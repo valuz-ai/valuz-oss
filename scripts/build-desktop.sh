@@ -157,9 +157,11 @@ if ! $SKIP_BACKEND; then
     uv add --dev pyinstaller --quiet
   fi
 
-  # Run PyInstaller — spec produces dist/valuz-server/ (see backend/valuz_agent.spec)
+  # Run PyInstaller — spec produces dist/valuz-server/ (see backend/scripts/valuz_agent.spec).
+  # --distpath/--workpath are CWD-relative (we're in backend/), so output stays at
+  # backend/dist regardless of where the spec file lives.
   log "Running PyInstaller..."
-  uv run pyinstaller valuz_agent.spec \
+  uv run pyinstaller scripts/valuz_agent.spec \
     --clean \
     --noconfirm \
     --distpath dist \
