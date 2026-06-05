@@ -256,13 +256,13 @@ if ! $SKIP_FRONTEND; then
 
   if $SIGNED; then
     ENV_FILE="$DESKTOP_DIR/.env.local"
-    if [ ! -f "$ENV_FILE" ]; then
-      die "--signed requires $ENV_FILE (CSC_LINK + CSC_KEY_PASSWORD)."
+    if [ -f "$ENV_FILE" ]; then
+      log "Building desktop app (signed; sourcing $ENV_FILE)..."
+      pnpm build:signed
+    else
+      log "Building desktop app (signed; using CI environment variables)..."
+      pnpm build
     fi
-    log "Building desktop app (signed; sourcing $ENV_FILE)..."
-    # pnpm build:signed does set -a / source .env.local / pnpm run build.
-    # We don't expand the secret values here so they stay out of the log.
-    pnpm build:signed
   else
     log "Building desktop app (unsigned — afterSign falls back to ad-hoc)..."
     pnpm build
