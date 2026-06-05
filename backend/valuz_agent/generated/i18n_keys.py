@@ -1797,10 +1797,15 @@ I18nKey = Literal[
     "ui.usageReport.output",
     "ui.usageReport.title",
     "ui.usageReport.totalTokens",
+    "updater.availableDesc",
+    "updater.downloadNow",
     "updater.downloadedDesc",
     "updater.downloadedTitle",
+    "updater.downloading",
+    "updater.downloadingDesc",
     "updater.errorTitle",
     "updater.errorUnknown",
     "updater.restartNow",
+    "updater.updateAvailable",
 ]
 # fmt: on

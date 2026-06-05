@@ -6,14 +6,27 @@ import {
   MetricStrip,
   SettingsSection,
 } from "@valuz/ui";
-import { useTranslation } from "@valuz/core";
-import { useState } from "react";
+import { useTranslation, useUpdaterStore } from "@valuz/core";
+import { useCallback, useMemo } from "react";
 
 export const AboutSection = () => {
   const { t } = useTranslation();
-  const [updateStatus, setUpdateStatus] = useState<
-    "idle" | "checking" | "latest" | "available" | "failed"
-  >("idle");
+  const { status: updaterStatus, version } = useUpdaterStore();
+
+  const bridge = useMemo(() => {
+    type DesktopBridge = { invoke: <T>(ch: string, args?: unknown) => Promise<T> };
+    return (window as Window & { valuzDesktop?: DesktopBridge }).valuzDesktop ?? null;
+  }, []);
+
+  const handleCheck = useCallback(() => {
+    if (!bridge) return;
+    void bridge.invoke("updater:check");
+  }, [bridge]);
+
+  const handleOpenUpdateWindow = useCallback(() => {
+    if (!bridge) return;
+    void bridge.invoke("updater:show-window");
+  }, [bridge]);
 
   return (
     <SettingsSection
@@ -58,33 +71,34 @@ export const AboutSection = () => {
         <Button
           variant="outline"
           size="sm"
-          disabled={updateStatus === "checking"}
-          onClick={() => {
-            setUpdateStatus("checking");
-            setTimeout(() => {
-              setUpdateStatus(Math.random() > 0.5 ? "latest" : "available");
-            }, 1500);
-          }}
+          disabled={updaterStatus === "checking"}
+          onClick={handleCheck}
         >
-          {updateStatus === "checking" && (
+          {updaterStatus === "checking" && (
             <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
           )}
-          {updateStatus === "checking"
+          {updaterStatus === "checking"
             ? t("settings.about.checking")
             : t("settings.about.checkUpdate")}
         </Button>
-        {updateStatus === "latest" && (
+        {updaterStatus === "idle" && (
           <span className="flex items-center gap-1 text-xs text-success">
             <Check className="h-3 w-3" /> {t("settings.about.latestVersion")}
           </span>
         )}
-        {updateStatus === "available" && (
-          <span className="flex items-center gap-1 text-xs text-brand">
-            <RefreshCw className="h-3 w-3" />{" "}
+        {(updaterStatus === "available" || updaterStatus === "downloaded") && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-xs text-brand"
+            onClick={handleOpenUpdateWindow}
+          >
+            <RefreshCw className="mr-1 h-3 w-3" />
             {t("settings.about.newVersionAvailable")}
-          </span>
+            {version ? ` v${version}` : ""}
+          </Button>
         )}
-        {updateStatus === "failed" && (
+        {updaterStatus === "error" && (
           <span className="text-xs text-red-500">
             {t("settings.about.checkFailed")}
           </span>

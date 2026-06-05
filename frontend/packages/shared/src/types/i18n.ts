@@ -1791,11 +1791,16 @@ export type KnownI18nKey =
   | "ui.usageReport.output"
   | "ui.usageReport.title"
   | "ui.usageReport.totalTokens"
+  | "updater.availableDesc"
+  | "updater.downloadNow"
   | "updater.downloadedDesc"
   | "updater.downloadedTitle"
+  | "updater.downloading"
+  | "updater.downloadingDesc"
   | "updater.errorTitle"
   | "updater.errorUnknown"
-  | "updater.restartNow";
+  | "updater.restartNow"
+  | "updater.updateAvailable";
 
 /** Either a known main-app key or a plugin-contributed key.
  *  Plugin keys are registered at runtime via
