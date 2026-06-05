@@ -23,6 +23,7 @@ from typing import Any
 
 import pytest
 
+from valuz_agent.integrations import automations_mcp_server as mod
 from valuz_agent.modules.automations.schemas import (
     AutomationItemResponse,
     AutomationToolPayload,
@@ -30,7 +31,6 @@ from valuz_agent.modules.automations.schemas import (
     IntervalTrigger,
     ManualTrigger,
 )
-from valuz_agent.integrations import automations_mcp_server as mod
 
 
 class StubService:
@@ -176,9 +176,10 @@ def patched_dispatch(monkeypatch: pytest.MonkeyPatch, stub_service: StubService)
     dispatcher runs against the stub without needing a DB."""
     workspace_id = {"value": "ws-proj"}
     workspace_kind = {"value": "project"}
+    session_agent_slug = {"value": None}
 
     async def _fake_session_context(session_id: str):  # noqa: ARG001
-        return workspace_id["value"], workspace_kind["value"]
+        return workspace_id["value"], workspace_kind["value"], session_agent_slug["value"]
 
     async def _fake_build_service(db):  # noqa: ARG001
         return stub_service
@@ -202,7 +203,7 @@ def patched_dispatch(monkeypatch: pytest.MonkeyPatch, stub_service: StubService)
     # The dispatch imports async_unit_of_work locally; patch where it's used.
     monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", _fake_async_unit_of_work)
 
-    return workspace_id, workspace_kind
+    return workspace_id, workspace_kind, session_agent_slug
 
 
 # ── Routing + validation ────────────────────────────────────────────
@@ -285,7 +286,7 @@ class TestAgentKindByContext:
     async def test_project_session_should_create_as_project_member(
         self, patched_dispatch: Any, stub_service: StubService
     ) -> None:
-        workspace_id, workspace_kind = patched_dispatch
+        workspace_id, workspace_kind, session_agent_slug = patched_dispatch
         workspace_kind["value"] = "project"
         workspace_id["value"] = "ws-proj"
 
@@ -309,7 +310,7 @@ class TestAgentKindByContext:
     async def test_chat_session_should_create_as_library_agent(
         self, patched_dispatch: Any, stub_service: StubService
     ) -> None:
-        workspace_id, workspace_kind = patched_dispatch
+        workspace_id, workspace_kind, session_agent_slug = patched_dispatch
         workspace_kind["value"] = "chat"
         workspace_id["value"] = "ws-chat-existing"
 
@@ -328,6 +329,74 @@ class TestAgentKindByContext:
         # Chat sessions DO forward the calling workspace so library agents
         # land in the user's current chat ws (not a fresh one).
         assert stub_service.calls[0][1]["calling_session_workspace_id"] == "ws-chat-existing"
+
+    async def test_chat_create_should_default_agent_slug_to_session_agent(
+        self, patched_dispatch: Any, stub_service: StubService
+    ) -> None:
+        """A project-less chat omits agent_slug → it defaults to the session's
+        bound agent (the agent the user is talking to / default-assistant), so
+        creation succeeds without any list_members round-trip."""
+        workspace_id, workspace_kind, session_agent_slug = patched_dispatch
+        workspace_kind["value"] = "chat"
+        workspace_id["value"] = "ws-chat-1"
+        session_agent_slug["value"] = "default-assistant"
+
+        result = await mod.automation_invoke(
+            AutomationToolPayload(
+                action="create",
+                name="Daily digest",
+                prompt_template="x",
+                # agent_slug deliberately omitted
+                trigger=CronTrigger(cron_expr="0 9 * * *"),
+            )
+        )
+        decoded = json.loads(result)
+        assert decoded["ok"] is True
+        payload = stub_service.calls[0][1]["payload"]
+        assert payload.agent_kind == "library_agent"
+        assert payload.agent_slug == "default-assistant"
+
+    async def test_chat_create_explicit_agent_slug_overrides_session_default(
+        self, patched_dispatch: Any, stub_service: StubService
+    ) -> None:
+        workspace_id, workspace_kind, session_agent_slug = patched_dispatch
+        workspace_kind["value"] = "chat"
+        session_agent_slug["value"] = "default-assistant"
+
+        await mod.automation_invoke(
+            AutomationToolPayload(
+                action="create",
+                name="Daily",
+                prompt_template="x",
+                agent_slug="research-director",
+                trigger=CronTrigger(cron_expr="0 9 * * *"),
+            )
+        )
+        payload = stub_service.calls[0][1]["payload"]
+        assert payload.agent_slug == "research-director"
+
+    async def test_project_create_still_requires_explicit_agent_slug(
+        self, patched_dispatch: Any, stub_service: StubService
+    ) -> None:
+        """The chat default must NOT leak into project sessions — they still
+        require an explicit project-member slug."""
+        workspace_id, workspace_kind, session_agent_slug = patched_dispatch
+        workspace_kind["value"] = "project"
+        # Even if the project conversation has a bound agent, project create
+        # is not auto-defaulted (the lead must pick the right member).
+        session_agent_slug["value"] = "some-conversation-agent"
+
+        result = await mod.automation_invoke(
+            AutomationToolPayload(
+                action="create",
+                name="Daily",
+                prompt_template="x",
+                trigger=CronTrigger(cron_expr="0 9 * * *"),
+            )
+        )
+        decoded = json.loads(result)
+        assert decoded["ok"] is False
+        assert decoded["error_code"] == "MISSING_AGENT"
 
 
 # ── Trigger discriminator routing ──────────────────────────────────
@@ -389,7 +458,7 @@ class TestScopeAndCrossWorkspace:
     async def test_chat_list_should_default_to_all_scope(
         self, patched_dispatch: Any, stub_service: StubService
     ) -> None:
-        workspace_id, workspace_kind = patched_dispatch
+        workspace_id, workspace_kind, session_agent_slug = patched_dispatch
         workspace_kind["value"] = "chat"
         workspace_id["value"] = "ws-chat-1"
 
