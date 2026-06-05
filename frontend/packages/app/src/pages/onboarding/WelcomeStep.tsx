@@ -16,7 +16,7 @@ export const WelcomeStep = ({ onStart }: { onStart: () => void }) => {
       {/* ---------- Left: pitch ---------- */}
       <div className="relative flex flex-col justify-center overflow-hidden bg-[linear-gradient(135deg,#f8fbff_0%,#ffffff_38%,#f3f6ff_68%,#eef4ff_100%)] px-10 py-16 lg:px-16">
         <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(28deg,rgba(91,130,255,0.24)_0%,rgba(141,108,255,0.14)_24%,transparent_48%),linear-gradient(180deg,transparent_66%,rgba(225,233,255,0.56)_100%)]" />
-        <div className="relative mx-auto w-full max-w-md">
+        <div className="relative mx-auto w-full max-w-md -translate-y-5">
           {/* Brand eyebrow */}
           <div className="mb-10 flex items-center gap-5">
             <img
@@ -28,7 +28,7 @@ export const WelcomeStep = ({ onStart }: { onStart: () => void }) => {
             <img
               src="./valuz-wordmark.svg"
               alt="Valuz"
-              className="h-auto w-[94px] -translate-x-[14px]"
+              className="h-auto w-[90px] -translate-x-[18px]"
             />
           </div>
 
@@ -42,7 +42,7 @@ export const WelcomeStep = ({ onStart }: { onStart: () => void }) => {
             {t("onboarding.heroTitleSuffix" as Parameters<typeof t>[0])}
           </h1>
 
-          <p className="mt-6 max-w-sm text-[15px] leading-7 text-ink-body">
+          <p className="mt-[5px] max-w-sm text-[15px] leading-7 text-ink-body">
             {t("onboarding.heroSubtitlePrefix" as Parameters<typeof t>[0])}
             <span className="font-medium text-ink-body">
               {t("onboarding.heroSubtitleAccent" as Parameters<typeof t>[0])}
@@ -53,7 +53,7 @@ export const WelcomeStep = ({ onStart }: { onStart: () => void }) => {
           <button
             type="button"
             onClick={onStart}
-            className="mt-9 inline-flex min-w-40 items-center justify-center gap-2 rounded-xl bg-brand px-9 py-3 text-[14px] font-medium text-white transition-all hover:bg-brand-hover active:scale-[0.99]"
+            className="mt-9 inline-flex w-[180px] items-center justify-center gap-2 rounded-xl bg-brand px-9 py-3 text-[14px] font-medium text-white transition-all hover:bg-brand-hover active:scale-[0.99]"
           >
             {t("onboarding.startButton" as Parameters<typeof t>[0])}
             <span aria-hidden className="text-[15px]">
@@ -62,7 +62,7 @@ export const WelcomeStep = ({ onStart }: { onStart: () => void }) => {
           </button>
 
           <p className="mt-7 flex items-center gap-2 text-[12px] leading-5 text-ink-meta">
-            <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-current" />
+            <ShieldCheck className="h-4 w-4 shrink-0 text-current" />
             {t("onboarding.heroFootnote" as Parameters<typeof t>[0])}
           </p>
         </div>
