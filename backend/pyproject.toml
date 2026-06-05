@@ -142,6 +142,28 @@ dev = [
     "httpx[socks]>=0.27",
 ]
 
+[tool.uv]
+# ``openai-codex-cli-bin`` — the version-pinned codex binary that
+# ``openai-codex`` pulls in transitively — ships ONLY ``musllinux`` wheels for
+# Linux (no ``manylinux``/glibc build). uv won't install a musl wheel on a glibc
+# host, so ``uv sync`` aborts on the glibc Linux CI runners (e.g. the
+# ``ubuntu-24.04-arm`` desktop-build job → ``manylinux_*_aarch64``).
+#
+# Codex is dormant in valuz (``provider_resolver`` only routes
+# ``claude_agent`` / ``deepagents``), and the PyInstaller spec already tolerates
+# the binary's absence (its ``collect_submodules`` / ``collect_data_files`` calls
+# for ``codex_cli_bin`` are wrapped in try/except). So drop the BINARY on Linux
+# and keep it on macOS/Windows, where wheels exist. An ``override-dependencies``
+# entry is required because the requirement is transitive (a marker on a direct
+# dep would only *add* a constraint, not remove ``openai-codex``'s). The
+# ``openai-codex`` SDK itself is pure-Python (universal wheel) and stays on every
+# platform, so ``from openai_codex import CodexConfig`` never ImportErrors; only
+# an actual codex launch (``from codex_cli_bin import bundled_codex_path``, lazy)
+# would notice, and that path is never exercised in valuz.
+override-dependencies = [
+    "openai-codex-cli-bin; sys_platform != 'linux'",
+]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 100
