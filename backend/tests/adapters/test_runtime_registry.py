@@ -103,23 +103,47 @@ def test_unknown_runtime_is_unavailable_with_reason() -> None:
 
 def test_codex_is_available_when_binary_on_path() -> None:
     fake_path = "/usr/local/bin/codex"
-    with patch("valuz_agent.adapters.runtime_registry.shutil.which", return_value=fake_path):
-        with patch.dict("os.environ", {}, clear=False):
-            import os
+    # No bundled package → exercise the PATH branch specifically.
+    with patch(
+        "valuz_agent.adapters.runtime_registry._resolve_bundled_binary",
+        return_value=None,
+    ):
+        with patch("valuz_agent.adapters.runtime_registry.shutil.which", return_value=fake_path):
+            with patch.dict("os.environ", {}, clear=False):
+                import os
 
-            os.environ.pop("CODEX_BIN_OVERRIDE", None)
+                os.environ.pop("CODEX_BIN_OVERRIDE", None)
+                available, reason = is_runtime_available("codex")
+    assert available is True
+    assert reason is None
+
+
+def test_codex_is_available_via_bundled_when_not_on_path() -> None:
+    """codex ships a binary inside the ``codex_cli_bin`` package; the probe must
+    report it available even with no ``codex`` on PATH and no override —
+    matching the kernel runtime's bundled-first resolution."""
+    with patch(
+        "valuz_agent.adapters.runtime_registry._resolve_bundled_binary",
+        return_value="/bundled/codex_cli_bin/bin/codex",
+    ):
+        with patch("valuz_agent.adapters.runtime_registry.shutil.which", return_value=None):
             available, reason = is_runtime_available("codex")
     assert available is True
     assert reason is None
 
 
 def test_codex_is_unavailable_when_binary_missing() -> None:
-    with patch("valuz_agent.adapters.runtime_registry.shutil.which", return_value=None):
-        with patch.dict("os.environ", {}, clear=False):
-            import os
+    # Neither a bundled package nor a PATH install → unavailable.
+    with patch(
+        "valuz_agent.adapters.runtime_registry._resolve_bundled_binary",
+        return_value=None,
+    ):
+        with patch("valuz_agent.adapters.runtime_registry.shutil.which", return_value=None):
+            with patch.dict("os.environ", {}, clear=False):
+                import os
 
-            os.environ.pop("CODEX_BIN_OVERRIDE", None)
-            available, reason = is_runtime_available("codex")
+                os.environ.pop("CODEX_BIN_OVERRIDE", None)
+                available, reason = is_runtime_available("codex")
     assert available is False
     assert reason is not None
     assert "codex" in reason

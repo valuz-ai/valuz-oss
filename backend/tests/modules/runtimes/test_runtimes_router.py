@@ -80,9 +80,15 @@ def test_should_mark_pure_python_runtimes_available(client: TestClient) -> None:
 
 
 def test_codex_should_be_unavailable_when_binary_missing(client: TestClient) -> None:
-    with patch(
-        "valuz_agent.adapters.runtime_registry.shutil.which",
-        return_value=None,
+    with (
+        patch(
+            "valuz_agent.adapters.runtime_registry._resolve_bundled_binary",
+            return_value=None,
+        ),
+        patch(
+            "valuz_agent.adapters.runtime_registry.shutil.which",
+            return_value=None,
+        ),
     ):
         resp = client.get("/v1/runtimes")
 
@@ -91,6 +97,25 @@ def test_codex_should_be_unavailable_when_binary_missing(client: TestClient) -> 
     assert by_id["codex"]["unavailable_reason"] is not None
     assert "codex" in by_id["codex"]["unavailable_reason"]
     assert by_id["codex"]["requires_binary"] == "codex"
+
+
+def test_codex_should_be_available_via_bundled_binary(client: TestClient) -> None:
+    """codex bundled by ``codex_cli_bin`` but not on PATH → still available."""
+    with (
+        patch(
+            "valuz_agent.adapters.runtime_registry._resolve_bundled_binary",
+            return_value="/bundled/codex",
+        ),
+        patch(
+            "valuz_agent.adapters.runtime_registry.shutil.which",
+            return_value=None,
+        ),
+    ):
+        resp = client.get("/v1/runtimes")
+
+    by_id = {r["id"]: r for r in resp.json()["runtimes"]}
+    assert by_id["codex"]["available"] is True
+    assert by_id["codex"]["unavailable_reason"] is None
 
 
 def test_codex_should_be_available_when_binary_on_path(client: TestClient) -> None:

@@ -188,16 +188,20 @@ exclude = [
 [[tool.mypy.overrides]]
 # ``follow_imports = "skip"`` for ``src.*`` / ``kernel.*`` means host mypy never
 # descends into the vendored kernel's bodies — it treats kernel imports as Any.
-# So upstream's ``module = ["yaml", "codex_cli_bin"] ignore_missing_imports``
-# override (kernel pin eec331f) has NO host equivalent: host mypy never resolves
-# ``codex_cli_bin`` (imported only inside ``src.runtimes.codex.runtime``), so
-# there is no missing-stub error to suppress. Verified: ``mypy valuz_agent/``
-# emits zero ``codex``-related lines.
 module = [
     "kernel.*",
     "src.*",
 ]
 follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+# ``codex_cli_bin`` (the binary-bundling package the ``openai-codex`` SDK
+# installs) ships no stubs / ``py.typed``. The host now imports it directly in
+# ``adapters/runtime_registry`` to resolve the bundled codex for the runtime
+# availability probe, so suppress its missing-stub error (mirrors the upstream
+# kernel's own ``ignore_missing_imports`` for this module).
+module = ["codex_cli_bin"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

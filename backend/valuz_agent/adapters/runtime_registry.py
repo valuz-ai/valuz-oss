@@ -90,6 +90,33 @@ def get_runtime(runtime_id: str) -> RuntimeSpec | None:
     return RUNTIME_REGISTRY.get(runtime_id)
 
 
+def _resolve_bundled_binary(runtime_id: str) -> str | None:
+    """Resolve a runtime binary that ships inside a Python dependency.
+
+    Only ``codex`` has one: the ``codex_cli_bin`` package (installed by the
+    ``openai-codex`` SDK) vendors a per-platform, version-pinned codex binary.
+    The kernel codex runtime already prefers it
+    (``src.runtimes.codex.runtime._bundled_codex_bin``); we mirror that lookup
+    here so the host's availability probe agrees with what the runtime will
+    actually launch. Without it, a host that has codex bundled but not on PATH
+    reported the runtime as unavailable even though sessions ran fine.
+
+    Returns the absolute path, or ``None`` when the package is absent or its
+    binary is missing (the caller then falls back to a PATH lookup).
+    """
+    if runtime_id != "codex":
+        return None
+    try:
+        from codex_cli_bin import bundled_codex_path
+    except ImportError:
+        return None
+    try:
+        path = bundled_codex_path()
+    except FileNotFoundError:
+        return None
+    return str(path) if path.exists() else None
+
+
 def is_runtime_available(runtime_id: str) -> tuple[bool, str | None]:
     """Check whether the runtime can actually run on this host.
 
@@ -117,6 +144,13 @@ def is_runtime_available(runtime_id: str) -> tuple[bool, str | None]:
                 f"{spec.binary_env_override}={override!r} but the path is not "
                 "executable; check the override or unset it to fall back to PATH"
             )
+
+    # Some runtimes ship their binary inside a Python dependency (codex via
+    # ``codex_cli_bin``). Prefer that over a PATH lookup, mirroring the kernel
+    # runtime's resolution order (override → bundled → PATH) so this probe
+    # agrees with what the runtime will actually launch.
+    if _resolve_bundled_binary(spec.id) is not None:
+        return True, None
 
     if shutil.which(spec.requires_binary):
         return True, None
