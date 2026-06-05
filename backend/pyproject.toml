@@ -71,7 +71,18 @@ dependencies = [
     # so it must be installed explicitly — otherwise OCR has no backend. It was
     # only present transitively via ``magika`` (markitdown's filetype detector);
     # declare it directly so OCR never breaks if that transitive path changes.
-    "onnxruntime>=1.20",
+    #
+    # Platform split — onnxruntime dropped macOS *x86_64* (Intel) wheels after
+    # 1.19.2: 1.17–1.19 ship a ``macosx_11_0_universal2`` build (runs on both
+    # Intel + Apple Silicon), but 1.20.0+ ship arm64-only mac wheels. So an
+    # Intel-Mac dev box has no wheel for the modern line and ``uv sync`` aborts
+    # the whole install. magika + pymupdf-layout (the other two requesters)
+    # declare NO onnxruntime floor, so OUR pin is the only upward pressure;
+    # capping Intel Mac at <1.20 lets it resolve to the 1.19.2 universal2 wheel
+    # (OCR/layout still work, just on the older engine). Every other platform —
+    # Apple Silicon, Linux, Windows — stays on the modern line.
+    "onnxruntime>=1.20; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "onnxruntime>=1.17,<1.20; sys_platform == 'darwin' and platform_machine == 'x86_64'",
     "croniter>=6.2.2",
     "cron-descriptor>=2.0.8",
     "pytz>=2026.1.post1",

@@ -53,7 +53,12 @@ need pnpm
 PIDS=()
 cleanup() {
     info "shutting down…"
-    for pid in "${PIDS[@]}"; do
+    # ``${PIDS[@]+...}`` guards the expansion: under ``set -u`` (and macOS's
+    # stock bash 3.2) a bare ``"${PIDS[@]}"`` on an empty array raises
+    # "unbound variable" — which fired in cleanup() when an early ``uv sync``
+    # failure tripped the trap before any PID was recorded, masking the real
+    # error with a confusing ``PIDS[@]: unbound variable``.
+    for pid in ${PIDS[@]+"${PIDS[@]}"}; do
         kill "$pid" 2>/dev/null || true
     done
     # Kill any straggling Electron windows the dev shell spawned.
