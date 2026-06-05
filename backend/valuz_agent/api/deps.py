@@ -240,12 +240,15 @@ async def get_automation_service() -> AsyncGenerator[AutomationService, None]:
     from valuz_agent.modules.connectors.service import ConnectorService
     from valuz_agent.modules.settings.preferences import (
         get_default_locale,
-        get_default_timezone,
+        get_effective_default_timezone,
     )
 
     async with async_unit_of_work() as db:
         locale = await get_default_locale(db)
-        default_timezone = await get_default_timezone(db)
+        # Effective default = configured tz, else the detected OS tz (so a
+        # schedule created without an explicit tz lands on the user's local
+        # clock, not UTC).
+        default_timezone = await get_effective_default_timezone(db)
         workspace_svc = WorkspaceService(
             datastore=WorkspaceDatastore(db),
             event_bus=event_bus,

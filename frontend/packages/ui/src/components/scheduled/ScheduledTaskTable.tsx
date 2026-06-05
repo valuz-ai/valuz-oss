@@ -148,9 +148,10 @@ export const ScheduledTaskTable = ({
         {collapsed ? null : (
           <>
         {/* Header row — hidden on mobile */}
-        <div className="hidden border-b border-[#f7f8fa] px-5 py-2 text-[12px] font-medium text-[#6E7481] md:grid md:grid-cols-[2fr_1.3fr_0.9fr_0.7fr_72px] dark:border-surface-border dark:text-ink-body">
+        <div className="hidden border-b border-[#f7f8fa] px-5 py-2 text-[12px] font-medium text-[#6E7481] md:grid md:grid-cols-[2fr_1.1fr_1.1fr_0.8fr_0.7fr_72px] dark:border-surface-border dark:text-ink-body">
           <div>{t("cron.taskColumn")}</div>
           <div className="text-center">{t("cron.triggerColumn")}</div>
+          <div className="text-center">{t("cron.timezoneColumn")}</div>
           <div className="text-center">{t("cron.lastRunColumn")}</div>
           <div className="text-center">{t("cron.statusColumn")}</div>
           <div className="text-center">{t("cron.actionColumn")}</div>
@@ -159,7 +160,7 @@ export const ScheduledTaskTable = ({
         {tasks.map((task) => (
           <div key={task.id}>
             {/* Desktop row */}
-            <div className="hidden items-center px-5 py-4 md:grid md:grid-cols-[2fr_1.3fr_0.9fr_0.7fr_72px]">
+            <div className="hidden items-center px-5 py-4 md:grid md:grid-cols-[2fr_1.1fr_1.1fr_0.8fr_0.7fr_72px]">
               <div className="flex min-w-0 items-start gap-2">
                 <Clock
                   className={cn(
@@ -189,12 +190,10 @@ export const ScheduledTaskTable = ({
                 </div>
               </div>
               <div className="text-center font-mono text-xs text-ink-label">
-                <span>{task.trigger}</span>
-                {task.triggerTimezone && (
-                  <span className="ml-1.5 text-ink-meta">
-                    ({task.triggerTimezone})
-                  </span>
-                )}
+                {task.trigger}
+              </div>
+              <div className="truncate text-center font-mono text-xs text-ink-meta">
+                {task.triggerTimezone || "—"}
               </div>
               <div className="text-center text-xs text-ink-body">
                 {task.last}
@@ -272,7 +271,7 @@ export const ScheduledTaskTable = ({
                   {task.trigger}
                   {task.triggerTimezone && (
                     <span className="ml-1.5 text-ink-meta">
-                      ({task.triggerTimezone})
+                      · {task.triggerTimezone}
                     </span>
                   )}
                 </span>

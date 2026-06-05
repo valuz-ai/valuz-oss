@@ -47,6 +47,35 @@ async def _build_additional_context(
 
     sections: list[str] = []
     async with async_unit_of_work() as db:
+        # 0) Current wall-clock + the user's effective timezone. Without this
+        #    the model has no idea what time it is or where the user lives, so
+        #    time-sensitive tools (above all the ``automation`` scheduler)
+        #    can't interpret "9am" / "tomorrow" in the user's LOCAL terms and
+        #    fall back to UTC. Effective tz = the user's configured preference,
+        #    else the host's detected OS tz (best-effort for a local-first
+        #    desktop; headless relies on the frontend-supplied pref). Lives in
+        #    per-turn additional-context (the clock changes every turn) — never
+        #    the cached system prompt.
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+
+            from valuz_agent.modules.settings.preferences import (
+                get_effective_default_timezone,
+            )
+
+            tz_name = await get_effective_default_timezone(db)
+            now_local = datetime.now(ZoneInfo(tz_name))
+            off = now_local.strftime("%z")  # e.g. "+0800"
+            off_label = f"UTC{off[:3]}:{off[3:]}" if len(off) == 5 else "UTC"
+            sections.append(
+                f"Current time: {now_local:%Y-%m-%d %H:%M:%S} "
+                f"({tz_name}, {off_label}). Interpret any time or schedule the "
+                "user mentions in this timezone unless they name another."
+            )
+        except Exception:  # noqa: BLE001 — never block a turn on a tz lookup
+            logger.debug("current-time context skipped", exc_info=True)
+
         # 1) Pending attachments — the files staged for *this* turn
         #    (not the whole session's history). The kernel already
         #    lists raw filepaths via "The user uploaded ..." — this

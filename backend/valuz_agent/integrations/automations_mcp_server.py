@@ -153,11 +153,14 @@ async def _build_automation_service(db: Any) -> Any:
     from valuz_agent.modules.projects.service import WorkspaceService
     from valuz_agent.modules.settings.preferences import (
         get_default_locale,
-        get_default_timezone,
+        get_effective_default_timezone,
     )
 
     locale = await get_default_locale(db)
-    default_tz = await get_default_timezone(db)
+    # Effective default = configured tz, else the detected OS tz — so an
+    # automation the LLM creates without an explicit timezone is scheduled on
+    # the user's local clock (and that resolved tz is persisted on the row).
+    default_tz = await get_effective_default_timezone(db)
     workspace_svc = WorkspaceService(
         datastore=WorkspaceDatastore(db),
         event_bus=event_bus,
@@ -550,6 +553,12 @@ Actions
   Cron format: standard 5-field POSIX (minute hour dom month dow). If the
   user gave a natural-language schedule, translate it yourself, confirm
   in plain prose, then call with cron_expr filled.
+  TIMEZONE — a cron schedule is meaningless without one, so ALWAYS set the
+  cron trigger's "timezone" to a concrete IANA name. Use the USER'S timezone,
+  given to you in the per-turn context (the "Current time" line) — the user
+  almost always means their LOCAL time; NEVER default to UTC. If you omit it
+  the server falls back to the user's configured/detected timezone, but pass
+  it explicitly and state the resolved zone back to the user to confirm.
 - list: returns existing automations. In a chat session, lists across all
   workspaces by default (set scope="this" to narrow to the current chat).
   In a project session, always scoped to the current project.

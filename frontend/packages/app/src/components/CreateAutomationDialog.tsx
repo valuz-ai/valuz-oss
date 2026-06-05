@@ -17,6 +17,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ActionKind, Trigger } from "@valuz/core";
+import { automationsApi } from "@valuz/core";
+import {
+  browserTimezone,
+  timezoneLabel,
+  timezoneOptions,
+} from "@valuz/shared";
 import {
   Button,
   CronInput,
@@ -43,6 +49,26 @@ import { useI18n } from "@valuz/ui";
 
 /** Minimum interval seconds — matches backend `MIN_INTERVAL_SECONDS` */
 const MIN_INTERVAL_SECONDS = 30;
+
+/**
+ * Format an absolute epoch-ms instant in the given IANA zone for the
+ * "next run" preview, e.g. "Sat, Jun 6, 18:30" — so the user sees the next
+ * fire in the same timezone they're scheduling in.
+ */
+function formatNextRun(ms: number, tz: string): string {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      timeZone: tz,
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(ms));
+  } catch {
+    return new Date(ms).toLocaleString();
+  }
+}
 
 export interface AutomationAgentChoice {
   slug: string;
@@ -140,6 +166,14 @@ export const CreateAutomationDialog = ({
   // Trigger state — discriminated union driven by the tab.
   const [triggerKind, setTriggerKind] = useState<"cron" | "interval">("cron");
   const [cron, setCron] = useState("0 9 * * *");
+  // Scheduling timezone — the IANA zone the cron rule is read in. Defaults to
+  // the live BROWSER timezone (the user's real local zone, correct for desktop
+  // AND headless+WebUI); the backend only OS-detects on the no-browser agent
+  // path. Always sent explicitly so a schedule is never silently UTC.
+  const [timezone, setTimezone] = useState<string>(browserTimezone());
+  // Live next-run preview (absolute epoch ms). Recomputed via the backend
+  // cron validator so the preview can't disagree with what the scheduler does.
+  const [nextRunMs, setNextRunMs] = useState<number | null>(null);
   // Interval input — user picks a number + a unit; we convert to seconds
   // at submit time. Default is "5 minutes" so the dialog opens at the
   // common-case cadence instead of seconds (which is the floor but a
@@ -207,6 +241,7 @@ export const CreateAutomationDialog = ({
       if (initial.trigger.kind === "cron") {
         setTriggerKind("cron");
         setCron(initial.trigger.cron_expr || "0 9 * * *");
+        setTimezone(initial.trigger.timezone || browserTimezone());
         // Reset interval fields to the default so a subsequent tab
         // switch lands on a sensible value instead of stale 5m.
         setIntervalValue(5);
@@ -246,15 +281,56 @@ export const CreateAutomationDialog = ({
     setPrompt("");
     setTriggerKind("cron");
     setCron("0 9 * * *");
+    setTimezone(browserTimezone());
     setIntervalValue(5);
     setIntervalUnit("minutes");
     setAgentSlug(defaultAgentSlug ?? agents[0]?.slug ?? "");
     setActionKind("chat");
   }, [open, initial, defaultAgentSlug, agents, allowTaskMode]);
 
+  // Debounced next-run preview: re-validate the cron in the selected tz and
+  // surface the next fire instant. Only for cron triggers; interval/manual
+  // clear it. The cancel flag drops stale responses if cron/tz change again
+  // before the request returns.
+  useEffect(() => {
+    let cancelled = false;
+    // All state writes live inside the debounce callback (async), so they
+    // don't trip react-hooks/set-state-in-effect and don't cascade renders.
+    const handle = setTimeout(() => {
+      if (cancelled) return;
+      if (triggerKind !== "cron" || !cron.trim()) {
+        setNextRunMs(null);
+        return;
+      }
+      automationsApi
+        .validateCron(cron, timezone)
+        .then((res) => {
+          if (cancelled) return;
+          const first =
+            res.valid && res.next_runs.length > 0
+              ? Number(res.next_runs[0])
+              : null;
+          setNextRunMs(first != null && Number.isFinite(first) ? first : null);
+        })
+        .catch(() => {
+          if (!cancelled) setNextRunMs(null);
+        });
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [triggerKind, cron, timezone]);
+
   const buildTrigger = (): Trigger => {
     if (triggerKind === "cron") {
-      return { kind: "cron", cron_expr: cron || "0 9 * * *", timezone: null };
+      return {
+        kind: "cron",
+        cron_expr: cron || "0 9 * * *",
+        // Always explicit — the user's selected (browser-defaulted) zone,
+        // never null/UTC.
+        timezone: timezone || browserTimezone(),
+      };
     }
     return {
       kind: "interval",
@@ -396,8 +472,47 @@ export const CreateAutomationDialog = ({
                   {t("automation.triggerInterval" as Parameters<typeof t>[0])}
                 </TabsTrigger>
               </TabsList>
-              <TabsContent value="cron" className="pt-3">
-                <CronInput value={cron} onChange={setCron} />
+              <TabsContent value="cron" className="pt-3 space-y-2">
+                {/* Timezone rides the same row as frequency/hour/minute via
+                    CronInput's slot (forced selection, browser-tz default,
+                    "City (GMT±N)" label). */}
+                <CronInput
+                  value={cron}
+                  onChange={setCron}
+                  timezoneSlot={
+                    <div className="min-w-[150px] flex-1">
+                      <label className="mb-1 block text-xs font-medium text-ink-heading">
+                        {t(
+                          "automation.timezoneLabel" as Parameters<typeof t>[0],
+                        )}
+                      </label>
+                      <Select
+                        value={timezone}
+                        onValueChange={(v) => v && setTimezone(v)}
+                      >
+                        <SelectTrigger className="w-full text-xs">
+                          <SelectValue>{timezoneLabel(timezone)}</SelectValue>
+                        </SelectTrigger>
+                        <SelectContent className="max-h-72">
+                          {timezoneOptions(timezone).map((tz) => (
+                            <SelectItem key={tz} value={tz}>
+                              {timezoneLabel(tz)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  }
+                />
+                {nextRunMs != null && (
+                  <p className="text-xs text-ink-meta">
+                    {t(
+                      "automation.nextRunPreview" as Parameters<typeof t>[0],
+                    )}
+                    {" · "}
+                    {formatNextRun(nextRunMs, timezone)}
+                  </p>
+                )}
               </TabsContent>
               <TabsContent value="interval" className="pt-3 space-y-2">
                 {/* Number input + unit Select on one row. Min on the input

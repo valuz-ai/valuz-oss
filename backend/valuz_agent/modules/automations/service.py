@@ -186,7 +186,11 @@ class AutomationService:
         if isinstance(trigger, CronTrigger):
             row.trigger_kind = "cron"
             row.cron_expr = trigger.cron_expr
-            row.timezone = _normalise_tz(trigger.timezone)
+            # Persist the EFFECTIVE tz (override → service default → detected),
+            # never a bare None: a cron row must always carry a concrete,
+            # user-visible timezone so the UI can show + let the user correct it
+            # instead of an invisible UTC fallback.
+            row.timezone = self._effective_tz_for(trigger.timezone)
             row.interval_seconds = None
         elif isinstance(trigger, IntervalTrigger):
             row.trigger_kind = "interval"

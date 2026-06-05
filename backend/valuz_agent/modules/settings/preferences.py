@@ -116,6 +116,21 @@ async def get_default_timezone(db: AsyncSession) -> str:
     return await _read(db, KEY_DEFAULT_TIMEZONE) or FALLBACK_TIMEZONE
 
 
+async def get_effective_default_timezone(db: AsyncSession) -> str:
+    """Create-time default timezone for schedules: configured value, else the
+    *detected* OS timezone, else UTC.
+
+    Distinct from ``get_default_timezone`` (a pure DB read used for settings
+    display, which falls straight back to UTC). When a user has never set a
+    default, scheduling in UTC silently fires automations at the wrong local
+    wall-clock time; resolving to the detected system tz here means a chat- or
+    MCP-created automation lands on the user's local clock by default. The tz
+    is always *persisted* on the row (see ``AutomationService._apply_trigger``)
+    so it stays visible/editable rather than an invisible UTC fallback.
+    """
+    return await _read(db, KEY_DEFAULT_TIMEZONE) or detect_system_timezone()
+
+
 async def set_default_timezone(db: AsyncSession, value: str) -> None:
     """Persist the user's default timezone preference.
 

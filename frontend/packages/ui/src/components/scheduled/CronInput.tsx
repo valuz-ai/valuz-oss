@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import {
   Select,
   SelectContent,
@@ -13,6 +13,14 @@ import { useI18n } from "../../hooks/use-i18n";
 export interface CronInputProps {
   value: string;
   onChange: (cron: string) => void;
+  /**
+   * Optional trailing field rendered on the SAME row as the simple-mode
+   * frequency/hour/minute selects (and on its own row below the expression
+   * in advanced mode). The automation dialog passes its timezone picker
+   * here so "when" and "which zone" sit together. Self-contained: bring your
+   * own label + width (use ``flex-1`` to fill the remaining row width).
+   */
+  timezoneSlot?: ReactNode;
 }
 
 type Frequency = "daily" | "weekdays" | "weekly" | "monthly";
@@ -169,7 +177,11 @@ function frequencyToCron(
   }
 }
 
-export const CronInput = ({ value, onChange }: CronInputProps) => {
+export const CronInput = ({
+  value,
+  onChange,
+  timezoneSlot,
+}: CronInputProps) => {
   const { t } = useI18n();
   // Default to simple mode but switch to advanced when an externally
   // supplied ``value`` doesn't fit any simple-mode pattern. The
@@ -251,8 +263,9 @@ export const CronInput = ({ value, onChange }: CronInputProps) => {
 
       {mode === "simple" ? (
         <div className="flex flex-wrap gap-2">
-          {/* Frequency */}
-          <div className="min-w-[100px] flex-1">
+          {/* Frequency — narrow fixed width so the timezone slot fits on
+              the same row. */}
+          <div className="w-[104px] shrink-0">
             <label className="mb-1 block text-xs font-medium text-ink-heading">
               {t("cron.frequency")}
             </label>
@@ -381,20 +394,30 @@ export const CronInput = ({ value, onChange }: CronInputProps) => {
               </SelectContent>
             </Select>
           </div>
+
+          {/* Timezone — same row as frequency/hour/minute; the slot brings
+              its own ``flex-1`` so it fills the remaining width. */}
+          {timezoneSlot}
         </div>
       ) : (
-        <div>
-          <label className="mb-1 block text-xs font-medium text-ink-heading">
-            {t("cron.cronExpression")}
-          </label>
-          <Input
-            type="text"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder="0 9 * * 1-5"
-            className="font-mono text-xs text-ink-label md:text-xs"
-          />
-          <p className="mt-1.5 text-2xs text-ink-meta">
+        <div className="space-y-1.5">
+          {/* Expression + timezone share one row, ~50/50. */}
+          <div className="flex flex-wrap items-start gap-2">
+            <div className="min-w-[160px] flex-1">
+              <label className="mb-1 block text-xs font-medium text-ink-heading">
+                {t("cron.cronExpression")}
+              </label>
+              <Input
+                type="text"
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                placeholder="0 9 * * 1-5"
+                className="font-mono text-xs text-ink-label md:text-xs"
+              />
+            </div>
+            {timezoneSlot}
+          </div>
+          <p className="text-2xs text-ink-meta">
             {value
               ? `→ ${cronToHumanReadable(value, t)}`
               : t("cron.cronFormat")}
