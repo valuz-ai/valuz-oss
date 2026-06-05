@@ -299,7 +299,7 @@ describe("launchTerminalWithCommand — unsupported", () => {
   });
 });
 
-describe("bundled claude fallback", () => {
+describe("bundled CLI fallback", () => {
   it("detectCliPath should fall back to bundled claude when which fails", async () => {
     const deps = makeDeps({ execFile: vi.fn(() => fail()) });
     // resolveBundledClaude hits the real filesystem — in the test env neither
@@ -320,9 +320,23 @@ describe("bundled claude fallback", () => {
     expect(state).toBe("logged_out");
   });
 
-  it("detectCliPath should not fall back to bundled for codex", async () => {
+  it("detectCliPath should fall back to bundled codex when which fails", async () => {
     const deps = makeDeps({ execFile: vi.fn(() => fail()) });
+    // resolveBundledCodex hits the real filesystem — in the test env neither
+    // the production nor the dev path exists, so it returns null.
     const path = await detectCliPath("codex", deps);
     expect(path).toBeNull();
+  });
+
+  it("detectLoginState should try bundled codex when global codex status fails", async () => {
+    const execFile = vi.fn(async (file: string) => {
+      // First call: global "codex login status" fails
+      if (file === "codex") throw new Error("not found");
+      // resolveBundledCodex returns null in test env, so no second call
+      return ok("");
+    });
+    const deps = makeDeps({ platform: () => "darwin", execFile });
+    const state = await detectLoginState("codex", deps);
+    expect(state).toBe("logged_out");
   });
 });
