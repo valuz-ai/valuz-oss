@@ -64,20 +64,20 @@ export const defaultDeps: CliLoginDeps = {
 // Strict markers we require in each CLI's status output before declaring a
 
 /**
- * Resolve the bundled Claude CLI shipped inside the backend's PyInstaller bundle.
+ * Resolve a CLI binary bundled inside the backend's PyInstaller bundle (prod)
+ * or the dev venv. Both expose the same package layout under different roots:
  *
- * Production layout (same as sidecar.ts):
- *   Valuz.app/Contents/Resources/libexec/
- *     ├── valuz-server
- *     └── _internal/claude_agent_sdk/_bundled/claude
+ *   Production (packaged, same root as sidecar.ts):
+ *     Valuz.app/Contents/Resources/libexec/_internal/<…segments>
+ *   Dev (the python3.X minor isn't pinned — it tracks whatever `uv` resolved
+ *   for the venv, so we glob it):
+ *     backend/.venv/lib/python3.X/site-packages/<…segments>
  *
- * Dev layout (the python3.X minor version isn't fixed — it tracks whatever
- * interpreter `uv` resolved for the venv, so we glob it):
- *   backend/.venv/lib/python3.X/site-packages/claude_agent_sdk/_bundled/claude
+ * ``segments`` is the path *inside* the bundle root — e.g.
+ * ``["claude_agent_sdk", "_bundled", "claude"]`` or
+ * ``["codex_cli_bin", "bin", "codex"]``.
  */
-function resolveBundledClaude(): string | null {
-  const binaryName = platform() === "win32" ? "claude.exe" : "claude";
-
+function resolveBundledBinary(segments: string[]): string | null {
   // Production: packaged Electron app. ``process.resourcesPath`` is an
   // Electron-only global — undefined under plain Node (e.g. vitest), where
   // ``join(undefined, …)`` would throw. Guard it so the function stays
@@ -87,9 +87,7 @@ function resolveBundledClaude(): string | null {
       process.resourcesPath,
       "libexec",
       "_internal",
-      "claude_agent_sdk",
-      "_bundled",
-      binaryName,
+      ...segments,
     );
     if (existsSync(bundled)) return bundled;
   }
@@ -101,7 +99,7 @@ function resolveBundledClaude(): string | null {
   // resolved. The Python minor version in the path (lib/python3.X/) isn't
   // pinned — it follows whatever interpreter `uv` resolved — so glob every
   // python3.* dir instead of hardcoding one (hardcoding 3.13 silently missed
-  // a 3.12 venv, making the bundled claude read as "not installed").
+  // a 3.12 venv, making the bundled binary read as "not installed").
   const venvLib = resolve(
     __dirname,
     "..",
@@ -122,18 +120,31 @@ function resolveBundledClaude(): string | null {
     // venv lib dir absent (no dev venv) — nothing to glob
   }
   for (const py of pyDirs) {
-    const devClaude = join(
-      venvLib,
-      py,
-      "site-packages",
-      "claude_agent_sdk",
-      "_bundled",
-      binaryName,
-    );
-    if (existsSync(devClaude)) return devClaude;
+    const candidate = join(venvLib, py, "site-packages", ...segments);
+    if (existsSync(candidate)) return candidate;
   }
 
   return null;
+}
+
+/**
+ * Bundled Claude CLI (shipped inside the ``claude_agent_sdk`` package):
+ *   prod: …/libexec/_internal/claude_agent_sdk/_bundled/claude
+ *   dev:  backend/.venv/lib/python3.X/site-packages/claude_agent_sdk/_bundled/claude
+ */
+function resolveBundledClaude(): string | null {
+  const binaryName = platform() === "win32" ? "claude.exe" : "claude";
+  return resolveBundledBinary(["claude_agent_sdk", "_bundled", binaryName]);
+}
+
+/**
+ * Bundled Codex CLI (shipped inside the ``codex_cli_bin`` package):
+ *   prod: …/libexec/_internal/codex_cli_bin/bin/codex
+ *   dev:  backend/.venv/lib/python3.X/site-packages/codex_cli_bin/bin/codex
+ */
+function resolveBundledCodex(): string | null {
+  const binaryName = platform() === "win32" ? "codex.exe" : "codex";
+  return resolveBundledBinary(["codex_cli_bin", "bin", binaryName]);
 }
 
 // Strict markers we require in each CLI's status output before declaring a
@@ -181,10 +192,13 @@ export const detectCliPath = async (
     // which failed — fall through
   }
 
-  // Fallback: use the bundled claude from the backend's PyInstaller bundle
-  // when no global install is found.
+  // Fallback: use the bundled CLI from the backend's PyInstaller bundle / dev
+  // venv when no global install is found.
   if (tool === "claude") {
     return resolveBundledClaude();
+  }
+  if (tool === "codex") {
+    return resolveBundledCodex();
   }
 
   return null;
@@ -237,6 +251,18 @@ export const detectLoginState = async (
     const out = allOutput(result);
     return out.includes(CODEX_STATUS_MARKER) ? "logged_in" : "logged_out";
   } catch {
+    // Global codex failed — try the bundled codex from the backend venv,
+    // mirroring the claude branch above.
+    const bundled = resolveBundledCodex();
+    if (bundled) {
+      try {
+        const result = await deps.execFile(bundled, ["login", "status"]);
+        const out = allOutput(result);
+        return out.includes(CODEX_STATUS_MARKER) ? "logged_in" : "logged_out";
+      } catch {
+        return "logged_out";
+      }
+    }
     return "logged_out";
   }
 };
