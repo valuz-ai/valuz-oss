@@ -28,7 +28,7 @@ export const WelcomeStep = ({ onStart }: { onStart: () => void }) => {
             <img
               src="./valuz-wordmark.svg"
               alt="Valuz"
-              className="h-auto w-[90px] -translate-x-[18px]"
+              className="h-auto w-[90px] -translate-x-[18px] translate-y-0.5"
             />
           </div>
 
