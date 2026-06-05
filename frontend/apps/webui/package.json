@@ -1,0 +1,28 @@
+{
+  "name": "@valuz/webui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json && vite build",
+    "test": "vitest run --passWithNoTests --config ../../vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
+    "lint": "eslint --config ../../eslint.config.js src",
+    "preview": "vite preview",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@fontsource/newsreader": "5.2.10",
+    "@fontsource/noto-serif-sc": "5.2.8",
+    "@valuz/app": "workspace:*",
+    "@valuz/core": "workspace:*",
+    "@valuz/parser-plugins": "workspace:*",
+    "@valuz/shared": "workspace:*",
+    "@valuz/ui": "workspace:*",
+    "lucide-react": "^1.8.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-router-dom": "^7.9.4"
+  }
+}

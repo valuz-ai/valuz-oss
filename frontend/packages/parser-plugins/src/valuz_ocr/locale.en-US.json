@@ -1,0 +1,6 @@
+{
+  "descriptor": {
+    "name": "Valuz OCR (not enabled)",
+    "description": "Valuz enterprise cloud OCR. Placeholder in the open-source build — the enterprise integration plugs in here."
+  }
+}

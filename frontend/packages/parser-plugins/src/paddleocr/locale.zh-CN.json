@@ -1,0 +1,18 @@
+{
+  "descriptor": {
+    "name": "PaddleOCR(云端,PaddleOCR-VL-1.6)",
+    "description": "百度 AI Studio 上的 PaddleOCR-VL-1.6 高精度模型,异步 API。仅支持 PDF 和图片解析;Office / Excel / HTML 会自动走本地解析。"
+  },
+  "setup": {
+    "label": "PaddleOCR-VL API Token"
+  },
+  "config": {
+    "access_token": {
+      "label": "Access Token",
+      "help": "AI Studio 个人设置 → 访问令牌"
+    },
+    "use_doc_orientation_classify": { "label": "文档方向识别" },
+    "use_doc_unwarping": { "label": "文档去扭曲" },
+    "use_chart_recognition": { "label": "图表识别" }
+  }
+}

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8" />
+<title>Valuz — Research Client</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #F8F9FB;
+    --surface: #ffffff;
+    --surface-2: #f5f4f2;
+    --border: #E6E7E9;
+    --border-strong: #d9d6d1;
+    --text: #1c1917;
+    --text-2: #6b6761;
+    --text-3: #a8a29e;
+    --accent: #7c6af5;
+    --accent-soft: #ede9ff;
+    --accent-2: #9084f8;
+    --success: #16a34a;
+    --success-soft: #dcfce7;
+    --warn: #d97706;
+    --warn-soft: #fef3c7;
+    --danger: #dc2626;
+    --radius: 14px;
+    --radius-sm: 6px;
+    --sidebar-w: 220px;
+    --context-w: 345px;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    font-family: var(--sans);
+    color: var(--text);
+    background: var(--bg);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+  }
+  #root { height: 100%; }
+  button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+  input, textarea { font-family: inherit; color: inherit; }
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  .sidebar-scroll,
+  .chat-scroll {
+    scrollbar-width: thin;
+  }
+  .sidebar-scroll {
+    scrollbar-color: transparent transparent;
+  }
+  .chat-scroll {
+    scrollbar-color: rgba(137, 143, 156, 0.12) transparent;
+  }
+  .sidebar-scroll:hover,
+  .sidebar-scroll:focus-within,
+  .sidebar-scroll:active {
+    scrollbar-color: rgba(137, 143, 156, 0.12) transparent;
+  }
+  .sidebar-scroll::-webkit-scrollbar,
+  .chat-scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .chat-scroll::-webkit-scrollbar-thumb {
+    background: rgba(137, 143, 156, 0.12);
+    border-radius: 999px;
+  }
+  .sidebar-scroll::-webkit-scrollbar-thumb {
+    background: transparent;
+  }
+  .sidebar-scroll:hover::-webkit-scrollbar-thumb,
+  .sidebar-scroll:focus-within::-webkit-scrollbar-thumb,
+  .sidebar-scroll:active::-webkit-scrollbar-thumb {
+    background: rgba(137, 143, 156, 0.12);
+  }
+  .sidebar-scroll::-webkit-scrollbar-track,
+  .chat-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .sidebar-scroll:hover::-webkit-scrollbar-track,
+  .sidebar-scroll:focus-within::-webkit-scrollbar-track,
+  .sidebar-scroll:active::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .composer-textarea::placeholder {
+    color: #6E7481;
+    opacity: 1;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="application/json" id="tweak-defaults">
+/*EDITMODE-BEGIN*/{
+  "accent": "indigo",
+  "density": "comfortable",
+  "mode": "light",
+  "contextOpen": true,
+  "showToolTimings": true
+}/*EDITMODE-END*/
+</script>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="app.jsx"></script>
+</body>
+</html>

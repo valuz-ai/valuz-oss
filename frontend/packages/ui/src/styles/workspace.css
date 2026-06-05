@@ -1,0 +1,576 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+@source "../../../*/src/**/*.{ts,tsx}";
+@source inline("absolute fixed relative inset-0 right-0 right-4 top-4 top-full bottom-2 bottom-4 left-2 left-4 z-10 z-20 z-50 flex flex-col flex-1 items-center justify-center justify-end gap-1 gap-2 gap-4 space-x-2 grid w-full w-4 h-full h-4 h-[46px] size-4 size-full min-w-[120px] max-w-md max-h-32 min-h-[200px] p-1 p-2 p-3 p-4 p-6 px-1.5 px-3 px-4 py-1 py-2 pt-0 mt-1 mt-2 mx-4 my-4 my-6 rounded rounded-full rounded-lg rounded-md rounded-xl border border-border border-b-2 border-collapse border-current border-sidebar divide-y divide-border bg-background bg-background/50 bg-background/90 bg-background/95 bg-muted bg-muted/80 bg-primary bg-red-50 bg-red-100 bg-sidebar bg-sidebar/80 text-left text-sm text-xs text-lg text-2xl text-3xl text-base text-muted-foreground text-primary-foreground text-red-600 text-red-700 text-red-800 font-medium font-mono font-semibold list-decimal list-disc list-inside shadow-lg backdrop-blur-sm transition-all transition-colors duration-150 duration-200 ease-out overflow-auto overflow-hidden overflow-x-auto overflow-y-auto cursor-pointer pointer-events-auto pointer-events-none opacity-0 animate-spin group origin-center shrink-0 whitespace-normal break-all before:font-mono before:text-[13px] before:text-right before:w-6 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_thead]:sticky [&_thead]:top-0 [&_thead]:z-10 [li_&]:pl-6 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-muted hover:bg-muted/40 hover:bg-primary/90 hover:bg-background hover:text-foreground supports-[backdrop-filter]:backdrop-blur supports-[backdrop-filter]:bg-sidebar/70 dark:bg-[var(--shiki-dark-bg,var(--sdm-tbg))] dark:text-[var(--shiki-dark,var(--sdm-c,inherit))] bg-[var(--sdm-tbg)] text-[var(--sdm-c,inherit)]");
+
+/* --------------------------------------------------------------------------
+ * Valuz Design System
+ * Canonical reference: frontend/docs/design/DESIGN.md
+ *
+ * Tailwind v4 uses --color-X here as utility seeds (bg-X / text-X / border-X
+ * etc.). To keep utilities working AND expose the spec's variable names
+ * (--bg / --surface / --border / ...) unchanged for direct CSS usage, both
+ * naming schemes coexist and point at the same values.
+ * -------------------------------------------------------------------------- */
+
+@theme {
+  /* Typography — spec section 2.1 */
+  --font-sans: "PingFang SC";
+  --font-serif: "PingFang SC";
+  --font-mono: monospace;
+  /* Editorial display serif — onboarding hero headlines ONLY. Latin glyphs
+   * render in Newsreader, CJK falls through to Noto Serif SC. Loaded via
+   * @fontsource in each app entry; never use this for dense product UI. */
+  --font-display: "Newsreader", "Noto Serif SC", "Songti SC", serif;
+
+  /* shadcn-style aliases — kept so existing components render on the new palette */
+  --color-background: #f8f9fb;
+  --color-foreground: #131313;
+  --color-card: #ffffff;
+  --color-card-foreground: #131313;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #131313;
+
+  --color-primary: #6d5cff;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #f5f5f4;
+  --color-secondary-foreground: #131313;
+
+  --color-muted: #f7f8fa;
+  --color-muted-foreground: #6e7481;
+  --color-accent: #ede9ff;
+  --color-accent-foreground: #3b27b0;
+
+  --color-border: #e6e7e9;
+  --color-input: #e6e7e9;
+  --color-ring: #6d5cff;
+  --color-destructive: #dc2626;
+  --color-destructive-foreground: #ffffff;
+
+  /* Valuz design tokens — `text-ink-heading`, `bg-surface`, etc. */
+  --color-brand: #6d5cff;
+  --color-brand-hover: #5b4be0;
+  --color-brand-light: #ede9ff;
+  --color-brand-secondary: #8b7fff;
+  --color-brand-50: #f5f3ff;
+  --color-brand-100: #ede9ff;
+  --color-brand-500: #6d5cff;
+  --color-brand-600: #5b4be0;
+  --color-brand-700: #3b27b0;
+
+  /* Accent palette — spec section 2.4 */
+  --color-accent-sky: #0ea5e9;
+  --color-accent-teal: #14b8a6;
+  --color-accent-amber: #eab308;
+  --color-accent-pink: #ec4899;
+  --color-context-icon: #725cf9;
+
+  /* Text — spec section 2.4 */
+  --color-ink-heading: #131313; /* TEXT_PRIMARY */
+  --color-ink-label: #131313; /* --text */
+  --color-ink-body: #6e7481; /* TEXT_SECONDARY / --text-2 */
+  --color-ink-meta: #6e7481;
+  --color-ink-muted: #b6b7bc; /* --text-3 */
+  --color-ink-section: #6e7481;
+  --color-ink-disabled: #e6e7e9; /* TEXT_DISABLED */
+
+  /* Surfaces — spec section 2.4 */
+  --color-surface: #ffffff;
+  --color-surface-soft: #f7f8fa; /* hover bg / context section bg */
+  --color-surface-2: #f5f5f4; /* spec --surface-2 */
+  --color-surface-muted: #f3f4f6; /* divider / inner card border bg */
+  --color-surface-border: #e6e7e9; /* spec --border */
+  --color-surface-border-strong: #dbdbdb; /* spec --border-strong */
+  --color-surface-border-hover: #dbdbdb;
+
+  /* Status / accent — spec section 2.4 */
+  --color-success: #16a34a;
+  --color-success-light: #dcfce7;
+  --color-success-text: #166534;
+  --color-success-border: rgba(83, 188, 118, 0.5);
+
+  --color-warning: #d97706;
+  --color-warning-light: #fef3c7;
+  --color-warning-text: #92400e;
+
+  --color-error: #dc2626;
+  --color-error-light: #fee2e2;
+  --color-error-text: #991b1b;
+
+  --color-info: #6d5cff;
+  --color-info-light: #ede9ff;
+  --color-info-text: #3b27b0;
+
+  /* Finance up/down — spec section 2.4 */
+  --color-finance-up: #f54b4b;
+  --color-finance-down: #53bc76;
+
+  /* Type scale (desktop-app focused) */
+  --text-2xs: 0.6875rem; /* 11px */
+  --text-xs: 0.75rem; /* 12px */
+  --text-sm: 0.8125rem; /* 13px */
+  --text-base: 0.875rem; /* 14px */
+  --text-lg: 0.9375rem; /* 15px — context panel title */
+  --text-xl: 1.125rem;
+  --text-2xl: 1.5rem;
+  --text-3xl: 1.875rem;
+
+  /* Shadows — spec section 2.6 */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --shadow-xl:
+    0 20px 25px -5px rgb(0 0 0 / 0.1), 0 10px 10px -5px rgb(0 0 0 / 0.04);
+  /* Spec-named shadows */
+  --shadow-app:
+    0 50px 100px -20px rgba(0, 0, 0, 0.45),
+    0 30px 60px -30px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.06);
+  --shadow-floating: 0 24px 48px rgba(28, 25, 23, 0.14);
+  --shadow-dropdown:
+    0 18px 40px -18px rgba(17, 24, 39, 0.28),
+    0 8px 16px -12px rgba(17, 24, 39, 0.18);
+  --shadow-popover:
+    0 12px 32px -8px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04);
+  --shadow-sidebar-active: 0 4px 10px rgba(217, 221, 224, 0.8);
+  --shadow-tweaks: 0 20px 40px -10px rgba(0, 0, 0, 0.15);
+
+  /* Radii — spec section 2.5 */
+  --radius-sm: 0.125rem; /* 2px */
+  --radius-md: 0.375rem; /* 6px */
+  --radius-lg: 0.5rem; /* 8px */
+  --radius-xl: 0.625rem; /* 10px */
+  --radius-2xl: 0.75rem; /* 12px */
+  --radius-3xl: 0.875rem; /* 14px */
+}
+
+/* Spec-name CSS variables for direct usage in components that read raw
+ * variables (e.g. `var(--bg)`). They mirror the same values as the Tailwind
+ * tokens above. */
+:root {
+  --bg: #f8f9fb;
+  --surface: #ffffff;
+  --surface-2: #f5f5f4;
+  --border: #e6e7e9;
+  --border-strong: #dbdbdb;
+  --text: #131313;
+  --text-2: #6e7481;
+  --text-3: #b6b7bc;
+  --accent: #6d5cff;
+  --accent-2: #8b7fff;
+  --accent-soft: #ede9ff;
+  --accent-sky: #0ea5e9;
+  --accent-teal: #14b8a6;
+  --accent-amber: #eab308;
+  --accent-pink: #ec4899;
+  --context-icon: #725cf9;
+  --color-shell-glow: #e0e1ea;
+  --mono: monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    background: var(--color-surface);
+  }
+
+  body {
+    @apply min-h-screen font-sans text-foreground antialiased;
+    background: radial-gradient(
+      ellipse at 45% 50%,
+      var(--color-shell-glow) 0%,
+      var(--color-background) 100%
+    );
+    font-size: 14px;
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-sans);
+    font-weight: 500;
+    color: var(--color-ink-heading);
+    letter-spacing: -0.01em;
+  }
+
+  a {
+    @apply text-inherit no-underline;
+  }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+  }
+
+  #root {
+    @apply min-h-screen;
+  }
+
+  /* Auto-hiding scrollbars — invisible at rest, fade in on hover or while
+   * scrolling (Chromium reapplies :hover styles when the user interacts with
+   * the scrollbar itself, so scrolling counts). Firefox uses
+   * scrollbar-color/scrollbar-width as the standards-track equivalent. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 200ms ease;
+  }
+
+  /* Spec section 7: 默认 scrollbar 宽 4px / thumb rgba(137,143,156,0.12) /
+   * radius 999px。Sidebar 等容器默认隐藏 thumb，hover/focus/active 显示。 */
+  *:hover,
+  *:focus-within {
+    scrollbar-color: rgba(137, 143, 156, 0.12) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 9999px;
+    transition: background-color 200ms ease;
+  }
+
+  *:hover::-webkit-scrollbar-thumb,
+  *:focus-within::-webkit-scrollbar-thumb,
+  ::-webkit-scrollbar-thumb:active {
+    background-color: rgba(137, 143, 156, 0.12);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(137, 143, 156, 0.28);
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
+
+@layer utilities {
+  .label-mono {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--color-ink-section);
+  }
+
+  .tabular {
+    font-feature-settings: "tnum";
+    font-variant-numeric: tabular-nums;
+  }
+
+  .gradient-brand {
+    background: linear-gradient(135deg, #533afd 0%, #965cf9 71.429%);
+  }
+
+  .ring-brand {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
+  }
+
+  .font-heading {
+    font-family: var(--font-sans);
+    letter-spacing: -0.01em;
+  }
+
+  .soft-gradient {
+    background: radial-gradient(
+      ellipse at 45% 50%,
+      var(--color-shell-glow) 0%,
+      var(--color-background) 100%
+    );
+  }
+
+  .hover-lift {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .hover-lift:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .card-interactive {
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  }
+
+  .card-interactive:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+    border-color: var(--color-surface-border-hover);
+  }
+
+  .section-card {
+    background: var(--color-surface);
+    border-radius: 12px;
+    box-shadow: var(--shadow-xs);
+  }
+}
+
+/* Sidebar tokens kept for components that read sidebar CSS vars (shadcn Sidebar) */
+:root {
+  --sidebar: transparent;
+  --sidebar-foreground: #131313;
+  --sidebar-primary: #533afd;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f3f4f6;
+  --sidebar-accent-foreground: #212121;
+  --sidebar-border: #f2f2f2;
+  --sidebar-ring: #533afd;
+}
+
+#streamdown {
+  
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --radius: 0.625rem;
+}
+
+#streamdown .-mt-10 {
+  margin-top: -2.5rem;
+}
+
+/* --------------------------------------------------------------------------
+ * Dark mode overrides — toggled via .dark class on <html>
+ * -------------------------------------------------------------------------- */
+.dark {
+  --color-background: #0f1012;
+  --color-foreground: #e4e4e7;
+  --color-card: #191a1f;
+  --color-card-foreground: #e4e4e7;
+  --color-popover: #191a1f;
+  --color-popover-foreground: #e4e4e7;
+
+  --color-primary: #7c6aff;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #1e1f24;
+  --color-secondary-foreground: #d4d4d8;
+
+  --color-muted: #1e1f24;
+  --color-muted-foreground: #71717a;
+  --color-accent: #1e1636;
+  --color-accent-foreground: #c4b5fd;
+
+  --color-border: #2a2b30;
+  --color-input: #2a2b30;
+  --color-ring: #7c6aff;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #ffffff;
+
+  /* Valuz tokens — dark */
+  --color-brand: #7c6aff;
+  --color-brand-hover: #965cf9;
+  --color-brand-light: #1e1636;
+  --color-brand-secondary: #f96bee;
+  --color-brand-50: #1e1636;
+  --color-brand-100: #2a1f52;
+  --color-brand-500: #7c6aff;
+  --color-brand-600: #965cf9;
+  --color-brand-700: #b794f6;
+
+  --color-ink-heading: #e4e4e7;
+  --color-ink-label: #d4d4d8;
+  --color-ink-body: #a1a1aa;
+  --color-ink-meta: #71717a;
+  --color-ink-muted: #3f3f46;
+  --color-ink-section: #71717a;
+  --color-ink-disabled: #3f3f46;
+
+  --color-surface: #131418;
+  --color-surface-soft: #191a1f;
+  --color-surface-2: #1e1f24;
+  --color-surface-muted: #1e1f24;
+  --color-surface-border: #2a2b30;
+  --color-surface-border-strong: #3f3f46;
+  --color-surface-border-hover: #3f3f46;
+
+  --color-success: #22c55e;
+  --color-success-light: rgba(34, 197, 94, 0.12);
+  --color-success-text: #86efac;
+  --color-success-border: rgba(34, 197, 94, 0.25);
+
+  --color-warning: #f59e0b;
+  --color-warning-light: rgba(245, 158, 11, 0.12);
+  --color-warning-text: #fcd34d;
+
+  --color-error: #ef4444;
+  --color-error-light: rgba(239, 68, 68, 0.12);
+  --color-error-text: #fca5a5;
+
+  --color-info: #7c6aff;
+  --color-info-light: #1e1636;
+  --color-info-text: #c4b5fd;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.25), 0 1px 2px rgba(0, 0, 0, 0.15);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.2);
+
+  --sidebar: transparent;
+  --sidebar-foreground: #e4e4e7;
+  --sidebar-primary: #7c6aff;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #1e1f24;
+  --sidebar-accent-foreground: #d4d4d8;
+  --sidebar-border: #2a2b30;
+  --sidebar-ring: #7c6aff;
+
+  --bg: #0f1012;
+  --surface: #131418;
+  --surface-2: #1e1f24;
+  --border: #2a2b30;
+  --border-strong: #3f3f46;
+  --text: #e4e4e7;
+  --text-2: #a1a1aa;
+  --text-3: #71717a;
+  --accent: #7c6aff;
+  --accent-2: #f96bee;
+  --accent-soft: #1e1636;
+  --context-icon: #b794f6;
+  --color-shell-glow: #15161a;
+}
+
+html.dark,
+.dark body {
+  background: #0f1012;
+}
+
+.dark body {
+  background: radial-gradient(
+    ellipse at 45% 50%,
+    var(--color-shell-glow) 0%,
+    var(--color-background) 100%
+  );
+}
+
+/* --------------------------------------------------------------------------
+ * Font size scale — toggled via data-size attribute on <html>
+ * -------------------------------------------------------------------------- */
+html[data-size="compact"] body {
+  font-size: 12px;
+}
+
+html[data-size="default"] body {
+  font-size: 14px;
+}
+
+html[data-size="comfortable"] body {
+  font-size: 16px;
+}
+
+@theme inline {
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+/* --------------------------------------------------------------------------
+ * Shimmer keyframe — used by ConversationTurnList's logo loader. Sweeps a
+ * highlight from left to right; clipped to logo silhouette via mask-image.
+ * -------------------------------------------------------------------------- */
+@keyframes shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(200%);
+  }
+}
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-page-enter {
+  animation: page-enter 0.2s ease-out both;
+}
+
+/* --------------------------------------------------------------------------
+ * Border-only breathe — used by the conversation page's scroll-to-bottom
+ * affordance while a turn is still streaming. Keeps the button body steady
+ * (no opacity flicker) and pulses an outward brand-tinted ring instead.
+ * -------------------------------------------------------------------------- */
+@keyframes border-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(109, 92, 255, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(109, 92, 255, 0.32);
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * Text shimmer — sweeps a brighter highlight across the text while a
+ * segment is mid-stream, signalling "this label is still updating". Same
+ * 2s rhythm as the LogoLoader so streaming UIs feel cohesive. The trick
+ * is a wider-than-text linear gradient clipped to the glyphs via
+ * ``background-clip: text`` — animating ``background-position`` then
+ * slides the highlight band across the letters.
+ * -------------------------------------------------------------------------- */
+@keyframes shimmer-text {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * Shimmer icon — pulses the leading SVG icon's stroke colour right at the
+ * start of each ``shimmer-text`` cycle so the highlight visually flows
+ * from the icon into the text. We can't ``background-clip: text`` an SVG
+ * (icons render via ``stroke="currentColor"``), so we ride on ``color``
+ * with a 0–25% peak and grey baseline for the rest of the cycle.
+ * -------------------------------------------------------------------------- */
+@keyframes shimmer-icon {
+  0% {
+    color: #c1c4cc;
+  }
+  25% {
+    color: #6e7481;
+  }
+  100% {
+    color: #6e7481;
+  }
+}

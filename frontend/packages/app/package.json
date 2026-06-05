@@ -1,0 +1,33 @@
+{
+  "name": "@valuz/app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./platform": "./src/platform/index.ts",
+    "./pages": "./src/pages/index.ts",
+    "./components": "./src/components/index.ts",
+    "./hooks": "./src/hooks/index.ts",
+    "./layout": "./src/layout/index.ts",
+    "./routes": "./src/routes/index.ts",
+    "./lib/*": "./src/lib/*.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --passWithNoTests --config ../../vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src --ext .ts,.tsx",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@valuz/core": "workspace:*",
+    "@valuz/shared": "workspace:*",
+    "@valuz/ui": "workspace:*",
+    "react": "^19.2.0",
+    "react-router-dom": "^7.9.4",
+    "zustand": "^5.0.8",
+    "sonner": "^2.0.7",
+    "lucide-react": "^0.511.0"
+  }
+}

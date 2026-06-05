@@ -1,0 +1,6 @@
+This is a test document for E2E verification.
+
+It contains sample text that should be parsed by the LightLocalParser
+and made available for search via the grep-based EmbeddedDocsRuntime.
+
+Keywords: valuz test fixture knowledge base

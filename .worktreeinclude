@@ -1,0 +1,7 @@
+# Local environment
+.env
+.env.local
+.env.*.local
+
+# API credentials
+config/secrets.json

@@ -1,0 +1,4 @@
+# User-facing binaries built at packaging time — not committed.
+# See docs/STRUCTURE.md §"Desktop Distribution".
+valuz
+valuz.exe

@@ -1,0 +1,32 @@
+{
+  "name": "@valuz/core",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts",
+    "./config/features": "./src/config/features.ts",
+    "./vite": "./src/edition/virtual-overlay-plugin.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --passWithNoTests --config ../../vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src --ext .ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@valuz/shared": "workspace:*",
+    "react": "^19.2.0",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "react-router-dom": "^7.9.4",
+    "sonner": "^2.0.7"
+  },
+  "peerDependencies": {
+    "react-router-dom": "^7.0.0",
+    "sonner": "^2.0.0"
+  }
+}

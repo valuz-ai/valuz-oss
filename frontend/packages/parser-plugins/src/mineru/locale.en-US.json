@@ -1,0 +1,25 @@
+{
+  "descriptor": {
+    "name": "MinerU (Cloud, Precise VLM)",
+    "description": "MinerU precise-parsing API powered by the highest-accuracy VLM model. Supports PDF / image / Office / Excel / HTML; HTML switches to the MinerU-HTML sub-model automatically. Files are uploaded to MinerU servers; requires an API token."
+  },
+  "setup": {
+    "label": "MinerU API Token"
+  },
+  "config": {
+    "api_token": {
+      "label": "API Token",
+      "help": "Issued from the mineru.net user dashboard"
+    },
+    "enable_formula": { "label": "Formula recognition" },
+    "enable_table": { "label": "Table recognition" },
+    "language": {
+      "label": "Document language",
+      "options": {
+        "auto": "Auto-detect",
+        "ch": "Chinese",
+        "en": "English"
+      }
+    }
+  }
+}

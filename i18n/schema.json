@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://valuz.agent/schemas/i18n-locale",
+  "title": "I18nLocale",
+  "description": "Schema for Valuz Agent i18n locale files. Keys are namespace segments; leaf values are translation strings.",
+  "type": "object",
+  "additionalProperties": {
+    "$ref": "#/$defs/leafOrNode"
+  },
+  "minProperties": 1,
+  "$defs": {
+    "leafOrNode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "description": "A translation string."
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/leafOrNode"
+          },
+          "minProperties": 1,
+          "description": "A nested namespace grouping translation keys."
+        }
+      ]
+    }
+  }
+}

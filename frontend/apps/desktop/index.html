@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Valuz</title>
+    <!--
+      Pre-React boot splash — drawn the moment the HTML parses so the user
+      doesn't see a flash of white while the JS bundle downloads, parses,
+      and mounts the React-rendered StartupScreen. Visually matches
+      StartupScreen.tsx (same logo, breathing animation, scan rings, faint
+      aurora tint) so the handoff to React is invisible. ReactDOM
+      createRoot wipes #root on first render, so this placeholder cleans
+      itself up — no extra teardown logic needed.
+    -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #f4f5f8;
+        color: #1b1f2a;
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      #root {
+        min-height: 100vh;
+      }
+      .preboot {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #f4f5f8;
+        overflow: hidden;
+      }
+      .preboot-aurora {
+        position: absolute;
+        inset: -20%;
+        filter: blur(90px);
+        opacity: 0.45;
+        pointer-events: none;
+        border-radius: 50%;
+      }
+      .preboot-aurora-a {
+        background: radial-gradient(
+          circle at 30% 30%,
+          rgba(114, 92, 249, 0.18),
+          transparent 60%
+        );
+        animation: preboot-drift-a 20s ease-in-out infinite alternate;
+      }
+      .preboot-aurora-b {
+        background: radial-gradient(
+          circle at 70% 60%,
+          rgba(58, 149, 255, 0.14),
+          transparent 60%
+        );
+        animation: preboot-drift-b 24s ease-in-out infinite alternate;
+      }
+      @keyframes preboot-drift-a {
+        from { transform: translate3d(-8%, -4%, 0) scale(1.05); }
+        to   { transform: translate3d( 4%,  4%, 0) scale(1.15); }
+      }
+      @keyframes preboot-drift-b {
+        from { transform: translate3d( 4%,  2%, 0) scale(1.1); }
+        to   { transform: translate3d(-4%, -4%, 0) scale(1); }
+      }
+      .preboot-hero {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 24px;
+      }
+      .preboot-logo-wrap {
+        position: relative;
+        width: 200px;
+        height: 200px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .preboot-logo {
+        position: relative;
+        width: 80px;
+        height: 80px;
+        border-radius: 22px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.6);
+        box-shadow:
+          0 0 0 1px rgba(17, 24, 39, 0.05),
+          0 8px 24px rgba(114, 92, 249, 0.16);
+        animation: preboot-breathe 4s ease-in-out infinite;
+      }
+      .preboot-logo img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        user-select: none;
+        -webkit-user-drag: none;
+      }
+      @keyframes preboot-breathe {
+        0%, 100% { transform: scale(1); }
+        50%      { transform: scale(1.03); }
+      }
+      .preboot-ring {
+        position: absolute;
+        width: 110px;
+        height: 110px;
+        border-radius: 50%;
+        border: 1px solid rgba(114, 92, 249, 0.22);
+        pointer-events: none;
+        animation: preboot-ring-pulse 4s ease-out infinite;
+      }
+      .preboot-ring-2 { animation-delay: 1.3s; }
+      .preboot-ring-3 { animation-delay: 2.6s; }
+      @keyframes preboot-ring-pulse {
+        0%   { transform: scale(0.75); opacity: 0.5; }
+        60%  { opacity: 0.15; }
+        100% { transform: scale(1.8); opacity: 0; }
+      }
+      .preboot-title {
+        margin: 0;
+        font-size: 30px;
+        letter-spacing: 0.28em;
+        font-weight: 700;
+        line-height: 1;
+        color: #1b1f2a;
+      }
+      .preboot-subtitle {
+        margin: 0;
+        font-size: 13px;
+        letter-spacing: 0.04em;
+        color: rgba(75, 85, 99, 0.85);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .preboot-aurora,
+        .preboot-logo,
+        .preboot-ring {
+          animation: none !important;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="root">
+      
+    </div>
+    <script type="module" src="/src/renderer/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,61 @@
+# .gitignore
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Code signing credentials (never commit)
+*.p12
+*.cer
+*.mobileprovision
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+
+# Build
+frontend/dist/
+.turbo/
+backend/dist/
+backend/build/
+backend/_pyinstaller_entry.py
+cli/build/
+docs/**/dist
+*.egg-info/
+
+# Test artefacts
+frontend/test-results/
+frontend/playwright-report/
+frontend/apps/desktop/dist-electron/
+frontend/apps/desktop/release/
+.playwright-mcp/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Docker data
+docker-data/
+
+# AI working files (ephemeral, not committed)
+.ai/
+
+# Runtime logs (never commit — backend/server logs, sidecar logs, etc.)
+*.log
+
+doc/ui-design
+
+# Git worktrees (isolated workspaces, never tracked)
+.worktrees/

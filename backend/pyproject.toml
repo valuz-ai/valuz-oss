@@ -1,0 +1,180 @@
+[project]
+name = "valuz-oss-backend"
+version = "0.1.0"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite>=0.20",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "alembic>=1.13",
+    "typer>=0.12",
+    "python-multipart>=0.0.9",
+    "sse-starlette>=2.0",
+    # Bundles the Claude Code CLI; floor must match upstream agent-harness.
+    # Kernel pin eec331f (dynamic workflows) needs the CLI's ``Workflow`` tool;
+    # session-modes (cb25177) needs the ``/goal`` slash (CLI >=2.1.146). The old
+    # ``>=0.1.68`` bundled a CLI without ``/goal`` → goal-mode turns no-op'd
+    # (0-token end_turn); a stale-but-present SDK throws no ImportError, so the
+    # floor must be reconciled by hand on every kernel bump (upgrade SOP §2b).
+    "claude-agent-sdk>=0.2.89",
+    "openai-agents>=0.14.6",
+    # Routes OpenAI-compatible models (incl. Reportify proxy on
+    # http://172.20.2.240:8080) through the kernel's deepagents runtime.
+    "deepagents>=0.5.3",
+    "langchain-openai>=1.2.1",
+    # Loaded by the kernel's DeepAgentsRuntime when a session pairs
+    # ``runtime_provider="deepagents"`` with ``api_protocol="anthropic"``.
+    # Valuz today maps anthropic→claude_agent (not deepagents), so this
+    # path isn't exercised — we still declare the dep to match upstream
+    # so a future routing change doesn't ImportError mid-turn.
+    "langchain-anthropic>=1.4.1",
+    # Loaded by the kernel's DeepAgentsRuntime when a session pairs
+    # ``runtime_provider="deepagents"`` with ``api_protocol="gemini"``.
+    # Valuz today has no provider routed to gemini, but mirror upstream so
+    # a future routing change doesn't ImportError mid-turn (per kernel
+    # upgrade SOP step 2b).
+    "langchain-google-genai>=4.2.2",
+    "langchain-mcp-adapters>=0.2.2",
+    # DeepAgentsRuntime persists thread state into a SQLite checkpoint so
+    # conversation history survives kernel restarts (kernel
+    # ``DEEPAGENTS_CHECKPOINT_DB`` env, defaults to a file next to the
+    # working dir; the host points it at the valuz DB — see
+    # ``boot/kernel._set_kernel_env``). Missing this dep
+    # surfaces as ``No module named 'langgraph.checkpoint.sqlite'`` on
+    # the first OpenAI-protocol turn.
+    "langgraph-checkpoint-sqlite>=2.0",
+    "jinja2>=3.1",
+    "httpx[socks]>=0.27",
+    "python-dotenv>=1.0",
+    "pymupdf4llm==1.27.2.3",
+    "markitdown[xlsx,pptx,docx]==0.1.5",
+    # HTML→Markdown for LightLocal. MarkItDown's HTML path corrupts non-ASCII
+    # (CLAUDE.md pitfall), so we use html-to-markdown (MIT, modernized
+    # markdownify fork by Goldziher / Na'aman Hirschfeld). Pinned to the
+    # 1.x line which is pure-Python; the 2.x+ rewrite under the Kreuzberg
+    # org introduces a Rust core we don't need for this scale of HTML.
+    # Provides ``markdownify`` callable as a drop-in markdownify alias.
+    "html-to-markdown>=1.0,<2.0",
+    # Image OCR for the LightLocal parser (KB image documents). rapidocr 3.x
+    # supports PP-OCRv5 (the older ``rapidocr-onnxruntime`` package is frozen at
+    # PP-OCRv4); its public API uses OmegaConf params
+    # (``RapidOCR(params={"Det.model_path": ...})``). The ``light_local``
+    # provider + setup-job downloader expect ≥3.3.0. A DEFAULT dep (not an
+    # optional extra) so ``uv sync`` never prunes it — image parsing returned
+    # ``not_installed`` when this lived under an extra the dev launcher dropped.
+    "rapidocr>=3.3.0",
+    # rapidocr's inference engine. rapidocr defaults to ``engine_name:
+    # onnxruntime`` but does NOT declare it (its deps are only opencv/numpy/…),
+    # so it must be installed explicitly — otherwise OCR has no backend. It was
+    # only present transitively via ``magika`` (markitdown's filetype detector);
+    # declare it directly so OCR never breaks if that transitive path changes.
+    "onnxruntime>=1.20",
+    "croniter>=6.2.2",
+    "cron-descriptor>=2.0.8",
+    "pytz>=2026.1.post1",
+    "types-pytz>=2026.1.1.20260408",
+    "types-croniter>=6.2.2.20260408",
+    # ``yaml`` is imported eagerly by ``kernel/src/core/skills.py`` (via
+    # ``src.core.__init__`` re-export), so any host import of
+    # ``from src.core import …`` triggers it. Today it arrives transitively,
+    # but declare it explicitly to match the upstream kernel pyproject and
+    # protect against a future transitive-dep drop.
+    "pyyaml>=6.0",
+    # Required by the kernel's ``CodexRuntime`` (``from openai_codex import
+    # CodexConfig``). Codex is dormant in valuz today (provider_resolver only
+    # produces ``claude_agent`` / ``deepagents``), but the kernel's
+    # ``runtimes/codex/__init__.py`` re-exports CodexRuntime eagerly, so any
+    # import of ``src.runtimes.codex`` would explode with ``ModuleNotFoundError:
+    # No module named 'openai_codex'``. Kernel pin eec331f moved codex off the
+    # vendored 0.131.0a4 wheel (``AppServerConfig``) to the PUBLISHED PyPI beta
+    # (0.1.0b2, ``CodexConfig``). No version pin — ``openai-codex`` is
+    # prerelease-only, so uv resolves the beta automatically. It pulls
+    # ``openai-codex-cli-bin`` (the per-platform, version-pinned codex binary)
+    # transitively; we mirror upstream and KEEP it (no override) so
+    # ``_resolve_codex_bin`` prefers that pinned binary over a stray PATH
+    # ``codex`` — even though codex is dormant in valuz today.
+    "openai-codex",
+]
+
+# Note: built-in parser plugins live in ``backend/parser_plugins/`` and
+# are discovered by convention (see ``modules/parser/registry.py``).
+# Only out-of-tree third-party plugins use the entry-point group below,
+# and that group lives on THEIR own pyproject — declaring it here for
+# built-ins would create a double-discovery path (entry-point + scan)
+# with no benefit. The entry-point GROUP NAME is part of the public
+# plugin contract though, so it's documented here:
+#
+#   [project.entry-points."valuz.parser_plugins"]
+#   my_plugin = "my_pypi_pkg:make_plugin"
+
+[tool.setuptools.packages.find]
+# Include the convention-discovery top-level ``plugins`` package
+# alongside the main host module. ``plugins`` is a sibling top-level
+# package — not nested under ``valuz_agent`` — so the same directory
+# layout can lift out cleanly into separate pypi packages in Phase 2
+# (e.g. ``plugins/parser/mineru/`` → ``valuz-parser-mineru``).
+include = ["valuz_agent*", "plugins*"]
+
+[project.optional-dependencies]
+# NOTE: ``rapidocr`` (image OCR) moved to the default ``[project] dependencies``
+# — keeping it under an extra meant ``uv sync`` (dev launcher) pruned it and KB
+# image parsing failed with ``not_installed``.
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "mypy>=1.10",
+    "ruff>=0.5",
+    "jsonschema>=4.23",
+    "httpx[socks]>=0.27",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"valuz_agent/api/routes/*.py" = ["B008"]  # FastAPI Depends() in default args is idiomatic
+"**/errors.py" = ["N818"]  # Domain exceptions prefer SkillNotFound over SkillNotFoundError
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+mypy_path = "$MYPY_CONFIG_FILE_DIR/kernel/src"
+exclude = [
+    "^kernel/",
+    "^valuz_agent/resources/",
+    "^valuz_agent/migrations/",
+]
+[[tool.mypy.overrides]]
+# ``follow_imports = "skip"`` for ``src.*`` / ``kernel.*`` means host mypy never
+# descends into the vendored kernel's bodies — it treats kernel imports as Any.
+# So upstream's ``module = ["yaml", "codex_cli_bin"] ignore_missing_imports``
+# override (kernel pin eec331f) has NO host equivalent: host mypy never resolves
+# ``codex_cli_bin`` (imported only inside ``src.runtimes.codex.runtime``), so
+# there is no missing-stub error to suppress. Verified: ``mypy valuz_agent/``
+# emits zero ``codex``-related lines.
+module = [
+    "kernel.*",
+    "src.*",
+]
+follow_imports = "skip"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+markers = [
+    "integration: marks tests that require external services (deselect with '-m not integration')",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.20.2",
+    "pyinstaller>=6.20.0",
+]

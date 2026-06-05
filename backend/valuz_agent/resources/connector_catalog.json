@@ -1,0 +1,105 @@
+[
+  {
+    "slug": "valuz",
+    "display_name": "Valuz",
+    "description": {
+      "zh-CN": "搜索和行情数据",
+      "en-US": "Search and market data"
+    },
+    "connectors": [
+      {
+        "slug": "valuz-search",
+        "display_name": {
+          "zh-CN": "Valuz · 搜索",
+          "en-US": "Valuz · Search"
+        },
+        "description": {
+          "zh-CN": "全市场财报、电话会、研报、纪要、公告搜索",
+          "en-US": "Search across earnings reports, conference calls, research, minutes & filings"
+        },
+        "url": "https://mcp.reportify.cn/search/mcp",
+        "auth_type": "oauth",
+        "transport": "http"
+      },
+      {
+        "slug": "valuz-stock",
+        "display_name": {
+          "zh-CN": "Valuz · 行情",
+          "en-US": "Valuz · Quotes"
+        },
+        "description": {
+          "zh-CN": "全市场实时与历史行情、财务、指标数据",
+          "en-US": "Real-time and historical quotes, financials, and indicators across all markets"
+        },
+        "url": "https://mcp.reportify.cn/stock/mcp",
+        "auth_type": "oauth",
+        "transport": "http"
+      }
+    ]
+  },
+  {
+    "slug": "github",
+    "display_name": "GitHub",
+    "description": "Access GitHub repositories, issues, pull requests and more.",
+    "icon_url": "https://github.com/favicon.ico",
+    "categories": ["developer"],
+    "url": "https://api.githubcopilot.com/mcp/",
+    "auth_type": "oauth",
+    "transport": "http",
+    "credentials_help_url": "https://github.com/settings/developers",
+    "oauth_credentials_schema": [
+      {
+        "key": "client_id",
+        "label": "Client ID",
+        "placeholder": "Ov23li...",
+        "required": true,
+        "secret": false
+      },
+      {
+        "key": "client_secret",
+        "label": "Client Secret",
+        "placeholder": "Client Secret",
+        "required": true,
+        "secret": true
+      }
+    ]
+  },
+  {
+    "slug": "linear",
+    "display_name": "Linear",
+    "description": "Manage Linear issues, projects and cycles.",
+    "icon_url": "https://linear.app/favicon.ico",
+    "categories": ["productivity"],
+    "url": "https://mcp.linear.app/mcp",
+    "auth_type": "oauth",
+    "transport": "http",
+    "oauth_credentials_schema": []
+  },
+  {
+    "slug": "notion",
+    "display_name": "Notion",
+    "description": "Read and write Notion pages and databases.",
+    "icon_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAAAAABXZoBIAAAA80lEQVR4AZTRIYyDMBjF8efxBn3qfFD1IcGiUFOIyVokAos6h8IjEXNIfD6DqUXOVb7jNnK027pkf9mfeE0LvukjtOtifJRp6BpdqAi3kquDLSJV6KYbJjF/5zXGA8/o6SU4OYhyHzQyX4bupwSWA4FvOMUKpYvVtjlOsqz322QunumXP6A1MpGcK62eUQGoSKPBZ2QOQMj+JWYREIUwzVqgCWFCACaIM5AMIWQJxEG0ADxsdswUyfEB7R0lQm7J3EfKDcdZVm4ZbhX/yM55eHs1Mk84kDmaWp9S51O7AxkDwFda6Lrth8s+gN/BTaMgUWMCAITxMqVHQtVcAAAAAElFTkSuQmCC",
+    "categories": ["productivity"],
+    "url": "https://mcp.notion.com/mcp",
+    "auth_type": "oauth",
+    "transport": "http",
+    "oauth_credentials_schema": []
+  },
+  {
+    "slug": "chrome-devtools",
+    "display_name": {
+      "zh-CN": "Chrome DevTools",
+      "en-US": "Chrome DevTools"
+    },
+    "description": {
+      "zh-CN": "通过 Chrome DevTools 协议调试、检查和自动化网页",
+      "en-US": "Debug, inspect and automate web pages via the Chrome DevTools Protocol"
+    },
+    "categories": ["developer"],
+    "transport": "stdio",
+    "auth_type": "none",
+    "command": "npx",
+    "args": ["-y", "chrome-devtools-mcp@latest"]
+  }
+]

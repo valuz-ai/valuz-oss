@@ -1,0 +1,78 @@
+protocols:
+  name: Valuz OSS
+  schemes:
+    - valuz-oss
+appId: io.valuz.oss.desktop
+productName: Valuz
+# Distribution-package artifact name template. Edition + platform + arch
+# are computed by scripts/build-desktop.sh and exported as VALUZ_DIST_TAG.
+# Result examples (per docs/STRUCTURE.md §"Distribution Model"):
+#   valuz-oss-darwin-arm64.dmg
+#   valuz-enterprise-darwin-arm64.dmg
+# The installed command stays ``valuz`` regardless of edition.
+artifactName: "valuz-${env.VALUZ_DIST_TAG}.${ext}"
+directories:
+  output: release
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+extraResources:
+  # User-facing binaries (the valuz Go CLI). On PATH after install.
+  - from: resources/bin/
+    to: bin/
+    filter:
+      - "**/*"
+  # Internal helpers (valuz-server PyInstaller bundle, rg, future valuz-tui).
+  # Not on the user PATH — invoked by valuz / Electron main process.
+  - from: resources/libexec/
+    to: libexec/
+    filter:
+      - "**/*"
+asar: true
+mac:
+  target:
+    - dmg
+    - dir
+  # No prefix — electron-builder forbids it. Substring match resolves to the
+  # Developer ID Application cert in CSC_LINK / login keychain.
+  identity: "Beijing Xiaobang Information Technology Co., Ltd. (UUHLDZ2S48)"
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # libexec/ holds PyInstaller's many .so / .dylib helpers + the ripgrep
+  # binary, none of which are built by us; skip individual signing.
+  # bin/valuz (Go CLI) is built by us and will be signed normally.
+  signIgnore:
+    - "/Contents/Resources/libexec/"
+  icon: build/iconRounded.png
+  # Notarization is handled by afterSign.cjs (@electron/notarize), not by
+  # electron-builder's built-in flow. Disable the built-in check to avoid
+  # "Env vars APPLE_API_KEY … need to be set" when using custom env var names.
+  notarize: false
+linux:
+  target:
+    - AppImage
+    - deb
+  icon: build/icon.png
+  category: Development
+afterSign: build/afterSign.cjs
+# Auto-update channel. electron-builder writes app-update.yml into the
+# packaged app from this block and emits latest-mac.yml / latest.yml next
+# to each artifact. electron-updater (src/main/updater.ts) reads
+# app-update.yml at runtime unless VALUZ_UPDATER_URL overrides it.
+#
+# Per-edition isolation: each edition publishes to its own repo
+# (e.g. owner=valuz-io, repo=valuz-${edition}) so an OSS user never
+# discovers the enterprise build. Drive the values from env so the build
+# script can stamp them per edition without editing this file.
+#
+# Releasing: `GH_TOKEN=… VALUZ_GH_OWNER=… VALUZ_GH_REPO=… electron-builder
+# --publish always`. Without --publish, the .yml manifest is generated
+# locally but nothing is uploaded.
+publish:
+  provider: github
+  owner: valuz-ai
+  repo: valuz-oss
+  releaseType: release

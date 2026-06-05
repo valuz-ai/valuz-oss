@@ -1,0 +1,18 @@
+{
+  "descriptor": {
+    "name": "PaddleOCR (Cloud, PaddleOCR-VL-1.6)",
+    "description": "Baidu AI Studio's PaddleOCR-VL-1.6 high-accuracy model, async API. PDF and image only; Office / Excel / HTML fall back to the local parser."
+  },
+  "setup": {
+    "label": "PaddleOCR-VL API Token"
+  },
+  "config": {
+    "access_token": {
+      "label": "Access Token",
+      "help": "AI Studio → Personal settings → Access token"
+    },
+    "use_doc_orientation_classify": { "label": "Detect document orientation" },
+    "use_doc_unwarping": { "label": "Dewarp document" },
+    "use_chart_recognition": { "label": "Chart recognition" }
+  }
+}

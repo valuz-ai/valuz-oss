@@ -1,0 +1,1 @@
+"""EventSink adapter implementations."""

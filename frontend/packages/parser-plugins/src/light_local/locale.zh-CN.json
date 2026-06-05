@@ -1,0 +1,9 @@
+{
+  "descriptor": {
+    "name": "本地解析",
+    "description": "进程内解析:PyMuPDF4LLM(PDF)、MarkItDown(Office/Excel)、html-to-markdown(HTML)、RapidOCR(图片)。除图片 OCR 模型需用户授权下载外,全部无需联网。"
+  },
+  "setup": {
+    "label": "下载 OCR 模型(PP-OCRv5 ONNX)"
+  }
+}

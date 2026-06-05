@@ -1,0 +1,9 @@
+{
+  "descriptor": {
+    "name": "Local parser",
+    "description": "In-process parsing: PyMuPDF4LLM (PDF), MarkItDown (Office/Excel), html-to-markdown (HTML), RapidOCR (image). Fully offline except for the image OCR model, which the user authorizes a one-time download for."
+  },
+  "setup": {
+    "label": "Download OCR model (PP-OCRv5 ONNX)"
+  }
+}

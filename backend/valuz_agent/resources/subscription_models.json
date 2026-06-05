@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "last_updated": "2026-06-02",
+  "_comment": "Recommended model lists for OAuth subscription channels. Updating these does not require a Python code change — bump last_updated and edit the arrays. API-key channels are NOT covered here; their models come from /v1/models auto-discovery + user manual entry on channel edit.",
+  "_sources": {
+    "claude-subscription": "https://code.claude.com/docs/en/model-config",
+    "codex-subscription": "https://developers.openai.com/codex/models"
+  },
+  "subscriptions": {
+    "claude-subscription": {
+      "default_model": "claude-sonnet-4-6",
+      "models": [
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5"
+      ]
+    },
+    "codex-subscription": {
+      "default_model": "gpt-5.5",
+      "models": [
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.3-codex",
+        "gpt-5.3-codex-spark",
+        "gpt-5.2"
+      ]
+    }
+  }
+}

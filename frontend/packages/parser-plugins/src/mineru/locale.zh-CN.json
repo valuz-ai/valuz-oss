@@ -1,0 +1,25 @@
+{
+  "descriptor": {
+    "name": "MinerU(云端,精准 VLM)",
+    "description": "MinerU 精准解析 API,使用最高精度 VLM 模型。支持 PDF / 图片 / Office / Excel / HTML;HTML 自动切换到 MinerU-HTML 子模型。上传文件到 MinerU 服务器进行解析,需用户配置 API Token。"
+  },
+  "setup": {
+    "label": "MinerU API Token"
+  },
+  "config": {
+    "api_token": {
+      "label": "API Token",
+      "help": "在 mineru.net 用户后台申请"
+    },
+    "enable_formula": { "label": "公式识别" },
+    "enable_table": { "label": "表格识别" },
+    "language": {
+      "label": "文档语言",
+      "options": {
+        "auto": "自动识别",
+        "ch": "中文",
+        "en": "English"
+      }
+    }
+  }
+}

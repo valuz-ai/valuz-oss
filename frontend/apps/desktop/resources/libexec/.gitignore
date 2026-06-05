@@ -1,0 +1,10 @@
+# Internal helpers staged at packaging time — not committed.
+# See docs/STRUCTURE.md §"Desktop Distribution".
+# PyInstaller produces ``valuz-server`` (binary) + ``_internal/`` as
+# sibling entries directly under libexec/ (flat layout, no wrapper dir).
+valuz-server
+valuz-server.exe
+_internal/
+valuz-tui/
+rg
+rg.exe

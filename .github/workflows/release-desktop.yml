@@ -1,0 +1,155 @@
+name: Release Desktop
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag (e.g. v0.2.0). Leave empty to use package.json version."
+        required: false
+        type: string
+
+concurrency:
+  group: release-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-mac:
+    name: macOS (arm64)
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ── Apple code-signing credentials ──────────────────────────
+      # CSC_LINK: base64-encoded .p12 certificate
+      # APPLE_API_KEY: base64-encoded App Store Connect API .p8 key
+      - name: Import signing certificate
+        env:
+          CSC_LINK_B64: ${{ secrets.CSC_LINK_B64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          echo "$CSC_LINK_B64" | base64 -d > /tmp/valuz-mac.p12
+          echo "CSC_LINK=/tmp/valuz-mac.p12" >> "$GITHUB_ENV"
+          echo "CSC_KEY_PASSWORD=$CSC_KEY_PASSWORD" >> "$GITHUB_ENV"
+          echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+
+      - name: Import Apple notarization key
+        env:
+          APPLE_API_KEY_B64: ${{ secrets.APPLE_API_KEY_B64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          echo "$APPLE_API_KEY_B64" | base64 -d > /tmp/AuthKey.p8
+          echo "APPLE_API_KEY_PATH=/tmp/AuthKey.p8" >> "$GITHUB_ENV"
+          echo "APPLE_API_KEY_ID=$APPLE_API_KEY_ID" >> "$GITHUB_ENV"
+          echo "APPLE_API_ISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
+
+      # ── Build ──────────────────────────────────────────────────
+      - name: Build desktop app (signed + publish)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash scripts/build-desktop.sh --signed --publish=always
+
+      - name: List artifacts
+        run: ls -lh frontend/apps/desktop/release/
+
+      # ── Upload build log on failure ────────────────────────────
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: |
+            frontend/apps/desktop/release/*.blockmap
+            frontend/apps/desktop/release/*.dmg
+            frontend/apps/desktop/release/latest-mac.yml
+          if-no-files-found: warn
+
+  build-linux-arm64:
+    name: Linux (arm64)
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi-dev libssl-dev
+
+      # ── Build ──────────────────────────────────────────────────
+      - name: Build desktop app (unsigned + publish)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash scripts/build-desktop.sh --publish=always
+
+      - name: List artifacts
+        run: ls -lh frontend/apps/desktop/release/
+
+      # ── Upload build log on failure ────────────────────────────
+      - name: Upload build artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-linux-arm64
+          path: |
+            frontend/apps/desktop/release/*.AppImage
+            frontend/apps/desktop/release/*.deb
+            frontend/apps/desktop/release/*.blockmap
+            frontend/apps/desktop/release/latest-linux.yml
+          if-no-files-found: warn

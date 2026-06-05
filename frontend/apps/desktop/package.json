@@ -1,0 +1,41 @@
+{
+  "name": "@valuz/desktop",
+  "productName": "Valuz",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Electron desktop shell for Valuz Agent",
+  "author": "Valuz",
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "VITE_DEV_SERVER_URL=http://127.0.0.1:1420 concurrently -k \"vite --config vite.renderer.config.ts\" \"vite build --watch --config vite.main.config.ts\" \"vite build --watch --config vite.preload.config.ts\" \"wait-on tcp:1420 dist-electron/main.js dist-electron/preload.js && electron .\"",
+    "build": "pnpm typecheck && vite build --config vite.renderer.config.ts && vite build --config vite.main.config.ts && vite build --config vite.preload.config.ts && electron-builder --config build/electron-builder.yml --publish ${ELECTRON_PUBLISH:-never}",
+    "build:signed": "set -a && . ./.env.local && set +a && pnpm run build",
+    "preview": "vite preview --config vite.renderer.config.ts",
+    "test": "vitest run --passWithNoTests --config ../../vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.preload.json",
+    "lint": "eslint --config ../../eslint.config.js src",
+    "clean": "rm -rf dist dist-electron release"
+  },
+  "dependencies": {
+    "@fontsource/newsreader": "5.2.10",
+    "@fontsource/noto-serif-sc": "5.2.8",
+    "@valuz/core": "workspace:*",
+    "@valuz/parser-plugins": "workspace:*",
+    "@valuz/shared": "workspace:*",
+    "@valuz/ui": "workspace:*",
+    "electron-updater": "^6.6.2",
+    "lucide-react": "^1.8.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.9.4",
+    "sonner": "^2.0.7"
+  },
+  "devDependencies": {
+    "@electron/notarize": "^3.1.1",
+    "concurrently": "^9.2.1",
+    "electron": "^36.3.2",
+    "electron-builder": "^26.0.12",
+    "wait-on": "^8.0.5"
+  }
+}

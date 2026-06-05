@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "last_updated": "2026-05-15",
+  "_comment": "Built-in provider catalog seed. Pure-insert: the seeder skips any row whose id already exists in valuz_provider. Updating an existing built-in row's defaults must land as an alembic revision, not by editing this file — that's the explicit V2 contract that keeps user customisations intact across boots.",
+  "providers": [
+    {
+      "id": "ch-anthropic",
+      "name": "Anthropic",
+      "provider_kind": "anthropic",
+      "usage": "Chat / 深度研究",
+      "source": "builtin"
+    },
+    {
+      "id": "ch-openai",
+      "name": "OpenAI",
+      "provider_kind": "openai",
+      "usage": "工具调用 / 结构化输出",
+      "source": "builtin"
+    },
+    {
+      "id": "ch-deepseek",
+      "name": "DeepSeek",
+      "provider_kind": "deepseek",
+      "usage": "快速草稿 / 成本优化",
+      "source": "builtin"
+    },
+    {
+      "id": "ch-claude-subscription",
+      "name": "Claude Pro / Max",
+      "provider_kind": "claude-subscription",
+      "usage": "claude /login 订阅",
+      "source": "builtin"
+    },
+    {
+      "id": "ch-codex-subscription",
+      "name": "Codex · ChatGPT",
+      "provider_kind": "codex-subscription",
+      "usage": "codex /login 订阅",
+      "source": "builtin"
+    }
+  ]
+}

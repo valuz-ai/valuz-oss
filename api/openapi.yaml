@@ -1,0 +1,3924 @@
+openapi: "3.1.0"
+info:
+  title: Valuz Agent API
+  version: "0.3.0"
+  description: Valuz Agent API contract — single source of truth
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+paths:
+  /v1/runs:
+    get:
+      summary: List runs for the activity overview (running sessions / tasks)
+      operationId: listRuns
+      tags: [runs]
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [running, finished]
+            default: running
+          description: running = in-flight; finished = recently completed/failed runs
+      responses:
+        "200":
+          description: Runs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runs]
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RunSummary"
+  /v1/agents:
+    get:
+      summary: List official Agents (read-only)
+      operationId: listAgents
+      tags: [agents]
+      parameters:
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by source (official|custom).
+      responses:
+        "200":
+          description: Official agents
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agents]
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Agent"
+    post:
+      summary: Create a user-defined Agent
+      operationId: createAgent
+      tags: [agents]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAgentRequest"
+      responses:
+        "201":
+          description: Created agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "409":
+          description: Slug already exists
+  /v1/agents/{slug}:
+    get:
+      summary: Get a single Agent
+      operationId: getAgent
+      tags: [agents]
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "404":
+          description: Agent not found
+    patch:
+      summary: Update an Agent
+      operationId: updateAgent
+      tags: [agents]
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAgentRequest"
+      responses:
+        "200":
+          description: Updated agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "404":
+          description: Agent not found
+    delete:
+      summary: Delete an Agent
+      operationId: deleteAgent
+      tags: [agents]
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Agent not found
+        "409":
+          description: Agent still deployed to one or more projects (解除派驻 first)
+  /v1/agents/{slug}/deployments:
+    get:
+      summary: List the projects an agent is deployed (派驻) into
+      operationId: listAgentDeployments
+      tags: [agents]
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deployments (live-reference 派驻 across projects)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deployments, count]
+                properties:
+                  count: {type: integer}
+                  deployments:
+                    type: array
+                    items:
+                      type: object
+                      required: [workspace_id, agent_slug]
+                      properties:
+                        workspace_id: {type: string}
+                        agent_slug:
+                          type: string
+                          description: Project-local member handle.
+        "404":
+          description: Agent not found
+  /v1/workspaces/{workspace_id}/agents:
+    get:
+      summary: List workspace member agents
+      operationId: listWorkspaceAgents
+      tags: [agents]
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Workspace member agents
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agents]
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MemberWithAgent"
+    post:
+      summary: Create a blank (template-free) agent in a workspace
+      operationId: createBlankAgent
+      tags: [agents]
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBlankAgentRequest"
+      responses:
+        "201":
+          description: Created member agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemberWithAgent"
+        "409":
+          description: Agent slug already exists in workspace
+  /v1/workspaces/{workspace_id}/agents:deploy:
+    post:
+      summary: Deploy (派驻, live-reference) a library agent into a project
+      operationId: deployAgent
+      tags: [agents]
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeployAgentRequest"
+      responses:
+        "201":
+          description: Created member agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemberWithAgent"
+        "404":
+          description: Source agent not found
+        "409":
+          description: Agent slug already exists in workspace
+  /v1/workspaces/{workspace_id}/agents/{agent_slug}:
+    delete:
+      summary: Delete a workspace agent and its kernel AgentConfig
+      operationId: deleteWorkspaceAgent
+      tags: [agents]
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: agent_slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Agent not found
+  /v1/workspaces/{workspace_id}/tasks:
+    post:
+      summary: Kickoff a lead-dispatch task
+      operationId: kickoffTask
+      tags: [tasks]
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KickoffTaskRequest"
+      responses:
+        "201":
+          description: Created task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          description: Workspace or lead agent not found
+    get:
+      summary: List workspace tasks
+      operationId: listTasks
+      tags: [tasks]
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Tasks
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tasks]
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Task"
+  /v1/tasks:
+    get:
+      summary: List tasks across every workspace
+      description: |
+        Global, cross-project task list ordered by updated_at desc. Powers the
+        sidebar TASKS section so users can see what's running regardless of
+        which project page they're on.
+      operationId: listAllTasks
+      tags: [tasks]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: {type: integer, default: 50, minimum: 1, maximum: 200}
+      responses:
+        "200":
+          description: Tasks
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tasks]
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Task"
+  /v1/tasks/{task_id}:
+    get:
+      summary: Task detail (header + runs + events)
+      operationId: getTask
+      tags: [tasks]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Task detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskDetail"
+        "404":
+          description: Task not found
+  /v1/tasks/{task_id}/events:
+    get:
+      summary: Task event log (ACTIVITY)
+      operationId: listTaskEvents
+      tags: [tasks]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Events
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TaskEvent"
+  /v1/tasks/{task_id}:intervene:
+    post:
+      summary: User intervention on a task (note/revise_goal/pause/resume/stop)
+      operationId: interveneTask
+      tags: [tasks]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InterveneRequest"
+      responses:
+        "200":
+          description: Updated task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "404":
+          description: Task not found
+  /v1/runs/{session_id}:stop:
+    post:
+      summary: User-initiated single-member stop (interrupt subtask, node→rework)
+      operationId: stopMember
+      tags: [tasks]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Member stopped
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stopped: {type: boolean}
+                required: [stopped]
+        "404":
+          description: Subtask run not found
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+
+  /api/v1/users:
+    get:
+      summary: List users
+      operationId: listUsers
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Paginated user list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedResponse"
+
+  # ── Runtime Agents (REP-107) ───────────────────────────────────────
+
+  /v1/runtimes:
+    get:
+      summary: List runtime agents and live availability
+      operationId: listRuntimes
+      tags: [runtimes]
+      description: |
+        Drives the Runtime picker on the session-creation form. Each
+        entry exposes:
+
+        - ``supported_protocols``: API protocols this runtime can
+          dispatch — used to filter the list of compatible providers for
+          the model dropdown.
+        - ``available`` + ``unavailable_reason``: live host probe.
+          ``codex`` reports ``available=false`` when the ``codex``
+          binary is missing from PATH (and ``CODEX_BIN_OVERRIDE`` isn't
+          set). The frontend should grey out unavailable runtimes and
+          render ``unavailable_reason`` as a tooltip.
+      responses:
+        "200":
+          description: Runtime list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runtimes]
+                properties:
+                  runtimes:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RuntimeListItem"
+
+  # ── System (backend status & log path discovery) ────────────────────
+
+  /v1/system/status:
+    get:
+      summary: Backend process status & introspection
+      operationId: getSystemStatus
+      tags: [system]
+      description: |
+        Snapshot of the running backend process — drives the desktop
+        ``服务`` panel (status card on top of the log viewer). Cheap to
+        call; safe to poll every few seconds.
+      responses:
+        "200":
+          description: Current backend status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemStatusResponse"
+
+  # ── Parser plugin setup (user-authorized model downloads) ──────────
+
+  /v1/system/parser/setup:
+    get:
+      summary: List parser setup jobs and their current status
+      operationId: listParserSetupJobs
+      tags: [parser]
+      description: |
+        Returns one entry per registered setup_id (e.g. ``rapidocr_models``).
+        Drives the "Local Capabilities" section on the parsing settings
+        page — each row gets a "Download / Re-download" button.
+      responses:
+        "200":
+          description: Setup job list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetupJobListResponse"
+
+  /v1/system/parser/setup/{setup_id}:
+    parameters:
+      - name: setup_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Current status of a single setup job
+      operationId: getParserSetupJob
+      tags: [parser]
+      description: |
+        Polled by the frontend ~every 2 seconds while a download is in
+        flight. Cheap to call — pure DB read.
+      responses:
+        "200":
+          description: Setup job status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetupJobStatus"
+        "404":
+          description: Unknown setup_id
+    delete:
+      summary: Cancel an in-flight setup job
+      operationId: cancelParserSetupJob
+      tags: [parser]
+      description: |
+        Sets a cooperative cancellation flag. The worker thread observes
+        it on the next chunk-loop iteration and cleans up ``*.partial``
+        files; the final status reflects ``cancelled``.
+      responses:
+        "200":
+          description: Updated status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetupJobStatus"
+        "404":
+          description: Unknown setup_id
+
+  /v1/system/parser/setup/{setup_id}/start:
+    parameters:
+      - name: setup_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Authorize and start a setup job
+      operationId: startParserSetupJob
+      tags: [parser]
+      description: |
+        Hard authorization gate: ``accept_license`` must be ``true`` and
+        ``confirmed_source`` must equal the requirement's ``source``
+        string. This is the only path that triggers network downloads —
+        no silent fetch ever happens.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartSetupJobRequest"
+      responses:
+        "200":
+          description: Job started (or already complete)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetupJobStatus"
+        "400":
+          description: Missing authorization fields
+        "404":
+          description: Unknown setup_id
+        "409":
+          description: Setup job already running
+
+  # ── Parser settings (routing + per-plugin config) ──────────────────
+
+  /v1/settings/parser/plugins:
+    get:
+      summary: List parser plugins shipped with this build
+      operationId: listParserPlugins
+      tags: [parser]
+      description: |
+        Each entry combines static descriptor metadata (id, name,
+        config_schema, supported_kinds) with the *effective* runtime
+        capability status (e.g. RapidOCR's image kind reads
+        ``needs_setup`` until the user authorizes the download).
+      responses:
+        "200":
+          description: Plugin list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginsListResponse"
+
+  /v1/settings/parser:
+    get:
+      summary: Get parser routing configuration
+      operationId: getParserRouting
+      tags: [parser]
+      responses:
+        "200":
+          description: Routing snapshot incl. server-rendered effective_by_kind
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParserRoutingResponse"
+    patch:
+      summary: Update parser routing configuration
+      operationId: patchParserRouting
+      tags: [parser]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ParserRoutingPatchRequest"
+      responses:
+        "200":
+          description: Updated routing snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ParserRoutingResponse"
+        "422":
+          description: Invalid plugin id
+
+  /v1/settings/parser/plugins/{plugin_id}/config:
+    parameters:
+      - name: plugin_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get user-supplied configuration for one plugin
+      operationId: getPluginConfig
+      tags: [parser]
+      description: |
+        ``has_secret`` indicates whether an API key has been stored;
+        plaintext secrets are never returned.
+      responses:
+        "200":
+          description: Plugin config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginConfigResponse"
+        "404":
+          description: Unknown plugin_id
+    patch:
+      summary: Update plugin configuration (API key, options)
+      operationId: patchPluginConfig
+      tags: [parser]
+      description: |
+        Plaintext ``secret`` is hashed into the FileSecretStore on
+        receipt and only the ``secret_ref`` lands in
+        ``valuz_app_setting``. Pass an empty string to clear.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PluginConfigPatchRequest"
+      responses:
+        "200":
+          description: Updated plugin config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginConfigResponse"
+        "404":
+          description: Unknown plugin_id
+
+  /v1/settings/parser/plugins/{plugin_id}/test:
+    parameters:
+      - name: plugin_id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Health-check a plugin with its current configuration
+      operationId: testPlugin
+      tags: [parser]
+      description: |
+        Builds the plugin's ``ParserBackend`` from stored config and
+        invokes ``health_check``. No file upload required — surfaces
+        bad API keys / wrong endpoints without burning a real parse.
+      responses:
+        "200":
+          description: Test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginTestResponse"
+        "404":
+          description: Unknown plugin_id
+
+  # ── Document Library (M06) ─────────────────────────────────────────
+
+  /v1/docs:
+    get:
+      summary: List documents
+      operationId: listDocuments
+      tags: [docs]
+      parameters:
+        - name: q
+          in: query
+          description: Search by filename
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: Filter by status (queued, processing, ready, failed)
+          schema:
+            type: string
+            enum: [queued, processing, ready, failed]
+      responses:
+        "200":
+          description: Document list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [documents]
+                properties:
+                  documents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DocumentListItem"
+
+  /v1/docs/health:
+    get:
+      summary: Docs runtime health
+      operationId: docsHealth
+      tags: [docs]
+      responses:
+        "200":
+          description: Docs runtime health status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocsHealthResponse"
+
+  /v1/docs/import:
+    post:
+      summary: Import files via multipart upload
+      operationId: importFiles
+      tags: [docs]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                workspace_id:
+                  type: string
+                  description: Optional workspace to bind imported docs
+      responses:
+        "200":
+          description: Import task created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportTaskResponse"
+
+  /v1/docs/import-folder:
+    post:
+      summary: Import local folder
+      operationId: importFolder
+      tags: [docs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportFolderRequest"
+      responses:
+        "200":
+          description: Import task created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportTaskResponse"
+
+  /v1/docs/reindex:
+    post:
+      summary: Reparse selected documents
+      operationId: reindexDocuments
+      tags: [docs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [document_ids]
+              properties:
+                document_ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "200":
+          description: Reindex task created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportTaskResponse"
+
+  /v1/docs/search:
+    post:
+      summary: Search documents via grep
+      operationId: searchDocuments
+      tags: [docs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [hits]
+                properties:
+                  hits:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SearchHit"
+
+  /v1/docs/tasks/{task_id}:
+    get:
+      summary: Get import task status
+      operationId: getImportTask
+      tags: [docs]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportTaskResponse"
+        "404":
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /v1/docs/{doc_id}:
+    get:
+      summary: Get document details
+      operationId: getDocument
+      tags: [docs]
+      parameters:
+        - name: doc_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Document detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentDetail"
+        "404":
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      summary: Delete a document
+      operationId: deleteDocument
+      tags: [docs]
+      parameters:
+        - name: doc_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Document deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  document_id:
+                    type: string
+
+  /v1/docs/{doc_id}/preview:
+    get:
+      summary: Get document markdown preview
+      operationId: getDocumentPreview
+      tags: [docs]
+      parameters:
+        - name: doc_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Markdown preview content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentPreview"
+        "404":
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /v1/workspaces/{workspace_id}/docs:
+    get:
+      summary: List documents bound to a workspace
+      operationId: listWorkspaceDocs
+      tags: [docs]
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Workspace document list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [documents]
+                properties:
+                  documents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DocumentListItem"
+    put:
+      summary: Update workspace document bindings
+      operationId: updateWorkspaceBindings
+      tags: [docs]
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkspaceBindingsRequest"
+      responses:
+        "200":
+          description: Bindings updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  # ── Skills endpoints ───────────────────────────────────────────
+
+  /v1/skills:
+    get:
+      summary: List skills catalog
+      operationId: listSkills
+      tags: [skills]
+      parameters:
+        - name: workspace_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Skills catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillsCatalog"
+    post:
+      summary: Create a new skill
+      operationId: createSkill
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillCreateRequest"
+      responses:
+        "201":
+          description: Skill created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillView"
+
+  /v1/skills/import/session:
+    post:
+      summary: Import skill from session
+      operationId: importSkillFromSession
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionSkillImportConfirmRequest"
+      responses:
+        "201":
+          description: Skill imported
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillView"
+
+  /v1/skills/create/chat/start:
+    post:
+      summary: Start AI-create-skill chat session
+      description: |
+        Creates a new chat-default session whose runtime auto-activates the
+        bundled skill-creator skill and provisions a per-session staging
+        directory. The frontend redirects to the regular conversation page
+        in "Skill Creator" mode; the user can then ask the agent to author
+        one or more skills, which are written under the staging dir.
+        Use /v1/skills/staging/{session_id}/scan to inspect drafts and
+        /v1/skills/staging/{session_id}/sync to persist them.
+      operationId: startSkillCreateChat
+      tags: [skills]
+      responses:
+        "201":
+          description: Authoring session ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillCreateChatStartResponse"
+
+  /v1/skills/staging/{session_id}/scan:
+    get:
+      summary: List draft skills written to a session's staging directory
+      description: |
+        Each subdirectory of the per-session staging dir that contains a
+        SKILL.md is reported as a slug. The response also flags conflict
+        kind ("none" / "same_source" / "diverged") against the user skill
+        library so the UI can suggest overwrite vs fork-as-vN.
+      operationId: scanSkillStaging
+      tags: [skills]
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Staging contents
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StagingScanResponse"
+
+  /v1/skills/staging/{session_id}/sync:
+    post:
+      summary: Persist selected staging slugs into the skill library
+      description: |
+        For each item the caller picks a strategy (overwrite | fork | abort).
+        On `fork` an automatic `<slug>-vN` is suggested unless `new_slug` is
+        provided. Default `target_scope=user` writes into the user skill
+        library (controlled by VALUZ_USER_SKILLS_DIR); `target_scope=project`
+        requires `workspace_id`.
+      operationId: syncSkillStaging
+      tags: [skills]
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StagingSyncRequest"
+      responses:
+        "201":
+          description: Sync results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StagingSyncResponse"
+        "404":
+          description: Slug not found in staging
+        "409":
+          description: Fork target already exists
+        "422":
+          description: Invalid target scope or workspace
+
+  /v1/skills/staging/{session_id}/optimize:
+    post:
+      summary: Pre-stage an existing skill for editing
+      description: |
+        Copies the source skill's directory into the session's staging dir
+        (slug name preserved) and writes a `.staging-meta.json` recording the
+        source path and content hash. The frontend then redirects the user
+        into the chat session where the agent can iterate on the slug; on
+        sync, the scan result reports `same_source` (safe overwrite) or
+        `diverged` (suggest fork-as-vN) vs the original.
+      operationId: optimizeSkillFromExisting
+      tags: [skills]
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StagingOptimizeRequest"
+      responses:
+        "201":
+          description: Skill staged for editing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StagingOptimizeResponse"
+        "404":
+          description: Source skill not found
+        "422":
+          description: Source dir is not a valid skill
+
+  /v1/skills/import/archive:
+    post:
+      summary: Preview archive import
+      operationId: importArchivePreview
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                target_scope:
+                  type: string
+                  default: user
+                workspace_id:
+                  type: string
+      responses:
+        "200":
+          description: Import preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillImportArchivePreview"
+
+  /v1/skills/import/archive/confirm:
+    post:
+      summary: Confirm archive import
+      operationId: confirmArchiveImport
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillImportArchiveConfirmRequest"
+      responses:
+        "201":
+          description: Skill imported
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillView"
+
+  /v1/skills/import/directory:
+    post:
+      summary: Preview directory import
+      operationId: importDirectoryPreview
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillImportDirectoryPreviewRequest"
+      responses:
+        "200":
+          description: Import preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillImportArchivePreview"
+
+  /v1/skills/import/url:
+    post:
+      summary: Preview URL import
+      operationId: importUrlPreview
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillImportUrlPreviewRequest"
+      responses:
+        "200":
+          description: Import preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillImportArchivePreview"
+
+  /v1/skills/import/url/confirm:
+    post:
+      summary: Confirm URL import
+      operationId: confirmUrlImport
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillImportUrlConfirmRequest"
+      responses:
+        "201":
+          description: Skill imported
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillView"
+
+  /v1/skills/tags:
+    get:
+      summary: List all skill tags
+      operationId: listSkillTags
+      tags: [skills]
+      parameters:
+        - name: workspace_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tags list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillTagsResponse"
+
+  /v1/skills/events/stream:
+    get:
+      summary: SSE stream for skill change events
+      operationId: skillEventsStream
+      tags: [skills]
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /v1/skills/{skill_id}:
+    get:
+      summary: Get skill detail
+      operationId: getSkill
+      tags: [skills]
+      parameters:
+        - name: skill_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: workspace_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Skill detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillDetail"
+        "404":
+          description: Skill not found
+    patch:
+      summary: Update skill
+      operationId: updateSkill
+      tags: [skills]
+      parameters:
+        - name: skill_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: workspace_id
+          in: query
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillUpdateRequest"
+      responses:
+        "200":
+          description: Skill updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillView"
+    delete:
+      summary: Delete skill (dry_run or confirm)
+      operationId: deleteSkill
+      tags: [skills]
+      parameters:
+        - name: skill_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: workspace_id
+          in: query
+          schema:
+            type: string
+        - name: mode
+          in: query
+          schema:
+            type: string
+            enum: [dry_run, confirm]
+            default: dry_run
+      responses:
+        "200":
+          description: Delete preview (dry_run)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillDeletePreview"
+        "204":
+          description: Skill deleted (confirm)
+
+  /v1/skills/{skill_id}/copy:
+    post:
+      summary: Copy skill
+      operationId: copySkill
+      tags: [skills]
+      parameters:
+        - name: skill_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillCopyRequest"
+      responses:
+        "201":
+          description: Skill copied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillView"
+
+  /v1/skills/{skill_id}/files:
+    get:
+      summary: List skill files
+      operationId: listSkillFiles
+      tags: [skills]
+      parameters:
+        - name: skill_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: workspace_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File tree
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SkillFileNode"
+    post:
+      summary: Create, rename, or delete a skill file
+      operationId: updateSkillFile
+      tags: [skills]
+      parameters:
+        - name: skill_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: workspace_id
+          in: query
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillFileAction"
+      responses:
+        "201":
+          description: File updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillFileContent"
+
+  /v1/skills/{skill_id}/files/{file_path}:
+    get:
+      summary: Get skill file content
+      operationId: getSkillFileContent
+      tags: [skills]
+      parameters:
+        - name: skill_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: file_path
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: workspace_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillFileContent"
+
+  /v1/workspaces/{workspace_id}/skills:
+    get:
+      summary: Workspace skills catalog
+      operationId: workspaceSkillsCatalog
+      tags: [skills]
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Skills catalog for workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillsCatalog"
+    # NOTE: workspace skill binding (PUT skills / scan / state) was removed —
+    # skills bind on the Agent now (08-agents-module). GET stays: it still
+    # feeds the conversation composer's skill-insert chips.
+
+  # ─── Sessions ──────────────────────────────────────────────────────
+
+  /v1/sessions:
+    get:
+      summary: List sessions
+      operationId: listSessions
+      tags: [sessions]
+      parameters:
+        - name: workspace_id
+          in: query
+          schema:
+            type: string
+        - name: q
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SessionListItem"
+
+    post:
+      summary: Create a new session
+      operationId: createSession
+      tags: [sessions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionCreateRequest"
+      responses:
+        "201":
+          description: Created session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDetail"
+
+  /v1/sessions/{session_id}:
+    get:
+      summary: Get session detail
+      operationId: getSession
+      tags: [sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDetail"
+        "404":
+          description: Session not found
+
+    patch:
+      summary: Rename session
+      operationId: renameSession
+      tags: [sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: name
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDetail"
+
+    delete:
+      summary: Delete session
+      operationId: deleteSession
+      tags: [sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Session deleted
+
+  /v1/sessions/{session_id}/events:
+    get:
+      summary: List session events
+      operationId: listSessionEvents
+      tags: [sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: after_seq
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: Session events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionEventsResponse"
+
+  /v1/sessions/{session_id}/messages:
+    post:
+      summary: Send message to session
+      operationId: sendMessage
+      tags: [sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionMessageRequest"
+      responses:
+        "200":
+          description: Run response with events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionRunResponse"
+        "409":
+          description: Session already running
+
+  /v1/sessions/{session_id}/messages/stream:
+    post:
+      summary: Send message and stream events via SSE
+      operationId: sendMessageStream
+      tags: [sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionMessageRequest"
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-sent events with SessionEventEnvelope data
+        "404":
+          description: Session not found
+        "409":
+          description: Session already running
+
+  /v1/sessions/{session_id}/interrupt:
+    post:
+      summary: Interrupt running session
+      operationId: interruptSession
+      tags: [sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session interrupted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDetail"
+
+  /v1/sessions/{session_id}/cancel:
+    post:
+      summary: Cancel session
+      operationId: cancelSession
+      tags: [sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDetail"
+
+  /v1/sessions/{session_id}/regenerate:
+    post:
+      summary: Regenerate last assistant turn
+      operationId: regenerateSession
+      tags: [sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Regenerated response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionRunResponse"
+
+  /v1/sessions/{session_id}/permission-mode:
+    patch:
+      summary: Update session approval mode
+      description: |
+        Change the approval mode for an existing session (kernel
+        V5+1aae940; live-reconcile since V5+bba3014). The new mode
+        applies on the next Send: Claude uses ``set_permission_mode``
+        (with fork-on-rebuild for the bypass tier — G1/G2 CLI
+        gotchas); Codex threads ``approval_policy`` / ``sandbox_policy``
+        per-turn via ``turn_kwargs``; DeepAgents drops its cached graph
+        for a cold rebuild. A turn already in flight keeps the mode it
+        started with. DeepAgents sessions reject ``auto_review`` (400 —
+        only the Claude tier ships the LLM classifier today).
+      operationId: updateSessionPermissionMode
+      tags: [sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionPermissionModeRequest"
+      responses:
+        "200":
+          description: Mode updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDetail"
+        "400":
+          description: Invalid mode for this runtime (e.g. auto_review on deepagents)
+        "404":
+          description: Session not found
+
+  /v1/sessions/{session_id}/effort:
+    patch:
+      summary: Update session reasoning-effort budget
+      description: |
+        Change the reasoning-effort budget for an existing session
+        (kernel V5+bba3014). Live-reconcile: the new effort applies on
+        the next Send. Claude cold-reloads the SDK client (effort is a
+        build-time option); Codex drops it into
+        ``turn_kwargs.reasoning_effort`` (survives ``--resume``);
+        DeepAgents drops its cached graph so the next turn rebuilds
+        the langchain chat client with the new value.
+
+        Per-runtime value mapping:
+          * Claude: pass-through all 5 values.
+          * Codex: ``max`` clamps to ``xhigh``.
+          * DeepAgents openai-completion: ``max`` → ``xhigh``.
+          * DeepAgents anthropic: pass-through.
+          * DeepAgents gemini: ``xhigh|max`` → ``high``.
+
+        ``effort=null`` resets to the SDK default.
+      operationId: updateSessionEffort
+      tags: [sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionEffortRequest"
+      responses:
+        "200":
+          description: Effort updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDetail"
+        "400":
+          description: Invalid effort value (not in low|medium|high|xhigh|max)
+        "404":
+          description: Session not found
+
+  /v1/sessions/{session_id}/actions:
+    post:
+      summary: Resolve a pending approval
+      description: |
+        Resolve a pending ``requires_action`` event with a user
+        decision (kernel V5+1aae940 — cross-runtime tool approval
+        contract v1). Idempotent on ``(pending_id, decision)``;
+        conflicting decisions for the same ``pending_id`` return 409
+        with the original ``accepted_at``. Expired / interrupted
+        pendings return 410. Same shape as the kernel-side
+        ``POST /api/v1/sessions/{session_id}/actions``; both routes
+        reach the same orchestrator.
+      operationId: submitSessionAction
+      tags: [sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionActionRequest"
+      responses:
+        "200":
+          description: Decision accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionActionResponse"
+        "400":
+          description: Decision shape invalid for this pending's subject
+        "404":
+          description: Session or pending action not found
+        "409":
+          description: Pending already resolved with a different decision
+        "410":
+          description: Pending already expired / interrupted, or project deleted
+        "501":
+          description: Runtime has not implemented the approval bridge
+
+  /v1/sessions/{session_id}/skills:
+    get:
+      summary: Get the per-session attached skill list
+      description: |
+        skill-creator is always active and is not included in this list.
+        The returned ids reflect skills the user has explicitly attached
+        to this session (e.g. via the in-chat skill picker).
+      operationId: getSessionExtraSkills
+      tags: [sessions]
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Attached skill ids
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionExtraSkillsResponse"
+    put:
+      summary: Replace the per-session attached skill list
+      description: |
+        Replaces (not appends) the previous list. skill-creator does not need
+        to be listed; it is always active regardless.
+      operationId: setSessionExtraSkills
+      tags: [sessions]
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionExtraSkillsRequest"
+      responses:
+        "200":
+          description: Attached skill ids
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionExtraSkillsResponse"
+
+  /v1/onboarding/example-project:
+    post:
+      summary: Create (or reuse) the onboarding example project
+      operationId: createExampleProject
+      tags: [onboarding]
+      description: |
+        One-shot endpoint called at the end of the onboarding flow.
+        Creates ~/Valuz/示例项目, binds it as a workspace, and deploys
+        the four official agents for the selected preset team.
+        Fully idempotent — safe to call again if the user re-runs onboarding.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExampleProjectRequest"
+      responses:
+        "200":
+          description: Workspace created or reused successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExampleProjectResponse"
+        "422":
+          description: Invalid team_id or workspace creation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /v1/onboarding/assistant:
+    post:
+      summary: Create (or reuse) the general Valuz assistant
+      operationId: createAssistant
+      tags: [onboarding]
+      description: |
+        Creates (or reuses) the general 「Valuz 小助手」 in the user's agent
+        library — backs TeamStep's「暂时不需要 team」choice. No project is
+        created. Idempotent. Returns 422 if no model channel is configured.
+      responses:
+        "200":
+          description: Assistant created or reused
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agent_slug]
+                properties:
+                  agent_slug: {type: string}
+        "422":
+          description: No model channel configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+components:
+  schemas:
+    RunSummary:
+      type: object
+      required: [session_id, source_kind, workspace_id, title, status, updated_at]
+      properties:
+        session_id: {type: string}
+        source_kind:
+          type: string
+          enum: [assistant, project_chat, task]
+        workspace_id: {type: string}
+        workspace_name: {type: string, nullable: true}
+        task_id: {type: string, nullable: true}
+        title: {type: string}
+        status: {type: string}
+        current_todo:
+          type: object
+          nullable: true
+          required: [content, status]
+          properties:
+            content: {type: string}
+            status: {type: string}
+            activeForm: {type: string, nullable: true}
+        last_message: {type: string, nullable: true}
+        last_output: {type: string, nullable: true}
+        last_event:
+          type: object
+          nullable: true
+          description: Tasks only — latest timeline event ({type, payload}).
+          required: [type, payload]
+          properties:
+            type: {type: string}
+            payload: {type: object, additionalProperties: true}
+        model: {type: string, nullable: true}
+        runtime: {type: string, nullable: true}
+        updated_at: {type: integer, format: int64, description: "Unix epoch milliseconds (UTC). Format via new Date(ms)."}
+    Agent:
+      type: object
+      required: [id, slug, name, description, instructions, runtime, model, skills, connector_types, source]
+      properties:
+        id: {type: string}
+        slug: {type: string}
+        name: {type: string}
+        description: {type: string}
+        instructions: {type: string}
+        runtime: {type: string}
+        model: {type: string}
+        skills:
+          type: array
+          items: {type: string}
+        connector_types:
+          type: array
+          items: {type: string}
+        provider_id:
+          type: string
+          nullable: true
+          description: >-
+            Default model provider id for instances ((provider, model) pair).
+            null for seeded/official agents (provider ids are install-local).
+        effort:
+          type: string
+          nullable: true
+          enum: [low, medium, high, xhigh, max]
+          description: >-
+            Default reasoning-effort budget prefilled into instances. null =
+            no override (runtime SDK default). Project conversations read the
+            budget from the bound agent.
+        source: {type: string}
+        readonly: {type: boolean, default: false, description: "If true, the agent cannot be edited."}
+        deletable: {type: boolean, default: true, description: "If false, the agent cannot be deleted."}
+        avatar:
+          type: string
+          nullable: true
+          description: >-
+            Preset icon key or uploaded asset URL for the agent's avatar.
+            v1 supports preset keys only. null = no avatar set.
+        kernel_agent_id:
+          type: string
+          nullable: true
+          description: >-
+            Shared kernel AgentConfig id (v2 live-reference). null until first
+            deploy (built lazily). Lets a project member map back to its
+            library agent (member.kernel_agent_id == agent.kernel_agent_id).
+    CreateAgentRequest:
+      type: object
+      required: [name]
+      properties:
+        # Optional — backend derives a CJK-preserving, globally-unique slug
+        # from ``name`` when omitted (VALUZ-AGENT-SLUG). UI sends name only.
+        slug: {type: string, nullable: true}
+        name: {type: string}
+        description: {type: string, default: ""}
+        instructions: {type: string, default: ""}
+        runtime: {type: string, default: claude_agent}
+        model: {type: string, default: claude-sonnet-4-6}
+        skills:
+          type: array
+          items: {type: string}
+        connector_types:
+          type: array
+          items: {type: string}
+        provider_id: {type: string, nullable: true}
+        effort: {type: string, nullable: true, enum: [low, medium, high, xhigh, max]}
+        avatar: {type: string, nullable: true}
+    UpdateAgentRequest:
+      type: object
+      properties:
+        name: {type: string, nullable: true}
+        description: {type: string, nullable: true}
+        instructions: {type: string, nullable: true}
+        runtime: {type: string, nullable: true}
+        model: {type: string, nullable: true}
+        skills:
+          type: array
+          nullable: true
+          items: {type: string}
+        connector_types:
+          type: array
+          nullable: true
+          items: {type: string}
+        provider_id: {type: string, nullable: true}
+        effort: {type: string, nullable: true, enum: [low, medium, high, xhigh, max]}
+        avatar: {type: string, nullable: true}
+    ConnectorBindingInput:
+      type: object
+      required: [type]
+      properties:
+        type: {type: string}
+        account_id: {type: string, nullable: true}
+    CreateBlankAgentRequest:
+      type: object
+      required: [name]
+      properties:
+        # Optional — backend derives from ``name``, unique within the
+        # workspace, when omitted (VALUZ-AGENT-SLUG).
+        agent_slug: {type: string, nullable: true}
+        name: {type: string}
+        instructions: {type: string, default: ""}
+        runtime: {type: string, default: claude_agent}
+        model: {type: string, default: claude-sonnet-4-6}
+        provider_id: {type: string, nullable: true}
+        effort: {type: string, nullable: true, enum: [low, medium, high, xhigh, max]}
+        skills:
+          type: array
+          nullable: true
+          items: {type: string}
+        connector_bindings:
+          type: array
+          nullable: true
+          items:
+            $ref: "#/components/schemas/ConnectorBindingInput"
+    DeployAgentRequest:
+      type: object
+      required: [source_agent_slug]
+      description: >-
+        v2 派驻 (live reference). Config lives on the agent, so there is no
+        per-deploy provider/model/connector override — just the source agent and
+        an optional project-local handle.
+      properties:
+        source_agent_slug: {type: string}
+        # Optional — backend derives from the source agent's name, unique
+        # within the target workspace, when omitted (VALUZ-AGENT-SLUG).
+        agent_slug: {type: string, nullable: true}
+    ProjectMember:
+      type: object
+      required: [id, workspace_id, agent_slug, kernel_agent_id]
+      properties:
+        id: {type: string}
+        workspace_id: {type: string}
+        agent_slug: {type: string}
+        kernel_agent_id: {type: string}
+        source_agent_slug: {type: string, nullable: true}
+    AgentSummary:
+      type: object
+      required: [id, name, model, runtime_provider, instructions, skills, connectors]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        model: {type: string}
+        runtime_provider: {type: string}
+        instructions: {type: string}
+        skills:
+          type: array
+          items: {type: string}
+        connectors:
+          type: array
+          items: {type: string}
+        provider_id: {type: string, nullable: true}
+        effort: {type: string, nullable: true, enum: [low, medium, high, xhigh, max]}
+    MemberWithAgent:
+      type: object
+      required: [member, agent]
+      properties:
+        member:
+          $ref: "#/components/schemas/ProjectMember"
+        agent:
+          oneOf:
+            - $ref: "#/components/schemas/AgentSummary"
+            - type: "null"
+    KickoffTaskRequest:
+      type: object
+      required: [goal, lead_agent_slug]
+      properties:
+        goal: {type: string}
+        lead_agent_slug: {type: string}
+        refs:
+          type: array
+          nullable: true
+          items: {type: string}
+        title: {type: string, nullable: true}
+        created_by: {type: string, default: user}
+        dispatch_mode:
+          type: string
+          enum: [sync, async]
+          default: async
+          description: >-
+            Dispatch architecture (M10). Both share one lead toolset
+            (non-blocking dispatch + await_members + plan/review/finish) and
+            goal mode; they differ only in the session driver. "async"
+            (default) runs the lead as a persistent actor re-woken by
+            member_done/send until finish_task (robust for multi-turn / long
+            members); "sync" (legacy) drives the lead in a single turn then
+            finalizes, with no re-drive.
+    Task:
+      type: object
+      required: [id, workspace_id, title, goal, status, created_by, lead_agent_slug, current_holder, file_path, created_at, updated_at]
+      properties:
+        id: {type: string}
+        workspace_id: {type: string}
+        title: {type: string}
+        goal: {type: string}
+        status: {type: string}
+        created_by: {type: string}
+        lead_agent_slug: {type: string}
+        current_holder: {type: string}
+        file_path: {type: string}
+        created_at: {type: integer, format: int64, description: "Unix epoch milliseconds (UTC). Format via new Date(ms)."}
+        updated_at: {type: integer, format: int64, description: "Unix epoch milliseconds (UTC). Format via new Date(ms)."}
+    TaskRun:
+      type: object
+      required: [id, session_id, agent_slug, sequence, kind, status, workspace_mode]
+      properties:
+        id: {type: string}
+        session_id: {type: string}
+        agent_slug: {type: string}
+        sequence: {type: integer}
+        kind: {type: string}
+        status: {type: string}
+        label: {type: string, nullable: true}
+        goal: {type: string, nullable: true}
+        dispatched_by: {type: string, nullable: true}
+        workspace_mode: {type: string}
+        run_dir: {type: string, nullable: true}
+        result_manifest:
+          type: object
+          nullable: true
+          additionalProperties: true
+    TaskEvent:
+      type: object
+      required: [id, sequence, type, actor, payload, created_at]
+      properties:
+        id: {type: string}
+        sequence: {type: integer}
+        type: {type: string}
+        actor: {type: string}
+        session_id: {type: string, nullable: true}
+        payload:
+          type: object
+          additionalProperties: true
+        created_at: {type: integer, format: int64, description: "Unix epoch milliseconds (UTC). Format via new Date(ms)."}
+    TaskDetail:
+      type: object
+      required: [task, runs, events]
+      properties:
+        task:
+          $ref: "#/components/schemas/Task"
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/TaskRun"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/TaskEvent"
+    InterveneRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [note, revise_goal, pause, resume, stop]
+        text: {type: string, nullable: true}
+        goal: {type: string, nullable: true}
+    ApiResponse:
+      type: object
+      required: [data]
+      properties:
+        data: {}
+        error:
+          $ref: "#/components/schemas/ApiError"
+          nullable: true
+
+    ApiError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+
+    PaginatedResponse:
+      allOf:
+        - $ref: "#/components/schemas/ApiResponse"
+        - type: object
+          properties:
+            meta:
+              type: object
+              properties:
+                page:
+                  type: integer
+                page_size:
+                  type: integer
+                total:
+                  type: integer
+
+    # ── Document Library schemas ───────────────────────────────────
+
+    DocumentListItem:
+      type: object
+      required: [id, filename, status, chunk_count, file_size_bytes]
+      properties:
+        id:
+          type: string
+        filename:
+          type: string
+        title:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [queued, processing, ready, failed]
+        chunk_count:
+          type: integer
+        file_size_bytes:
+          type: integer
+        mime_type:
+          type: string
+          nullable: true
+        created_at:
+          type: integer
+          format: int64
+          description: "Unix epoch milliseconds (UTC). Format via new Date(ms)."
+
+    ParserAttempt:
+      type: object
+      required: [plugin_id, error, occurred_at, ok]
+      properties:
+        plugin_id:
+          type: string
+          description: Identifier of the parser plugin that was invoked
+        error:
+          type: string
+          description: Error message if the attempt failed; empty string on success
+        occurred_at:
+          type: string
+          format: date-time
+          description: ISO-8601 timestamp of the attempt
+        ok:
+          type: boolean
+          description: True if this attempt succeeded; false for failed/fallback attempts
+
+    DocumentDetail:
+      allOf:
+        - $ref: "#/components/schemas/DocumentListItem"
+        - type: object
+          properties:
+            original_path:
+              type: string
+              nullable: true
+            managed_path:
+              type: string
+              nullable: true
+            parser_mode:
+              type: string
+              nullable: true
+            docs_runtime_id:
+              type: string
+              nullable: true
+            last_error_code:
+              type: string
+              nullable: true
+            last_error_message:
+              type: string
+              nullable: true
+            parser_attempts:
+              type: array
+              items:
+                $ref: "#/components/schemas/ParserAttempt"
+              description: Ordered list of parse attempts for this document (oldest first)
+
+    DocumentPreview:
+      type: object
+      required: [document_id, markdown]
+      properties:
+        document_id:
+          type: string
+        markdown:
+          type: string
+          description: Parsed markdown content
+
+    ImportTaskResponse:
+      type: object
+      required: [task_id, status, total_items, processed_items, failed_items]
+      properties:
+        task_id:
+          type: string
+        task_type:
+          type: string
+          enum: [import_files, import_folder, reindex]
+        status:
+          type: string
+          enum: [queued, processing, completed, failed]
+        total_items:
+          type: integer
+        processed_items:
+          type: integer
+        failed_items:
+          type: integer
+        workspace_id:
+          type: string
+          nullable: true
+        created_at:
+          type: integer
+          format: int64
+          description: "Unix epoch milliseconds (UTC). Format via new Date(ms)."
+
+    SearchRequest:
+      type: object
+      required: [query, workspace_id]
+      properties:
+        query:
+          type: string
+        workspace_id:
+          type: string
+        top_k:
+          type: integer
+          default: 5
+
+    SearchHit:
+      type: object
+      required: [document_id, filename, score, snippet]
+      properties:
+        document_id:
+          type: string
+        filename:
+          type: string
+        score:
+          type: number
+          format: float
+        snippet:
+          type: string
+        page_ref:
+          type: string
+          nullable: true
+        chunk_ref:
+          type: string
+          nullable: true
+
+    DocsHealthResponse:
+      type: object
+      required: [status, preview_dir_exists, total_documents]
+      properties:
+        status:
+          type: string
+          enum: [healthy, unavailable]
+        preview_dir_exists:
+          type: boolean
+        total_documents:
+          type: integer
+        ready_count:
+          type: integer
+        processing_count:
+          type: integer
+        failed_count:
+          type: integer
+
+    ImportFolderRequest:
+      type: object
+      required: [folder_path]
+      properties:
+        folder_path:
+          type: string
+        workspace_id:
+          type: string
+          nullable: true
+
+    WorkspaceBindingsRequest:
+      type: object
+      required: [document_ids]
+      properties:
+        document_ids:
+          type: array
+          items:
+            type: string
+
+    # ── Skills schemas ────────────────────────────────────────────
+
+    SkillView:
+      type: object
+      required: [id, name, description, scope, source, path]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        scope:
+          type: string
+          enum: [user, project, official, tenant]
+        source:
+          type: string
+        path:
+          type: string
+        enabled:
+          type: boolean
+          default: false
+        tags:
+          type: array
+          items:
+            type: string
+        slug:
+          type: string
+          default: ""
+        icon:
+          type: string
+          nullable: true
+        status:
+          type: string
+          default: available
+        readonly:
+          type: boolean
+          default: false
+        is_locked:
+          type: boolean
+          default: false
+        lock_reason:
+          type: string
+          nullable: true
+        project_root:
+          type: string
+          nullable: true
+        origin_label:
+          type: string
+          nullable: true
+        argument_hint:
+          type: string
+          nullable: true
+        context:
+          type: string
+          nullable: true
+        content_hash:
+          type: string
+          nullable: true
+        manifest_hash:
+          type: string
+          nullable: true
+        version:
+          type: integer
+          nullable: true
+          minimum: 1
+          description: |
+            Optional integer version pulled from SKILL.md frontmatter `version: N`.
+            Forking via staging sync (-vN) bumps this; legacy skills omit the field.
+        folder_created_at:
+          type: integer
+          format: int64
+          nullable: true
+          description: |
+            Unix epoch milliseconds (UTC); format via new Date(ms).
+            Filesystem birthtime of the skill folder (macOS `st_birthtime`;
+            Linux `statx` where available; falls back to `st_mtime`). Drives
+            the DESC sort on the skill management page — newest folder
+            first, `name` ASC as tiebreaker. `null` for legacy rows that
+            weren't scanned with the new helper yet (next `startup_scan`
+            backfills); the sort puts `null` last.
+        creation_origin:
+          type: string
+          enum: [created, imported, discovered]
+          default: discovered
+          description: |
+            Skill origin marker — host-side bookkeeping kept only in the
+            `valuz_skill_index` DB row, never written into SKILL.md.
+            `"created"` for the UI dialog / skill-creator AI session /
+            duplicate action; `"imported"` for archive / URL / directory
+            import; `"discovered"` when the folder was found on disk by
+            the filesystem scan (e.g. hand-dropped or symlinked into
+            `~/.agents/skills/`) rather than originated by Valuz. Drives
+            the "创建" vs "同步" badge in the .agents group on the skill
+            management page; `"discovered"` renders no badge.
+      allOf:
+        - $ref: "#/components/schemas/SkillView"
+        - type: object
+          properties:
+            instructions_markdown:
+              type: string
+              nullable: true
+            file_count:
+              type: integer
+              default: 0
+            root_path:
+              type: string
+              nullable: true
+            manifest_filename:
+              type: string
+              nullable: true
+            metadata:
+              type: object
+
+    SkillsCatalog:
+      type: object
+      required: [workspace_id, skills]
+      properties:
+        workspace_id:
+          type: string
+        skills:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkillView"
+
+    SkillScanResponse:
+      type: object
+      required: [discovered]
+      properties:
+        discovered:
+          type: integer
+
+    SkillCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+          default: ""
+        target_scope:
+          type: string
+          enum: [user, project, official, tenant]
+          default: user
+        workspace_id:
+          type: string
+          nullable: true
+        instructions_markdown:
+          type: string
+          nullable: true
+        add_to_workspace:
+          type: boolean
+          default: false
+
+    SkillUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        instructions_markdown:
+          type: string
+          nullable: true
+
+    SkillCopyRequest:
+      type: object
+      required: [new_name]
+      properties:
+        new_name:
+          type: string
+        workspace_id:
+          type: string
+          nullable: true
+        add_to_workspace:
+          type: boolean
+          default: false
+
+    SkillStateRequest:
+      type: object
+      required: [path, enabled]
+      properties:
+        path:
+          type: string
+        enabled:
+          type: boolean
+
+    WorkspaceSkillsUpdateRequest:
+      type: object
+      properties:
+        skills_enabled:
+          type: array
+          items:
+            type: string
+
+    SessionSkillImportConfirmRequest:
+      type: object
+      required: [session_id, name]
+      properties:
+        session_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          default: ""
+        target_scope:
+          type: string
+          enum: [user, project, official, tenant]
+          default: user
+        workspace_id:
+          type: string
+          nullable: true
+        add_to_workspace:
+          type: boolean
+          default: false
+
+    SkillCreateChatStartResponse:
+      type: object
+      required: [session_id, authoring_workspace_id]
+      properties:
+        session_id:
+          type: string
+        authoring_workspace_id:
+          type: string
+
+    StagingFileNode:
+      type: object
+      required: [path, type]
+      properties:
+        path: { type: string }
+        type:
+          type: string
+          enum: [file, directory]
+        size:
+          type: integer
+          nullable: true
+
+    StagingSlugView:
+      type: object
+      required: [slug, name, description, file_count, total_bytes, files, conflict_kind, suggested_strategy]
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        description: { type: string }
+        file_count: { type: integer }
+        total_bytes: { type: integer }
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/StagingFileNode"
+        conflict_kind:
+          type: string
+          enum: [none, same_source, diverged]
+        suggested_strategy:
+          type: string
+          enum: [overwrite, fork, abort]
+        suggested_new_slug:
+          type: string
+          nullable: true
+        source_skill_id:
+          type: string
+          nullable: true
+        version:
+          type: integer
+          nullable: true
+          minimum: 1
+          description: Parsed from SKILL.md frontmatter `version:`.
+
+    StagingScanResponse:
+      type: object
+      required: [session_id, staging_path, slugs]
+      properties:
+        session_id: { type: string }
+        staging_path: { type: string }
+        slugs:
+          type: array
+          items:
+            $ref: "#/components/schemas/StagingSlugView"
+
+    StagingSyncItem:
+      type: object
+      required: [slug]
+      properties:
+        slug: { type: string }
+        strategy:
+          type: string
+          enum: [overwrite, fork, abort]
+          default: overwrite
+        new_slug:
+          type: string
+          nullable: true
+
+    StagingSyncRequest:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/StagingSyncItem"
+        target_scope:
+          type: string
+          enum: [user, project, official, tenant]
+          default: user
+        workspace_id:
+          type: string
+          nullable: true
+
+    StagingSyncItemResult:
+      type: object
+      required: [slug, strategy, skipped]
+      properties:
+        slug: { type: string }
+        strategy:
+          type: string
+          enum: [overwrite, fork, abort]
+        written_path:
+          type: string
+          nullable: true
+        new_slug:
+          type: string
+          nullable: true
+        skipped: { type: boolean }
+
+    StagingSyncResponse:
+      type: object
+      required: [session_id, results]
+      properties:
+        session_id: { type: string }
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/StagingSyncItemResult"
+
+    StagingOptimizeRequest:
+      type: object
+      required: [source_skill_id]
+      properties:
+        source_skill_id: { type: string }
+
+    StagingOptimizeResponse:
+      type: object
+      required: [session_id, slug, staging_path]
+      properties:
+        session_id: { type: string }
+        slug: { type: string }
+        staging_path: { type: string }
+
+    SessionExtraSkillsRequest:
+      type: object
+      required: [skill_ids]
+      properties:
+        skill_ids:
+          type: array
+          items: { type: string }
+
+    SessionExtraSkillsResponse:
+      type: object
+      required: [skill_ids]
+      properties:
+        skill_ids:
+          type: array
+          items: { type: string }
+
+    SkillDeletePreview:
+      type: object
+      properties:
+        affected_projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkillDeleteAffectedProject"
+        count:
+          type: integer
+
+    SkillDeleteAffectedProject:
+      type: object
+      required: [workspace_id, name]
+      properties:
+        workspace_id:
+          type: string
+        name:
+          type: string
+
+    SkillImportArchivePreview:
+      type: object
+      required: [preview_id, name, description]
+      properties:
+        preview_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        file_tree:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkillImportPreviewFile"
+        validation_warnings:
+          type: array
+          items:
+            type: string
+        name_conflict:
+          type: boolean
+          default: false
+        suggested_name:
+          type: string
+          nullable: true
+
+    SkillImportPreviewFile:
+      type: object
+      required: [path, type]
+      properties:
+        path:
+          type: string
+        type:
+          type: string
+          enum: [file, directory]
+        size:
+          type: integer
+          nullable: true
+
+    SkillImportArchiveConfirmRequest:
+      type: object
+      required: [preview_id]
+      properties:
+        preview_id:
+          type: string
+        name:
+          type: string
+          nullable: true
+        target_scope:
+          type: string
+          enum: [user, project, official, tenant]
+          default: user
+        workspace_id:
+          type: string
+          nullable: true
+        add_to_workspace:
+          type: boolean
+          default: false
+
+    SkillImportDirectoryPreviewRequest:
+      type: object
+      required: [directory_path]
+      properties:
+        directory_path:
+          type: string
+        target_scope:
+          type: string
+          enum: [user, project, official, tenant]
+          default: user
+        workspace_id:
+          type: string
+          nullable: true
+
+    # ─── Session Schemas ───────────────────────────────────────────────
+
+    SessionListItem:
+      type: object
+      required: [id, workspace_id, status, origin, updated_at]
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        name:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [created, running, idle, failed, cancelled, archived]
+        origin:
+          type: string
+          enum: [user, schedule]
+        last_user_message_text:
+          type: string
+          nullable: true
+        locked_model_id:
+          type: string
+          nullable: true
+        locked_provider_id:
+          type: string
+          nullable: true
+          description: >-
+            Provider id locked at session creation. Promoted from SessionDetail
+            to SessionListItem so the desktop sidebar's session list can drive
+            the composer's (providerId, modelId) model selector without an extra
+            detail fetch — without this, the composer falls back to the
+            workspace default provider even though the session is wired to a
+            different model end-to-end.
+        updated_at:
+          type: integer
+          format: int64
+          description: Unix epoch milliseconds (UTC). Format via new Date(ms).
+        runtime_provider:
+          type: string
+          enum: [claude_agent, codex, deepagents]
+          default: deepagents
+          description: |
+            Kernel runtime stamped at session creation. Surfaced so the
+            UI can render a runtime badge in the session list without
+            another fetch.
+        permission_mode:
+          type: string
+          enum: [default, auto_review, full_access]
+          default: full_access
+          description: |
+            Approval mode for this session (kernel V5+1aae940; live-
+            reconcile since V5+bba3014). ``default`` parks every shell /
+            file-write / MCP-tool call on the host until the user
+            decides; ``auto_review`` lets an LLM classifier auto-decide
+            (Claude tier only — DeepAgents 400s); ``full_access``
+            auto-approves everything (CI / batch mode, current default).
+            Mutable via ``PATCH /v1/sessions/{id}/permission-mode`` —
+            applies on next Send.
+        effort:
+          type: string
+          enum: [low, medium, high, xhigh, max]
+          nullable: true
+          description: |
+            Reasoning-effort budget (kernel V5+bba3014
+            ``ModelSettings.effort``). ``null`` = SDK default. Mutable
+            via ``PATCH /v1/sessions/{id}/effort`` — applies on next
+            Send. Per-runtime mapping: Claude pass-through all 5 values;
+            Codex ``max`` clamps to ``xhigh``; DeepAgents openai-
+            completion ``max`` → ``xhigh``, anthropic pass-through,
+            gemini ``xhigh|max`` → ``high``.
+        task_id:
+          type: string
+          nullable: true
+          description: |
+            Owning task id if this session is part of a task run (lead
+            session or dispatched sub-Run). ``null`` = a user-initiated
+            standalone conversation. Surfaced here so UIs (e.g. the
+            desktop sidebar's "recent sessions") can hide task-internal
+            sessions, which are implementation details of the task run
+            and not something the user opened directly.
+
+    TodoItem:
+      type: object
+      required: [content, status]
+      properties:
+        content:
+          type: string
+        status:
+          type: string
+          description: One of "pending", "in_progress", "completed".
+        activeForm:
+          type: string
+          nullable: true
+          description: |
+            Gerund form rendered while the todo is in_progress (e.g.
+            "Planning migration"). Camel-cased to match the Claude
+            Agent SDK's TodoWrite payload verbatim.
+
+    SessionDetail:
+      allOf:
+        - $ref: "#/components/schemas/SessionListItem"
+        - type: object
+          properties:
+            total_tokens:
+              type: integer
+              default: 0
+            total_cost_usd:
+              type: number
+              default: 0
+            created_at:
+              type: integer
+              format: int64
+              nullable: true
+              description: Unix epoch milliseconds (UTC). Format via new Date(ms).
+            todos:
+              type: array
+              nullable: true
+              description: |
+                Latest TODO snapshot from the agent's TodoWrite calls
+                (kernel V5+messages). null when the agent has never
+                touched the list; an empty list is a valid "all done"
+                signal preserved by the kernel's change-only semantics.
+              items:
+                $ref: "#/components/schemas/TodoItem"
+            instructions:
+              type: string
+              nullable: true
+              description: |
+                Frozen system-prompt append captured at session creation
+                from the workspace's then-current ``instructions_md``
+                (ADR-008). The runtime hands this verbatim to the model
+                on every turn; workspace edits after creation do *not*
+                mutate this field. null when the workspace had no
+                instructions at session-create time. Frontend session
+                panels should render this — NOT the live workspace
+                ``instructions_md`` — so users see the prompt the
+                running agent actually has.
+            agent_slug:
+              type: string
+              nullable: true
+              description: |
+                Workspace-local agent handle for this session when it was
+                created from a named workspace agent (e.g. a Project Task
+                lead/member). null for plain chat sessions.
+
+    RuntimeListItem:
+      type: object
+      required:
+        - id
+        - display_name
+        - supported_protocols
+        - available
+      properties:
+        id:
+          type: string
+          enum: [claude_agent, codex, deepagents]
+          description: |
+            Internal runtime enum — matches kernel
+            ``Session.runtime_provider``. Stable wire identifier even
+            when ``display_name`` is rebranded (e.g. ``deepagents`` is
+            displayed as "Valuz Agent").
+        display_name:
+          type: string
+          description: User-facing label for the picker.
+        supported_protocols:
+          type: array
+          items:
+            type: string
+            enum: [anthropic, openai-completion, openai-response, gemini]
+          description: |
+            API protocols this runtime can dispatch (kernel V5+bba3014
+            4-value enum, user-facing hyphen form). The picker uses
+            this to filter eligible providers. Per-runtime:
+              * claude_agent → [anthropic]
+              * codex → [openai-response]
+              * deepagents → [anthropic, openai-completion, gemini]
+        requires_binary:
+          type: string
+          nullable: true
+          description: |
+            Name of an external CLI the runtime spawns. ``null`` for
+            pure-Python runtimes. Surfaced so the UI can name the
+            missing binary in setup instructions.
+        available:
+          type: boolean
+          description: |
+            ``true`` when the runtime can actually run on this host.
+            ``false`` greys out the picker option.
+        unavailable_reason:
+          type: string
+          nullable: true
+          description: |
+            Short, user-actionable explanation when ``available`` is
+            ``false`` (e.g. ``"'codex' binary not found on PATH; install
+            it first"``). ``null`` when available.
+
+    SystemStatusResponse:
+      type: object
+      required:
+        - status
+        - pid
+        - started_at
+        - uptime_seconds
+        - version
+        - kernel_pin
+        - port
+        - active_session_count
+        - db_path
+        - log_path
+        - log_dir
+        - data_dir
+        - runtimes_available
+        - warnings
+      properties:
+        status:
+          type: string
+          enum: [running, starting, degraded]
+          description: |
+            High-level health label. ``running`` = boot complete + DB
+            reachable. ``starting`` = startup hooks still in progress.
+            ``degraded`` = boot complete but at least one
+            ``warnings[]`` entry is non-empty (e.g. codex MCP handshake
+            failed at startup).
+        pid:
+          type: integer
+        started_at:
+          type: integer
+          format: int64
+          description: Unix epoch milliseconds (UTC) boot timestamp. Format via new Date(ms).
+        uptime_seconds:
+          type: number
+          format: double
+          description: Seconds since process start.
+        version:
+          type: string
+          description: ``valuz_agent`` package version.
+        kernel_pin:
+          type: string
+          description: |
+            Vendored kernel commit short SHA, parsed from
+            ``backend/kernel/KERNEL_VERSION`` so the UI can show which
+            agent-harness build is running.
+        port:
+          type: integer
+          description: TCP port the server is listening on.
+        active_session_count:
+          type: integer
+          description: Sessions currently in ``running`` status (kernel store).
+        db_path:
+          type: string
+          description: Absolute path to the SQLite database file.
+        log_path:
+          type: string
+          description: |
+            Absolute path to the rolling log file the backend writes
+            structured JSON lines to. The desktop ``服务`` panel uses
+            this to expose an "open in editor" escape hatch.
+        log_dir:
+          type: string
+          description: |
+            Parent directory of ``log_path`` — surfaced separately so
+            "open log directory" goes to the folder, not the file.
+        data_dir:
+          type: string
+          description: ``settings.data_dir`` (root of all valuz local writes).
+        runtimes_available:
+          type: array
+          items:
+            type: string
+            enum: [claude_agent, codex, deepagents]
+          description: Runtime ids the host can currently dispatch to.
+        warnings:
+          type: array
+          items:
+            type: string
+          description: |
+            Non-fatal issues detected at boot or since (e.g.
+            ``"codex MCP handshake failed: <err>"``). Empty when healthy.
+
+    SessionCreateRequest:
+      type: object
+      required: [workspace_id]
+      properties:
+        workspace_id:
+          type: string
+        title:
+          type: string
+          nullable: true
+        model_id:
+          type: string
+          nullable: true
+          description: |
+            Optional explicit model id. ``null`` falls back to the bound
+            provider's default model, then the workspace default, then a
+            global fallback (kernel V5 dropped MODEL_CATALOG so any
+            string is forwarded verbatim to the SDK).
+        provider_id:
+          type: string
+          nullable: true
+          description: |
+            Optional provider id pinning the LLM gateway for this session.
+            ``null`` lets the host pick one whose ``model_ids``
+            contains ``model_id``.
+        runtime_id:
+          type: string
+          nullable: true
+          enum: [claude_agent, codex, deepagents, null]
+          description: |
+            Optional explicit Runtime Agent for this session. Allowed
+            values match the kernel's ``Session.runtime_provider`` enum.
+            ``null`` lets the host derive the runtime from the provider
+            (based on ``provider_kind``) — kept for backwards
+            compatibility with clients that pre-date the runtime picker.
+            Unknown values return 422.
+        mcp_provider_slugs:
+          type: array
+          nullable: true
+          items:
+            type: string
+          description: |
+            MCP data sources to enable for this session (e.g.
+            ``["reportify"]``). ``null`` defaults to every connected
+            provider; ``[]`` is honoured as "explicitly none".
+        permission_mode:
+          type: string
+          nullable: true
+          enum: [default, auto_review, full_access, null]
+          description: |
+            Approval mode for the new session (kernel V5+1aae940; live-
+            reconcile since V5+bba3014). ``null`` falls through to the
+            kernel default of ``full_access``. DeepAgents rejects
+            ``auto_review`` (400). Mutable post-create via
+            ``PATCH /v1/sessions/{id}/permission-mode``.
+        effort:
+          type: string
+          nullable: true
+          enum: [low, medium, high, xhigh, max, null]
+          description: |
+            Initial reasoning-effort budget (kernel V5+bba3014
+            ``ModelSettings.effort``). ``null`` = SDK default. Mutable
+            post-create via ``PATCH /v1/sessions/{id}/effort``.
+        agent_slug:
+          type: string
+          nullable: true
+          description: |
+            Project member agent to bind this conversation to. When set,
+            the session inherits runtime / model / provider / effort /
+            instructions / skills / connectors from the agent and the
+            model_id / provider_id / runtime_id / effort fields above are
+            ignored. ``null`` keeps the classic model-picker path.
+
+    SessionPermissionModeRequest:
+      type: object
+      required: [permission_mode]
+      properties:
+        permission_mode:
+          type: string
+          enum: [default, auto_review, full_access]
+          description: |
+            New approval mode for the session. Live-reconcile (kernel
+            V5+bba3014): applies on the next Send. Claude uses the live
+            ``set_permission_mode`` mutator (with fork-on-rebuild for
+            the bypass tier); Codex threads
+            ``approval_policy`` / ``sandbox_policy`` per-turn through
+            ``turn_kwargs``; DeepAgents drops its cached graph for a
+            cold rebuild. A turn already in flight keeps the mode it
+            started with.
+
+    SessionEffortRequest:
+      type: object
+      properties:
+        effort:
+          type: string
+          nullable: true
+          enum: [low, medium, high, xhigh, max, null]
+          description: |
+            New reasoning-effort budget for the session (kernel
+            V5+bba3014). Live-reconcile: applies on the next Send.
+            Claude cold-reloads the SDK client (effort is a build-time
+            option); Codex drops it into
+            ``turn_kwargs.reasoning_effort``; DeepAgents drops its
+            cached graph so the next turn rebuilds the langchain chat
+            client with the new value. ``null`` resets to the SDK
+            default. Returns 400 on an unknown value.
+
+    SessionActionRequest:
+      type: object
+      required: [pending_id, decision]
+      description: |
+        Body for ``POST /v1/sessions/{id}/actions``. Resolves a pending
+        ``requires_action`` event with the user's decision. Mirrors the
+        kernel's ``SubmitActionRequest`` shape (kernel V5+d008b53). The
+        kernel exposes the same shape under ``/api/v1/sessions/{id}/actions``;
+        both routes hit the same orchestrator instance.
+
+        Decision verbs (V5+d008b53):
+          - ``approve`` / ``reject`` — universal verbs for tool-approval
+            subjects (v1).
+          - ``answer`` — only valid for ``clarifying_questions``;
+            requires ``answers`` field.
+          - ``approve_with_changes`` — A1; requires ``modified_input``.
+            Available only on runtimes whose SDK accepts modified args
+            (Claude / DeepAgents; codex 400s).
+          - ``approve_for_session`` — v2; the kernel commits a
+            session-scoped rule from the staged pending's
+            ``session_rule_preview``, and subsequent matching tool
+            calls short-circuit with an ``auto_approved``
+            ``action_resolved`` event.
+
+        ``auto_approved`` / ``expired`` / ``interrupted`` are
+        kernel-only emit verbs and are rejected as input.
+      properties:
+        pending_id:
+          type: string
+          description: |
+            ``pending_id`` from the matching ``requires_action`` event.
+        decision:
+          type: string
+          enum: [approve, approve_with_changes, approve_for_session, reject, answer]
+        message:
+          type: string
+          nullable: true
+          description: |
+            Optional rejection reason; surfaced back to the agent
+            (Claude ``PermissionResultDeny.message``, DeepAgents
+            ``RejectDecision.message``; codex 0.116.0a1 logs only).
+        answers:
+          type: object
+          nullable: true
+          additionalProperties:
+            oneOf:
+              - type: string
+              - type: array
+                items:
+                  type: string
+          description: |
+            Structured answers for ``clarifying_questions``. Keys are
+            question texts (match ``payload.questions[].question`` from
+            the ``requires_action`` event); values are the selected
+            option ``label`` for single-select or a list for
+            multi-select. Required iff ``decision == "answer"``;
+            rejected otherwise (422).
+        modified_input:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: |
+            Replacement tool args for an ``approve_with_changes``
+            decision. Same shape as ``payload.original_input`` on the
+            ``requires_action`` event. Required iff ``decision ==
+            "approve_with_changes"``; rejected otherwise (422). Claude
+            maps it to ``PermissionResultAllow.updated_input``;
+            DeepAgents to ``EditDecision.edited_action.args``.
+
+    SessionActionResponse:
+      type: object
+      required: [session_id, pending_id, decision, accepted_at]
+      properties:
+        session_id:
+          type: string
+        pending_id:
+          type: string
+        decision:
+          type: string
+          enum: [approve, approve_with_changes, approve_for_session, reject, answer]
+        accepted_at:
+          type: integer
+          format: int64
+          description: |
+            Unix epoch milliseconds (UTC); format via new Date(ms).
+            Server timestamp the decision landed at. On idempotent
+            replies (same decision retried), this is the *original*
+            timestamp — clients can use this to deduplicate UI state.
+        idempotent:
+          type: boolean
+          default: false
+          description: |
+            ``true`` when the route saw a repeat of an already-resolved
+            decision. The runtime is not re-notified in that case;
+            this is just an idempotency hint to the caller.
+        rule_id:
+          type: string
+          nullable: true
+          description: |
+            UUID of the just-committed session-scoped rule. Populated
+            only when ``decision == "approve_for_session"``; ``null``
+            for every other verb. The frontend uses it to render the
+            rule badge on the resolved card and to correlate future
+            ``auto_approved`` events back to their originating pending.
+            Idempotent retries surface the *original* ``rule_id`` so
+            a WS/SSE reconnect doesn't think it created a new rule.
+
+    SessionMessageRequest:
+      type: object
+      required: [prompt]
+      properties:
+        prompt:
+          type: string
+        provider_id:
+          type: string
+          nullable: true
+          description: |
+            Optional provider override for back-compat with older clients.
+            The session's model is locked at creation; if this does not
+            match the frozen value the service ignores it rather than
+            failing.
+        model_id:
+          type: string
+          nullable: true
+          description: |
+            Optional model override. Same back-compat semantics as
+            ``provider_id`` — ignored when it does not match the
+            session's frozen model.
+
+    SessionEvent:
+      type: object
+      required: [event_type]
+      properties:
+        event_type:
+          type: string
+        payload:
+          type: object
+          additionalProperties:
+            type: string
+
+    SessionEventEnvelope:
+      type: object
+      required: [seq, event]
+      properties:
+        seq:
+          type: integer
+        event:
+          $ref: "#/components/schemas/SessionEvent"
+        timestamp:
+          type: integer
+          format: int64
+          nullable: true
+          description: >-
+            Unix epoch milliseconds (UTC) the kernel persisted the event with.
+            Format via new Date(ms).
+
+    SessionEventsResponse:
+      type: object
+      required: [session_id, items]
+      properties:
+        session_id:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionEventEnvelope"
+
+    SessionRunResponse:
+      type: object
+      required: [session, events]
+      properties:
+        session:
+          $ref: "#/components/schemas/SessionDetail"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionEventEnvelope"
+
+    # ── Skills: File-level schemas ─────────────────────────────────
+
+    SkillFileNode:
+      type: object
+      required: [name, path, type]
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        type:
+          type: string
+          enum: [file, directory]
+        size:
+          type: integer
+          nullable: true
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkillFileNode"
+
+    SkillFileContent:
+      type: object
+      required: [path, content]
+      properties:
+        path:
+          type: string
+        content:
+          type: string
+        encoding:
+          type: string
+          default: utf-8
+
+    SkillFileAction:
+      type: object
+      required: [action, path]
+      properties:
+        action:
+          type: string
+          enum: [create, rename, delete]
+        path:
+          type: string
+        new_path:
+          type: string
+          nullable: true
+        content:
+          type: string
+          nullable: true
+
+    SkillTagsResponse:
+      type: object
+      required: [tags]
+      properties:
+        tags:
+          type: array
+          items:
+            type: string
+
+    SkillImportUrlPreviewRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+        target_scope:
+          type: string
+          enum: [user, project, official, tenant]
+          default: user
+        workspace_id:
+          type: string
+          nullable: true
+
+    SkillImportUrlConfirmRequest:
+      type: object
+      required: [preview_id]
+      properties:
+        preview_id:
+          type: string
+        name:
+          type: string
+          nullable: true
+        target_scope:
+          type: string
+          enum: [user, project, official, tenant]
+          default: user
+        workspace_id:
+          type: string
+          nullable: true
+        add_to_workspace:
+          type: boolean
+          default: false
+
+    # ── Parser plugin / setup / routing schemas ────────────────────
+
+    SetupRequirement:
+      type: object
+      required: [id, label_zh, kind]
+      description: |
+        Static metadata for a one-time setup operation (e.g. authorized
+        model download). Mirrored on the FE so the license / source
+        dialog can render without an extra round-trip.
+      properties:
+        id:
+          type: string
+        label_zh:
+          type: string
+        kind:
+          type: string
+          enum: [credential, model_download]
+        network_required:
+          type: boolean
+          default: true
+        size_bytes:
+          type: integer
+          nullable: true
+        source:
+          type: string
+          nullable: true
+        license_name:
+          type: string
+          nullable: true
+        license_url:
+          type: string
+          nullable: true
+
+    SetupJobStatus:
+      type: object
+      required:
+        [setup_id, status, downloaded_bytes, total_bytes, error, source, started_at, completed_at, updated_at, requirement]
+      properties:
+        setup_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed, cancelled]
+        downloaded_bytes:
+          type: integer
+        total_bytes:
+          type: integer
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        source:
+          type: string
+          nullable: true
+        started_at:
+          type: integer
+          format: int64
+          nullable: true
+          description: "Unix epoch milliseconds (UTC). Format via new Date(ms)."
+        completed_at:
+          type: integer
+          format: int64
+          nullable: true
+          description: "Unix epoch milliseconds (UTC). Format via new Date(ms)."
+        updated_at:
+          type: integer
+          format: int64
+          nullable: true
+          description: "Unix epoch milliseconds (UTC). Format via new Date(ms)."
+        requirement:
+          allOf:
+            - $ref: "#/components/schemas/SetupRequirement"
+          nullable: true
+
+    SetupJobListResponse:
+      type: object
+      required: [jobs]
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/SetupJobStatus"
+
+    StartSetupJobRequest:
+      type: object
+      required: [accept_license, confirmed_source]
+      description: |
+        Authorization payload. The server rejects the call unless both
+        fields are present — see ``api/routes/parser.py:start_setup_job``.
+      properties:
+        accept_license:
+          type: boolean
+        confirmed_source:
+          type: string
+
+    ConfigField:
+      type: object
+      required: [key, label_zh, type]
+      properties:
+        key:
+          type: string
+        label_zh:
+          type: string
+        type:
+          type: string
+          enum: [string, secret, bool, select, number]
+        required:
+          type: boolean
+          default: false
+        default:
+          nullable: true
+        placeholder:
+          type: string
+          nullable: true
+        help_zh:
+          type: string
+          nullable: true
+        options:
+          type: array
+          nullable: true
+          items:
+            type: array
+            minItems: 2
+            maxItems: 2
+            items:
+              type: string
+
+    PluginCapabilityStatus:
+      type: object
+      required: [kind, status]
+      properties:
+        kind:
+          type: string
+        status:
+          type: string
+          enum: [ready, needs_setup, unavailable]
+        setup:
+          allOf:
+            - $ref: "#/components/schemas/SetupRequirement"
+          nullable: true
+        reason_zh:
+          type: string
+          nullable: true
+
+    PluginDescriptor:
+      type: object
+      required:
+        [id, name_zh, description_zh, mode, capabilities, config_schema, supported_kinds, is_configured, requires_secret]
+      properties:
+        id:
+          type: string
+        name_zh:
+          type: string
+        description_zh:
+          type: string
+        mode:
+          type: string
+          enum: [sync, async_poll]
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/PluginCapabilityStatus"
+        config_schema:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConfigField"
+        supported_kinds:
+          type: array
+          items:
+            type: string
+        is_configured:
+          type: boolean
+        requires_secret:
+          type: boolean
+
+    PluginsListResponse:
+      type: object
+      required: [plugins]
+      properties:
+        plugins:
+          type: array
+          items:
+            $ref: "#/components/schemas/PluginDescriptor"
+
+    ParserRoutingResponse:
+      type: object
+      required:
+        [primary_plugin_id, by_kind, fallback_to_local_on_error, effective_by_kind, locked_kinds]
+      properties:
+        primary_plugin_id:
+          type: string
+        by_kind:
+          type: object
+          additionalProperties:
+            type: string
+        fallback_to_local_on_error:
+          type: boolean
+        effective_by_kind:
+          type: object
+          description: |
+            Server-rendered mapping of ``kind → plugin_id`` showing what
+            the router will actually choose given current settings.
+            Mirrors the FE's display logic so the FE doesn't have to
+            duplicate the capability gate.
+          additionalProperties:
+            type: string
+        locked_kinds:
+          type: array
+          description: Kinds the router never routes away from light_local.
+          items:
+            type: string
+
+    ParserRoutingPatchRequest:
+      type: object
+      description: All fields optional; only those provided are updated.
+      properties:
+        primary_plugin_id:
+          type: string
+        by_kind:
+          type: object
+          additionalProperties:
+            type: string
+        fallback_to_local_on_error:
+          type: boolean
+
+    PluginConfigResponse:
+      type: object
+      required: [plugin_id, enabled, has_secret, options]
+      properties:
+        plugin_id:
+          type: string
+        enabled:
+          type: boolean
+        has_secret:
+          type: boolean
+          description: True if an API key is stored. Plaintext is never returned.
+        options:
+          type: object
+          additionalProperties: true
+
+    PluginConfigPatchRequest:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        secret:
+          type: string
+          description: |
+            Plaintext API key. Hashed into the secret store on receipt;
+            only the ref is persisted. Empty string clears the stored
+            secret.
+        options:
+          type: object
+          additionalProperties: true
+
+    PluginTestResponse:
+      type: object
+      required: [ok, plugin_id]
+      properties:
+        ok:
+          type: boolean
+        plugin_id:
+          type: string
+        error:
+          type: string
+          nullable: true
+        latency_ms:
+          type: integer
+          nullable: true
