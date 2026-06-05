@@ -21,7 +21,7 @@ finds the data-directory copies of ``valuz_agent`` first.
 Usage::
 
     cd backend
-    uv run pyinstaller valuz_agent.spec --clean --noconfirm
+    uv run pyinstaller scripts/valuz_agent.spec --clean --noconfirm
     ./dist/valuz-server/valuz-server --host 127.0.0.1 --port 19100
 """
 
@@ -39,7 +39,11 @@ else:
     exe_name = "valuz-server"
 
 # --- Source root (backend/) ---
-HERE = Path(SPECPATH)
+# This spec lives in ``backend/scripts/``, so ``SPECPATH`` is that dir; the
+# backend root (which holds ``valuz_agent`` / ``kernel`` / ``alembic``) is its
+# parent. PyInstaller is still invoked from ``backend/`` (``pyinstaller
+# scripts/valuz_agent.spec``), so build/dist land under ``backend/`` as before.
+HERE = Path(SPECPATH).parent
 
 # --- Auto-collect all submodules for third-party packages ---
 _third_party_pkgs = [
@@ -129,7 +133,7 @@ a = Analysis(
         # OCR (optional, may not be installed)
         "rapidocr_onnxruntime",
     ],
-    hookspath=[str(HERE / "pyinstaller_hooks")],
+    hookspath=[str(Path(SPECPATH) / "pyinstaller_hooks")],  # sits next to this spec (backend/scripts/)
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
