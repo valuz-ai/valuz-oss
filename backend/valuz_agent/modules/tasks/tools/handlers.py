@@ -315,6 +315,35 @@ async def _check_orchestration_gate(ctx: ExecContext) -> tuple[str, str] | ToolR
     return workspace_id, agent_slug
 
 
+async def _bound_agent_member(sess: Any) -> dict[str, Any] | None:
+    """The conversation's own bound agent, shaped like a ``list_members`` row.
+
+    A project-less *chat* workspace has no deployed project members, but the
+    conversation is still driven by a real agent — its bound library agent
+    (e.g. the seeded ``default-assistant``), recorded on the session as
+    ``metadata["valuz"]["agent_slug"]`` with the kernel agent at
+    ``session.agent_id``. ``_list_members_handler`` surfaces it as a fallback
+    so the roster isn't an empty dead-end the caller gives up on — the slug is
+    directly usable as an automation's ``agent_slug``. Returns ``None`` when
+    the session carries no bound agent slug.
+    """
+    from valuz_agent.adapters.agent_resolver import summarize_role
+
+    valuz = (getattr(sess, "metadata", None) or {}).get("valuz", {})
+    slug = valuz.get("agent_slug") if isinstance(valuz, dict) else None
+    if not slug:
+        return None
+    agent_id = getattr(sess, "agent_id", None)
+    agent_cfg = await kernel_store.load_agent(agent_id) if agent_id else None
+    return {
+        "slug": slug,
+        "name": agent_cfg.name if agent_cfg else slug,
+        "runtime": agent_cfg.runtime_provider if agent_cfg else "unknown",
+        "source_agent_slug": slug,
+        "role_summary": summarize_role(agent_cfg.instructions) if agent_cfg else "",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -704,6 +733,16 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
 
         try:
             members = await queries.list_members(workspace_id)
+            if not members:
+                # Project-less chat fallback (see ``_bound_agent_member``):
+                # a chat workspace has no deployed project members, but the
+                # conversation IS driven by its bound agent. Surface it so the
+                # roster isn't an empty dead-end that makes the caller give up
+                # (e.g. abort an automation create) — the slug is usable
+                # directly as the automation's agent_slug.
+                bound = await _bound_agent_member(sess)
+                if bound is not None:
+                    members = [bound]
             return ToolResult(content=json.dumps(members, ensure_ascii=False))
         except Exception as exc:  # noqa: BLE001
             logger.exception("list_members handler error")

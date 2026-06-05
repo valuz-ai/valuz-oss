@@ -288,6 +288,12 @@ You may modify the plan of a DRAFT task directly with ``modify_plan``
    (``claude``, ``assistant``, ``lead``, ``Frontend Engineer``, …)
    are not real members.
 
+   This rule is for TASKS only. It does NOT apply to the ``automation``
+   tool: a chat automation defaults to the agent you are already talking
+   to, so you can create it directly WITHOUT list_members. (And in a chat
+   with no project, list_members is expected to be empty — never read that
+   as "no agent available".)
+
    Map user intent → real ``agent_slug`` from the roster yourself —
    the user thinks in role names ("研究员") while the API needs slugs
    ("research-director"). The roster includes a one-line

@@ -89,13 +89,21 @@ def _current_session_id() -> str:
     return sid
 
 
-async def _resolve_session_context(session_id: str) -> tuple[str | None, str]:
-    """Resolve ``(workspace_id, workspace_kind)`` for the calling session.
+async def _resolve_session_context(session_id: str) -> tuple[str | None, str, str | None]:
+    """Resolve ``(workspace_id, workspace_kind, bound_agent_slug)`` for the call.
 
-    Returns ``(None, "chat")`` when the kernel session has been GC'd or
-    the host can't find its workspace — the agent should still be able to
-    operate on user-level automations even when its origin chat workspace
-    is gone. The caller then forwards ``None`` to ``AutomationService.create``
+    ``bound_agent_slug`` is the agent the calling conversation is bound to —
+    recorded on the kernel session as ``metadata["valuz"]["agent_slug"]``. For a
+    quick/temp chat that's a *library* agent slug (e.g. the seeded
+    ``default-assistant``); ``_handle_create`` uses it to default a chat
+    automation's ``agent_slug`` so the user/LLM need not pick one — and need not
+    consult ``list_members``, which lists project members only and is empty for
+    a project-less chat.
+
+    Returns ``(None, "chat", <slug|None>)`` when the kernel session has been
+    GC'd or the host can't find its workspace — the agent should still be able
+    to operate on user-level automations even when its origin chat workspace is
+    gone. The caller then forwards ``None`` to ``AutomationService.create``
     which lazy-creates a fresh chat workspace named after the automation.
     """
     from valuz_agent.adapters import kernel_store
@@ -104,14 +112,22 @@ async def _resolve_session_context(session_id: str) -> tuple[str | None, str]:
 
     kernel_session = await kernel_store.load_session(session_id)
     if kernel_session is None:
-        return None, "chat"
+        return None, "chat", None
     project_id = str(kernel_session.project_id)
+
+    meta = getattr(kernel_session, "metadata", None) or {}
+    valuz_meta = meta.get("valuz") if isinstance(meta, dict) else None
+    bound_agent_slug: str | None = None
+    if isinstance(valuz_meta, dict):
+        slug = valuz_meta.get("agent_slug")
+        if isinstance(slug, str) and slug:
+            bound_agent_slug = slug
 
     async with async_unit_of_work(commit=False) as db:
         ws = await WorkspaceDatastore(db).get_by_id(project_id)
     if ws is None:
-        return None, "chat"
-    return ws.id, ws.kind
+        return None, "chat", bound_agent_slug
+    return ws.id, ws.kind, bound_agent_slug
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +214,7 @@ async def _handle_create(
     payload: AutomationToolPayload,
     workspace_kind: str,
     workspace_id: str | None,
+    session_agent_slug: str | None = None,
 ) -> AutomationToolResult:
     from valuz_agent.modules.automations.errors import (
         AgentNotFound,
@@ -219,13 +236,22 @@ async def _handle_create(
             "prompt_template is required for create.",
             code="MISSING_PROMPT",
         )
-    if not payload.agent_slug:
+    # Resolve the effective agent. In a chat / quick conversation the automation
+    # runs as the agent the user is already talking to: default ``agent_slug``
+    # to the session's bound agent (a library agent such as ``default-assistant``)
+    # when omitted. This removes the false dependency on ``list_members`` —
+    # project-member-scoped, hence empty for a project-less chat — that
+    # otherwise made the LLM give up before ever calling create.
+    effective_agent_slug = payload.agent_slug
+    if not effective_agent_slug and workspace_kind == "chat":
+        effective_agent_slug = session_agent_slug
+    if not effective_agent_slug:
         return _err(
             "create",
             (
-                "agent_slug is required. Pick an agent first — chat sessions "
-                "choose from LIBRARY/Agents, project sessions choose from "
-                "the project's team members (call list_members to see them)."
+                "agent_slug is required. In a PROJECT session pick a team member "
+                "(call list_members to see them). In a chat it defaults to your "
+                "current agent; pass a library agent slug only to override."
             ),
             code="MISSING_AGENT",
         )
@@ -252,7 +278,7 @@ async def _handle_create(
         workspace_kind=workspace_kind,  # type: ignore[arg-type]
         workspace_id=workspace_id,
         agent_kind=agent_kind,  # type: ignore[arg-type]
-        agent_slug=payload.agent_slug,
+        agent_slug=effective_agent_slug,
         prompt_template=payload.prompt_template,
         trigger=trigger,
     )
@@ -461,7 +487,7 @@ async def _dispatch(payload: AutomationToolPayload) -> AutomationToolResult:
     from valuz_agent.infra.db import async_unit_of_work
 
     session_id = _current_session_id()
-    workspace_id, workspace_kind = await _resolve_session_context(session_id)
+    workspace_id, workspace_kind, session_agent_slug = await _resolve_session_context(session_id)
     scope = _coerce_scope(payload, workspace_kind)
 
     async with async_unit_of_work() as db:
@@ -474,6 +500,7 @@ async def _dispatch(payload: AutomationToolPayload) -> AutomationToolResult:
                 payload=payload,
                 workspace_kind=workspace_kind,
                 workspace_id=workspace_id,
+                session_agent_slug=session_agent_slug,
             )
         if payload.action == "update":
             return await _handle_update(
@@ -507,10 +534,15 @@ or to manage non-recurring follow-ups.
 
 Actions
 =======
-- create: requires name, prompt_template, agent_slug, trigger.
-  agent_slug — chat sessions pick from LIBRARY/Agents; project sessions
-    pick from the project's team members (call list_members first to see
-    candidates). Do NOT invent slugs.
+- create: requires name, prompt_template, trigger. agent_slug is
+  CONTEXT-DEPENDENT — do NOT treat it as universally required:
+    • Chat / quick conversation (no project): agent_slug is OPTIONAL. Omit it
+      and the automation runs as the agent you are CURRENTLY talking to. Do
+      NOT call list_members here — it lists *project members*, so it is empty
+      in a project-less chat, and an empty roster does NOT mean "no agent
+      available". Pass an explicit LIBRARY agent slug only to override.
+    • Project session: agent_slug is REQUIRED and must be a project team
+      member — call list_members first to see candidates. Do NOT invent slugs.
   trigger — discriminated object. Either:
     {"kind": "cron", "cron_expr": "0 9 * * *", "timezone": "Asia/Shanghai"}
     {"kind": "interval", "seconds": 300}
