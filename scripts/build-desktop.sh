@@ -95,6 +95,17 @@ log()  { echo "[build] $*"; }
 warn() { echo "[build] WARNING: $*" >&2; }
 die()  { echo "[build] ERROR: $*" >&2; exit 1; }
 
+# --- Version from git tag ---
+# Precedence: VALUZ_VERSION env > nearest reachable tag (v prefix stripped).
+if [ -n "${VALUZ_VERSION:-}" ]; then
+  BUILD_VERSION="$VALUZ_VERSION"
+else
+  BUILD_VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')" || true
+  : "${BUILD_VERSION:=0.0.0}"
+fi
+: "${BUILD_VERSION:=0.0.0}"
+log "Build version: $BUILD_VERSION"
+
 if $VERBOSE; then
   set -x
 fi
@@ -192,8 +203,7 @@ if ! $SKIP_CLI; then
   CLI_OUT="$RESOURCES_BIN/valuz"
 
   log "Building Go CLI → $CLI_OUT"
-  # Trim paths + omit DWARF/symbols for a leaner shippable binary.
-  go build -trimpath -ldflags "-s -w" -o "$CLI_OUT" .
+  go build -trimpath -ldflags "-s -w -X main.version=$BUILD_VERSION" -o "$CLI_OUT" .
   chmod +x "$CLI_OUT"
 
   log "CLI binary built: $(du -sh "$CLI_OUT" | cut -f1)"
@@ -247,6 +257,14 @@ if ! $SKIP_FRONTEND; then
 
   # Build workspace packages + desktop app
   cd "$DESKTOP_DIR"
+
+  # Override package.json version with build version from git tag
+  DESKTOP_PKG="$DESKTOP_DIR/package.json"
+  log "Setting desktop version: $BUILD_VERSION"
+  cd "$DESKTOP_DIR"
+  # Portable sed: swap "version": "old" → "version": "new"
+  sed -i.bak -E 's/("version"[[:space:]]*:[[:space:]]*)"[^"]*"/\1"'"$BUILD_VERSION"'"/' "$DESKTOP_PKG"
+  rm -f "$DESKTOP_PKG.bak"
 
   # When --publish is given, append the flag to the electron-builder
   # invocation so it uploads artifacts + latest-mac.yml to GitHub Releases.

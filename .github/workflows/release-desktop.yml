@@ -16,8 +16,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  set-version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            V="${{ github.ref_name }}"
+          else
+            V="${{ inputs.version }}"
+          fi
+          # Strip leading 'v'
+          V="${V#v}"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
   build-mac:
     name: macOS (arm64)
+    needs: set-version
     runs-on: macos-14
     environment: CSC_KEY_PASSWORD
     permissions:
@@ -77,6 +95,7 @@ jobs:
       - name: Build desktop app (signed + publish)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VALUZ_VERSION: ${{ needs.set-version.outputs.version }}
         run: |
           bash scripts/build-desktop.sh --signed --publish=always
 
@@ -97,6 +116,7 @@ jobs:
 
   build-mac-x64:
     name: macOS (x86_64)
+    needs: set-version
     runs-on: macos-13
     environment: CSC_KEY_PASSWORD
     permissions:
@@ -154,6 +174,7 @@ jobs:
       - name: Build desktop app (signed + publish)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VALUZ_VERSION: ${{ needs.set-version.outputs.version }}
         run: |
           bash scripts/build-desktop.sh --signed --publish=always
 
@@ -174,6 +195,7 @@ jobs:
 
   build-linux-arm64:
     name: Linux (arm64)
+    needs: set-version
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: write
@@ -213,6 +235,7 @@ jobs:
       - name: Build desktop app (unsigned + publish)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VALUZ_VERSION: ${{ needs.set-version.outputs.version }}
         run: |
           bash scripts/build-desktop.sh --publish=always
 
