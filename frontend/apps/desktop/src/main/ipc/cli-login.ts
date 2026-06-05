@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { join, resolve } from "node:path";
@@ -71,27 +71,39 @@ export const defaultDeps: CliLoginDeps = {
  *     ├── valuz-server
  *     └── _internal/claude_agent_sdk/_bundled/claude
  *
- * Dev layout:
- *   backend/.venv/lib/python3.13/site-packages/claude_agent_sdk/_bundled/claude
+ * Dev layout (the python3.X minor version isn't fixed — it tracks whatever
+ * interpreter `uv` resolved for the venv, so we glob it):
+ *   backend/.venv/lib/python3.X/site-packages/claude_agent_sdk/_bundled/claude
  */
 function resolveBundledClaude(): string | null {
   const binaryName = platform() === "win32" ? "claude.exe" : "claude";
 
-  // Production: packaged Electron app
-  const bundled = join(
-    process.resourcesPath,
-    "libexec",
-    "_internal",
-    "claude_agent_sdk",
-    "_bundled",
-    binaryName,
-  );
-  if (existsSync(bundled)) return bundled;
+  // Production: packaged Electron app. ``process.resourcesPath`` is an
+  // Electron-only global — undefined under plain Node (e.g. vitest), where
+  // ``join(undefined, …)`` would throw. Guard it so the function stays
+  // callable off-Electron and the dev fallback below remains reachable.
+  if (process.resourcesPath) {
+    const bundled = join(
+      process.resourcesPath,
+      "libexec",
+      "_internal",
+      "claude_agent_sdk",
+      "_bundled",
+      binaryName,
+    );
+    if (existsSync(bundled)) return bundled;
+  }
 
-  // Dev: walk up from dist-electron/ to project root, then into backend venv
-  const devClaude = resolve(
+  // Dev: walk up from dist-electron/ to the repo root, then into the backend
+  // venv. dist-electron sits at frontend/apps/desktop/dist-electron, so the
+  // repo root is exactly 4 levels up (desktop → apps → frontend → repo) — an
+  // earlier 5th ".." overshot to the repo's parent and the fallback never
+  // resolved. The Python minor version in the path (lib/python3.X/) isn't
+  // pinned — it follows whatever interpreter `uv` resolved — so glob every
+  // python3.* dir instead of hardcoding one (hardcoding 3.13 silently missed
+  // a 3.12 venv, making the bundled claude read as "not installed").
+  const venvLib = resolve(
     __dirname,
-    "..",
     "..",
     "..",
     "..",
@@ -99,13 +111,27 @@ function resolveBundledClaude(): string | null {
     "backend",
     ".venv",
     "lib",
-    "python3.13",
-    "site-packages",
-    "claude_agent_sdk",
-    "_bundled",
-    binaryName,
   );
-  if (existsSync(devClaude)) return devClaude;
+  let pyDirs: string[] = [];
+  try {
+    pyDirs = readdirSync(venvLib)
+      .filter((d) => d.startsWith("python3."))
+      .sort()
+      .reverse(); // prefer the newest minor when several venvs coexist
+  } catch {
+    // venv lib dir absent (no dev venv) — nothing to glob
+  }
+  for (const py of pyDirs) {
+    const devClaude = join(
+      venvLib,
+      py,
+      "site-packages",
+      "claude_agent_sdk",
+      "_bundled",
+      binaryName,
+    );
+    if (existsSync(devClaude)) return devClaude;
+  }
 
   return null;
 }
