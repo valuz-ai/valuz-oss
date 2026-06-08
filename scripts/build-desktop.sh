@@ -58,6 +58,7 @@ SKIP_BACKEND=false
 SKIP_FRONTEND=false
 SKIP_CLI=false
 SKIP_RG=false
+SKIP_NOTICES=false
 SIGNED=false
 VERBOSE=false
 PUBLISH=never
@@ -69,13 +70,14 @@ for arg in "$@"; do
     --skip-frontend) SKIP_FRONTEND=true ;;
     --skip-cli)      SKIP_CLI=true ;;
     --skip-rg)       SKIP_RG=true ;;
+    --skip-notices)  SKIP_NOTICES=true ;;
     --signed)        SIGNED=true ;;
     --verbose)       VERBOSE=true ;;
     --publish=*)     PUBLISH="${arg#--publish=}" ;;
     --publish)       PUBLISH="always" ;;
     --edition=*)     EDITION="${arg#--edition=}" ;;
     --help|-h)
-      echo "Usage: $0 [--edition=oss|enterprise|finance] [--signed] [--skip-backend] [--skip-frontend] [--skip-cli] [--skip-rg] [--verbose] [--publish[=always|never|onTag]]"
+      echo "Usage: $0 [--edition=oss|enterprise|finance] [--signed] [--skip-backend] [--skip-frontend] [--skip-cli] [--skip-rg] [--skip-notices] [--verbose] [--publish[=always|never|onTag]]"
       exit 0
       ;;
     *)
@@ -256,6 +258,18 @@ if ! $SKIP_FRONTEND; then
   # Install dependencies
   log "Installing frontend dependencies..."
   pnpm install --frozen-lockfile 2>/dev/null || pnpm install
+
+  # Generate third-party license notices and stage them for bundling
+  # (electron-builder extraResources picks up resources/THIRD-PARTY-NOTICES.txt).
+  # Required to satisfy bundled dependencies' attribution terms. The file is a
+  # build artifact — regenerated here every build, not committed.
+  if ! $SKIP_NOTICES; then
+    log "Generating third-party license notices..."
+    bash "$SCRIPT_DIR/gen-third-party-notices.sh" \
+      "$RESOURCES_DIR/THIRD-PARTY-NOTICES.txt"
+  else
+    log "Skipping third-party notices generation (--skip-notices)"
+  fi
 
   # Build workspace packages + desktop app
   cd "$DESKTOP_DIR"

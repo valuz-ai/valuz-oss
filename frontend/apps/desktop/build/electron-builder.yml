@@ -29,6 +29,11 @@ extraResources:
     to: libexec/
     filter:
       - "**/*"
+  # Third-party attribution notices (generated at build time by
+  # scripts/gen-third-party-notices.sh). Required to satisfy bundled
+  # dependencies' license terms. Lands at Valuz.app/Contents/Resources/.
+  - from: resources/THIRD-PARTY-NOTICES.txt
+    to: THIRD-PARTY-NOTICES.txt
 asar: true
 mac:
   target:

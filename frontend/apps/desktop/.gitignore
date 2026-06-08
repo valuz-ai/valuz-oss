@@ -14,6 +14,9 @@ dist-ssr
 release
 *.local
 
+# Generated at build time by scripts/gen-third-party-notices.sh — not committed
+resources/THIRD-PARTY-NOTICES.txt
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
