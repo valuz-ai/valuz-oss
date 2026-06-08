@@ -9,6 +9,7 @@ import {
   SelectValue,
 } from "../ui/select";
 import { cn } from "@valuz/ui/lib/utils";
+import { modelLabel } from "@valuz/shared";
 
 export type TestStatus = "idle" | "testing" | "ok" | "fail";
 
@@ -242,12 +243,12 @@ export const ProviderFormFields: FC<ProviderFormFieldsProps> = ({
           </label>
           <Select value="" onValueChange={() => {}}>
             <SelectTrigger className="w-full">
-              <SelectValue placeholder={discoveredModels[0]} />
+              <SelectValue placeholder={modelLabel(discoveredModels[0])} />
             </SelectTrigger>
             <SelectContent>
               {discoveredModels.map((m) => (
                 <SelectItem key={m} value={m}>
-                  {m}
+                  {modelLabel(m)}
                 </SelectItem>
               ))}
             </SelectContent>
