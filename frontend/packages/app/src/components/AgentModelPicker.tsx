@@ -13,7 +13,9 @@ import {
   cn,
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@valuz/ui";
@@ -129,6 +131,50 @@ export const AgentModelPicker = ({
     [models, selectedKey],
   );
 
+  // Group models by provider so the dropdown matches the Settings → Model
+  // list: provider as a group header, the item shows only the model name
+  // (no inline "· provider" suffix, and no provider label outside the
+  // trigger).
+  const modelGroups = useMemo(() => {
+    const groups: {
+      providerId: string;
+      providerName: string;
+      rows: typeof models;
+    }[] = [];
+    for (const m of models) {
+      let g = groups.find((x) => x.providerId === m.providerId);
+      if (!g) {
+        g = { providerId: m.providerId, providerName: m.providerName, rows: [] };
+        groups.push(g);
+      }
+      g.rows.push(m);
+    }
+    return groups;
+  }, [models]);
+
+  const modelMenu = (
+    <SelectContent>
+      {modelGroups.map((g, idx) => (
+        <SelectGroup key={g.providerId}>
+          {idx > 0 && (
+            <div className="my-1 border-t border-[#f7f8fa] dark:border-surface-border" />
+          )}
+          <SelectLabel className="text-2xs font-medium uppercase tracking-wide text-ink-meta">
+            {g.providerName}
+          </SelectLabel>
+          {g.rows.map((m) => (
+            <SelectItem
+              key={COMPOSITE(m.providerId, m.modelId)}
+              value={COMPOSITE(m.providerId, m.modelId)}
+            >
+              {modelLabel(m.modelId)}
+            </SelectItem>
+          ))}
+        </SelectGroup>
+      ))}
+    </SelectContent>
+  );
+
   const runtimeSelect = (
     <Select
       value={runtimeId}
@@ -168,16 +214,7 @@ export const AgentModelPicker = ({
           />
         )}
       </SelectTrigger>
-      <SelectContent>
-        {models.map((m) => (
-          <SelectItem
-            key={COMPOSITE(m.providerId, m.modelId)}
-            value={COMPOSITE(m.providerId, m.modelId)}
-          >
-            {modelLabel(m.modelId)} · {m.providerName}
-          </SelectItem>
-        ))}
-      </SelectContent>
+      {modelMenu}
     </Select>
   );
 
@@ -206,11 +243,6 @@ export const AgentModelPicker = ({
               {t("agent.modelDesc" as Parameters<typeof t>[0])}
             </div>
           </div>
-          {selectedRow && (
-            <span className="shrink-0 truncate text-2xs text-ink-meta">
-              {selectedRow.providerName}
-            </span>
-          )}
           {modelSelect}
         </div>
       </div>
@@ -261,16 +293,7 @@ export const AgentModelPicker = ({
               placeholder={t("agent.selectModel" as Parameters<typeof t>[0])}
             />
           </SelectTrigger>
-          <SelectContent>
-            {models.map((m) => (
-              <SelectItem
-                key={COMPOSITE(m.providerId, m.modelId)}
-                value={COMPOSITE(m.providerId, m.modelId)}
-              >
-                {modelLabel(m.modelId)} · {m.providerName}
-              </SelectItem>
-            ))}
-          </SelectContent>
+          {modelMenu}
         </Select>
       </DialogField>
     </div>

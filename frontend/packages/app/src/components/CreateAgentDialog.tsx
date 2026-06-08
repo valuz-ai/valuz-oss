@@ -355,7 +355,7 @@ export const CreateAgentDialog = ({
                   <SelectContent>
                     {EFFORT_LEVELS.map((e) => (
                       <SelectItem key={e} value={e}>
-                        {e}
+                        {t(`effort.${e}` as Parameters<typeof t>[0])}
                       </SelectItem>
                     ))}
                   </SelectContent>

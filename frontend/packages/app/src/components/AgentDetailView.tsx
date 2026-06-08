@@ -837,7 +837,7 @@ export const AgentDetailView = ({
                       <SelectContent>
                         {["low", "medium", "high", "xhigh", "max"].map((e) => (
                           <SelectItem key={e} value={e}>
-                            {e}
+                            {t(`effort.${e}` as Parameters<typeof t>[0])}
                           </SelectItem>
                         ))}
                       </SelectContent>
