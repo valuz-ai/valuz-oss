@@ -7,7 +7,7 @@
 > rationale). When this file and those disagree, those win on intent; this file
 > wins on backend mechanics.
 
-Python/FastAPI on a vendored Agent Harness kernel. The **host**
+Python/FastAPI on an Agent Harness kernel. The **host**
 (`valuz_agent/`) owns the workspace UX, skill catalog, KB, providers, MCP
 catalog, scheduling, tasks, and OAuth; the **kernel** (`kernel/`) owns
 Project/Agent/Session/Event persistence and the runtime adapters. The two meet
@@ -20,7 +20,7 @@ backend/
 ├── alembic/                      # both migration chains (moved out of the packages)
 │   ├── host/                     #   host chain — version_table = alembic_version_host
 │   └── kernel/                   #   kernel chain — version_table = alembic_version
-├── kernel/                       # Agent Harness core (DO NOT EDIT — see §6)
+├── kernel/                       # Agent Harness core — see §6 for the seam
 │   ├── src/                      #   core/ · adapters/ (SQLAlchemyStore) · runtimes/
 │   ├── app/                      #   FastAPI subrouters mounted at /api/v1/*
 │   └── KERNEL_VERSION            #   provenance: last vendored upstream commit
@@ -61,8 +61,8 @@ app.dependencies import …` (singletons + lifecycle), `from app.config import
 AppConfig`, and `from app.routes.* import router`. `from src.adapters.*` /
 `from src.runtimes.*` are forbidden **outside**
 `valuz_agent/adapters/kernel_sync.py` — the single sanctioned escape hatch.
-`kernel/` is a verbatim vendored copy: never edit it; patch upstream and
-re-vendor (bump `KERNEL_VERSION`).
+Keep host code talking to the kernel through its public API above rather than
+reaching into kernel internals.
 
 ## Anatomy of a business module
 
@@ -231,6 +231,4 @@ logs land under `.ai/dev/{backend,frontend}.log`.
   `libexec/rg`. The binary is vendored per platform at
   `backend/vendor/rg/<platform-tag>-<arch-tag>/` (refresh with
   `scripts/download-rg.sh`).
-- **Kernel is read-only** — bugs in `kernel/` are fixed upstream and
-  re-vendored, never patched in place.
 ```

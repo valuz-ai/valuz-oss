@@ -27,7 +27,7 @@ user configures (and, optionally, to the Reportify cloud for research data).
                              ▼
           ┌───────────────────────────────────────────┐
           │  Backend (valuz-server, FastAPI)           │
-          │  Host application + vendored kernel        │
+          │  Host application + agent kernel           │
           └───────────────────┬───────────────────────┘
                              │
         ┌────────────────────┼─────────────────────┐
@@ -53,8 +53,8 @@ diagnoses these processes but owns none of their implementation.
 
 ## 2. Backend: Host + Kernel
 
-The backend is split into a **host application** (`valuz_agent`) and a
-**vendored agent kernel** (`kernel/`). All coupling between them goes through a
+The backend is split into a **host application** (`valuz_agent`) and an
+**agent kernel** (`kernel/`). All coupling between them goes through a
 single adapter seam.
 
 ```
@@ -80,7 +80,7 @@ single adapter seam.
 └───────────────────────────────────┬────────────────────────────────┘
                                     ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│  Vendored Agent Harness Kernel  (backend/kernel)                   │
+│  Agent Harness Kernel  (backend/kernel)                            │
 │                                                                    │
 │  app/      routes mounted at /api/v1/{projects,agents,sessions,…}  │
 │            StorePort + SessionOrchestrator singletons              │
@@ -94,8 +94,7 @@ single adapter seam.
 ```
 
 **Kernel** owns the `Project ↔ Agent ↔ Session ↔ Event` persistence model and
-runtime orchestration. It is vendored read-only: the host never
-edits kernel source; it upgrades the kernel as a unit and adapts via the seam.
+runtime orchestration.
 
 **Host** owns everything else — the agent library, project membership, the task
 orchestrator, providers, the MCP catalog, scheduling, attachments, OAuth pages,
@@ -280,7 +279,6 @@ desktop implementations.
 
 - **Contract first** — `api/openapi.yaml` leads; implementations follow.
 - **Single adapter seam** — all host ↔ kernel coupling crosses `adapters/`.
-- **Kernel is read-only** — vendored and upgraded as a unit, never patched in place.
 - **One async DB entry** — all host DB access through `infra/db.py`; never run
   synchronous DB calls on the event loop.
 - **One write registry** — all host filesystem writes go through `FsRegistry`.

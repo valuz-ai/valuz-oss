@@ -1,25 +1,25 @@
 """Kernel-behavior coverage for the attachment source/parsed split.
 
-These pin the vendored-kernel changes that let the agent see BOTH the original
-file and its parsed text extract:
+These pin the kernel changes that let the agent see BOTH the original file and
+its parsed text extract:
 
   * ``build_user_prompt`` lists ``source_path`` for every attachment and appends
     ``(extracted text: <parsed_path>)`` only when a parse exists.
   * the store converters round-trip ``{source_path, parsed_path}`` and still read
     legacy rows that carry a single ``filepath`` key (back-compat).
 
-The kernel is vendored read-only and ships without its own tests here, so this
-host-side module guards the behavior the host now depends on.
+The kernel ships without its own tests in this repo, so this host-side module
+guards the behavior the host depends on.
 """
 
 from __future__ import annotations
 
 # ruff: noqa: I001 — the boot.kernel side-effect import MUST precede ``from
-# src.*`` (it injects the vendored kernel onto sys.path); isort would reorder it.
+# src.*`` (it injects the kernel onto sys.path); isort would reorder it.
 
 from datetime import datetime
 
-# Side-effect import — puts the vendored kernel on sys.path so ``src.*`` resolves
+# Side-effect import — puts the kernel on sys.path so ``src.*`` resolves
 # before the kernel imports below run.
 import valuz_agent.boot.kernel  # noqa: F401
 from src.adapters.sqlalchemy_store.converters import (  # type: ignore[import-not-found]

@@ -79,7 +79,7 @@ See **[Architecture](docs/architecture.md)** for the full technical design.
 ```
 ├── api/              OpenAPI contract (single source of truth)
 ├── backend/          Python/FastAPI server (packaged as valuz-server)
-│   ├── kernel/       Vendored agent harness kernel (read-only)
+│   ├── kernel/       Agent harness kernel
 │   └── valuz_agent/  Host application
 ├── cli/              Go control CLI — user-facing `valuz` binary
 ├── frontend/         pnpm workspace

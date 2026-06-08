@@ -1,4 +1,4 @@
-"""Boot the vendored Agent Harness V5 kernel inside the valuz host process.
+"""Boot the Agent Harness V5 kernel inside the valuz host process.
 
 The kernel ships under ``backend/kernel/`` with bare top-level imports
 (``from src.core ...``, ``from app.config ...``). Importing the ``kernel``
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 import kernel  # noqa: F401, E402  (side-effect import)
 
 KERNEL_DIR: Path = Path(__file__).resolve().parents[2] / "kernel"
-# The kernel alembic chain was moved out of the vendored kernel tree to
+# The kernel alembic chain was moved out of the kernel tree to
 # backend/alembic/kernel (sibling of the host chain at backend/alembic/host).
 KERNEL_ALEMBIC_DIR: Path = Path(__file__).resolve().parents[2] / "alembic" / "kernel"
 KERNEL_ALEMBIC_INI: Path = KERNEL_ALEMBIC_DIR / "alembic.ini"
@@ -73,7 +73,7 @@ def drop_stale_kernel_tables(engine: Engine | None = None) -> None:
 
     The kernel's Alembic chain is the only thing that's *supposed* to
     rewrite ``projects`` / ``agents`` / ``sessions`` / ``events``, but
-    historically upstream has shipped schema changes that reuse the
+    historically the kernel has shipped schema changes that reuse the
     same revision id (so already-stamped DBs skip the upgrade and end
     up missing required columns). This function detects those known
     fingerprints by checking for the presence of marker columns —
@@ -116,8 +116,8 @@ def drop_stale_kernel_tables(engine: Engine | None = None) -> None:
 
         # Per-upgrade fingerprints. Each row pins a "new required column"
         # whose ABSENCE uniquely identifies a pre-upgrade kernel DB.
-        # When upstream cleanly bumps the revision id these fingerprints
-        # become defensive-only; when upstream reuses an existing revision
+        # When the kernel cleanly bumps the revision id these fingerprints
+        # become defensive-only; when it reuses an existing revision
         # id (which has happened multiple times — see KERNEL_VERSION
         # commentary) the fingerprint is the only thing that triggers the
         # rebuild.
@@ -195,7 +195,7 @@ def run_kernel_migrations() -> None:
        uses a separate ``alembic_version_host`` row in the same file
        so the two don't collide.
 
-    Always runs in a dedicated thread because the kernel's vendored
+    Always runs in a dedicated thread because the kernel's
     ``alembic/env.py`` calls ``asyncio.run()`` to drive its async
     migrations, and that fails if the calling thread already has a
     running event loop — which is the case for FastAPI/Starlette
@@ -243,9 +243,9 @@ async def init_kernel_dependencies() -> None:
     # write lock — no wait, no retry. The host engine was hardened to 15s
     # (infra/database) but this kernel half of the SAME file was not, which is the
     # real source of the dispatch/scheduler lock storms. Attach the missing PRAGMA
-    # to the kernel engine here (host seam — kernel files stay vendored/unedited),
-    # then dispose the pool so live connections reconnect with it. Upstream fix:
-    # add busy_timeout to the kernel engine factory + re-vendor.
+    # to the kernel engine here (at the host seam), then dispose the pool so live
+    # connections reconnect with it. The tidier home is the kernel's engine
+    # factory — fold busy_timeout in there when next touching it.
     if settings.is_sqlite and getattr(kernel_deps, "_engine", None) is not None:
         from sqlalchemy import event as _sa_event
 

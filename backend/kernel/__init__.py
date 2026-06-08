@@ -1,7 +1,4 @@
-# Vendored from agent-harness — see KERNEL_VERSION for upstream commit.
-# DO NOT EDIT — patch upstream and re-rsync.
-#
-# This module exists to make the vendored kernel importable.
+# This module exists to make the kernel importable.
 # The kernel uses bare top-level imports (`from src.core...`, `from app.config...`),
 # so we inject this directory onto sys.path on first import. Any caller can then do:
 #

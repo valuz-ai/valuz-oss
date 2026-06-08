@@ -140,7 +140,7 @@ def test_should_drop_kernel_quartet_when_agents_lacks_instructions_column(tmp_pa
 def test_should_drop_kernel_quartet_when_sessions_lacks_runtime_provider_column(tmp_path):
     """Pre-V5+d5f2238 DB has sessions without ``runtime_provider`` → drop everything.
 
-    Fingerprint for the explicit-runtime-dispatch upgrade. Upstream kept
+    Fingerprint for the explicit-runtime-dispatch upgrade. The kernel kept
     Alembic revision ``14b5c6e20476`` for the new column, so a DB stamped
     at that id silently skips the upgrade — the host trigger has to drop
     the quartet so ``run_kernel_migrations`` recreates the schema with

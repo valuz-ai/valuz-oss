@@ -15,7 +15,7 @@ import logging
 import re
 from typing import Any
 
-# Side-effect: puts the vendored kernel on sys.path so ``src.core`` / ``app.*``
+# Side-effect: puts the kernel on sys.path so ``src.core`` / ``app.*``
 # resolve at call time.
 import valuz_agent.boot.kernel  # noqa: F401
 from valuz_agent.adapters import kernel_store

@@ -11,7 +11,7 @@ from src.core.types import (  # type: ignore[import-not-found]
     Session as KernelSession,
 )
 
-# Side-effect: puts the vendored kernel on sys.path so ``src.core`` resolves.
+# Side-effect: puts the kernel on sys.path so ``src.core`` resolves.
 import valuz_agent.boot.kernel  # noqa: F401
 from valuz_agent.modules.sessions.dto import SessionDetail, SessionListItem, TodoItem
 from valuz_agent.modules.sessions.errors import SessionNotFound

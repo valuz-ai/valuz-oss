@@ -1,6 +1,6 @@
 """Sync facade over the V5 kernel's async StorePort.
 
-The vendored kernel is async-only (every ``StorePort`` method is a coroutine).
+The kernel is async-only (every ``StorePort`` method is a coroutine).
 Most valuz business code is sync — domain services accept a SQLAlchemy ``Session``
 and run on FastAPI threadpool handlers. Without a bridge they can't talk to the
 kernel.
@@ -157,9 +157,9 @@ def list_user_sessions_sync(
     """``list_sessions`` variant that excludes task-internal sessions
     (lead / dispatched sub-runs) at the SQL layer.
 
-    The kernel's own ``list_sessions`` has no metadata filter and is
-    read-only vendored (ADR-003), so we run a filtered SELECT here — the
-    single sanctioned place for kernel coupling — adding a json_extract
+    The kernel's own ``list_sessions`` has no metadata filter, so we run
+    a filtered SELECT here — the single sanctioned place for kernel
+    coupling — adding a json_extract
     predicate on ``metadata.valuz.task_id IS NULL`` and reusing the
     kernel's own row→domain converter so the returned objects are byte-for-
     byte identical to ``list_sessions``. The ``LIMIT`` applies *after* the

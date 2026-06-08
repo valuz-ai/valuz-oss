@@ -84,7 +84,7 @@ def create_app() -> FastAPI:
     module_registry.apply(app)
     middleware_registry.apply(app)
 
-    # Vendored Agent Harness V5 kernel — mounted at /api/v1/* (its native prefix).
+    # Agent Harness V5 kernel — mounted at /api/v1/* (its native prefix).
     # Valuz business routes stay at /v1/* and are progressively migrated to call
     # into the kernel via valuz_agent.adapters.* helpers.
     from valuz_agent.boot.kernel import get_kernel_routers

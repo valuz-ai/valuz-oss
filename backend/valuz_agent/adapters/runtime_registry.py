@@ -27,10 +27,9 @@ Design notes
 * Mirrors ``src.runtimes.factory.ALLOWED_PROTOCOLS_BY_RUNTIME``. When the
   kernel adds a runtime/protocol, update both this map and the
   frontend's ``runtime-protocols.ts`` in lock-step.
-* Adding a new runtime is a 3-step change: (1) extend the kernel's
-  factory + provider enum, (2) re-vendor the kernel, (3) add an entry
-  here. Anything beyond this module is downstream — the API + UI read
-  from here.
+* Adding a new runtime is a 2-step change: (1) extend the kernel's
+  factory + provider enum, (2) add an entry here. Anything beyond this
+  module is downstream — the API + UI read from here.
 """
 
 from __future__ import annotations

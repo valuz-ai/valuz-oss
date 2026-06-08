@@ -83,7 +83,7 @@ def _read_kernel_pin() -> str:
     # KERNEL_VERSION lives at ``backend/kernel/KERNEL_VERSION``. Walk up
     # from this file: modules/system/ → modules/ → valuz_agent/ →
     # backend/. ``parents[3]`` is ``backend/``; appending
-    # ``kernel/KERNEL_VERSION`` lands on the vendored pin.
+    # ``kernel/KERNEL_VERSION`` lands on the kernel version file.
     here = Path(__file__).resolve()
     candidate = here.parents[3] / "kernel" / "KERNEL_VERSION"
     pin = "unknown"

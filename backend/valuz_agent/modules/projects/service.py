@@ -215,8 +215,8 @@ class WorkspaceService:
         1. Pre-existing workspaces that were created before the kernel-mirror
            code was wired in (e.g. the chat-default row in databases stamped
            by an early build).
-        2. Workspaces whose kernel mirror was lost (manual DB editing, kernel
-           re-vendor that dropped/recreated tables, etc.).
+        2. Workspaces whose kernel mirror was lost (manual DB editing, a kernel
+           migration that dropped/recreated tables, etc.).
 
         Without this, ``orchestrator.run_turn`` raises ``ProjectNotFoundError``
         on the first send into the affected workspace — manifests as quick

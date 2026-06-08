@@ -1600,7 +1600,7 @@ def _test_provider_connection(
         return ConnectionTestResult(success=False, error_message=f"Connection failed: {exc}")
 
 
-# MODEL_CATALOG is gone in the upstream kernel as of 39ec84c — runtime
+# MODEL_CATALOG is gone in the kernel as of 39ec84c — runtime
 # dispatch is now per-session ``api_protocol`` rather than a curated list,
 # so provider CRUD no longer needs to push model ids into the kernel.
 # See ``valuz_agent.adapters.provider_resolver`` for the new flow.
