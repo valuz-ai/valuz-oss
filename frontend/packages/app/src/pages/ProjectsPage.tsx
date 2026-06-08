@@ -276,9 +276,6 @@ export const ProjectsPage = () => {
           if (!open) setDeleteTarget(null);
         }}
         itemName={deleteTarget?.name}
-        description={t(
-          "project.deleteProjectConfirm" as Parameters<typeof t>[0],
-        )}
         onConfirm={() => void handleDelete()}
       />
     </div>
