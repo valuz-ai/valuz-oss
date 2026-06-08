@@ -1541,7 +1541,13 @@ export const ConversationPage = () => {
   // display names so the dropdown reads "Claude Agent · mimo-v2.5-pro".
   const composerAgents = useMemo<ComposerAgentItem[]>(() => {
     if (isTempConversation) {
-      return myAgents.map((a) => ({
+      // Pin the onboarding-seeded Valuz 小助手 (``valuz-helper``) to the top of
+      // the dropdown; keep the rest of the library in its existing order.
+      const ordered = [
+        ...myAgents.filter((a) => a.slug === "valuz-helper"),
+        ...myAgents.filter((a) => a.slug !== "valuz-helper"),
+      ];
+      return ordered.map((a) => ({
         slug: a.slug,
         name: a.name,
         runtimeLabel:
