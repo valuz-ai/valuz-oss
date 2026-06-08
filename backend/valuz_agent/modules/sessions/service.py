@@ -377,12 +377,20 @@ class SessionService:
         trigger_meta: dict[str, str] | None,
         creation_context: dict[str, str] | None,
         permission_mode: str | None,
+        override_runtime_id: str | None = None,
+        override_model_id: str | None = None,
+        override_provider_id: str | None = None,
+        override_effort: str | None = None,
     ) -> SessionDetail:
         """Create a session bound to an agent (project member OR global library).
 
-        The agent is the single source of truth for the session's model
-        identity: runtime_provider / model / provider / effort, plus
-        instructions / skills / mcp_servers. This mirrors the dispatch
+        The agent supplies the session's defaults — runtime_provider / model /
+        provider / effort, plus instructions / skills / mcp_servers. The
+        ``override_*`` arguments let a single conversation start with a
+        different runtime / model / provider / effort WITHOUT mutating the
+        agent: they are written onto this session only (the agent row is never
+        touched), and — per ADR-006 — frozen for the session's lifetime. This
+        mirrors the dispatch
         ``build_member_session`` path but for a plain (non-task)
         conversation — no brief, no run_dir override (the kernel uses the
         project cwd).
@@ -426,17 +434,25 @@ class SessionService:
         # here — starting a conversation must never mutate or re-save the agent
         # (that previously triggered an agent save on every "send"). We read the
         # agent as-is.
-        provider_id = (agent.metadata or {}).get("provider_id")
+        # Resolve the effective brain: the agent supplies the defaults, the
+        # ``override_*`` args (one conversation's temporary picks) win when set.
+        effective_model = override_model_id or agent.model
+        effective_runtime_request = override_runtime_id or agent.runtime_provider
+        model_overridden = bool(override_model_id) and override_model_id != agent.model
+
+        # Provider resolution:
+        #  - an explicit ``override_provider_id`` always wins;
+        #  - if the MODEL was overridden, the agent's pinned provider may not
+        #    host the new model, so skip it and resolve a provider that does;
+        #  - otherwise prefer the agent's pinned provider (the common case for
+        #    source-agent-instantiated members carries none — provider ids are
+        #    install-local), falling back to any enabled provider hosting the
+        #    model. We never pin the resolved provider back onto the agent —
+        #    starting a conversation must never re-save the agent (M10 附录 E).
+        provider_id = override_provider_id
+        if not provider_id and not model_overridden:
+            provider_id = (agent.metadata or {}).get("provider_id")
         if not provider_id:
-            # The agent has no pinned provider. This is the common case for
-            # source-agent-instantiated members: provider ids are install-local
-            # so source agents can't carry one, and the add-agent dialog's
-            # agent mode doesn't ask for one. Rather than hard-fail (which surfaced
-            # as "保存失败" the moment a user tried to talk to a freshly added
-            # agent), mirror the plain-conversation path and the dispatch path:
-            # resolve a configured provider that hosts the agent's model. We do
-            # NOT pin it back onto the agent — starting a conversation must
-            # never re-save the agent (M10 附录 E).
             from valuz_agent.infra.config import settings
             from valuz_agent.infra.eventbus import event_bus
             from valuz_agent.infra.secret_store import FileSecretStore
@@ -447,26 +463,26 @@ class SessionService:
                 secret_store=FileSecretStore(settings.secrets_dir),
                 event_bus=event_bus,
             )
-            match = await prov_svc.resolve_provider_for_model(agent.model)
+            match = await prov_svc.resolve_provider_for_model(effective_model)
             if match is not None:
                 provider_id = match.id
         if not provider_id:
             raise SessionNotRunnable(
                 f"agent '{agent_slug}' has no model provider configured and no "
-                f"enabled provider hosts model '{agent.model}' — add a provider "
+                f"enabled provider hosts model '{effective_model}' — add a provider "
                 "for that model or pin one on the agent"
             )
 
         try:
             runtime_provider = await resolve_runtime_provider(
                 provider_id=provider_id,
-                model_id=agent.model,
+                model_id=effective_model,
                 providers=self._providers,
-                request_runtime_id=agent.runtime_provider,
+                request_runtime_id=effective_runtime_request,
             )
             model_provider = await resolve_model_provider(
                 provider_id=provider_id,
-                model_id=agent.model,
+                model_id=effective_model,
                 providers=self._providers,
                 secrets=self._secrets,
                 runtime_provider=runtime_provider,
@@ -503,10 +519,10 @@ class SessionService:
         # 400s "thinking options type cannot be disabled when reasoning_effort is
         # set"). That's a per-model constraint — clear effort on those specific
         # agents — not a reason to drop it runtime-wide.
-        agent_effort = getattr(agent, "effort", None)
+        effective_effort = override_effort or getattr(agent, "effort", None)
         model_settings = (
-            ModelSettings(effort=_coerce_session_effort(agent_effort))
-            if agent_effort
+            ModelSettings(effort=_coerce_session_effort(effective_effort))
+            if effective_effort
             else ModelSettings()
         )
 
@@ -567,7 +583,7 @@ class SessionService:
             project_id=workspace_id,
             agent_id=kernel_agent_id,
             runtime_provider=runtime_provider,
-            model=agent.model,
+            model=effective_model,
             model_provider=model_provider,
             model_settings=model_settings,
             instructions=instructions,
@@ -606,11 +622,12 @@ class SessionService:
         Resolves model + capabilities from the valuz catalog, persists a kernel
         ``Session`` row, and publishes the ``SESSION_CREATED`` event.
 
-        When ``agent_slug`` is given the session binds to that project member
-        agent: runtime / model / provider / effort / instructions / skills /
-        connectors all come from the agent (project conversations pick an
-        agent instead of a raw model). The model/provider/runtime/effort
-        request fields are ignored in that path.
+        When ``agent_slug`` is given the session binds to that agent:
+        instructions / skills / connectors always come from the agent, and
+        runtime / model / provider / effort default to the agent's brain. An
+        explicit model_id / provider_id / runtime_id / effort in that path
+        OVERRIDES the agent's default for this one session only — the agent row
+        is never modified, and the values are frozen for the session (ADR-006).
         """
         if agent_slug:
             return await self._create_agent_bound_session(
@@ -621,6 +638,10 @@ class SessionService:
                 trigger_meta=trigger_meta,
                 creation_context=creation_context,
                 permission_mode=permission_mode,
+                override_runtime_id=runtime_id,
+                override_model_id=model_id,
+                override_provider_id=provider_id,
+                override_effort=effort,
             )
         # Quick-chat sessions get an ephemeral, single-use workspace each
         # time. ``"chat-default"`` is the sentinel the chat launchers send

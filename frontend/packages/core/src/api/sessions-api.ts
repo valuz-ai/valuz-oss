@@ -248,10 +248,12 @@ export interface SessionCreateRequest {
    */
   effort?: EffortLevel | null;
   /**
-   * Project conversations bind to a configured project agent. When set,
-   * the session inherits runtime / model / provider / effort / skills /
-   * connectors from the agent and the model_id / provider_id / runtime_id
-   * / effort fields above are ignored. ``null`` keeps the model-picker path.
+   * Agent to bind this conversation to. When set, instructions / skills /
+   * connectors come from the agent, and runtime / model / provider / effort
+   * default to the agent's brain. An explicit model_id / provider_id /
+   * runtime_id / effort above OVERRIDES the agent's default for this one
+   * session only — the agent itself is never modified. ``null`` keeps the
+   * classic model-picker path.
    */
   agent_slug?: string | null;
 }

@@ -3398,11 +3398,13 @@ components:
           type: string
           nullable: true
           description: |
-            Project member agent to bind this conversation to. When set,
-            the session inherits runtime / model / provider / effort /
-            instructions / skills / connectors from the agent and the
-            model_id / provider_id / runtime_id / effort fields above are
-            ignored. ``null`` keeps the classic model-picker path.
+            Agent to bind this conversation to. When set, instructions /
+            skills / connectors come from the agent, and runtime / model /
+            provider / effort default to the agent's brain. An explicit
+            model_id / provider_id / runtime_id / effort above OVERRIDES the
+            agent's default for this one session only — the agent itself is
+            never modified, and the values are frozen for the session
+            (ADR-006). ``null`` keeps the classic model-picker path.
 
     SessionPermissionModeRequest:
       type: object

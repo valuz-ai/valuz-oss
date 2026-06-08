@@ -56,10 +56,11 @@ class SessionCreateRequest(SessionModelSelection):
     # surfaces a review feed; ``full_access`` auto-approves everything.
     # ``None`` falls through to the kernel default of ``full_access``.
     permission_mode: str | None = None
-    # Project conversations bind to a configured project agent. When set,
-    # the session inherits runtime / model / provider / effort / skills /
-    # connectors from the agent and the model/provider/runtime/effort
-    # request fields above are ignored. ``None`` keeps the classic
+    # Agent to bind this conversation to. When set, skills / connectors /
+    # instructions come from the agent, and runtime / model / provider /
+    # effort default to the agent's brain — but an explicit model/provider/
+    # runtime/effort above OVERRIDES that default for this one session
+    # (the agent row is never modified). ``None`` keeps the classic
     # model-picker path (quick chats).
     agent_slug: str | None = None
 
