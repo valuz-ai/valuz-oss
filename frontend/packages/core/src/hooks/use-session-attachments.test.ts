@@ -60,6 +60,38 @@ describe("useSessionAttachments", () => {
     expect(listAttachments).not.toHaveBeenCalled();
   });
 
+  it("a late/empty load does not clobber an optimistic upload (eager-create race)", async () => {
+    // The new-conversation flow sets sessionId to the freshly-minted session,
+    // firing the load BEFORE the upload commits → the server returns empty. If
+    // that resolves after the upload appended its row, the row must survive.
+    let resolveLoad: (v: { items: never[] }) => void = () => {};
+    const loadPromise = new Promise<{ items: never[] }>((r) => {
+      resolveLoad = r;
+    });
+    listAttachments.mockReturnValueOnce(loadPromise); // the racing, empty load
+    uploadAttachment.mockResolvedValue(
+      row({ id: "u1", session_id: "s1", parse_status: "parsing" }),
+    );
+    const ensureSession = vi.fn().mockResolvedValue({ id: "s1" });
+
+    const { result } = renderHook(() => useSessionAttachments("s1"));
+    // Upload appends u1 while the load is still pending.
+    await act(async () => {
+      await result.current.attachLocalFiles(
+        [new File(["x"], "f.pdf", { type: "application/pdf" })],
+        ensureSession,
+      );
+    });
+    expect(result.current.attachments.some((a) => a.id === "u1")).toBe(true);
+
+    // The stale empty load resolves last — it must NOT wipe the appended row.
+    await act(async () => {
+      resolveLoad({ items: [] });
+      await loadPromise;
+    });
+    expect(result.current.attachments.some((a) => a.id === "u1")).toBe(true);
+  });
+
   it("polls a parsing row until it settles to ready (S1-03)", async () => {
     vi.useFakeTimers();
     // First call = initial load (parsing); subsequent calls = poll (ready).

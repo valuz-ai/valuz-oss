@@ -500,7 +500,7 @@ class SkillLibraryService:
             workspace_id=payload.workspace_id,
             name=payload.new_name,
         )
-        shutil.copytree(source_dir, target_dir)
+        await asyncio.to_thread(shutil.copytree, source_dir, target_dir)
         manifest_path = _detect_manifest(target_dir)
         if manifest_path is not None:
             metadata, body = _extract_frontmatter(_read_text(manifest_path))
@@ -580,7 +580,8 @@ class SkillLibraryService:
         target_scope: str,
         workspace_id: str | None = None,
     ) -> SkillImportArchivePreview:
-        extracted_root = self._extract_archive(Path(archive_path))
+        # Archive extraction is blocking CPU/disk — keep it off the event loop.
+        extracted_root = await asyncio.to_thread(self._extract_archive, Path(archive_path))
         preview_id = f"skill-preview-{uuid4().hex[:8]}"
         skill_root = self._locate_skill_root(
             extracted_root,
@@ -631,7 +632,7 @@ class SkillLibraryService:
             workspace_id=payload.workspace_id,
             name=target_name,
         )
-        shutil.copytree(preview_root, target_dir)
+        await asyncio.to_thread(shutil.copytree, preview_root, target_dir)
         manifest_path = _detect_manifest(target_dir)
         if manifest_path is not None and payload.name:
             # Rename the copied manifest to the user-chosen name. With no
@@ -800,8 +801,6 @@ class SkillLibraryService:
         target_scope: str = "user",
         workspace_id: str | None = None,
     ) -> SkillImportArchivePreview:
-        import urllib.request
-
         from valuz_agent.modules.skills.errors import SkillImportFailed
 
         # Everything for this import is extracted UNDER ``staging_dir`` so the
@@ -810,22 +809,12 @@ class SkillLibraryService:
         staging_dir = Path(tempfile.mkdtemp(prefix="valuz-skill-url-"))
 
         try:
-            if self._is_github_url(url):
-                fetched_root = self._fetch_github_tree(url, staging_dir)
-            else:
-                req = urllib.request.Request(url, headers={"User-Agent": "Valuz-Agent/1.0"})
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    content = resp.read()
-
-                downloaded = staging_dir / "download"
-                downloaded.write_bytes(content)
-
-                suffix = Path(url.split("?")[0]).suffix.lower()
-                if suffix in {".zip", ".tar", ".gz", ".tgz"}:
-                    fetched_root = self._extract_archive(downloaded, dest=staging_dir / "extract")
-                else:
-                    downloaded.rename(staging_dir / "SKILL.md")
-                    fetched_root = staging_dir
+            # Network fetch (urlopen, 30s timeout) + archive extraction are
+            # blocking — run them off the event loop so a URL skill import never
+            # freezes the whole single-threaded server for other requests.
+            fetched_root = await asyncio.to_thread(
+                self._fetch_url_into_staging, url, staging_dir
+            )
         except Exception as e:
             shutil.rmtree(staging_dir, ignore_errors=True)
             raise SkillImportFailed(f"Failed to fetch URL: {e}") from e
@@ -846,6 +835,29 @@ class SkillLibraryService:
             source_url=url,
             cleanup_root=staging_dir,
         )
+
+    def _fetch_url_into_staging(self, url: str, staging_dir: Path) -> Path:
+        """Blocking fetch + extract for ``import_url_preview``.
+
+        Does the network download (``urllib``, 30s timeout) and archive
+        extraction. Both are blocking, so this MUST run off the event loop —
+        the caller invokes it via ``asyncio.to_thread``. Returns the root the
+        fetched content was materialized under.
+        """
+        import urllib.request
+
+        if self._is_github_url(url):
+            return self._fetch_github_tree(url, staging_dir)
+        req = urllib.request.Request(url, headers={"User-Agent": "Valuz-Agent/1.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            content = resp.read()
+        downloaded = staging_dir / "download"
+        downloaded.write_bytes(content)
+        suffix = Path(url.split("?")[0]).suffix.lower()
+        if suffix in {".zip", ".tar", ".gz", ".tgz"}:
+            return self._extract_archive(downloaded, dest=staging_dir / "extract")
+        downloaded.rename(staging_dir / "SKILL.md")
+        return staging_dir
 
     async def _build_multi_preview(
         self,
@@ -937,7 +949,7 @@ class SkillLibraryService:
             workspace_id=payload.workspace_id,
             name=final_name,
         )
-        shutil.copytree(skill_root, target_dir, dirs_exist_ok=True)
+        await asyncio.to_thread(shutil.copytree, skill_root, target_dir, dirs_exist_ok=True)
 
         workspace = await self._resolve_workspace(payload.workspace_id)
         if payload.target_scope == "project" and workspace is not None:

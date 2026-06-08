@@ -139,7 +139,12 @@ class DispatcherService:
             # isolated git worktree only for repo-worktree mode.
             run_seq = await run_ds.next_sequence(task_id)
             mode = workspace_mode or "shared"
-            run_dir = _member_run_dir(project_cwd, task_id, run_seq, mode)
+            # ``repo-worktree`` mode shells out to ``git worktree add`` (blocking
+            # subprocess); offload so dispatch never blocks the event loop. The
+            # default ``shared`` mode is a no-op Path() and stays instant.
+            run_dir = await asyncio.to_thread(
+                _member_run_dir, project_cwd, task_id, run_seq, mode
+            )
             started = time.time()
 
             # Build brief for the member
@@ -420,7 +425,12 @@ class DispatcherService:
 
             run_seq = await run_ds.next_sequence(task_id)
             mode = workspace_mode or "shared"
-            run_dir = _member_run_dir(project_cwd, task_id, run_seq, mode)
+            # ``repo-worktree`` mode shells out to ``git worktree add`` (blocking
+            # subprocess); offload so dispatch never blocks the event loop. The
+            # default ``shared`` mode is a no-op Path() and stays instant.
+            run_dir = await asyncio.to_thread(
+                _member_run_dir, project_cwd, task_id, run_seq, mode
+            )
 
             refs_text = "\n".join(f"- {r}" for r in (refs or []))
             # Goal mode prepends ``/goal `` (wrap_for_mode); drop the redundant

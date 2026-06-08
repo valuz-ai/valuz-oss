@@ -79,10 +79,16 @@ export function useSessionAttachments(
     });
   }, []);
 
-  // Load on session change — a full replace (a fresh session has no optimistic
-  // local state to preserve). State is set only inside the async resolution
-  // (never synchronously in the effect body) — a null session resolves to an
-  // empty list rather than an inline ``setAttachments([])``.
+  // Load on session change. CRITICAL: this races with ``attachLocalFiles`` in
+  // the eager-create flow (the new-conversation composer sets ``sessionId`` to
+  // the freshly-minted session, which fires this load *before* the upload has
+  // committed its row — so the server returns an empty/stale list). We must NOT
+  // let that stale result clobber a row the upload optimistically appended, or
+  // the just-attached file silently vanishes from the composer + panel. So the
+  // load MERGES: server rows win, but any optimistic row for THIS session that
+  // the server hasn't returned yet is preserved. Rows from a previously-active
+  // session (different ``session_id``) are dropped — this still behaves like a
+  // replace across a real session switch.
   useEffect(() => {
     let cancelled = false;
     const load = async (): Promise<SessionAttachmentItem[]> => {
@@ -95,7 +101,15 @@ export function useSessionAttachments(
       }
     };
     void load().then((items) => {
-      if (!cancelled) setAttachments(items);
+      if (cancelled) return;
+      setAttachments((prev) => {
+        if (!sessionId) return [];
+        const serverIds = new Set(items.map((r) => r.id));
+        const optimistic = prev.filter(
+          (a) => a.session_id === sessionId && !serverIds.has(a.id),
+        );
+        return [...items, ...optimistic];
+      });
     });
     return () => {
       cancelled = true;
@@ -106,8 +120,12 @@ export function useSessionAttachments(
     (a) => !a.consumed_at && a.parse_status === "parsing",
   );
 
-  // Poll while ANY row (pending or already consumed) is still parsing, so the
-  // panel history stays accurate too. Stops the moment everything settles.
+  // Poll while ANY row is still parsing. The optimistic append (attachLocalFiles)
+  // puts the freshly-uploaded ``parsing`` row into local state, so this fires
+  // immediately on attach and keeps the composer/panel progress live until every
+  // row settles. (No grace-poll needed: the new-conversation composer stays on
+  // /conversation/new instead of navigating, so the optimistic row is never
+  // dropped by a navigate→bootstrap reset.)
   const anyParsing = attachments.some((a) => a.parse_status === "parsing");
   useEffect(() => {
     if (!sessionId || !anyParsing) return;

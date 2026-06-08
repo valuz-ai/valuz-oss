@@ -2105,7 +2105,7 @@ export const ConversationPage = () => {
   // Loading server-side attachments on session change + polling parse status
   // is owned by ``useSessionAttachments`` above.
 
-  const ensureSession = useCallback(async () => {
+  const ensureSession = useCallback(async (navigateOnCreate = true) => {
     if (selectedSession) return selectedSession;
     if (!selectedWorkspaceId) throw new Error("No active workspace.");
     // For quick-chat (kind="chat"), send the ``"chat-default"`` sentinel so
@@ -2187,7 +2187,12 @@ export const ConversationPage = () => {
     // is gated on ``sessionDetail.id !== selectedSessionIdRef.current``
     // — we just set the ref, so the in-flight SSE subscription is
     // not disturbed.
-    if (id === NEW_SESSION_ID) {
+    // Attach-on-upload mints the session WITHOUT navigating (navigateOnCreate
+    // = false): staying on ``/conversation/new`` until the user actually sends
+    // mirrors the project-detail composer and avoids the navigate→bootstrap
+    // churn that was dropping the freshly-attached file from the panel. The
+    // send path navigates explicitly (see ``performSend``).
+    if (id === NEW_SESSION_ID && navigateOnCreate) {
       navigate(`/conversation/${created.id}`, { replace: true });
     }
     return created;
@@ -2518,7 +2523,8 @@ export const ConversationPage = () => {
       // entry), attaches each doc, re-reads the list, and starts polling the
       // async parse status — so the composer chips + panel show progress.
       try {
-        await attachKbDocs(ids, ensureSession);
+        // navigate:false — stay on /conversation/new while attaching.
+        await attachKbDocs(ids, () => ensureSession(false));
       } catch {
         toast.error(t("common.failed" as Parameters<typeof t>[0]));
       }
@@ -2531,7 +2537,8 @@ export const ConversationPage = () => {
   // uploads each file, and polls its parse status for the progress UI.
   const handleLocalFilesAttach = useCallback(
     (files: File[]) => {
-      void attachLocalFiles(files, ensureSession);
+      // navigate:false — stay on /conversation/new while attaching.
+      void attachLocalFiles(files, () => ensureSession(false));
     },
     [attachLocalFiles, ensureSession],
   );
@@ -2597,10 +2604,15 @@ export const ConversationPage = () => {
     try {
       const session = await ensureSession();
       if (!session?.id) throw new Error("Failed to create session.");
-      // ``ensureSession`` itself takes care of swapping
-      // ``/conversation/new`` → ``/conversation/{real-id}`` (replace:true)
-      // when a brand-new session is minted, so handleSend doesn't need
-      // its own navigate fallback here.
+      // Land on the real session URL on SEND. ``ensureSession`` navigates
+      // inline when it mints a brand-new session (no prior attach), but when
+      // the session was pre-created by an attach (navigate:false — we stayed on
+      // ``/conversation/new`` so the attachment panel/chips render without the
+      // navigate→bootstrap churn) it returns cached without navigating, so do
+      // the swap here. ``replace:true`` keeps Back from returning to the draft.
+      if (id === NEW_SESSION_ID && session.id !== NEW_SESSION_ID) {
+        navigate(`/conversation/${session.id}`, { replace: true });
+      }
 
       // Attachments were already uploaded (on attach) and the backend's
       // ``_run_agent_background`` reads this session's pending

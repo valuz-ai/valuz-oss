@@ -752,6 +752,16 @@ async def _build_attachment_parser(db: Any) -> Any:
 # mid-run. Discarded automatically on completion.
 _PARSE_TASKS: set[asyncio.Task[None]] = set()
 
+# Cap concurrent *local* (SYNC) parses. ``to_thread`` keeps a single parse off
+# the event loop, but a CPU-bound parser (pymupdf4llm / markitdown) holds the
+# GIL in stretches, so N simultaneous parses (e.g. the user re-uploading the
+# same heavy PDF several times) would still starve the loop. Bounding the
+# worker threads to a small number keeps the loop getting fair time slices.
+# ASYNC_POLL (cloud) parses are I/O-bound and intentionally NOT gated by this —
+# they only await the network, and serializing them would needlessly stall a
+# multi-file upload behind a minutes-long cloud job.
+_LOCAL_PARSE_SEMAPHORE = asyncio.Semaphore(2)
+
 
 def _spawn_attachment_parse(
     attachment_id: str, source_path: str, dest_dir: Path, base_name: str
@@ -796,7 +806,9 @@ def _spawn_attachment_parse(
             if router.plugin_mode_for(source_path) == ParserPluginMode.ASYNC_POLL:
                 result = await router.parse(source_path)
             else:
-                result = await asyncio.to_thread(router.parse_sync, source_path)
+                # Bound concurrent CPU-bound local parses (see semaphore note).
+                async with _LOCAL_PARSE_SEMAPHORE:
+                    result = await asyncio.to_thread(router.parse_sync, source_path)
             parsed_path, parse_status, engine = _write_parse_result(
                 result, dest_dir, base_name
             )

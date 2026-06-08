@@ -1224,6 +1224,21 @@ export const ProjectDetailPage = () => {
         onRemoveKb={handleRemoveKb}
         onSelectAllInKb={handleSelectAllInKb}
         onImportFile={handleImportFile}
+        // Staged conversation attachments (upload-on-attach) — surface them in
+        // the panel's "uploaded files" section with live parse status, same as
+        // the conversation page. Without ``uploadedFiles`` the section is
+        // hidden entirely (``showUploadedFiles = uploadedFiles !== undefined``).
+        uploadedFiles={stagedAttachments.map((a) => ({
+          id: a.id,
+          name: a.filename,
+          parseStatus: a.parse_status as
+            | "parsing"
+            | "ready"
+            | "failed"
+            | undefined,
+          sourceKind: a.source_kind,
+        }))}
+        onRemoveUploadedFile={(attId) => void removeAttachment(attId)}
         scheduledTasks={scheduledTasks.map((it) => ({
           // Adapter: AutomationItem → the panel's generic row shape.
           // ``cron`` shows the technical expression (cron text / "Ns" /
@@ -1312,6 +1327,13 @@ export const ProjectDetailPage = () => {
     selectedMcpSlugs,
     refreshFileTree,
     openMember,
+    // The right panel is rendered into a layout slot via ``setRightPanel`` —
+    // it captures these by closure, so they MUST be deps or the panel shows a
+    // stale snapshot. ``stagedAttachments`` (+ its remove handler) drive the
+    // "uploaded files" section; without them the section stayed empty while
+    // the composer chip updated live.
+    stagedAttachments,
+    removeAttachment,
   ]);
 
   /* ── PLACEHOLDER_RENDER ─────────────────────────────────────── */
