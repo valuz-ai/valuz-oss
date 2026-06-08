@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   Bot,
   CheckCircle2,
@@ -9,6 +9,7 @@ import {
   Loader2,
   PauseCircle,
   Users,
+  X,
   XCircle,
 } from "lucide-react";
 import {
@@ -21,10 +22,12 @@ import { modelLabel } from "@valuz/shared";
 import {
   AccordionSection,
   FileRefreshButton,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
   ProjectFileTree,
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+  SheetTrigger,
   Tabs,
   TabsContent,
   TabsList,
@@ -123,6 +126,7 @@ export const TaskContextPanel = ({
   onOpenInFinder,
 }: TaskContextPanelProps) => {
   const { t } = useTranslation();
+  const [planReviewOpen, setPlanReviewOpen] = useState(false);
 
   // slug → AgentSummary, so each team row can show the bound model
   // without an extra API roundtrip.
@@ -242,8 +246,8 @@ export const TaskContextPanel = ({
         contentClassName="p-0"
         action={
           plannedSubtasks.length > 0 ? (
-            <Popover>
-              <PopoverTrigger asChild>
+            <Sheet open={planReviewOpen} onOpenChange={setPlanReviewOpen}>
+              <SheetTrigger asChild>
                 <button
                   type="button"
                   onClick={(e) => e.stopPropagation()}
@@ -254,28 +258,32 @@ export const TaskContextPanel = ({
                 >
                   <Expand className="h-3.5 w-3.5" />
                 </button>
-              </PopoverTrigger>
-              <PopoverContent
-                side="left"
-                align="start"
-                sideOffset={8}
-                collisionPadding={12}
-                // 600px gives 4-row plans with multi-line goals room
-                // to breathe. Height caps to Radix's available-height
-                // var (computed from the actual viewport gap), not a
-                // raw 80vh — the latter spills off-screen when the
-                // trigger sits near the top edge, hiding the bottom
-                // border and making the popover look truncated.
-                className="flex w-[600px] max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden p-0"
+              </SheetTrigger>
+              <SheetContent
+                side="right"
+                showCloseButton={false}
+                className="!bottom-5 left-auto !right-5 !top-5 !h-auto w-[600px] max-w-[calc(100vw-48px)] gap-0 overflow-hidden rounded-xl border-l-0 bg-popover p-0 shadow-xl data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-none"
               >
+                <SheetTitle className="sr-only">
+                  {t("task.panel.planReviewTitle" as Parameters<typeof t>[0])}
+                </SheetTitle>
+                <SheetDescription className="sr-only">
+                  {t(
+                    "task.panel.planReviewSubtitle" as Parameters<typeof t>[0],
+                    {
+                      count: plannedSubtasks.length,
+                    },
+                  )}
+                </SheetDescription>
                 <PlanReviewPopover
                   subtasks={plannedSubtasks}
                   agentBySlug={agentBySlug}
                   subtaskByKey={subtaskByKey}
+                  onClose={() => setPlanReviewOpen(false)}
                   t={t}
                 />
-              </PopoverContent>
-            </Popover>
+              </SheetContent>
+            </Sheet>
           ) : undefined
         }
       >
@@ -507,29 +515,43 @@ function PlanReviewPopover({
   subtasks,
   agentBySlug,
   subtaskByKey,
+  onClose,
   t,
 }: {
   subtasks: PlannedSubtask[];
   agentBySlug: Map<string, NonNullable<MemberWithAgent["agent"]>>;
   subtaskByKey: Map<string, { idx: number; label: string }>;
+  onClose: () => void;
   t: (key: string, params?: Record<string, string | number>) => string;
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="sticky top-0 z-10 border-b border-surface-border bg-card px-4 py-3">
-        <div className="flex items-center gap-2">
-          <ListTodo className="h-3.5 w-3.5 text-ink-meta" />
-          <h3 className="text-sm font-semibold text-ink-heading">
-            {t("task.panel.planReviewTitle" as Parameters<typeof t>[0])}
-          </h3>
+      <header className="sticky top-0 z-10 border-b border-[#f7f8fa] bg-card px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <ListTodo className="h-3.5 w-3.5 text-ink-meta" />
+              <h3 className="text-sm font-semibold text-ink-heading">
+                {t("task.panel.planReviewTitle" as Parameters<typeof t>[0])}
+              </h3>
+            </div>
+            <p className="mt-0.5 text-2xs text-ink-meta">
+              {t("task.panel.planReviewSubtitle" as Parameters<typeof t>[0], {
+                count: subtasks.length,
+              })}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink-meta transition-colors hover:bg-surface-soft hover:text-ink-heading"
+            aria-label={t("common.close" as Parameters<typeof t>[0])}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
-        <p className="mt-0.5 text-2xs text-ink-meta">
-          {t("task.panel.planReviewSubtitle" as Parameters<typeof t>[0], {
-            count: subtasks.length,
-          })}
-        </p>
       </header>
-      <ol className="flex-1 divide-y divide-surface-border overflow-y-auto">
+      <ol className="flex-1 overflow-y-auto">
         {subtasks.map((task, idx) => {
           const agentLabel = task.agent
             ? (agentBySlug.get(task.agent)?.name ?? task.agent)
@@ -614,8 +636,8 @@ function PlanReviewPopover({
                   </p>
                 )}
                 {task.review_criteria && (
-                  <div className="mt-2 rounded-md border border-emerald-500/30 bg-emerald-50 px-3 py-2 dark:bg-emerald-500/10">
-                    <p className="text-2xs font-semibold text-emerald-700 dark:text-emerald-400">
+                  <div className="mt-2 rounded-md border border-[#eae6ff] bg-[#f3f2ff] px-3 py-2">
+                    <p className="text-2xs font-semibold text-[#725cf9]">
                       {t(
                         "task.panel.planRowCriteria" as Parameters<typeof t>[0],
                       )}
