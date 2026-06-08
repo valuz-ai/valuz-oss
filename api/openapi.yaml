@@ -2628,6 +2628,7 @@ components:
             `~/.agents/skills/`) rather than originated by Valuz. Drives
             the "创建" vs "同步" badge in the .agents group on the skill
             management page; `"discovered"` renders no badge.
+    SkillDetail:
       allOf:
         - $ref: "#/components/schemas/SkillView"
         - type: object
@@ -2646,6 +2647,35 @@ components:
               nullable: true
             metadata:
               type: object
+            origin:
+              allOf:
+                - $ref: "#/components/schemas/SkillOrigin"
+              nullable: true
+              description: >-
+                Import provenance for a URL/GitHub-imported skill; null for
+                skills not imported from a URL. Lets the detail UI show
+                "Imported from …" and link back to the source.
+
+    SkillOrigin:
+      type: object
+      required: [type, source_url]
+      description: >-
+        Provenance for an imported skill (mirrors
+        valuz_skill_index.origin_json). Host-only bookkeeping, never written
+        into SKILL.md.
+      properties:
+        type:
+          type: string
+          enum: [github, url]
+        source_url:
+          type: string
+          description: The URL the skill was imported from.
+        path:
+          type: string
+          default: ""
+          description: >-
+            The skill's in-repo relative location when it came from a
+            multi-skill collection/plugin; empty for a single-skill source.
 
     SkillsCatalog:
       type: object

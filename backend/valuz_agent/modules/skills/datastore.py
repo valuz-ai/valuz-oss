@@ -57,6 +57,19 @@ class SkillDatastore:
         row.creation_origin = origin
         await async_commit_with_retry(self._db, where="SkillDatastore.set_creation_origin")
 
+    async def set_origin_metadata(self, skill_id: str, origin_json: str) -> None:
+        """Stamp import provenance (``origin_json``) on an existing row.
+
+        Host-only bookkeeping like ``creation_origin`` — never touches SKILL.md
+        and survives ``startup_scan`` rescans (the scan never writes this
+        column). A missing row is a no-op.
+        """
+        row = await self._db.get(SkillIndexRow, skill_id)
+        if row is None:
+            return
+        row.origin_json = origin_json
+        await async_commit_with_retry(self._db, where="SkillDatastore.set_origin_metadata")
+
     async def create(self, row: SkillIndexRow) -> SkillIndexRow:
         self._db.add(row)
         await async_commit_with_retry(self._db, where="SkillDatastore.create")

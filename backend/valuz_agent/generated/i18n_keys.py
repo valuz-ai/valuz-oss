@@ -1479,6 +1479,7 @@ I18nKey = Literal[
     "skill.importSelected",
     "skill.imported",
     "skill.importedCount",
+    "skill.importedFrom",
     "skill.importedPartial",
     "skill.inFinder",
     "skill.linkImport",

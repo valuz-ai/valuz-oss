@@ -66,12 +66,25 @@ export interface SkillView {
   creation_origin: SkillCreationOrigin;
 }
 
+/** Import provenance for a URL/GitHub-imported skill (mirrors the backend
+ * ``valuz_skill_index.origin_json``). Lets the detail UI show "Imported from …"
+ * and link back to the source. */
+export interface SkillOrigin {
+  type: "github" | "url";
+  source_url: string;
+  /** In-repo relative path when the skill came from a multi-skill
+   * collection/plugin; empty for a single-skill source. */
+  path: string;
+}
+
 export interface SkillDetail extends SkillView {
   instructions_markdown?: string | null;
   file_count?: number;
   root_path?: string | null;
   manifest_filename?: string | null;
   metadata?: Record<string, unknown>;
+  /** Null/absent for skills not imported from a URL. */
+  origin?: SkillOrigin | null;
 }
 
 export interface SkillsCatalog {

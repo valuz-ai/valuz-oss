@@ -1473,6 +1473,7 @@ export type KnownI18nKey =
   | "skill.importSelected"
   | "skill.imported"
   | "skill.importedCount"
+  | "skill.importedFrom"
   | "skill.importedPartial"
   | "skill.inFinder"
   | "skill.linkImport"

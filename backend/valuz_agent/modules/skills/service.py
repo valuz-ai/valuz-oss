@@ -44,12 +44,25 @@ from valuz_agent.modules.skills.models import (
     SkillImportDirectoryPreviewRequest,
     SkillImportPreviewFile,
     SkillImportUrlConfirmRequest,
+    SkillOrigin,
     SkillsCatalog,
     SkillUpdateRequest,
     SkillView,
 )
 
 _import_previews: dict[str, tuple[Path, bool] | tuple[Path, bool, float]] = {}
+# Import provenance staged alongside a preview, keyed by the same ``preview_id``.
+# Populated for URL/GitHub imports; consumed by ``confirm_url_import`` to persist
+# ``valuz_skill_index.origin_json``. Cleaned up with the preview.
+_import_origins: dict[str, SkillOrigin] = {}
+
+# Per-skill import caps. A URL can point at an arbitrarily large repository, so
+# these bound what a single import may copy into the library — a defence against
+# a pathological repo (or a wrong ref/path landing on the whole tree). Exceeding
+# any cap aborts the import rather than silently truncating an incomplete skill.
+_MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024  # 5 MiB per file
+_MAX_IMPORT_TOTAL_BYTES = 25 * 1024 * 1024  # 25 MiB per skill bundle
+_MAX_IMPORT_FILE_COUNT = 512  # max files per skill bundle
 
 
 class SkillLibraryService:
@@ -743,7 +756,18 @@ class SkillLibraryService:
             root_path=str(skill_dir),
             manifest_filename=manifest_filename,
             metadata=metadata,
+            origin=await self._load_origin(skill.id),
         )
+
+    async def _load_origin(self, skill_id: str) -> SkillOrigin | None:
+        """Read import provenance off the ``valuz_skill_index`` row, if any."""
+        row = await self._ds.get_by_id(skill_id)
+        if row is None or not row.origin_json:
+            return None
+        try:
+            return SkillOrigin.model_validate_json(row.origin_json)
+        except ValueError:
+            return None  # tolerate a legacy / malformed blob
 
     # ------------------------------------------------------------------
     # URL import (T1.3)
@@ -795,6 +819,7 @@ class SkillLibraryService:
             fetched_root=fetched_root,
             target_scope=target_scope,
             workspace_id=workspace_id,
+            source_url=url,
         )
 
     async def _build_multi_preview(
@@ -804,14 +829,21 @@ class SkillLibraryService:
         fetched_root: Path,
         target_scope: str,
         workspace_id: str | None,
+        source_url: str,
     ) -> SkillImportArchivePreview:
         """Build a preview that lists every skill found under the source.
 
         The FIRST skill is the top-level preview (single-skill clients keep
         working); ``skills`` carries all candidates, each with its own
-        ``preview_id`` so confirm is called once per chosen skill.
+        ``preview_id`` so confirm is called once per chosen skill. Each
+        candidate's import provenance is staged in ``_import_origins`` keyed by
+        its ``preview_id`` for ``confirm_url_import`` to persist.
         """
         import time
+
+        origin_type: Literal["github", "url"] = (
+            "github" if self._is_github_url(source_url) else "url"
+        )
 
         primary: SkillImportArchivePreview | None = None
         candidates: list[SkillImportCandidate] = []
@@ -828,6 +860,11 @@ class SkillLibraryService:
                 relpath = str(root.relative_to(fetched_root))
             except ValueError:
                 relpath = root.name
+            _import_origins[preview_id] = SkillOrigin(
+                type=origin_type,
+                source_url=source_url,
+                path="" if relpath in (".", "") else relpath,
+            )
             candidates.append(
                 SkillImportCandidate(
                     preview_id=preview_id,
@@ -860,6 +897,8 @@ class SkillLibraryService:
             self._cleanup_preview(payload.preview_id)
             raise PreviewExpired()
 
+        self._enforce_import_caps(skill_root)
+
         final_name = payload.name or skill_root.name
         target_dir = await self._allocate_skill_dir(
             target_scope=payload.target_scope,
@@ -873,10 +912,47 @@ class SkillLibraryService:
             self._ds.set_skill_enabled(workspace, str(target_dir), True)
         elif payload.add_to_workspace and workspace is not None and workspace.kind == "project":
             self._ds.set_skill_enabled(workspace, str(target_dir), True)
+        # Capture provenance before cleanup pops it.
+        origin = _import_origins.get(payload.preview_id)
         self._cleanup_preview(payload.preview_id)
         # URL import gets the same "imported" badge as archive / directory
         # imports — host bookkeeping in valuz_skill_index, never SKILL.md.
-        return await self._finalize_origin(target_dir, "imported", payload.workspace_id)
+        skill = await self._finalize_origin(target_dir, "imported", payload.workspace_id)
+        if origin is not None:
+            await self._ds.set_origin_metadata(skill.id, origin.model_dump_json())
+        return skill
+
+    def _enforce_import_caps(self, skill_root: Path) -> None:
+        """Reject a staged skill that exceeds the per-import size/count caps.
+
+        Walks the staged tree once and raises ``SkillImportFailed`` on the first
+        breach (file too big, too many files, or bundle too large) so a
+        pathological repo can't be copied wholesale into the library.
+        """
+        from valuz_agent.modules.skills.errors import SkillImportFailed
+
+        total = 0
+        count = 0
+        for path in skill_root.rglob("*"):
+            if not path.is_file():
+                continue
+            count += 1
+            if count > _MAX_IMPORT_FILE_COUNT:
+                raise SkillImportFailed(
+                    f"Import exceeds the {_MAX_IMPORT_FILE_COUNT}-file limit"
+                )
+            size = path.stat().st_size
+            if size > _MAX_IMPORT_FILE_BYTES:
+                raise SkillImportFailed(
+                    f"File '{path.name}' exceeds the "
+                    f"{_MAX_IMPORT_FILE_BYTES // (1024 * 1024)} MiB per-file limit"
+                )
+            total += size
+            if total > _MAX_IMPORT_TOTAL_BYTES:
+                raise SkillImportFailed(
+                    f"Import bundle exceeds the "
+                    f"{_MAX_IMPORT_TOTAL_BYTES // (1024 * 1024)} MiB limit"
+                )
 
     # ------------------------------------------------------------------
     # GitHub URL import helpers
@@ -888,131 +964,187 @@ class SkillLibraryService:
     def _fetch_github_tree(self, url: str, staging_dir: Path) -> Path:
         """Fetch a GitHub URL into a local dir and return that RAW tree.
 
-        Always downloads the branch **zipball via codeload** — a single request
-        that does NOT count against the GitHub REST rate limit — then descends
-        to the requested subdirectory. This replaces walking the contents API
-        file-by-file (which rate-limits on a multi-folder repo). The caller runs
-        ``_locate_skill_roots`` over the result so a collection/plugin surfaces
-        every skill, not just the first.
+        Always downloads the **zipball via codeload** — a single request that
+        does NOT count against the GitHub REST rate limit — then descends to the
+        requested subdirectory. The caller runs ``_locate_skill_roots`` over the
+        result so a collection/plugin surfaces every skill, not just the first.
 
-        Handles repo-root URLs (``github.com/owner/repo``) and
-        ``/tree/<branch>/<subdir>`` / ``/blob`` / raw URLs (subdir extracted).
+        Handles repo-root URLs (``github.com/owner/repo``), ``/tree/<ref>/<dir>``,
+        ``/blob/<ref>/<file>``, and raw URLs. The ref may itself contain ``/``
+        (e.g. ``release/v2`` or a ``dependabot/...`` branch): GitHub web URLs do
+        not delimit where the ref ends and the in-repo path begins, so for
+        tree/blob/raw URLs we try each ref/path split point — shortest ref first
+        — against codeload (no API call) and accept the first whose ref resolves
+        AND whose sub-path exists. The plain ``zip/<ref>`` form resolves a
+        branch, tag, OR commit SHA in one request.
         """
         parsed = self._parse_github_url(url)
         if parsed is None:
             raise ValueError(f"Could not parse GitHub URL: {url}")
 
-        owner, repo, branch, dir_path = parsed
+        owner, repo, segments = parsed
 
-        downloaded = staging_dir / "repo.zip"
-        branch = self._download_repo_zipball(owner, repo, branch, downloaded)
-        extracted = self._extract_archive(downloaded)
+        if segments is None:
+            # Bare repo URL — the whole repository is the skill source.
+            target = staging_dir / "repo.zip"
+            self._download_repo_zipball(owner, repo, target)
+            return self._extract_to_subdir(target, "")
 
-        # A GitHub zipball wraps everything in a single ``owner-repo-<sha>/`` dir.
+        tried: list[str] = []
+        for split in range(1, len(segments) + 1):
+            ref = "/".join(segments[:split])
+            subdir = "/".join(segments[split:])
+            tried.append(ref)
+            target = staging_dir / f"repo-{split}.zip"
+            if not self._try_download_codeload(owner, repo, ref, target):
+                continue  # ref does not exist at this split — try a longer ref
+            try:
+                return self._extract_to_subdir(target, subdir)
+            except FileNotFoundError:
+                # The ref resolved but this split's sub-path isn't in it — the
+                # boundary guess was wrong (e.g. a branch named like the first
+                # path segment). Keep trying longer refs.
+                continue
+        raise ValueError(
+            f"Could not resolve a branch/tag/commit in GitHub URL {url} — tried refs: "
+            + ", ".join(tried)
+        )
+
+    def _extract_to_subdir(self, zip_path: Path, subdir: str) -> Path:
+        """Extract a codeload zipball and descend to ``subdir``.
+
+        A GitHub zipball wraps everything in a single ``owner-repo-<sha>/`` dir.
+        Raises ``FileNotFoundError`` when ``subdir`` is not present so the caller
+        can treat it as a wrong ref/path split and retry a longer ref.
+        """
+        extracted = self._extract_archive(zip_path)
         tops = [p for p in extracted.iterdir() if p.is_dir()]
         root = tops[0] if len(tops) == 1 else extracted
-
-        if dir_path and dir_path not in (".", ""):
-            sub = root / dir_path
+        if subdir and subdir not in (".", ""):
+            sub = root / subdir
             if not sub.is_dir():
-                raise ValueError(f"Path not found in repo {owner}/{repo}@{branch}: {dir_path}")
+                raise FileNotFoundError(subdir)
             return sub
-
         return root
 
-    def _download_repo_zipball(
-        self, owner: str, repo: str, branch: str | None, target: Path
-    ) -> str:
-        """Download the repo zipball into ``target``; return the branch used.
+    def _try_download_codeload(self, owner: str, repo: str, ref: str, target: Path) -> bool:
+        """Download the codeload zipball for ``ref`` (branch/tag/commit) into
+        ``target``. Returns ``True`` on success, ``False`` if the ref does not
+        exist (404). Other HTTP errors propagate.
 
-        For a known branch (from a ``/tree/<branch>/...`` URL), downloads it
-        directly. For a bare repo URL (no ref), tries the common defaults
-        ``main`` then ``master`` against **codeload** — which, unlike the GitHub
-        REST API, is not rate-limited — and only falls back to the API (to learn
-        a non-standard default branch) if neither exists. This keeps the common
-        case API-free, so bare-repo imports succeed even when the REST API is
-        rate-limited.
+        Uses the plain ``zip/<ref>`` form, which resolves a branch, tag, or
+        commit SHA — including refs that contain ``/`` — in a single request and
+        without touching the rate-limited GitHub REST API.
         """
         import urllib.error
+        from urllib.parse import quote
 
-        codeload = "https://codeload.github.com/{o}/{r}/zip/refs/heads/{b}"
-        candidates = [branch] if branch else ["main", "master"]
-        last_http_err: urllib.error.HTTPError | None = None
-        for cand in candidates:
-            try:
-                self._download_file(codeload.format(o=owner, r=repo, b=cand), target)
+        escaped = "/".join(quote(part, safe="") for part in ref.split("/"))
+        codeload = f"https://codeload.github.com/{owner}/{repo}/zip/{escaped}"
+        try:
+            self._download_file(codeload, target)
+            return True
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return False
+            raise
+
+    def _download_repo_zipball(self, owner: str, repo: str, target: Path) -> str:
+        """Download a **bare repo's** default-branch zipball; return the ref used.
+
+        Tries the common defaults ``main`` then ``master`` against codeload —
+        which, unlike the GitHub REST API, is not rate-limited — and only falls
+        back to the API (to learn a non-standard default branch) if neither
+        exists. Keeps the common case API-free so bare-repo imports succeed even
+        when the REST API is rate-limited.
+        """
+        for cand in ("main", "master"):
+            if self._try_download_codeload(owner, repo, cand, target):
                 return cand
-            except urllib.error.HTTPError as exc:
-                if exc.code == 404:
-                    last_http_err = exc
-                    continue
-                raise
-        # Bare repo whose default is neither main nor master — last resort: the
-        # API tells us the real default branch (this path can rate-limit).
-        if not branch:
-            api_branch = self._github_default_branch(owner, repo)
-            self._download_file(
-                codeload.format(o=owner, r=repo, b=api_branch), target
+        # Default branch is neither main nor master — last resort: ask the API
+        # (this path can rate-limit; GITHUB_TOKEN raises the cap when set).
+        api_branch = self._github_default_branch(owner, repo)
+        if not self._try_download_codeload(owner, repo, api_branch, target):
+            raise ValueError(
+                f"Could not download default branch '{api_branch}' for {owner}/{repo}"
             )
-            return api_branch
-        raise last_http_err if last_http_err else ValueError(
-            f"Could not download {owner}/{repo}@{branch}"
-        )
+        return api_branch
 
     def _github_default_branch(self, owner: str, repo: str) -> str:
         import json
+        import os
         import urllib.request
 
+        headers = {
+            "User-Agent": "Valuz-Agent/1.0",
+            "Accept": "application/vnd.github.v3+json",
+        }
+        # Unauthenticated api.github.com is capped at 60 req/hour per IP, which a
+        # shared/self-hosted host exhausts fast (surfacing as 403 during import).
+        # A GITHUB_TOKEN raises the cap to 5000/hour.
+        token = os.environ.get("GITHUB_TOKEN", "").strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         req = urllib.request.Request(
             f"https://api.github.com/repos/{owner}/{repo}",
-            headers={
-                "User-Agent": "Valuz-Agent/1.0",
-                "Accept": "application/vnd.github.v3+json",
-            },
+            headers=headers,
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode())
         return str(data.get("default_branch") or "main")
 
-    def _parse_github_url(self, url: str) -> tuple[str, str, str | None, str] | None:
+    def _parse_github_url(self, url: str) -> tuple[str, str, list[str] | None] | None:
+        """Parse a GitHub URL into ``(owner, repo, segments)``.
+
+        ``segments`` is the list of raw (url-decoded) path segments that jointly
+        encode ``(ref, in-repo dir)`` after ``/tree/`` or ``/blob/`` — the caller
+        resolves where the ref ends, because a ref may contain ``/``. It is
+        ``None`` for a bare repo URL (whole repo, default branch). For ``/blob/``
+        and raw URLs the trailing filename segment is dropped (its parent dir is
+        the skill dir).
+        """
         import re
+        from urllib.parse import unquote
+
+        def _segments(rest: str, *, drop_last: bool) -> list[str]:
+            parts = [unquote(p) for p in rest.split("/") if p]
+            if drop_last and parts:
+                parts = parts[:-1]
+            return parts
 
         tree_match = re.match(
-            r"https?://github\.com/([^/]+)/([^/]+)/tree/([^/]+)/(.+)",
+            r"https?://github\.com/([^/]+)/([^/]+)/tree/(.+)",
             url,
         )
         if tree_match:
-            owner, repo, branch, path = tree_match.groups()
-            return owner, repo, branch, path
+            owner, repo, rest = tree_match.groups()
+            return owner, repo, _segments(rest, drop_last=False)
 
         blob_match = re.match(
-            r"https?://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)",
+            r"https?://github\.com/([^/]+)/([^/]+)/blob/(.+)",
             url,
         )
         if blob_match:
-            owner, repo, branch, file_path = blob_match.groups()
-            dir_path = str(Path(file_path).parent)
-            return owner, repo, branch, dir_path
+            owner, repo, rest = blob_match.groups()
+            return owner, repo, _segments(rest, drop_last=True)
 
         raw_match = re.match(
-            r"https?://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)",
+            r"https?://raw\.githubusercontent\.com/([^/]+)/([^/]+)/(.+)",
             url,
         )
         if raw_match:
-            owner, repo, branch, file_path = raw_match.groups()
-            dir_path = str(Path(file_path).parent)
-            return owner, repo, branch, dir_path
+            owner, repo, rest = raw_match.groups()
+            return owner, repo, _segments(rest, drop_last=True)
 
         # Bare repo URL — ``github.com/owner/repo`` (optionally ``.git`` /
-        # trailing slash). No ref or subdirectory, so branch is resolved to the
-        # repo default later and dir_path is the root ("").
+        # trailing slash). No ref or subdirectory → segments is None.
         repo_match = re.match(
             r"https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$",
             url,
         )
         if repo_match:
             owner, repo = repo_match.groups()
-            return owner, repo, None, ""
+            return owner, repo, None
 
         return None
 
@@ -1480,6 +1612,7 @@ class SkillLibraryService:
         return nodes
 
     def _cleanup_preview(self, preview_id: str) -> None:
+        _import_origins.pop(preview_id, None)
         preview = _import_previews.pop(preview_id, None)
         if preview is None:
             return

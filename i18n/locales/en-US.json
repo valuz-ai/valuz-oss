@@ -1516,6 +1516,7 @@
     "multiSkillDetected": "{count} skills detected",
     "multiSkillHint": "This link bundles multiple skills. Choose which to import.",
     "importSelected": "Import selected ({count})",
+    "importedFrom": "Imported from {source}",
     "importedCount": "Imported {count} skills",
     "importedPartial": "Imported {ok}, {failed} failed",
     "importAllFailed": "Import failed",

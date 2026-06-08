@@ -1515,6 +1515,7 @@
     "multiSkillDetected": "检测到 {count} 个技能",
     "multiSkillHint": "该链接包含多个技能,选择要导入的技能。",
     "importSelected": "导入所选 ({count})",
+    "importedFrom": "导入自 {source}",
     "importedCount": "已导入 {count} 个技能",
     "importedPartial": "已导入 {ok} 个,{failed} 个失败",
     "importAllFailed": "导入失败",

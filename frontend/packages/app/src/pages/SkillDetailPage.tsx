@@ -8,6 +8,7 @@ import {
   Check,
   X,
   Bot,
+  ExternalLink,
 } from "lucide-react";
 import {
   Badge,
@@ -313,6 +314,24 @@ export const SkillDetailPage = () => {
                 {t("skill.fileStructure" as Parameters<typeof t>[0])}
                 {skill?.version ? ` · v${skill.version}` : ""}
               </div>
+              {skill?.origin && (
+                <a
+                  href={skill.origin.source_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={skill.origin.source_url}
+                  className="mt-2 flex items-center gap-1 text-2xs text-ink-meta transition-colors hover:text-brand"
+                >
+                  <ExternalLink className="h-3 w-3 shrink-0" />
+                  <span className="truncate">
+                    {t("skill.importedFrom" as Parameters<typeof t>[0], {
+                      source:
+                        skill.origin.type === "github" ? "GitHub" : "URL",
+                    })}
+                    {skill.origin.path ? ` · ${skill.origin.path}` : ""}
+                  </span>
+                </a>
+              )}
             </div>
           )}
         </div>

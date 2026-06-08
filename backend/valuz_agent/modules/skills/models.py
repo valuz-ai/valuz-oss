@@ -47,6 +47,11 @@ class SkillIndexRow(Base, PrimaryKeyMixin, TimestampMixin):
     # legacy rows seeded before this column landed — those are healed to
     # ``"discovered"`` on the next ``startup_scan``.
     creation_origin: Mapped[str | None] = mapped_column(String(32), default="discovered")
+    # Import provenance (JSON: {type, source_url, path}) for skills pulled from a
+    # URL/GitHub, so the UI can show "Imported from …" and link back. Host-only
+    # bookkeeping like ``creation_origin`` — never written into SKILL.md, and
+    # preserved across ``startup_scan`` rescans. Null for non-imported skills.
+    origin_json: Mapped[str | None] = mapped_column(Text, default=None)
     deletable: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
@@ -61,6 +66,19 @@ class ProjectSkillConfigRow(Base):
 # ---------------------------------------------------------------------------
 # Pydantic request / response models
 # ---------------------------------------------------------------------------
+
+
+class SkillOrigin(BaseModel):
+    """Provenance for an imported skill (mirrors ``valuz_skill_index.origin_json``).
+
+    Lets the detail UI show "Imported from …" and link back to the source.
+    ``path`` is the skill's in-repo relative location when it came from a
+    multi-skill collection/plugin (empty for a single-skill source).
+    """
+
+    type: Literal["github", "url"]
+    source_url: str
+    path: str = ""
 
 
 class SkillView(BaseModel):
@@ -105,6 +123,8 @@ class SkillDetail(SkillView):
     root_path: str | None = None
     manifest_filename: str | None = None
     metadata: dict = Field(default_factory=dict)
+    # Import provenance (None for skills not imported from a URL/GitHub).
+    origin: SkillOrigin | None = None
 
 
 class SkillsCatalog(BaseModel):
