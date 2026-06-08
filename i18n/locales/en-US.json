@@ -198,6 +198,11 @@
   "conversation": {
     "addAttachment": "Add attachment",
     "agentReply": "Agent reply",
+    "attachmentParsing": "Parsing",
+    "attachmentParsingBody": "Some attachments are still being parsed. Submit anyway? The agent will only be able to read the raw file — parsed content and document search won't be available.",
+    "attachmentParsingConfirm": "Submit anyway",
+    "attachmentParsingTitle": "Attachment still parsing",
+    "selectAgentFirst": "Select an agent before attaching files",
     "answer": "Answer",
     "answered": "Answered",
     "askUserAnswerTitle": "Your answer",

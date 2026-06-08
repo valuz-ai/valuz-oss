@@ -32,6 +32,7 @@ from valuz_agent.ports.parser_plugin import (
     CapabilityStatus,
     ParserPlugin,
     ParserPluginConfig,
+    ParserPluginMode,
     SecretResolver,
 )
 
@@ -230,6 +231,23 @@ class ParserRouter(ParserBackend):
     @property
     def strategy_name(self) -> str:
         return "parser_router"
+
+    def plugin_mode_for(self, file_path: str | Path) -> ParserPluginMode:
+        """Execution mode of the plugin this router would pick for ``file_path``
+        right now (after the same capability-gate demotion ``parse`` applies).
+
+        An on-loop background caller (the conversation-attachment parse task)
+        uses this to choose the correct off-loop dispatch:
+
+        - ``ASYNC_POLL`` (MinerU / PaddleOCR) → ``await router.parse(...)`` on
+          the main loop; the PollingScheduler tick + awaited future live there.
+          Driving it from a ``to_thread`` worker via ``parse_sync`` would hit
+          ``asyncio.run`` on a loop disconnected from the scheduler and hang.
+        - ``SYNC`` (LightLocal) → ``await asyncio.to_thread(router.parse_sync,
+          ...)`` so the in-process CPU/IO parse never blocks the event loop.
+        """
+        plugin, _reason = self._resolve_plugin(classify(file_path))
+        return plugin.descriptor.mode
 
     def expected_plugin_id_for_kind(self, kind: str) -> str:
         """Return the plugin id this router *would* pick for ``kind``

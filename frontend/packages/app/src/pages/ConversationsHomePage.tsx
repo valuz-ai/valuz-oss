@@ -18,6 +18,7 @@ import {
   useModelDefaults,
   useRuntimes,
   usePanelStore,
+  useSessionAttachments,
   workspacesApi,
   type ProviderDetail,
   type RuntimeId,
@@ -26,6 +27,7 @@ import {
 } from "@valuz/core";
 import { homeSuggestions } from "@valuz/app/lib/prototype-data";
 import { useTranslation } from "@valuz/core";
+import { AttachmentParsingDialog } from "../components/AttachmentParsingDialog";
 
 export const ConversationsHomePage = () => {
   const { t } = useTranslation();
@@ -82,8 +84,20 @@ export const ConversationsHomePage = () => {
     }
   }, [modelDefaults, composerTouched]);
   const [globalSkills, setGlobalSkills] = useState<SkillView[]>([]);
-  const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
+  // Attachments upload-on-attach, which needs a session up front. The first
+  // attach eager-creates the quick-chat session (freezing model/runtime per
+  // ADR-006 — the composer pickers lock once ``sessionId`` is set). Parsing
+  // runs async on the backend; the hook polls the status for the progress UI.
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const {
+    attachments: stagedAttachments,
+    hasParsing,
+    attachLocalFiles,
+    remove: removeAttachment,
+    markPendingConsumed,
+  } = useSessionAttachments(sessionId);
+  const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
 
   const { runtimes: runtimeList } = useRuntimes();
   useEffect(() => {
@@ -236,20 +250,24 @@ export const ConversationsHomePage = () => {
     }
   };
 
-  const handleSend = async () => {
+  // Mint (once) the quick-chat session attachments upload into. Cached in
+  // ``sessionId`` so subsequent attaches + the send reuse the same session.
+  const ensureSession = async (): Promise<{ id: string }> => {
+    if (sessionId) return { id: sessionId };
+    const session = await sessionsApi.create(sessionPayload());
+    setSessionId(session.id);
+    return { id: session.id };
+  };
+
+  // The actual send. Attachments are already uploaded (on attach), so this
+  // just reuses / mints the session and posts the message.
+  const performSend = async () => {
     const text = input.trim();
     if (!text || sending) return;
     setSending(true);
     try {
-      const session = await sessionsApi.create(sessionPayload());
-      for (const file of pendingAttachments) {
-        try {
-          await sessionsApi.uploadAttachment(session.id, file);
-        } catch {
-          // best-effort — don't block the message on attachment failure
-        }
-      }
-      setPendingAttachments([]);
+      const session = await ensureSession();
+      markPendingConsumed();
       await sessionsApi.sendMessage(session.id, text);
       setInput("");
       panelSetCollapsed(false);
@@ -261,6 +279,17 @@ export const ConversationsHomePage = () => {
     } finally {
       setSending(false);
     }
+  };
+
+  const handleSend = () => {
+    const text = input.trim();
+    if (!text || sending) return;
+    // Block on unfinished parsing — let the user wait or submit raw.
+    if (hasParsing) {
+      setParsingConfirmOpen(true);
+      return;
+    }
+    void performSend();
   };
 
   return (
@@ -442,9 +471,38 @@ export const ConversationsHomePage = () => {
                 setSelectedPermissionMode(mode);
                 setComposerTouched(true);
               }}
-              onAttachmentsChange={(files) => setPendingAttachments(files)}
+              // ADR-006: the first attach mints the session, freezing
+              // model/runtime — lock the pickers once that happens.
+              modelLocked={sessionId != null}
+              uploadOnAttach
+              existingAttachmentCount={
+                stagedAttachments.filter((a) => !a.consumed_at).length
+              }
+              pinnedAttachments={stagedAttachments
+                .filter((a) => !a.consumed_at)
+                .map((a) => ({
+                  id: a.id,
+                  name: a.filename,
+                  parseStatus: a.parse_status as
+                    | "parsing"
+                    | "ready"
+                    | "failed"
+                    | undefined,
+                  sourceKind: a.source_kind,
+                }))}
+              onRemovePinnedAttachment={(attId) => void removeAttachment(attId)}
+              onLocalUpload={(files) => void attachLocalFiles(files, ensureSession)}
+              onFileDrop={(files) => void attachLocalFiles(files, ensureSession)}
               sending={sending}
               autoFocus
+            />
+            <AttachmentParsingDialog
+              open={parsingConfirmOpen}
+              onConfirm={() => {
+                setParsingConfirmOpen(false);
+                void performSend();
+              }}
+              onCancel={() => setParsingConfirmOpen(false)}
             />
           </div>
         </div>

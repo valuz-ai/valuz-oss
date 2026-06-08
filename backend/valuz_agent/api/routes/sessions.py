@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Literal
@@ -676,59 +677,145 @@ async def upload_attachment(
             fh.write(chunk)
             size += len(chunk)
 
-    # Parse the uploaded file so the agent can receive the extracted text
-    # as an attachment rather than the raw binary.
-    parsed_path, parse_status = _parse_into_attachment_dir(str(target), target_dir, target.name)
-
+    # Persist the row as ``parsing`` and kick the heavy parse off the event
+    # loop in a background task. The parser (PyMuPDF / MarkItDown / RapidOCR)
+    # is CPU/IO-heavy and fully synchronous — running it inline froze the
+    # whole single-threaded server for the parse's duration (every other
+    # request / SSE stream stalled). The upload now returns at once; the
+    # frontend polls ``GET .../attachments`` until ``parse_status`` flips to
+    # ``ready`` / ``failed``. A turn sent before parsing finishes falls back
+    # to the raw ``stored_path`` (see ``_attachment_paths`` and the
+    # additional-context builder).
     row = SessionAttachmentRow(
         session_id=session_id,
         filename=file.filename or target.name,
         stored_path=str(target),
-        parsed_path=parsed_path,
-        parse_status=parse_status,
+        parsed_path=None,
+        parse_status="parsing",
         size_bytes=size,
         mime_type=file.content_type,
         source_kind="local",
     )
     await SessionDatastore(db).create_attachment(row)
     await db.refresh(row)
+    _spawn_attachment_parse(row.id, str(target), target_dir, target.name)
     return _row_to_item(row)
 
 
-def _parse_into_attachment_dir(
-    source_path: str, dest_dir: Path, base_name: str
-) -> tuple[str | None, str]:
-    """Run ``LightLocalParser`` on ``source_path`` and write the markdown
-    extract into ``dest_dir`` as ``{base_name}.parsed.md``.
+def _write_parse_result(
+    result: Any, dest_dir: Path, base_name: str
+) -> tuple[str | None, str, str | None]:
+    """Write a ``ParseResult``'s markdown into ``dest_dir`` as
+    ``{base_name}.parsed.md`` and classify the outcome.
 
-    Shared by the local-upload and KB-pick attachment paths so every
-    attachment — regardless of origin — is consumed by the agent the
-    same way: a uniformly-parsed ``.parsed.md`` living in the session's
-    own attachment directory. (KB picks keep ``stored_path`` pointing
-    at the KB's deterministic ``source_path`` — only the parsed
-    derivative lands in the session dir, no raw-file copy.)
+    Returns ``(parsed_path, parse_status, engine)``:
+    - ``("…/x.parsed.md", "ready", <plugin/engine>)`` when the parser produced
+      real markdown and reported no error.
+    - ``(None, "failed", <plugin/engine>)`` when there is no markdown OR the
+      result carries ``metadata["error"]`` (unsupported file, parser failure,
+      or a fallback-disabled cloud failure). Callers fall back to the raw
+      ``stored_path`` so the agent at least sees the original file.
 
-    Returns ``(parsed_path, parse_status)``: ``("…/x.parsed.md",
-    "ready")`` on success, ``(None, "failed")`` when the parser raised
-    or produced nothing — callers fall back to ``stored_path`` so the
-    agent at least sees the raw file.
+    ``engine`` records WHICH parser ran (``metadata["plugin_id"]`` — e.g.
+    ``mineru`` / ``paddleocr`` / ``light_local`` — falling back to the
+    per-format ``engine`` label) for provenance on the attachment row.
     """
-    try:
-        from valuz_agent.integrations.parser_light_local import LightLocalParser
+    meta = dict(getattr(result, "metadata", None) or {})
+    engine = meta.get("plugin_id") or meta.get("engine")
+    markdown = getattr(result, "markdown", "") or ""
+    if not markdown or meta.get("error"):
+        return None, "failed", engine
+    target = dest_dir / f"{base_name}.parsed.md"
+    i = 1
+    while target.exists():
+        target = dest_dir / f"{base_name}-{i}.parsed.md"
+        i += 1
+    target.write_text(markdown, encoding="utf-8")
+    return str(target), "ready", engine
 
-        result = LightLocalParser().parse_sync(source_path)
-        if result.markdown:
-            target = dest_dir / f"{base_name}.parsed.md"
-            i = 1
-            while target.exists():
-                target = dest_dir / f"{base_name}-{i}.parsed.md"
-                i += 1
-            target.write_text(result.markdown, encoding="utf-8")
-            return str(target), "ready"
-    except Exception:
-        logger.exception("Failed to parse attachment source %s", source_path)
-        return None, "failed"
-    return None, "failed"
+
+async def _build_attachment_parser(db: Any) -> Any:
+    """Build the configured ``ParserRouter`` for an attachment parse.
+
+    Thin indirection over ``deps.build_parser_router`` so tests can monkeypatch
+    a stub router without standing up the full settings/registry stack.
+    """
+    from valuz_agent.api.deps import build_parser_router
+
+    return await build_parser_router(db)
+
+
+# Strong refs to in-flight parse tasks. ``asyncio`` only holds weak refs to
+# bare tasks, so without this set a fire-and-forget parse could be GC'd
+# mid-run. Discarded automatically on completion.
+_PARSE_TASKS: set[asyncio.Task[None]] = set()
+
+
+def _spawn_attachment_parse(
+    attachment_id: str, source_path: str, dest_dir: Path, base_name: str
+) -> None:
+    """Parse ``source_path`` through the CONFIGURED parser and persist it.
+
+    Fire-and-forget: the upload route has already returned the row as
+    ``parse_status="parsing"``. This runs on the MAIN event loop (created via
+    ``asyncio.create_task``) and routes the file through the same
+    ``ParserRouter`` KB/Docs ingestion uses, so a user who configured MinerU /
+    PaddleOCR gets that engine for conversation attachments — not hardcoded
+    light parsing.
+
+    Off-loop dispatch is MODE-AWARE (the load-bearing detail):
+    - ASYNC_POLL backends (MinerU / PaddleOCR) submit to the ``PollingScheduler``
+      and await a future whose tick lives on THIS (main) loop, so we
+      ``await router.parse(...)`` directly. Driving them via
+      ``to_thread(parse_sync)`` would ``asyncio.run`` a loop disconnected from
+      the scheduler and hang.
+    - SYNC backends (LightLocal) do heavy in-process CPU/IO, so we push them off
+      the loop via ``await asyncio.to_thread(router.parse_sync, ...)`` — keeping
+      the single-threaded server responsive (the whole point of the async
+      upload model).
+
+    Every failure mode is contained so a parse crash can never take down the
+    event loop or strand the row in ``parsing`` (the poller would spin forever).
+    """
+
+    async def _run() -> None:
+        from valuz_agent.infra.db import async_unit_of_work
+        from valuz_agent.ports.parser_plugin import ParserPluginMode
+
+        parsed_path: str | None = None
+        parse_status = "failed"
+        error_message: str | None = None
+        engine: str | None = None
+        try:
+            # Build the router in its OWN fresh session — the request's session
+            # is closed by the time this background task runs.
+            async with async_unit_of_work() as db:
+                router = await _build_attachment_parser(db)
+            if router.plugin_mode_for(source_path) == ParserPluginMode.ASYNC_POLL:
+                result = await router.parse(source_path)
+            else:
+                result = await asyncio.to_thread(router.parse_sync, source_path)
+            parsed_path, parse_status, engine = _write_parse_result(
+                result, dest_dir, base_name
+            )
+        except Exception as exc:  # noqa: BLE001 — contain; never crash the loop
+            logger.exception("Background parse failed for attachment %s", attachment_id)
+            error_message = str(exc)
+        try:
+            async with async_unit_of_work() as db:
+                await SessionDatastore(db).update_attachment_parse(
+                    attachment_id,
+                    parsed_path=parsed_path,
+                    parse_status=parse_status,
+                    parse_mode=engine,
+                    error_message=error_message,
+                )
+        except Exception:  # noqa: BLE001 — persistence best-effort
+            logger.exception("Failed to persist parse result for attachment %s", attachment_id)
+
+    task = asyncio.create_task(_run())
+    _PARSE_TASKS.add(task)
+    task.add_done_callback(_PARSE_TASKS.discard)
 
 
 @router.post("/{session_id}/attachments/kb", status_code=201)
@@ -740,14 +827,16 @@ async def add_kb_attachments(
     """Attach one or more KB documents to the session.
 
     Each ``doc_id`` becomes a ``SessionAttachmentRow`` with
-    ``source_kind="kb_doc"``. KB picks now go through the **same**
-    parse pipeline as local uploads (``_parse_into_attachment_dir``):
-    we run ``LightLocalParser`` on the KB document's ``source_path``
-    and write the markdown extract into the session's own attachment
-    directory. So the agent reads a uniformly-parsed ``.parsed.md``
-    in the session dir — exactly like a local upload — rather than
-    the KB's global ``docs/preview/`` artifact (which may have been
-    produced by a different, KB-routed parser).
+    ``source_kind="kb_doc"``. KB picks go through the **same** async
+    parse pipeline as local uploads (``_spawn_attachment_parse``): the
+    row is created ``parse_status="parsing"`` and a background task runs
+    the KB document's ``source_path`` through the configured
+    ``ParserRouter`` (MinerU / PaddleOCR / LightLocal), writing the
+    markdown extract into the session's own attachment directory. So the
+    agent reads a uniformly-parsed ``.parsed.md`` in the session dir —
+    exactly like a local upload — rather than the KB's global
+    ``docs/preview/`` artifact (which may have been produced by a
+    different, KB-routed parser).
 
     ``stored_path`` still points at the KB's deterministic
     ``source_path`` — the raw file is never copied, only the parsed
@@ -807,15 +896,16 @@ async def add_kb_attachments(
         # KB's deterministic ``source_path`` (also the fallback the
         # agent reads when the parse yields nothing).
         safe_name = (doc.source_filename or doc_id).replace("/", "_").replace("\\", "_")
-        parsed_path, parse_status = _parse_into_attachment_dir(
-            doc.source_path, target_dir, safe_name
-        )
+        # Persist as ``parsing`` and parse in the background — see
+        # ``upload_attachment`` for why parsing must never run inline (it
+        # blocks the whole event loop). The poller flips the row to
+        # ``ready`` / ``failed`` once the background task finishes.
         row = SessionAttachmentRow(
             session_id=session_id,
             filename=doc.source_filename,
             stored_path=doc.source_path,
-            parsed_path=parsed_path,
-            parse_status=parse_status,
+            parsed_path=None,
+            parse_status="parsing",
             size_bytes=doc.file_size_bytes or 0,
             mime_type=doc.mime_type,
             source_kind="kb_doc",
@@ -823,6 +913,8 @@ async def add_kb_attachments(
             source_kb_doc_id=doc.id,
         )
         await ds.create_attachment(row)
+        await db.refresh(row)
+        _spawn_attachment_parse(row.id, doc.source_path, target_dir, safe_name)
 
     rows = await ds.list_attachments(session_id)
     return AttachmentListResponse(items=[_row_to_item(r) for r in rows])

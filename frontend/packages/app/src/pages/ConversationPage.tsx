@@ -35,7 +35,6 @@ import {
   providersApi,
   skillsApi,
   usePanelStore,
-  type SessionAttachmentItem,
   type SessionDetail,
   type SessionEventDTO,
   type SessionListItem,
@@ -56,6 +55,7 @@ import {
   useComposerProviders,
   useModelDefaults,
   useRuntimes,
+  useSessionAttachments,
   type RuntimeId,
   type MemberWithAgent,
   type Agent,
@@ -99,6 +99,7 @@ import { usePlatform } from "@valuz/app/platform";
 import { useHasUsableChannel, useTranslation } from "@valuz/core";
 import { useProjectKbBindings, useKbDocTree } from "@valuz/app/hooks";
 import { LiveTaskCard } from "../components/LiveTaskCard";
+import { AttachmentParsingDialog } from "../components/AttachmentParsingDialog";
 import { CreateAgentDialog } from "../components/CreateAgentDialog";
 import { getLastTempAgent, setLastTempAgent } from "../lib/last-temp-agent";
 
@@ -899,17 +900,27 @@ export const ConversationPage = () => {
   const keepCurrentTurnAtTopRef = useRef(false);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [kbPickerOpen, setKbPickerOpen] = useState(false);
-  const [attachments, setAttachments] = useState<File[]>([]);
+  // Open while confirming a send that would ship still-parsing attachments.
+  const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
   const sidebarSessions = useSessionStore((state) => state.sessions);
   const setSidebarSessions = useSessionStore((state) => state.setSessions);
   const fetchSidebarSessions = useSessionStore((state) => state.fetchSessions);
   const upsertWorkspace = useWorkspaceStore((s) => s.upsertWorkspace);
-  // Server-stored attachments (persisted via /v1/sessions/{id}/attachments).
-  // Distinct from ``attachments`` (File[]) which holds files queued in the UI
-  // before send_message uploads them.
-  const [sessionAttachments, setSessionAttachments] = useState<
-    SessionAttachmentItem[]
-  >([]);
+  // Server-stored attachments + async parse status, owned by the shared hook:
+  // upload-on-attach, poll ``parsing → ready|failed``, and live progress for
+  // the composer chips + context panel. ``setSessionAttachments`` is the
+  // hook's own setter (kept aliased so existing optimistic splices still
+  // work). Local files now upload the moment they're attached, so there is no
+  // separate not-yet-uploaded ``File[]`` queue for them anymore.
+  const {
+    attachments: sessionAttachments,
+    setAttachments: setSessionAttachments,
+    hasParsing: attachmentsParsing,
+    attachLocalFiles,
+    attachKbDocs,
+    remove: removeSessionAttachmentRow,
+    markPendingConsumed,
+  } = useSessionAttachments(selectedSessionId);
   const navigate = useNavigate();
 
   const [availableSkills, setAvailableSkills] = useState<SkillView[]>([]);
@@ -2091,27 +2102,8 @@ export const ConversationPage = () => {
     prevSendingRef.current = sending;
   }, [sending, refreshFileTree]);
 
-  // Load server-side attachments whenever the active session changes so the
-  // context panel reflects history (uploaded by previous turns) and not just
-  // the queue of pending uploads in this composer instance.
-  useEffect(() => {
-    if (!selectedSessionId) {
-      setSessionAttachments([]);
-      return;
-    }
-    let cancelled = false;
-    sessionsApi
-      .listAttachments(selectedSessionId)
-      .then((res) => {
-        if (!cancelled) setSessionAttachments(res.items);
-      })
-      .catch(() => {
-        if (!cancelled) setSessionAttachments([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedSessionId]);
+  // Loading server-side attachments on session change + polling parse status
+  // is owned by ``useSessionAttachments`` above.
 
   const ensureSession = useCallback(async () => {
     if (selectedSession) return selectedSession;
@@ -2521,54 +2513,42 @@ export const ConversationPage = () => {
     async (ids: string[]) => {
       setKbPickerOpen(false);
       if (ids.length === 0) return;
-      // KB picks land in the session-attachment pipeline. The
-      // backend creates one SessionAttachmentRow per doc id (live
-      // reference to the KB's preview/source paths — no copy); we
-      // re-fetch the panel state so the optimistic UI matches the
-      // server (duplicates collapsed, ``parse_status="missing"``
-      // entries surfaced).
-      //
-      // If the session hasn't been created yet (new-conversation
-      // entry), spin one up first — same lazy mint as
-      // ``handleSend`` so the picker works from a blank page too.
-      const session = await ensureSession();
-      if (!session?.id) {
-        toast.error(t("conversation.cannotLoadKb" as Parameters<typeof t>[0]));
-        return;
-      }
+      // KB picks land in the same session-attachment pipeline as local
+      // uploads. The hook eager-mints the session if needed (new-conversation
+      // entry), attaches each doc, re-reads the list, and starts polling the
+      // async parse status — so the composer chips + panel show progress.
       try {
-        await sessionsApi.addKbAttachments(session.id, ids);
-        const res = await sessionsApi.listAttachments(session.id);
-        setSessionAttachments(res.items);
+        await attachKbDocs(ids, ensureSession);
       } catch {
         toast.error(t("common.failed" as Parameters<typeof t>[0]));
       }
     },
-    [ensureSession],
+    [attachKbDocs, ensureSession, t],
   );
 
-  // Delete a persisted session attachment row (KB-sourced or
-  // already-uploaded local). Hoisted to component scope so both the
-  // side panel's remove button and the composer's pinned-chip remove
-  // button can share it. Optimistic: drop the row locally, then
-  // re-fetch on failure so a backend surprise reconciles.
-  const handleRemoveSessionAttachment = useCallback((attachmentId: string) => {
-    const sessionId = selectedSessionIdRef.current;
-    if (!sessionId) return;
-    setSessionAttachments((prev) => prev.filter((a) => a.id !== attachmentId));
-    sessionsApi.deleteAttachment(sessionId, attachmentId).catch(() => {
-      void sessionsApi
-        .listAttachments(sessionId)
-        .then((res) => setSessionAttachments(res.items))
-        .catch(() => {});
-    });
-  }, []);
+  // Local files upload the moment they're attached (drag-drop, file picker, or
+  // the panel's upload button). The hook eager-mints the session if needed,
+  // uploads each file, and polls its parse status for the progress UI.
+  const handleLocalFilesAttach = useCallback(
+    (files: File[]) => {
+      void attachLocalFiles(files, ensureSession);
+    },
+    [attachLocalFiles, ensureSession],
+  );
 
-  const handleAttachmentsChange = useCallback((files: File[]) => {
-    setAttachments(files);
-  }, []);
+  // Delete a persisted session attachment row (KB-sourced or local).
+  // Hoisted so both the side panel's remove button and the composer's
+  // pinned-chip remove button share it.
+  const handleRemoveSessionAttachment = useCallback(
+    (attachmentId: string) => {
+      void removeSessionAttachmentRow(attachmentId);
+    },
+    [removeSessionAttachmentRow],
+  );
 
-  const handleSend = async () => {
+  // The actual send. Attachments are uploaded on attach, so this never
+  // uploads — it just mints/reuses the session and posts the message.
+  const performSend = async () => {
     if (!draft.trim() || sending) return;
     // 10-new-conversation-guidance: every conversation binds an agent. A new
     // 临时对话 with an empty library / no pick has no agent — nudge the user to
@@ -2590,10 +2570,11 @@ export const ConversationPage = () => {
     // even while ensureSession + uploads + POST /messages are still
     // round-tripping. Without this the page sits idle for ~500-3000ms
     // depending on session creation + Claude SDK warm-up.
-    const queuedAttachmentMeta = attachments.map((f) => ({
-      name: f.name,
-      size: f.size,
-    }));
+    // Attachments are already uploaded (on attach); the optimistic bubble
+    // lists this turn's pending rows so chips show instantly.
+    const queuedAttachmentMeta = sessionAttachments
+      .filter((a) => !a.consumed_at)
+      .map((a) => ({ name: a.filename, size: a.size_bytes }));
     pinNextTurnToTopRef.current = true;
     keepCurrentTurnAtTopRef.current = true;
     setPendingUserMessage({
@@ -2621,33 +2602,12 @@ export const ConversationPage = () => {
       // when a brand-new session is minted, so handleSend doesn't need
       // its own navigate fallback here.
 
-      // Upload attachments before sending the message. Backend
-      // ``_run_agent_background`` reads SessionAttachmentRow rows for this
-      // session and threads ``stored_path`` / ``parsed_path`` into kernel
-      // ``UserMessage.attachments[]`` — the agent gets the file paths
-      // structurally, plus an ``additional-context`` hint listing this
-      // turn's files. So the prompt text stays clean: we do NOT splice
-      // any "uploaded files" string into the user message.
-      const uploadedItems: SessionAttachmentItem[] = [];
-      if (attachments.length > 0) {
-        for (const file of attachments) {
-          try {
-            const item = await sessionsApi.uploadAttachment(session.id, file);
-            uploadedItems.push(item);
-          } catch {
-            toast.error(
-              t("conversation.uploadFailed" as Parameters<typeof t>[0]),
-            );
-          }
-        }
-        setAttachments([]);
-        // Add the freshly-uploaded rows to the panel state so the
-        // history bar reflects them immediately (they're pending until
-        // this turn consumes them, below).
-        if (uploadedItems.length > 0) {
-          setSessionAttachments((prev) => [...prev, ...uploadedItems]);
-        }
-      }
+      // Attachments were already uploaded (on attach) and the backend's
+      // ``_run_agent_background`` reads this session's pending
+      // SessionAttachmentRow rows, threading ``parsed_path`` (or the raw
+      // ``stored_path`` when a parse hasn't finished) into kernel
+      // ``UserMessage.attachments[]`` plus the ``additional-context`` hint —
+      // so the prompt text stays clean. Nothing to upload here.
 
       // Prompt text is sent verbatim — no attachment hint appended.
       const outboundText = text;
@@ -2665,17 +2625,11 @@ export const ConversationPage = () => {
       );
       if (!detail?.id) throw new Error("Failed to send message.");
       // Attachments are per-turn: the backend ships this turn's pending
-      // set with the message, then stamps those rows ``consumed_at``
-      // once the turn runs. Optimistically mark every currently-pending
-      // attachment consumed — they drop out of the composer's staging
-      // chips and stop counting against the upload cap, but stay in the
-      // panel's "uploaded files" history (the panel renders all rows,
-      // the composer only renders pending ones).
-      setSessionAttachments((prev) =>
-        prev.map((a) =>
-          a.consumed_at ? a : { ...a, consumed_at: Date.now() },
-        ),
-      );
+      // set with the message, then stamps those rows ``consumed_at`` once
+      // the turn runs. Optimistically mark them consumed so they drop out
+      // of the composer's staging chips immediately (they stay in the
+      // panel's "uploaded files" history).
+      markPendingConsumed();
       const updatedSession = sessionDetailToListItem(detail);
       const mergeStartedSession = (current: SessionListItem) => ({
         ...updatedSession,
@@ -2722,6 +2676,18 @@ export const ConversationPage = () => {
       // outright, so likewise safe to clear.
       isSendInFlightRef.current = false;
     }
+  };
+
+  // Send entry point. Blocks on attachments that are still parsing — the
+  // confirm dialog lets the user wait or submit with only the raw file
+  // (no parsed content / doc-search until parsing finishes).
+  const handleSend = () => {
+    if (!draft.trim() || sending) return;
+    if (attachmentsParsing) {
+      setParsingConfirmOpen(true);
+      return;
+    }
+    void performSend();
   };
 
   const handleInterrupt = async () => {
@@ -3547,24 +3513,16 @@ export const ConversationPage = () => {
     // Merge server-stored attachments (canonical) with locally-queued File
     // objects (not yet uploaded). Server side dedupes by filename if the user
     // queued the same name; keeping both keeps the panel honest before send.
-    const queuedNames = new Set(sessionAttachments.map((a) => a.filename));
-    const uploadedFiles: UploadedFileItem[] = [
-      ...sessionAttachments.map((a) => ({
-        id: a.id,
-        name: a.filename,
-        size: formatFileSize(a.size_bytes),
-        sourceKind: a.source_kind,
-      })),
-      ...attachments
-        .filter((f) => !queuedNames.has(f.name))
-        .map((f) => ({
-          id: `pending-${f.name}`,
-          name: f.name,
-          size: formatFileSize(f.size),
-          status: "uploaded" as const,
-          sourceKind: "local" as const,
-        })),
-    ];
+    // Local + KB attachments, each with its live parse status so the panel
+    // shows a "解析中" indicator while the backend parses (uploads happen on
+    // attach now, so there is no separate not-yet-uploaded queue to merge).
+    const uploadedFiles: UploadedFileItem[] = sessionAttachments.map((a) => ({
+      id: a.id,
+      name: a.filename,
+      size: formatFileSize(a.size_bytes),
+      sourceKind: a.source_kind,
+      parseStatus: a.parse_status as "parsing" | "ready" | "failed" | undefined,
+    }));
     // Always render the panel — even when it has nothing in it — so the
     // right-side toggle button stays visible on every conversation page.
     // The layout hides the panel column when the user collapses it; the
@@ -3579,26 +3537,18 @@ export const ConversationPage = () => {
       input.style.display = "none";
       input.addEventListener("change", () => {
         const files = Array.from(input.files ?? []);
-        if (files.length > 0) {
-          setAttachments((prev) => [...prev, ...files]);
-        }
+        // Upload-on-attach (same pipeline as the composer): the file uploads
+        // immediately and the panel polls its parse status.
+        if (files.length > 0) handleLocalFilesAttach(files);
         input.remove();
       });
       document.body.appendChild(input);
       input.click();
     };
 
+    // All rows are persisted (uploaded on attach), so removal always routes
+    // through the shared row-delete handler.
     const handleRemoveUploadedFile = (fileId: string) => {
-      // Pending (not-yet-uploaded) local files are dequeued by name
-      // from the in-memory ``attachments`` slot. Persisted rows (both
-      // ``local`` and ``kb_doc``) go through the shared, hoisted
-      // ``handleRemoveSessionAttachment`` so the panel and the
-      // composer's pinned-chip remove button stay consistent.
-      if (fileId.startsWith("pending-")) {
-        const name = fileId.slice("pending-".length);
-        setAttachments((prev) => prev.filter((f) => f.name !== name));
-        return;
-      }
       handleRemoveSessionAttachment(fileId);
     };
 
@@ -3679,7 +3629,6 @@ export const ConversationPage = () => {
     stagingRefreshing,
     stagingSyncing,
     refreshStaging,
-    attachments,
     sessionAttachments,
     handleRemoveSessionAttachment,
     handleSyncStaging,
@@ -3721,8 +3670,7 @@ export const ConversationPage = () => {
   useEffect(() => {
     setSessionAttachments([]);
     setFileTree([]);
-    setAttachments([]);
-  }, [selectedSessionId]);
+  }, [selectedSessionId, setSessionAttachments]);
 
   // Drive the right-panel collapsed state from per-session data:
   //   * Project workspaces always have meaningful panel content
@@ -3772,7 +3720,6 @@ export const ConversationPage = () => {
     const hasData =
       (todos?.length ?? 0) > 0 ||
       sessionAttachments.length > 0 ||
-      attachments.length > 0 ||
       fileTree.length > 0;
     if (hasData && !prevHasDataRef.current) {
       panelSetCollapsed(false);
@@ -3784,7 +3731,6 @@ export const ConversationPage = () => {
     isProjectWorkspace,
     todos,
     sessionAttachments,
-    attachments,
     fileTree,
     panelSetCollapsed,
   ]);
@@ -4221,14 +4167,24 @@ export const ConversationPage = () => {
             existingAttachmentCount={
               sessionAttachments.filter((a) => !a.consumed_at).length
             }
-            // KB-sourced attachments surface as chips in the composer's
-            // attachment row — same visual slot as a not-yet-uploaded
-            // local file. Only *pending* ones show: once a turn
-            // consumes them they drop from the composer's staging row
-            // (but stay in the side panel's history).
+            // Both local uploads and KB picks surface as chips in the
+            // composer's attachment row, each with its async parse status
+            // (spinner while ``parsing``). Only *pending* ones show: once a
+            // turn consumes them they drop from the staging row (but stay in
+            // the side panel's history).
+            uploadOnAttach
             pinnedAttachments={sessionAttachments
-              .filter((a) => a.source_kind === "kb_doc" && !a.consumed_at)
-              .map((a) => ({ id: a.id, name: a.filename }))}
+              .filter((a) => !a.consumed_at)
+              .map((a) => ({
+                id: a.id,
+                name: a.filename,
+                parseStatus: a.parse_status as
+                  | "parsing"
+                  | "ready"
+                  | "failed"
+                  | undefined,
+                sourceKind: a.source_kind,
+              }))}
             onRemovePinnedAttachment={handleRemoveSessionAttachment}
             // 09-assistant §2.1/§2.2: every conversation — 临时 or project —
             // binds to an agent, so the 🤖 chip is always in agent mode. The
@@ -4352,10 +4308,16 @@ export const ConversationPage = () => {
             onKBPick={() => {
               void handleOpenKbPicker();
             }}
-            onFileDrop={(files) => {
-              handleAttachmentsChange([...attachments, ...files]);
+            onLocalUpload={handleLocalFilesAttach}
+            onFileDrop={handleLocalFilesAttach}
+          />
+          <AttachmentParsingDialog
+            open={parsingConfirmOpen}
+            onConfirm={() => {
+              setParsingConfirmOpen(false);
+              void performSend();
             }}
-            onAttachmentsChange={handleAttachmentsChange}
+            onCancel={() => setParsingConfirmOpen(false)}
           />
         </div>
       </div>

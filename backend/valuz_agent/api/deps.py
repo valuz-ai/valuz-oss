@@ -39,6 +39,8 @@ from valuz_agent.modules.tasks.datastore import (
 from valuz_agent.ports.identity import ANONYMOUS, IdentityResolver, UserIdentity
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from valuz_agent.modules.automations.service import AutomationService
     from valuz_agent.modules.decisions.aggregator import DecisionAggregator
     from valuz_agent.modules.skills.contracts import RuntimeContext
@@ -176,6 +178,30 @@ class _SecretStoreResolver:
         return self._store.get(secret_ref)
 
 
+async def build_parser_router(db: AsyncSession) -> ParserRouter:
+    """Build the config-aware ``ParserRouter`` — the SAME engine KB/Docs
+    ingestion uses — from the process-wide plugin registry (+ polling
+    scheduler), the secret resolver, and the user's routing snapshot loaded
+    from settings.
+
+    Shared by ``get_document_service`` and the conversation-attachment parse
+    path so uploaded attachments honor the configured engine (MinerU /
+    PaddleOCR), not just LightLocal. ``load_routing_config`` MUST be read in
+    the caller's live session — the attachment background task passes its own
+    fresh ``async_unit_of_work`` here because the request session is already
+    closed by the time it runs.
+    """
+    from valuz_agent.modules.settings.parser_routing import load_routing_config
+
+    routing_config = await load_routing_config(db)
+    return ParserRouter(
+        registry=_parser_registry(),
+        secret_resolver=_SecretStoreResolver(_secret_store()),
+        routing_config=routing_config,
+        setup_complete_probe=_setup_controller().is_complete,
+    )
+
+
 async def get_document_service() -> AsyncGenerator[DocumentLibraryService, None]:
     from valuz_agent.infra.config import settings
 
@@ -183,20 +209,10 @@ async def get_document_service() -> AsyncGenerator[DocumentLibraryService, None]
         preview_dir = settings.docs_dir / "preview"
         preview_dir.mkdir(parents=True, exist_ok=True)
         docs_runtime = EmbeddedDocsRuntime(preview_dir=preview_dir)
-        controller = _setup_controller()
         # ``ParserRouter`` reads its routing config from an immutable snapshot
         # resolved here (one async read per request) instead of opening a sync
-        # session per parse. ``controller.is_complete`` gates ``needs_setup``
-        # capabilities.
-        from valuz_agent.modules.settings.parser_routing import load_routing_config
-
-        routing_config = await load_routing_config(db)
-        parser = ParserRouter(
-            registry=_parser_registry(),
-            secret_resolver=_SecretStoreResolver(_secret_store()),
-            routing_config=routing_config,
-            setup_complete_probe=controller.is_complete,
-        )
+        # session per parse.
+        parser = await build_parser_router(db)
         yield DocumentLibraryService(
             datastore=DocumentDatastore(db),
             parser=parser,

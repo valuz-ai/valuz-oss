@@ -30,7 +30,6 @@ primitive so a caller can stub it (used by the actor-loop unit tests).
 # ruff: noqa: I001
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Literal
@@ -107,7 +106,7 @@ async def run_session_to_idle(
             )
             from valuz_agent.modules.sessions.context_builder import _build_additional_context
 
-            pending_attachments = await asyncio.to_thread(_load_pending_attachments, session_id)
+            pending_attachments = await _load_pending_attachments(session_id)
             consumed_attachment_ids = [row.id for row in pending_attachments]
             attachment_paths = _attachment_paths(pending_attachments)
         except Exception:  # noqa: BLE001
@@ -122,8 +121,8 @@ async def run_session_to_idle(
         # on open. No host-side pre-persist needed.
         workspace_id = str(loaded_session.project_id) if loaded_session else ""
         try:
-            additional_context = await asyncio.to_thread(
-                _build_additional_context, session_id, workspace_id, pending_attachments
+            additional_context = await _build_additional_context(
+                session_id, workspace_id, pending_attachments
             )
         except Exception:  # noqa: BLE001
             additional_context = ""
@@ -184,7 +183,7 @@ async def run_session_to_idle(
         try:
             from valuz_agent.modules.sessions.attachments import _mark_attachments_consumed
 
-            await asyncio.to_thread(_mark_attachments_consumed, consumed_attachment_ids)
+            await _mark_attachments_consumed(consumed_attachment_ids)
         except Exception:  # noqa: BLE001
             pass
 

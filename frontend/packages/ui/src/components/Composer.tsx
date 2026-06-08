@@ -11,6 +11,7 @@ import {
   FolderClosed,
   Gauge,
   Hand,
+  Loader2,
   Lock,
   Paperclip,
   Plus,
@@ -234,10 +235,19 @@ export interface ComposerProps {
   skills?: SkillSearchItem[];
   /** Called when user selects a skill from the popup */
   onSkillSelect?: (skill: SkillSearchItem) => void;
-  /** Called when user picks local file upload */
-  onLocalUpload?: () => void;
+  /** Called when user picks local files. Receives the accepted File list
+   *  (clamped to the remaining attachment slots). */
+  onLocalUpload?: (files: File[]) => void;
   /** Called when user picks knowledge base file */
   onKBPick?: () => void;
+  /**
+   * Upload-on-attach mode. When true the composer does NOT keep its own
+   * not-yet-uploaded ``File[]`` queue: picking / dropping a file fires
+   * ``onLocalUpload`` / ``onFileDrop`` and the host uploads it immediately
+   * (showing parse progress via ``pinnedAttachments``). When false (default)
+   * the composer queues files locally and the host uploads them at send time.
+   */
+  uploadOnAttach?: boolean;
   /**
    * Count of attachments already persisted on the session (local
    * uploads + KB-sourced references). Added to the composer's own
@@ -257,7 +267,15 @@ export interface ComposerProps {
    * not just in the side panel. ``onRemovePinnedAttachment`` deletes
    * the underlying attachment row.
    */
-  pinnedAttachments?: { id: string; name: string }[];
+  pinnedAttachments?: {
+    id: string;
+    name: string;
+    /** Async parse status — drives the inline progress indicator on the
+     *  chip ("解析中" spinner while ``parsing``, error tint on ``failed``). */
+    parseStatus?: "parsing" | "ready" | "failed";
+    /** ``local`` upload vs ``kb_doc`` live reference — drives the chip icon. */
+    sourceKind?: "local" | "kb_doc";
+  }[];
   onRemovePinnedAttachment?: (id: string) => void;
   /** Called when files are dropped onto the composer */
   onFileDrop?: (files: File[]) => void;
@@ -387,6 +405,7 @@ export const Composer = ({
   onSkillSelect,
   onLocalUpload,
   onKBPick,
+  uploadOnAttach = false,
   existingAttachmentCount = 0,
   pinnedAttachments = [],
   onRemovePinnedAttachment,
@@ -776,10 +795,22 @@ export const Composer = ({
         MAX_SESSION_ATTACHMENTS - existingAttachmentCount - attachments.length;
       if (slotsLeft <= 0) return;
       const accepted = files.slice(0, slotsLeft);
+      // Upload-on-attach: hand the host the File list and let it upload +
+      // track parse progress; don't keep a local queue (would double-render).
+      if (uploadOnAttach) {
+        onFileDrop?.(accepted);
+        return;
+      }
       updateAttachments([...attachments, ...accepted]);
       onFileDrop?.(accepted);
     },
-    [attachments, existingAttachmentCount, onFileDrop, updateAttachments],
+    [
+      attachments,
+      existingAttachmentCount,
+      onFileDrop,
+      updateAttachments,
+      uploadOnAttach,
+    ],
   );
 
   const handleFileInputChange = useCallback(
@@ -789,15 +820,23 @@ export const Composer = ({
       const slotsLeft =
         MAX_SESSION_ATTACHMENTS - existingAttachmentCount - attachments.length;
       if (slotsLeft > 0) {
-        updateAttachments([
-          ...attachments,
-          ...Array.from(files).slice(0, slotsLeft),
-        ]);
-        onLocalUpload?.();
+        const accepted = Array.from(files).slice(0, slotsLeft);
+        if (uploadOnAttach) {
+          onLocalUpload?.(accepted);
+        } else {
+          updateAttachments([...attachments, ...accepted]);
+          onLocalUpload?.(accepted);
+        }
       }
       e.target.value = "";
     },
-    [attachments, existingAttachmentCount, onLocalUpload, updateAttachments],
+    [
+      attachments,
+      existingAttachmentCount,
+      onLocalUpload,
+      updateAttachments,
+      uploadOnAttach,
+    ],
   );
 
   const handleRemoveAttachment = useCallback(
@@ -1038,7 +1077,8 @@ export const Composer = ({
     })() ??
     "Model";
 
-  const hasContent = currentValue || attachments.length > 0;
+  const hasContent =
+    currentValue || attachments.length > 0 || pinnedAttachments.length > 0;
 
   // Session-wide attachment budget. ``existingAttachmentCount`` is the
   // server-persisted count (local + KB rows); ``attachments`` is this
@@ -1116,24 +1156,53 @@ export const Composer = ({
               same way a local upload does in the input box. */}
           {(pinnedAttachments.length > 0 || attachments.length > 0) && (
             <div className="mb-3 flex flex-wrap items-center gap-1.5">
-              {pinnedAttachments.map((doc) => (
-                <span
-                  key={`pinned-${doc.id}`}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-brand/25 bg-brand-light px-2.5 py-1 text-2xs text-brand"
-                >
-                  <Database className="h-3 w-3 shrink-0" />
-                  <span className="max-w-[140px] truncate">{doc.name}</span>
-                  {onRemovePinnedAttachment ? (
-                    <button
-                      type="button"
-                      onClick={() => onRemovePinnedAttachment(doc.id)}
-                      className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-brand/60 transition-colors hover:bg-brand/10 hover:text-brand"
-                    >
-                      <X className="h-2.5 w-2.5" />
-                    </button>
-                  ) : null}
-                </span>
-              ))}
+              {pinnedAttachments.map((doc) => {
+                const isKb = doc.sourceKind === "kb_doc";
+                const isParsing = doc.parseStatus === "parsing";
+                const isFailed = doc.parseStatus === "failed";
+                const ChipIcon = isParsing
+                  ? Loader2
+                  : isKb
+                    ? Database
+                    : Paperclip;
+                return (
+                  <span
+                    key={`pinned-${doc.id}`}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-2xs",
+                      isFailed
+                        ? "border-error/30 bg-error-light text-error-text"
+                        : isKb
+                          ? "border-brand/25 bg-brand-light text-brand"
+                          : "border-surface-border bg-surface-soft text-ink-body",
+                    )}
+                  >
+                    <ChipIcon
+                      className={cn(
+                        "h-3 w-3 shrink-0",
+                        isParsing && "animate-spin",
+                      )}
+                    />
+                    <span className="max-w-[140px] truncate">{doc.name}</span>
+                    {isParsing ? (
+                      <span className="shrink-0 text-ink-meta">
+                        {t("conversation.attachmentParsing")}
+                      </span>
+                    ) : isFailed ? (
+                      <span className="shrink-0">{t("common.failed")}</span>
+                    ) : null}
+                    {onRemovePinnedAttachment ? (
+                      <button
+                        type="button"
+                        onClick={() => onRemovePinnedAttachment(doc.id)}
+                        className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-ink-meta transition-colors hover:bg-surface-border hover:text-ink-body"
+                      >
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    ) : null}
+                  </span>
+                );
+              })}
               {attachments.map((file, index) => (
                 <span
                   key={`${file.name}-${index}`}

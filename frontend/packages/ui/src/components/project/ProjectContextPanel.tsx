@@ -149,6 +149,11 @@ export interface UploadedFileItem {
   size?: string;
   /** Parser/upload status for the row badge. */
   status?: "uploaded" | "ok" | "failed";
+  /** Async parse status of the attachment. ``parsing`` renders an inline
+   *  spinner + "解析中"; ``failed`` renders the error badge. Distinct from
+   *  ``status`` so the live poll can drive the indicator without disturbing
+   *  legacy callers. */
+  parseStatus?: "parsing" | "ready" | "failed";
   /** Origin of the attachment: ``local`` (multipart upload) vs
    * ``kb_doc`` (live reference to a global knowledge-base document).
    * Drives the row icon — KB picks render a ``Database`` glyph so
@@ -1025,12 +1030,17 @@ export const ProjectDetailContextPanel = ({
                 <span className="flex-1 truncate text-ink-heading">
                   {f.name}
                 </span>
-                {f.size ? (
+                {f.parseStatus === "parsing" ? (
+                  <span className="flex shrink-0 items-center gap-1 text-2xs text-ink-meta">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    {t("conversation.attachmentParsing")}
+                  </span>
+                ) : f.size ? (
                   <span className="shrink-0 text-2xs text-ink-meta">
                     {f.size}
                   </span>
                 ) : null}
-                {f.status === "failed" ? (
+                {f.status === "failed" || f.parseStatus === "failed" ? (
                   <span className="shrink-0 rounded bg-error-light px-1 py-px text-2xs text-error-text">
                     {t("common.failed")}
                   </span>

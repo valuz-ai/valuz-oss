@@ -45,6 +45,38 @@ class SessionDatastore:
     async def get_attachment(self, attachment_id: str) -> SessionAttachmentRow | None:
         return await self._db.get(SessionAttachmentRow, attachment_id)
 
+    async def update_attachment_parse(
+        self,
+        attachment_id: str,
+        *,
+        parsed_path: str | None,
+        parse_status: str,
+        parse_mode: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        """Persist the result of a background parse.
+
+        Called by the fire-and-forget parse task spawned from the upload routes
+        once the configured ``ParserRouter`` finishes (off the event loop). The
+        upload request has already returned with ``parse_status="parsing"``;
+        this flips the row to ``ready`` (with ``parsed_path``) or ``failed``,
+        and records ``parse_mode`` — the plugin/engine that actually ran (e.g.
+        ``mineru`` / ``paddleocr`` / ``light_local``) for provenance.
+        No-op-safe if the row was deleted mid-parse (user removed the
+        attachment): the ``UPDATE`` simply matches zero rows.
+        """
+        await self._db.execute(
+            update(SessionAttachmentRow)
+            .where(SessionAttachmentRow.id == attachment_id)
+            .values(
+                parsed_path=parsed_path,
+                parse_status=parse_status,
+                parse_mode=parse_mode,
+                error_message=error_message,
+            )
+        )
+        await self._db.commit()
+
     async def mark_attachments_consumed(self, attachment_ids: list[str]) -> None:
         """Stamp ``consumed_at`` on the given rows.
 

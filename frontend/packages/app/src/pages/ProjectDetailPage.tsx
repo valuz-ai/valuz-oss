@@ -46,6 +46,7 @@ import {
   usePanelStore,
   useProjectLastUsed,
   useRuntimes,
+  useSessionAttachments,
   useSessionStore,
   type ActionKind,
   type AutomationItem,
@@ -68,6 +69,7 @@ import { usePlatform } from "@valuz/app/platform";
 import { useProjectKbBindings, useKbDocTree } from "@valuz/app/hooks";
 import { RUNTIME_DISPLAY_NAME, useTranslation } from "@valuz/core";
 import { toFileTree } from "../lib/file-tree";
+import { AttachmentParsingDialog } from "../components/AttachmentParsingDialog";
 
 const TEXT_EXTENSIONS = new Set([
   "txt",
@@ -669,10 +671,20 @@ export const ProjectDetailPage = () => {
   } = useProjectKbBindings(id);
   const [kbAddDialogOpen, setKbAddDialogOpen] = useState(false);
   const [composerValue, setComposerValue] = useState("");
-  // Files queued by the composer's attachment menu / drag-drop. Uploaded
-  // during handleSend (after the session is created) and rendered in the
-  // context panel's "Upload files" section in the meantime.
-  const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
+  // Attachments upload-on-attach (chat mode), which needs a session up front.
+  // The first attach eager-creates the project chat session (with the picked
+  // agent), freezing it per ADR-006 — the agent picker locks once
+  // ``chatSessionId`` is set. Parsing runs async on the backend; the hook
+  // polls status for the composer progress chips.
+  const [chatSessionId, setChatSessionId] = useState<string | null>(null);
+  const {
+    attachments: stagedAttachments,
+    hasParsing,
+    attachLocalFiles,
+    remove: removeAttachment,
+    markPendingConsumed,
+  } = useSessionAttachments(chatSessionId);
+  const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
   // PRD-PAAT §3.2 unified composer mode. ``chat`` creates a normal
   // session; ``task`` kicks off a background Task via tasksApi.kickoff
   // and routes to the task detail page.
@@ -1055,10 +1067,56 @@ export const ProjectDetailPage = () => {
     }
   };
 
-  const handleSend = async () => {
+  // Mint (once) the project chat session attachments upload into and the send
+  // reuses. Project sessions bind to an agent, so one must be picked first
+  // (ADR-006: the agent is frozen at creation — the composer locks it once
+  // ``chatSessionId`` is set).
+  const ensureChatSession = async (): Promise<{ id: string }> => {
+    if (chatSessionId) return { id: chatSessionId };
+    if (!selectedAgentSlug) throw new Error("no-agent-selected");
+    const session = await sessionsApi.create({
+      workspace_id: id,
+      agent_slug: selectedAgentSlug,
+      permission_mode: selectedPermissionMode,
+    });
+    setChatSessionId(session.id);
+    return { id: session.id };
+  };
+
+  // Upload-on-attach for the project chat composer. Needs an agent up front;
+  // surface a hint instead of silently dropping the file when none is picked.
+  const handleAttachFiles = (files: File[]) => {
+    if (!selectedAgentSlug) {
+      toast.error(t("conversation.selectAgentFirst" as Parameters<typeof t>[0]));
+      return;
+    }
+    void attachLocalFiles(files, ensureChatSession);
+  };
+
+  // The actual chat send. Attachments are already uploaded (on attach), so
+  // this just reuses / mints the session and posts the message.
+  const performChatSend = async () => {
     const text = composerValue.trim();
     if (!text || sending) return;
     setSending(true);
+    try {
+      const session = await ensureChatSession();
+      markPendingConsumed();
+      // ``text`` already contains any ``/slug`` tokens because Composer
+      // serializes inline skill chips into its controlled value.
+      await sessionsApi.sendMessage(session.id, text);
+      setComposerValue("");
+      navigate(`/conversation/${session.id}`);
+    } catch {
+      toast.error(t("common.saveFailed" as Parameters<typeof t>[0]));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleSend = async () => {
+    const text = composerValue.trim();
+    if (!text || sending) return;
 
     // PRD-PAAT §3.2 Task mode: treat the composer text as a task goal,
     // kick off via tasksApi.kickoff(), and route the user to the task
@@ -1071,9 +1129,9 @@ export const ProjectDetailPage = () => {
     if (composerMode === "task") {
       if (!selectedAgentSlug) {
         toast.error(t("task.noLeadAgents" as Parameters<typeof t>[0]));
-        setSending(false);
         return;
       }
+      setSending(true);
       try {
         const task = await tasksApi.kickoff(id, {
           goal: text,
@@ -1083,7 +1141,6 @@ export const ProjectDetailPage = () => {
         });
         toast.success(t("task.kickedOff"));
         setComposerValue("");
-        setPendingAttachments([]);
         navigate(`/tasks/${encodeURIComponent(task.id)}`);
       } catch (err) {
         // Surface the backend message (kickoff has a few well-known
@@ -1099,38 +1156,12 @@ export const ProjectDetailPage = () => {
       return;
     }
 
-    try {
-      // ADR-006: model_provider is locked at session creation. Pass the
-      // composer's pick here, not on the subsequent sendMessage (where the
-      // backend ignores it).
-      const session = await sessionsApi.create({
-        workspace_id: id,
-        agent_slug: selectedAgentSlug ?? undefined,
-        permission_mode: selectedPermissionMode,
-      });
-      // Upload any queued attachments before sending so the kernel runtime
-      // sees them on the first turn. Failures here don't block the message.
-      for (const file of pendingAttachments) {
-        try {
-          await sessionsApi.uploadAttachment(session.id, file);
-        } catch {
-          toast.error(
-            t("conversation.uploadFailed" as Parameters<typeof t>[0]),
-          );
-        }
-      }
-      setPendingAttachments([]);
-      // ``text`` already contains any ``/slug`` tokens because Composer
-      // serializes inline skill chips into its controlled value — don't
-      // prepend ``selectedComposerSkill`` again or it ships duplicated.
-      await sessionsApi.sendMessage(session.id, text);
-      setComposerValue("");
-      navigate(`/conversation/${session.id}`);
-    } catch {
-      toast.error(t("common.saveFailed" as Parameters<typeof t>[0]));
-    } finally {
-      setSending(false);
+    // Chat mode — block on unfinished parsing, then send.
+    if (hasParsing) {
+      setParsingConfirmOpen(true);
+      return;
     }
+    void performChatSend();
   };
 
   const displayName = workspace?.name ?? decodeURIComponent(id);
@@ -1274,7 +1305,6 @@ export const ProjectDetailPage = () => {
     fileTree,
     workspace,
     displayName,
-    pendingAttachments,
     scheduledTasks,
     handleToggleScheduledTask,
     handleDeleteScheduledTask,
@@ -1323,7 +1353,25 @@ export const ProjectDetailPage = () => {
                 void handleSend();
               }}
               showSkillButton={false}
-              onAttachmentsChange={(files) => setPendingAttachments(files)}
+              uploadOnAttach
+              existingAttachmentCount={
+                stagedAttachments.filter((a) => !a.consumed_at).length
+              }
+              pinnedAttachments={stagedAttachments
+                .filter((a) => !a.consumed_at)
+                .map((a) => ({
+                  id: a.id,
+                  name: a.filename,
+                  parseStatus: a.parse_status as
+                    | "parsing"
+                    | "ready"
+                    | "failed"
+                    | undefined,
+                  sourceKind: a.source_kind,
+                }))}
+              onRemovePinnedAttachment={(attId) => void removeAttachment(attId)}
+              onLocalUpload={handleAttachFiles}
+              onFileDrop={handleAttachFiles}
               onKBPick={() => void handleOpenKbPicker()}
               // Project conversations pick a configured agent instead of a
               // raw model. The session inherits runtime/model/provider/
@@ -1331,6 +1379,9 @@ export const ProjectDetailPage = () => {
               // same add-agent dialog the config panel uses.
               agents={composerAgents}
               selectedAgentSlug={selectedAgentSlug}
+              // First attach mints the chat session, freezing the agent
+              // (ADR-006) — lock the picker once that happens.
+              agentLocked={chatSessionId != null}
               onAgentChange={(slug) => {
                 setSelectedAgentSlug(slug);
                 setComposerTouched(true);
@@ -1342,6 +1393,14 @@ export const ProjectDetailPage = () => {
                 setSelectedPermissionMode(mode);
                 setComposerTouched(true);
               }}
+            />
+            <AttachmentParsingDialog
+              open={parsingConfirmOpen}
+              onConfirm={() => {
+                setParsingConfirmOpen(false);
+                void performChatSend();
+              }}
+              onCancel={() => setParsingConfirmOpen(false)}
             />
           </div>
 
