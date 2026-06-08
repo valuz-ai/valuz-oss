@@ -101,18 +101,18 @@ async def run_session_to_idle(
         # kickoff which may carry user-staged attachments.
         try:
             from valuz_agent.modules.sessions.attachments import (
-                _attachment_paths,
+                _attachment_specs,
                 _load_pending_attachments,
             )
             from valuz_agent.modules.sessions.context_builder import _build_additional_context
 
             pending_attachments = await _load_pending_attachments(session_id)
             consumed_attachment_ids = [row.id for row in pending_attachments]
-            attachment_paths = _attachment_paths(pending_attachments)
+            attachment_specs = _attachment_specs(pending_attachments)
         except Exception:  # noqa: BLE001
             pending_attachments = []
             consumed_attachment_ids = []
-            attachment_paths = ()
+            attachment_specs = ()
 
         loaded_session = await store.load_session(session_id)
         # Kernel ``run_turn`` persists ``session.status="running"`` to the DB
@@ -131,7 +131,10 @@ async def run_session_to_idle(
 
         user_msg = UserMessage(
             text=content,
-            attachments=tuple(Attachment(filepath=p) for p in attachment_paths),
+            attachments=tuple(
+                Attachment(source_path=source, parsed_path=parsed)
+                for source, parsed in attachment_specs
+            ),
             additional_context=additional_context,
         )
 

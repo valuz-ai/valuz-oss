@@ -41,9 +41,11 @@ def _parse_user_message(msg: dict[str, Any]) -> UserMessage:
     """Parse the inbound `{"message": {...}}` frame into a UserMessage.
 
     Accepts the structured shape
-    ``{"text": str, "attachments": [{"filepath": str}], "additional_context": str}``.
-    ``attachments`` and ``additional_context`` are optional. The legacy string
-    form is rejected so callers migrate to the new contract.
+    ``{"text": str, "attachments": [{"source_path": str, "parsed_path": str?}],
+    "additional_context": str}``. ``attachments`` and ``additional_context`` are
+    optional; ``parsed_path`` is optional per attachment. The legacy ``filepath``
+    key is still read (as ``source_path``) for callers mid-migration. The legacy
+    string ``message`` form is rejected so callers migrate to the new contract.
     """
     raw = msg.get("message")
     if isinstance(raw, str):
@@ -64,9 +66,16 @@ def _parse_user_message(msg: dict[str, Any]) -> UserMessage:
 
     attachments: list[Attachment] = []
     for item in raw_attachments:
-        if not isinstance(item, dict) or not isinstance(item.get("filepath"), str):
-            raise ValueError("Each attachment must be an object with a `filepath` string")
-        attachments.append(Attachment(filepath=item["filepath"]))
+        if not isinstance(item, dict):
+            raise ValueError("Each attachment must be an object with a `source_path` string")
+        # ``filepath`` is the legacy single-path key; accept it as ``source_path``.
+        source = item.get("source_path", item.get("filepath"))
+        if not isinstance(source, str) or not source:
+            raise ValueError("Each attachment must have a non-empty `source_path` string")
+        parsed = item.get("parsed_path")
+        if parsed is not None and not isinstance(parsed, str):
+            raise ValueError("`parsed_path` must be a string when present")
+        attachments.append(Attachment(source_path=source, parsed_path=parsed or None))
 
     raw_additional = raw.get("additional_context", "")
     if not isinstance(raw_additional, str):

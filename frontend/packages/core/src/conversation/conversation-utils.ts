@@ -23,10 +23,16 @@ const parseTurnAttachments = (raw: string): ConversationTurnAttachment[] => {
     }
     const obj = entry as Record<string, unknown>;
     const explicitName = typeof obj.name === "string" ? obj.name : undefined;
-    const filepath =
-      typeof obj.filepath === "string" ? obj.filepath : undefined;
-    const fromPath = filepath
-      ? (filepath.split("/").pop() ?? filepath).replace(/\.parsed\.md$/, "")
+    // `source_path` is the original file; `filepath` is the legacy single-path
+    // key still present on user_message events persisted before the split.
+    const sourcePath =
+      typeof obj.source_path === "string"
+        ? obj.source_path
+        : typeof obj.filepath === "string"
+          ? obj.filepath
+          : undefined;
+    const fromPath = sourcePath
+      ? (sourcePath.split("/").pop() ?? sourcePath).replace(/\.parsed\.md$/, "")
       : undefined;
     const size = typeof obj.size === "number" ? obj.size : 0;
     return {

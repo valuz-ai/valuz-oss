@@ -68,7 +68,12 @@ def build_user_prompt(message: UserMessage, cwd: str, now: datetime) -> str:
     if message.attachments:
         lines = ["The user uploaded the following attachments (read them as needed):"]
         for a in message.attachments:
-            lines.append(f"- {a.filepath}")
+            # ``source_path`` is the original file (operate on this); when the
+            # upstream parsed it, point the agent at the cheaper text extract too.
+            if a.parsed_path:
+                lines.append(f"- {a.source_path}  (extracted text: {a.parsed_path})")
+            else:
+                lines.append(f"- {a.source_path}")
         parts.append("\n".join(lines))
 
     parts.append(message.text)

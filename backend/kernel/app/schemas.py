@@ -45,7 +45,8 @@ class StopReasonSchema(BaseModel):
 
 
 class AttachmentSchema(BaseModel):
-    filepath: str
+    source_path: str
+    parsed_path: str | None = None
 
 
 class UserMessageSchema(BaseModel):

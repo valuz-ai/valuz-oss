@@ -420,3 +420,33 @@ describe("buildTurns — streaming deltas", () => {
     expect(turns[1]!.userText).toBe("hi");
   });
 });
+
+describe("buildTurns — attachment names", () => {
+  it("derives the attachment name from source_path (original file)", () => {
+    const turns = buildTurns([
+      evt(1, "message.user", {
+        text: "summarize",
+        message_id: "u1",
+        attachments: JSON.stringify([
+          { source_path: "/ws/report.pdf", parsed_path: "/ws/report.md" },
+        ]),
+      }),
+    ]);
+
+    expect(turns[0]!.attachments).toEqual([{ name: "report.pdf", size: 0 }]);
+  });
+
+  it("falls back to the legacy filepath key on pre-split events", () => {
+    const turns = buildTurns([
+      evt(1, "message.user", {
+        text: "look",
+        message_id: "u1",
+        attachments: JSON.stringify([{ filepath: "/ws/old.parsed.md" }]),
+      }),
+    ]);
+
+    // Legacy events stored only the parsed path; the ``.parsed.md`` suffix is
+    // stripped for display.
+    expect(turns[0]!.attachments).toEqual([{ name: "old", size: 0 }]);
+  });
+});

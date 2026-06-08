@@ -420,7 +420,10 @@ class SessionOrchestrator:
                     type="user_message",
                     data={
                         "message": user_message.text,
-                        "attachments": [{"filepath": a.filepath} for a in user_message.attachments],
+                        "attachments": [
+                            {"source_path": a.source_path, "parsed_path": a.parsed_path}
+                            for a in user_message.attachments
+                        ],
                     },
                 )
             )

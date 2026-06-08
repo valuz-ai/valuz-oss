@@ -633,10 +633,12 @@ async def upload_attachment(
 ) -> AttachmentItem:
     """Stream-write *file* into the session's attachment dir and persist a row.
 
-    The returned ``stored_path`` is an absolute filesystem path the frontend
-    forwards into the kernel's ``UserMessage.attachments[].filepath`` so the
-    agent can ``Read`` the file directly. The kernel never copies bytes —
-    valuz holds the canonical store and the kernel only references it.
+    The returned ``stored_path`` is an absolute filesystem path that becomes the
+    kernel's ``UserMessage.attachments[].source_path`` (the original file the
+    agent operates on); the parsed markdown extract, when ready, rides along as
+    ``parsed_path`` so the agent can ``Read`` text cheaply. The kernel never
+    copies bytes — valuz holds the canonical store and the kernel only
+    references it.
     """
     if await kernel_store.load_session(session_id) is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")

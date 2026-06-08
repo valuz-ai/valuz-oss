@@ -412,13 +412,28 @@ def dict_to_mcp(data: dict[str, Any]) -> McpServerConfig:
 def user_message_to_dict(msg: UserMessage) -> dict[str, Any]:
     return {
         "text": msg.text,
-        "attachments": [{"filepath": a.filepath} for a in msg.attachments],
+        "attachments": [
+            {"source_path": a.source_path, "parsed_path": a.parsed_path} for a in msg.attachments
+        ],
     }
+
+
+def _coerce_optional_str(value: Any) -> str | None:
+    """Normalize a persisted ``parsed_path`` to ``str | None`` (drop empties)."""
+    return value if isinstance(value, str) and value else None
 
 
 def dict_to_user_message(data: dict[str, Any]) -> UserMessage:
     raw_attachments = data.get("attachments") or []
-    attachments = tuple(Attachment(filepath=str(a.get("filepath", ""))) for a in raw_attachments)
+    attachments = tuple(
+        Attachment(
+            # Back-compat: rows persisted before the source/parsed split carry a
+            # single ``filepath`` — read it as ``source_path``.
+            source_path=str(a.get("source_path", a.get("filepath", ""))),
+            parsed_path=_coerce_optional_str(a.get("parsed_path")),
+        )
+        for a in raw_attachments
+    )
     return UserMessage(text=str(data.get("text", "")), attachments=attachments)
 
 

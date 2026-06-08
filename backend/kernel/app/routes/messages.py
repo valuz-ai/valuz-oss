@@ -36,7 +36,8 @@ def _message_to_data(message: Message) -> MessageData:
         user_message=UserMessageSchema(
             text=message.user_message.text,
             attachments=[
-                AttachmentSchema(filepath=a.filepath) for a in message.user_message.attachments
+                AttachmentSchema(source_path=a.source_path, parsed_path=a.parsed_path)
+                for a in message.user_message.attachments
             ],
         ),
         assistant_message=message.assistant_message,

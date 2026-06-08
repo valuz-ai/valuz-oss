@@ -34,16 +34,25 @@ async def _load_pending_attachments(session_id: str):  # type: ignore[no-untyped
         return await SessionDatastore(db).list_attachments(session_id)
 
 
-def _attachment_paths(rows) -> tuple[str, ...]:  # type: ignore[no-untyped-def]
-    """Pick the agent-facing filepath for each attachment row.
+def _attachment_specs(rows) -> tuple[tuple[str, str | None], ...]:  # type: ignore[no-untyped-def]
+    """Map each attachment row to a ``(source_path, parsed_path)`` pair.
 
-    Prefers ``parsed_path`` (LightLocalParser markdown extract) over
-    the raw ``stored_path`` so the agent can ``Read`` text it can
-    reason about, falling back to the original on parser miss/failure
-    (raw PDFs / binaries).
+    ``source_path`` is always the original file the user attached
+    (``stored_path``) so the agent can operate on the real bytes. ``parsed_path``
+    is the markdown text extract — surfaced *alongside* the original so the agent
+    can ``Read`` reasoning-friendly text — but only when parsing actually
+    succeeded (``parse_status == "ready"`` with a path); it is ``None`` while a
+    file is still parsing, on parser miss/failure, or for raw PDFs / binaries.
+
+    This replaces the old ``_attachment_paths`` collapse-to-one behavior, which
+    dropped the original whenever a parse succeeded — leaving the agent unable to
+    act on the source file.
     """
     return tuple(
-        (row.parsed_path if row.parse_status == "ready" and row.parsed_path else row.stored_path)
+        (
+            row.stored_path,
+            row.parsed_path if row.parse_status == "ready" and row.parsed_path else None,
+        )
         for row in rows
     )
 

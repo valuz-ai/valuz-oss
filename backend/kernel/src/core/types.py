@@ -15,10 +15,19 @@ class Attachment:
     """A file the user has attached to a turn.
 
     Upstream uploads files into the project's workspace and hands the harness
-    an absolute filepath. The kernel does not move bytes — it only references.
+    their paths. The kernel does not move bytes — it only references.
+
+    ``source_path`` is the original file the user attached (always present); the
+    agent acts on this when it needs the raw bytes (rename it, run a tool over
+    it, …). ``parsed_path`` is an optional extracted/normalized rendering the
+    upstream produced — e.g. a Markdown text extract of a PDF — so the agent can
+    read the content cheaply; it is ``None`` when the upstream did no parsing.
+    ``build_user_prompt`` surfaces both, so the agent can read the extract yet
+    still operate on the original.
     """
 
-    filepath: str
+    source_path: str
+    parsed_path: str | None = None
 
 
 @dataclass(frozen=True)

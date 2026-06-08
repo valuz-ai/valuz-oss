@@ -49,7 +49,7 @@ from valuz_agent.modules.projects.datastore import WorkspaceDatastore
 from valuz_agent.modules.projects.service import WorkspaceService
 from valuz_agent.modules.providers.datastore import ProviderDatastore
 from valuz_agent.modules.sessions.attachments import (
-    _attachment_paths,
+    _attachment_specs,
     _load_pending_attachments,
     _mark_attachments_consumed,
 )
@@ -1056,7 +1056,7 @@ class SessionService:
             # the full rationale).
             pending_attachments = await _load_pending_attachments(session_id)
             consumed_attachment_ids = [row.id for row in pending_attachments]
-            attachment_paths = _attachment_paths(pending_attachments)
+            attachment_specs = _attachment_specs(pending_attachments)
             workspace_id = str(session.project_id)
             additional_context = await _build_additional_context(
                 session_id,
@@ -1065,7 +1065,10 @@ class SessionService:
             )
             user_msg = UserMessage(
                 text=content,
-                attachments=tuple(Attachment(filepath=p) for p in attachment_paths),
+                attachments=tuple(
+                    Attachment(source_path=source, parsed_path=parsed)
+                    for source, parsed in attachment_specs
+                ),
                 additional_context=additional_context,
             )
 

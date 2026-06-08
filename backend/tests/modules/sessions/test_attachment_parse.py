@@ -3,10 +3,11 @@
 Pins the contract behind the non-blocking upload model AND the
 configured-parser fix:
 
-  * ``_attachment_paths`` (the runtime-facing path picker) prefers parsed
-    markdown only when ``parse_status == "ready"``, otherwise falls back to the
-    raw ``stored_path`` — so a turn sent *while a file is still parsing* (or
-    after a parse failure) ships the raw file reference (Scenario-1 S1-04/05).
+  * ``_attachment_specs`` (the runtime-facing path picker) always carries the
+    original ``stored_path`` as ``source_path`` and adds the parsed markdown as
+    ``parsed_path`` only when ``parse_status == "ready"`` — so a turn sent *while
+    a file is still parsing* (or after a parse failure) ships the raw file with
+    no parsed extract (Scenario-1 S1-04/05).
   * ``SessionDatastore.update_attachment_parse`` flips a ``parsing`` row to
     ``ready`` / ``failed`` and records ``parse_mode`` (which engine ran).
   * ``_spawn_attachment_parse`` parses through the CONFIGURED ``ParserRouter``
@@ -31,7 +32,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from valuz_agent.infra.database import Base
-from valuz_agent.modules.sessions.attachments import _attachment_paths
+from valuz_agent.modules.sessions.attachments import _attachment_specs
 from valuz_agent.modules.sessions.datastore import SessionDatastore
 from valuz_agent.modules.sessions.models import SessionAttachmentRow
 from valuz_agent.ports.parser_backend import ParseResult
@@ -56,7 +57,7 @@ def db(tmp_path, monkeypatch):  # type: ignore[no-untyped-def]
 
 
 class _Row:
-    """Minimal stand-in for ``SessionAttachmentRow`` — ``_attachment_paths``
+    """Minimal stand-in for ``SessionAttachmentRow`` — ``_attachment_specs``
     only reads ``parse_status`` / ``parsed_path`` / ``stored_path``."""
 
     def __init__(self, parse_status: str, parsed_path: str | None, stored_path: str) -> None:
@@ -66,25 +67,26 @@ class _Row:
 
 
 # ---------------------------------------------------------------------------
-# _attachment_paths — the raw-fallback contract (S1-04 / S1-05)
+# _attachment_specs — source always present, parsed only when ready (S1-04/05)
 # ---------------------------------------------------------------------------
 
 
-def test_attachment_paths_uses_parsed_when_ready() -> None:
-    assert _attachment_paths([_Row("ready", "/p.md", "/raw.pdf")]) == ("/p.md",)
+def test_attachment_specs_carries_both_when_ready() -> None:
+    # Parsed-ready: agent gets the original AND the markdown extract alongside.
+    assert _attachment_specs([_Row("ready", "/p.md", "/raw.pdf")]) == (("/raw.pdf", "/p.md"),)
 
 
-def test_attachment_paths_falls_back_to_raw_while_parsing() -> None:
-    # Submit-before-parse: the agent gets only the raw file reference.
-    assert _attachment_paths([_Row("parsing", None, "/raw.pdf")]) == ("/raw.pdf",)
+def test_attachment_specs_no_parsed_while_parsing() -> None:
+    # Submit-before-parse: the original ships now; no parsed extract yet.
+    assert _attachment_specs([_Row("parsing", None, "/raw.pdf")]) == (("/raw.pdf", None),)
 
 
-def test_attachment_paths_falls_back_to_raw_on_failure() -> None:
-    assert _attachment_paths([_Row("failed", None, "/raw.pdf")]) == ("/raw.pdf",)
+def test_attachment_specs_no_parsed_on_failure() -> None:
+    assert _attachment_specs([_Row("failed", None, "/raw.pdf")]) == (("/raw.pdf", None),)
 
 
-def test_attachment_paths_falls_back_when_ready_but_no_parsed() -> None:
-    assert _attachment_paths([_Row("ready", None, "/raw.pdf")]) == ("/raw.pdf",)
+def test_attachment_specs_no_parsed_when_ready_but_no_path() -> None:
+    assert _attachment_specs([_Row("ready", None, "/raw.pdf")]) == (("/raw.pdf", None),)
 
 
 # ---------------------------------------------------------------------------
