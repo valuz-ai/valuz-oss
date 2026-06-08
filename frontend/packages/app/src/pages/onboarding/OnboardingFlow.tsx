@@ -141,13 +141,17 @@ const OnboardingChrome = ({
       {/* pl-20 leaves room for the macOS traffic-light cluster (~78px); on
           web the extra space just reads as breathing room. pr-5 keeps the
           right edge from feeling crowded. */}
-      <header className="absolute inset-x-0 top-0 z-10 flex items-center justify-between pl-20 pr-5 py-3">
+      <header
+        className="absolute inset-x-0 top-0 z-10 flex items-center justify-between pl-20 pr-5 py-3"
+        style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
+      >
         <div className="flex items-center gap-4">
           {onBack ? (
             <button
               type="button"
               onClick={onBack}
               className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-ink-meta transition-colors hover:bg-surface-soft hover:text-ink-heading"
+              style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
             >
               <ArrowLeft className="h-4 w-4" />
               {t("onboarding.back" as Parameters<typeof t>[0])}
@@ -191,6 +195,7 @@ const OnboardingChrome = ({
             type="button"
             onClick={onSkip}
             className="rounded-lg px-3 py-2 text-sm font-medium text-ink-meta transition-colors hover:bg-surface-soft hover:text-ink-heading"
+            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
           >
             {t("onboarding.skipGuide" as Parameters<typeof t>[0])}
           </button>

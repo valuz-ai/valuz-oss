@@ -1,5 +1,6 @@
 import type { ServiceInfo, ServiceStatusType } from "@valuz/shared";
 import { t } from "@valuz/shared/i18n";
+import { WindowDragRegion } from "@valuz/ui";
 import { useMemo } from "react";
 
 interface StartupScreenProps {
@@ -37,6 +38,8 @@ export const StartupScreen = ({
   return (
     <div className="splash-root">
       <style>{SPLASH_CSS}</style>
+      <WindowDragRegion />
+
 
       {/* Layer 1 — animated aurora */}
       <div className="splash-aurora splash-aurora-a" aria-hidden />
