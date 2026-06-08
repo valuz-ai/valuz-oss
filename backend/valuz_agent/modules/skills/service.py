@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import shutil
@@ -50,7 +51,20 @@ from valuz_agent.modules.skills.models import (
     SkillView,
 )
 
-_import_previews: dict[str, tuple[Path, bool] | tuple[Path, bool, float]] = {}
+# Preview entries are heterogeneous by import kind:
+#   archive/directory: (skill_root, managed_temp: bool)  — cleaned via skill_root.parent
+#   URL/GitHub:        (skill_root, cleanup_root: Path, created_at: float)
+# For URL imports every candidate shares one ``cleanup_root`` (the staging dir),
+# ref-counted in ``_import_cleanup_refs`` so confirming one skill never deletes a
+# sibling's source; the dir is reclaimed only when the last candidate is gone.
+_import_previews: dict[str, tuple[Path, bool] | tuple[Path, Path, float]] = {}
+_import_cleanup_refs: dict[str, int] = {}
+# Serializes ``startup_scan`` across concurrent callers (e.g. a multi-skill
+# import confirming N skills at once). Without it, two scans both see a
+# just-copied skill as absent and race to INSERT its index row → UNIQUE
+# violation → flush rollback. Module-level because the service is built
+# per-request, so an instance lock wouldn't be shared.
+_scan_lock = asyncio.Lock()
 # Import provenance staged alongside a preview, keyed by the same ``preview_id``.
 # Populated for URL/GitHub imports; consumed by ``confirm_url_import`` to persist
 # ``valuz_skill_index.origin_json``. Cleaned up with the preview.
@@ -198,6 +212,13 @@ class SkillLibraryService:
         return SkillsCatalog(workspace_id=workspace_id, skills=skills)
 
     async def startup_scan(self) -> None:
+        # Serialize concurrent scans (see ``_scan_lock``): each acquirer commits
+        # its rows before releasing, so the next scan sees them and does an
+        # UPDATE instead of a duplicate INSERT.
+        async with _scan_lock:
+            await self._startup_scan_unlocked()
+
+    async def _startup_scan_unlocked(self) -> None:
         from valuz_agent.modules.skills.contracts import RuntimeContext
 
         all_manifests: list = []
@@ -781,6 +802,11 @@ class SkillLibraryService:
     ) -> SkillImportArchivePreview:
         import urllib.request
 
+        from valuz_agent.modules.skills.errors import SkillImportFailed
+
+        # Everything for this import is extracted UNDER ``staging_dir`` so the
+        # whole tree is reclaimed by a single rmtree once every candidate preview
+        # has been confirmed or expired (ref-counted in ``_cleanup_preview``).
         staging_dir = Path(tempfile.mkdtemp(prefix="valuz-skill-url-"))
 
         try:
@@ -796,13 +822,12 @@ class SkillLibraryService:
 
                 suffix = Path(url.split("?")[0]).suffix.lower()
                 if suffix in {".zip", ".tar", ".gz", ".tgz"}:
-                    fetched_root = self._extract_archive(downloaded)
+                    fetched_root = self._extract_archive(downloaded, dest=staging_dir / "extract")
                 else:
                     downloaded.rename(staging_dir / "SKILL.md")
                     fetched_root = staging_dir
         except Exception as e:
-            from valuz_agent.modules.skills.errors import SkillImportFailed
-
+            shutil.rmtree(staging_dir, ignore_errors=True)
             raise SkillImportFailed(f"Failed to fetch URL: {e}") from e
 
         # A URL may point at a single skill OR a collection/plugin holding many
@@ -810,8 +835,7 @@ class SkillLibraryService:
         # multi-select — never silently grab the first.
         skill_roots = self._locate_skill_roots(fetched_root)
         if not skill_roots:
-            from valuz_agent.modules.skills.errors import SkillImportFailed
-
+            shutil.rmtree(staging_dir, ignore_errors=True)
             raise SkillImportFailed("No SKILL.md found in the fetched content")
 
         return await self._build_multi_preview(
@@ -820,6 +844,7 @@ class SkillLibraryService:
             target_scope=target_scope,
             workspace_id=workspace_id,
             source_url=url,
+            cleanup_root=staging_dir,
         )
 
     async def _build_multi_preview(
@@ -830,6 +855,7 @@ class SkillLibraryService:
         target_scope: str,
         workspace_id: str | None,
         source_url: str,
+        cleanup_root: Path,
     ) -> SkillImportArchivePreview:
         """Build a preview that lists every skill found under the source.
 
@@ -838,6 +864,11 @@ class SkillLibraryService:
         ``preview_id`` so confirm is called once per chosen skill. Each
         candidate's import provenance is staged in ``_import_origins`` keyed by
         its ``preview_id`` for ``confirm_url_import`` to persist.
+
+        Every candidate is a subdir of the SHARED ``cleanup_root`` (the import's
+        staging dir). The root is ref-counted so confirming/cleaning up one
+        skill never deletes a sibling's source — the staging dir is reclaimed
+        only once the last candidate is consumed or expired.
         """
         import time
 
@@ -849,7 +880,8 @@ class SkillLibraryService:
         candidates: list[SkillImportCandidate] = []
         for root in skill_roots:
             preview_id = str(uuid4())
-            _import_previews[preview_id] = (root, True, time.time())
+            _import_previews[preview_id] = (root, cleanup_root, time.time())
+            self._incref_cleanup_root(cleanup_root)
             preview = await self._build_import_preview(
                 preview_id=preview_id,
                 skill_root=root,
@@ -890,9 +922,9 @@ class SkillLibraryService:
         from valuz_agent.modules.skills.errors import PreviewExpired
 
         entry = _import_previews.get(payload.preview_id)
-        if entry is None:
+        if entry is None or len(entry) != 3:
             raise PreviewExpired("Import preview not found or expired")
-        skill_root, is_temp, created_at = entry
+        skill_root, _cleanup_root, created_at = entry
         if time.time() - created_at > 600:
             self._cleanup_preview(payload.preview_id)
             raise PreviewExpired()
@@ -1016,8 +1048,11 @@ class SkillLibraryService:
         A GitHub zipball wraps everything in a single ``owner-repo-<sha>/`` dir.
         Raises ``FileNotFoundError`` when ``subdir`` is not present so the caller
         can treat it as a wrong ref/path split and retry a longer ref.
+
+        Extraction lands next to the zip (under the URL import's staging dir) so
+        a single cleanup of that staging dir reclaims everything.
         """
-        extracted = self._extract_archive(zip_path)
+        extracted = self._extract_archive(zip_path, dest=zip_path.parent / f"{zip_path.stem}-x")
         tops = [p for p in extracted.iterdir() if p.is_dir()]
         root = tops[0] if len(tops) == 1 else extracted
         if subdir and subdir not in (".", ""):
@@ -1467,8 +1502,17 @@ class SkillLibraryService:
                         chunks.append(text)
         return "".join(chunks).strip()
 
-    def _extract_archive(self, archive_path: Path) -> Path:
-        staging_dir = Path(tempfile.mkdtemp(prefix="valuz-skill-import-"))
+    def _extract_archive(self, archive_path: Path, dest: Path | None = None) -> Path:
+        """Extract an archive and return the directory it was extracted into.
+
+        ``dest`` lets the caller place the extraction under a known root (e.g. a
+        URL import's shared staging dir) so a single ``rmtree`` of that root
+        cleans everything up; without it a fresh temp dir is created.
+        """
+        staging_dir = dest if dest is not None else Path(
+            tempfile.mkdtemp(prefix="valuz-skill-import-")
+        )
+        staging_dir.mkdir(parents=True, exist_ok=True)
         suffix = archive_path.suffix.lower()
         if suffix == ".zip":
             with zipfile.ZipFile(archive_path) as zipped:
@@ -1611,12 +1655,34 @@ class SkillLibraryService:
                 )
         return nodes
 
+    def _incref_cleanup_root(self, root: Path) -> None:
+        key = str(root)
+        _import_cleanup_refs[key] = _import_cleanup_refs.get(key, 0) + 1
+
+    def _decref_cleanup_root(self, root: Path) -> None:
+        """Drop one reference to a shared staging dir; rmtree it at zero."""
+        key = str(root)
+        remaining = _import_cleanup_refs.get(key, 1) - 1
+        if remaining > 0:
+            _import_cleanup_refs[key] = remaining
+            return
+        _import_cleanup_refs.pop(key, None)
+        shutil.rmtree(root, ignore_errors=True)
+
     def _cleanup_preview(self, preview_id: str) -> None:
         _import_origins.pop(preview_id, None)
         preview = _import_previews.pop(preview_id, None)
         if preview is None:
             return
-        preview_root = preview[0]
-        managed_temp = preview[1]
+        # URL/GitHub import: (skill_root, cleanup_root: Path, created_at). All
+        # candidates share cleanup_root, so decref and only rmtree at zero —
+        # never delete the shared tree out from under a sibling's confirm.
+        if len(preview) == 3:
+            cleanup_root = preview[1]
+            self._decref_cleanup_root(cleanup_root)
+            return
+        # archive/directory import: (skill_root, managed_temp). A managed temp
+        # extraction lives one level above the skill root.
+        preview_root, managed_temp = preview
         if managed_temp:
             shutil.rmtree(preview_root.parent, ignore_errors=True)

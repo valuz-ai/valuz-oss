@@ -369,7 +369,13 @@ class TestUrlImport:
         from valuz_agent.modules.skills.service import _import_previews
 
         preview_id = "test-expired"
-        _import_previews[preview_id] = (Path("/tmp/nonexistent"), True, time.time() - 700)
+        # URL preview shape: (skill_root, cleanup_root, created_at). Stamp it 700s
+        # ago so confirm trips the 600s TTL.
+        _import_previews[preview_id] = (
+            Path("/tmp/nonexistent/skill"),
+            Path("/tmp/nonexistent"),
+            time.time() - 700,
+        )
         from valuz_agent.modules.skills.models import SkillImportUrlConfirmRequest
 
         with pytest.raises(PreviewExpired):
