@@ -1314,21 +1314,29 @@ async def _probe_connector(connector_id: str, svc: ConnectorService) -> TestConn
         try:
             from mcp.client.stdio import StdioServerParameters, stdio_client
 
-            shell_path_str: str = os.environ.get("PATH", "")
-            for shell in ("zsh", "bash"):
-                try:
-                    out = subprocess.check_output(
-                        [shell, "-l", "-c", "echo $PATH"],
-                        text=True,
-                        timeout=5,
-                        stderr=subprocess.DEVNULL,
-                    ).strip()
-                    lines = [line for line in out.splitlines() if line.strip()]
-                    if lines:
-                        shell_path_str = lines[-1]
-                        break
-                except Exception:
-                    continue
+            # Resolving the user's interactive PATH spawns a login shell per
+            # candidate (``zsh -l`` / ``bash -l`` sources rc files), up to 5s
+            # each — blocking. Run it off the event loop so a connector test
+            # never freezes the server for other requests.
+            def _detect_shell_path(default: str) -> str:
+                for shell in ("zsh", "bash"):
+                    try:
+                        out = subprocess.check_output(
+                            [shell, "-l", "-c", "echo $PATH"],
+                            text=True,
+                            timeout=5,
+                            stderr=subprocess.DEVNULL,
+                        ).strip()
+                        lines = [line for line in out.splitlines() if line.strip()]
+                        if lines:
+                            return lines[-1]
+                    except Exception:
+                        continue
+                return default
+
+            shell_path_str: str = await asyncio.to_thread(
+                _detect_shell_path, os.environ.get("PATH", "")
+            )
 
             raw_command = view.command
             extra_args: list[str] = []
