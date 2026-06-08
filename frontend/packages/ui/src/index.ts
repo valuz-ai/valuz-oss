@@ -17,6 +17,7 @@ export * from "./components/common/PageLoader";
 export * from "./components/common/PermissionRequestDialog";
 export * from "./components/common/SearchInput";
 export * from "./components/common/StatusPill";
+export * from "./components/common/WindowDragRegion";
 export * from "./components/common/status-tone";
 export * from "./components/common/SuggestionList";
 export * from "./components/common/AppToaster";

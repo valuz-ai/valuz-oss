@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { MessageSquare, FolderOpen } from "lucide-react";
-import { Button } from "@valuz/ui";
+import { Button, WindowDragRegion } from "@valuz/ui";
 import { useTranslation } from "@valuz/core";
 import { markOnboarded } from "../lib/onboarding";
 
@@ -12,6 +12,7 @@ export const OnboardingPage = () => {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background">
+      <WindowDragRegion />
       <div className="w-full max-w-[460px] px-6">
         {/* Step 1: File parsing info */}
         {step === 1 && (

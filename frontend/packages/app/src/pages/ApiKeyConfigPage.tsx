@@ -10,6 +10,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  WindowDragRegion,
 } from "@valuz/ui";
 import { providersApi, type ProviderDescriptor } from "@valuz/core";
 import { useTranslation } from "@valuz/core";
@@ -162,6 +163,7 @@ export const ApiKeyConfigPage = () => {
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-background">
+      <WindowDragRegion />
       <div className="w-full max-w-[420px] px-6">
         <button
           type="button"
