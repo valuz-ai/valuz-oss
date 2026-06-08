@@ -41,11 +41,6 @@ export interface UseSessionAttachmentsResult {
 }
 
 const POLL_INTERVAL_MS = 1000;
-// After an attach, poll the server for this long even if local state shows
-// nothing parsing yet — bridges the window where a just-uploaded row hasn't
-// landed in local state (eager-create navigate/reset race) but already exists
-// server-side as ``parse_status="parsing"``.
-const POLL_GRACE_MS = 30_000;
 
 /**
  * Owns a session's attachment staging set: load-on-session-change, eager
@@ -125,57 +120,36 @@ export function useSessionAttachments(
     (a) => !a.consumed_at && a.parse_status === "parsing",
   );
 
-  // ``pollUntil`` is bumped on every attach so the server is polled for a grace
-  // window regardless of what local state currently shows (see POLL_GRACE_MS).
-  const [pollUntil, setPollUntil] = useState(0);
-
-  // Poll while ANY row is still parsing OR we're inside the post-attach grace
-  // window. The grace window is the fix for "the attachment only shows up after
-  // parsing finishes": the eager-create flow can drop the optimistic row (the
-  // navigate re-keys the hook and a stale/empty load lands), which left the
-  // poll un-triggered (it was gated purely on local parsing state) so nothing
-  // re-fetched during the parse. Polling the server here reliably surfaces the
-  // ``parsing`` row — which exists the instant the upload POST returns — and
-  // keeps the composer/panel progress live throughout the parse.
+  // Poll while ANY row is still parsing. The optimistic append (attachLocalFiles)
+  // puts the freshly-uploaded ``parsing`` row into local state, so this fires
+  // immediately on attach and keeps the composer/panel progress live until every
+  // row settles. (No grace-poll needed: the new-conversation composer stays on
+  // /conversation/new instead of navigating, so the optimistic row is never
+  // dropped by a navigate→bootstrap reset.)
   const anyParsing = attachments.some((a) => a.parse_status === "parsing");
   useEffect(() => {
-    if (!sessionId) return;
-    if (!anyParsing && Date.now() >= pollUntil) return;
+    if (!sessionId || !anyParsing) return;
     let cancelled = false;
-    let handle: ReturnType<typeof setInterval> | undefined;
-    const tick = () => {
+    const handle = setInterval(() => {
       sessionsApi
         .listAttachments(sessionId)
         .then((res) => {
-          if (cancelled) return;
-          mergeServer(res.items);
-          const stillParsing = res.items.some(
-            (a) => a.parse_status === "parsing",
-          );
-          // Stop once everything has settled AND the grace window has elapsed.
-          if (!stillParsing && Date.now() >= pollUntil) {
-            cancelled = true;
-            if (handle) clearInterval(handle);
-          }
+          if (!cancelled) mergeServer(res.items);
         })
         .catch(() => {
           /* transient — next tick retries */
         });
-    };
-    handle = setInterval(tick, POLL_INTERVAL_MS);
+    }, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
-      if (handle) clearInterval(handle);
+      clearInterval(handle);
     };
-  }, [sessionId, anyParsing, pollUntil, mergeServer]);
+  }, [sessionId, anyParsing, mergeServer]);
 
   const attachLocalFiles = useCallback(
     async (files: File[], ensureSession: EnsureSession) => {
       if (files.length === 0) return;
       const session = await ensureSession();
-      // Open the grace-poll window NOW so the parsing row surfaces even if the
-      // eager-create navigate drops the optimistic append below.
-      setPollUntil(Date.now() + POLL_GRACE_MS);
       for (const file of files) {
         try {
           const item = await sessionsApi.uploadAttachment(session.id, file);
@@ -194,7 +168,6 @@ export function useSessionAttachments(
     async (docIds: string[], ensureSession: EnsureSession) => {
       if (docIds.length === 0) return;
       const session = await ensureSession();
-      setPollUntil(Date.now() + POLL_GRACE_MS);
       await sessionsApi.addKbAttachments(session.id, docIds);
       // Re-read the full list (the KB endpoint returns pending-only); merge so
       // panel history + optimistic consume survive.
