@@ -48,7 +48,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import multiprocessing
     import os
+
+    # The document parser runs in a ``ProcessPoolExecutor`` (see
+    # ``infra/parse_pool``). Under a PyInstaller-frozen ``valuz-server`` the
+    # ``spawn`` start method re-launches this executable as a worker; without
+    # ``freeze_support`` the child would re-run the server (and the pool would
+    # never start). A no-op when not frozen, so it's safe to always call —
+    # and it must run before any pool is created.
+    multiprocessing.freeze_support()
 
     from valuz_agent.modules.system.service import (
         record_boot_started,

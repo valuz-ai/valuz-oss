@@ -31,6 +31,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await steps.start_mcp_session_managers(app)
     await steps.start_automation_runner(app)
     await steps.start_polling_scheduler()
+    steps.warm_parse_pool()
     await steps.start_skills(app)
     await steps.start_decision_aggregator(app)
     steps.mark_boot_complete()  # LAST
@@ -40,6 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── shutdown（逆序拆解）──
     await steps.stop_decision_aggregator(app)
     await steps.stop_automation_runner(app)
+    steps.shutdown_parse_pool()
     await steps.stop_polling_scheduler()
     await steps.stop_mcp_session_managers(app)
     await steps.shutdown_kernel()

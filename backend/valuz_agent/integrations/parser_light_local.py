@@ -81,10 +81,40 @@ def _build_rapidocr(rapidocr_cls: Any) -> Any:
     return rapidocr_cls()
 
 
+def _light_local_parse_worker(file_path: str, options: ParseOptions | None = None) -> ParseResult:
+    """Picklable entry executed inside the parse process pool.
+
+    Runs the *inline* implementation (``_parse_sync_impl``) — NOT the public
+    ``parse_sync`` wrapper, which would recursively try to offload and
+    deadlock. Constructs a fresh stateless ``LightLocalParser`` in the worker.
+    """
+    return LightLocalParser()._parse_sync_impl(file_path, options)
+
+
 class LightLocalParser:
-    """Personal baseline: in-process parser using PyMuPDF4LLM + MarkItDown + RapidOCR."""
+    """Personal baseline: in-process parser using PyMuPDF4LLM + MarkItDown + RapidOCR.
+
+    The heavy backends (pymupdf4llm / markitdown) do their work in pure Python
+    and hold the GIL, so both entry points offload to a **separate process**
+    via :mod:`valuz_agent.infra.parse_pool` — otherwise a ``to_thread`` worker
+    (conversation-attachment parse) or the docs-reindex daemon thread would
+    starve the single-threaded event loop through GIL contention. See the
+    ``parse_pool`` module docstring for the measured loop-stall numbers.
+    """
 
     def parse_sync(self, file_path: str, options: ParseOptions | None = None) -> ParseResult:
+        """Sync entry. Offloads the GIL-bound parse to a worker process,
+        blocking the CALLING THREAD (never the event loop) on the result.
+
+        Must only be called from a worker thread / true-sync context — the
+        router invokes it from a ``to_thread`` worker (attachments) and from
+        the docs-reindex daemon thread. NEVER call it on the event loop.
+        """
+        from valuz_agent.infra import parse_pool
+
+        return parse_pool.run_parse_blocking(_light_local_parse_worker, file_path, options)
+
+    def _parse_sync_impl(self, file_path: str, options: ParseOptions | None = None) -> ParseResult:
         p = Path(file_path)
         ext = p.suffix.lower()
 
@@ -116,7 +146,13 @@ class LightLocalParser:
         return ParseResult(markdown=md, page_count=1, metadata={"engine": "plain_text"})
 
     async def parse(self, file_path: str, options: ParseOptions | None = None) -> ParseResult:
-        return self.parse_sync(file_path, options)
+        # Await the parse in a worker PROCESS so the GIL-bound work can't block
+        # this loop. Reached on the main loop via the router's
+        # ``_runtime_fallback_async`` (cloud plugin threw → demote to local), so
+        # a plain ``self.parse_sync(...)`` here would freeze the server.
+        from valuz_agent.infra import parse_pool
+
+        return await parse_pool.run_parse_async(_light_local_parse_worker, file_path, options)
 
     async def health_check(self) -> bool:
         return True
