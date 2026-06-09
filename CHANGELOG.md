@@ -35,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Packaged app: onboarding's "enter example project" failed with a 500 because the frozen
+  backend couldn't locate its i18n locale catalogs (raised "Cannot locate repo root"). The
+  catalogs are now bundled and loaded from the bundle. (#39 @St0neWan9)
+- Packaged app: the loader logo now renders, using a relative logo path. (2d97163 @St0neWan9)
+- Windows release build: install pip-licenses into the backend venv instead of a flaky
+  ephemeral overlay, fixing the third-party-notices step that aborted the build. (#38 @St0neWan9)
 - Onboarding and startup screens are now draggable on the frameless desktop window. (#24 @St0neWan9)
 - Offload local document parsing to a separate process so it no longer blocks the event
   loop; further event-loop and attachment-display follow-ups. (#27, #21 @Ready22Race)
