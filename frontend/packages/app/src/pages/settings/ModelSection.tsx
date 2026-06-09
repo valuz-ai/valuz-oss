@@ -9,6 +9,7 @@ import {
   Trash2,
 } from "lucide-react";
 import type { ProviderOption } from "@valuz/ui";
+import { modelLabel } from "@valuz/shared";
 import {
   Badge,
   Button,
@@ -433,7 +434,7 @@ export const ModelSection = () => {
                       modelId: m,
                       itemLabel:
                         labeled ||
-                        m ||
+                        modelLabel(m) ||
                         t(
                           "settings.model.followSubscription" as Parameters<
                             typeof t
@@ -520,11 +521,6 @@ export const ModelSection = () => {
                               )}
                         </div>
                       </div>
-                      {selectedOption && (
-                        <span className="shrink-0 truncate text-2xs text-ink-meta">
-                          {selectedOption.providerName}
-                        </span>
-                      )}
                       <Select
                         value={selectedOption ? selectedKey : ""}
                         onValueChange={(v) => {
