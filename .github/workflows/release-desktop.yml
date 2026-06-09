@@ -360,6 +360,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VALUZ_VERSION: ${{ needs.set-version.outputs.version }}
+          # uv's wheel install for the third-party-notices scan kept failing on
+          # this runner with "os error 3" against the 8.3 short path
+          # C:\Users\RUNNER~1\AppData\Local\Temp\… . Point uv's temp + cache at
+          # the runner work-drive temp (a clean full path, no 8.3 alias) and
+          # copy instead of hardlink (cache and venv can be on different drives).
+          UV_LINK_MODE: copy
+          UV_CACHE_DIR: ${{ runner.temp }}\uv-cache
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         shell: bash
         run: |
           bash scripts/build-desktop.sh --publish=always
