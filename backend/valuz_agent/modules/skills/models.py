@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import BigInteger, Boolean, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin
+from valuz_agent.infra.database import Base, OwnedMixin, PrimaryKeyMixin, TimestampMixin
 from valuz_agent.infra.time_utils import now_ms
 
 # ---------------------------------------------------------------------------
@@ -12,7 +12,7 @@ from valuz_agent.infra.time_utils import now_ms
 # ---------------------------------------------------------------------------
 
 
-class SkillIndexRow(Base, PrimaryKeyMixin, TimestampMixin):
+class SkillIndexRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     __tablename__ = "valuz_skill_index"
 
     slug: Mapped[str] = mapped_column(String(256))
@@ -55,7 +55,7 @@ class SkillIndexRow(Base, PrimaryKeyMixin, TimestampMixin):
     deletable: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
-class ProjectSkillConfigRow(Base):
+class ProjectSkillConfigRow(Base, OwnedMixin):
     __tablename__ = "valuz_project_skill_config"
 
     workspace_id: Mapped[str] = mapped_column(String(36), primary_key=True)

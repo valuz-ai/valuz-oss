@@ -82,6 +82,17 @@ class Settings(BaseSettings):
     def secrets_dir(self) -> Path:
         return self.data_dir / "secrets"
 
+    # ── Installation identity ────────────────────────────────────────
+    # Where the locally-generated owner id (int32) is persisted. Lives
+    # OUTSIDE the business tables so a DB clean-up rebuild never loses it
+    # (see ``infra.local_identity.resolve_local_user_id``). Assigned once
+    # on first install from a device fingerprint and stable thereafter.
+    installation_filename: str = "installation.json"
+
+    @property
+    def installation_file(self) -> Path:
+        return self.data_dir / self.installation_filename
+
     # ── Logging paths ────────────────────────────────────────────────
     # ``infra.logging.configure_logging`` writes structured JSON lines
     # to ``log_file`` via a RotatingFileHandler so the desktop ``服务``

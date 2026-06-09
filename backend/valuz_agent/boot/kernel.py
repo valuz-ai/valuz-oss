@@ -129,6 +129,10 @@ def drop_stale_kernel_tables(engine: Engine | None = None) -> None:
             ("sessions", "permission_mode"),  # post-1aae940 / approval v1
             ("sessions", "mode"),  # post-cb25177 / session-modes (4b2490e2b9c4
             # inserted MID-CHAIN: a DB stamped at the old tail won't backfill)
+            ("sessions", "user_id"),  # ownership cutover: every kernel table
+            # gained a required user_id via a regenerated baseline (no ALTER),
+            # so a pre-cutover DB must be wiped + rebuilt — see the host
+            # counterpart boot.schema.drop_stale_host_tables.
         ]
         for table, col in kernel_column_fingerprints:
             if table in existing and not _has_col(table, col):
@@ -173,8 +177,9 @@ def drop_stale_kernel_tables(engine: Engine | None = None) -> None:
 def _do_alembic_upgrade() -> None:
     _set_kernel_env()
 
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     cfg = Config(str(KERNEL_ALEMBIC_INI))
     cfg.set_main_option("script_location", str(KERNEL_ALEMBIC_DIR))
@@ -234,6 +239,17 @@ async def init_kernel_dependencies() -> None:
     from app.dependencies import init_dependencies
 
     await init_dependencies(AppConfig())
+
+    # Seed the kernel-side owner id so every projects/agents/sessions/messages/
+    # events row is stamped with the local install owner (OSS). A ContextVar set
+    # on the host thread would not cross into the kernel's own event loop/thread,
+    # so we seed the module-level default (thread-independent); the commercial
+    # overlay refines per-request. Mirrors the host's owner_context default seed.
+    from src.core.owner_context import set_default_owner  # type: ignore[import-not-found]
+
+    from valuz_agent.infra.local_identity import resolve_local_user_id
+
+    set_default_owner(resolve_local_user_id())
 
     # The kernel's engine factory (kernel/src/adapters/sqlalchemy_store/engine.py)
     # sets journal_mode=WAL but NOT busy_timeout, so kernel connections run with

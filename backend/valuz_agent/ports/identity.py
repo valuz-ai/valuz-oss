@@ -13,6 +13,9 @@ from typing import Any, Protocol
 
 @dataclass
 class UserIdentity:
+    # The owner id. Stamped on every business row's ``user_id`` column and
+    # consumed by billing / events / RuntimeContext. OSS → the device-derived
+    # local install id; commercial → the logged-in user's id.
     user_id: str
     email: str | None = None
     display_name: str | None = None

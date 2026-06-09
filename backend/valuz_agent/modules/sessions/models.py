@@ -1,10 +1,10 @@
 from sqlalchemy import BigInteger, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin
+from valuz_agent.infra.database import Base, OwnedMixin, PrimaryKeyMixin, TimestampMixin
 
 
-class SessionAttachmentRow(Base, PrimaryKeyMixin, TimestampMixin):
+class SessionAttachmentRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     __tablename__ = "valuz_session_attachment"
 
     session_id: Mapped[str] = mapped_column(String(36), index=True)

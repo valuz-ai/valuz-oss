@@ -253,6 +253,12 @@ def test_build_member_session_injects_skill_scoping(
     monkeypatch.setattr(
         agent_resolver.kernel_store, "load_agent", _as_async(lambda _id: fake_agent)
     )
+    # Hermetic: don't resolve skill slugs against the real skill-index DB — this
+    # test only asserts the prompt-scoping block (built from the agent's own
+    # ``skills`` list), not the materialised paths.
+    monkeypatch.setattr(
+        agent_resolver, "resolve_skill_slugs_to_paths", _as_async(lambda *a, **k: [])
+    )
 
     session = asyncio.run(
         agent_resolver.build_member_session(

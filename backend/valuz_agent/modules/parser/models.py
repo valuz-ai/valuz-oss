@@ -26,10 +26,10 @@ from __future__ import annotations
 from sqlalchemy import BigInteger, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from valuz_agent.infra.database import Base
+from valuz_agent.infra.database import Base, OwnedMixin
 
 
-class SetupJobRow(Base):
+class SetupJobRow(Base, OwnedMixin):
     """Persistent state for a one-time setup operation (model download,
     license acceptance gate, etc.)."""
 
@@ -65,7 +65,7 @@ class SetupJobRow(Base):
     updated_at: Mapped[int] = mapped_column(BigInteger)
 
 
-class PollingTaskRow(Base):
+class PollingTaskRow(Base, OwnedMixin):
     """Persistent state for one remote async parse task."""
 
     __tablename__ = "valuz_polling_task"

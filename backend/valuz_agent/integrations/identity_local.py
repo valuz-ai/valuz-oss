@@ -8,14 +8,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from valuz_agent.ports.identity import ANONYMOUS, UserIdentity
+from valuz_agent.infra.local_identity import resolve_local_user_id
+from valuz_agent.ports.identity import UserIdentity
 
 
 class LocalIdentityResolver:
-    """All requests map to the single local user."""
+    """All requests map to the single local user.
+
+    ``user_id`` is the device-derived install id that lands in every row's
+    ``user_id`` column (see ``infra.local_identity``).
+    """
 
     def resolve(self, request: Any) -> UserIdentity:
-        return ANONYMOUS
+        return UserIdentity(user_id=resolve_local_user_id())
 
 
 __all__ = ["LocalIdentityResolver"]

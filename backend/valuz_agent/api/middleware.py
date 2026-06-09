@@ -10,8 +10,34 @@ from valuz_agent.infra.logging import (
     reset_request_id,
     set_request_id,
 )
+from valuz_agent.infra.owner_context import (
+    reset_current_user_id,
+    set_current_user_id,
+)
 
 logger = logging.getLogger("valuz_agent.api.access")
+
+
+class OwnerContextMiddleware(BaseHTTPMiddleware):
+    """Stamp the request's owner id into the ``current_user_id`` ContextVar.
+
+    Resolves the request's ``UserIdentity`` (OSS → the local install id;
+    commercial overlay → the logged-in user via ``set_identity_resolver``) and
+    publishes its ``user_id`` so every row created while handling the request is
+    stamped with that owner (see ``infra.owner_context``). Outside a request the
+    ContextVar default applies, so background work still stamps a real owner.
+    """
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        # Lazy import: ``api.deps`` pulls in the whole service graph, so we keep
+        # it out of module import order.
+        from valuz_agent.api.deps import get_current_user
+
+        token = set_current_user_id(get_current_user(request).user_id)
+        try:
+            return await call_next(request)
+        finally:
+            reset_current_user_id(token)
 
 
 class ErrorHandlerMiddleware(BaseHTTPMiddleware):

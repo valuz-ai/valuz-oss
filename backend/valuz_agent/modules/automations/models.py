@@ -21,10 +21,10 @@ but the DB guard is the last-line defence against direct-insert bugs.
 from sqlalchemy import BigInteger, CheckConstraint, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin
+from valuz_agent.infra.database import Base, OwnedMixin, PrimaryKeyMixin, TimestampMixin
 
 
-class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin):
+class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     __tablename__ = "valuz_automation"
     __table_args__ = (
         CheckConstraint(
@@ -90,7 +90,7 @@ class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin):
     last_run_at: Mapped[int | None] = mapped_column(BigInteger)
 
 
-class AutomationRunRow(Base, PrimaryKeyMixin):
+class AutomationRunRow(Base, PrimaryKeyMixin, OwnedMixin):
     __tablename__ = "valuz_automation_run"
 
     automation_id: Mapped[str] = mapped_column(String(36), index=True)
