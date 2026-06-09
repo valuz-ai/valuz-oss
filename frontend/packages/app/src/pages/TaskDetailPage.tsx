@@ -11,7 +11,6 @@ import {
   ArrowLeft,
   CheckCheck,
   CheckCircle2,
-  ChevronDown,
   ChevronRight,
   FileText,
   Flag,
@@ -806,20 +805,20 @@ export const TaskDetailPage = () => {
           artifacts came with it — without that, the long body looks
           like a magic blob of text. */}
         {task.status === "completed" && completionInfo && (
-          <section className="mt-3 w-full rounded-xl border border-[#e6e7e9] bg-[#f7f7f8] px-4 py-3">
+          <section className="mt-5 w-full">
             {/* Header: title + provenance metadata on the same row (who /
               when), matching the prototype's "✓ 交付结果 PM (lead) · 时间". */}
-            <div className="-mx-4 mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-[#e6e7e9] px-4 pb-3">
-              <CheckCheck className="h-4 w-4 text-[#725cf9]" />
-              <span className="text-xs font-semibold text-[#725cf9]">
+            <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <CheckCheck className="h-3.5 w-3.5 text-[#6b63e8]" />
+              <span className="text-sm font-semibold text-[#131313]">
                 {t("task.deliverableTitle" as Parameters<typeof t>[0])}
               </span>
               {leadAgentName && (
-                <span className="text-xs font-medium text-ink-meta">
+                <span className="text-sm font-medium text-[#9aa3b2]">
                   {leadAgentName}
                 </span>
               )}
-              <span className="ml-auto text-2xs tabular-nums text-ink-meta">
+              <span className="ml-auto text-sm tabular-nums text-[#9aa3b2]">
                 {formatEventTime(completionInfo.completedAt)}
               </span>
             </div>
@@ -829,78 +828,92 @@ export const TaskDetailPage = () => {
               the lead passed to ``finish_task(artifacts=…)``; we only
               show the basename so long workspace-relative paths don't
               dominate the row. */}
-            {completionInfo.artifacts.length > 0 && (
-              // ``max-h-[240px] overflow-y-auto`` caps the artifact list
-              // so a 30-file deliverable doesn't push the summary
-              // accordion off-screen; the user scrolls inside the list
-              // instead of scrolling the whole page.
-              <ul className="-mx-2 mb-3 flex max-h-[240px] flex-col gap-2 overflow-y-auto pr-1">
-                {completionInfo.artifacts.map((path) => {
-                  const basename = path.split(/[\\/]/).pop() || path;
-                  const absolute = resolveArtifactPath(path, rootPath);
-                  return (
-                    <li key={path}>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void openArtifact(absolute, t as Translator)
-                        }
-                        title={t(
-                          "task.artifactOpenInFinder" as Parameters<
-                            typeof t
-                          >[0],
+            <div className="overflow-hidden rounded-[8px] border border-[#e6e7e9] bg-white">
+              {completionInfo.artifacts.length > 0 && (
+                // ``max-h-[240px] overflow-y-auto`` caps the artifact list
+                // so a 30-file deliverable doesn't push the summary
+                // accordion off-screen; the user scrolls inside the list
+                // instead of scrolling the whole page.
+                <ul className="flex max-h-[280px] flex-col overflow-y-auto">
+                  {completionInfo.artifacts.map((path, index) => {
+                    const basename = path.split(/[\\/]/).pop() || path;
+                    const absolute = resolveArtifactPath(path, rootPath);
+                    return (
+                      <li
+                        key={path}
+                        className={cn(
+                          index < completionInfo.artifacts.length - 1 &&
+                            "border-b border-[#f3f4f6]",
                         )}
-                        className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[#eeeff1]"
                       >
-                        <span
-                          className={cn(
-                            "flex h-7 w-7 shrink-0 items-center justify-center rounded-[7px]",
-                            artifactIconBgClassName(basename),
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void openArtifact(absolute, t as Translator)
+                          }
+                          title={t(
+                            "task.artifactOpenInFinder" as Parameters<
+                              typeof t
+                            >[0],
                           )}
+                          className="group flex h-[54px] w-full items-center gap-3 px-3 text-left transition-colors hover:bg-[#fafbfd]"
                         >
-                          <FileText
-                            className={cn(
-                              "h-4 w-4",
-                              artifactIconClassName(basename),
-                            )}
-                          />
-                        </span>
-                        <div className="flex min-w-0 flex-1 flex-col">
                           <span
-                            className="truncate text-xs font-medium text-ink-heading"
-                            title={absolute}
+                            className={cn(
+                              "flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px]",
+                              artifactIconBgClassName(basename),
+                            )}
                           >
-                            {basename}
+                            <FileText
+                              className={cn(
+                                "h-4 w-4",
+                                artifactIconClassName(basename),
+                              )}
+                            />
                           </span>
-                          {leadAgentName && (
-                            <span className="text-2xs text-ink-meta">
-                              {t("task.artifactBy" as Parameters<typeof t>[0], {
-                                agent: leadAgentName,
-                              })}
+                          <div className="flex min-w-0 flex-1 flex-col justify-center">
+                            <span
+                              className="truncate text-[13px] font-semibold leading-5 text-[#1f2937]"
+                              title={absolute}
+                            >
+                              {basename}
                             </span>
-                          )}
-                        </div>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+                            {leadAgentName && (
+                              <span className="relative -top-0.5 text-[11px] leading-4 text-[#9aa3b2]">
+                                {t(
+                                  "task.artifactBy" as Parameters<typeof t>[0],
+                                  {
+                                    agent: leadAgentName,
+                                  },
+                                )}
+                              </span>
+                            )}
+                          </div>
+                          <ChevronRight className="h-4 w-4 shrink-0 text-[#c4cad4] transition-transform group-hover:translate-x-0.5" />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
 
-            {/* Summary accordion (bottom half). ``<details open>`` keeps
-              it expanded by default — long-form lead summary is the
-              actual deliverable for tasks without file artifacts. */}
-            <details className="-mx-2 group/d border-t border-[#e6e7e9] pt-3" open>
-              <summary className="flex cursor-pointer items-center gap-2 rounded-md px-3 py-1 text-xs font-medium text-[#131313]">
-                <ChevronDown className="h-3.5 w-3.5 transition-transform group-open/d:rotate-0 -rotate-90" />
-                <span>
-                  {t("task.completionSummary" as Parameters<typeof t>[0])}
-                </span>
-              </summary>
-              <div className="mt-2 whitespace-pre-wrap px-3 py-2.5 text-[12px] leading-6 text-ink-body">
-                {completionInfo.summary}
-              </div>
-            </details>
+              <details
+                className={cn(
+                  "group/d overflow-hidden bg-white",
+                  completionInfo.artifacts.length > 0 && "border-t border-[#f3f4f6]",
+                )}
+              >
+                <summary className="flex h-12 cursor-pointer items-center gap-3 px-3 text-left list-none [&::-webkit-details-marker]:hidden">
+                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[#98a1b2] transition-transform group-open/d:rotate-90" />
+                  <span className="min-w-0 flex-1 text-[13px] font-semibold leading-5 text-[#131313]">
+                    {t("task.completionSummary" as Parameters<typeof t>[0])}
+                  </span>
+                </summary>
+                <div className="whitespace-pre-wrap px-3 pb-3 pt-0 text-[12px] leading-6 text-ink-body">
+                  {completionInfo.summary}
+                </div>
+              </details>
+            </div>
           </section>
         )}
 
@@ -944,10 +957,13 @@ export const TaskDetailPage = () => {
           dispatched X → X returned Y" as a unit instead of two
           unrelated rows. Everything else stays a top-level node on
           the rail. */}
-        <section className="mt-6 w-full">
-          <h2 className="mb-4 text-[14px] font-semibold text-[#131313]">
-            {t("task.eventsTitle")}
-          </h2>
+        <section className="mt-5 w-full">
+          <div className="mb-3 flex items-center gap-2">
+            <ListTodo className="h-3.5 w-3.5 text-[#6b63e8]" />
+            <h2 className="text-[14px] font-semibold text-[#131313]">
+              {t("task.eventsTitle")}
+            </h2>
+          </div>
           {events.length === 0 ? (
             <p className="text-xs text-ink-meta">{t("task.noEvents")}</p>
           ) : (
