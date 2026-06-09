@@ -345,6 +345,25 @@ async def stop_polling_scheduler() -> None:
     await _polling_scheduler().shutdown()
 
 
+def warm_parse_pool() -> None:
+    """Pre-spawn the document-parser worker processes. Local parses
+    (pymupdf4llm / markitdown) run in a separate process so their GIL-bound
+    work can't stall the event loop; warming here pays the spawn + import cost
+    at boot instead of on the first upload. Best-effort, never fatal."""
+    from valuz_agent.infra import parse_pool
+
+    try:
+        parse_pool.warm()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def shutdown_parse_pool() -> None:
+    from valuz_agent.infra import parse_pool
+
+    parse_pool.shutdown()
+
+
 async def start_skills(app: FastAPI) -> None:
     # Sync bundled official skills (e.g. skill-creator, valuz-handbook) into
     # the user's official-skills directory before scanning, so they appear
