@@ -126,6 +126,11 @@ a = Analysis(
         # Alembic chains, moved out of the package trees to backend/alembic/
         # {host,kernel}; boot resolves them relative to backend/ (= _internal/).
         (str(HERE / "alembic"), "alembic"),
+        # Shared i18n locale catalogs (repo-root i18n/locales/, one level above
+        # backend/). The backend's t() loads these at runtime; without bundling
+        # them, any server-side t() in the packaged app raised "Cannot locate
+        # repo root" (i18n._locales_dir reads them from _internal/i18n/locales).
+        (str(HERE.parent / "i18n" / "locales"), "i18n/locales"),
     ],
     hiddenimports=[
         # Third-party dependencies — all submodules auto-collected

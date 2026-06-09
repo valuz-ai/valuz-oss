@@ -24,6 +24,7 @@ configured language.
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -55,6 +56,21 @@ def _repo_root() -> Path:
     raise RuntimeError("Cannot locate repo root")
 
 
+def _locales_dir() -> Path:
+    """Locate the shared i18n locale catalogs (``i18n/locales/*.json``).
+
+    Under a PyInstaller-frozen ``valuz-server`` there is no source repo to walk
+    up to: the catalogs are bundled under ``_internal/i18n/locales`` (see
+    ``backend/scripts/valuz_agent.spec`` ``datas``), and ``sys._MEIPASS`` points
+    at that ``_internal`` dir. In a dev checkout, resolve relative to the repo
+    root. Without this, any backend ``t()`` in the packaged app raised
+    ``Cannot locate repo root`` and 500'd (e.g. onboarding's example project).
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / "i18n" / "locales"  # type: ignore[attr-defined]
+    return _repo_root() / "i18n" / "locales"
+
+
 def _flatten(obj: object, prefix: str = "") -> dict[str, str]:
     result: dict[str, str] = {}
     if not isinstance(obj, dict):
@@ -71,8 +87,7 @@ def _flatten(obj: object, prefix: str = "") -> dict[str, str]:
 def _load(locale: str) -> dict[str, str]:
     if locale in _loaded:
         return _loaded[locale]
-    root = _repo_root()
-    path = root / "i18n" / "locales" / f"{locale}.json"
+    path = _locales_dir() / f"{locale}.json"
     if not path.is_file():
         # Unknown locale → empty table; resolution will fall back to
         # ``_FALLBACK_LOCALE`` and then to the key itself.
