@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Settings → Model: show friendly model display names (e.g. "Sonnet 4.6") in the
+  default-model picker and drop the redundant provider label beside it. (#43 @St0neWan9)
 - Unified model and reasoning-effort dropdowns; pin the Valuz Assistant (小助手) to the
   top of the new-conversation agent list. (#25 @St0neWan9)
 - Hardened GitHub skill import: bare/slash repo URLs, multi-select import, caps,
@@ -35,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Packaged app: connector OAuth callback now targets the sidecar's actual port instead of a
+  hardcoded :8000, fixing the ERR_CONNECTION_REFUSED on the redirect. (#42 @St0neWan9)
 - Packaged app: onboarding's "enter example project" failed with a 500 because the frozen
   backend couldn't locate its i18n locale catalogs (raised "Cannot locate repo root"). The
   catalogs are now bundled and loaded from the bundle. (#39 @St0neWan9)
