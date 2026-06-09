@@ -151,6 +151,13 @@ export const startSidecar = async (
     VALUZ_DATA_DIR: path.join(homedir(), ".valuz", "app"),
   };
 
+  // The backend builds its public callback URLs (notably the connector OAuth
+  // redirect_uri) from VALUZ_BACKEND_BASE_URL, which defaults to :8000. The
+  // sidecar listens on ``port`` (19100 by default), so without this the OAuth
+  // redirect points at a dead :8000 and the browser callback is refused. Pin
+  // the base URL to the actual port the sidecar is bound to.
+  env.VALUZ_BACKEND_BASE_URL = `http://127.0.0.1:${port}`;
+
   // Point the backend's docs_embedded._detect_rg() at the bundled binary.
   // It already honours VALUZ_RG_PATH ahead of bundled / PATH lookup.
   const rgBinary = resolveRgBinary();
