@@ -16,10 +16,10 @@ from __future__ import annotations
 from sqlalchemy import JSON, Boolean, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin
+from valuz_agent.infra.database import Base, OwnedMixin, PrimaryKeyMixin, TimestampMixin
 
 
-class AgentRow(Base, PrimaryKeyMixin, TimestampMixin):
+class AgentRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     """Stateless Agent — blueprint layer, global + official-only for MVP."""
 
     __tablename__ = "valuz_agent"
@@ -61,7 +61,7 @@ class AgentRow(Base, PrimaryKeyMixin, TimestampMixin):
     kernel_agent_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
 
-class ProjectMemberRow(Base, PrimaryKeyMixin, TimestampMixin):
+class ProjectMemberRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     """Per-workspace agent membership row — maps a slug handle to a kernel agent."""
 
     __tablename__ = "valuz_project_member"

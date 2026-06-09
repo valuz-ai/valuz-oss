@@ -2,10 +2,10 @@ from pydantic import BaseModel
 from sqlalchemy import BigInteger, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin
+from valuz_agent.infra.database import Base, OwnedMixin, PrimaryKeyMixin, TimestampMixin
 
 
-class WorkspaceRow(Base, PrimaryKeyMixin, TimestampMixin):
+class WorkspaceRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     __tablename__ = "valuz_workspace"
 
     name: Mapped[str] = mapped_column(String(256))
@@ -15,7 +15,7 @@ class WorkspaceRow(Base, PrimaryKeyMixin, TimestampMixin):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
 
-class WorkspaceContextRow(Base):
+class WorkspaceContextRow(Base, OwnedMixin):
     __tablename__ = "valuz_workspace_context"
 
     workspace_id: Mapped[str] = mapped_column(String(36), primary_key=True)

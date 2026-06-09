@@ -81,7 +81,8 @@ def test_should_leave_modern_schema_alone_when_events_already_has_message_id(tmp
     - ``messages`` table present (V5+messages)
     - ``sessions.runtime_provider`` (V5+d5f2238)
     - ``sessions.permission_mode`` (V5+1aae940 — approval contract)
-    All five fingerprints must pass simultaneously for a no-op outcome.
+    - ``sessions.user_id`` (ownership cutover)
+    All fingerprints must pass simultaneously for a no-op outcome.
     """
     db_url = f"sqlite:///{tmp_path / 'modern.db'}"
     engine = create_engine(db_url)
@@ -92,7 +93,8 @@ def test_should_leave_modern_schema_alone_when_events_already_has_message_id(tmp
         conn.execute(
             text(
                 "CREATE TABLE sessions (id TEXT PRIMARY KEY, model_provider TEXT, "
-                "todos TEXT, runtime_provider TEXT, permission_mode TEXT, mode TEXT)"
+                "todos TEXT, runtime_provider TEXT, permission_mode TEXT, mode TEXT, "
+                "user_id TEXT)"
             )
         )
         conn.execute(

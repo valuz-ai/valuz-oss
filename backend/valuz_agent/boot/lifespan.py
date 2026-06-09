@@ -17,6 +17,7 @@ from valuz_agent.boot import steps
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── startup（顺序 load-bearing，注释分组）──
     steps.configure_structured_logging()  # FIRST
+    steps.ensure_local_identity()  # seed owner ctx before any insert
     steps.acquire_single_writer_lock()
     await steps.bootstrap_schema()
     await steps.configure_i18n()

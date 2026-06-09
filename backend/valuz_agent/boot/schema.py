@@ -14,6 +14,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlalchemy import Engine
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +28,68 @@ _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_DIR = _BACKEND_ROOT / "alembic" / "host"
 ALEMBIC_INI = ALEMBIC_DIR / "alembic.ini"
 VERSION_TABLE = "alembic_version_host"
+
+# Marker table whose ``user_id`` column signals a post-ownership host schema.
+# Its ABSENCE on an otherwise-populated host DB identifies a pre-``user_id``
+# install that must be wiped + rebuilt (see ``drop_stale_host_tables``).
+_OWNERSHIP_MARKER_TABLE = "valuz_provider"
+_OWNERSHIP_MARKER_COLUMN = "user_id"
+
+
+def drop_stale_host_tables(engine: Engine | None = None) -> None:
+    """Clean-up probe for the ``user_id`` ownership cutover — host counterpart
+    to ``boot.kernel.drop_stale_kernel_tables``.
+
+    Per dev-stage policy (no data preservation), the ``user_id`` column was
+    added by **regenerating** the host baseline rather than shipping an ALTER
+    migration. A host DB created before the cutover therefore has the old
+    column-less tables and an ``alembic_version_host`` stamp that already points
+    at the head — so a plain ``upgrade head`` would be a no-op and the column
+    would never appear.
+
+    This probe detects that fingerprint (the marker table exists but lacks
+    ``user_id``) and drops every ``valuz_*`` table plus the
+    ``alembic_version_host`` stamp, so the following ``run_host_migrations``
+    rebuilds the whole host schema from the baseline.
+
+    No-op on a fresh install (marker table absent) and on an already-migrated DB
+    (marker column present). Runs synchronously off the event loop — it owns no
+    session and reads no business data, like the kernel probe.
+    """
+    from sqlalchemy import create_engine, inspect, text
+
+    from valuz_agent.infra.config import settings
+
+    owns_engine = engine is None
+    if engine is None:
+        engine = create_engine(settings.db_url)
+    try:
+        inspector = inspect(engine)
+        existing = set(inspector.get_table_names())
+
+        if _OWNERSHIP_MARKER_TABLE not in existing:
+            return  # fresh install — nothing to wipe
+        marker_cols = {c["name"] for c in inspector.get_columns(_OWNERSHIP_MARKER_TABLE)}
+        if _OWNERSHIP_MARKER_COLUMN in marker_cols:
+            return  # already on the post-ownership schema
+
+        stale = sorted(t for t in existing if t.startswith("valuz_"))
+        if VERSION_TABLE in existing:
+            stale.append(VERSION_TABLE)
+
+        logger.warning(
+            "Pre-user_id host schema detected (%s lacks %s) — dropping %d host "
+            "table(s) for a fresh baseline rebuild",
+            _OWNERSHIP_MARKER_TABLE,
+            _OWNERSHIP_MARKER_COLUMN,
+            len(stale),
+        )
+        with engine.begin() as conn:
+            for table in stale:
+                conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
+    finally:
+        if owns_engine:
+            engine.dispose()
 
 
 def run_host_migrations() -> None:
@@ -44,8 +110,14 @@ def run_host_migrations() -> None:
     db_url = settings.db_url_async
 
     def _do() -> None:
-        from alembic import command
         from alembic.config import Config
+
+        from alembic import command
+
+        # Wipe a pre-``user_id`` host schema before upgrading so the regenerated
+        # baseline rebuilds clean (runs here, off the event loop, in the same
+        # dedicated thread as the upgrade).
+        drop_stale_host_tables()
 
         cfg = Config(str(ALEMBIC_INI))
         cfg.set_main_option("script_location", str(ALEMBIC_DIR))
@@ -75,4 +147,4 @@ def run_host_migrations() -> None:
         raise error[0]
 
 
-__all__ = ["run_host_migrations", "VERSION_TABLE"]
+__all__ = ["run_host_migrations", "drop_stale_host_tables", "VERSION_TABLE"]

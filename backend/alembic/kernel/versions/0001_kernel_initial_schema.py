@@ -1,8 +1,15 @@
 """kernel initial schema
 
+Every kernel table (projects/agents/sessions/messages/events) carries a required
+``user_id`` (owner id) plus a matching ``ix_<table>_user_id`` index, stamped from
+``src.core.owner_context`` (host-seeded at boot). Regenerated as the single
+baseline; existing kernel DBs are wiped + rebuilt by
+``boot.kernel.drop_stale_kernel_tables`` (``user_id`` fingerprint) per the
+dev-stage no-data-preservation policy.
+
 Revision ID: 0001
 Revises:
-Create Date: 2026-06-05 00:19:55.818008
+Create Date: 2026-06-09 02:53:14.558789
 
 """
 
@@ -24,19 +31,16 @@ def upgrade() -> None:
     op.create_table(
         "agents",
         sa.Column("id", sa.String(length=36), nullable=False),
+        sa.Column("user_id", sa.String(length=64), nullable=False),
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("model", sa.String(length=100), nullable=False),
-        sa.Column(
-            "runtime_provider", sa.String(length=20), nullable=False, server_default="claude_agent"
-        ),
+        sa.Column("runtime_provider", sa.String(length=20), nullable=False),
         sa.Column("instructions", sa.Text(), nullable=False),
         sa.Column("tools", sa.JSON(), nullable=False),
         sa.Column("callable_agents", sa.JSON(), nullable=False),
         sa.Column("skills", sa.JSON(), nullable=False),
         sa.Column("mcp_servers", sa.JSON(), nullable=False),
-        sa.Column(
-            "permission_mode", sa.String(length=20), nullable=False, server_default="full_access"
-        ),
+        sa.Column("permission_mode", sa.String(length=20), nullable=False),
         sa.Column("max_turns", sa.Integer(), nullable=False),
         sa.Column("max_cost_usd", sa.Float(), nullable=False),
         sa.Column("effort", sa.String(length=10), nullable=True),
@@ -49,19 +53,17 @@ def upgrade() -> None:
             name="ck_agents_permission_mode",
         ),
         sa.CheckConstraint("status IN ('active', 'deleted')", name="ck_agents_status"),
-        sa.CheckConstraint(
-            "runtime_provider IN ('claude_agent', 'codex', 'deepagents')",
-            name="ck_agents_runtime_provider",
-        ),
         sa.PrimaryKeyConstraint("id"),
     )
     with op.batch_alter_table("agents", schema=None) as batch_op:
         batch_op.create_index("ix_agents_created_at", ["created_at"], unique=False)
         batch_op.create_index("ix_agents_status", ["status"], unique=False)
+        batch_op.create_index(batch_op.f("ix_agents_user_id"), ["user_id"], unique=False)
 
     op.create_table(
         "events",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("user_id", sa.String(length=64), nullable=False),
         sa.Column("session_id", sa.String(length=36), nullable=False),
         sa.Column("message_id", sa.String(length=36), nullable=False),
         sa.Column("type", sa.String(length=30), nullable=False),
@@ -75,10 +77,12 @@ def upgrade() -> None:
             "ix_events_session_timestamp", ["session_id", "timestamp"], unique=False
         )
         batch_op.create_index("ix_events_session_type", ["session_id", "type"], unique=False)
+        batch_op.create_index(batch_op.f("ix_events_user_id"), ["user_id"], unique=False)
 
     op.create_table(
         "messages",
         sa.Column("id", sa.String(length=36), nullable=False),
+        sa.Column("user_id", sa.String(length=64), nullable=False),
         sa.Column("session_id", sa.String(length=36), nullable=False),
         sa.Column("user_message", sa.JSON(), nullable=False),
         sa.Column("assistant_message", sa.JSON(), nullable=True),
@@ -104,10 +108,12 @@ def upgrade() -> None:
         batch_op.create_index(
             "ix_messages_session_started", ["session_id", "started_at"], unique=False
         )
+        batch_op.create_index(batch_op.f("ix_messages_user_id"), ["user_id"], unique=False)
 
     op.create_table(
         "projects",
         sa.Column("id", sa.String(length=36), nullable=False),
+        sa.Column("user_id", sa.String(length=64), nullable=False),
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("cwd", sa.Text(), nullable=False),
         sa.Column("status", sa.String(length=20), nullable=False),
@@ -119,13 +125,15 @@ def upgrade() -> None:
     with op.batch_alter_table("projects", schema=None) as batch_op:
         batch_op.create_index("ix_projects_created_at", ["created_at"], unique=False)
         batch_op.create_index("ix_projects_status", ["status"], unique=False)
+        batch_op.create_index(batch_op.f("ix_projects_user_id"), ["user_id"], unique=False)
 
     op.create_table(
         "sessions",
         sa.Column("id", sa.String(length=36), nullable=False),
+        sa.Column("user_id", sa.String(length=64), nullable=False),
         sa.Column("project_id", sa.String(length=36), nullable=False),
         sa.Column("agent_id", sa.String(length=36), nullable=False),
-        sa.Column("cwd", sa.Text(), nullable=False, server_default=""),
+        sa.Column("cwd", sa.Text(), nullable=False),
         sa.Column("runtime_provider", sa.String(length=20), nullable=False),
         sa.Column("model", sa.String(length=100), nullable=False),
         sa.Column("instructions", sa.Text(), nullable=False),
@@ -133,10 +141,8 @@ def upgrade() -> None:
         sa.Column("mcp_servers", sa.JSON(), nullable=False),
         sa.Column("model_provider", sa.JSON(), nullable=True),
         sa.Column("model_settings", sa.JSON(), nullable=True),
-        sa.Column(
-            "permission_mode", sa.String(length=20), nullable=False, server_default="full_access"
-        ),
-        sa.Column("mode", sa.String(length=20), nullable=False, server_default="default"),
+        sa.Column("permission_mode", sa.String(length=20), nullable=False),
+        sa.Column("mode", sa.String(length=20), nullable=False),
         sa.Column("status", sa.String(length=20), nullable=False),
         sa.Column("stop_reason", sa.JSON(), nullable=True),
         sa.Column("created_at", sa.BigInteger(), nullable=False),
@@ -162,6 +168,7 @@ def upgrade() -> None:
         batch_op.create_index("ix_sessions_created_at", ["created_at"], unique=False)
         batch_op.create_index("ix_sessions_project_id", ["project_id"], unique=False)
         batch_op.create_index("ix_sessions_status", ["status"], unique=False)
+        batch_op.create_index(batch_op.f("ix_sessions_user_id"), ["user_id"], unique=False)
 
     # ### end Alembic commands ###
 
@@ -169,6 +176,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
     with op.batch_alter_table("sessions", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_sessions_user_id"))
         batch_op.drop_index("ix_sessions_status")
         batch_op.drop_index("ix_sessions_project_id")
         batch_op.drop_index("ix_sessions_created_at")
@@ -176,21 +184,25 @@ def downgrade() -> None:
 
     op.drop_table("sessions")
     with op.batch_alter_table("projects", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_projects_user_id"))
         batch_op.drop_index("ix_projects_status")
         batch_op.drop_index("ix_projects_created_at")
 
     op.drop_table("projects")
     with op.batch_alter_table("messages", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_messages_user_id"))
         batch_op.drop_index("ix_messages_session_started")
 
     op.drop_table("messages")
     with op.batch_alter_table("events", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_events_user_id"))
         batch_op.drop_index("ix_events_session_type")
         batch_op.drop_index("ix_events_session_timestamp")
         batch_op.drop_index("ix_events_message_id")
 
     op.drop_table("events")
     with op.batch_alter_table("agents", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_agents_user_id"))
         batch_op.drop_index("ix_agents_status")
         batch_op.drop_index("ix_agents_created_at")
 

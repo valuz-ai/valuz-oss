@@ -19,7 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON
-
+from src.core.owner_context import get_owner_id
 from src.core.time_utils import now_ms
 
 
@@ -27,10 +27,20 @@ class Base(DeclarativeBase):
     pass
 
 
+def _owner_column() -> Mapped[str]:
+    """Owner id column shared by every kernel table.
+
+    Required (``NOT NULL``) and stamped from ``owner_context`` (host-seeded at
+    boot). Indexed because the commercial overlay filters by owner.
+    """
+    return mapped_column(String(64), nullable=False, index=True, default=get_owner_id)
+
+
 class ProjectModel(Base):
     __tablename__ = "projects"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = _owner_column()
     name: Mapped[str] = mapped_column(String(255), default="")
     cwd: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), default="active")
@@ -51,6 +61,7 @@ class AgentModel(Base):
     __tablename__ = "agents"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = _owner_column()
     name: Mapped[str] = mapped_column(String(255), default="")
     model: Mapped[str] = mapped_column(String(100), default="claude-sonnet-4-6")
     runtime_provider: Mapped[str] = mapped_column(String(20), default="claude_agent")
@@ -86,6 +97,7 @@ class SessionModel(Base):
     __tablename__ = "sessions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = _owner_column()
     project_id: Mapped[str] = mapped_column(String(36))
     agent_id: Mapped[str] = mapped_column(String(36))
     # Per-session cwd override; "" = fall back to project.cwd.
@@ -134,6 +146,7 @@ class MessageModel(Base):
     __tablename__ = "messages"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = _owner_column()
     session_id: Mapped[str] = mapped_column(String(36))
     user_message: Mapped[dict[str, Any]] = mapped_column(JSON)
     assistant_message: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
@@ -164,6 +177,7 @@ class EventModel(Base):
     __tablename__ = "events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = _owner_column()
     session_id: Mapped[str] = mapped_column(String(36))
     message_id: Mapped[str] = mapped_column(String(36))
     type: Mapped[str] = mapped_column(String(30))

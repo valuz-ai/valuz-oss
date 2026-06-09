@@ -27,6 +27,23 @@ def configure_structured_logging() -> None:
     configure_logging()
 
 
+def ensure_local_identity() -> None:
+    """Resolve the local install owner id and seed the owner ContextVar default.
+
+    Runs early — before any schema bootstrap or seed insert — so every row
+    created during boot, and every background-context insert thereafter (seeds,
+    automations, the task runner, kernel mirrors), is stamped with a real owner.
+    OSS derives the id from the device fingerprint and persists it once to
+    ``~/.valuz/app/installation.json``; the commercial overlay overrides
+    per-request identity via ``set_identity_resolver`` and does not depend on
+    this default.
+    """
+    from valuz_agent.infra.local_identity import resolve_local_user_id
+    from valuz_agent.infra.owner_context import set_default_user_id
+
+    set_default_user_id(resolve_local_user_id())
+
+
 def acquire_single_writer_lock() -> None:
     """Refuse to start if another backend already owns the SQLite file.
 

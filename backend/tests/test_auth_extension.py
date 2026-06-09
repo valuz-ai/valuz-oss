@@ -1,7 +1,7 @@
 """Tests for the authentication extension points (Slice 2).
 
 Verifies that:
-1. OSS mode → all requests resolve to ANONYMOUS
+1. OSS mode → all requests resolve to the local install identity
 2. Custom IdentityResolver injection works
 3. get_current_user returns ANONYMOUS when resolver returns None
 4. Auth middleware injection returns 401 on missing token
@@ -17,16 +17,21 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from valuz_agent.api.deps import get_current_user, set_identity_resolver
-from valuz_agent.ports.identity import ANONYMOUS, UserIdentity
 from valuz_agent.integrations.identity_local import LocalIdentityResolver
+from valuz_agent.ports.identity import ANONYMOUS, UserIdentity
 
 
 class TestLocalIdentityResolver:
-    def test_always_returns_anonymous(self) -> None:
+    def test_returns_local_install_identity(self) -> None:
+        from valuz_agent.infra.local_identity import resolve_local_user_id
+
         resolver = LocalIdentityResolver()
         result = resolver.resolve(MagicMock())
-        assert result is ANONYMOUS
-        assert result.user_id == "local-user"
+        # OSS resolves every request to the device-derived local install id
+        # (stamped on every row's ``user_id`` column), not the ANONYMOUS literal.
+        assert result.user_id == resolve_local_user_id()
+        assert result.user_id.startswith("local-")
+        assert result.org_id is None
 
 
 class TestGetCurrentUser:
@@ -36,10 +41,12 @@ class TestGetCurrentUser:
     def teardown_method(self) -> None:
         set_identity_resolver(LocalIdentityResolver())
 
-    def test_default_returns_anonymous(self) -> None:
+    def test_default_returns_local_install_user(self) -> None:
+        from valuz_agent.infra.local_identity import resolve_local_user_id
+
         request = MagicMock()
         user = get_current_user(request)
-        assert user.user_id == "local-user"
+        assert user.user_id == resolve_local_user_id()
         assert user.org_id is None
 
     def test_custom_resolver_injection(self) -> None:
