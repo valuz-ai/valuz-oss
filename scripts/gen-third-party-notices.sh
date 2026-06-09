@@ -71,14 +71,33 @@ command -v uv >/dev/null 2>&1 || { echo "ERROR: uv not found" >&2; exit 1; }
 # GitHub runners ("Failed to install … os error 3" against an 8.3 short path like
 # C:\Users\RUNNER~1\AppData\Local\Temp\…). --with-license-file embeds the full
 # license text. --no-sync keeps the already-synced env from being re-resolved.
-( cd "$BACKEND_DIR" \
-    && uv pip install --quiet pip-licenses \
-    && uv run --no-sync pip-licenses \
-        --format=plain-vertical \
-        --with-license-file --no-license-path \
-        --with-urls \
-        --ignore-packages valuz-agent valuz_agent ) >> "$TMP" \
-  || { echo "ERROR: python license scan failed — run 'cd backend && uv sync' first" >&2; exit 1; }
+#
+# Capture into a buffer (so a mid-write failure can't leave a half-section) and
+# retry: on Windows CI uv's wheel install into TEMP fails intermittently. If it
+# still won't run, emit a placeholder and KEEP GOING instead of aborting the
+# whole desktop build — the Python license texts are platform-independent, so
+# the macOS/Linux artifacts carry the authoritative copy.
+py_licenses=""
+py_ok=0
+for _attempt in 1 2 3; do
+  if py_licenses="$(cd "$BACKEND_DIR" \
+      && uv pip install --quiet pip-licenses \
+      && uv run --no-sync pip-licenses \
+          --format=plain-vertical \
+          --with-license-file --no-license-path \
+          --with-urls \
+          --ignore-packages valuz-agent valuz_agent)"; then
+    py_ok=1
+    break
+  fi
+  echo "WARNING: python license scan attempt $_attempt failed; retrying…" >&2
+done
+if [ "$py_ok" -eq 1 ]; then
+  printf '%s\n' "$py_licenses" >> "$TMP"
+else
+  echo "WARNING: python license scan failed after 3 attempts — emitting placeholder; the macOS/Linux build carries the authoritative Python notices" >&2
+  printf '(The Python dependency license texts could not be generated on this build\nplatform. They are identical across platforms — see the macOS/Linux release\nartifacts for the authoritative list.)\n' >> "$TMP"
+fi
 printf '\n' >> "$TMP"
 
 # --- 3. Vendored / bundled components -------------------------------------
