@@ -15,6 +15,7 @@ unchanged.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -40,6 +41,14 @@ class PolicyDecision:
     reason: str | None = None
 
 
+class ProviderVisibilityCandidate(Protocol):
+    """Minimal shape of a provider list item the policy inspects to decide
+    visibility — just its ``id`` and ``source``."""
+
+    id: str
+    source: str
+
+
 class ProviderPolicyPort(Protocol):
     """Gate writes to providers. Called by the provider CRUD routes before
     delegating to the service."""
@@ -60,6 +69,18 @@ class ProviderPolicyPort(Protocol):
         """
         ...
 
+    async def hidden_provider_ids(
+        self, candidates: Iterable[ProviderVisibilityCandidate]
+    ) -> set[str]:
+        """Return the ids among ``candidates`` to hide from the providers list.
+
+        Richer than ``hide_user_providers``: the policy may hide *any* provider
+        by id — builtin personal channels, member BYOK, etc. — based on the
+        caller's org / platform model policy. ``candidates`` are the items about
+        to be returned (each exposes ``id`` + ``source``). Default hides nothing.
+        """
+        ...
+
 
 class AllowAllProviderPolicy:
     """Default policy — every write is permitted, nothing hidden (OSS single-user)."""
@@ -69,6 +90,11 @@ class AllowAllProviderPolicy:
 
     async def hide_user_providers(self) -> bool:
         return False
+
+    async def hidden_provider_ids(
+        self, candidates: Iterable[ProviderVisibilityCandidate]
+    ) -> set[str]:
+        return set()
 
 
 _provider_policy: ProviderPolicyPort = AllowAllProviderPolicy()
@@ -88,6 +114,7 @@ __all__ = [
     "AllowAllProviderPolicy",
     "PolicyDecision",
     "ProviderPolicyPort",
+    "ProviderVisibilityCandidate",
     "ProviderWriteAction",
     "ProviderWriteContext",
     "get_provider_policy",

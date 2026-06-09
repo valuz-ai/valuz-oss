@@ -109,13 +109,47 @@ function prettifyKnownFamily(id: string): string | null {
 }
 
 /**
- * Friendly model name. Three tiers:
- *  1. exact entry in {@link MODEL_LABELS}
- *  2. known-family rule ({@link prettifyKnownFamily}) — new versions of
+ * Process-wide ``{id: label}`` overlay populated at runtime — e.g. by
+ * ``providersApi.list()`` after each fetch, projecting every provider's
+ * ``model_labels`` into one flat map. Lets overlay-contributed system
+ * models (where the admin sets ``display_name`` on the gateway row) show
+ * their friendly name in every UI surface without touching the call
+ * sites — ``modelLabel(id)`` just hits the overlay first.
+ *
+ * Same-id collisions across providers are last-write-wins; in practice
+ * a single gateway is the authoritative source for system-model ids, so
+ * the only realistic collision is "same id, same label" anyway.
+ */
+const _dynamicLabels = new Map<string, string>();
+
+export function registerDynamicModelLabels(
+  labels: Record<string, string> | null | undefined,
+): void {
+  if (!labels) return;
+  for (const [id, label] of Object.entries(labels)) {
+    if (typeof label === "string" && label.trim()) {
+      _dynamicLabels.set(id, label);
+    }
+  }
+}
+
+/** Test helper — drop the entire overlay. Production code should never call this. */
+export function _clearDynamicModelLabels(): void {
+  _dynamicLabels.clear();
+}
+
+/**
+ * Friendly model name. Four tiers, first hit wins:
+ *  1. runtime overlay (overlay-contributed display_name; see
+ *     {@link registerDynamicModelLabels})
+ *  2. exact entry in {@link MODEL_LABELS}
+ *  3. known-family rule ({@link prettifyKnownFamily}) — new versions of
  *     existing series auto-format without a table edit
- *  3. raw id (unknown vendor — never guessed, never hidden)
+ *  4. raw id (unknown vendor — never guessed, never hidden)
  */
 export function modelLabel(id: string | null | undefined): string {
   if (!id) return "";
+  const dyn = _dynamicLabels.get(id);
+  if (dyn) return dyn;
   return MODEL_LABELS[id] ?? prettifyKnownFamily(id) ?? id;
 }

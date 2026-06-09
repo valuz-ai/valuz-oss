@@ -109,6 +109,12 @@ class ProviderListItem:
     # in a single request. ``[]`` when the provider has no discoverable
     # models (subscription providers, unconfigured api-key rows).
     model_options: list[str] = field(default_factory=list)
+    # Optional ``{model_id: human_label}`` map for the picker UI. Populated
+    # for system providers whose overlay surfaces admin-set display names
+    # alongside the wire-level model id; the UI shows the label and still
+    # sends the id on the wire. Empty when the provider has no labels
+    # (typical: user api_key providers — model picker shows ids as-is).
+    model_labels: dict[str, str] = field(default_factory=dict)
     # Human-readable reason the provider is currently disabled. Only
     # populated for ``source="system"`` (overlay-contributed system
     # providers) when ``enabled=False`` — e.g. "未登录 Valuz 账户". The
@@ -603,8 +609,33 @@ async def _resolve_descriptor_model_options(d: SystemLLMProvider) -> list[str]:
         return list(d.model_options)
 
 
+async def _resolve_descriptor_model_labels(d: SystemLLMProvider) -> dict[str, str]:
+    """Resolve a descriptor's ``{model_id: human_label}`` map.
+
+    Returns ``{}`` when the descriptor doesn't supply a label resolver, when the
+    resolver returns an empty / non-dict value, or when it raises — labels are a
+    UI nicety and must never break the picker. Callers pass the resulting dict
+    through to ``ProviderListItem.model_labels``; the frontend renders
+    ``labels.get(id, id)``, so missing entries naturally fall back to the id.
+    """
+    import inspect
+
+    if d.list_model_labels is None:
+        return {}
+    try:
+        result = d.list_model_labels()
+        if inspect.isawaitable(result):
+            result = await result
+        return dict(result) if isinstance(result, dict) else {}
+    except Exception:  # noqa: BLE001 — labels are decorative; never break the picker
+        return {}
+
+
 def _descriptor_to_list_item(
-    d: SystemLLMProvider, *, model_options: list[str] | None = None
+    d: SystemLLMProvider,
+    *,
+    model_options: list[str] | None = None,
+    model_labels: dict[str, str] | None = None,
 ) -> ProviderListItem:
     """Project a registry descriptor onto the ``ProviderListItem`` shape.
 
@@ -615,9 +646,13 @@ def _descriptor_to_list_item(
 
     ``model_options`` overrides the descriptor's static list when the caller
     has resolved a dynamic ``list_models`` (see ``_resolve_descriptor_model_options``).
+    ``model_labels`` carries the resolved ``{id: human_label}`` map (see
+    ``_resolve_descriptor_model_labels``); empty when the descriptor doesn't
+    supply labels.
     """
     protocols = _system_compatible_protocols(d.api_protocol)
     opts = model_options if model_options is not None else list(d.model_options)
+    labels = dict(model_labels) if model_labels else {}
     return ProviderListItem(
         id=d.id,
         name=d.name,
@@ -634,14 +669,18 @@ def _descriptor_to_list_item(
         effective_protocol=protocols[0],
         compatible_protocols=protocols,
         model_options=opts,
+        model_labels=labels,
         unavailable_reason=d.unavailable_reason() if not d.enabled() else None,
     )
 
 
 def _descriptor_to_detail(
-    d: SystemLLMProvider, *, model_options: list[str] | None = None
+    d: SystemLLMProvider,
+    *,
+    model_options: list[str] | None = None,
+    model_labels: dict[str, str] | None = None,
 ) -> ProviderDetail:
-    item = _descriptor_to_list_item(d, model_options=model_options)
+    item = _descriptor_to_list_item(d, model_options=model_options, model_labels=model_labels)
     return ProviderDetail(
         id=item.id,
         name=item.name,
@@ -658,6 +697,7 @@ def _descriptor_to_detail(
         effective_protocol=item.effective_protocol,
         compatible_protocols=item.compatible_protocols,
         model_options=item.model_options,
+        model_labels=item.model_labels,
         unavailable_reason=item.unavailable_reason,
         base_url=d.api_base,
         supports_custom_base_url=False,
@@ -740,10 +780,11 @@ class ProviderService:
         from valuz_agent.ports.provider_policy import get_provider_policy
 
         rows = await self._ds.list_providers()
+        policy = get_provider_policy()
         # When the caller's org locks custom models, hide their own
         # (``source="user"``) providers so they can't be selected — the
         # "禁止使用" half of the lock. Managed/system rows are unaffected.
-        hide_user = await get_provider_policy().hide_user_providers()
+        hide_user = await policy.hide_user_providers()
         user_items = [
             _row_to_list_item(r)
             for r in rows
@@ -764,8 +805,20 @@ class ProviderService:
             opts = await _resolve_descriptor_model_options(d)
             if not opts:
                 continue
-            system_items.append(_descriptor_to_list_item(d, model_options=opts))
-        return system_items + user_items
+            labels = await _resolve_descriptor_model_labels(d)
+            system_items.append(
+                _descriptor_to_list_item(d, model_options=opts, model_labels=labels)
+            )
+        combined = system_items + user_items
+        # Richer visibility filter (overlay-bound policy): hide whole provider
+        # ids the caller isn't allowed to see — e.g. builtin personal channels
+        # (Claude Pro/Max, Codex) when the platform disables member-configured
+        # models. Superset of the coarse ``hide_user`` filter above; the default
+        # ``AllowAllProviderPolicy`` hides nothing, so OSS behaviour is unchanged.
+        hidden = await policy.hidden_provider_ids(combined)
+        if hidden:
+            combined = [it for it in combined if it.id not in hidden]
+        return combined
 
     async def get_provider(self, provider_id: str) -> ProviderDetail:
         descriptor = get_llm_registry().get(provider_id)
@@ -773,6 +826,7 @@ class ProviderService:
             return _descriptor_to_detail(
                 descriptor,
                 model_options=await _resolve_descriptor_model_options(descriptor),
+                model_labels=await _resolve_descriptor_model_labels(descriptor),
             )
         row = await self._ds.get_by_id(provider_id)
         if not row:

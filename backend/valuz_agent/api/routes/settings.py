@@ -35,7 +35,7 @@ from valuz_agent.modules.settings.service import (
     SettingsService,
     UpdateCheckResult,
 )
-from valuz_agent.ports.llm_provider import SystemProviderImmutable
+from valuz_agent.ports.llm_provider import SystemProviderImmutable, get_llm_registry
 
 router = APIRouter(prefix="/v1/settings", tags=["settings"])
 
@@ -203,6 +203,18 @@ async def patch_model_defaults(payload: ModelDefaultsPatchPayload) -> ModelDefau
                     await ds.clear_default()
                     await set_default_provider_id(db, None)
                     await set_default_model(db, None)
+                elif get_llm_registry().get(payload.default_provider_id) is not None:
+                    # System/registry-backed provider (e.g. the commercial
+                    # "Valuz 系统模型" channel). It has no providers-table row to
+                    # carry ``is_default``, so pin it via preferences only — NOT
+                    # through ProviderService.set_default, whose ``_guard_not_system``
+                    # correctly blocks editing system providers but over-blocks
+                    # selecting one as the default. Clear any builtin row's
+                    # ``is_default`` so model_resolver doesn't see two defaults.
+                    await ProviderDatastore(db).clear_default()
+                    await set_default_provider_id(db, payload.default_provider_id)
+                    if payload.default_model is not None:
+                        await set_default_model(db, payload.default_model or None)
                 else:
                     # Set: delegate to ProviderService so is_default +
                     # default_model row + app-setting keys all update together.

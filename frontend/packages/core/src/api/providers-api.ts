@@ -9,7 +9,20 @@ import type {
   ProbeModelsResponse,
   DiscoverModelsResponse,
 } from "@valuz/shared";
+import { registerDynamicModelLabels } from "@valuz/shared";
 import { createFetchJson } from "./fetch-json";
+
+/** Project every provider's ``model_labels`` map into the global
+ * ``modelLabel`` resolver overlay so downstream UIs (Composer, AgentDetailView,
+ * ProjectContextPanel, …) render the admin-set human label without having to
+ * pass providers in by hand. Safe to call repeatedly — last-write-wins. */
+function _hydrateModelLabels(
+  items: { model_labels?: Record<string, string> }[],
+): void {
+  for (const p of items) {
+    if (p.model_labels) registerDynamicModelLabels(p.model_labels);
+  }
+}
 
 export type {
   ProviderAuthType,
@@ -71,12 +84,20 @@ export const providersApi = {
     return fetchJson("/v1/providers/config");
   },
 
-  list(): Promise<{ providers: ProviderListItem[] }> {
-    return fetchJson("/v1/providers");
+  async list(): Promise<{ providers: ProviderListItem[] }> {
+    const res = await fetchJson<{ providers: ProviderListItem[] }>(
+      "/v1/providers",
+    );
+    _hydrateModelLabels(res.providers);
+    return res;
   },
 
-  get(providerId: string): Promise<ProviderDetail> {
-    return fetchJson(`/v1/providers/${encodeURIComponent(providerId)}`);
+  async get(providerId: string): Promise<ProviderDetail> {
+    const res = await fetchJson<ProviderDetail>(
+      `/v1/providers/${encodeURIComponent(providerId)}`,
+    );
+    _hydrateModelLabels([res]);
+    return res;
   },
 
   create(payload: ProviderCreateRequest): Promise<ProviderDetail> {

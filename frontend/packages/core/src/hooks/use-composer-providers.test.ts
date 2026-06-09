@@ -19,6 +19,7 @@ const provider = (
   auth_type: "api_key",
   base_url: null,
   model_options: [],
+  model_labels: {},
   unavailable_reason: null,
   supports_custom_base_url: false,
   supports_connection_test: true,
@@ -264,6 +265,87 @@ describe("useComposerProviders", () => {
     expect(result.current.map((m) => m.providerId)).toEqual([
       "ch-codex-subscription",
     ]);
+  });
+
+  it("for runtimeFilter=codex also surfaces system providers compatible with openai-response", () => {
+    // Cloud-backend gateway → overlay registers an openai-response system
+    // descriptor (provider_kind="system", compatible_protocols=["openai-response"]).
+    // The codex picker must surface it alongside the OAuth subscription.
+    const providers = [
+      provider({
+        id: "ch-codex-subscription",
+        name: "Codex (订阅)",
+        provider_kind: "codex-subscription",
+        credential_source: "none",
+        auth_type: "oauth",
+        compatible_protocols: ["openai-response"],
+        model_options: ["gpt-5-codex"],
+      }),
+      provider({
+        id: "valuz-channel-codex",
+        name: "Valuz 系统模型",
+        provider_kind: "system",
+        source: "system",
+        credential_source: "system_managed",
+        auth_type: "oauth",
+        compatible_protocols: ["openai-response"],
+        model_options: ["gpt-5.4-nano"],
+      }),
+      // Anthropic-only system provider — must NOT leak into the codex card.
+      provider({
+        id: "valuz-channel",
+        name: "Valuz 系统模型",
+        provider_kind: "system",
+        source: "system",
+        credential_source: "system_managed",
+        auth_type: "oauth",
+        compatible_protocols: ["anthropic"],
+        model_options: ["sys-reportify-pro"],
+      }),
+    ];
+
+    const { result } = renderHook(() =>
+      useComposerProviders(providers, "codex"),
+    );
+    expect(result.current.map((m) => m.providerId)).toEqual([
+      "ch-codex-subscription",
+      "valuz-channel-codex",
+    ]);
+  });
+
+  it("for runtimeFilter=deepagents excludes system providers that only speak openai-response", () => {
+    // Mirror of the codex case: the openai-response system provider must
+    // NOT appear under the Deep Agents card (Valuz Agent SDK doesn't speak
+    // the Responses API).
+    const providers = [
+      // Anthropic-capable system provider — SHOULD appear.
+      provider({
+        id: "valuz-channel",
+        name: "Valuz 系统模型",
+        provider_kind: "system",
+        source: "system",
+        credential_source: "system_managed",
+        auth_type: "oauth",
+        compatible_protocols: ["anthropic"],
+        model_options: ["sys-reportify-pro"],
+      }),
+      // openai-response-only system provider — should be filtered out.
+      provider({
+        id: "valuz-channel-codex",
+        name: "Valuz 系统模型",
+        provider_kind: "system",
+        source: "system",
+        credential_source: "system_managed",
+        auth_type: "oauth",
+        compatible_protocols: ["openai-response"],
+        model_options: ["gpt-5.4-nano"],
+      }),
+    ];
+
+    const { result } = renderHook(() =>
+      useComposerProviders(providers, "deepagents"),
+    );
+    expect(result.current.map((m) => m.providerId)).toEqual(["valuz-channel"]);
   });
 
   it("ignores runtimeFilter=undefined (backwards compat)", () => {

@@ -115,9 +115,19 @@ export const isProviderRuntimeCompatible = (
       ALLOWED_PROTOCOLS_BY_RUNTIME.claude_agent,
     );
   }
-  // codex: only its own subscription. The codex CLI walks its own
-  // keychain and cannot drive a bare OpenAI api_key endpoint.
-  return provider.provider_kind === "codex-subscription";
+  // codex: its own ChatGPT subscription, OR a system/gateway provider that
+  // serves the Responses API. The codex CLI can't drive a bare user-supplied
+  // OpenAI api_key endpoint (walks its own keychain), but the kernel codex
+  // runtime *can* target a managed ``base_url`` with ``wire_api="responses"``
+  // — so a ``source="system"`` channel speaking ``openai-response`` (the Valuz
+  // channel) is usable too.
+  if (provider.provider_kind === "codex-subscription") {
+    return true;
+  }
+  if (provider.provider_kind === "system") {
+    return speaksAnyProtocolFrom(provider, ALLOWED_PROTOCOLS_BY_RUNTIME.codex);
+  }
+  return false;
 };
 
 // Type-only assertion: the runtime allowlist matches the 4-value

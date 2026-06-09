@@ -57,28 +57,59 @@ const SUBSCRIPTION_PROVIDER_KINDS = new Set([
  * ``provider_kind`` for old API responses that pre-date the field. */
 const ANTHROPIC_PROVIDER_KINDS = new Set(["anthropic", "claude-subscription"]);
 
+/** Can ``c`` drive any of the ``allowed`` wire protocols? Trusts
+ * ``compatible_protocols`` (kernel V5+bba3014 source of truth) and falls
+ * back to the row's single ``protocol`` / ``provider_kind`` for legacy
+ * rows. ``ANTHROPIC_PROVIDER_KINDS`` is only consulted when "anthropic"
+ * is in ``allowed`` — provider_kind heuristics aren't trusted for the
+ * openai-* / gemini families (their kinds are too noisy). */
+const canDriveAny = (
+  c: Pick<
+    ProviderDetail,
+    "compatible_protocols" | "protocol" | "provider_kind"
+  >,
+  allowed: readonly string[],
+): boolean => {
+  if (c.compatible_protocols && c.compatible_protocols.length > 0) {
+    return c.compatible_protocols.some((p) => allowed.includes(p));
+  }
+  // Legacy fallback (pre-bba3014). Hyphen-form openai-* and bare "openai"
+  // both map to "openai-completion" for the purposes of this check.
+  if (c.protocol) {
+    if (allowed.includes(c.protocol)) return true;
+    if (c.protocol === "openai" && allowed.includes("openai-completion")) {
+      return true;
+    }
+  }
+  // Trust provider_kind only for the anthropic side — the openai-* / gemini
+  // kinds are too noisy to infer protocol from.
+  if (
+    allowed.includes("anthropic") &&
+    ANTHROPIC_PROVIDER_KINDS.has(c.provider_kind)
+  ) {
+    return true;
+  }
+  return false;
+};
+
 const canDriveAnthropic = (
   c: Pick<
     ProviderDetail,
     "compatible_protocols" | "protocol" | "provider_kind"
   >,
-): boolean => {
-  if (c.compatible_protocols && c.compatible_protocols.length > 0) {
-    return c.compatible_protocols.includes("anthropic");
-  }
-  // Legacy fallback (pre-bba3014). Hyphen-form openai-* and bare
-  // "openai" both signal "not anthropic".
-  if (c.protocol === "anthropic") return true;
-  if (
-    c.protocol === "openai" ||
-    c.protocol === "openai-completion" ||
-    c.protocol === "openai-response" ||
-    c.protocol === "gemini"
-  ) {
-    return false;
-  }
-  return ANTHROPIC_PROVIDER_KINDS.has(c.provider_kind);
-};
+): boolean => canDriveAny(c, ["anthropic"]);
+
+/** Wire protocols each runtime's SDK can speak. ``deepagents`` (Valuz
+ * Agent) is the multi-shape one — it talks anthropic OR openai-completion
+ * OR gemini. ``claude_agent`` and ``codex`` are single-shape (their
+ * respective CLIs/SDKs only know one wire). Used together with
+ * ``canDriveAny`` to filter providers for the runtime picker. */
+const DEEPAGENTS_PROTOCOLS = [
+  "anthropic",
+  "openai-completion",
+  "gemini",
+] as const;
+const CODEX_PROTOCOLS = ["openai-response"] as const;
 
 /**
  * Transforms enabled ProviderDetail[] into flat ModelSelectorItem[]
@@ -116,9 +147,6 @@ export const useComposerProviders = (
         .filter(providerHasUsableCredentials)
         .filter((c) => {
           if (!runtimeFilter) return true;
-          if (runtimeFilter === "deepagents") {
-            return !SUBSCRIPTION_PROVIDER_KINDS.has(c.provider_kind);
-          }
           if (runtimeFilter === "claude_agent") {
             // ``compatible_protocols`` is the source of truth — backed
             // by the descriptor's ``supports_protocol_selection`` flag
@@ -128,10 +156,24 @@ export const useComposerProviders = (
             // Claude Pro / Max subscription.
             return canDriveAnthropic(c);
           }
-          // codex: only codex-subscription — the codex CLI reads its
-          // own keychain (codex /login) and cannot authenticate to
-          // Anthropic's API, so claude-subscription is excluded.
-          return c.provider_kind === "codex-subscription";
+          if (runtimeFilter === "deepagents") {
+            // Exclude OAuth subscription providers — their credentials live
+            // in another CLI's keychain (claude /login, codex /login), so
+            // deepagents (Valuz Agent) can't authenticate to them.
+            if (SUBSCRIPTION_PROVIDER_KINDS.has(c.provider_kind)) return false;
+            // Then require at least one wire protocol the SDK can speak —
+            // protects against system providers bound to other shapes (e.g.
+            // overlay-contributed openai-response channels) leaking in.
+            return canDriveAny(c, DEEPAGENTS_PROTOCOLS);
+          }
+          // codex: the codex CLI reads its own keychain (codex /login) so
+          // the OAuth ``codex-subscription`` kind always belongs here.
+          // Beyond that, allow non-subscription providers that declare
+          // ``openai-response`` compatibility — this is how overlay system
+          // channels (cloud-backend gateway) surface a Codex-runtime card.
+          if (c.provider_kind === "codex-subscription") return true;
+          if (SUBSCRIPTION_PROVIDER_KINDS.has(c.provider_kind)) return false;
+          return canDriveAny(c, CODEX_PROTOCOLS);
         })
         .flatMap((c) => {
           const models =

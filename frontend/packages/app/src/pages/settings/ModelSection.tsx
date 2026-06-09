@@ -29,7 +29,6 @@ import {
   cn,
 } from "@valuz/ui";
 import { useTranslation } from "@valuz/core";
-import { modelLabel } from "@valuz/shared";
 import {
   useCliLoginFlow,
   type CliTool,
@@ -409,18 +408,24 @@ export const ModelSection = () => {
                   });
                 } else {
                   for (const m of models) {
+                    // Prefer the admin-supplied display label when the provider
+                    // surfaces one (overlay-contributed system channels do —
+                    // user api_key providers' model_labels is ``{}``). Wire-level
+                    // ``modelId`` is untouched.
+                    const labeled = p.model_labels?.[m];
                     groupOptions.push({
                       key: `${p.id}::${m}`,
                       providerId: p.id,
                       providerName: p.name,
                       modelId: m,
-                      itemLabel: m
-                        ? modelLabel(m)
-                        : t(
-                            "settings.model.followSubscription" as Parameters<
-                              typeof t
-                            >[0],
-                          ),
+                      itemLabel:
+                        labeled ||
+                        m ||
+                        t(
+                          "settings.model.followSubscription" as Parameters<
+                            typeof t
+                          >[0],
+                        ),
                     });
                   }
                 }
@@ -502,6 +507,11 @@ export const ModelSection = () => {
                               )}
                         </div>
                       </div>
+                      {selectedOption && (
+                        <span className="shrink-0 truncate text-2xs text-ink-meta">
+                          {selectedOption.providerName}
+                        </span>
+                      )}
                       <Select
                         value={selectedOption ? selectedKey : ""}
                         onValueChange={(v) => {

@@ -67,6 +67,14 @@ class SystemLLMProvider:
         unavailable_reason: Optional message shown next to the disabled
             badge. ``None`` = no reason given.
         list_models: Optional dynamic model lister (Phase 2).
+        list_model_labels: Optional ``{model_id: human_label}`` resolver. When
+            present and a model id has a non-empty label, the UI picker shows
+            the label instead of the raw id (id still rides the wire as the
+            ``model`` field — runtime selection and resolver lookup are
+            unaffected). Empty / missing entries fall back to the id. May be
+            sync or async; resolution errors degrade silently to no labels.
+            Use when overlay-supplied models have admin-set display names
+            that the user shouldn't have to read as ``model_name`` slugs.
     """
 
     id: str
@@ -84,6 +92,7 @@ class SystemLLMProvider:
         default_factory=lambda: lambda: None, repr=False
     )
     list_models: Callable[[], Awaitable[list[str]] | list[str]] | None = None
+    list_model_labels: Callable[[], Awaitable[dict[str, str]] | dict[str, str]] | None = None
 
 
 class SystemProviderImmutable(RuntimeError):  # noqa: N818 — domain error, not Error-suffixed

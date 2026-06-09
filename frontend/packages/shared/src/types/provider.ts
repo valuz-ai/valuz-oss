@@ -76,6 +76,12 @@ export interface ProviderListItem {
    *  Default-config picker can flatten (provider × model) entries
    *  without an N+1 fetch. */
   model_options: string[];
+  /** Optional ``{model_id: human_label}`` map for the picker UI. The
+   *  wire-level model id (the value in ``model_options``) is always what
+   *  the runtime sends as ``model``; ``model_labels`` only changes what
+   *  the user reads. Missing entries fall back to the id; ``{}`` for
+   *  providers without admin-set display names. */
+  model_labels: Record<string, string>;
   /** Human-readable reason the provider is currently disabled. Only
    *  populated for ``source="system"`` (overlay-contributed) when
    *  ``enabled=false`` — e.g. "未登录 Valuz 账户". Other providers
