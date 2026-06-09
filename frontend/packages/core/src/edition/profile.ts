@@ -1,5 +1,7 @@
 import type { ComponentType } from "react";
 
+import type { Capabilities } from "./capabilities";
+
 // Edition 类型的单点定义在 @valuz/shared/constants/editions.ts；这里只 re-export 以便
 // 同模块的其他 interface（FeatureFlags / EditionProfile）继续在 profile.ts 内自洽引用。
 export type { Edition } from "@valuz/shared";
@@ -94,4 +96,5 @@ export interface EditionProfile {
   workspacePanels: WorkspacePanelModule[];
   branding: BrandingProfile;
   navItems: NavItemModule[];
+  capabilities: Capabilities;
 }

@@ -17,6 +17,20 @@ describe("registry store", () => {
     ]);
   });
 
+  it("seeds capabilities to all-on by default", () => {
+    const state = useRegistryStore.getState();
+    expect(state.capabilities.configureModelChannel).toBe(true);
+  });
+
+  it("flips a single capability via setCapabilities without touching others", () => {
+    useRegistryStore
+      .getState()
+      .setCapabilities({ configureModelChannel: false });
+    expect(useRegistryStore.getState().capabilities.configureModelChannel).toBe(
+      false,
+    );
+  });
+
   it("registers a runtime route and lets callers dispose it", () => {
     const dispose = useRegistryStore.getState().registerRoute({
       id: "plugin-route",

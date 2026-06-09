@@ -1,3 +1,4 @@
+import { DEFAULT_CAPABILITIES } from "./capabilities";
 import type {
   BrandingProfile,
   EditionProfile,
@@ -107,4 +108,5 @@ export const personalProfile: EditionProfile = {
   workspacePanels: personalWorkspacePanels,
   branding: personalBranding,
   navItems: personalNavItems,
+  capabilities: DEFAULT_CAPABILITIES,
 };

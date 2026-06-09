@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { Capabilities } from "./capabilities";
 import type { Edition, EditionProfile, FeatureFlags } from "./profile";
 import type {
   BrandingProfile,
@@ -26,10 +27,17 @@ interface RegistryState {
   services: ServiceDescriptor[];
   branding: BrandingProfile;
   navItems: NavItemModule[];
+  capabilities: Capabilities;
   slots: SlotMap;
 
   setEdition: (edition: Edition) => void;
   hydrate: (profile: EditionProfile) => void;
+  /**
+   * Partially update capabilities at runtime. Overlay editions call this
+   * after fetching org policy to flip individual entries; the personal
+   * default stays on for everything not explicitly overridden.
+   */
+  setCapabilities: (patch: Partial<Capabilities>) => void;
 
   registerRoute: (route: DesktopRouteModule) => () => void;
   unregisterRoute: (id: string) => void;
@@ -81,6 +89,7 @@ export const useRegistryStore = create<RegistryState>((set) => ({
   services: [...seed.services],
   branding: seed.branding,
   navItems: [...seed.navItems],
+  capabilities: { ...seed.capabilities },
   slots: {},
 
   // setEdition 现在只能切到 personal——公共骨架不内置 enterprise profile。
@@ -96,6 +105,7 @@ export const useRegistryStore = create<RegistryState>((set) => ({
       services: [...personalProfile.services],
       branding: personalProfile.branding,
       navItems: [...personalProfile.navItems],
+      capabilities: { ...personalProfile.capabilities },
     });
   },
 
@@ -109,7 +119,13 @@ export const useRegistryStore = create<RegistryState>((set) => ({
       services: [...profile.services],
       branding: profile.branding,
       navItems: [...profile.navItems],
+      capabilities: { ...profile.capabilities },
     }),
+
+  setCapabilities: (patch) =>
+    set((state) => ({
+      capabilities: { ...state.capabilities, ...patch },
+    })),
 
   registerRoute: (route) => {
     set((state) => ({ desktopRoutes: upsertById(state.desktopRoutes, route) }));
@@ -224,5 +240,17 @@ export const getRegistrySnapshot = (): EditionProfile => {
     services: state.services,
     branding: state.branding,
     navItems: state.navItems,
+    capabilities: state.capabilities,
   };
 };
+
+/**
+ * React hook returning the current capability set. Re-renders subscribers
+ * when any capability flips. Lives here rather than in `./capabilities` to
+ * keep that file dependency-free (capabilities.ts ← registry-store would
+ * complete a cycle through personal-profile and break module init order
+ * depending on which file the consumer imports first).
+ */
+export function useCapabilities(): Capabilities {
+  return useRegistryStore((s) => s.capabilities);
+}

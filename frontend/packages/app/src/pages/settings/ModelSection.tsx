@@ -28,7 +28,7 @@ import {
   SettingsSection,
   cn,
 } from "@valuz/ui";
-import { useTranslation } from "@valuz/core";
+import { useCapabilities, useTranslation } from "@valuz/core";
 import {
   useCliLoginFlow,
   type CliTool,
@@ -69,6 +69,11 @@ const CLI_TOOL_BY_PROVIDER_KIND: Record<string, CliTool> = {
 export const ModelSection = () => {
   const { t } = useTranslation();
   const { checkCliLogin: platformCheckCliLogin } = usePlatform();
+  // Runtime capability gate. OSS defaults to true; overlay editions flip
+  // it off when an org policy disallows configuring model channels.
+  // CLI-login flow stays exposed regardless — those credentials live in
+  // the CLI's keychain and remain reachable outside Valuz anyway.
+  const { configureModelChannel } = useCapabilities();
 
   const [modelDefaults, setModelDefaults] = useState<ModelDefaults>({
     default_runtime: "claude_agent",
@@ -345,9 +350,11 @@ export const ModelSection = () => {
           <div className="mt-5 flex items-center gap-3 rounded-xl border border-error-text/20 bg-error-light px-4 py-3 text-xs text-error-text">
             <Lock className="h-4 w-4" />
             <span className="flex-1">{t("settings.model.noModelWarning")}</span>
-            <Button size="sm" onClick={() => setAddOpen(true)}>
-              {t("settings.model.configureModel")}
-            </Button>
+            {configureModelChannel && (
+              <Button size="sm" onClick={() => setAddOpen(true)}>
+                {t("settings.model.configureModel")}
+              </Button>
+            )}
           </div>
         )}
 
@@ -617,15 +624,17 @@ export const ModelSection = () => {
               {t("settings.model.modelChannelDesc" as Parameters<typeof t>[0])}
             </div>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            onClick={() => setAddOpen(true)}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            {t("common.add" as Parameters<typeof t>[0])}
-          </Button>
+          {configureModelChannel && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => setAddOpen(true)}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {t("common.add" as Parameters<typeof t>[0])}
+            </Button>
+          )}
         </div>
 
         <Card className="rounded-xl shadow-xs">
@@ -883,31 +892,34 @@ export const ModelSection = () => {
                             </Button>
                           );
                         })()}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="gap-1.5 text-xs"
-                          onClick={() => {
-                            void handleOpenEdit(provider.id);
-                          }}
-                        >
-                          <FilePenLine className="h-3 w-3" />
-                          {t("common.edit")}
-                        </Button>
-                        {provider.auth_type !== "oauth" && (
+                        {configureModelChannel && (
                           <Button
                             variant="outline"
                             size="sm"
-                            aria-label={t("common.refresh")}
-                            className="h-8 w-8 p-0 text-[#131313] hover:text-[#131313]"
+                            className="gap-1.5 text-xs"
                             onClick={() => {
-                              void handleTestProvider(provider.id);
+                              void handleOpenEdit(provider.id);
                             }}
                           >
-                            <RefreshCw className="h-3.5 w-3.5" />
+                            <FilePenLine className="h-3 w-3" />
+                            {t("common.edit")}
                           </Button>
                         )}
-                        {provider.deletable && (
+                        {configureModelChannel &&
+                          provider.auth_type !== "oauth" && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              aria-label={t("common.refresh")}
+                              className="h-8 w-8 p-0 text-[#131313] hover:text-[#131313]"
+                              onClick={() => {
+                                void handleTestProvider(provider.id);
+                              }}
+                            >
+                              <RefreshCw className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        {configureModelChannel && provider.deletable && (
                           <Button
                             variant="outline"
                             size="sm"
