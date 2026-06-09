@@ -65,13 +65,19 @@ printf '\n' >> "$TMP"
 echo ">> scanning Python dependencies (pip-licenses)…" >&2
 { hr; printf 'SECTION 2 — BACKEND (Python)\n'; hr; printf '\n'; } >> "$TMP"
 command -v uv >/dev/null 2>&1 || { echo "ERROR: uv not found" >&2; exit 1; }
-# uv run --with pulls pip-licenses ephemerally and runs it against the backend
-# project env (auto-synced). --with-license-file embeds the full license text.
-( cd "$BACKEND_DIR" && uv run --with pip-licenses pip-licenses \
-    --format=plain-vertical \
-    --with-license-file --no-license-path \
-    --with-urls \
-    --ignore-packages valuz-agent valuz_agent ) >> "$TMP" \
+# Install pip-licenses into the backend project venv (which lives in the repo
+# work tree) and run it from there. We deliberately avoid `uv run --with`, whose
+# ephemeral overlay env is created under the system TEMP dir and fails on Windows
+# GitHub runners ("Failed to install … os error 3" against an 8.3 short path like
+# C:\Users\RUNNER~1\AppData\Local\Temp\…). --with-license-file embeds the full
+# license text. --no-sync keeps the already-synced env from being re-resolved.
+( cd "$BACKEND_DIR" \
+    && uv pip install --quiet pip-licenses \
+    && uv run --no-sync pip-licenses \
+        --format=plain-vertical \
+        --with-license-file --no-license-path \
+        --with-urls \
+        --ignore-packages valuz-agent valuz_agent ) >> "$TMP" \
   || { echo "ERROR: python license scan failed — run 'cd backend && uv sync' first" >&2; exit 1; }
 printf '\n' >> "$TMP"
 
