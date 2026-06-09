@@ -267,6 +267,7 @@
     "taskCreated": "已创建任务",
     "openTask": "查看任务",
     "backToTask": "返回任务",
+    "brainOverride": "仅本次对话覆盖",
     "pillDrafted": "已起草任务",
     "pillPlanned": "已制定计划 v{version}（{count} 个子任务）",
     "pillModified": "已调整计划 v{version}（{count} 个子任务）",

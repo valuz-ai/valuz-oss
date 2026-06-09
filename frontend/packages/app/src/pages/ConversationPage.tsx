@@ -605,6 +605,10 @@ export const ConversationPage = () => {
     if (!modelDefaults) return;
     if (selectedSessionId) return;
     if (composerTouched) return;
+    // Agent-bound conversations seed runtime / model / effort from the
+    // agent's brain (the agent-brain effect later in this file), not from
+    // Settings → Default. Only quick chats (no agent) use the global default.
+    if (selectedAgentSlug) return;
     // Force-assign — must beat the runtime-fallback effect below, which
     // otherwise races in first because useRuntimes is module-cached.
     if (modelDefaults.default_runtime) {
@@ -1567,6 +1571,68 @@ export const ConversationPage = () => {
       modelLabel: modelLabel(m.agent?.model ?? ""),
     }));
   }, [isTempConversation, myAgents, projectAgents, runtimeList]);
+
+  // The brain (runtime / model / provider / effort) of the currently bound
+  // agent. It seeds the override controls' defaults; an untouched override
+  // therefore equals the agent's own config, which the backend treats as a
+  // no-op (it only diverges from the agent when the user actually changes a
+  // value). Temp conversations bind a library agent; projects bind a member.
+  const selectedAgentBrain = useMemo<{
+    runtime: RuntimeId | null;
+    model: string;
+    providerId: string | null;
+    effort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+  } | null>(() => {
+    if (!selectedAgentSlug) return null;
+    if (isTempConversation) {
+      const a = myAgents.find((x) => x.slug === selectedAgentSlug);
+      return a
+        ? {
+            runtime: (a.runtime as RuntimeId) || null,
+            model: a.model,
+            providerId: a.provider_id,
+            effort: a.effort,
+          }
+        : null;
+    }
+    const a = projectAgents.find(
+      (m) => m.member.agent_slug === selectedAgentSlug,
+    )?.agent;
+    return a
+      ? {
+          runtime: (a.runtime_provider as RuntimeId) || null,
+          model: a.model,
+          providerId: a.provider_id,
+          effort: a.effort,
+        }
+      : null;
+  }, [selectedAgentSlug, isTempConversation, myAgents, projectAgents]);
+
+  // Seed the override controls from the bound agent's brain for a NEW agent
+  // conversation. Runs on first bind and whenever the agent changes (the
+  // agent picker clears ``composerTouched``); a user override sets
+  // ``composerTouched`` and is preserved until they switch agents. Existing
+  // sessions are frozen (ADR-006), so this never runs for them.
+  useEffect(() => {
+    if (selectedSessionId) return;
+    if (composerTouched) return;
+    if (!selectedAgentBrain) return;
+    if (selectedAgentBrain.runtime)
+      setSelectedRuntimeId(selectedAgentBrain.runtime);
+    setSelectedProviderId(selectedAgentBrain.providerId);
+    if (selectedAgentBrain.model) setSelectedModelId(selectedAgentBrain.model);
+    setSelectedEffort(selectedAgentBrain.effort);
+  }, [selectedAgentBrain, composerTouched, selectedSessionId]);
+
+  // Whether this conversation's model diverges from the bound agent's default
+  // (i.e. the user actually overrode it). Drives the muted model hint in the
+  // agent button — hidden until an override happens, so a default chat is clean.
+  const agentModelOverridden = useMemo(
+    () =>
+      !!selectedAgentBrain &&
+      (selectedModelId ?? null) !== (selectedAgentBrain.model ?? null),
+    [selectedAgentBrain, selectedModelId],
+  );
 
   // Slug → display name, so the header chip shows the agent's full name
   // ("研究分析师") rather than the raw kernel slug.
@@ -4214,12 +4280,24 @@ export const ConversationPage = () => {
             selectedAgentSlug={
               selectedSession ? sessionAgentSlug : selectedAgentSlug
             }
+            // Surface the bound agent's runtime / model / effort in the agent
+            // dropdown — temp / quick chats only. Project conversations are
+            // driven by the deployed agent team, so they neither show the
+            // model hint nor offer a per-conversation override. For a NEW temp
+            // conversation the controls are an editable override (applied at
+            // session creation; the agent itself is never modified); for an
+            // EXISTING temp session runtime/model are read-only (frozen,
+            // ADR-006) but visible, and effort stays editable (live-reconcile).
+            allowAgentBrainOverride={!isProjectWorkspace}
+            agentModelOverridden={agentModelOverridden}
             // ADR-006: once a session exists both chips freeze (the locked
             // 🤖 chip shows the bound ``sessionAgentSlug``).
             agentLocked={selectedSession != null}
             onAgentChange={(slug) => {
               setSelectedAgentSlug(slug);
-              setComposerTouched(true);
+              // Clear the "touched" flag so the override re-seeds from the
+              // newly-bound agent's brain (see the seeding effect).
+              setComposerTouched(false);
             }}
             // 09-assistant 📁 project chip: switches the draft between 临时对话
             // (chat-default) and a project workspace. The page stores the
@@ -4285,24 +4363,20 @@ export const ConversationPage = () => {
                 });
               }
             }}
-            // Project conversations read the reasoning-effort budget from the
-            // bound agent (configured on the agent, not per-message), so the
-            // Composer's effort selector is hidden for them — passing
-            // ``undefined`` collapses the effort UI. Quick chats keep the
-            // per-conversation picker.
-            effort={isProjectWorkspace ? undefined : selectedEffort}
-            onEffortChange={
-              isProjectWorkspace
-                ? undefined
-                : (level) => {
-                    setSelectedEffort(level);
-                    if (!isNewSession && id) {
-                      void sessionsApi.updateEffort(id, level).catch(() => {
-                        /* non-fatal — surfaced by error toast pipeline */
-                      });
-                    }
-                  }
-            }
+            // Effort budget: seeded from the bound agent's brain for a new
+            // agent conversation (overridable here — see
+            // ``allowAgentBrainOverride`` below), or from Settings for quick
+            // chats. For a live session it live-reconciles via PATCH.
+            effort={selectedEffort}
+            onEffortChange={(level) => {
+              setSelectedEffort(level);
+              setComposerTouched(true);
+              if (!isNewSession && id) {
+                void sessionsApi.updateEffort(id, level).catch(() => {
+                  /* non-fatal — surfaced by error toast pipeline */
+                });
+              }
+            }}
             // Session model is frozen at creation (V5 / ADR-006). Lock the
             // picker the moment a session exists — including freshly-created
             // sessions (e.g. Skill Creator opens a session before the user

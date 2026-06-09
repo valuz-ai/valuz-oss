@@ -413,6 +413,7 @@ I18nKey = Literal[
     "conversation.attachmentRef",
     "conversation.attachmentUploadFailed",
     "conversation.backToTask",
+    "conversation.brainOverride",
     "conversation.browsedPages",
     "conversation.calledServer",
     "conversation.calledSkills",

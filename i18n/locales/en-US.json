@@ -267,6 +267,7 @@
     "taskCreated": "Task created",
     "openTask": "View task",
     "backToTask": "Back to task",
+    "brainOverride": "This chat only",
     "pillDrafted": "Task drafted",
     "pillPlanned": "Plan v{version} ({count} subtasks)",
     "pillModified": "Plan v{version} updated ({count} subtasks)",

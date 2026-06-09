@@ -348,6 +348,20 @@ export interface ComposerProps {
   selectedAgentSlug?: string | null;
   /** Called when the user picks a different project agent. */
   onAgentChange?: (slug: string) => void;
+  /**
+   * Agent mode only: also surface the runtime / model / effort controls so
+   * the user can override the selected agent's brain for THIS conversation.
+   * The override is applied at session creation and never mutates the agent.
+   * Off by default — only the new-conversation composer opts in.
+   */
+  allowAgentBrainOverride?: boolean;
+  /**
+   * True when the conversation's model diverges from the bound agent's
+   * default (i.e. the user actually overrode it). Drives the muted model
+   * hint inside the agent button — shown only when overridden, so an
+   * un-customized chat stays clean.
+   */
+  agentModelOverridden?: boolean;
   /** Read-only display once a session exists (agent frozen at creation). */
   agentLocked?: boolean;
   /** Project options for the 📁 chip. When provided (even empty) the chip
@@ -427,6 +441,8 @@ export const Composer = ({
   agents,
   selectedAgentSlug,
   onAgentChange,
+  allowAgentBrainOverride = false,
+  agentModelOverridden = false,
   agentLocked = false,
   projects,
   selectedWorkspaceId,
@@ -481,6 +497,15 @@ export const Composer = ({
   const [attachOpen, setAttachOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
+  // Drill-in for the per-conversation brain override (agent popover). ``null``
+  // shows the agent list + the three override rows; a value shows that field's
+  // option list. Reset whenever the popover closes.
+  const [agentSubmenu, setAgentSubmenu] = useState<
+    null | "runtime" | "model" | "effort"
+  >(null);
+  useEffect(() => {
+    if (!agentOpen) setAgentSubmenu(null);
+  }, [agentOpen]);
   const agentRef = useRef<HTMLDivElement>(null);
   const [projectOpen, setProjectOpen] = useState(false);
   const projectRef = useRef<HTMLDivElement>(null);
@@ -1629,7 +1654,14 @@ export const Composer = ({
             {agentMode && (
               <div className="relative" ref={agentRef}>
                 {(() => {
-                  const canOpen = !agentLocked;
+                  // Open for agent switching when unlocked. Once a session
+                  // exists (locked) the popover still opens — read-only — so
+                  // the user can see the session's brain and tweak effort
+                  // (which live-reconciles); runtime/model stay frozen
+                  // (ADR-006).
+                  const canOpen =
+                    !agentLocked ||
+                    (allowAgentBrainOverride && !!selectedAgentSlug);
                   // When locked to a session whose bound agent is no longer in
                   // the candidate list (e.g. the library agent was deleted
                   // after the session was created), fall back to the raw slug
@@ -1669,15 +1701,28 @@ export const Composer = ({
                               {t("task.runLead" as Parameters<typeof t>[0])}
                             </span>
                           )}
-                          <span className="max-w-[240px] truncate text-ink-heading leading-none">
+                          <span className="max-w-[200px] truncate text-ink-heading leading-none">
                             {triggerLabel}
                           </span>
-                          {!agentLocked && (
+                          {/* Overridden model as a muted hint inside the
+                              agent button — shown ONLY once the user diverges
+                              from the agent's default (temp/quick chats; not
+                              project conversations). An un-customized chat
+                              stays clean. The picker lives in the dropdown's
+                              override rows. */}
+                          {allowAgentBrainOverride &&
+                            agentModelOverridden &&
+                            selectedModelLabel && (
+                              <span className="max-w-[120px] truncate leading-none text-ink-muted">
+                                {selectedModelLabel}
+                              </span>
+                            )}
+                          {canOpen && (
                             <ChevronDown className="h-3 w-3 shrink-0" />
                           )}
                         </span>
                       </button>
-                      {agentOpen && !agentLocked && (
+                      {agentOpen && canOpen && (
                         <div
                           className={cn(
                             "absolute right-0 z-50 min-w-[260px] rounded-lg border border-surface-border bg-surface shadow-lg",
@@ -1692,11 +1737,13 @@ export const Composer = ({
                                   <button
                                     key={a.slug}
                                     type="button"
+                                    disabled={agentLocked}
                                     className={cn(
-                                      "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-surface-muted",
+                                      "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-surface-muted disabled:cursor-default disabled:hover:bg-transparent",
                                       selected && "bg-surface-muted",
                                     )}
                                     onClick={() => {
+                                      if (agentLocked) return;
                                       onAgentChange?.(a.slug);
                                       setAgentOpen(false);
                                     }}
@@ -1725,7 +1772,205 @@ export const Composer = ({
                               </div>
                             )}
                           </div>
-                          {onAddAgent && (
+                          {allowAgentBrainOverride && selectedAgentSlug && (
+                            <div className="border-t border-surface-border p-1">
+                                <div className="px-2 pt-1 pb-1 text-2xs font-medium tracking-wide text-ink-meta uppercase">
+                                  {t(
+                                    "conversation.brainOverride" as Parameters<
+                                      typeof t
+                                    >[0],
+                                  )}
+                                </div>
+                                {(
+                                  [
+                                    {
+                                      key: "runtime" as const,
+                                      label: t(
+                                        "agent.runtimeLabel" as Parameters<
+                                          typeof t
+                                        >[0],
+                                      ),
+                                      value: selectedRuntimeLabel,
+                                    },
+                                    {
+                                      key: "model" as const,
+                                      label: t(
+                                        "agent.model" as Parameters<typeof t>[0],
+                                      ),
+                                      value: selectedModelLabel,
+                                    },
+                                    {
+                                      key: "effort" as const,
+                                      label: t(
+                                        "effort.label" as Parameters<typeof t>[0],
+                                      ),
+                                      value: selectedEffortLabel,
+                                    },
+                                  ] as const
+                                ).map((row) => (
+                                  <div key={row.key} className="relative">
+                                    <button
+                                      type="button"
+                                      className={cn(
+                                        "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors",
+                                        row.key !== "effort" && modelLocked
+                                          ? "cursor-default"
+                                          : "hover:bg-surface-muted",
+                                        agentSubmenu === row.key &&
+                                          "bg-surface-muted",
+                                      )}
+                                      onMouseEnter={() => {
+                                        if (row.key !== "effort" && modelLocked)
+                                          return;
+                                        setAgentSubmenu(row.key);
+                                      }}
+                                      onClick={() => {
+                                        if (row.key !== "effort" && modelLocked)
+                                          return;
+                                        setAgentSubmenu((s) =>
+                                          s === row.key ? null : row.key,
+                                        );
+                                      }}
+                                    >
+                                      <span className="shrink-0 text-ink-body">
+                                        {row.label}
+                                      </span>
+                                      <span className="inline-flex min-w-0 items-center gap-1 text-ink-meta">
+                                        <span className="max-w-[130px] truncate">
+                                          {row.value}
+                                        </span>
+                                        {!(
+                                          row.key !== "effort" && modelLocked
+                                        ) && (
+                                          <ChevronRight className="h-3 w-3 shrink-0" />
+                                        )}
+                                      </span>
+                                    </button>
+                                    {/* Secondary flyout — pops out to the left of
+                                        the agent popover (which is right-anchored).
+                                        Anchors to the row's top when the composer
+                                        sits in the upper half of the window (menu
+                                        opens downward) and to its bottom when in
+                                        the lower half (menu opens upward), so the
+                                        list grows toward the open space instead of
+                                        off-screen. */}
+                                    {agentSubmenu === row.key && (
+                                      <div
+                                        className={cn(
+                                          "absolute right-full z-50 mr-1 max-h-[300px] min-w-[200px] overflow-y-auto rounded-lg border border-surface-border bg-surface p-1 shadow-lg",
+                                          menuDir === "down"
+                                            ? "top-0"
+                                            : "bottom-0",
+                                        )}
+                                      >
+                                        {row.key === "runtime" &&
+                                          runtimes.map((r) => (
+                                            <button
+                                              key={r.id}
+                                              type="button"
+                                              disabled={!r.available}
+                                              className={cn(
+                                                "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-50",
+                                                r.id === selectedRuntimeId &&
+                                                  "bg-surface-muted",
+                                              )}
+                                              onClick={() => {
+                                                onRuntimeChange?.(r.id);
+                                                setAgentSubmenu(null);
+                                              }}
+                                            >
+                                              <span className="truncate text-ink-heading">
+                                                {r.displayName}
+                                              </span>
+                                              {r.id === selectedRuntimeId && (
+                                                <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
+                                              )}
+                                            </button>
+                                          ))}
+                                        {row.key === "model" &&
+                                          Array.from(
+                                            providers
+                                              .reduce((map, m) => {
+                                                const g = map.get(
+                                                  m.providerId,
+                                                ) ?? {
+                                                  name: m.providerName,
+                                                  items: [] as ModelSelectorItem[],
+                                                };
+                                                g.items.push(m);
+                                                map.set(m.providerId, g);
+                                                return map;
+                                              }, new Map<string, { name: string; items: ModelSelectorItem[] }>())
+                                              .entries(),
+                                          ).map(([pid, g]) => (
+                                            <div key={pid}>
+                                              <div className="px-2 pt-1.5 pb-0.5 text-2xs font-medium tracking-wide text-ink-meta uppercase">
+                                                {g.name}
+                                              </div>
+                                              {g.items.map((m) => {
+                                                const sel =
+                                                  m.providerId ===
+                                                    selectedProviderId &&
+                                                  m.modelId === selectedModelId;
+                                                return (
+                                                  <button
+                                                    key={`${m.providerId}::${m.modelId}`}
+                                                    type="button"
+                                                    className={cn(
+                                                      "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-muted",
+                                                      sel && "bg-surface-muted",
+                                                    )}
+                                                    onClick={() => {
+                                                      onModelChange?.(
+                                                        m.providerId,
+                                                        m.modelId,
+                                                      );
+                                                      setAgentSubmenu(null);
+                                                    }}
+                                                  >
+                                                    <span className="truncate text-ink-heading">
+                                                      {modelLabel(m.modelId)}
+                                                    </span>
+                                                    {sel && (
+                                                      <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
+                                                    )}
+                                                  </button>
+                                                );
+                                              })}
+                                            </div>
+                                          ))}
+                                        {row.key === "effort" &&
+                                          EFFORT_ORDER.map((level) => {
+                                            const sel = effortKey === level;
+                                            return (
+                                              <button
+                                                key={level}
+                                                type="button"
+                                                className={cn(
+                                                  "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-muted",
+                                                  sel && "bg-surface-muted",
+                                                )}
+                                                onClick={() => {
+                                                  onEffortChange?.(level);
+                                                  setAgentSubmenu(null);
+                                                }}
+                                              >
+                                                <span className="truncate text-ink-heading">
+                                                  {EFFORT_LABELS[level].label}
+                                                </span>
+                                                {sel && (
+                                                  <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
+                                                )}
+                                              </button>
+                                            );
+                                          })}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          {onAddAgent && !agentLocked && (
                             <div className="border-t border-surface-border p-1">
                               <button
                                 type="button"
