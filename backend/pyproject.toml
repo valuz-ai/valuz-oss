@@ -83,6 +83,15 @@ dependencies = [
     # Apple Silicon, Linux, Windows — stays on the modern line.
     "onnxruntime>=1.20; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "onnxruntime>=1.17,<1.20; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    # Same platform split for opencv-python (also a rapidocr transitive dep, no
+    # version floor declared upstream). opencv-python dropped the Intel-macOS-13
+    # wheel at 4.13: 4.12.0.88 ships ``macosx_13_0_x86_64``, but 4.13.x bumped
+    # the Intel-mac wheel's deployment target to 14.0, so an Intel Mac on macOS
+    # 13 (Ventura) has NO wheel and ``uv sync`` aborts the whole install. Cap
+    # Intel Mac at <4.13 (resolves to 4.12.0.88 — OCR still works); every other
+    # platform — Apple Silicon, Linux, Windows — stays on the modern line.
+    "opencv-python>=4.13; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "opencv-python>=4.11,<4.13; sys_platform == 'darwin' and platform_machine == 'x86_64'",
     "croniter>=6.2.2",
     "cron-descriptor>=2.0.8",
     "pytz>=2026.1.post1",
@@ -162,6 +171,17 @@ dev = [
 # would notice, and that path is never exercised in valuz.
 override-dependencies = [
     "openai-codex-cli-bin; sys_platform != 'linux'",
+]
+
+# The lockfile MUST stay installable on Intel macOS (x86_64 darwin) — our
+# lowest-common-denominator dev box (a 2019 Intel MBP on Ventura). Without this,
+# uv happily locks a version whose only mac wheel is arm64 or targets a newer
+# macOS (opencv-python 4.13 -> macosx_14, onnxruntime 1.20 -> arm64-only) and
+# the failure only surfaces at ``uv sync`` on that machine. Declaring the env
+# here makes ``uv lock`` (and CI) fail fast instead. ``aarch64`` is the dev
+# default and always covered; this just pins the Intel-mac corner explicitly.
+required-environments = [
+    "sys_platform == 'darwin' and platform_machine == 'x86_64'",
 ]
 
 [tool.ruff]
