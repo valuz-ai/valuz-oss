@@ -64,15 +64,28 @@ class ErrorHandlerMiddleware(BaseHTTPMiddleware):
 class TimingMiddleware(BaseHTTPMiddleware):
     """Stamp ``X-Process-Time-Ms`` + emit a structured access log line.
 
-    The access log feeds the desktop ``服务`` panel — every HTTP request
+    The access log feeds the desktop ``服务`` panel — each HTTP request
     shows up as one ``message=request`` entry with ``method`` /
     ``path`` / ``status`` / ``duration_ms`` fields. Mirrors the field
     names ``GET /v1/system/status`` already documents.
 
-    Skips noisy paths so polling endpoints don't drown out signal:
+    Noise control — the panel's 2000-line buffer must hold *signal*,
+    and the UI polls reads constantly (``/v1/runs`` every few seconds,
+    ``/v1/sessions/{id}/events`` ~1/s per open conversation), which
+    used to fill the whole buffer within minutes. Levels are therefore
+    assigned by what a request says about system health, not blanket
+    INFO:
+
+      - failures (status ≥ 400)              → WARNING
+      - mutations (POST/PUT/PATCH/DELETE)    → INFO
+      - slow reads (≥ ``_SLOW_MS``)          → INFO
+      - routine successful reads (GET/HEAD)  → DEBUG (file/panel run at
+        INFO, so these drop unless a dev raises verbosity)
+
+    Hard-skipped paths log nothing at any level:
 
       - ``/v1/system/status``: the desktop panel polls this every 5s
-        (would dwarf everything else).
+        (would dwarf everything else even at DEBUG).
       - ``/internal/mcp/...``: kernel-internal MCP traffic; chatty and
         not actionable from the UI.
 
@@ -81,6 +94,7 @@ class TimingMiddleware(BaseHTTPMiddleware):
     """
 
     _SKIP_PREFIXES = ("/v1/system/status", "/internal/mcp")
+    _SLOW_MS = 1000.0
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         start = time.perf_counter()
@@ -102,7 +116,14 @@ class TimingMiddleware(BaseHTTPMiddleware):
 
         path = request.url.path
         if not any(path.startswith(p) for p in self._SKIP_PREFIXES):
-            logger.info(
+            if response.status_code >= 400:
+                level = logging.WARNING
+            elif request.method in ("GET", "HEAD") and elapsed_ms < self._SLOW_MS:
+                level = logging.DEBUG
+            else:
+                level = logging.INFO
+            logger.log(
+                level,
                 "request",
                 extra={
                     "method": request.method,
