@@ -90,7 +90,7 @@ async def list_skills(
     from valuz_agent.ports.resource_enhancer import get_resource_enhancer
 
     data = catalog.model_dump()
-    data["skills"] = get_resource_enhancer().enhance("skill", data.get("skills", []))
+    data["skills"] = await get_resource_enhancer().enhance("skill", data.get("skills", []))
     return data
 
 

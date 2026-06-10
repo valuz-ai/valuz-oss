@@ -208,12 +208,15 @@ def _translate_kernel_event(
         output_tokens = int(data.get("output_tokens") or 0)
         # Billing meter call — best-effort, never breaks the SSE stream.
         # Cost estimate uses claude-sonnet-4-6 rates: $3/M input, $15/M output.
+        # ``meter`` is async (it may do network I/O in commercial overlays);
+        # this translation helper is sync but always runs on the event loop
+        # (both callers are async), so fire-and-forget via ``create_task`` —
+        # metering must never block or break the SSE stream.
         try:
             from valuz_agent.ports.billing import MeterEvent, get_billing_port
 
             cost_usd = (input_tokens * 3 + output_tokens * 15) / 1_000_000
-            billing = get_billing_port()
-            billing.meter(
+            coro = get_billing_port().meter(
                 MeterEvent(
                     user_id=data.get("user_id", "local-user"),
                     event_type="llm_call",
@@ -221,6 +224,10 @@ def _translate_kernel_event(
                     metadata={"input_tokens": input_tokens, "output_tokens": output_tokens},
                 )
             )
+            try:
+                asyncio.get_running_loop().create_task(coro)
+            except RuntimeError:
+                coro.close()  # no running loop — drop the meter event
         except Exception:
             pass  # billing is best-effort; never break the SSE stream
         return "runtime.engine.usage", _with_message_id(

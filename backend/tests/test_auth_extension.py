@@ -22,11 +22,11 @@ from valuz_agent.ports.identity import ANONYMOUS, UserIdentity
 
 
 class TestLocalIdentityResolver:
-    def test_returns_local_install_identity(self) -> None:
+    async def test_returns_local_install_identity(self) -> None:
         from valuz_agent.infra.local_identity import resolve_local_user_id
 
         resolver = LocalIdentityResolver()
-        result = resolver.resolve(MagicMock())
+        result = await resolver.resolve(MagicMock())
         # OSS resolves every request to the device-derived local install id
         # (stamped on every row's ``user_id`` column), not the ANONYMOUS literal.
         assert result.user_id == resolve_local_user_id()
@@ -41,17 +41,17 @@ class TestGetCurrentUser:
     def teardown_method(self) -> None:
         set_identity_resolver(LocalIdentityResolver())
 
-    def test_default_returns_local_install_user(self) -> None:
+    async def test_default_returns_local_install_user(self) -> None:
         from valuz_agent.infra.local_identity import resolve_local_user_id
 
         request = MagicMock()
-        user = get_current_user(request)
+        user = await get_current_user(request)
         assert user.user_id == resolve_local_user_id()
         assert user.org_id is None
 
-    def test_custom_resolver_injection(self) -> None:
+    async def test_custom_resolver_injection(self) -> None:
         class MockResolver:
-            def resolve(self, request: object) -> UserIdentity:
+            async def resolve(self, request: object) -> UserIdentity:
                 return UserIdentity(
                     user_id="test-user",
                     email="test@example.com",
@@ -61,19 +61,19 @@ class TestGetCurrentUser:
 
         set_identity_resolver(MockResolver())
         request = MagicMock()
-        user = get_current_user(request)
+        user = await get_current_user(request)
         assert user.user_id == "test-user"
         assert user.org_id == "org-1"
         assert user.email == "test@example.com"
 
-    def test_resolver_returning_none_falls_back_to_anonymous(self) -> None:
+    async def test_resolver_returning_none_falls_back_to_anonymous(self) -> None:
         class NoneResolver:
-            def resolve(self, request: object) -> UserIdentity | None:
+            async def resolve(self, request: object) -> UserIdentity | None:
                 return None
 
         set_identity_resolver(NoneResolver())
         request = MagicMock()
-        user = get_current_user(request)
+        user = await get_current_user(request)
         assert user is ANONYMOUS
 
 
@@ -130,11 +130,11 @@ class TestAuthMiddlewareIntegration:
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
 
-    def test_should_work_with_identity_resolver_and_middleware(self) -> None:
+    async def test_should_work_with_identity_resolver_and_middleware(self) -> None:
         """Full integration: middleware validates token, resolver extracts identity."""
 
         class JWTResolver:
-            def resolve(self, request: object) -> UserIdentity | None:
+            async def resolve(self, request: object) -> UserIdentity | None:
                 auth = getattr(request, "headers", {}).get("Authorization", "")
                 if auth.startswith("Bearer "):
                     return UserIdentity(
@@ -146,13 +146,13 @@ class TestAuthMiddlewareIntegration:
         try:
             request = MagicMock()
             request.headers = {"Authorization": "Bearer valid-token"}
-            user = get_current_user(request)
+            user = await get_current_user(request)
             assert user.user_id == "jwt-user"
             assert user.org_id == "org-jwt"
 
             request_no_token = MagicMock()
             request_no_token.headers = {}
-            user2 = get_current_user(request_no_token)
+            user2 = await get_current_user(request_no_token)
             assert user2 is ANONYMOUS
         finally:
             set_identity_resolver(LocalIdentityResolver())

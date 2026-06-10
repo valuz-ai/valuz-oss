@@ -895,7 +895,7 @@ class SessionService:
         detail = _session_to_detail(kernel_session)
         return detail
 
-    def send_message(
+    async def send_message(
         self,
         session_id: str,
         content: str,
@@ -945,7 +945,7 @@ class SessionService:
 
         billing = get_billing_port()
         uid = session.metadata.get("owner_user_id", "local-user")
-        budget = billing.check_budget(uid)
+        budget = await billing.check_budget(uid)
         if not budget.allowed:
             raise BudgetExceeded(budget.reason or "insufficient credits")
 
@@ -1028,7 +1028,7 @@ class SessionService:
 
         billing = get_billing_port()
         uid = session.metadata.get("owner_user_id", "local-user")
-        budget = billing.check_budget(uid)
+        budget = await billing.check_budget(uid)
         if not budget.allowed:
             raise BudgetExceeded(budget.reason or "insufficient credits")
 
@@ -1133,7 +1133,7 @@ class SessionService:
 
                     uid = meta.get("owner_user_id", "local-user")
                     try:
-                        get_billing_port().meter(
+                        await get_billing_port().meter(
                             MeterEvent(
                                 user_id=uid,
                                 event_type="llm_call",
@@ -1316,7 +1316,7 @@ class SessionService:
         )
         return _session_to_detail(updated)
 
-    def regenerate(self, session_id: str) -> SessionDetail:
+    async def regenerate(self, session_id: str) -> SessionDetail:
         session = kernel_sync.load_session_sync(session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
@@ -1324,7 +1324,7 @@ class SessionService:
         last_msg = meta.get("last_user_message_text")
         if not last_msg:
             raise SessionNotRunnable("No user message to regenerate from")
-        return self.send_message(session_id, str(last_msg))
+        return await self.send_message(session_id, str(last_msg))
 
     def rename_session(self, session_id: str, name: str) -> SessionDetail:
         session = kernel_sync.load_session_sync(session_id)

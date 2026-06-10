@@ -314,7 +314,7 @@ async def list_connectors(
 
     locale = _parse_accept_language(accept_language)
     items = [_view_to_item(v, locale).model_dump() for v in await svc.list_connectors()]
-    items = get_resource_enhancer().enhance("connector", items)
+    items = await get_resource_enhancer().enhance("connector", items)
     return {"connectors": items}
 
 

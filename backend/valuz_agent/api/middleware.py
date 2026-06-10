@@ -33,7 +33,7 @@ class OwnerContextMiddleware(BaseHTTPMiddleware):
         # it out of module import order.
         from valuz_agent.api.deps import get_current_user
 
-        token = set_current_user_id(get_current_user(request).user_id)
+        token = set_current_user_id((await get_current_user(request)).user_id)
         try:
             return await call_next(request)
         finally:

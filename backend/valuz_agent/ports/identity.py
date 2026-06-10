@@ -30,7 +30,7 @@ ANONYMOUS = UserIdentity(user_id="local-user")
 class IdentityResolver(Protocol):
     """Resolve the current user from an incoming HTTP request."""
 
-    def resolve(self, request: Any) -> UserIdentity | None: ...
+    async def resolve(self, request: Any) -> UserIdentity | None: ...
 
 
 __all__ = ["UserIdentity", "ANONYMOUS", "IdentityResolver"]

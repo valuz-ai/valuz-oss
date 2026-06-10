@@ -13,7 +13,9 @@ from typing import Any, Protocol
 class ResourceListEnhancer(Protocol):
     """Enhance resource list responses with external data (e.g. cloud sync status)."""
 
-    def enhance(self, resource_type: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    async def enhance(
+        self, resource_type: str, items: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """Receive local resource list, return enhanced list."""
         ...
 
@@ -21,7 +23,9 @@ class ResourceListEnhancer(Protocol):
 class NoopResourceEnhancer:
     """Default enhancer — returns items unchanged."""
 
-    def enhance(self, resource_type: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    async def enhance(
+        self, resource_type: str, items: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         return items
 
 
