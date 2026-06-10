@@ -15,14 +15,11 @@ let mainWindow: BrowserWindow | null = null;
 export const getMainWindow = () => mainWindow;
 
 export const createMainWindow = async () => {
-  mainWindow = new BrowserWindow({
+  const windowOptions: Electron.BrowserWindowConstructorOptions = {
     title: "Valuz",
     width: 1440,
     height: 900,
     show: false,
-    titleBarStyle: "hidden",
-    // TopBar h-36 配 traffic light 居中：(36-13)/2 ≈ 12。
-    trafficLightPosition: { x: 10, y: 12 },
     icon: getIconPath(),
     backgroundColor: "#F8F9FB",
     webPreferences: {
@@ -31,7 +28,16 @@ export const createMainWindow = async () => {
       sandbox: true,
       nodeIntegration: false,
     },
-  });
+  };
+
+  // macOS: hidden title bar with inline traffic lights.
+  // Windows/Linux: use the default system title bar.
+  if (process.platform === "darwin") {
+    windowOptions.titleBarStyle = "hidden";
+    windowOptions.trafficLightPosition = { x: 10, y: 12 };
+  }
+
+  mainWindow = new BrowserWindow(windowOptions);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void openExternalIfSafe(url);

@@ -184,12 +184,17 @@ export const detectCliPath = async (
   tool: CliTool,
   deps: CliLoginDeps = defaultDeps,
 ): Promise<string | null> => {
+  const plat = deps.platform();
+  const whichCmd = plat === "win32" ? "where" : "which";
+  const toolName = plat === "win32" ? `${tool}.exe` : tool;
+
   try {
-    const { stdout } = await deps.execFile("which", [tool]);
-    const path = stdout.trim();
+    const { stdout } = await deps.execFile(whichCmd, [toolName]);
+    // `where` returns multiple matches, one per line
+    const path = stdout.trim().split("\n")[0].trim();
     if (path.length > 0) return path;
   } catch {
-    // which failed — fall through
+    // which/where failed — fall through
   }
 
   // Fallback: use the bundled CLI from the backend's PyInstaller bundle / dev
@@ -208,12 +213,6 @@ export const detectLoginState = async (
   tool: CliTool,
   deps: CliLoginDeps = defaultDeps,
 ): Promise<LoginState> => {
-  const plat = deps.platform();
-
-  if (plat !== "darwin" && plat !== "linux") {
-    return "unsupported";
-  }
-
   // Authoritative path for both CLIs: shell out to the tool's own status
   // command and require strict marker text in the output. The CLI is the
   // only thing that knows whether the auth artefact on disk / in keychain
@@ -337,6 +336,32 @@ export const launchTerminalWithCommand = async (
       return {
         launched: false,
         error: err instanceof Error ? err.message : "spawn failed",
+      };
+    }
+  }
+
+  if (plat === "win32") {
+    // Try Windows Terminal (wt.exe) first, fall back to cmd.exe.
+    try {
+      await deps.execFile("where", ["wt.exe"]);
+      deps.spawnDetached("wt.exe", [
+        "new-tab",
+        "--",
+        "cmd.exe",
+        "/K",
+        command,
+      ]);
+      return { launched: true };
+    } catch {
+      // Windows Terminal not available — fall back to cmd.exe
+    }
+    try {
+      deps.spawnDetached("cmd.exe", ["/K", command]);
+      return { launched: true };
+    } catch (err) {
+      return {
+        launched: false,
+        error: err instanceof Error ? err.message : "Failed to launch terminal",
       };
     }
   }

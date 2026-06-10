@@ -12,7 +12,6 @@ from valuz_agent.infra.single_writer import (
     release_single_writer_lock,
 )
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only lock semantics")
 
 
 @pytest.fixture(autouse=True)

@@ -19,12 +19,15 @@ export const createAppTray = ({
   getMainWindow,
   checkForUpdates,
 }: CreateTrayOptions) => {
-  // Monochrome silhouette with transparent background. nativeImage picks up
-  // iconTemplate@2x.png automatically for retina menu bars; macOS auto-tints
-  // the opaque pixels to match the menu bar theme.
-  const iconPath = path.join(app.getAppPath(), "build", "iconTemplate.png");
+  // macOS: monochrome template icon (auto-tinted by the OS for light/dark menu bar).
+  // Windows/Linux: use the standard ico/png icon.
+  const iconName =
+    process.platform === "darwin" ? "iconTemplate.png" : "icon.ico";
+  const iconPath = path.join(app.getAppPath(), "build", iconName);
   const trayImage = nativeImage.createFromPath(iconPath);
-  trayImage.setTemplateImage(true);
+  if (process.platform === "darwin") {
+    trayImage.setTemplateImage(true);
+  }
   const tray = new Tray(trayImage);
 
   const showMainWindow = () => {

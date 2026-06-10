@@ -298,6 +298,26 @@ def detect_system_timezone() -> str:
     import os
     from pathlib import Path
 
+    if sys.platform == "win32":
+        # /etc/localtime does not exist on Windows. Try TZ env var first,
+        # then fall back to datetime-based detection.
+        tz_env = os.environ.get("TZ", "").strip()
+        if tz_env:
+            try:
+                from zoneinfo import ZoneInfo
+
+                ZoneInfo(tz_env)
+                return tz_env
+            except Exception:
+                pass
+        try:
+            name = datetime.now().astimezone().tzname()
+            if name:
+                return name
+        except Exception:
+            pass
+        return FALLBACK_TIMEZONE
+
     local = Path("/etc/localtime")
     if local.is_symlink():
         target = os.readlink(local)
