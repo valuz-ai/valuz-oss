@@ -60,7 +60,6 @@ from claude_agent_sdk.types import (
 from claude_agent_sdk.types import (
     McpStdioServerConfig as SdkMcpStdioServerConfig,
 )
-
 from src.core.agent_config import AgentConfig
 from src.core.approval_rule_matcher import (
     ClaudePermissionUpdateRuleMatcher,
@@ -1327,6 +1326,10 @@ class ClaudeAgentRuntime:
           one. ``base_url is None`` (first-party Anthropic) wipes any
           stale parent-env value so the SDK falls back to its baked-in
           ``api.anthropic.com``.
+        * ``CLAUDE_CODE_DISABLE_ADVISOR_TOOL`` — forced ``"1"`` whenever a
+          custom ``base_url`` is set (the advisor is Anthropic-API-only and
+          may be unavailable behind a gateway); cleared on the first-party
+          path so it keeps the default.
         * ``ANTHROPIC_AUTH_TOKEN`` — the per-session api_key.
         * Non-Claude model aliases additionally rewrite the SDK's
           ``ANTHROPIC_DEFAULT_*_MODEL`` family so the CLI doesn't
@@ -1339,12 +1342,27 @@ class ClaudeAgentRuntime:
         merged: dict[str, str] = dict(os.environ)
         if self.model_provider.base_url is not None:
             merged["ANTHROPIC_BASE_URL"] = self.model_provider.base_url
+            # The advisor is a server-executed, Anthropic-API-only tool. It
+            # is not available on Bedrock/Vertex/Foundry, and through an LLM
+            # gateway its availability depends on whether the gateway
+            # forwards the request intact to the Anthropic API — which we
+            # can't know for a user-supplied ``base_url``. When it's
+            # unavailable the CLI surfaces an error on every turn, so we
+            # default it off for any custom gateway; losing an optional
+            # enhancement beats a recurring user-facing failure. Direct
+            # first-party Anthropic (``base_url is None``) keeps it on.
+            # https://code.claude.com/docs/en/advisor.md
+            merged["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] = "1"
         else:
             # If a previous env carried a stale base_url (e.g. parent
             # shell exported one for an unrelated workflow), wipe it so
             # the SDK actually falls back to its default rather than
             # silently inheriting the parent's pointer.
             merged.pop("ANTHROPIC_BASE_URL", None)
+            # Symmetric with the base_url wipe above: drop any inherited
+            # advisor-off flag so the first-party path gets the default
+            # (advisor on) rather than silently honoring a parent export.
+            merged.pop("CLAUDE_CODE_DISABLE_ADVISOR_TOOL", None)
         merged["ANTHROPIC_AUTH_TOKEN"] = self.model_provider.api_key
         if "claude" not in self.model:
             merged["ANTHROPIC_MODEL"] = self.model
