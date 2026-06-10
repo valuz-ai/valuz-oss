@@ -135,7 +135,7 @@ jobs:
         run: |
           TAG="v${{ needs.set-version.outputs.version }}"
           shopt -s nullglob
-          files=(frontend/apps/desktop/release/*.dmg frontend/apps/desktop/release/*.blockmap frontend/apps/desktop/release/latest-mac.yml)
+          files=(frontend/apps/desktop/release/*.dmg frontend/apps/desktop/release/*.zip frontend/apps/desktop/release/*.blockmap frontend/apps/desktop/release/latest-mac.yml)
           if [ ${#files[@]} -eq 0 ]; then
             echo "No artifacts found to upload"
             exit 0
@@ -244,7 +244,7 @@ jobs:
         run: |
           TAG="v${{ needs.set-version.outputs.version }}"
           shopt -s nullglob
-          files=(frontend/apps/desktop/release/*.dmg frontend/apps/desktop/release/*.blockmap frontend/apps/desktop/release/latest-mac.yml)
+          files=(frontend/apps/desktop/release/*.dmg frontend/apps/desktop/release/*.zip frontend/apps/desktop/release/*.blockmap frontend/apps/desktop/release/latest-mac.yml)
           if [ ${#files[@]} -eq 0 ]; then
             echo "No artifacts found to upload"
             exit 0
