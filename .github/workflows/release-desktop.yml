@@ -335,7 +335,7 @@ jobs:
         run: |
           TAG="v${{ needs.set-version.outputs.version }}"
           shopt -s nullglob
-          files=(frontend/apps/desktop/release/*.AppImage frontend/apps/desktop/release/*.deb frontend/apps/desktop/release/*.blockmap frontend/apps/desktop/release/latest-linux.yml)
+          files=(frontend/apps/desktop/release/*.AppImage frontend/apps/desktop/release/*.deb frontend/apps/desktop/release/*.blockmap frontend/apps/desktop/release/latest-linux*.yml)
           if [ ${#files[@]} -eq 0 ]; then
             echo "No artifacts found to upload"
             exit 0
@@ -353,7 +353,7 @@ jobs:
             frontend/apps/desktop/release/*.AppImage
             frontend/apps/desktop/release/*.deb
             frontend/apps/desktop/release/*.blockmap
-            frontend/apps/desktop/release/latest-linux.yml
+            frontend/apps/desktop/release/latest-linux*.yml
           if-no-files-found: warn
 
   build-windows-x64:
