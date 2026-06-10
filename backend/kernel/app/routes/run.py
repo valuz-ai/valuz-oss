@@ -23,11 +23,7 @@ from app.schemas import DataResponse
 from app.ws_sink import WebSocketEventSink
 from src.core import StorePort
 from src.core.events import EventSink
-from src.core.orchestrator import (
-    ProjectDeletedError,
-    ProjectNotFoundError,
-    SessionNotFoundError,
-)
+from src.core.orchestrator import SessionNotFoundError
 from src.core.types import Attachment, UserMessage
 
 logger = logging.getLogger(__name__)
@@ -98,14 +94,6 @@ async def run_session(websocket: WebSocket, session_id: str) -> None:
         await websocket.close(code=4004, reason="Session not found")
         return
 
-    project = await store.load_project(session.project_id)
-    if project is None:
-        await websocket.close(code=4004, reason="Project not found")
-        return
-    if project.status == "deleted":
-        await websocket.close(code=4012, reason="Project deleted")
-        return
-
     orchestrator = get_orchestrator()
     sink: EventSink = WebSocketEventSink(websocket)
 
@@ -125,12 +113,6 @@ async def run_session(websocket: WebSocket, session_id: str) -> None:
                 websocket,
                 {"type": "error", "data": {"message": "Session not found"}},
             )
-        except ProjectDeletedError:
-            with contextlib.suppress(RuntimeError):
-                await websocket.close(code=4012, reason="Project deleted")
-        except ProjectNotFoundError:
-            with contextlib.suppress(RuntimeError):
-                await websocket.close(code=4004, reason="Project not found")
         except Exception as run_exc:
             logger.exception("Runtime error for session %s", session_id)
             await _send_safely(

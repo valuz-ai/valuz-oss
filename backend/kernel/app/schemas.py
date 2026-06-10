@@ -166,65 +166,21 @@ class ModelSettingsSchema(BaseModel):
     effort: EffortLiteral | None = None
 
 
-# -- Project request/data schemas --
+RuntimeProvider = Literal["claude_agent", "codex", "deepagents"]
 
 
-class CreateProjectRequest(BaseModel):
-    name: str
-    cwd: str
-    metadata: dict[str, Any] = Field(default_factory=dict)
+# -- Agent snapshot --
 
 
-class UpdateProjectRequest(BaseModel):
-    name: str | None = None
-    metadata: dict[str, Any] | None = None
+class AgentConfigSchema(BaseModel):
+    """Wire shape of the embedded agent snapshot (``Session.agent_config``).
 
+    Mirrors ``core.agent_config.AgentConfig`` minus runtime-only fields
+    (hooks) and row-lifecycle fields (status / created_at). ``name`` is the
+    only required field; everything else defaults like the dataclass.
+    """
 
-class ValidateCwdRequest(BaseModel):
-    cwd: str
-
-
-class ValidateCwdData(BaseModel):
-    exists: bool
-    is_dir: bool
-    writable: bool
-    has_dot_claude: bool
-    absolute_path: str | None = None
-    error: str | None = None
-
-
-class ValidateCwdResponse(BaseModel):
-    data: ValidateCwdData
-    error: ApiError | None = None
-
-
-class ProjectData(BaseModel):
-    id: str
-    name: str
-    cwd: str
-    status: str = "active"
-    created_at: int | None = None  # Unix epoch milliseconds (UTC)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class ProjectResponse(BaseModel):
-    data: ProjectData
-    error: ApiError | None = None
-
-
-class ProjectListResponse(BaseModel):
-    data: list[ProjectData]
-    error: ApiError | None = None
-
-
-# -- Agent --
-
-
-class CreateAgentRequest(BaseModel):
-    """Create a new global agent. Only ``name`` is required — every other
-    field carries a sensible default so users can ship a minimal agent and
-    flesh it out later."""
-
+    id: str = ""
     name: str
     model: str = "claude-sonnet-4-6"
     runtime_provider: RuntimeProvider = "claude_agent"
@@ -241,62 +197,12 @@ class CreateAgentRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class UpdateAgentRequest(BaseModel):
-    name: str | None = None
-    model: str | None = None
-    runtime_provider: RuntimeProvider | None = None
-    instructions: str | None = None
-    permission_mode: Literal["default", "auto_review", "full_access"] | None = None
-    max_turns: int | None = None
-    max_cost_usd: float | None = None
-    tools: list[ToolDefSchema] | None = None
-    callable_agents: list[SubAgentDefSchema] | None = None
-    skills: list[str] | None = None
-    mcp_servers: list[McpServerConfigSchema] | None = None
-    effort: EffortLiteral | None = None
-    thinking: dict[str, Any] | None = None
-    metadata: dict[str, Any] | None = None
-
-
-class AgentData(BaseModel):
-    id: str
-    name: str
-    model: str
-    runtime_provider: RuntimeProvider = "claude_agent"
-    instructions: str = ""
-    permission_mode: Literal["default", "auto_review", "full_access"] = "full_access"
-    max_turns: int = 50
-    max_cost_usd: float = 10.0
-    tools: list[ToolDefSchema] = Field(default_factory=list)
-    callable_agents: list[SubAgentDefSchema] = Field(default_factory=list)
-    skills: list[str] = Field(default_factory=list)
-    mcp_servers: list[McpServerConfigSchema] = Field(default_factory=list)
-    effort: EffortLiteral | None = None
-    thinking: dict[str, Any] | None = None
-    status: str = "active"
-    created_at: int | None = None  # Unix epoch milliseconds (UTC)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class AgentResponse(BaseModel):
-    data: AgentData
-    error: ApiError | None = None
-
-
-class AgentListResponse(BaseModel):
-    data: list[AgentData]
-    error: ApiError | None = None
-
-
 # -- Session --
 
 
-RuntimeProvider = Literal["claude_agent", "codex", "deepagents"]
-
-
 class CreateSessionRequest(BaseModel):
-    project_id: str
-    agent_id: str
+    agent_config: AgentConfigSchema
+    cwd: str
     runtime_provider: RuntimeProvider
     model: str = ""
     model_provider: ModelProviderInputSchema | None = None
@@ -305,7 +211,6 @@ class CreateSessionRequest(BaseModel):
     skills: list[str] = Field(default_factory=list)
     mcp_servers: list[McpServerConfigSchema] = Field(default_factory=list)
     permission_mode: Literal["default", "auto_review", "full_access"] | None = None
-    cwd: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -342,8 +247,7 @@ class TodoItem(BaseModel):
 
 class SessionData(BaseModel):
     id: str
-    project_id: str
-    agent_id: str
+    agent_config: AgentConfigSchema
     runtime_provider: RuntimeProvider
     cwd: str = ""
     model: str = ""

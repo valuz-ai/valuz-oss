@@ -28,7 +28,6 @@ import valuz_agent.boot.kernel  # noqa: F401 — ensure kernel sys.path
 
 from src.core import AgentConfig, ModelSettings, Session  # type: ignore[import-not-found]
 
-from valuz_agent.adapters import kernel_store
 from valuz_agent.adapters.capability_resolver import (
     always_on_http_mcp_servers,
     always_on_skill_paths,
@@ -379,6 +378,40 @@ def summarize_role(instructions: str | None) -> str:
     return flat[:ROLE_SUMMARY_LIMIT].rstrip() + "…"
 
 
+
+async def _member_agent_config(member, members: ProjectMemberDatastore):  # noqa: ANN001, ANN202
+    """Build the member's AgentConfig from its source library row.
+
+    The kernel has no agents table — the library AgentRow is the single
+    source of truth and the config is built in memory (and embedded into
+    sessions as their snapshot). Members created before provenance landed
+    (``source_agent_slug`` NULL, despite the 0003 backfill) resolve to None.
+    """
+    if not member.source_agent_slug:
+        logger.warning(
+            "member %s/%s has no source_agent_slug — cannot build agent config",
+            member.project_id,
+            member.agent_slug,
+        )
+        return None
+    from valuz_agent.modules.agents.datastore import AgentDatastore
+    from valuz_agent.modules.agents.service import AgentService
+
+    db = members._db  # noqa: SLF001 — same unit of work as the member lookup
+    row = await AgentDatastore(db).get_agent(member.source_agent_slug)
+    if row is None:
+        logger.warning(
+            "member %s/%s points at missing library agent %s",
+            member.project_id,
+            member.agent_slug,
+            member.source_agent_slug,
+        )
+        return None
+    return await AgentService(db).build_agent_config(
+        row, member.kernel_agent_id or row.kernel_agent_id
+    )
+
+
 async def build_member_roster(
     *,
     project_id: str,
@@ -396,7 +429,7 @@ async def build_member_roster(
     for row in rows:
         if row.agent_slug == exclude_slug:
             continue
-        agent = await kernel_store.load_agent(row.kernel_agent_id)
+        agent = await _member_agent_config(row, members)
         if agent is None:
             continue
         summary = summarize_role(agent.instructions)
@@ -435,11 +468,10 @@ async def resolve_member_agent(
         logger.debug("resolve_member_agent: no membership for %s/%s", project_id, agent_slug)
         return None
 
-    agent = await kernel_store.load_agent(member.kernel_agent_id)
+    agent = await _member_agent_config(member, members)
     if agent is None:
         logger.warning(
-            "resolve_member_agent: orphaned member row — kernel agent %s missing for %s/%s",
-            member.kernel_agent_id,
+            "resolve_member_agent: member %s/%s has no resolvable library agent",
             project_id,
             agent_slug,
         )
@@ -566,11 +598,10 @@ async def build_member_session(
         logger.debug("build_member_session: no membership for %s/%s", project_id, agent_slug)
         return None
 
-    agent = await kernel_store.load_agent(member_row.kernel_agent_id)
+    agent = await _member_agent_config(member_row, members)
     if agent is None:
         logger.warning(
-            "build_member_session: orphaned member — kernel agent %s missing for %s/%s",
-            member_row.kernel_agent_id,
+            "build_member_session: member %s/%s has no resolvable library agent",
             project_id,
             agent_slug,
         )
@@ -716,8 +747,6 @@ async def build_member_session(
 
     session = Session(
         id=session_id,
-        project_id=project_id,
-        agent_id=agent.id,
         agent_config=agent,
         cwd=run_dir,
         mode=session_mode,

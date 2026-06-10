@@ -251,7 +251,7 @@ def test_build_member_session_injects_skill_scoping(
     )
     fake_members = SimpleNamespace(get=_async_member_get())
     monkeypatch.setattr(
-        agent_resolver.kernel_store, "load_agent", _as_async(lambda _id: fake_agent)
+        agent_resolver, "_member_agent_config", _as_async(lambda _member, _ds: fake_agent)
     )
     # Hermetic: don't resolve skill slugs against the real skill-index DB — this
     # test only asserts the prompt-scoping block (built from the agent's own
@@ -303,7 +303,7 @@ def test_build_member_session_carries_agent_effort(
     )
     fake_members = SimpleNamespace(get=_async_member_get())
     monkeypatch.setattr(
-        agent_resolver.kernel_store, "load_agent", _as_async(lambda _id: fake_agent)
+        agent_resolver, "_member_agent_config", _as_async(lambda _member, _ds: fake_agent)
     )
 
     session = asyncio.run(
@@ -344,7 +344,7 @@ def test_build_member_session_no_effort_leaves_model_settings_unset(
     )
     fake_members = SimpleNamespace(get=_async_member_get())
     monkeypatch.setattr(
-        agent_resolver.kernel_store, "load_agent", _as_async(lambda _id: fake_agent)
+        agent_resolver, "_member_agent_config", _as_async(lambda _member, _ds: fake_agent)
     )
 
     session = asyncio.run(
@@ -382,7 +382,7 @@ def _fake_goal_mode_setup(monkeypatch: pytest.MonkeyPatch, runtime_provider: str
     )
     fake_members = SimpleNamespace(get=_async_member_get())
     monkeypatch.setattr(
-        agent_resolver.kernel_store, "load_agent", _as_async(lambda _id: fake_agent)
+        agent_resolver, "_member_agent_config", _as_async(lambda _member, _ds: fake_agent)
     )
     return agent_resolver, fake_members
 
@@ -589,30 +589,18 @@ async def test_materialize_lead_agent_builds_clone_with_dispatch_tools() -> None
     """The lead clone has a deterministic id and carries the mode's dispatch tools."""
     from src.core import AgentConfig  # type: ignore[import-not-found]
 
-    from valuz_agent.adapters import kernel_store
     from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
 
-    saved: dict[str, AgentConfig] = {}
-
-    async def _save(a):  # noqa: ANN001, ANN202
-        saved[a.id] = a
-
-    orig = kernel_store.save_agent
-    kernel_store.save_agent = _save  # type: ignore[assignment]
-    try:
-        base = AgentConfig(id="base1", name="lead", tools=())
-        orch = TaskOrchestrator()
-        clone = await orch._materialize_lead_agent(base, dispatch_mode="async")
-        assert clone.id == "base1__lead__async"
-        assert saved[clone.id] is clone  # dual-track row mirrors the snapshot
-        names = {t.name for t in clone.tools}
-        assert "dispatch" in names
-        assert "await_members" in names
-        assert "send" in names
-        assert "finish_task" in names
-        assert "create_task" not in names
-    finally:
-        kernel_store.save_agent = orig  # type: ignore[assignment]
+    base = AgentConfig(id="base1", name="lead", tools=())
+    orch = TaskOrchestrator()
+    clone = await orch._materialize_lead_agent(base, dispatch_mode="async")
+    assert clone.id == "base1__lead__async"
+    names = {t.name for t in clone.tools}
+    assert "dispatch" in names
+    assert "await_members" in names
+    assert "send" in names
+    assert "finish_task" in names
+    assert "create_task" not in names
 
 
 def test_send_to_member_rejects_cross_task(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -660,7 +648,6 @@ async def test_orchestration_tools_include_list_and_get() -> None:
     / get_plan) via DISPATCH_TOOL_DECLARATIONS."""
     from src.core import AgentConfig  # type: ignore[import-not-found]
 
-    from valuz_agent.adapters import kernel_store
     from valuz_agent.modules.tasks.dispatch_mcp import (
         ORCHESTRATION_TOOL_DECLARATIONS,
         ensure_orchestration_tools_on_agent,
@@ -698,47 +685,38 @@ async def test_orchestration_tools_include_list_and_get() -> None:
     # DISPATCH_TOOL_DECLARATIONS). Names should appear exactly once on the
     # clone — the new dedup in _materialize_lead_agent prevents duplicates
     # when a tool sits in both ORCHESTRATION and DISPATCH declarations.
-    saved: dict[str, AgentConfig] = {}
+    clone = await TaskOrchestrator()._materialize_lead_agent(conv, dispatch_mode="async")
+    clone_tool_names = [t.name for t in clone.tools]
+    clone_names = set(clone_tool_names)
+    # Launcher / draft-mode tools stripped:
+    for stripped in (
+        "create_task",
+        "list_tasks",
+        "get_task",
+        "draft_task",
+        "commit_task",
+        "abandon_task",
+        "inject_into_task",
+    ):
+        assert stripped not in clone_names, f"{stripped} should be dropped from lead"
+    # Lead toolset present:
+    for kept in (
+        "dispatch",
+        "await_members",
+        "send",
+        "finish_task",
+        "list_members",
+        "review_subtask",
+        "plan_task",
+        "modify_plan",
+        "get_plan",
+    ):
+        assert kept in clone_names, f"{kept} should be on lead clone"
+    # No duplicates (every name appears at most once).
+    assert len(clone_tool_names) == len(clone_names), (
+        f"lead clone has duplicate tools: {clone_tool_names}"
+    )
 
-    async def _save(x):  # noqa: ANN001, ANN202
-        saved[x.id] = x
-
-    orig = kernel_store.save_agent
-    kernel_store.save_agent = _save  # type: ignore[assignment]
-    try:
-        clone = await TaskOrchestrator()._materialize_lead_agent(conv, dispatch_mode="async")
-        clone_tool_names = [t.name for t in clone.tools]
-        clone_names = set(clone_tool_names)
-        # Launcher / draft-mode tools stripped:
-        for stripped in (
-            "create_task",
-            "list_tasks",
-            "get_task",
-            "draft_task",
-            "commit_task",
-            "abandon_task",
-            "inject_into_task",
-        ):
-            assert stripped not in clone_names, f"{stripped} should be dropped from lead"
-        # Lead toolset present:
-        for kept in (
-            "dispatch",
-            "await_members",
-            "send",
-            "finish_task",
-            "list_members",
-            "review_subtask",
-            "plan_task",
-            "modify_plan",
-            "get_plan",
-        ):
-            assert kept in clone_names, f"{kept} should be on lead clone"
-        # No duplicates (every name appears at most once).
-        assert len(clone_tool_names) == len(clone_names), (
-            f"lead clone has duplicate tools: {clone_tool_names}"
-        )
-    finally:
-        kernel_store.save_agent = orig  # type: ignore[assignment]
 
 
 def test_build_member_session_carries_effort_for_deepagents(
@@ -768,7 +746,7 @@ def test_build_member_session_carries_effort_for_deepagents(
     )
     fake_members = SimpleNamespace(get=_async_member_get("da-1"))
     monkeypatch.setattr(
-        agent_resolver.kernel_store, "load_agent", _as_async(lambda _id: fake_agent)
+        agent_resolver, "_member_agent_config", _as_async(lambda _member, _ds: fake_agent)
     )
 
     session = asyncio.run(

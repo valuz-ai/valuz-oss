@@ -95,30 +95,33 @@ def _expect(condition: bool, label: str) -> None:
 async def _seed_project_and_agent() -> tuple[str, str]:
     """Insert a project + a project-member agent into the
     just-bootstrapped DB. Returns (project_id, agent_slug)."""
-    from src.core import AgentConfig  # type: ignore[import-not-found]
-
-    from valuz_agent.adapters import kernel_store
     from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.modules.agents.datastore import ProjectMemberDatastore
-    from valuz_agent.modules.agents.models import ProjectMemberRow
+    from valuz_agent.modules.agents.datastore import AgentDatastore, ProjectMemberDatastore
+    from valuz_agent.modules.agents.models import AgentRow, ProjectMemberRow
     from valuz_agent.modules.projects.datastore import ProjectDatastore
     from valuz_agent.modules.projects.models import ProjectRow
 
     ws_id = "ws-chatplan-e2e"
     slug = "lead-agent"
 
-    # Kernel agent (the canonical AgentConfig the lead/member sessions
-    # will reference via membership.kernel_agent_id).
+    # Library agent — the member references it via source_agent_slug; the
+    # session-creation path builds the embedded snapshot from this row.
     kernel_agent_id = f"kernel-agent-{uuid.uuid4().hex[:8]}"
-    cfg = AgentConfig(
-        id=kernel_agent_id,
-        name=slug,
-        runtime_provider="claude_agent",
-        instructions="You are the lead agent for chat-plan E2E.",
-    )
-    await kernel_store.save_agent(cfg)
 
     async with async_unit_of_work() as db:
+        agent_ds = AgentDatastore(db)
+        await agent_ds.create(
+            AgentRow(
+                slug=slug,
+                name=slug,
+                source="custom",
+                runtime="claude_agent",
+                model="claude-sonnet-4-6",
+                instructions="You are the lead agent for chat-plan E2E.",
+                kernel_agent_id=kernel_agent_id,
+            )
+        )
+
         ws_ds = ProjectDatastore(db)
         ws_row = ProjectRow(
             id=ws_id,
@@ -133,6 +136,7 @@ async def _seed_project_and_agent() -> tuple[str, str]:
             project_id=ws_id,
             agent_slug=slug,
             kernel_agent_id=kernel_agent_id,
+            source_agent_slug=slug,
         )
         await member_ds.create(member)
 

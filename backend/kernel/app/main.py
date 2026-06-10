@@ -11,9 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import AppConfig
 from app.dependencies import init_dependencies, shutdown_dependencies
 from app.mcp_toolkit_router import mcp_router_lifespan, mount_mcp_router
-from app.routes.agents import router as agents_router
 from app.routes.messages import router as messages_router
-from app.routes.projects import router as projects_router
 from app.routes.run import router as run_router
 from app.routes.sessions import router as sessions_router
 
@@ -48,8 +46,6 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-app.include_router(projects_router)
-app.include_router(agents_router)
 app.include_router(sessions_router)
 app.include_router(messages_router)
 app.include_router(run_router)

@@ -20,6 +20,3 @@ class AppConfig:
     port: int = field(default_factory=lambda: int(os.getenv("PORT", "8000")))
     cors_origins: list[str] = field(default_factory=_get_cors_origins)
     debug: bool = field(default_factory=lambda: os.getenv("DEBUG", "false").lower() == "true")
-    workspace_dir: str = field(
-        default_factory=lambda: os.getenv("HARNESS_WORKSPACE_DIR", "/tmp/harness-workspaces")
-    )

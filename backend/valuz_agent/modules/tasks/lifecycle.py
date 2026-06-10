@@ -44,7 +44,7 @@ from uuid import uuid4
 
 from valuz_agent.adapters import kernel_store
 from valuz_agent.modules.sessions import project_index
-from valuz_agent.adapters.agent_resolver import build_member_session
+from valuz_agent.adapters.agent_resolver import _member_agent_config, build_member_session
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.fs_registry import fs_registry
@@ -201,7 +201,7 @@ class LifecycleService:
                 raise ValueError(
                     f"lead agent {lead_agent_slug!r} is not a member of project {project_id!r}"
                 )
-            lead_agent = await kernel_store.load_agent(lead_member.kernel_agent_id)
+            lead_agent = await _member_agent_config(lead_member, member_ds)
             lead_clone = None
             if lead_agent is not None:
                 lead_clone = await self._materialize_lead_agent(
@@ -528,7 +528,7 @@ class LifecycleService:
             )
             lead_cwd = str(project_cwd)
 
-            lead_agent = await kernel_store.load_agent(lead_member.kernel_agent_id)
+            lead_agent = await _member_agent_config(lead_member, member_ds)
             lead_clone = None
             if lead_agent is not None:
                 lead_clone = await self._materialize_lead_agent(
@@ -1184,9 +1184,8 @@ class LifecycleService:
         clone = _ensure_global_tools_declared(
             replace(base_agent, id=clone_id, tools=base_tools + tuple(declarations))
         )
-        # Dual-track: the clone row keeps legacy sessions resumable; new lead
-        # sessions embed the clone as their agent_config snapshot.
-        await kernel_store.save_agent(clone)
+        # The clone exists only as the lead session's embedded snapshot —
+        # the kernel has no agents table to materialize it into.
         return clone
 
 

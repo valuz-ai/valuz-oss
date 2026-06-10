@@ -82,19 +82,21 @@ single adapter seam.
 ┌──────────────────────────────────────────────────────────────────┐
 │  Agent Harness Kernel  (backend/kernel)                            │
 │                                                                    │
-│  app/      routes mounted at /api/v1/{projects,agents,sessions,…}  │
+│  app/      routes mounted at /api/v1/{sessions,messages,…}        │
 │            StorePort + SessionOrchestrator singletons              │
-│  src/core/      Project, AgentConfig, Session, Event, McpServer…   │
+│  src/core/      AgentConfig, Session, Event, McpServer…            │
 │  src/adapters/  SQLAlchemyStore (async)                            │
 │  src/runtimes/  ClaudeAgentRuntime, DeepAgentsRuntime, Codex,      │
 │                 skills materialization                             │
 │                                                                    │
-│  Tables (unprefixed): projects · agents · sessions · events        │
+│  Tables (unprefixed): sessions · messages · events                 │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-**Kernel** owns the `Project ↔ Agent ↔ Session ↔ Event` persistence model and
-runtime orchestration.
+**Kernel** owns the `Session ↔ Message ↔ Event` persistence model and runtime
+orchestration. Sessions are self-sufficient: each embeds its agent
+configuration snapshot (`agent_config`) and working directory (`cwd`) — the
+kernel holds no project or agent tables.
 
 **Host** owns everything else — the agent library, project membership, the task
 orchestrator, providers, the MCP catalog, scheduling, attachments, OAuth pages,

@@ -36,12 +36,22 @@ MEMORY_WRITE_TOOL_NAME = "memory_write"
 # --- context resolution (module-level so tests can monkeypatch) -------------
 
 
-async def _resolve_project_cwd(project_id: str) -> str | None:
+async def _resolve_project_cwd(session_id: str) -> str | None:
+    """Project-root cwd for the session's project — resolved through the
+    session's host-stamped ``metadata.valuz.project_id`` (the kernel knows
+    no projects). NOT ``session.cwd``: task sub-runs execute in their own
+    run_dir while memory scopes must anchor at the project root."""
+    if not session_id:
+        return None
+    sess = await kernel_store.load_session(session_id)
+    if sess is None:
+        return None
+    project_id = ((sess.metadata or {}).get("valuz", {}) or {}).get("project_id") or ""
     if not project_id:
         return None
-    proj = await kernel_store.load_project(project_id)
-    cwd = getattr(proj, "cwd", "") if proj else ""
-    return cwd or None
+    from valuz_agent.modules.projects.service import project_cwd_by_id
+
+    return await project_cwd_by_id(str(project_id))
 
 
 async def _resolve_task_id(session_id: str) -> str | None:
@@ -61,7 +71,7 @@ class ScopeResolver:
     async def resolve(self, scope: Scope, ctx: ExecContext) -> MemoryScope:
         if scope == "global":
             return MemoryScope("global")
-        cwd = await _resolve_project_cwd(ctx.project_id)
+        cwd = await _resolve_project_cwd(ctx.session_id)
         if not cwd:
             raise MemoryError(
                 f"scope {scope!r} unavailable: this session has no project cwd "

@@ -133,24 +133,20 @@ async def test_should_complete_full_approval_cycle(_store_and_orchestrator, tmp_
     """Park → orchestrator.submit_action → action_resolved persisted + bus."""
     from src.core.agent_config import AgentConfig  # type: ignore[import-not-found]
     from src.core.events import Event  # type: ignore[import-not-found]
-    from src.core.project import Project  # type: ignore[import-not-found]
     from src.core.types import Message, Session, UserMessage  # type: ignore[import-not-found]
 
     store, orchestrator, _ = _store_and_orchestrator
 
-    project_id = uuid.uuid4().hex
     agent_id = uuid.uuid4().hex
     session_id = uuid.uuid4().hex
     message_id = uuid.uuid4().hex
     pending_id = "pending-abc"
 
-    await store.save_project(Project(id=project_id, name="p", cwd=str(tmp_path)))
-    await store.save_agent(AgentConfig(id=agent_id, name="a", model="claude-sonnet-4-6"))
     await store.save_session(
         Session(
             id=session_id,
-            project_id=project_id,
-            agent_id=agent_id,
+            agent_config=AgentConfig(id=agent_id, name="a", model="claude-sonnet-4-6"),
+            cwd=str(tmp_path),
             permission_mode="default",
         )
     )
@@ -222,16 +218,17 @@ async def test_should_return_idempotent_on_same_decision_retry(_store_and_orches
     """Same (pending_id, decision) twice → idempotent=True + original timestamp."""
     from src.core.agent_config import AgentConfig  # type: ignore[import-not-found]
     from src.core.events import Event  # type: ignore[import-not-found]
-    from src.core.project import Project  # type: ignore[import-not-found]
     from src.core.types import Message, Session, UserMessage  # type: ignore[import-not-found]
 
     store, orchestrator, _ = _store_and_orchestrator
 
     pid, aid, sid, mid = (uuid.uuid4().hex for _ in range(4))
     pending_id = "pending-idem"
-    await store.save_project(Project(id=pid, name="p", cwd=str(tmp_path)))
-    await store.save_agent(AgentConfig(id=aid, name="a", model="m"))
-    await store.save_session(Session(id=sid, project_id=pid, agent_id=aid))
+    await store.save_session(Session(
+            id=sid,
+            agent_config=AgentConfig(id=aid, name="a", model="m"),
+            cwd=str(tmp_path),
+        ))
     await store.save_message(
         Message(
             id=mid,
@@ -277,16 +274,17 @@ async def test_should_reject_conflicting_decision_with_pending_action_conflict(
     from src.core.agent_config import AgentConfig  # type: ignore[import-not-found]
     from src.core.events import Event  # type: ignore[import-not-found]
     from src.core.orchestrator import PendingActionConflictError  # type: ignore[import-not-found]
-    from src.core.project import Project  # type: ignore[import-not-found]
     from src.core.types import Message, Session, UserMessage  # type: ignore[import-not-found]
 
     store, orchestrator, _ = _store_and_orchestrator
 
     pid, aid, sid, mid = (uuid.uuid4().hex for _ in range(4))
     pending_id = "pending-conflict"
-    await store.save_project(Project(id=pid, name="p", cwd=str(tmp_path)))
-    await store.save_agent(AgentConfig(id=aid, name="a", model="m"))
-    await store.save_session(Session(id=sid, project_id=pid, agent_id=aid))
+    await store.save_session(Session(
+            id=sid,
+            agent_config=AgentConfig(id=aid, name="a", model="m"),
+            cwd=str(tmp_path),
+        ))
     await store.save_message(
         Message(
             id=mid,
@@ -326,18 +324,20 @@ async def test_should_seal_orphan_pendings_on_startup_walk(_store_and_orchestrat
     """``scan_orphan_pendings`` writes ``action_resolved(expired)`` for unresolved rows."""
     from src.core.agent_config import AgentConfig  # type: ignore[import-not-found]
     from src.core.events import Event  # type: ignore[import-not-found]
-    from src.core.project import Project  # type: ignore[import-not-found]
     from src.core.types import Message, Session, UserMessage  # type: ignore[import-not-found]
 
     store, orchestrator, _ = _store_and_orchestrator
 
     pid, aid, sid, mid = (uuid.uuid4().hex for _ in range(4))
     pending_id = "pending-stale"
-    await store.save_project(Project(id=pid, name="p", cwd=str(tmp_path)))
-    await store.save_agent(AgentConfig(id=aid, name="a", model="m"))
     # Status must be ``running`` for the scan to find it (simulates a
     # crash mid-turn).
-    await store.save_session(Session(id=sid, project_id=pid, agent_id=aid, status="running"))
+    await store.save_session(Session(
+            id=sid,
+            agent_config=AgentConfig(id=aid, name="a", model="m"),
+            cwd=str(tmp_path),
+            status="running",
+        ))
     await store.save_message(
         Message(
             id=mid,
@@ -396,16 +396,17 @@ async def test_should_commit_session_rule_and_return_rule_id_on_approve_for_sess
     """
     from src.core.agent_config import AgentConfig  # type: ignore[import-not-found]
     from src.core.events import Event  # type: ignore[import-not-found]
-    from src.core.project import Project  # type: ignore[import-not-found]
     from src.core.types import Message, Session, UserMessage  # type: ignore[import-not-found]
 
     store, orchestrator, _ = _store_and_orchestrator
 
     pid, aid, sid, mid = (uuid.uuid4().hex for _ in range(4))
     pending_id = "pending-rule-1"
-    await store.save_project(Project(id=pid, name="p", cwd=str(tmp_path)))
-    await store.save_agent(AgentConfig(id=aid, name="a", model="m"))
-    await store.save_session(Session(id=sid, project_id=pid, agent_id=aid))
+    await store.save_session(Session(
+            id=sid,
+            agent_config=AgentConfig(id=aid, name="a", model="m"),
+            cwd=str(tmp_path),
+        ))
     await store.save_message(
         Message(
             id=mid,
@@ -469,16 +470,17 @@ async def test_should_forward_modified_input_to_runtime_on_approve_with_changes(
     """A1 verb: orchestrator passes ``modified_input`` through to the runtime."""
     from src.core.agent_config import AgentConfig  # type: ignore[import-not-found]
     from src.core.events import Event  # type: ignore[import-not-found]
-    from src.core.project import Project  # type: ignore[import-not-found]
     from src.core.types import Message, Session, UserMessage  # type: ignore[import-not-found]
 
     store, orchestrator, _ = _store_and_orchestrator
 
     pid, aid, sid, mid = (uuid.uuid4().hex for _ in range(4))
     pending_id = "pending-edit-1"
-    await store.save_project(Project(id=pid, name="p", cwd=str(tmp_path)))
-    await store.save_agent(AgentConfig(id=aid, name="a", model="m"))
-    await store.save_session(Session(id=sid, project_id=pid, agent_id=aid))
+    await store.save_session(Session(
+            id=sid,
+            agent_config=AgentConfig(id=aid, name="a", model="m"),
+            cwd=str(tmp_path),
+        ))
     await store.save_message(
         Message(
             id=mid,

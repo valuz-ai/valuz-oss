@@ -1,8 +1,8 @@
 """sessions.agent_config snapshot — kernel round-trip + dual-track binding.
 
 PR3 of the kernel de-projectization: sessions embed their AgentConfig as a
-JSON snapshot; the orchestrator binds the runtime to the snapshot when
-present and only falls back to the agents table for legacy rows.
+JSON snapshot; the orchestrator binds the runtime to the snapshot — the kernel has no
+agents table.
 """
 
 from src.adapters.sqlalchemy_store.converters import (  # type: ignore[import-not-found]
@@ -63,9 +63,8 @@ def test_session_model_round_trip_carries_snapshot() -> None:
     cfg = _sample_config()
     session = Session(
         id="sess-1",
-        project_id="proj-1",
-        agent_id="agent-1",
         agent_config=cfg,
+        cwd="/tmp/snapshot-test",
         runtime_provider="claude_agent",
         model="claude-opus-4-8",
     )
@@ -74,9 +73,7 @@ def test_session_model_round_trip_carries_snapshot() -> None:
     assert back.agent_config.name == "研究员"
     assert back.agent_config.max_turns == 7
 
-    # Legacy rows (no snapshot) stay None — the orchestrator's fallback key.
-    legacy = Session(id="sess-2", project_id="p", agent_id="a")
-    assert model_to_session(session_to_model(legacy)).agent_config is None
+
 
 
 def test_dict_to_agent_config_handles_empty() -> None:

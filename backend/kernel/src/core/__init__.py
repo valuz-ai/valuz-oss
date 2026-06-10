@@ -3,7 +3,6 @@
 from src.core.agent_config import AgentConfig, SubAgentDef
 from src.core.events import Event, EventSink, EventType, InboundEventType, OutboundEventType
 from src.core.hooks import HookResult, Hooks
-from src.core.project import Project, ProjectStatus
 from src.core.prompt_builder import build_user_prompt
 from src.core.runtime_port import RuntimePort
 from src.core.skills import Skill, SkillLoader
@@ -60,8 +59,6 @@ __all__ = [
     "ModelProvider",
     "ModelSettings",
     "OutboundEventType",
-    "Project",
-    "ProjectStatus",
     "RuntimePort",
     "RuntimeProvider",
     "Session",

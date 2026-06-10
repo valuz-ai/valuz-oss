@@ -73,7 +73,8 @@ async def _resolve_project_id(session_id: str) -> str | None:
     session = await kernel_store.load_session(session_id)
     if session is None:
         return None
-    return str(session.project_id)
+    project_id = ((session.metadata or {}).get("valuz", {}) or {}).get("project_id")
+    return str(project_id) if project_id else None
 
 
 def _build_doc_service(db: Any) -> Any:  # type: ignore[no-untyped-def]
@@ -130,7 +131,7 @@ async def doc_search(
     from valuz_agent.infra.db import async_unit_of_work
 
     session_id = _current_session_id()
-    project_id = _resolve_project_id(session_id)
+    project_id = await _resolve_project_id(session_id)
     if project_id is None:
         return []
     async with async_unit_of_work(commit=False) as db:
@@ -172,7 +173,7 @@ async def list_doc_scope(folder_id: str | None = None) -> dict[str, Any]:
 
     del folder_id  # full-tree view is enough today; folder drilldown is a TODO.
     session_id = _current_session_id()
-    project_id = _resolve_project_id(session_id)
+    project_id = await _resolve_project_id(session_id)
     if project_id is None:
         return {"knowledge_bases": [], "total_documents": 0}
     async with async_unit_of_work(commit=False) as db:

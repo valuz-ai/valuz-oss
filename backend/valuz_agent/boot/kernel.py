@@ -48,11 +48,9 @@ KERNEL_ALEMBIC_INI: Path = KERNEL_ALEMBIC_DIR / "alembic.ini"
 def _set_kernel_env() -> None:
     """Make the kernel see the valuz database URL and a sane workspace dir.
 
-    The kernel's ``app.config.AppConfig`` reads ``DATABASE_URL`` and
-    ``HARNESS_WORKSPACE_DIR`` from os.environ at construction time, so we set
-    them before anything imports ``app.config``. ``HARNESS_WORKSPACE_DIR`` is
-    a default landing spot; valuz will override it per-project via the
-    workspace cwd resolved through ``FsRegistry``.
+    The kernel's ``app.config.AppConfig`` reads ``DATABASE_URL`` from
+    os.environ at construction time, so we set it before anything imports
+    ``app.config``.
 
     ``DEEPAGENTS_CHECKPOINT_DB`` points the kernel's DeepAgentsRuntime
     langgraph checkpointer at the SAME SQLite file as the rest of valuz —
@@ -60,11 +58,10 @@ def _set_kernel_env() -> None:
     in whatever cwd happened to be active when the runtime first booted.
     Langgraph's checkpoint tables (``checkpoints`` / ``writes`` /
     ``checkpoint_blobs``) don't collide with the kernel's
-    ``projects/agents/sessions/messages/events`` or valuz's ``valuz_*``
-    namespaces; setdefault honours an external override.
+    ``sessions/messages/events`` or valuz's ``valuz_*`` namespaces;
+    setdefault honours an external override.
     """
     os.environ["DATABASE_URL"] = settings.db_url_async
-    os.environ.setdefault("HARNESS_WORKSPACE_DIR", str(settings.data_dir / "workspaces"))
     os.environ.setdefault("DEEPAGENTS_CHECKPOINT_DB", str(settings.db_path))
 
 
@@ -72,19 +69,19 @@ def drop_stale_kernel_tables(engine: Engine | None = None) -> None:
     """Belt-and-braces drop trigger for kernel-shape drift.
 
     The kernel's Alembic chain is the only thing that's *supposed* to
-    rewrite ``projects`` / ``agents`` / ``sessions`` / ``events``, but
+    rewrite ``sessions`` / ``messages`` / ``events``, but
     historically the kernel has shipped schema changes that reuse the
     same revision id (so already-stamped DBs skip the upgrade and end
     up missing required columns). This function detects those known
     fingerprints by checking for the presence of marker columns —
-    anything missing means "drop the kernel quartet so the next
+    anything missing means "drop the kernel tables so the next
     ``alembic upgrade head`` rebuilds clean".
 
     Per dev-stage policy: no data preservation. Internal dogfood users
     accepted this trade in exchange for cleaner kernel upgrade
     semantics — see CHANGELOG entry for the V1+V2 schema bootstrap.
 
-    Idempotent: a healthy four-table kernel passes through unchanged.
+    Idempotent: a healthy three-table kernel passes through unchanged.
 
     Lives next to ``run_kernel_migrations`` so the boot sequence has
     a single import surface for "do everything the kernel needs at
@@ -107,51 +104,36 @@ def drop_stale_kernel_tables(engine: Engine | None = None) -> None:
 
         suspect: list[str] = []
 
-        # V4 fossils that survived the V5 cutover. Anything with the V4
-        # column shape is wholly incompatible with the V5 schema.
-        if _has_col("sessions", "environment_id"):
+        # De-projectization cutover: the kernel now owns exactly three
+        # tables (sessions / messages / events) and sessions embed their
+        # agent snapshot. Any DB still carrying the old projects/agents
+        # tables — or a sessions shape without agent_config — predates the
+        # cutover and must be wiped (regenerated baseline, no ALTER chain).
+        if "projects" in existing or "agents" in existing:
             suspect.append("sessions")
+        if "sessions" in existing and not _has_col("sessions", "agent_config"):
+            if "sessions" not in suspect:
+                suspect.append("sessions")
+        # V4 fossils that survived the V5 cutover.
+        if _has_col("sessions", "environment_id"):
+            if "sessions" not in suspect:
+                suspect.append("sessions")
         if _has_col("environments", "workspace_mounts"):
             suspect.append("environments")
 
-        # Per-upgrade fingerprints. Each row pins a "new required column"
-        # whose ABSENCE uniquely identifies a pre-upgrade kernel DB.
-        # When the kernel cleanly bumps the revision id these fingerprints
-        # become defensive-only; when it reuses an existing revision
-        # id (which has happened multiple times — see KERNEL_VERSION
-        # commentary) the fingerprint is the only thing that triggers the
-        # rebuild.
-        kernel_column_fingerprints: list[tuple[str, str]] = [
-            ("sessions", "model_provider"),  # post-39ec84c
-            ("events", "message_id"),  # post-c215c8a
-            ("agents", "instructions"),  # post-e8d6c87 / ADR-008
-            ("sessions", "runtime_provider"),  # post-d66241e
-            ("sessions", "permission_mode"),  # post-1aae940 / approval v1
-            ("sessions", "mode"),  # post-cb25177 / session-modes (4b2490e2b9c4
-            # inserted MID-CHAIN: a DB stamped at the old tail won't backfill)
-            ("sessions", "user_id"),  # ownership cutover: every kernel table
-            # gained a required user_id via a regenerated baseline (no ALTER),
-            # so a pre-cutover DB must be wiped + rebuilt — see the host
-            # counterpart boot.schema.drop_stale_host_tables.
-            ("sessions", "agent_config"),  # embedded agent snapshot (kernel
-            # de-projectization: sessions carry their AgentConfig inline)
-        ]
-        for table, col in kernel_column_fingerprints:
-            if table in existing and not _has_col(table, col):
-                if "sessions" not in suspect:
-                    suspect.append("sessions")
-
         # Torn-state recovery: an interrupted previous boot can leave the
-        # quartet half-created. Drop whatever's there so the next
+        # trio half-created. Drop whatever's there so the next
         # ``alembic upgrade`` rebuilds.
-        kernel_tables = {"projects", "agents", "sessions", "events"} & existing
-        if kernel_tables and len(kernel_tables) < 4:
+        kernel_tables = {"sessions", "messages", "events"} & existing
+        if kernel_tables and len(kernel_tables) < 3:
             for t in kernel_tables:
                 if t not in suspect:
                     suspect.append(t)
 
-        # Cascade: if any quartet member is stale the others are too —
-        # the kernel's initial migration creates them as a unit.
+        # Cascade: if any member is stale the others are too — the kernel's
+        # initial migration creates them as a unit. The legacy table names
+        # (projects / agents / environments) stay in the drop list so
+        # pre-cutover fossils are cleared.
         if "sessions" in suspect:
             for t in ("projects", "agents", "events", "environments", "messages"):
                 if t in existing and t not in suspect:
@@ -307,8 +289,7 @@ def get_kernel_routers() -> list:
     presets, this decision is revisited in a new ADR.
     """
     from app.routes.messages import router as messages_router
-    from app.routes.projects import router as projects_router
     from app.routes.run import router as run_router
     from app.routes.sessions import router as sessions_router
 
-    return [projects_router, sessions_router, messages_router, run_router]
+    return [sessions_router, messages_router, run_router]

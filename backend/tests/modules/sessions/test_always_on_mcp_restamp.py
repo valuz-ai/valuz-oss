@@ -16,12 +16,13 @@ from valuz_agent.modules.sessions import capabilities
 
 
 def _make_session(*, mcp_servers):
+    from src.core.agent_config import AgentConfig  # type: ignore[import-not-found]
     from src.core.types import Session  # type: ignore[import-not-found]
 
     return Session(
         id="sess-1",
-        project_id="proj-1",
-        agent_id="agent-1",
+        agent_config=AgentConfig(id="agent-1", name="a"),
+        cwd="/tmp/restamp-test",
         runtime_provider="claude_agent",
         model="claude-sonnet-4-6",
         model_provider=None,

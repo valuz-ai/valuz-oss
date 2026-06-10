@@ -128,7 +128,7 @@ def test_tool_handlers_closed_loop(svc, tmp_path, monkeypatch):
         mem_tools, "_resolve_task_id", lambda sid: _coro("t1" if sid == "task" else None)
     )
 
-    ctx = ExecContext(session_id="proj", project_id="ws")
+    ctx = ExecContext(session_id="proj")
     r = asyncio.run(
         mem_tools._memory_write_handler(
             {"scope": "project", "name": "d", "type": "project", "content": "use PG"}, ctx
@@ -140,7 +140,7 @@ def test_tool_handlers_closed_loop(svc, tmp_path, monkeypatch):
 
     # chat session (no cwd) cannot write project, can write global
     monkeypatch.setattr(mem_tools, "_resolve_project_cwd", _async_const(None))
-    chat = ExecContext(session_id="chat", project_id="ws")
+    chat = ExecContext(session_id="chat")
     r = asyncio.run(
         mem_tools._memory_write_handler(
             {"scope": "project", "name": "x", "type": "project", "content": "y"}, chat

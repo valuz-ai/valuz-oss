@@ -439,8 +439,6 @@ async def submit_session_action(
         PendingActionDecisionMismatchError,
         PendingActionExpiredError,
         PendingActionNotFoundError,
-        ProjectDeletedError,
-        ProjectNotFoundError,
         RuntimeUnavailableError,
         SessionNotFoundError,
     )
@@ -456,10 +454,6 @@ async def submit_session_action(
         )
     except SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
-    except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
-    except ProjectDeletedError as exc:
-        raise HTTPException(status_code=410, detail="Project deleted") from exc
     except PendingActionNotFoundError as exc:
         raise HTTPException(
             status_code=404,

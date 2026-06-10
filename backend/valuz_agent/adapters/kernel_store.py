@@ -29,10 +29,8 @@ from collections.abc import Sequence
 import valuz_agent.boot.kernel  # noqa: F401  (sys.path side-effect)
 
 from src.core import (  # type: ignore[import-not-found]
-    AgentConfig,
     Event,
     Message,
-    Project,
     Session,
     StorePort,
 )
@@ -44,46 +42,6 @@ def _store() -> StorePort:
     from app.dependencies import get_store  # type: ignore[import-not-found]
 
     return get_store()
-
-
-# ---- Project operations ----
-
-
-async def save_project(project: Project) -> None:
-    await _store().save_project(project)
-
-
-async def load_project(project_id: str) -> Project | None:
-    return await _store().load_project(project_id)
-
-
-async def delete_project(project_id: str) -> bool:
-    return await _store().delete_project(project_id)
-
-
-# ---- Agent operations ----
-
-
-async def save_agent(agent: AgentConfig) -> None:
-    await _store().save_agent(agent)
-
-
-async def load_agent(agent_id: str) -> AgentConfig | None:
-    return await _store().load_agent(agent_id)
-
-
-async def delete_agent(agent_id: str) -> bool:
-    return await _store().delete_agent(agent_id)
-
-
-async def list_agents(*, status: str = "active") -> list[AgentConfig]:
-    """List kernel AgentConfig rows, post-filtered by status client-side.
-
-    ``StorePort.list_agents`` has no status filter, so we paginate
-    (limit=200, MVP-sufficient) and filter here.
-    """
-    agents = await _store().list_agents(limit=200, offset=0)
-    return [a for a in agents if a.status == status]
 
 
 # ---- Session operations ----
@@ -160,18 +118,11 @@ async def append_session_scoped_event(session_id: str, event: Event) -> bool:
 __all__ = [
     "append_event",
     "append_session_scoped_event",
-    "delete_agent",
-    "delete_project",
     "delete_session",
     "get_events",
     "latest_message_id",
-    "list_agents",
     "list_messages_for_session",
     "list_sessions",
-    "load_agent",
-    "load_project",
     "load_session",
-    "save_agent",
-    "save_project",
     "save_session",
 ]

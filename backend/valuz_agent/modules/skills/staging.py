@@ -150,7 +150,7 @@ async def _resolve_project_cwd_for_session(session_id: str) -> Path | None:
     if session is None:
         return None
 
-    project_id = session.project_id
+    project_id = str(((session.metadata or {}).get("valuz", {}) or {}).get("project_id") or "")
     project_kind = "chat"
     project_root_path: str | None = None
     try:

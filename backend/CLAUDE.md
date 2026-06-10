@@ -8,10 +8,11 @@
 > wins on backend mechanics.
 
 Python/FastAPI on an Agent Harness kernel. The **host**
-(`valuz_agent/`) owns the project UX, skill catalog, KB, providers, MCP
-catalog, scheduling, tasks, and OAuth; the **kernel** (`kernel/`) owns
-Project/Agent/Session/Event persistence and the runtime adapters. The two meet
-only at the adapter seam (§6).
+(`valuz_agent/`) owns the project UX, agent library, skill catalog, KB,
+providers, MCP catalog, scheduling, tasks, and OAuth; the **kernel**
+(`kernel/`) owns Session/Message/Event persistence (each session embeds its
+AgentConfig snapshot and cwd — the kernel knows no projects or agents) and
+the runtime adapters. The two meet only at the adapter seam (§6).
 
 ## Layout
 
@@ -39,7 +40,7 @@ backend/
 ```
 
 A single SQLite file at `~/.valuz/app/valuz.db` carries both layers:
-4 unprefixed kernel tables (`projects` / `agents` / `sessions` / `events`),
+3 unprefixed kernel tables (`sessions` / `messages` / `events`),
 the `valuz_*`-prefixed business tables, and two alembic heads
 (`alembic_version` kernel + `alembic_version_host` host). Both layers run
 **async** SQLAlchemy on aiosqlite; WAL + per-connection `busy_timeout` make

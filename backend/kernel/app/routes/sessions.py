@@ -8,9 +8,10 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app._validators import validate_mcp_servers, validate_skills
+from app._validators import validate_mcp_servers, validate_registered_tools, validate_skills
 from app.dependencies import get_orchestrator, get_store
 from app.schemas import (
+    AgentConfigSchema,
     CreateSessionRequest,
     DataResponse,
     EventData,
@@ -29,10 +30,13 @@ from app.schemas import (
     SubmitActionData,
     SubmitActionRequest,
     SubmitActionResponse,
+    SubAgentDefSchema,
     TodoItem,
+    ToolDefSchema,
     UpdateSessionRequest,
 )
 from src.core import (
+    AgentConfig,
     Event,
     McpServerConfig,
     McpStdioServerConfig,
@@ -47,8 +51,6 @@ from src.core.orchestrator import (
     PendingActionDecisionMismatchError,
     PendingActionExpiredError,
     PendingActionNotFoundError,
-    ProjectDeletedError,
-    ProjectNotFoundError,
     RuntimeUnavailableError,
     SessionNotFoundError,
     SessionOrchestrator,
@@ -80,6 +82,54 @@ def _mcp_to_schema(
     )
 
 
+def _agent_config_to_schema(cfg: Any) -> AgentConfigSchema:
+    return AgentConfigSchema(
+        id=cfg.id,
+        name=cfg.name,
+        model=cfg.model,
+        runtime_provider=cfg.runtime_provider,
+        instructions=cfg.instructions,
+        permission_mode=cfg.permission_mode,
+        max_turns=cfg.max_turns,
+        max_cost_usd=cfg.max_cost_usd,
+        tools=[
+            ToolDefSchema(
+                name=t.name,
+                description=t.description,
+                parameters=t.parameters,
+                read_only=t.read_only,
+                permission=t.permission,
+            )
+            for t in cfg.tools
+        ],
+        callable_agents=[
+            SubAgentDefSchema(
+                name=a.name,
+                description=a.description,
+                prompt=a.prompt,
+                tools=list(a.tools),
+                model=a.model,
+                skills=list(a.skills) if a.skills is not None else None,
+                metadata=a.metadata,
+            )
+            for a in cfg.callable_agents
+        ],
+        skills=list(cfg.skills),
+        mcp_servers=[_mcp_to_schema(c) for c in cfg.mcp_servers],
+        effort=cfg.effort,
+        thinking=cfg.thinking,
+        metadata=cfg.metadata,
+    )
+
+
+def _agent_config_from_schema(schema: AgentConfigSchema) -> AgentConfig:
+    from src.adapters.sqlalchemy_store.converters import dict_to_agent_config
+
+    cfg = dict_to_agent_config(schema.model_dump())
+    assert cfg is not None  # name is required on the schema
+    return cfg
+
+
 def _session_to_data(session: Session) -> SessionData:
     stop_reason = None
     if session.stop_reason is not None:
@@ -87,8 +137,7 @@ def _session_to_data(session: Session) -> SessionData:
         stop_reason = StopReasonSchema(**sr_dict)
     return SessionData(
         id=session.id,
-        project_id=session.project_id,
-        agent_id=session.agent_id,
+        agent_config=_agent_config_to_schema(session.agent_config),
         runtime_provider=session.runtime_provider,
         cwd=session.cwd,
         model=session.model,
@@ -132,17 +181,12 @@ async def create_session(
     body: CreateSessionRequest,
     store: StoreDep,
 ) -> dict[str, Any]:
-    project = await store.load_project(body.project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    if project.status == "deleted":
-        raise HTTPException(status_code=410, detail="Project deleted")
-
-    if not body.agent_id:
-        raise HTTPException(status_code=400, detail="agent_id is required.")
-    agent = await store.load_agent(body.agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
+    if not body.cwd.strip():
+        raise HTTPException(status_code=400, detail="cwd is required and must be non-empty.")
+    if not body.agent_config.name.strip():
+        raise HTTPException(status_code=400, detail="agent_config.name must not be empty.")
+    agent = _agent_config_from_schema(body.agent_config)
+    validate_registered_tools(list(agent.tools))
 
     # DeepAgents needs an explicit langchain model client at runtime, so
     # both ``model`` and ``model_provider`` are required when chosen.
@@ -163,6 +207,8 @@ async def create_session(
     # ``permission_mode`` is sunk to the session per D9: agent holds the
     # default; createSession prefills from agent when the request omits the
     # field; runtime reads ``session.permission_mode`` thereafter.
+    # ``permission_mode`` is sunk to the session: the embedded snapshot
+    # holds the default; the request value wins when provided.
     permission_mode = body.permission_mode or agent.permission_mode
     if body.runtime_provider == "deepagents" and permission_mode == "auto_review":
         raise HTTPException(
@@ -191,8 +237,7 @@ async def create_session(
 
     session = Session(
         id=str(uuid.uuid4()),
-        project_id=project.id,
-        agent_id=body.agent_id,
+        agent_config=agent,
         runtime_provider=body.runtime_provider,
         cwd=body.cwd,
         model=body.model,
@@ -262,15 +307,12 @@ def _model_settings_from_schema(s: ModelSettingsSchema | None) -> ModelSettings 
 @router.get("", response_model=SessionListResponse)
 async def list_sessions(
     store: StoreDep,
-    project_id: Annotated[str | None, Query()] = None,
-    agent_id: Annotated[str | None, Query()] = None,
+
     status: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> dict[str, Any]:
     sessions = await store.list_sessions(
-        project_id=project_id,
-        agent_id=agent_id,
         status=status,
         limit=limit,
         offset=offset,
@@ -286,9 +328,6 @@ async def get_session(
     session = await store.load_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    project = await store.load_project(session.project_id)
-    if project is not None and project.status == "deleted":
-        raise HTTPException(status_code=410, detail="Project deleted")
     return {"data": _session_to_data(session)}
 
 
@@ -435,10 +474,6 @@ async def submit_session_action(
         )
     except SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
-    except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
-    except ProjectDeletedError as exc:
-        raise HTTPException(status_code=410, detail="Project deleted") from exc
     except PendingActionNotFoundError as exc:
         raise HTTPException(
             status_code=404, detail=f"Pending action {body.pending_id} not found"

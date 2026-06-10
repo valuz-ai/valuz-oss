@@ -87,9 +87,6 @@ def test_should_leave_modern_schema_alone_when_events_already_has_message_id(tmp
     db_url = f"sqlite:///{tmp_path / 'modern.db'}"
     engine = create_engine(db_url)
     with engine.begin() as conn:
-        conn.execute(text("CREATE TABLE projects (id TEXT PRIMARY KEY)"))
-        # Modern agents shape: ``instructions`` column (ADR-008).
-        conn.execute(text("CREATE TABLE agents (id TEXT PRIMARY KEY, instructions TEXT)"))
         conn.execute(
             text(
                 "CREATE TABLE sessions (id TEXT PRIMARY KEY, model_provider TEXT, "

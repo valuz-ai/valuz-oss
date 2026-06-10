@@ -12,13 +12,12 @@ class ExecContext:
     """Execution context handed to custom-tool handlers.
 
     Carries the identity of the session that invoked the tool so a
-    handler can correlate the call to its session / agent / project.
+    handler can correlate the call to its session (and through the
+    session's metadata, to whatever grouping the host maintains).
     """
 
     workspace: str = ""
     session_id: str = ""
-    agent_id: str = ""
-    project_id: str = ""
 
 
 @dataclass

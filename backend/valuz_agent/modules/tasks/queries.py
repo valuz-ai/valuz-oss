@@ -17,8 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 import valuz_agent.boot.kernel  # noqa: F401 — puts kernel on sys.path
-from valuz_agent.adapters import kernel_store
-from valuz_agent.adapters.agent_resolver import summarize_role
+from valuz_agent.adapters.agent_resolver import _member_agent_config, summarize_role
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.agents.datastore import ProjectMemberDatastore
 from valuz_agent.modules.tasks.datastore import (
@@ -36,7 +35,7 @@ async def list_members(project_id: str) -> list[dict[str, Any]]:
         rows = await member_ds.list_by_project(project_id)
         result: list[dict[str, Any]] = []
         for row in rows:
-            agent_cfg = await kernel_store.load_agent(row.kernel_agent_id)
+            agent_cfg = await _member_agent_config(row, member_ds)
             runtime = agent_cfg.runtime_provider if agent_cfg else "unknown"
             name = agent_cfg.name if agent_cfg else row.agent_slug
             role_summary = summarize_role(agent_cfg.instructions) if agent_cfg else ""

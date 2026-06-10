@@ -337,7 +337,9 @@ class DispatcherService:
                 member = await member_ds.get(project_id, agent_slug)
                 if member is None:
                     return agent_slug
-                agent_cfg = await kernel_store.load_agent(member.kernel_agent_id)
+                from valuz_agent.adapters.agent_resolver import _member_agent_config
+
+                agent_cfg = await _member_agent_config(member, member_ds)
                 if agent_cfg is None:
                     return agent_slug
                 skill_names = sorted(

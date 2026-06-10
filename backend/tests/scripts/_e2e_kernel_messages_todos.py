@@ -155,7 +155,6 @@ def main() -> None:
     # provider boot path).
     from src.core.agent_config import AgentConfig as KernelAgent  # type: ignore[import-not-found]
     from src.core.events import Event as KernelEvent  # type: ignore[import-not-found]
-    from src.core.project import Project as KernelProject  # type: ignore[import-not-found]
     from src.core.types import Message as KernelMessage  # type: ignore[import-not-found]
     from src.core.types import Session as KernelSession  # type: ignore[import-not-found]
     from src.core.types import UserMessage as KernelUserMessage  # type: ignore[import-not-found]
@@ -166,27 +165,22 @@ def main() -> None:
     agent_id = uuid.uuid4().hex
     session_id = uuid.uuid4().hex
 
-    asyncio.run(kernel_store.save_agent(KernelAgent(id=agent_id, name="e2e-agent")))
-    asyncio.run(
-        kernel_store.save_project(
-            KernelProject(
-                id=project_id,
-                name="e2e-project",
-                cwd=str(tmp_root / "project"),
-                agent_id=agent_id,
-            )
-        )
-    )
     (tmp_root / "project").mkdir(exist_ok=True)
     asyncio.run(
         kernel_store.save_session(
             KernelSession(
                 id=session_id,
-                project_id=project_id,
-                agent_id=agent_id,
+                agent_config=KernelAgent(id=agent_id, name="e2e-agent"),
+                cwd=str(tmp_root / "project"),
                 model="claude-sonnet-4-6",
                 status="idle",
-                metadata={"valuz": {"name": "E2E TODO smoke", "origin": "user"}},
+                metadata={
+                    "valuz": {
+                        "name": "E2E TODO smoke",
+                        "origin": "user",
+                        "project_id": project_id,
+                    }
+                },
             )
         )
     )
@@ -250,8 +244,8 @@ def main() -> None:
         await store.save_session(
             KS(
                 id=session.id,
-                project_id=session.project_id,
-                agent_id=session.agent_id,
+                agent_config=session.agent_config,
+                cwd=session.cwd,
                 model=session.model,
                 model_provider=session.model_provider,
                 model_settings=session.model_settings,

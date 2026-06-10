@@ -686,8 +686,6 @@ class CodexRuntime:
             ExecContext(
                 workspace=self.workspace_root,
                 session_id=session.id,
-                agent_id=session.agent_id,
-                project_id=session.project_id,
             ),
         )
         self._registered_session_id = session.id

@@ -126,8 +126,9 @@ async def _build_additional_context(
             g = injection_assembler.global_block()
             if g.strip():
                 mem_parts.append(g.strip())
-            proj = await kernel_store.load_project(project_id)
-            project_cwd = getattr(proj, "cwd", "") if proj else ""
+            from valuz_agent.modules.projects.service import project_cwd_by_id
+
+            project_cwd = await project_cwd_by_id(project_id) or ""
             task_id = None
             sess = await kernel_store.load_session(session_id)
             if sess is not None:

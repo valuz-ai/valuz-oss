@@ -327,6 +327,15 @@ class SessionService:
     # Commands
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _resolve_session_cwd(row) -> str:  # noqa: ANN001
+        """Required session cwd — the kernel no longer has a project to fall
+        back to, so every create path must pass an absolute directory."""
+        from valuz_agent.infra.fs_registry import fs_registry
+
+        kind = row.kind if row.kind in ("chat", "project") else "chat"
+        return str(fs_registry.project_cwd(row.id, kind, row.root_path))
+
     async def _resolve_bound_agent(
         self, project_id: str, agent_slug: str
     ) -> tuple[str, KernelAgentConfig]:
@@ -355,7 +364,6 @@ class SessionService:
         )
         from valuz_agent.modules.agents.service import (
             AgentService,
-            _prepare_conversation_tools,
         )
 
         async with async_unit_of_work() as _db:
@@ -371,15 +379,12 @@ class SessionService:
                             row, member.kernel_agent_id
                         )
                         return member.kernel_agent_id, config
-                # Legacy member without provenance — dual-track fallback to the
-                # kernel agents row it references.
-                agent = await kernel_store.load_agent(member.kernel_agent_id)
-                if agent is None:
-                    raise SessionNotRunnable(
-                        f"agent '{agent_slug}' has no kernel config (id "
-                        f"{member.kernel_agent_id}) — re-create the agent"
-                    )
-                return member.kernel_agent_id, _prepare_conversation_tools(agent)
+                # Member without provenance (pre-0003 row whose backfill found
+                # no matching library agent) — nothing to build a config from.
+                raise SessionNotRunnable(
+                    f"agent '{agent_slug}' has no source library agent — "
+                    "re-deploy it from the agent library"
+                )
 
         # Not a project member → resolve as a global library agent. Use a
         # committed unit of work so a lazy kernel_agent_id backfill persists.
@@ -592,11 +597,13 @@ class SessionService:
         if creation_context:
             valuz_meta["creation_context"] = {str(k): str(v) for k, v in creation_context.items()}
 
+        project_row = await self._projects.get_by_id(project_id)
+        if project_row is None:
+            raise SessionNotRunnable(f"project '{project_id}' not found")
         kernel_session = KernelSession(
             id=session_id,
-            project_id=project_id,
-            agent_id=kernel_agent_id,
             agent_config=agent,
+            cwd=self._resolve_session_cwd(project_row),
             runtime_provider=runtime_provider,
             model=effective_model,
             model_provider=model_provider,
@@ -909,11 +916,12 @@ class SessionService:
         effective_effort = _coerce_session_effort(effort)
         model_settings = ModelSettings(effort=effective_effort)
 
+        if project_row is None:
+            raise SessionNotRunnable(f"project '{project_id}' not found")
         kernel_session = KernelSession(
             id=session_id,
-            project_id=project_id,
-            agent_id=agent_id,
             agent_config=agent_config,
+            cwd=self._resolve_session_cwd(project_row),
             runtime_provider=runtime_provider,
             model=resolution.model,
             model_provider=model_provider,

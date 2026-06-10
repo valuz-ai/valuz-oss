@@ -107,8 +107,6 @@ class DeepAgentsRuntime:
         # Identity of the session currently being run — exposed to
         # custom-tool handlers through ExecContext.
         self._cur_session_id: str = ""
-        self._cur_agent_id: str = ""
-        self._cur_project_id: str = ""
 
         # Approval bridge state (Phase 3 of the cross-runtime approval
         # contract). ``_pending_futures`` maps pending_id → future that
@@ -208,8 +206,6 @@ class DeepAgentsRuntime:
         session.status = "running"
         self._cancelled = False
         self._cur_session_id = session.id
-        self._cur_agent_id = session.agent_id
-        self._cur_project_id = session.project_id
 
         try:
             # Reconcile live session-driven levers BEFORE ``_ensure_graph``
@@ -1120,8 +1116,6 @@ class DeepAgentsRuntime:
                 ExecContext(
                     workspace=captured_workspace,
                     session_id=self._cur_session_id,
-                    agent_id=self._cur_agent_id,
-                    project_id=self._cur_project_id,
                 ),
             )
             if captured_hooks and captured_hooks._handlers.get("after_tool"):

@@ -26,7 +26,6 @@ from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from valuz_agent.adapters import kernel_store
 from valuz_agent.i18n import t
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.time_utils import now_ms
@@ -233,7 +232,9 @@ class AutomationService:
         if member is None:
             return None
         try:
-            agent_cfg = await kernel_store.load_agent(member.kernel_agent_id)
+            from valuz_agent.adapters.agent_resolver import _member_agent_config
+
+            agent_cfg = await _member_agent_config(member, self._members)
         except Exception:  # noqa: BLE001 — display path is non-fatal
             return None
         return agent_cfg.name if agent_cfg else None

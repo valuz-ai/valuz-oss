@@ -1240,7 +1240,9 @@ class SkillLibraryService:
         # instead so the right side-effects fire (project-scoped session
         # → bind to project; chat session → library only).
         if "kind" not in creation_context:
-            inferred_project_id = str(kernel_session.project_id or "")
+            inferred_project_id = str(
+                ((kernel_session.metadata or {}).get("valuz", {}) or {}).get("project_id") or ""
+            )
             project = await self._resolve_project(inferred_project_id)
             if project is not None and project.kind == "project":
                 creation_context["kind"] = "project"

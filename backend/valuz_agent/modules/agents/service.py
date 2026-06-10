@@ -86,38 +86,6 @@ def _ensure_global_tools_declared(agent: AgentConfig) -> AgentConfig:
     return replace(agent, tools=tuple(agent.tools or ()) + missing)
 
 
-async def backfill_global_agent_tools() -> int:
-    """Re-save every active kernel agent missing a baseline tool declaration.
-
-    In-process tools bind via the persisted ``AgentConfig.tools`` (unlike HTTP
-    MCP / skills, which are recomputed per session), so an agent created before
-    a baseline tool landed carries no declaration until re-saved. This boot-time
-    backfill walks every active agent and appends any missing baseline:
-
-    - **All agents** get the always-on in-process tools (memory + submit_skill).
-    - **Non-lead-clone agents** (the conversation/base agents — project
-      synthetic + members) additionally get the task launcher/observability
-      tools (create_task / list_tasks / get_task) so a project conversation can
-      spawn + track tasks. Lead clones (``…__lead__…``) are skipped for these —
-      ``_materialize_lead_agent`` deliberately strips them.
-
-    Idempotent — fully-declared agents are skipped. Returns the count patched.
-    """
-    from valuz_agent.adapters import kernel_store
-    from valuz_agent.modules.tasks.dispatch_mcp import ensure_orchestration_tools_on_agent
-
-    patched = 0
-    for agent in await kernel_store.list_agents():
-        updated = _ensure_global_tools_declared(agent)
-        if "__lead__" not in (getattr(agent, "id", "") or ""):
-            updated = ensure_orchestration_tools_on_agent(updated)
-        if updated is not agent:
-            await kernel_store.save_agent(updated)
-            patched += 1
-    logger.info("global-tools backfill: patched %d agent(s)", patched)
-    return patched
-
-
 class MemberNotFoundError(Exception):
     pass
 
@@ -226,19 +194,17 @@ class AgentService:
         return _prepare_conversation_tools(agent)
 
     async def ensure_kernel_agent(self, row: AgentRow) -> str:
-        """Build/sync the shared kernel ``AgentConfig`` for an AgentRow; return id.
+        """Ensure the row carries a stable snapshot identity and return it.
 
-        Idempotent: reuses ``row.kernel_agent_id`` when present (re-syncing the
-        config to the row's current fields — this is the global-edit cascade),
-        else mints one and backfills the column (lazy build for seeded rows).
+        Historically this materialized a shared kernel ``AgentConfig`` row;
+        the kernel no longer has an agents table — sessions embed their
+        config snapshot instead. What remains is the stable id stamped into
+        snapshots (``config.id``) and referenced by project members. Minted
+        lazily and backfilled onto the AgentRow, exactly as before.
         """
         from uuid import uuid4
 
-        from valuz_agent.adapters import kernel_store
-
         kernel_agent_id = row.kernel_agent_id or uuid4().hex
-        agent = await self.build_agent_config(row, kernel_agent_id)
-        await kernel_store.save_agent(agent)
         if row.kernel_agent_id != kernel_agent_id:
             await self._agents.update_fields(row.slug, {"kernel_agent_id": kernel_agent_id})
             row.kernel_agent_id = kernel_agent_id
@@ -327,12 +293,9 @@ class AgentService:
         row = await self._agents.update_fields(slug, fields)
         if row is None:
             raise AgentNotFoundError(slug)
-        # v2 live-reference: re-sync the shared kernel AgentConfig so the edit
-        # propagates to EVERY project this agent is派驻'd into (global cascade).
-        # Only when a config already exists (agent has been deployed at least
-        # once); a never-deployed agent has nothing to propagate to yet.
-        if row.kernel_agent_id:
-            await self.ensure_kernel_agent(row)
+        # Live-reference semantics need no kernel cascade anymore: sessions
+        # snapshot the row's fields at creation, so every NEW session (in any
+        # project the agent is deployed to) picks the edit up automatically.
         return row
 
     async def delete_agent(self, slug: str) -> None:
@@ -379,16 +342,20 @@ class AgentService:
         Kernel load failures are surfaced as agent=None so the list still
         returns even when a kernel row is missing.
         """
-        from valuz_agent.adapters import kernel_store
-
         members = await self._members.list_by_project(project_id)
         result: list[dict[str, Any]] = []
         for m in members:
             try:
-                agent = await kernel_store.load_agent(m.kernel_agent_id)
+                agent = None
+                if m.source_agent_slug:
+                    src_row = await self._agents.get_agent(m.source_agent_slug)
+                    if src_row is not None:
+                        agent = await self.build_agent_config(
+                            src_row, m.kernel_agent_id or src_row.kernel_agent_id
+                        )
             except Exception:
                 logger.warning(
-                    "list_members: could not load kernel agent %s for member %s/%s",
+                    "list_members: could not build agent config %s for member %s/%s",
                     m.kernel_agent_id,
                     project_id,
                     m.agent_slug,
@@ -471,9 +438,7 @@ class AgentService:
         )
         await self._members.create(member)
 
-        from valuz_agent.adapters import kernel_store
-
-        agent = await kernel_store.load_agent(kernel_agent_id)
+        agent = await self.build_agent_config(source_agent, kernel_agent_id)
         return {"member": member, "agent": agent}
 
     # ------------------------------------------------------------------

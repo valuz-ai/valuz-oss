@@ -84,3 +84,23 @@ def validate_mcp_servers(servers: list[McpServerConfigSchema]) -> list[McpServer
                 )
             )
     return out
+
+
+def validate_registered_tools(tools: list) -> None:  # type: ignore[type-arg]
+    """Reject tool declarations whose handlers aren't registered in-process.
+
+    A ToolDef without a registry handler would surface to the model and
+    fail at call time; catching it at create time gives a 400 with the
+    offending names instead. (Moved from the former agents router when the
+    agents table was removed — the embedded snapshot is validated at
+    session creation now.)
+    """
+    from src.core.tool_registry import unresolved_tool_names
+
+    unresolved = unresolved_tool_names(tuple(tools))
+    if unresolved:
+        names = ", ".join(sorted(unresolved))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown or unregistered tools: {names}",
+        )

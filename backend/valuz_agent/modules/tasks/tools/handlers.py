@@ -334,9 +334,6 @@ async def _bound_agent_member(sess: Any) -> dict[str, Any] | None:
     if not slug:
         return None
     agent_cfg = getattr(sess, "agent_config", None)
-    if agent_cfg is None:
-        agent_id = getattr(sess, "agent_id", None)
-        agent_cfg = await kernel_store.load_agent(agent_id) if agent_id else None
     return {
         "slug": slug,
         "name": agent_cfg.name if agent_cfg else slug,

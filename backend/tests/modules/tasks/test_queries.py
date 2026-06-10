@@ -222,10 +222,10 @@ async def test_list_members_degrades_when_agent_not_loadable(db_factory, tmp_pat
     finally:
         db.close()
 
-    async def _no_agent(_kernel_agent_id):
+    async def _no_agent(_member, _ds):
         return None
 
-    monkeypatch.setattr(queries.kernel_store, "load_agent", _no_agent)
+    monkeypatch.setattr(queries, "_member_agent_config", _no_agent)
 
     out = await queries.list_members("w1")
 

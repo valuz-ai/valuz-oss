@@ -209,16 +209,15 @@ RuntimeProvider = Literal["claude_agent", "codex", "deepagents"]
 
 @dataclass
 class Session:
-    """Execution session — belongs to a Project, references an Agent.
+    """Execution session — the kernel's self-sufficient unit of work.
 
-    ``cwd`` overrides the working directory for this session's runtime; when
-    empty the runtime falls back to the parent project's cwd. This lets a host
-    give each session an isolated working directory (e.g. per-task / per-run)
-    without minting a project per session. ``agent_id`` is required
-    at creation; sessions seed ``instructions`` / ``skills`` /
-    ``mcp_servers`` / ``model`` from the chosen agent on the frontend, but
-    the values persisted here are the source of truth that the runtime
-    reads — the agent's defaults are not consulted again post-creation.
+    A session carries everything its runtime needs: ``agent_config`` (the
+    embedded agent snapshot), ``cwd`` (its working directory), and the
+    flattened run parameters (``instructions`` / ``skills`` /
+    ``mcp_servers`` / ``model`` …) seeded from the agent at creation. The
+    persisted values here are the source of truth the runtime reads —
+    nothing is resolved through external tables post-creation. Callers
+    group sessions however they like via ``metadata``.
 
     ``runtime_provider`` is the explicit dispatch key picked at creation
     and fixed for the session's lifetime — it determines which runtime
@@ -229,17 +228,14 @@ class Session:
     """
 
     id: str
-    project_id: str
-    agent_id: str
-    # Embedded snapshot of the agent configuration this session runs with.
-    # When present it is the source of truth the orchestrator binds the
-    # runtime to — the ``agents`` table row referenced by ``agent_id`` is
-    # not consulted. ``None`` = legacy row from before the snapshot column
-    # (the orchestrator falls back to loading ``agent_id``).
-    agent_config: AgentConfig | None = None
-    # Per-session working directory override. Empty ("") = fall back to the
-    # parent project's cwd. Set to give a session an isolated workdir.
-    cwd: str = ""
+    # Embedded snapshot of the agent configuration this session runs with —
+    # the source of truth the orchestrator binds the runtime to. The kernel
+    # has no agents table; the snapshot IS the agent for this session.
+    agent_config: AgentConfig
+    # Absolute working directory for this session's runtime. Required and
+    # non-empty: the kernel has no project to fall back to — every session
+    # is self-sufficient.
+    cwd: str
     runtime_provider: RuntimeProvider = "claude_agent"
     model: str = ""
     model_provider: ModelProvider | None = None

@@ -38,8 +38,8 @@ def _copy_session(session: KernelSession, /, **overrides: object) -> KernelSessi
 
     fields: dict[str, object] = {
         "id": session.id,
-        "project_id": session.project_id,
-        "agent_id": session.agent_id,
+        "agent_config": session.agent_config,
+        "cwd": session.cwd,
         "runtime_provider": getattr(session, "runtime_provider", "claude_agent"),
         "model": session.model,
         "model_provider": session.model_provider,
@@ -70,7 +70,7 @@ def _session_to_list_item(session: KernelSession) -> SessionListItem:
     raw_task_id = meta.get("task_id")
     return SessionListItem(
         id=session.id,
-        project_id=str(session.project_id),
+        project_id=str(meta.get("project_id") or ""),
         name=meta.get("name") or None,  # type: ignore[arg-type]
         status=_map_kernel_status(session.status),
         origin=str(meta.get("origin") or "user"),
@@ -109,7 +109,7 @@ def _session_to_detail(session: KernelSession) -> SessionDetail:
     effort = settings.effort if settings is not None else None
     return SessionDetail(
         id=session.id,
-        project_id=str(session.project_id),
+        project_id=str(meta.get("project_id") or ""),
         name=meta.get("name") or None,  # type: ignore[arg-type]
         status=_map_kernel_status(session.status),
         origin=str(meta.get("origin") or "user"),

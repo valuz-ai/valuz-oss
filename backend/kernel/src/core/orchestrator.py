@@ -1,12 +1,13 @@
-"""SessionOrchestrator — manages Runtime lifecycle around a Project's cwd.
+"""SessionOrchestrator — manages Runtime lifecycle around each session's cwd.
 
 Transport-agnostic orchestration layer. WebSocket, REST, and CLI all delegate
 to this class for runtime caching, turn execution, interrupt handling, and
 cleanup.
 
-Sessions belong to a Project. The project owns the host-side cwd that the
-runtime uses as its workspace root; this orchestrator does not create or own
-that directory.
+Sessions are self-sufficient: each carries its own working directory
+(``session.cwd``) and embedded agent snapshot (``session.agent_config``);
+this orchestrator does not create or own the directory beyond seeding the
+``.claude/CLAUDE.md`` stub.
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ from typing import Any, Literal
 
 from src.core.agent_config import AgentConfig
 from src.core.events import Event, EventSink
-from src.core.project import Project
 from src.core.prompt_builder import wrap_for_mode
 from src.core.runtime_port import RuntimePort
 from src.core.session_approval_cache import SessionApprovalCache, SessionRule
@@ -28,6 +28,7 @@ from src.core.session_bus import SessionEventBus
 from src.core.store_port import StorePort
 from src.core.time_utils import now_ms
 from src.core.types import Error, Message, Session, UserMessage
+from src.core.workspace import bootstrap_session_workspace
 
 # Per-session callable injected into runtimes that wire ``approve_for_session``.
 # Closes over (session_id, cache, runtime.approval_rule_matcher) so the
@@ -41,18 +42,6 @@ logger = logging.getLogger(__name__)
 
 class SessionNotFoundError(Exception):
     """Raised when a session ID does not exist in the store."""
-
-
-class AgentNotFoundError(Exception):
-    """Raised when a session's agent_id does not resolve."""
-
-
-class ProjectNotFoundError(Exception):
-    """Raised when a session's project_id does not resolve."""
-
-
-class ProjectDeletedError(Exception):
-    """Raised when a session's project has been soft-deleted."""
 
 
 class PendingActionNotFoundError(Exception):
@@ -224,17 +213,17 @@ class _MessageObserverSink:
 
 
 class SessionOrchestrator:
-    """Manages Runtime lifecycle for sessions inside a Project.
+    """Manages Runtime lifecycle for sessions.
 
     Responsibilities:
-    1. Load Project + AgentConfig from session bindings
+    1. Bind the runtime to the session's embedded AgentConfig snapshot
     2. Runtime caching per session (config changes take effect on new sessions)
     3. Active runtime tracking (interrupt support)
     4. Per-run Message lifecycle (one row per call to run_turn)
 
-    Sessions in the same Project may run concurrently. They share the
-    project's cwd, so the user is responsible for any workspace contention
-    that arises (e.g. two sessions editing the same file).
+    Sessions sharing a cwd may run concurrently; the user is responsible for
+    any workspace contention that arises (e.g. two sessions editing the same
+    file).
     """
 
     def __init__(self, store: StorePort) -> None:
@@ -350,7 +339,7 @@ class SessionOrchestrator:
         from src.adapters.database_sink import DatabaseEventSink
         from src.adapters.delta_coalescing_sink import DeltaCoalescingSink
 
-        session, project, agent = await self._load_bindings(session_id)
+        session, agent = await self._load_session(session_id)
 
         # Slice 3 of session-modes (broadened in slice 6 simplification):
         # both Claude and Codex process ``/plan <text>`` / ``/goal <text>``
@@ -402,15 +391,16 @@ class SessionOrchestrator:
         coalesced: EventSink = DeltaCoalescingSink(composite)
         observer = _MessageObserverSink(coalesced)
 
-        # Per-session cwd override (session.cwd) wins over the project cwd;
-        # empty falls back to project.cwd. Lets a host isolate each session's
-        # working directory without minting a project per session.
+        # Sessions are self-sufficient: ``session.cwd`` is required at
+        # creation. Seed the workspace stub lazily (idempotent, one stat on
+        # the hot path) — there is no project-creation moment to hook.
+        bootstrap_session_workspace(session.cwd, agent.name or None)
         runtime = await self._ensure_runtime(
             session_id,
             agent,
             session,
             observer,
-            session.cwd or project.cwd,
+            session.cwd,
         )
         self._active[session_id] = runtime
 
@@ -540,27 +530,13 @@ class SessionOrchestrator:
             except Exception:
                 logger.debug("Error closing runtime for session %s", session_id, exc_info=True)
 
-    async def _load_bindings(self, session_id: str) -> tuple[Any, Project, AgentConfig]:
+    async def _load_session(self, session_id: str) -> tuple[Any, AgentConfig]:
         session = await self._store.load_session(session_id)
         if session is None:
             raise SessionNotFoundError(session_id)
-
-        project = await self._store.load_project(session.project_id)
-        if project is None:
-            raise ProjectNotFoundError(session.project_id)
-        if project.status == "deleted":
-            raise ProjectDeletedError(session.project_id)
-
-        # Dual-track: the embedded snapshot (sessions.agent_config) is the
-        # source of truth when present; legacy rows fall back to the agents
-        # table referenced by ``agent_id``.
-        agent = session.agent_config
-        if agent is None:
-            agent = await self._store.load_agent(session.agent_id)
-        if agent is None:
-            raise AgentNotFoundError(f"Agent {session.agent_id} not found for session {session_id}")
-
-        return session, project, agent
+        # The embedded snapshot IS the agent for this session — the kernel
+        # holds no agents table to consult.
+        return session, session.agent_config
 
     async def _ensure_runtime(
         self,
@@ -630,7 +606,6 @@ class SessionOrchestrator:
 
         Validation order (raises one of the typed errors below):
           1. Session loadable (else SessionNotFoundError)
-          2. Project not soft-deleted (else ProjectDeletedError)
           3. ``pending_id`` matches a ``requires_action`` event
              (else PendingActionNotFoundError)
           4. Decision matches the pending's subject and the pending's
@@ -673,11 +648,6 @@ class SessionOrchestrator:
         session = await self._store.load_session(session_id)
         if session is None:
             raise SessionNotFoundError(session_id)
-        project = await self._store.load_project(session.project_id)
-        if project is None:
-            raise ProjectNotFoundError(session.project_id)
-        if project.status == "deleted":
-            raise ProjectDeletedError(session.project_id)
 
         pending_event, resolved_event = await self._derive_pending(session_id, pending_id)
         if pending_event is None:

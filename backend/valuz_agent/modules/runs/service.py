@@ -181,7 +181,7 @@ class RunsService:
                     ws_map,
                     task_map,
                     effective,
-                    project_id=proj_by_session.get(sess.id, str(sess.project_id)),
+                    project_id=proj_by_session.get(sess.id, ""),
                 )
             )
 

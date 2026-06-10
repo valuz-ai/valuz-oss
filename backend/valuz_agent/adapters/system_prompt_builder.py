@@ -29,7 +29,7 @@ def build_project_system_prompt(
 
     No ``# Project: <name>`` header is prepended: the kernel writes a
     project ``CLAUDE.md`` with the project name as H1 (see
-    ``src.core.project.bootstrap_project_workspace``) and the runtime
+    ``src.core.workspace.bootstrap_session_workspace``) and the runtime
     surfaces ``cwd`` to the model independently, so a synthetic header
     here would be redundant. It would also create a visible mismatch in
     the frontend session panel, which renders ``session.instructions``

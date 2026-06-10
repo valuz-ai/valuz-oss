@@ -149,6 +149,23 @@ def _row_to_detail(
     )
 
 
+async def project_cwd_by_id(project_id: str) -> str | None:
+    """Resolve a project's session cwd by id — module-level so sibling
+    modules (memory scope, prompt context, skills staging) can call it
+    without wiring a ProjectService. Opens its own unit of work."""
+    if not project_id:
+        return None
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.projects.datastore import ProjectDatastore
+
+    async with async_unit_of_work(commit=False) as db:
+        row = await ProjectDatastore(db).get_by_id(project_id)
+    if row is None:
+        return None
+    kind = row.kind if row.kind in ("chat", "project") else "chat"
+    return str(fs_registry.project_cwd(row.id, kind, row.root_path))  # type: ignore[arg-type]
+
+
 class ProjectService:
     def __init__(
         self,
@@ -175,11 +192,9 @@ class ProjectService:
     async def ensure_chat_project(self) -> None:
         existing = await self._ds.get_chat_project()
         if existing:
-            await self._ensure_kernel_mirror(existing, instructions_md=None)
             return
         row = ProjectRow(name="Chat", kind="chat", sort_order=0)
         await self._ds.create(row)
-        await self._ensure_kernel_mirror(row, instructions_md=None)
 
     async def create_chat_project_for_session(self, name: str = "Chat") -> ProjectRow:
         """Materialize a fresh, ephemeral chat project for one chat-kind context.
@@ -204,34 +219,11 @@ class ProjectService:
         """
         row = ProjectRow(name=name, kind="chat", sort_order=100)
         await self._ds.create(row)
-        await self._ensure_kernel_mirror(row, instructions_md=None)
         return row
-
-    async def ensure_all_kernel_mirrors(self) -> None:
-        """Reconcile every valuz project into the kernel project/agent tables.
-
-        Idempotent boot-time safety net for two cases:
-
-        1. Pre-existing projects that were created before the kernel-mirror
-           code was wired in (e.g. the chat-default row in databases stamped
-           by an early build).
-        2. Projects whose kernel mirror was lost (manual DB editing, a kernel
-           migration that dropped/recreated tables, etc.).
-
-        Without this, ``orchestrator.run_turn`` raises ``ProjectNotFoundError``
-        on the first send into the affected project — manifests as quick
-        chat / skill-creator chat failing with category "ProjectNotFoundError".
-        """
-        # Always ensure the chat project exists first (creates the row if
-        # missing AND mirrors to kernel).
-        await self.ensure_chat_project()
-        # Then walk every other project and re-mirror.
-        for row in await self._ds.list_projects():
-            await self._ensure_kernel_mirror(row, instructions_md=row.instructions_md)
 
     async def list_projects(self) -> list[ProjectListItem]:
         rows = await self._ds.list_projects()
-        return [_row_to_list_item(r, cwd=self._resolve_kernel_cwd(r)) for r in rows]
+        return [_row_to_list_item(r, cwd=self.resolve_project_cwd(r)) for r in rows]
 
     async def get_project(self, project_id: str) -> ProjectDetail:
         if project_id == "chat-default":
@@ -244,7 +236,7 @@ class ProjectService:
                     row,
                     instructions_md=row.instructions_md,
                     memory_summary=row.memory_summary,
-                    cwd=self._resolve_kernel_cwd(row),
+                    cwd=self.resolve_project_cwd(row),
                 )
         row = await self._ds.get_by_id(project_id)
         if not row:
@@ -253,7 +245,7 @@ class ProjectService:
             row,
             instructions_md=row.instructions_md,
             memory_summary=row.memory_summary,
-            cwd=self._resolve_kernel_cwd(row),
+            cwd=self.resolve_project_cwd(row),
         )
 
     async def create_project(self, name: str, root_path: str) -> ProjectDetail:
@@ -263,8 +255,7 @@ class ProjectService:
             raise ValueError(f"Directory already bound to project '{existing.name}'")
         row = ProjectRow(name=name, kind="project", root_path=abs_path, sort_order=10)
         await self._ds.create(row)
-        await self._ensure_kernel_mirror(row, instructions_md=None)
-        return _row_to_detail(row, cwd=self._resolve_kernel_cwd(row))
+        return _row_to_detail(row, cwd=self.resolve_project_cwd(row))
 
     async def rename_project(self, project_id: str, name: str) -> ProjectDetail:
         row = await self._ds.get_by_id(project_id)
@@ -274,10 +265,7 @@ class ProjectService:
             raise ValueError("Chat project cannot be renamed")
         row.name = name
         await self._ds.update(row)
-        # Keep the kernel project's display name in lock-step. Pass the row we
-        # already loaded so the kernel helper needs no host-DB read.
-        await self._rename_kernel_mirror(project_id, name, row)
-        return _row_to_detail(row, cwd=self._resolve_kernel_cwd(row))
+        return _row_to_detail(row, cwd=self.resolve_project_cwd(row))
 
     async def update_instructions(self, project_id: str, instructions_md: str) -> None:
         row = await self._ds.get_by_id(project_id)
@@ -370,10 +358,6 @@ class ProjectService:
             await self._automations.delete_all_for_project(project_id)
         if self._skills:
             await self._skills.set_project_skills(project_id, [])
-        # Soft-delete the matching kernel Project (and its Agent) so kernel
-        # listing endpoints stop showing this project. The kernel only soft-
-        # deletes by default; existing sessions remain readable for audit.
-        await self._delete_kernel_mirror(project_id)
         await self._ds.delete(project_id)
 
     # ------------------------------------------------------------------
@@ -391,149 +375,11 @@ class ProjectService:
         # ``agent-`` is 6 chars + project_id (32 hex) = 38; trim to 36.
         return f"agent-{project_id}"[:36]
 
-    def _resolve_kernel_cwd(self, row: ProjectRow) -> str:
+    def resolve_project_cwd(self, row: ProjectRow) -> str:
+        """Absolute cwd a session in this project runs in — required at
+        session creation now that the kernel has no project to fall back to."""
         kind = row.kind if row.kind in ("chat", "project") else "chat"
         return str(fs_registry.project_cwd(row.id, kind, row.root_path))  # type: ignore[arg-type]
-
-    async def _ensure_kernel_mirror(self, row: ProjectRow, *, instructions_md: str | None) -> None:
-        """Create or reconcile the kernel Project + Agent for ``row``.
-
-        Idempotent: re-running updates the kernel rows in place.
-
-        Per ADR-008, the per-project synthetic agent only carries
-        identity/budget fields — instructions / skills / mcp_servers all
-        live on the *session*. The ``instructions_md`` argument is no
-        longer threaded into the agent here; the session-create path in
-        ``SessionService`` reads the latest ``instructions_md`` and writes
-        it into ``Session.instructions`` instead.
-        """
-        del instructions_md  # ADR-008: session is the source of truth
-        from src.core.agent_config import (
-            AgentConfig as KernelAgentConfig,  # type: ignore[import-not-found]
-        )
-        from src.core.project import Project as KernelProject  # type: ignore[import-not-found]
-
-        cwd = self._resolve_kernel_cwd(row)
-        agent_id = self._kernel_agent_id(row.id)
-
-        existing_agent = await kernel_store.load_agent(agent_id)
-        # Ensure ``submit_skill`` is declared on the agent so the runtime
-        # advertises it to the model. Idempotent — re-mirroring an agent
-        # that already has the declaration leaves the tuple unchanged.
-        prior_tools = existing_agent.tools if existing_agent else ()
-        merged_tools = _ensure_orchestration_declared(
-            _ensure_memory_tools_declared(_ensure_submit_skill_declared(prior_tools))
-        )
-        agent = KernelAgentConfig(
-            id=agent_id,
-            name=row.name,
-            instructions="",  # ADR-008: session-level field is what the runtime reads
-            # Carry forward fields that may have been edited via the kernel
-            # API so a cwd refresh doesn't reset the agent's tuning.
-            model=existing_agent.model if existing_agent else "claude-sonnet-4-6",
-            tools=merged_tools,
-            callable_agents=existing_agent.callable_agents if existing_agent else (),
-            skills=existing_agent.skills if existing_agent else (),
-            mcp_servers=(),  # ADR-008: session-level via capability_resolver
-            # ``full_access`` is the agent-level default. The actual approval
-            # behaviour for any given turn is decided by ``session.permission_mode``
-            # (sunk in V5+1aae940 per ADR-008 successor), which the host stamps
-            # at session creation from the user's per-session selection.
-            # The synthetic per-project agent never surfaces in the UI, so
-            # its agent-level default just needs to be a valid value the new
-            # 3-value CHECK constraint accepts — pre-upgrade rows of the legacy
-            # ``bypass`` value get coerced to ``full_access`` by the kernel's
-            # ``807642401b71`` migration.
-            permission_mode=_coerce_permission_mode(
-                existing_agent.permission_mode if existing_agent else "full_access"
-            ),
-            max_turns=existing_agent.max_turns if existing_agent else 50,
-            max_cost_usd=existing_agent.max_cost_usd if existing_agent else 10.0,
-            effort=existing_agent.effort if existing_agent else None,
-            thinking=existing_agent.thinking if existing_agent else None,
-        )
-        await kernel_store.save_agent(agent)
-
-        existing_project = await kernel_store.load_project(row.id)
-        project = KernelProject(
-            id=row.id,
-            name=row.name,
-            cwd=cwd,
-            status="active",
-            metadata=existing_project.metadata if existing_project else {},
-        )
-        await kernel_store.save_project(project)
-
-    async def _rename_project_kernel_agent(
-        self, project_id: str, new_name: str, row: ProjectRow | None
-    ) -> None:
-        """Keep the synthetic agent's ``name`` in lock-step with the project.
-
-        Per ADR-008 the agent no longer carries the project's prompt;
-        the only field this method touches is ``name`` (so kernel listings
-        stay readable for ops). If the agent doesn't exist yet we bootstrap it
-        via ``_ensure_kernel_mirror`` — ``row`` is the already-fetched project
-        row threaded down from the async caller (so this stays a pure
-        ``kernel_store`` helper with no host-DB access).
-        """
-        agent_id = self._kernel_agent_id(project_id)
-        existing = await kernel_store.load_agent(agent_id)
-        if existing is None:
-            if row is not None:
-                await self._ensure_kernel_mirror(row, instructions_md=None)
-            return
-
-        from src.core.agent_config import (
-            AgentConfig as KernelAgentConfig,  # type: ignore[import-not-found]
-        )
-
-        await kernel_store.save_agent(
-            KernelAgentConfig(
-                id=existing.id,
-                name=new_name,
-                model=existing.model,
-                instructions=existing.instructions,
-                tools=_ensure_orchestration_declared(
-                    _ensure_memory_tools_declared(_ensure_submit_skill_declared(existing.tools))
-                ),
-                callable_agents=existing.callable_agents,
-                skills=existing.skills,
-                mcp_servers=existing.mcp_servers,
-                # Re-coerce on every save: a pre-upgrade dev DB whose
-                # cached agent row carries a legacy enum value would
-                # otherwise re-emit it under the new CHECK constraint.
-                permission_mode=_coerce_permission_mode(existing.permission_mode),
-                max_turns=existing.max_turns,
-                max_cost_usd=existing.max_cost_usd,
-                effort=existing.effort,
-                thinking=existing.thinking,
-            )
-        )
-
-    async def _rename_kernel_mirror(
-        self, project_id: str, new_name: str, row: ProjectRow | None
-    ) -> None:
-        existing_project = await kernel_store.load_project(project_id)
-        if existing_project is None:
-            return
-        from src.core.project import Project as KernelProject  # type: ignore[import-not-found]
-
-        await kernel_store.save_project(
-            KernelProject(
-                id=existing_project.id,
-                name=new_name,
-                cwd=existing_project.cwd,
-                status=existing_project.status,
-                created_at=existing_project.created_at,
-                metadata=existing_project.metadata,
-            )
-        )
-        await self._rename_project_kernel_agent(project_id, new_name, row)
-
-    async def _delete_kernel_mirror(self, project_id: str) -> None:
-        # Kernel does soft-delete (status = "deleted"); the agent stays so
-        # historical sessions remain readable.
-        await kernel_store.delete_project(project_id)
 
     async def list_files(
         self,

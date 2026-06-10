@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from valuz_agent.adapters import kernel_store
 
 logger = logging.getLogger(__name__)
 
@@ -71,12 +70,7 @@ async def _credential_gap(session: Any, agent_slug: str, *, db: Any | None = Non
         try:
             from valuz_agent.modules.providers.datastore import ProviderDatastore
 
-            # Prefer the session's embedded agent snapshot; legacy rows
-            # fall back to the agents table referenced by agent_id.
             agent = getattr(session, "agent_config", None)
-            if agent is None:
-                agent_id = getattr(session, "agent_id", None)
-                agent = await kernel_store.load_agent(agent_id) if agent_id else None
             if agent is not None:
                 provider_id = (getattr(agent, "metadata", None) or {}).get("provider_id")
                 if provider_id:

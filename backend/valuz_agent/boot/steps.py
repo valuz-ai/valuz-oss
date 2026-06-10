@@ -182,37 +182,6 @@ async def init_kernel(app: FastAPI) -> None:
 
     register_memory_tools()
 
-    # One-time backfill of the always-on in-process baseline tools (memory +
-    # submit_skill). These bind via the persisted AgentConfig.tools, so
-    # agents created before a baseline tool landed carry no declaration
-    # until re-saved. Re-save any active agent missing one so the baseline
-    # is universal regardless of agent age (idempotent — runs after the
-    # tools are registered above so handlers resolve).
-    from valuz_agent.modules.agents.service import backfill_global_agent_tools
-
-    await backfill_global_agent_tools()
-
-
-async def ensure_project_kernel_mirrors() -> None:
-    """Boot-time safety net: every valuz project must have a kernel
-    project + agent row, otherwise ``orchestrator.run_turn`` raises
-    ``ProjectNotFoundError`` on the first message and the user sees the
-    session fail with no clear cause. Idempotent — re-mirrors existing
-    rows, creates the chat-default row when missing.
-
-    Runs after ``init_kernel`` so the kernel store is initialized.
-    """
-    from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.infra.eventbus import event_bus
-    from valuz_agent.modules.projects.datastore import (
-        ProjectDatastore,
-    )
-    from valuz_agent.modules.projects.service import ProjectService
-
-    async with async_unit_of_work() as db:
-        svc = ProjectService(ProjectDatastore(db), event_bus)
-        await svc.ensure_all_kernel_mirrors()
-
 
 def install_binding_change_listener() -> None:
     """Wire ``project.bindings.changed`` → docs caps refresh.
@@ -253,46 +222,6 @@ def install_binding_change_listener() -> None:
         "project.bindings.changed",
         _on_bindings_changed,
     )
-
-
-async def reconcile_project_session_index() -> None:
-    """One-shot backfill of the host project↔session index.
-
-    Sessions created before the index landed (or whose record write was
-    lost) are re-registered from the kernel rows while the kernel still
-    carries ``sessions.project_id``. Idempotent — ``record`` upserts on
-    ``session_id``. This step is deleted together with the kernel column
-    once the cutover completes.
-    """
-    from valuz_agent.adapters import kernel_store
-    from valuz_agent.modules.sessions import project_index
-
-    try:
-        known = set(await project_index.list_session_ids(limit=10000))
-        sessions = await kernel_store.list_sessions(limit=1000)
-    except Exception:  # noqa: BLE001 — reconciliation is best-effort
-        logger.exception("project-session index reconciliation failed")
-        return
-    backfilled = 0
-    for sess in sessions:
-        if sess.id in known:
-            continue
-        meta = (sess.metadata or {}).get("valuz") or {}
-        run_kind = meta.get("run_kind")
-        if meta.get("task_id"):
-            kind = "task_lead" if run_kind == "lead" else "task_subtask"
-        else:
-            kind = "chat"
-        origin = str(meta.get("origin") or "user")
-        try:
-            await project_index.record(
-                str(sess.project_id), sess.id, kind=kind, origin=origin
-            )
-            backfilled += 1
-        except Exception:  # noqa: BLE001
-            logger.exception("failed to backfill index row for session %s", sess.id)
-    if backfilled:
-        logger.info("project-session index: backfilled %d row(s)", backfilled)
 
 
 async def recover_stranded_sessions() -> None:

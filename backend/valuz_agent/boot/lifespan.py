@@ -22,9 +22,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await steps.bootstrap_schema()
     await steps.configure_i18n()
     await steps.init_kernel(app)
-    await steps.ensure_project_kernel_mirrors()
     steps.install_binding_change_listener()
-    await steps.reconcile_project_session_index()
     # ── recovery（依赖 kernel store 已就绪）──
     await steps.recover_stranded_sessions()
     await steps.seal_orphan_pendings()

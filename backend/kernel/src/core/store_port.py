@@ -1,54 +1,16 @@
-"""StorePort — persistence interface for Project, Agent, Session, and Event storage."""
+"""StorePort — persistence interface for Session, Message, and Event storage."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Protocol
 
-from src.core.agent_config import AgentConfig
 from src.core.events import Event
-from src.core.project import Project
 from src.core.types import Message, Session
 
 
 class StorePort(Protocol):
-    """Persistence interface — Project, Agent, Session, Event storage."""
-
-    # -- Project CRUD --
-
-    async def save_project(self, project: Project) -> None:
-        """Create or update a Project."""
-        ...
-
-    async def load_project(self, project_id: str) -> Project | None:
-        """Load a Project by ID, or None if not found. Includes deleted projects."""
-        ...
-
-    async def list_projects(self, *, limit: int = 50, offset: int = 0) -> list[Project]:
-        """List active projects ordered by creation time descending."""
-        ...
-
-    async def delete_project(self, project_id: str) -> bool:
-        """Soft-delete a Project. Returns True if found."""
-        ...
-
-    # -- Agent CRUD --
-
-    async def save_agent(self, agent: AgentConfig) -> None:
-        """Create or update an Agent definition."""
-        ...
-
-    async def load_agent(self, agent_id: str) -> AgentConfig | None:
-        """Load an Agent by ID, or None if not found."""
-        ...
-
-    async def list_agents(self, *, limit: int = 50, offset: int = 0) -> list[AgentConfig]:
-        """List agents ordered by creation time descending."""
-        ...
-
-    async def delete_agent(self, agent_id: str) -> bool:
-        """Delete an Agent. Returns True if found."""
-        ...
+    """Persistence interface — Session, Message, Event storage."""
 
     # -- Session CRUD --
 
@@ -63,8 +25,6 @@ class StorePort(Protocol):
     async def list_sessions(
         self,
         *,
-        project_id: str | None = None,
-        agent_id: str | None = None,
         status: str | None = None,
         ids: Sequence[str] | None = None,
         limit: int = 50,
