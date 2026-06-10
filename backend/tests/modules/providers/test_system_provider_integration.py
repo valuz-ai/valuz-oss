@@ -290,6 +290,12 @@ class TestUserProviderHiding:
         async def hide_user_providers(self) -> bool:
             return True
 
+        async def hidden_provider_ids(self, candidates):  # type: ignore[no-untyped-def]
+            # Part of ProviderPolicyPort (the richer by-id filter) — this
+            # policy only exercises the coarse hide-user half, so it hides
+            # nothing by id.
+            return set()
+
     async def test_locked_hides_user_rows(self, svc: _SvcHandle) -> None:
         from valuz_agent.ports.provider_policy import (
             AllowAllProviderPolicy,
