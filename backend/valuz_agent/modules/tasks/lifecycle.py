@@ -44,7 +44,11 @@ from uuid import uuid4
 
 from valuz_agent.adapters import kernel_client
 from valuz_agent.modules.sessions import project_index
-from valuz_agent.adapters.agent_resolver import _member_agent_config, build_member_session
+from valuz_agent.adapters.agent_resolver import (
+    _member_agent_config,
+    build_member_session,
+    embed_agent_config,
+)
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.fs_registry import fs_registry
@@ -245,16 +249,12 @@ class LifecycleService:
             if lead_session is None:
                 raise ValueError(f"could not build lead session for {lead_agent_slug!r}")
 
-            # Point the lead session at the per-task lead clone so the runtime
-            # surfaces the dispatch tools (build_member_session set agent_id to
-            # the base agent; everything else on the session — instructions /
-            # skills / model / provider — already came from the base).
+            # Swap the embedded snapshot for the per-task lead clone so the
+            # runtime surfaces the dispatch tools (build_member_session
+            # embedded the base agent; everything else on the session —
+            # instructions / skills / model / provider — already came from it).
             if lead_clone is not None:
-                from dataclasses import replace as _replace
-
-                lead_session = _replace(
-                    lead_session, agent_id=lead_clone.id, agent_config=lead_clone
-                )
+                lead_session = embed_agent_config(lead_session, lead_clone)
 
             # Fail fast: don't spawn a lead that has no usable credentials —
             # it would only fail mid-turn with a cryptic "Not logged in".
@@ -571,11 +571,7 @@ class LifecycleService:
             if lead_session is None:
                 return {"error": f"could not build lead session for {lead_slug!r}"}
             if lead_clone is not None:
-                from dataclasses import replace as _replace
-
-                lead_session = _replace(
-                    lead_session, agent_id=lead_clone.id, agent_config=lead_clone
-                )
+                lead_session = embed_agent_config(lead_session, lead_clone)
 
             gap = await _credential_gap(lead_session, lead_slug, db=db)
             if gap is not None:
