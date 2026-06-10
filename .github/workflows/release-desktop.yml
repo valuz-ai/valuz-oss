@@ -377,6 +377,23 @@ jobs:
         shell: bash
         run: ls -lh frontend/apps/desktop/release/
 
+      # electron-builder refuses to upload if the release was published >2h ago.
+      # Use gh as a fallback to guarantee the artifact lands in the release.
+      - name: Ensure artifacts uploaded to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ needs.set-version.outputs.version }}"
+          shopt -s nullglob
+          files=(frontend/apps/desktop/release/*.exe frontend/apps/desktop/release/*.blockmap frontend/apps/desktop/release/latest.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No artifacts found to upload"
+            exit 0
+          fi
+          echo "Uploading ${#files[@]} artifact(s) to release $TAG"
+          gh release upload "$TAG" "${files[@]}" --clobber --repo valuz-ai/valuz-oss
+
       # ── Upload build log on failure ────────────────────────────
       - name: Upload build artifacts on failure
         if: failure()
