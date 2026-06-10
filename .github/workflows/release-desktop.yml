@@ -312,7 +312,7 @@ jobs:
     name: Windows (x64)
     needs: set-version
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'windows-x64' }}
-    runs-on: windows-latest
+    runs-on: windows
     permissions:
       contents: write
     steps:
