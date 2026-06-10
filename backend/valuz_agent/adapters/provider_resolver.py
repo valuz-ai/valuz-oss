@@ -1,4 +1,4 @@
-"""Compose a kernel ``ModelProvider`` from a valuz provider row.
+"""Compose the kernel model-provider wire schema from a valuz provider row.
 
 Background
 ----------
@@ -66,7 +66,9 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-from src.core.types import ModelProvider  # type: ignore[import-not-found]
+from app.schemas import (
+    ModelProviderInputSchema as ModelProvider,
+)
 
 # Side-effect import — surfaces ``src.core...`` on sys.path.
 import valuz_agent.boot.kernel  # noqa: F401

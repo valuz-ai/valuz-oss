@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from src.core.events import Event  # type: ignore[import-not-found]
+from src.core.events import Event
 
 logger = logging.getLogger(__name__)
 

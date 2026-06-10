@@ -201,8 +201,13 @@ class AgentConfigSchema(BaseModel):
 
 
 class CreateSessionRequest(BaseModel):
+    # Optional client-supplied id (UUID-shaped). Hosts pre-mint the id so
+    # side-tables and per-session tokens can reference the session before
+    # the create round-trip; omitted → the kernel mints one.
+    id: str | None = None
     agent_config: AgentConfigSchema
     cwd: str
+    mode: Literal["default", "plan", "goal"] = "default"
     runtime_provider: RuntimeProvider
     model: str = ""
     model_provider: ModelProviderInputSchema | None = None
@@ -223,6 +228,50 @@ class UpdateSessionRequest(BaseModel):
     permission_mode: Literal["default", "auto_review", "full_access"] | None = None
     cwd: str | None = None
     metadata: dict[str, Any] | None = None
+
+
+class EventPayload(BaseModel):
+    """Out-of-band event append (``POST /sessions/{id}/events``).
+
+    The kernel anchors the event onto the session's most recent message —
+    callers (recovery, interrupt fallback, skill-candidate detection) don't
+    hold a message id.
+    """
+
+    type: str
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class AppendEventData(BaseModel):
+    persisted: bool
+
+
+class AppendEventResponse(BaseModel):
+    data: AppendEventData
+    error: ApiError | None = None
+
+
+class FinalizeSessionRequest(BaseModel):
+    """Terminal/idle state flip for out-of-band supervisors
+    (``POST /sessions/{id}/finalize``).
+
+    Used by boot recovery (running → terminated after a crash) and the
+    interrupt fallback (running → idle with UserInterrupt). ``error_event``
+    is appended after the flip when provided. Idempotent: flipping to the
+    already-current status is a no-op success.
+    """
+
+    # ``running`` is the optimistic pre-run flip an in-process host applies
+    # for immediate status UX before the turn actually starts; remote hosts
+    # observe the WS run channel instead. ``idle``/``terminated`` are the
+    # supervisor finalizations (recovery, interrupt fallback, cancel).
+    status: Literal["running", "idle", "terminated"]
+    stop_reason_type: Literal["user_interrupt", "error"] | None = None
+    stop_reason_message: str | None = None
+    # Optional metadata replacement applied atomically with the flip (the
+    # supervisor usually stamps bookkeeping like last_user_message_text).
+    metadata: dict[str, Any] | None = None
+    error_event: EventPayload | None = None
 
 
 class SetSessionModeRequest(BaseModel):

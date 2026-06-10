@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from valuz_agent.adapters import kernel_store
+from valuz_agent.adapters import kernel_client
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.integrations.tools_skill_creator import (
@@ -349,7 +349,7 @@ class ProjectService:
         # come from the host index, which is cleared in the same sweep.
         try:
             for sid in await project_index.remove_for_project(project_id):
-                await kernel_store.delete_session(sid)
+                await kernel_client.delete_session(sid)
         except Exception:  # noqa: BLE001
             pass
         if self._docs:

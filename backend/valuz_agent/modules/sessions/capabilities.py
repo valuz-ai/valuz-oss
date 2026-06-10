@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import logging
 
+from app.schemas import UpdateSessionRequest
+
+import valuz_agent.boot.kernel  # noqa: F401 — sys.path side-effect for app.schemas
+from valuz_agent.adapters import kernel_client
 from valuz_agent.infra.db import async_unit_of_work
-from valuz_agent.modules.sessions.mappers import _copy_session
 
 logger = logging.getLogger(__name__)
 
@@ -45,17 +48,16 @@ async def refresh_docs_capabilities_for_session(session_id: str) -> bool:
 
     Safe to call repeatedly — idempotent on the docs pair.
     """
-    from src.core.types import (
-        McpHttpServerConfig as _McpHttpServerConfig,  # type: ignore[import-not-found]
+    from app.schemas import (
+        McpHttpServerConfigSchema as _McpHttpServerConfig,
     )
 
-    from valuz_agent.adapters import kernel_store
     from valuz_agent.adapters.capability_resolver import _PROJECT_DOCS_SKILL_DIR
     from valuz_agent.infra.config import settings as _settings
     from valuz_agent.integrations.docs_mcp_server import docs_mcp_url
     from valuz_agent.modules.projects.datastore import ProjectDatastore
 
-    session = await kernel_store.load_session(session_id)
+    session = await kernel_client.get_session(session_id)
     if session is None:
         return False
     # Sessions that have already finished don't run new turns; capability
@@ -63,7 +65,9 @@ async def refresh_docs_capabilities_for_session(session_id: str) -> bool:
     if session.status in ("terminated",):
         return False
 
-    project_id = str(session.project_id)
+    project_id = str(((session.metadata or {}).get("valuz", {}) or {}).get("project_id") or "")
+    if not project_id:
+        return False
 
     # Every session (chat + project) carries the docs capability —
     # see ``capability_resolver`` (2.5). The MCP server's tools return
@@ -104,12 +108,10 @@ async def refresh_docs_capabilities_for_session(session_id: str) -> bool:
                 },
             )
         )
-    updated = _copy_session(
-        session,
-        skills=tuple(new_skills),
-        mcp_servers=tuple(new_mcp),
+    await kernel_client.update_session(
+        session_id,
+        UpdateSessionRequest(skills=list(new_skills), mcp_servers=list(new_mcp)),
     )
-    await kernel_store.save_session(updated)
     logger.info(
         "Refreshed docs capabilities on session %s (skill=%s mcp=%s)",
         session_id,
@@ -145,10 +147,9 @@ async def refresh_always_on_mcp_for_session(session_id: str) -> bool:
     stale), ``False`` when the always-on set already matched (the common case,
     so the prompt cache stays warm).
     """
-    from valuz_agent.adapters import kernel_store
     from valuz_agent.adapters.capability_resolver import always_on_http_mcp_servers
 
-    session = await kernel_store.load_session(session_id)
+    session = await kernel_client.get_session(session_id)
     if session is None or session.status in ("terminated",):
         return False
 
@@ -165,8 +166,9 @@ async def refresh_always_on_mcp_for_session(session_id: str) -> bool:
     if new_mcp == tuple(current):
         return False
 
-    updated = _copy_session(session, mcp_servers=new_mcp)
-    await kernel_store.save_session(updated)
+    await kernel_client.update_session(
+        session_id, UpdateSessionRequest(mcp_servers=list(new_mcp))
+    )
     logger.info("Re-stamped always-on MCP token on session %s", session_id)
     return True
 
@@ -180,12 +182,11 @@ async def refresh_docs_capabilities_for_project(project_id: str) -> int:
 
     Returns the number of sessions whose row actually changed.
     """
-    from valuz_agent.adapters import kernel_store
     from valuz_agent.modules.sessions import project_index
 
     try:
         ids = await project_index.list_session_ids(project_id, limit=500)
-        sessions = await kernel_store.list_sessions(ids=ids, limit=500)
+        sessions = await kernel_client.list_sessions(ids=ids, limit=500)
     except Exception:  # noqa: BLE001 — never raise into eventbus handlers
         logger.exception(
             "refresh_docs_capabilities_for_project: failed to list sessions for %s",

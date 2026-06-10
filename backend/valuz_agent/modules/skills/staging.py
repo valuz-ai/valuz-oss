@@ -140,11 +140,11 @@ async def _resolve_project_cwd_for_session(session_id: str) -> Path | None:
     decides whether to fall back to the legacy session-keyed staging
     path or to error out.
     """
-    from valuz_agent.adapters import kernel_store
+    from valuz_agent.adapters import kernel_client
     from valuz_agent.infra.fs_registry import fs_registry
 
     try:
-        session = await kernel_store.load_session(session_id)
+        session = await kernel_client.get_session(session_id)
     except Exception:  # noqa: BLE001 — kernel store transient failures are non-fatal here
         return None
     if session is None:

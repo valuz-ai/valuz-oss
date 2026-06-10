@@ -20,7 +20,7 @@ from typing import Any
 
 import valuz_agent.boot.kernel  # noqa: F401
 
-from src.core import ToolDef  # type: ignore[import-not-found]
+from src.core import ToolDef
 
 # ---------------------------------------------------------------------------
 # Tool names (surfaced by the kernel as mcp__harness__<name>)

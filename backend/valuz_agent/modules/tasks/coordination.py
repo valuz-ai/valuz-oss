@@ -39,7 +39,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from valuz_agent.adapters import kernel_store
+from valuz_agent.adapters import kernel_client
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.tasks import messaging, planning
 from valuz_agent.modules.tasks.actor_runner import collect_manifest
@@ -250,7 +250,7 @@ class CoordinationService:
                 run = runs_by_key.get(key)
                 if run is None:
                     continue
-                ks = await kernel_store.load_session(run.session_id)
+                ks = await kernel_client.get_session(run.session_id)
                 if getattr(ks, "status", None) == "running":
                     continue  # genuinely in flight — keep waiting
                 disp = classify_member(

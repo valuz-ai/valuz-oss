@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 import valuz_agent.boot.kernel  # noqa: F401 — ensures sys.path has kernel root
 
-from src.core import AgentConfig  # type: ignore[import-not-found]
+from src.core import AgentConfig
 
 from valuz_agent.modules.agents.datastore import (
     AgentDatastore,
@@ -155,7 +155,35 @@ class AgentService:
         slugs = [b["type"] for b in connector_bindings if b.get("type")]
         if not slugs:
             return ()
-        return tuple(await self._connectors.resolve_mcp_servers(slugs))
+        # The connector module hands back wire schemas; the agent snapshot is
+        # a domain object (tool/agent-prep cluster), so convert here.
+        from src.core import (
+            McpHttpServerConfig,
+            McpStdioServerConfig,
+        )
+
+        out = []
+        for cfg in await self._connectors.resolve_mcp_servers(slugs):
+            if getattr(cfg, "transport", None) == "stdio" or hasattr(cfg, "command"):
+                out.append(
+                    McpStdioServerConfig(
+                        name=cfg.name,
+                        command=cfg.command,
+                        args=tuple(cfg.args),
+                        env=dict(cfg.env),
+                        env_vars=tuple(cfg.env_vars),
+                    )
+                )
+            else:
+                out.append(
+                    McpHttpServerConfig(
+                        name=cfg.name,
+                        url=cfg.url,
+                        transport=cfg.transport,
+                        headers=dict(cfg.headers),
+                    )
+                )
+        return tuple(out)
 
     # ------------------------------------------------------------------
     # Shared kernel AgentConfig (v2 live-reference)

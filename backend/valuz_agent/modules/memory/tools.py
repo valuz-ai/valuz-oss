@@ -18,12 +18,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.core import ToolDef, ToolResult  # type: ignore[import-not-found]
-from src.core.tool_registry import register_tool  # type: ignore[import-not-found]
-from src.core.tools import ExecContext  # type: ignore[import-not-found]
+from src.core import ToolDef, ToolResult
+from src.core.tool_registry import register_tool
+from src.core.tools import ExecContext
 
 import valuz_agent.boot.kernel  # noqa: F401
-from valuz_agent.adapters import kernel_store
+from valuz_agent.adapters import kernel_client
 from valuz_agent.modules.memory.models import MEM_TYPES, MemoryScope, Scope
 from valuz_agent.modules.memory.service import MemoryError, memory_service
 
@@ -43,7 +43,7 @@ async def _resolve_project_cwd(session_id: str) -> str | None:
     run_dir while memory scopes must anchor at the project root."""
     if not session_id:
         return None
-    sess = await kernel_store.load_session(session_id)
+    sess = await kernel_client.get_session(session_id)
     if sess is None:
         return None
     project_id = ((sess.metadata or {}).get("valuz", {}) or {}).get("project_id") or ""
@@ -57,7 +57,7 @@ async def _resolve_project_cwd(session_id: str) -> str | None:
 async def _resolve_task_id(session_id: str) -> str | None:
     if not session_id:
         return None
-    sess = await kernel_store.load_session(session_id)
+    sess = await kernel_client.get_session(session_id)
     if sess is None:
         return None
     valuz = (sess.metadata or {}).get("valuz", {}) or {}

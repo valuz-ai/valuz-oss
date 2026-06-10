@@ -21,11 +21,11 @@ from typing import TYPE_CHECKING, Any
 
 import valuz_agent.boot.kernel  # noqa: F401
 
-from src.core import ToolDef, ToolResult  # type: ignore[import-not-found]
-from src.core.tool_registry import register_tool  # type: ignore[import-not-found]
-from src.core.tools import ExecContext  # type: ignore[import-not-found]
+from src.core import ToolDef, ToolResult
+from src.core.tool_registry import register_tool
+from src.core.tools import ExecContext
 
-from valuz_agent.adapters import kernel_store
+from valuz_agent.adapters import kernel_client
 from valuz_agent.modules.tasks import messaging, planning, queries
 
 from valuz_agent.modules.tasks.tools.declarations import (
@@ -102,7 +102,7 @@ async def _check_lead_gate(ctx: ExecContext) -> tuple[str, str] | ToolResult:
 
     Returns a ToolResult(is_error=True) when the check fails.
     """
-    sess = await kernel_store.load_session(ctx.session_id)
+    sess = await kernel_client.get_session(ctx.session_id)
     if sess is None:
         return ToolResult(content="dispatch: caller session not found", is_error=True)
 
@@ -145,7 +145,7 @@ async def _resolve_plan_writer_task(
 
     Read-only callers (get_plan) should use ``_resolve_plan_reader_task`` instead.
     """
-    sess = await kernel_store.load_session(ctx.session_id)
+    sess = await kernel_client.get_session(ctx.session_id)
     if sess is None:
         return ToolResult(content="plan tool: caller session not found", is_error=True)
 
@@ -183,7 +183,7 @@ async def _resolve_plan_reader_task(
     Permits any caller in the task's project (chat or lead). Useful for
     get_plan: knowing your own draft / a project mate's plan is fine.
     """
-    sess = await kernel_store.load_session(ctx.session_id)
+    sess = await kernel_client.get_session(ctx.session_id)
     if sess is None:
         return ToolResult(content="plan tool: caller session not found", is_error=True)
 
@@ -274,7 +274,7 @@ async def _check_orchestration_gate(ctx: ExecContext) -> tuple[str, str] | ToolR
     spawning nested tasks (附录 E E-3). The project must be a project (chat
     projects are ephemeral). Returns a ToolResult(is_error=True) on failure.
     """
-    sess = await kernel_store.load_session(ctx.session_id)
+    sess = await kernel_client.get_session(ctx.session_id)
     if sess is None:
         return ToolResult(content="create_task: caller session not found", is_error=True)
 
@@ -538,7 +538,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         if not text.strip():
             return ToolResult(content="inject_into_task: text is required", is_error=True)
 
-        sess = await kernel_store.load_session(ctx.session_id)
+        sess = await kernel_client.get_session(ctx.session_id)
         if sess is None:
             return ToolResult(content="inject_into_task: caller session not found", is_error=True)
 
@@ -592,7 +592,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         if not task_id:
             return ToolResult(content="resume_task: task_id is required", is_error=True)
 
-        sess = await kernel_store.load_session(ctx.session_id)
+        sess = await kernel_client.get_session(ctx.session_id)
         if sess is None:
             return ToolResult(content="resume_task: caller session not found", is_error=True)
 
@@ -720,7 +720,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         # project-conversation launcher (so it can inspect the team before
         # create_task). NOT lead-gated; just needs a project. Resolve from
         # valuz metadata (task runs) or session.project_id (launcher).
-        sess = await kernel_store.load_session(ctx.session_id)
+        sess = await kernel_client.get_session(ctx.session_id)
         if sess is None:
             return ToolResult(content="list_members: caller session not found", is_error=True)
         v: dict[str, Any] = (sess.metadata or {}).get("valuz", {})

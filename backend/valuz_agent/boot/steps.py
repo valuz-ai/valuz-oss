@@ -255,10 +255,10 @@ async def seal_orphan_pendings() -> None:
     """
     import logging
 
-    from app.dependencies import get_orchestrator  # type: ignore[import-not-found]
+    from valuz_agent.adapters import kernel_client
 
     try:
-        sealed = await get_orchestrator().scan_orphan_pendings()
+        sealed = await kernel_client.scan_orphan_pendings()
     except Exception:  # noqa: BLE001 — startup must not block on bookkeeping
         logging.getLogger(__name__).exception("scan_orphan_pendings failed")
         return

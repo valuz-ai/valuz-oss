@@ -210,10 +210,12 @@ exclude = [
 # ``follow_imports = "skip"`` for ``src.*`` / ``kernel.*`` means host mypy never
 # descends into the vendored kernel's bodies — it treats kernel imports as Any.
 module = [
+    "app.*",
     "kernel.*",
     "src.*",
 ]
 follow_imports = "skip"
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # ``codex_cli_bin`` (the binary-bundling package the ``openai-codex`` SDK

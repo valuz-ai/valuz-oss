@@ -27,7 +27,7 @@ from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
 
 def _as_async(fn):
     """Wrap a sync callable as a coroutine fn for monkeypatching the async
-    ``kernel_store`` facade (its methods are awaited by the code under test)."""
+    ``kernel_client`` facade (its methods are awaited by the code under test)."""
 
     async def _f(*args, **kwargs):
         return fn(*args, **kwargs)
@@ -589,7 +589,7 @@ def test_auto_finalize_stays_active_on_stop_reason_error_with_empty_plan(
     fake_sess = SimpleNamespace(
         stop_reason={"type": "error", "category": "execution_error", "message": "boom: skill x"}
     )
-    monkeypatch.setattr(orch_mod.kernel_store, "load_session", _as_async(lambda _sid: fake_sess))
+    monkeypatch.setattr(orch_mod.kernel_client, "get_session", _as_async(lambda _sid: fake_sess))
     orch = TaskOrchestrator()
     asyncio.run(
         orch._auto_finalize_lead_task(
@@ -781,7 +781,7 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
         ),
     }
     monkeypatch.setattr(
-        orch_mod.kernel_store, "load_session", _as_async(lambda sid: sessions.get(sid))
+        orch_mod.kernel_client, "get_session", _as_async(lambda sid: sessions.get(sid))
     )
 
     orch = TaskOrchestrator()
@@ -944,8 +944,8 @@ def test_resume_task_only_paused_flips_active_and_redrives(
     )
     # paused member kernel session was interrupted (idle + UserInterrupt-ish) → resume.
     monkeypatch.setattr(
-        orch_mod.kernel_store,
-        "load_session",
+        orch_mod.kernel_client,
+        "get_session",
         _as_async(
             lambda sid: SimpleNamespace(status="idle", stop_reason={"type": "user_interrupt"})
         ),
@@ -1000,8 +1000,8 @@ def test_resume_task_accepts_blocked(db_factory, tmp_path, monkeypatch) -> None:
         db_factory, tmp_path, members=[], task_status="blocked", run_status="rejected"
     )
     monkeypatch.setattr(
-        orch_mod.kernel_store,
-        "load_session",
+        orch_mod.kernel_client,
+        "get_session",
         _as_async(lambda sid: SimpleNamespace(status="idle", stop_reason={"type": "error"})),
     )
     orch = TaskOrchestrator()
@@ -1031,8 +1031,8 @@ def test_resume_task_accepts_stopped(db_factory, tmp_path, monkeypatch) -> None:
         db_factory, tmp_path, members=[], task_status="stopped", run_status="completed"
     )
     monkeypatch.setattr(
-        orch_mod.kernel_store,
-        "load_session",
+        orch_mod.kernel_client,
+        "get_session",
         _as_async(lambda sid: SimpleNamespace(status="idle", stop_reason=None)),
     )
     orch = TaskOrchestrator()
@@ -1062,8 +1062,8 @@ def test_resume_task_accepts_completed(db_factory, tmp_path, monkeypatch) -> Non
         db_factory, tmp_path, members=[], task_status="completed", run_status="completed"
     )
     monkeypatch.setattr(
-        orch_mod.kernel_store,
-        "load_session",
+        orch_mod.kernel_client,
+        "get_session",
         _as_async(lambda sid: SimpleNamespace(status="idle", stop_reason=None)),
     )
     orch = TaskOrchestrator()
@@ -1137,7 +1137,7 @@ def test_heartbeat_pending_synthesizes_terminal_completed(
         "sC": SimpleNamespace(status="running", stop_reason=None),  # still in flight
     }
     monkeypatch.setattr(
-        orch_mod.kernel_store, "load_session", _as_async(lambda sid: sessions.get(sid))
+        orch_mod.kernel_client, "get_session", _as_async(lambda sid: sessions.get(sid))
     )
     # ``_heartbeat_pending`` lives in tasks/coordination.py (ADR-023 Step 3b);
     # the orchestrator delegates to it, so stub the coordination module's
@@ -1195,8 +1195,8 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
     monkeypatch.setattr(orch, "run_actor_loop", _fake_loop)
     # On resume, paused members read as interrupted-idle → resumable.
     monkeypatch.setattr(
-        orch_mod.kernel_store,
-        "load_session",
+        orch_mod.kernel_client,
+        "get_session",
         _as_async(
             lambda sid: SimpleNamespace(status="idle", stop_reason={"type": "user_interrupt"})
         ),
@@ -1295,8 +1295,8 @@ def test_resume_evicts_kernel_runtime_before_respawn(db_factory, tmp_path, monke
         run_status="paused",
     )
     monkeypatch.setattr(
-        orch_mod.kernel_store,
-        "load_session",
+        orch_mod.kernel_client,
+        "get_session",
         _as_async(
             lambda sid: SimpleNamespace(status="idle", stop_reason={"type": "user_interrupt"})
         ),

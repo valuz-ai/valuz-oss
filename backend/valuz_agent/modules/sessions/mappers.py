@@ -7,7 +7,7 @@ orchestration logic; ``service`` and the route layer both import from here.
 
 from __future__ import annotations
 
-from src.core.types import (  # type: ignore[import-not-found]
+from src.core.types import (
     Session as KernelSession,
 )
 
@@ -34,7 +34,7 @@ def _copy_session(session: KernelSession, /, **overrides: object) -> KernelSessi
     update silently demotes the session back to ``full_access`` and the
     approval bridge for the next turn never wires.
     """
-    from src.core.types import Session as KS  # type: ignore[import-not-found]
+    from src.core.types import Session as KS
 
     fields: dict[str, object] = {
         "id": session.id,

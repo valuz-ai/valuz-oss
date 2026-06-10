@@ -22,7 +22,7 @@ from typing import Any
 
 import valuz_agent.boot.kernel  # noqa: F401
 
-from src.core import Session  # type: ignore[import-not-found]
+from app.schemas import SessionData as Session
 
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.time_utils import now_ms

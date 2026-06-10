@@ -10,36 +10,36 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app._validators import validate_mcp_servers, validate_registered_tools, validate_skills
 from app.dependencies import get_orchestrator, get_store
+from app.serializers import (
+    agent_config_from_schema as _agent_config_from_schema,
+)
+from app.serializers import (
+    event_to_data as _event_to_data,
+)
+from app.serializers import (
+    session_to_data as _session_to_data,
+)
 from app.schemas import (
-    AgentConfigSchema,
+    AppendEventData,
+    AppendEventResponse,
     CreateSessionRequest,
+    EventPayload,
+    FinalizeSessionRequest,
     DataResponse,
-    EventData,
     EventListResponse,
-    McpHttpServerConfigSchema,
-    McpStdioServerConfigSchema,
     ModelProviderInputSchema,
-    ModelProviderResponseSchema,
     ModelProviderUpdateSchema,
     ModelSettingsSchema,
-    SessionData,
     SessionListResponse,
     SessionResponse,
     SetSessionModeRequest,
-    StopReasonSchema,
     SubmitActionData,
     SubmitActionRequest,
     SubmitActionResponse,
-    SubAgentDefSchema,
-    TodoItem,
-    ToolDefSchema,
     UpdateSessionRequest,
 )
 from src.core import (
-    AgentConfig,
     Event,
-    McpServerConfig,
-    McpStdioServerConfig,
     ModelProvider,
     ModelSettings,
     Session,
@@ -61,119 +61,6 @@ router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 
 StoreDep = Annotated[StorePort, Depends(get_store)]
 OrchestratorDep = Annotated[SessionOrchestrator, Depends(get_orchestrator)]
-
-
-def _mcp_to_schema(
-    cfg: McpServerConfig,
-) -> McpHttpServerConfigSchema | McpStdioServerConfigSchema:
-    if isinstance(cfg, McpStdioServerConfig):
-        return McpStdioServerConfigSchema(
-            name=cfg.name,
-            command=cfg.command,
-            args=list(cfg.args),
-            env=dict(cfg.env),
-            env_vars=list(cfg.env_vars),
-        )
-    return McpHttpServerConfigSchema(
-        name=cfg.name,
-        url=cfg.url,
-        transport=cfg.transport,
-        headers=dict(cfg.headers),
-    )
-
-
-def _agent_config_to_schema(cfg: Any) -> AgentConfigSchema:
-    return AgentConfigSchema(
-        id=cfg.id,
-        name=cfg.name,
-        model=cfg.model,
-        runtime_provider=cfg.runtime_provider,
-        instructions=cfg.instructions,
-        permission_mode=cfg.permission_mode,
-        max_turns=cfg.max_turns,
-        max_cost_usd=cfg.max_cost_usd,
-        tools=[
-            ToolDefSchema(
-                name=t.name,
-                description=t.description,
-                parameters=t.parameters,
-                read_only=t.read_only,
-                permission=t.permission,
-            )
-            for t in cfg.tools
-        ],
-        callable_agents=[
-            SubAgentDefSchema(
-                name=a.name,
-                description=a.description,
-                prompt=a.prompt,
-                tools=list(a.tools),
-                model=a.model,
-                skills=list(a.skills) if a.skills is not None else None,
-                metadata=a.metadata,
-            )
-            for a in cfg.callable_agents
-        ],
-        skills=list(cfg.skills),
-        mcp_servers=[_mcp_to_schema(c) for c in cfg.mcp_servers],
-        effort=cfg.effort,
-        thinking=cfg.thinking,
-        metadata=cfg.metadata,
-    )
-
-
-def _agent_config_from_schema(schema: AgentConfigSchema) -> AgentConfig:
-    from src.adapters.sqlalchemy_store.converters import dict_to_agent_config
-
-    cfg = dict_to_agent_config(schema.model_dump())
-    assert cfg is not None  # name is required on the schema
-    return cfg
-
-
-def _session_to_data(session: Session) -> SessionData:
-    stop_reason = None
-    if session.stop_reason is not None:
-        sr_dict = dataclasses.asdict(session.stop_reason)
-        stop_reason = StopReasonSchema(**sr_dict)
-    return SessionData(
-        id=session.id,
-        agent_config=_agent_config_to_schema(session.agent_config),
-        runtime_provider=session.runtime_provider,
-        cwd=session.cwd,
-        model=session.model,
-        model_provider=(
-            ModelProviderResponseSchema(
-                base_url=session.model_provider.base_url,
-                api_protocol=session.model_provider.api_protocol,
-            )
-            if session.model_provider is not None
-            else None
-        ),
-        model_settings=(
-            ModelSettingsSchema(
-                temperature=session.model_settings.temperature,
-                max_tokens=session.model_settings.max_tokens,
-                effort=session.model_settings.effort,
-            )
-            if session.model_settings is not None
-            else None
-        ),
-        instructions=session.instructions,
-        skills=list(session.skills),
-        mcp_servers=[_mcp_to_schema(cfg) for cfg in session.mcp_servers],
-        permission_mode=session.permission_mode,
-        mode=session.mode,
-        status=session.status,
-        stop_reason=stop_reason,
-        created_at=session.created_at,
-        metadata=session.metadata,
-        runtime_session_id=session.runtime_session_id,
-        todos=[TodoItem(**t) for t in session.todos] if session.todos is not None else None,
-    )
-
-
-def _event_to_data(event: Event) -> EventData:
-    return EventData(type=event.type, data=event.data, timestamp=event.timestamp)
 
 
 @router.post("", status_code=201, response_model=SessionResponse)
@@ -236,7 +123,7 @@ async def create_session(
     mcp_configs = validate_mcp_servers(body.mcp_servers)
 
     session = Session(
-        id=str(uuid.uuid4()),
+        id=body.id or str(uuid.uuid4()),
         agent_config=agent,
         runtime_provider=body.runtime_provider,
         cwd=body.cwd,
@@ -247,6 +134,7 @@ async def create_session(
         skills=tuple(body.skills),
         mcp_servers=tuple(mcp_configs),
         permission_mode=permission_mode,
+        mode=body.mode,
         metadata=body.metadata,
     )
     await store.save_session(session)
@@ -307,13 +195,15 @@ def _model_settings_from_schema(s: ModelSettingsSchema | None) -> ModelSettings 
 @router.get("", response_model=SessionListResponse)
 async def list_sessions(
     store: StoreDep,
-
     status: Annotated[str | None, Query()] = None,
-    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    ids: Annotated[str | None, Query(description="comma-separated session id filter")] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> dict[str, Any]:
+    id_list = [i for i in (ids.split(",") if ids else []) if i] if ids is not None else None
     sessions = await store.list_sessions(
         status=status,
+        ids=id_list,
         limit=limit,
         offset=offset,
     )
@@ -436,6 +326,82 @@ async def delete_session(
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"data": None}
+
+
+@router.post("/{session_id}/events", status_code=201, response_model=AppendEventResponse)
+async def append_session_event(
+    session_id: str,
+    body: EventPayload,
+    store: StoreDep,
+) -> dict[str, Any]:
+    """Append an out-of-band event onto the session's latest message.
+
+    For supervisors that aren't driving a turn (recovery, interrupt
+    fallback, after-the-fact detectors). ``persisted=false`` when the
+    session has no messages yet to anchor onto (the event is dropped).
+    """
+    session = await store.load_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    messages = await store.list_messages_for_session(session_id, limit=1)
+    if not messages:
+        return {"data": AppendEventData(persisted=False)}
+    await store.append_event(
+        session_id,
+        messages[0].id,
+        Event(type=body.type, data=body.data),  # type: ignore[arg-type]
+    )
+    return {"data": AppendEventData(persisted=True)}
+
+
+@router.post("/{session_id}/finalize", response_model=SessionResponse)
+async def finalize_session(
+    session_id: str,
+    body: FinalizeSessionRequest,
+    store: StoreDep,
+) -> dict[str, Any]:
+    """Flip a session to ``idle``/``terminated`` from outside a turn.
+
+    The supervisor-facing alternative to PATCH (which deliberately cannot
+    touch ``status``): boot recovery clears crashed ``running`` rows, the
+    interrupt fallback parks a session as idle. Appends ``error_event``
+    after the flip when provided. Idempotent on the status flip.
+    """
+    session = await store.load_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    from src.core.types import Error as ErrorStop  # type: ignore[import-not-found]
+    from src.core.types import UserInterrupt  # type: ignore[import-not-found]
+
+    stop_reason = session.stop_reason
+    if body.stop_reason_type == "user_interrupt":
+        stop_reason = UserInterrupt()
+    elif body.stop_reason_type == "error":
+        stop_reason = ErrorStop(message=body.stop_reason_message or "")
+
+    if (
+        session.status != body.status
+        or body.stop_reason_type is not None
+        or body.metadata is not None
+    ):
+        session = dataclasses.replace(
+            session,
+            status=body.status,
+            stop_reason=stop_reason,
+            metadata=body.metadata if body.metadata is not None else session.metadata,
+        )
+        await store.save_session(session)
+
+    if body.error_event is not None:
+        messages = await store.list_messages_for_session(session_id, limit=1)
+        if messages:
+            await store.append_event(
+                session_id,
+                messages[0].id,
+                Event(type=body.error_event.type, data=body.error_event.data),  # type: ignore[arg-type]
+            )
+    return {"data": _session_to_data(session)}
 
 
 @router.get("/{session_id}/events", response_model=EventListResponse)

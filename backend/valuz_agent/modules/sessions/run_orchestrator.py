@@ -18,9 +18,8 @@ from typing import Any
 # Side-effect: puts the kernel on sys.path so ``src.core`` / ``app.*``
 # resolve at call time.
 import valuz_agent.boot.kernel  # noqa: F401
-from valuz_agent.adapters import kernel_store
+from valuz_agent.adapters import kernel_client
 from valuz_agent.infra.eventbus import EventBus
-from valuz_agent.modules.sessions.mappers import _copy_session
 from valuz_agent.modules.tasks.actor_runner import run_session_to_idle
 
 logger = logging.getLogger(__name__)
@@ -94,7 +93,7 @@ async def _finalize_session(session_id: str, content: str, final_status: str) ->
     can share it. Builds a fresh ``Session`` dataclass because the kernel's
     types are frozen.
     """
-    session = await kernel_store.load_session(session_id)
+    session = await kernel_client.get_session(session_id)
     if session is None:
         return
 
@@ -105,9 +104,9 @@ async def _finalize_session(session_id: str, content: str, final_status: str) ->
         valuz["name"] = content[:40].replace("\n", " ").strip()
     meta["valuz"] = valuz
 
-    updated = _copy_session(
-        session,
-        status=final_status,  # type: ignore[arg-type]
-        metadata=meta,
+    from app.schemas import FinalizeSessionRequest
+
+    await kernel_client.finalize_session(
+        session_id,
+        FinalizeSessionRequest(status=final_status, metadata=meta),  # type: ignore[arg-type]
     )
-    await kernel_store.save_session(updated)

@@ -26,6 +26,26 @@ from valuz_agent.modules.tasks.orchestrator import (
 )
 
 
+def _fake_agent_config(**kw):
+    """Real AgentConfig for resolver fakes — serializer needs full fields."""
+    from src.core import AgentConfig  # type: ignore[import-not-found]
+
+    kw.setdefault("id", "fake-agent")
+    kw.setdefault("name", "fake")
+    kw.setdefault("skills", tuple(kw.get("skills", ())))
+    kw.setdefault("mcp_servers", ())
+    kw.pop("metadata", None) if False else None
+    allowed = {
+        "id", "name", "model", "runtime_provider", "instructions", "tools",
+        "callable_agents", "skills", "mcp_servers", "permission_mode",
+        "max_turns", "max_cost_usd", "effort", "thinking", "metadata",
+    }
+    kw = {k: v for k, v in kw.items() if k in allowed}
+    if isinstance(kw.get("skills"), list):
+        kw["skills"] = tuple(kw["skills"])
+    return AgentConfig(**kw)
+
+
 def _async_member_get(source_agent_slug: str = "lead-agent"):
     """A fake ProjectMemberDatastore.get — async, since the real one is async
     (build_member_session awaits it)."""
@@ -38,7 +58,7 @@ def _async_member_get(source_agent_slug: str = "lead-agent"):
 
 def _as_async(fn):
     """Wrap a sync callable as a coroutine fn for monkeypatching the async
-    ``kernel_store`` facade (its methods are awaited by the code under test)."""
+    ``kernel_client`` facade (its methods are awaited by the code under test)."""
 
     async def _f(*args, **kwargs):
         return fn(*args, **kwargs)
@@ -238,7 +258,7 @@ def test_build_member_session_injects_skill_scoping(
 
     from valuz_agent.adapters import agent_resolver
 
-    fake_agent = SimpleNamespace(
+    fake_agent = _fake_agent_config(
         id="kernel-agent-1",
         name="writer",
         instructions="be a writer",
@@ -289,7 +309,7 @@ def test_build_member_session_carries_agent_effort(
 
     from valuz_agent.adapters import agent_resolver
 
-    fake_agent = SimpleNamespace(
+    fake_agent = _fake_agent_config(
         id="kernel-agent-1",
         name="writer",
         instructions="be a writer",
@@ -330,7 +350,7 @@ def test_build_member_session_no_effort_leaves_model_settings_unset(
 
     from valuz_agent.adapters import agent_resolver
 
-    fake_agent = SimpleNamespace(
+    fake_agent = _fake_agent_config(
         id="kernel-agent-1",
         name="writer",
         instructions="be a writer",
@@ -368,7 +388,7 @@ def _fake_goal_mode_setup(monkeypatch: pytest.MonkeyPatch, runtime_provider: str
 
     from valuz_agent.adapters import agent_resolver
 
-    fake_agent = SimpleNamespace(
+    fake_agent = _fake_agent_config(
         id="kernel-agent-1",
         name="writer",
         instructions="be a writer",
@@ -529,8 +549,8 @@ def test_create_task_gate_rejects_task_sessions(
 
     # run_kind="lead" → rejected before any DB lookup.
     monkeypatch.setattr(
-        dispatch_mcp.kernel_store,
-        "load_session",
+        dispatch_mcp.kernel_client,
+        "get_session",
         _as_async(lambda _sid: _sess({"run_kind": "lead", "project_id": "w1"})),
     )
     res = asyncio.run(dispatch_mcp._check_orchestration_gate(ctx))  # type: ignore[arg-type]
@@ -538,8 +558,8 @@ def test_create_task_gate_rejects_task_sessions(
 
     # run_kind="subtask" → rejected.
     monkeypatch.setattr(
-        dispatch_mcp.kernel_store,
-        "load_session",
+        dispatch_mcp.kernel_client,
+        "get_session",
         _as_async(lambda _sid: _sess({"run_kind": "subtask", "project_id": "w1"})),
     )
     res = asyncio.run(dispatch_mcp._check_orchestration_gate(ctx))  # type: ignore[arg-type]
@@ -547,8 +567,8 @@ def test_create_task_gate_rejects_task_sessions(
 
     # plain conversation but no project_id → rejected.
     monkeypatch.setattr(
-        dispatch_mcp.kernel_store,
-        "load_session",
+        dispatch_mcp.kernel_client,
+        "get_session",
         _as_async(lambda _sid: _sess({"agent_slug": "x"})),
     )
     res = asyncio.run(dispatch_mcp._check_orchestration_gate(ctx))  # type: ignore[arg-type]
@@ -732,7 +752,7 @@ def test_build_member_session_carries_effort_for_deepagents(
 
     from valuz_agent.adapters import agent_resolver
 
-    fake_agent = SimpleNamespace(
+    fake_agent = _fake_agent_config(
         id="da-1",
         name="da-writer",
         instructions="be brief",

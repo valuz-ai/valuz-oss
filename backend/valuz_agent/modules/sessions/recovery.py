@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 
-from valuz_agent.adapters import kernel_store
+from valuz_agent.adapters import kernel_client
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ async def recover_running_sessions(*, batch_limit: int = 500) -> int:
     raises; the caller (startup hook) treats it as best-effort.
     """
     try:
-        sessions = await kernel_store.list_sessions(limit=batch_limit)
+        sessions = await kernel_client.list_sessions(limit=batch_limit)
     except Exception:  # noqa: BLE001 — startup must not block on bookkeeping
         logger.exception("recover_running_sessions: failed to list kernel sessions")
         return 0
@@ -78,67 +78,32 @@ async def recover_running_sessions(*, batch_limit: int = 500) -> int:
 async def _finalise_one(session: object) -> None:
     """Flip one session from ``running`` to ``terminated`` + emit an event.
 
-    Imports are deferred so this module doesn't load the kernel SDK at
-    import time (matters for tests that patch the kernel boundary).
+    Goes through the kernel client's finalize endpoint, which applies the
+    status flip and appends the explanatory ``session_error`` event in one
+    supervisor call (the event is anchored onto the session's latest
+    message; dropped when the session never ran a turn — there is nothing
+    for SSE to replay anyway).
     """
-    from src.core.events import Event as KernelEvent  # type: ignore[import-not-found]
-    from src.core.types import Session as KS  # type: ignore[import-not-found]  # noqa: N814
+    from app.schemas import (
+        EventPayload,
+        FinalizeSessionRequest,
+    )
 
     sid = session.id  # type: ignore[attr-defined]
 
-    updated = KS(
-        id=sid,
-        project_id=session.project_id,  # type: ignore[attr-defined]
-        agent_id=session.agent_id,  # type: ignore[attr-defined]
-        runtime_provider=getattr(session, "runtime_provider", "claude_agent"),
-        model=session.model,  # type: ignore[attr-defined]
-        model_provider=getattr(session, "model_provider", None),
-        model_settings=getattr(session, "model_settings", None),
-        instructions=getattr(session, "instructions", ""),
-        skills=session.skills,  # type: ignore[attr-defined]
-        mcp_servers=session.mcp_servers,  # type: ignore[attr-defined]
-        # V5+1aae940: forward ``permission_mode`` so the status flip
-        # doesn't silently demote a default-mode session back to
-        # full_access on the next save. ``getattr`` with a safe default
-        # keeps the recovery path resilient against rows that pre-date
-        # the migration (e.g. mid-upgrade test fixtures).
-        permission_mode=getattr(session, "permission_mode", "full_access"),
-        status="terminated",
-        # We can't synthesise a ``StopReason`` dataclass from outside the
-        # turn, so leave whatever the kernel already had (likely None).
-        # The session_error event below carries the human-readable cause.
-        stop_reason=getattr(session, "stop_reason", None),
-        created_at=session.created_at,  # type: ignore[attr-defined]
-        metadata=session.metadata,  # type: ignore[attr-defined]
-        runtime_session_id=getattr(session, "runtime_session_id", None),
-        todos=getattr(session, "todos", None),
-    )
-    await kernel_store.save_session(updated)
-
-    # SSE replay needs *something* in the events table — otherwise a
-    # client reconnecting with after_seq=last would see the stream end
-    # cleanly with no explanation. ``session_error`` already has a SSE
-    # translation (``run.failed``) the renderer knows how to surface.
-    # V5+messages: events table requires a message_id. Anchor onto the
-    # latest message for the session; if none exists (session was created
-    # but never ran a turn), the error is silently dropped — there's
-    # nothing for SSE to replay anyway.
-    persisted = await kernel_store.append_session_scoped_event(
+    await kernel_client.finalize_session(
         sid,
-        KernelEvent(
-            type="session_error",
-            data={
-                "category": "ServerRestart",
-                "message": "Agent turn was interrupted by a server restart.",
-            },
+        FinalizeSessionRequest(
+            status="terminated",
+            error_event=EventPayload(
+                type="session_error",
+                data={
+                    "category": "ServerRestart",
+                    "message": "Agent turn was interrupted by a server restart.",
+                },
+            ),
         ),
     )
-    if not persisted:
-        logger.info(
-            "recover_running_sessions: session %s has no messages; skipping session_error event",
-            sid,
-        )
-
     logger.info("Recovered stranded session %s → terminated", sid)
 
 

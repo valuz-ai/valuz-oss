@@ -71,7 +71,7 @@ single adapter seam.
 │        ▲   all kernel coupling crosses this seam   ▲               │
 │        │                                                           │
 │  adapters/                                                         │
-│   ├── kernel_sync          sync facade over the async StorePort    │
+│   ├── kernel_client        API-shaped client seam (wire schemas)   │
 │   ├── capability_resolver  project + extras → kernel skills/MCP  │
 │   ├── model_resolver       request + provider + default → model id │
 │   ├── mcp_resolver         slug + creds → MCP server configs       │

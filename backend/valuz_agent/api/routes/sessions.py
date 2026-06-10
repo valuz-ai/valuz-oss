@@ -8,7 +8,7 @@ from pydantic import BaseModel, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from valuz_agent.adapters import kernel_store
+from valuz_agent.adapters import kernel_client
 from valuz_agent.adapters.event_sse_adapter import iter_events_sse
 from valuz_agent.api.deps import get_current_user, get_session_service
 from valuz_agent.infra.db import get_async_session
@@ -430,18 +430,7 @@ async def submit_session_action(
         ``orchestrator.submit_action``; that error becomes a 400 here.
     """
 
-    # Import the kernel orchestrator's exception types here so the route
-    # file doesn't pull in kernel internals at module load (keeps the
-    # import surface narrow + matches existing patterns elsewhere).
-    from src.core.orchestrator import (  # type: ignore[import-not-found]
-        ApprovalNotImplementedError,
-        PendingActionConflictError,
-        PendingActionDecisionMismatchError,
-        PendingActionExpiredError,
-        PendingActionNotFoundError,
-        RuntimeUnavailableError,
-        SessionNotFoundError,
-    )
+    from valuz_agent.adapters.kernel_client import KernelClientError
 
     try:
         result = await svc.submit_action(
@@ -452,48 +441,10 @@ async def submit_session_action(
             answers=body.answers,
             modified_input=body.modified_input,
         )
-    except SessionNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Session not found") from exc
-    except PendingActionNotFoundError as exc:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Pending action {body.pending_id} not found",
-        ) from exc
-    except PendingActionDecisionMismatchError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Pending {exc.pending_id} subject={exc.subject!r} "
-                f"cannot accept decision={exc.decision!r}"
-            ),
-        ) from exc
-    except PendingActionConflictError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Pending {exc.pending_id} already resolved as "
-                f"{exc.previous_decision}; cannot replace with "
-                f"{exc.requested_decision}"
-            ),
-        ) from exc
-    except PendingActionExpiredError as exc:
-        raise HTTPException(
-            status_code=410,
-            detail=f"Pending {exc.pending_id} already {exc.reason}; cannot decide",
-        ) from exc
-    except RuntimeUnavailableError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"No live runtime is awaiting decision for session {session_id}; "
-                "the turn has ended or the host restarted."
-            ),
-        ) from exc
-    except ApprovalNotImplementedError as exc:
-        raise HTTPException(
-            status_code=501,
-            detail=f"Runtime has not implemented the approval bridge: {exc}",
-        ) from exc
+    except KernelClientError as exc:
+        # The kernel seam already shaped the error HTTP-wise (the kernel
+        # route mapped its orchestrator exceptions); re-surface verbatim.
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
 
     rule_id_raw = result.get("rule_id")
     return SessionActionResponse(
@@ -614,7 +565,7 @@ async def list_attachments(
     client-side. The runtime path uses ``_load_pending_attachments``
     instead, which is pending-only.
     """
-    if await kernel_store.load_session(session_id) is None:
+    if await kernel_client.get_session(session_id) is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
     rows = await SessionDatastore(db).list_attachments(session_id, include_consumed=True)
     return AttachmentListResponse(items=[_row_to_item(r) for r in rows])
@@ -635,7 +586,7 @@ async def upload_attachment(
     copies bytes — valuz holds the canonical store and the kernel only
     references it.
     """
-    if await kernel_store.load_session(session_id) is None:
+    if await kernel_client.get_session(session_id) is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
 
     # Session-wide attachment cap (local + KB-sourced counted together).
@@ -856,7 +807,7 @@ async def add_kb_attachments(
     docs return 400 with the offending id so the picker can surface
     the conflict instead of silently dropping the selection.
     """
-    if await kernel_store.load_session(session_id) is None:
+    if await kernel_client.get_session(session_id) is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
     if not body.doc_ids:
         # Empty list is a no-op (picker confirmed with nothing
@@ -953,7 +904,7 @@ async def delete_attachment(
     """
     import os
 
-    if await kernel_store.load_session(session_id) is None:
+    if await kernel_client.get_session(session_id) is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
     ds = SessionDatastore(db)
     row = await ds.get_attachment(attachment_id)

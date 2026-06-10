@@ -68,9 +68,9 @@ def _current_session_id() -> str:
 
 async def _resolve_project_id(session_id: str) -> str | None:
     """Map ``session_id`` → ``project_id`` via the kernel store."""
-    from valuz_agent.adapters import kernel_store
+    from valuz_agent.adapters import kernel_client
 
-    session = await kernel_store.load_session(session_id)
+    session = await kernel_client.get_session(session_id)
     if session is None:
         return None
     project_id = ((session.metadata or {}).get("valuz", {}) or {}).get("project_id")

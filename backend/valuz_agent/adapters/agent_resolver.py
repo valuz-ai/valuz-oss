@@ -8,7 +8,7 @@ Slice 2 scope (lead-dispatch-mvp §S3 / H-T6):
   build_member_session — constructs a full kernel Session dataclass ready for
     save_session_sync. Lead sessions receive the dispatch playbook; member sessions
     receive only the scoped brief. Caller is responsible for saving the returned
-    Session via ``kernel_store.save_session``.
+    create request via ``kernel_client.create_session``.
 
 Boundary notes (§S0):
   - kernel Session has NO ``tools`` field — tools live on AgentConfig only.
@@ -26,7 +26,11 @@ from uuid import uuid4
 
 import valuz_agent.boot.kernel  # noqa: F401 — ensure kernel sys.path
 
-from src.core import AgentConfig, ModelSettings, Session  # type: ignore[import-not-found]
+from app.schemas import (
+    CreateSessionRequest,
+    ModelSettingsSchema,
+)
+from src.core import AgentConfig
 
 from valuz_agent.adapters.capability_resolver import (
     always_on_http_mcp_servers,
@@ -563,11 +567,11 @@ async def build_member_session(
     dispatch_mode: str = "sync",
     goal_mode: bool = False,
     plan_pre_committed: bool = False,
-) -> Session | None:
-    """Construct a kernel Session dataclass for a dispatch member or lead.
+) -> CreateSessionRequest | None:
+    """Construct the kernel create-session request for a dispatch member or lead.
 
     Returns None when the member cannot be resolved (orphaned slug).
-    Caller must persist the returned Session via ``kernel_store.save_session``.
+    Caller persists via ``kernel_client.create_session`` (the returned object IS the request).
 
     Args:
         project_id: The valuz project id (= kernel project id).
@@ -717,7 +721,7 @@ async def build_member_session(
     # That's a per-model constraint — clear effort on those agents — not a
     # reason to strip it for every deepagents session.
     agent_effort = getattr(agent, "effort", None)
-    model_settings = ModelSettings(effort=agent_effort) if agent_effort else None
+    model_settings = ModelSettingsSchema(effort=agent_effort) if agent_effort else None
 
     # Session-modes (docs/exec-plans/active/task-goal-mode.md): when the
     # caller opts into goal mode (lead whole-task / member sub-run), set
@@ -739,13 +743,19 @@ async def build_member_session(
     # De-dupe by name in case the agent's own mcp_servers already carry a
     # reserved ``valuz_*`` name (shouldn't, but keep injection idempotent).
     existing_names = {getattr(m, "name", None) for m in (agent.mcp_servers or ())}
-    mcp_servers = tuple(agent.mcp_servers or ()) + tuple(
+    from app.serializers import mcp_to_schema as _mcp_to_schema
+
+    mcp_servers = [_mcp_to_schema(m) for m in (agent.mcp_servers or ())] + [
         m for m in builtin_mcp if m.name not in existing_names
+    ]
+
+    from app.serializers import (
+        agent_config_to_schema,
     )
 
-    session = Session(
+    session = CreateSessionRequest(
         id=session_id,
-        agent_config=agent,
+        agent_config=agent_config_to_schema(agent),
         cwd=run_dir,
         mode=session_mode,
         runtime_provider=agent.runtime_provider,
@@ -753,8 +763,8 @@ async def build_member_session(
         model_provider=model_provider,
         model_settings=model_settings,
         instructions=instructions,
-        skills=session_skills,
-        mcp_servers=mcp_servers,
+        skills=list(session_skills),
+        mcp_servers=list(mcp_servers),
         permission_mode=agent.permission_mode,
         metadata={
             "valuz": {

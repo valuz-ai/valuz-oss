@@ -428,7 +428,7 @@ class TestImportFromSessionConfirm:
 
     @staticmethod
     def _patch_events(monkeypatch, events):
-        from valuz_agent.adapters import kernel_store
+        from valuz_agent.adapters import kernel_client
 
         seen: list[str] = []
 
@@ -436,7 +436,7 @@ class TestImportFromSessionConfirm:
             seen.append(session_id)
             return events
 
-        monkeypatch.setattr(kernel_store, "get_events", fake_get_events)
+        monkeypatch.setattr(kernel_client, "get_events", fake_get_events)
         return seen
 
     async def test_should_build_skill_body_from_persisted_assistant_events(

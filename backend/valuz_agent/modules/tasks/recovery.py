@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from valuz_agent.adapters import kernel_store
+from valuz_agent.adapters import kernel_client
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.tasks import planning
 from valuz_agent.modules.tasks.actor_runner import ActorRunner, collect_manifest
@@ -243,7 +243,7 @@ class RecoveryService:
             for run in runs:
                 if run.kind != "subtask" or run.status not in ("active", "paused"):
                     continue
-                ks = await kernel_store.load_session(run.session_id)
+                ks = await kernel_client.get_session(run.session_id)
                 node = plan.get(run.subtask_key) if run.subtask_key else None
                 rec = reconcile(
                     getattr(ks, "status", None) if ks is not None else None,
@@ -342,9 +342,9 @@ class RecoveryService:
         ``shutdown`` mailbox message is what stops its actor loop instead.
         """
         try:
-            from app.dependencies import get_orchestrator  # type: ignore[import-not-found]
+            from valuz_agent.adapters import kernel_client
 
-            await get_orchestrator().interrupt(session_id)
+            await kernel_client.interrupt(session_id)
         except Exception:  # noqa: BLE001
             logger.warning("interrupt failed for session %s", session_id, exc_info=True)
 

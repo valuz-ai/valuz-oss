@@ -106,11 +106,11 @@ async def _resolve_session_context(session_id: str) -> tuple[str | None, str, st
     gone. The caller then forwards ``None`` to ``AutomationService.create``
     which lazy-creates a fresh chat project named after the automation.
     """
-    from valuz_agent.adapters import kernel_store
+    from valuz_agent.adapters import kernel_client
     from valuz_agent.infra.db import async_unit_of_work
     from valuz_agent.modules.projects.datastore import ProjectDatastore
 
-    kernel_session = await kernel_store.load_session(session_id)
+    kernel_session = await kernel_client.get_session(session_id)
     if kernel_session is None:
         return None, "chat", None
     project_id = str(kernel_session.project_id)

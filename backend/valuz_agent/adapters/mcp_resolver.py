@@ -1,11 +1,11 @@
-"""Resolve a list of enabled MCP-provider slugs into kernel ``McpServerConfig``.
+"""Resolve a list of enabled MCP-provider slugs into kernel MCP wire schemas.
 
 The capability resolver receives the slugs the caller chose for a session and
 delegates to this module to materialise them. Each provider knows how to
 acquire its credentials (OAuth account secret store, future API-key vaults,
 etc.) and how to build its URL.
 
-The resulting ``McpServerConfig`` list is handed to the kernel verbatim. The
+The resulting wire-schema list is handed to the kernel verbatim. The
 kernel runtime registers them under their ``name`` so the agent's tool calls
 land in the right server.
 """
@@ -15,10 +15,14 @@ from __future__ import annotations
 import json
 import logging
 
-from src.core.types import (  # type: ignore[import-not-found]
-    McpHttpServerConfig,
-    McpServerConfig,
-    McpStdioServerConfig,
+from app.schemas import (
+    McpHttpServerConfigSchema as McpHttpServerConfig,
+)
+from app.schemas import (
+    McpServerConfigSchema as McpServerConfig,
+)
+from app.schemas import (
+    McpStdioServerConfigSchema as McpStdioServerConfig,
 )
 
 # Side-effect import — surfaces ``src.core...`` on sys.path.

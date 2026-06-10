@@ -25,9 +25,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from src.core.types import (  # type: ignore[import-not-found]
-    McpHttpServerConfig,
-    McpServerConfig,
+from app.schemas import (
+    McpHttpServerConfigSchema as McpHttpServerConfig,
+)
+from app.schemas import (
+    McpServerConfigSchema as McpServerConfig,
 )
 
 # Side-effect import — surfaces ``src.core...`` on sys.path.

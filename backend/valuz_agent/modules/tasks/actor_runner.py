@@ -36,9 +36,9 @@ from typing import Any, Literal
 
 import valuz_agent.boot.kernel  # noqa: F401
 
-from src.core import UserMessage  # type: ignore[import-not-found]
+from src.core import UserMessage
 
-from valuz_agent.adapters import kernel_store
+from valuz_agent.adapters import kernel_client
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.fs_registry import fs_registry
 
@@ -86,7 +86,7 @@ async def run_session_to_idle(
     consumed_attachment_ids: list[str] = []
 
     try:
-        from app.dependencies import get_orchestrator, get_store  # type: ignore[import-not-found]
+        from app.dependencies import get_orchestrator, get_store
         from valuz_agent.adapters.broadcast_sink import BroadcastEventSink, broadcast
 
         store = get_store()
@@ -127,7 +127,7 @@ async def run_session_to_idle(
         except Exception:  # noqa: BLE001
             additional_context = ""
 
-        from src.core.types import Attachment  # type: ignore[import-not-found]
+        from src.core.types import Attachment
 
         user_msg = UserMessage(
             text=content,
@@ -153,7 +153,7 @@ async def run_session_to_idle(
             final_status = "terminated"
             encountered_error = True
             try:
-                from src.core.events import Event as KernelEvent  # type: ignore[import-not-found]
+                from src.core.events import Event as KernelEvent
 
                 await broadcast(
                     session_id,
@@ -247,7 +247,7 @@ async def collect_manifest(
     # Extract summary from the last assistant event
     summary = ""
     try:
-        events = await kernel_store.get_events(session_id, limit=200)
+        events = await kernel_client.get_events(session_id, limit=200)
         # Walk backwards: find last assistant_message text
         for event in reversed(events):
             payload = event.data if hasattr(event, "data") else {}

@@ -56,14 +56,17 @@ collaboration goes through the sibling's **service** API or a `ports/`
 protocol. Enforced by `scripts/check_module_boundaries.py` (wired into
 `make lint`).
 
-**Kernel boundary** — the host consumes the kernel **only through its declared
-public API**: `from src.core import …` (domain types/protocols), `from
-app.dependencies import …` (singletons + lifecycle), `from app.config import
-AppConfig`, and `from app.routes.* import router`. `from src.adapters.*` /
-`from src.runtimes.*` are forbidden **outside**
-`valuz_agent/adapters/kernel_store.py` — the single sanctioned escape hatch.
-Keep host code talking to the kernel through its public API above rather than
-reaching into kernel internals.
+**Kernel boundary** — every host *operation* on kernel state goes through
+`adapters/kernel_client.py` (the `KernelClient` protocol: API-shaped, typed
+with the kernel's wire schemas from `app.schemas`). `from src.adapters.*` /
+`from src.runtimes.*` are forbidden everywhere; `from app.dependencies` is
+restricted to the seam, `boot/kernel.py`, and the documented in-process
+run-driver exemptions — all mechanically enforced by
+`scripts/check_module_boundaries.py`. Declared in-process integration points
+that bypass the client (each with its remote-phase replacement): tool-handler
+registration (→ MCP-over-HTTP toolkit), `broadcast_sink` (→ WS/SSE
+subscription), `event_sse_adapter` raw SQL + `analytics` ORM (TD-007 →
+kernel query APIs), and the run-driver (→ the WS run channel).
 
 ## Anatomy of a business module
 
@@ -152,7 +155,7 @@ session-creation time:
 
 | Adapter | Job |
 |---------|-----|
-| `kernel_store` | async facade over the kernel's async `StorePort` (only importer of `src.adapters` / `src.runtimes`) |
+| `kernel_client` | `KernelClient` protocol + in-process impl — API-shaped seam, wire-schema typed (swap for HTTP in remote mode) |
 | `capability_resolver` | project + extras → kernel skills / MCP set |
 | `model_resolver` | request + provider + default → concrete model id |
 | `mcp_resolver` | slug + creds → `list[McpServerConfig]` |

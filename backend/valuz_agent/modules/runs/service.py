@@ -20,10 +20,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from src.core import Session as KernelSession  # type: ignore[import-not-found]
+from app.schemas import SessionData as KernelSession
 
 import valuz_agent.boot.kernel  # noqa: F401 — puts kernel on sys.path
-from valuz_agent.adapters import kernel_store
+from valuz_agent.adapters import kernel_client
 from valuz_agent.modules.projects.datastore import ProjectDatastore
 from valuz_agent.modules.projects.models import ProjectRow
 from valuz_agent.modules.sessions import project_index
@@ -149,7 +149,7 @@ class RunsService:
         # project-agnostic).
         index_rows = await project_index.list_recent(limit=200)
         proj_by_session = {r.session_id: r.project_id for r in index_rows}
-        sessions: list[KernelSession] = await kernel_store.list_sessions(
+        sessions: list[KernelSession] = await kernel_client.list_sessions(
             ids=[r.session_id for r in index_rows], limit=200
         )
         ws_map: dict[str, ProjectRow] = {
@@ -258,7 +258,7 @@ class RunsService:
         the last round's content. Scans a few recent messages because the
         in-flight turn's message may not have its ``assistant_message`` set yet.
         """
-        messages = await kernel_store.list_messages_for_session(session_id, limit=3)
+        messages = await kernel_client.list_messages(session_id, limit=3)
         for message in messages:  # most-recent first
             if message.assistant_message:
                 return str(message.assistant_message)

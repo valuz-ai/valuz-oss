@@ -91,6 +91,49 @@ def _imported_dotted_paths(tree: ast.AST):
                 yield alias.name, node.lineno
 
 
+# ── Kernel boundary ─────────────────────────────────────────────────
+# The host consumes the kernel only through declared seams. Deep imports
+# (``src.adapters`` / ``src.runtimes``) are forbidden everywhere; the kernel
+# singletons (``app.dependencies``) are restricted to the seam itself, the
+# boot lifecycle, and the in-process run-driver exemptions documented in
+# ``adapters/kernel_client.py``.
+
+HOST_ROOT = MODULES_ROOT.parent
+
+FORBIDDEN_KERNEL_PREFIXES = ("src.adapters", "src.runtimes")
+
+APP_DEPENDENCIES_ALLOWLIST = {
+    "adapters/kernel_client.py",  # the seam itself
+    "boot/kernel.py",  # kernel lifecycle owner
+    # In-process run-driver exemptions (the host half of the WS run channel:
+    # sink attach/detach + turn driving). Remote mode replaces these with the
+    # WS transport, not with more app.dependencies callers.
+    "modules/tasks/actor_runner.py",
+    "modules/sessions/service.py",
+}
+
+
+def check_kernel_boundary() -> list[str]:
+    problems: list[str] = []
+    for py in sorted(HOST_ROOT.rglob("*.py")):
+        rel = py.relative_to(HOST_ROOT).as_posix()
+        tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+        for dotted, lineno in _imported_dotted_paths(tree):
+            if any(dotted == p or dotted.startswith(p + ".") for p in FORBIDDEN_KERNEL_PREFIXES):
+                problems.append(
+                    f"  valuz_agent/{rel}:{lineno}  imports {dotted} "
+                    "(kernel internals — use the kernel_client seam)"
+                )
+            if (
+                dotted == "app.dependencies" or dotted.startswith("app.dependencies.")
+            ) and rel not in APP_DEPENDENCIES_ALLOWLIST:
+                problems.append(
+                    f"  valuz_agent/{rel}:{lineno}  imports app.dependencies "
+                    "(kernel singletons — go through adapters/kernel_client)"
+                )
+    return problems
+
+
 def main() -> int:
     violations: list[tuple[Path, int, str, str]] = []
     for py in sorted(MODULES_ROOT.rglob("*.py")):
@@ -113,6 +156,13 @@ def main() -> int:
             "or a ports/ protocol, not its datastore. If this is a legitimate\n"
             "transitional edge, see T1.3 in the backend-architecture-refactor plan."
         )
+        return 1
+
+    kernel_problems = check_kernel_boundary()
+    if kernel_problems:
+        print("Kernel boundary violations:")
+        for line in kernel_problems:
+            print(line)
         return 1
 
     print("module boundaries OK")

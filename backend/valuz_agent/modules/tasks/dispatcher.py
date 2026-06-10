@@ -25,7 +25,7 @@ import logging
 import time
 from typing import Any, Literal, cast
 
-from valuz_agent.adapters import kernel_store
+from valuz_agent.adapters import kernel_client
 from valuz_agent.modules.sessions import project_index
 from valuz_agent.adapters.agent_resolver import build_member_session
 from valuz_agent.infra.db import async_unit_of_work
@@ -196,7 +196,7 @@ class DispatcherService:
                 )
                 return {"error": gap, "status": "failed", "agent": agent}
 
-            await kernel_store.save_session(member_session)
+            await kernel_client.create_session(member_session)
             await project_index.record(
                 project_id, member_session.id, kind="task_subtask", origin="task"
             )
@@ -497,7 +497,7 @@ class DispatcherService:
                 )
                 return {"error": gap, "status": "failed", "agent": agent}
 
-            await kernel_store.save_session(member_session)
+            await kernel_client.create_session(member_session)
             await project_index.record(
                 project_id, member_session.id, kind="task_subtask", origin="task"
             )

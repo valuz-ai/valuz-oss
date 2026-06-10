@@ -20,7 +20,7 @@ import os
 import time
 from pathlib import Path
 
-from valuz_agent.adapters import kernel_store
+from valuz_agent.adapters import kernel_client
 from valuz_agent.infra.config import settings
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.system.schemas import SystemStatusResponse
@@ -100,7 +100,7 @@ def _read_kernel_pin() -> str:
 
 async def _count_active_sessions() -> int:
     try:
-        sessions = await kernel_store.list_sessions(limit=500)
+        sessions = await kernel_client.list_sessions(limit=500)
         return sum(1 for s in sessions if s.status == "running")
     except Exception:  # noqa: BLE001 — status must never throw
         return 0

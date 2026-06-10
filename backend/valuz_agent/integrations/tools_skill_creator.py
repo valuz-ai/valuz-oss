@@ -28,8 +28,8 @@ from __future__ import annotations
 
 import logging
 
-from src.core.tool_registry import register_tool  # type: ignore[import-not-found]
-from src.core.tools import ExecContext, ToolDef, ToolResult  # type: ignore[import-not-found]
+from src.core.tool_registry import register_tool
+from src.core.tools import ExecContext, ToolDef, ToolResult
 
 # Side-effect import — surfaces ``src.core...`` on sys.path. Without this,
 # the kernel package fails to resolve when this module is imported during

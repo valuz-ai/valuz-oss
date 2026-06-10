@@ -37,7 +37,8 @@ from typing import Any
 
 import valuz_agent.boot.kernel  # noqa: F401
 
-from src.core import Event, Session  # type: ignore[import-not-found]
+from app.schemas import EventData as Event
+from app.schemas import SessionData as Session
 
 from valuz_agent.adapters.broadcast_sink import subscribe_all, unsubscribe_all
 from valuz_agent.infra.time_utils import now_ms
@@ -184,18 +185,13 @@ class DecisionAggregator:
 
     async def _hydrate_from_history(self) -> None:
         """Rebuild the snapshot from kernel events at startup."""
-        try:
-            from app.dependencies import get_store  # type: ignore[import-not-found]
-        except ImportError:
-            logger.warning("decisions hydration skipped — kernel app.dependencies not importable")
-            return
+        from valuz_agent.adapters import kernel_client
 
-        store = get_store()
         # Scan all sessions (the kernel doesn't index by status; the
         # filter is cheap in-memory since active sessions are small in
         # the typical desktop deployment).
         try:
-            sessions = await store.list_sessions(limit=500)
+            sessions = await kernel_client.list_sessions(limit=500)
         except Exception:  # noqa: BLE001
             logger.warning("decisions hydration: list_sessions failed", exc_info=True)
             return
@@ -206,7 +202,7 @@ class DecisionAggregator:
             if not is_task_driven(session):
                 continue
             try:
-                events = await store.get_events(session.id, limit=200)
+                events = await kernel_client.get_events(session.id, limit=200)
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "decisions hydration: get_events(%s) failed",
@@ -361,14 +357,12 @@ class DecisionAggregator:
     # ---- Helpers ----------------------------------------------------
 
     async def _load_session(self, session_id: str) -> Session | None:
+        from valuz_agent.adapters import kernel_client
+
         try:
-            from app.dependencies import get_store
-        except ImportError:
-            return None
-        try:
-            return await get_store().load_session(session_id)
+            return await kernel_client.get_session(session_id)
         except Exception:  # noqa: BLE001
-            logger.warning("decisions: load_session(%s) failed", session_id, exc_info=True)
+            logger.warning("decisions: get_session(%s) failed", session_id, exc_info=True)
             return None
 
 
