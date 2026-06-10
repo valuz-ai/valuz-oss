@@ -380,7 +380,7 @@ class SessionService:
                     if row is not None:
                         config = await AgentService(_db).build_agent_config(row)
                         return config.id, config
-                # Member without provenance (pre-0003 row whose backfill found
+                # Member without provenance (legacy row whose backfill found
                 # no matching library agent) — nothing to build a config from.
                 raise SessionNotRunnable(
                     f"agent '{agent_slug}' has no source library agent — "

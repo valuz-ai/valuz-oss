@@ -254,6 +254,24 @@ class ConnectorService:
         self._secrets = secrets
         self._remote_catalog = remote_catalog
 
+    @classmethod
+    def with_defaults(cls, db: Any) -> ConnectorService:
+        """Build a ConnectorService over an existing DB session with the
+        default (filesystem keychain) secret store.
+
+        Cohesion seam for callers outside this module: they may not import
+        ``ConnectorDatastore`` directly (module-boundary rule), so this is the
+        sanctioned way to get a working service from just a session — e.g.
+        ``AgentService`` resolving an agent's ``connector_types`` into MCP
+        servers on session-creation paths that have no DI container.
+        """
+        from valuz_agent.infra.config import settings
+
+        return cls(
+            datastore=ConnectorDatastore(db),
+            secrets=FileSecretStore(settings.secrets_dir),
+        )
+
     async def list_connectors(self, *, org_id: str | None = None) -> list[ConnectorView]:
         local = [_row_to_view(r) for r in await self._ds.list_all()]
         if self._remote_catalog is None:

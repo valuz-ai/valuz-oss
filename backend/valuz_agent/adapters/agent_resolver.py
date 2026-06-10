@@ -389,7 +389,7 @@ async def _member_agent_config(member, members: ProjectMemberDatastore):  # noqa
     The kernel has no agents table — the library AgentRow is the single
     source of truth and the config is built in memory (and embedded into
     sessions as their snapshot). Members created before provenance landed
-    (``source_agent_slug`` NULL, despite the 0003 backfill) resolve to None.
+    (``source_agent_slug`` NULL, despite the legacy backfill) resolve to None.
     """
     if not member.source_agent_slug:
         logger.warning(

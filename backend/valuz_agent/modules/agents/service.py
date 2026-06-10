@@ -132,9 +132,13 @@ class AgentService:
         self._db = db
         self._agents = AgentDatastore(db)
         self._members = ProjectMemberDatastore(db)
-        # Injected so this service never reaches into the secret store
-        # itself — connector→MCP cohesion lives in ConnectorService.
-        self._connectors = connector_service
+        # Connector→MCP cohesion lives in ConnectorService (this service never
+        # reaches into the secret store itself). Injectable for tests/overlays;
+        # defaults to the module's own factory so every call site — including
+        # the session-creation paths that build AgentService ad hoc — resolves
+        # ``connector_types`` into live MCP servers instead of silently
+        # dropping them.
+        self._connectors = connector_service or ConnectorService.with_defaults(db)
 
     # ------------------------------------------------------------------
     # Connector → MCP resolution

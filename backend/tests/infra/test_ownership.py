@@ -129,7 +129,12 @@ class TestOwnedMixinStamping:
 # 4. drop_stale_host_tables
 # --------------------------------------------------------------------------- #
 class TestDropStaleHostTables:
-    def test_drops_when_marker_lacks_user_id(self, tmp_path) -> None:
+    """The probe is a pure stamp gate now (0-migration policy) — full
+    behavioral coverage lives in ``tests/migrations/test_host_baseline_reset``.
+    These two cases pin the ownership-relevant ends: an unstamped legacy DB
+    resets; a baseline-stamped DB is trusted as-is."""
+
+    def test_drops_legacy_db_without_baseline_stamp(self, tmp_path) -> None:
         engine = create_engine(f"sqlite:///{tmp_path / 'pre.db'}")
         with engine.begin() as conn:
             conn.execute(text("CREATE TABLE valuz_provider (id TEXT PRIMARY KEY)"))
@@ -143,13 +148,17 @@ class TestDropStaleHostTables:
         assert "valuz_agent" not in remaining
         assert "alembic_version_host" not in remaining
 
-    def test_noop_when_marker_has_user_id(self, tmp_path) -> None:
+    def test_noop_when_stamped_at_baseline(self, tmp_path) -> None:
+        from valuz_agent.boot.schema import BASELINE_REVISION
+
         engine = create_engine(f"sqlite:///{tmp_path / 'modern.db'}")
         with engine.begin() as conn:
-            conn.execute(
-                text("CREATE TABLE valuz_provider (id TEXT PRIMARY KEY, user_id TEXT)")
-            )
+            conn.execute(text("CREATE TABLE valuz_provider (id TEXT PRIMARY KEY, user_id TEXT)"))
             conn.execute(text("CREATE TABLE valuz_agent (id TEXT PRIMARY KEY, user_id TEXT)"))
+            conn.execute(text("CREATE TABLE alembic_version_host (version_num TEXT PRIMARY KEY)"))
+            conn.execute(
+                text(f"INSERT INTO alembic_version_host VALUES ('{BASELINE_REVISION}')")
+            )
 
         drop_stale_host_tables(engine)
 
@@ -158,6 +167,6 @@ class TestDropStaleHostTables:
 
     def test_noop_on_fresh_install(self, tmp_path) -> None:
         engine = create_engine(f"sqlite:///{tmp_path / 'fresh.db'}")
-        # No marker table at all → nothing to wipe.
+        # No host tables at all → nothing to reset.
         drop_stale_host_tables(engine)
         assert set(inspect(engine).get_table_names()) == set()

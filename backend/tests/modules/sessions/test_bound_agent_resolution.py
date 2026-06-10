@@ -22,6 +22,7 @@ from valuz_agent.infra.database import Base
 from valuz_agent.modules.agents.datastore import AgentDatastore, ProjectMemberDatastore
 from valuz_agent.modules.agents.models import AgentRow, ProjectMemberRow
 from valuz_agent.modules.agents.seed import DEFAULT_ASSISTANT_SLUG
+from valuz_agent.modules.connectors.models import ConnectorRow
 from valuz_agent.modules.sessions import service as session_service
 from valuz_agent.modules.sessions.errors import SessionNotRunnable
 from valuz_agent.modules.sessions.service import SessionService
@@ -33,7 +34,7 @@ async def db(tmp_path) -> AsyncIterator:
     async with engine.begin() as conn:
         await conn.run_sync(
             Base.metadata.create_all,
-            tables=[AgentRow.__table__, ProjectMemberRow.__table__],
+            tables=[AgentRow.__table__, ProjectMemberRow.__table__, ConnectorRow.__table__],
         )
     session = async_sessionmaker(bind=engine, expire_on_commit=False)()
     try:
@@ -148,3 +149,42 @@ async def test_member_resolution_builds_snapshot_from_library_row(db, patch_uow)
     assert config.instructions == "dig deep"
     # Conversation tool set is applied by build_agent_config.
     assert any(t.name == "create_task" for t in config.tools)
+
+
+async def test_resolution_carries_connector_types_into_mcp_servers(db, patch_uow) -> None:
+    """Regression: the session-resolution path builds ``AgentService`` ad hoc
+    (no DI container), which used to leave it without a ConnectorService — so
+    the agent's ``connector_types`` were silently dropped and the session's
+    ``mcp_servers`` came out empty. The default-factory wiring must resolve
+    them into live MCP server configs."""
+    await db.merge(
+        ConnectorRow(
+            slug="my-search",
+            display_name="My Search",
+            connector_type="custom",
+            transport="http",
+            url="https://mcp.example.com/mcp",
+            auth_type="none",
+            enabled=True,
+        )
+    )
+    await db.commit()
+    await AgentDatastore(db).create(
+        AgentRow(
+            slug="analyst",
+            name="分析师",
+            source="custom",
+            runtime="claude_agent",
+            model="claude-sonnet-4-6",
+            connector_types=["my-search"],
+        )
+    )
+
+    _kernel_agent_id, config = await SessionService._resolve_bound_agent(
+        SimpleNamespace(), "chat-default", "analyst"
+    )
+
+    assert [m.name for m in config.mcp_servers] == ["my-search"]
+    assert config.mcp_servers[0].url == "https://mcp.example.com/mcp"
+    # The binding declaration also rides metadata for downstream adapters.
+    assert config.metadata["connector_bindings"] == [{"type": "my-search"}]
