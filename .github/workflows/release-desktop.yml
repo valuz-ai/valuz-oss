@@ -315,17 +315,7 @@ jobs:
     runs-on: windows
     permissions:
       contents: write
-    steps:
-      - name: Debug runner paths
-        shell: powershell
-        run: |
-          echo "GITHUB_WORKSPACE=$env:GITHUB_WORKSPACE"
-          echo "RUNNER_TEMP=$env:RUNNER_TEMP"
-          echo "RUNNER_WORKSPACE=$env:RUNNER_WORKSPACE"
-          echo "TEMP=$env:TEMP"
-          echo "TMP=$env:TMP"
-          pwd
-     
+    steps:     
       - name: Configure Git Mirror for Checkout
         run: git config --global url."https://gh-proxy.org/https://github.com/".insteadOf "https://github.com/"
 
