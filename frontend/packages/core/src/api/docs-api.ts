@@ -35,7 +35,7 @@ export interface KbTreeNode {
 }
 
 export interface BindingItem {
-  workspace_id?: string;
+  project_id?: string;
   binding_kind: "kb" | "folder" | "document";
   target_id: string;
 }
@@ -106,7 +106,7 @@ export interface ImportTask {
   processed_items: number;
   failed_items: number;
   kb_id: string | null;
-  workspace_id: string | null;
+  project_id: string | null;
   created_at: number | null;
 }
 
@@ -220,7 +220,7 @@ export const docsApi = {
 
   search(params: {
     query: string;
-    workspace_id: string;
+    project_id: string;
     top_k?: number;
     folder_ids?: string[];
     document_ids?: string[];
@@ -229,7 +229,7 @@ export const docsApi = {
       "/v1/docs/search",
       jsonPost({
         query: params.query,
-        workspace_id: params.workspace_id,
+        project_id: params.project_id,
         top_k: params.top_k ?? 5,
         folder_ids: params.folder_ids,
         document_ids: params.document_ids,
@@ -256,22 +256,22 @@ export const docsApi = {
 // ── Binding API ─────────────────────────────────────────────────────
 
 export const bindingApi = {
-  list(workspaceId: string): Promise<{ bindings: BindingItem[] }> {
-    return fetchJson(`/v1/workspaces/${workspaceId}/kb-bindings`);
+  list(projectId: string): Promise<{ bindings: BindingItem[] }> {
+    return fetchJson(`/v1/projects/${projectId}/kb-bindings`);
   },
 
   update(
-    workspaceId: string,
+    projectId: string,
     bindings: Array<{ binding_kind: string; target_id: string }>,
   ): Promise<{ bindings: BindingItem[] }> {
     return fetchJson(
-      `/v1/workspaces/${workspaceId}/kb-bindings`,
+      `/v1/projects/${projectId}/kb-bindings`,
       jsonPut({ bindings }),
     );
   },
 
-  removeAll(workspaceId: string): Promise<{ ok: boolean }> {
-    return fetchJson(`/v1/workspaces/${workspaceId}/kb-bindings`, {
+  removeAll(projectId: string): Promise<{ ok: boolean }> {
+    return fetchJson(`/v1/projects/${projectId}/kb-bindings`, {
       method: "DELETE",
     });
   },

@@ -20,8 +20,8 @@ from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.docs.datastore import DocumentDatastore
 from valuz_agent.modules.docs.service import DocumentLibraryService
 from valuz_agent.modules.parser import ParserRouter, build_default_registry
-from valuz_agent.modules.projects.datastore import WorkspaceDatastore
-from valuz_agent.modules.projects.service import WorkspaceService
+from valuz_agent.modules.projects.datastore import ProjectDatastore
+from valuz_agent.modules.projects.service import ProjectService
 from valuz_agent.modules.providers.datastore import ProviderDatastore
 from valuz_agent.modules.providers.service import ProviderService
 from valuz_agent.modules.runs.service import RunsService
@@ -93,10 +93,10 @@ async def get_provider_service() -> AsyncGenerator[ProviderService, None]:
         )
 
 
-async def get_workspace_service() -> AsyncGenerator[WorkspaceService, None]:
+async def get_project_service() -> AsyncGenerator[ProjectService, None]:
     async with async_unit_of_work() as db:
-        yield WorkspaceService(
-            datastore=WorkspaceDatastore(db),
+        yield ProjectService(
+            datastore=ProjectDatastore(db),
             event_bus=event_bus,
             session_datastore=SessionDatastore(db),
             document_datastore=DocumentDatastore(db),
@@ -111,8 +111,8 @@ async def get_skill_service() -> AsyncGenerator[SkillLibraryService, None]:
         yield SkillLibraryService(
             datastore=SkillDatastore(db),
             skill_source=FilesystemSkillSource(),
-            workspace_service=WorkspaceService(
-                datastore=WorkspaceDatastore(db),
+            project_service=ProjectService(
+                datastore=ProjectDatastore(db),
                 event_bus=event_bus,
             ),
             event_bus=event_bus,
@@ -226,14 +226,14 @@ async def get_document_service() -> AsyncGenerator[DocumentLibraryService, None]
 
 async def get_session_service() -> AsyncGenerator[SessionService, None]:
     async with async_unit_of_work() as db:
-        workspace_ds = WorkspaceDatastore(db)
-        workspace_svc = WorkspaceService(datastore=workspace_ds, event_bus=event_bus)
+        project_ds = ProjectDatastore(db)
+        project_svc = ProjectService(datastore=project_ds, event_bus=event_bus)
         yield SessionService(
             event_bus=event_bus,
-            workspace_svc=workspace_svc,
+            project_svc=project_svc,
             providers=ProviderDatastore(db),
             skills=SkillDatastore(db),
-            workspaces=workspace_ds,
+            projects=project_ds,
             docs=DocumentDatastore(db),
             secrets=_secret_store(),
             connectors=ConnectorDatastore(db),
@@ -247,7 +247,7 @@ async def get_automation_service() -> AsyncGenerator[AutomationService, None]:
 
     Locale + default tz come from settings preferences via the sync
     settings bridge, then the service is constructed with both the
-    workspace and agent collaborator services so ``create`` can run the
+    project and agent collaborator services so ``create`` can run the
     chat/project branching from ADR-021 §4.
     """
     from valuz_agent.modules.agents.service import AgentService
@@ -264,8 +264,8 @@ async def get_automation_service() -> AsyncGenerator[AutomationService, None]:
         # schedule created without an explicit tz lands on the user's local
         # clock, not UTC).
         default_timezone = await get_effective_default_timezone(db)
-        workspace_svc = WorkspaceService(
-            datastore=WorkspaceDatastore(db),
+        project_svc = ProjectService(
+            datastore=ProjectDatastore(db),
             event_bus=event_bus,
         )
         # AgentService needs a ConnectorService so library-agent instantiation
@@ -278,7 +278,7 @@ async def get_automation_service() -> AsyncGenerator[AutomationService, None]:
         yield AutomationService(
             db=db,
             event_bus=event_bus,
-            workspace_service=workspace_svc,
+            project_service=project_svc,
             agent_service=agent_svc,
             locale=locale,
             default_timezone=default_timezone,
@@ -296,7 +296,7 @@ async def get_settings_service() -> AsyncGenerator[SettingsService, None]:
 async def get_runs_service() -> AsyncGenerator[RunsService, None]:
     async with async_unit_of_work() as db:
         yield RunsService(
-            workspaces=WorkspaceDatastore(db),
+            projects=ProjectDatastore(db),
             task_sessions=TaskSessionDatastore(db),
             tasks=TaskDatastore(db),
             task_events=TaskEventDatastore(db),

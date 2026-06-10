@@ -1,9 +1,9 @@
 """HTTP routes for lead-dispatch Tasks (lead-dispatch-mvp §S* / H9/H14).
 
 Endpoints:
-  POST   /v1/workspaces/{id}/tasks            — kickoff a task (goal + lead agent)
-  POST   /v1/workspaces/{id}/tasks:draft      — open a draft task (VALUZ-CHATPLAN S3)
-  GET    /v1/workspaces/{id}/tasks            — list workspace tasks
+  POST   /v1/projects/{id}/tasks            — kickoff a task (goal + lead agent)
+  POST   /v1/projects/{id}/tasks:draft      — open a draft task (VALUZ-CHATPLAN S3)
+  GET    /v1/projects/{id}/tasks            — list project tasks
   GET    /v1/tasks/{task_id}                  — task header + runs + events
   GET    /v1/tasks/{task_id}/events           — full event log (ACTIVITY)
   GET    /v1/tasks/{task_id}/events/stream    — SSE: live task events (cursor: ?after_seq=N)
@@ -58,7 +58,7 @@ class KickoffTaskRequest(BaseModel):
 
 class TaskResponse(BaseModel):
     id: str
-    workspace_id: str
+    project_id: str
     title: str
     goal: str
     status: str
@@ -84,7 +84,7 @@ class RunResponse(BaseModel):
     label: str | None
     goal: str | None
     dispatched_by: str | None
-    workspace_mode: str
+    project_mode: str
     run_dir: str | None
     result_manifest: dict[str, Any] | None
 
@@ -180,12 +180,12 @@ class PlanResponse(BaseModel):
 # --------------------------------------------------------------------------
 
 
-@router.post("/v1/workspaces/{workspace_id}/tasks", status_code=201, response_model=TaskResponse)
-async def kickoff_task(workspace_id: str, payload: KickoffTaskRequest) -> TaskResponse:
+@router.post("/v1/projects/{project_id}/tasks", status_code=201, response_model=TaskResponse)
+async def kickoff_task(project_id: str, payload: KickoffTaskRequest) -> TaskResponse:
     """Create a task and start its lead session (lead self-dispatches sub-runs)."""
     try:
         row = await task_orchestrator.kickoff(
-            workspace_id=workspace_id,
+            project_id=project_id,
             goal=payload.goal,
             lead_agent_slug=payload.lead_agent_slug,
             refs=payload.refs,
@@ -198,11 +198,11 @@ async def kickoff_task(workspace_id: str, payload: KickoffTaskRequest) -> TaskRe
     return TaskResponse.model_validate(row)
 
 
-@router.get("/v1/workspaces/{workspace_id}/tasks", response_model=dict[str, list[TaskResponse]])
+@router.get("/v1/projects/{project_id}/tasks", response_model=dict[str, list[TaskResponse]])
 async def list_tasks(
-    workspace_id: str, db: AsyncSession = Depends(get_async_session)
+    project_id: str, db: AsyncSession = Depends(get_async_session)
 ) -> dict[str, list[TaskResponse]]:
-    rows = await TaskDatastore(db).list_tasks(workspace_id)
+    rows = await TaskDatastore(db).list_tasks(project_id)
     return {"tasks": [TaskResponse.model_validate(r) for r in rows]}
 
 
@@ -225,7 +225,7 @@ async def get_task(
     if task is None:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
     runs = await TaskSessionDatastore(db).list_runs(task_id)
-    events = await TaskEventDatastore(db).list_events(task.workspace_id, task_id)
+    events = await TaskEventDatastore(db).list_events(task.project_id, task_id)
     return TaskDetailResponse(
         task=TaskResponse.model_validate(task),
         runs=[RunResponse.model_validate(r) for r in runs],
@@ -240,7 +240,7 @@ async def list_task_events(
     task = await TaskDatastore(db).get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
-    events = await TaskEventDatastore(db).list_events(task.workspace_id, task_id)
+    events = await TaskEventDatastore(db).list_events(task.project_id, task_id)
     return {"events": [EventResponse.model_validate(e) for e in events]}
 
 
@@ -257,7 +257,7 @@ _TASK_EVENTS_HEARTBEAT_S = 15.0
 
 async def _iter_task_events_sse(
     task_id: str,
-    workspace_id: str,
+    project_id: str,
     after_seq: int,
     is_disconnected: callable | None = None,
 ) -> AsyncIterator[dict[str, str]]:
@@ -285,7 +285,7 @@ async def _iter_task_events_sse(
         if is_disconnected is not None and is_disconnected():
             return
         async with async_unit_of_work(commit=False) as db:
-            rows = await TaskEventDatastore(db).list_events_after(workspace_id, task_id, cursor)
+            rows = await TaskEventDatastore(db).list_events_after(project_id, task_id, cursor)
         if rows:
             for row in rows:
                 event_payload = EventResponse.model_validate(row).model_dump(mode="json")
@@ -334,7 +334,7 @@ async def stream_task_events(
     return EventSourceResponse(
         _iter_task_events_sse(
             task_id=task_id,
-            workspace_id=task.workspace_id,
+            project_id=task.project_id,
             after_seq=after_seq,
             is_disconnected=None,
         )
@@ -361,7 +361,7 @@ async def intervene(
     task = await task_ds.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
-    ws = task.workspace_id
+    ws = task.project_id
 
     if payload.action == "note":
         await event_ds.append_event(
@@ -377,7 +377,7 @@ async def intervene(
         # Best-effort: an offline/finished lead just isn't woken (DB goal still
         # updated above). The lead decides autonomously how to fold it in.
         notified = await messaging.notify_lead_goal_revised(
-            task_id=task_id, workspace_id=ws, new_goal=payload.goal
+            task_id=task_id, project_id=ws, new_goal=payload.goal
         )
         await event_ds.append_event(
             ws,
@@ -416,16 +416,16 @@ class StopMemberResponse(BaseModel):
 
 
 @router.post(
-    "/v1/workspaces/{workspace_id}/tasks:draft",
+    "/v1/projects/{project_id}/tasks:draft",
     status_code=201,
     response_model=DraftTaskResponse,
 )
-async def draft_task(workspace_id: str, payload: DraftTaskRequest) -> DraftTaskResponse:
+async def draft_task(project_id: str, payload: DraftTaskRequest) -> DraftTaskResponse:
     """Open a draft task (status=draft, plan_version=0). No lead session is
     started — the originating chat session is recorded as the plan writer."""
     try:
         row = await task_orchestrator.draft_task(
-            workspace_id=workspace_id,
+            project_id=project_id,
             goal=payload.goal,
             lead_agent_slug=payload.lead_agent_slug,
             originating_session_id=payload.originating_session_id,
@@ -452,7 +452,7 @@ async def commit_task(task_id: str, payload: CommitTaskRequest) -> dict[str, Any
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
     result = await task_orchestrator.commit_task(
         task_id=task_id,
-        workspace_id=task.workspace_id,
+        project_id=task.project_id,
         caller_session_id=payload.caller_session_id,
         lead_agent_slug_override=payload.lead_agent_slug,
     )
@@ -470,7 +470,7 @@ async def abandon_task(task_id: str, payload: AbandonTaskRequest) -> dict[str, A
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
     result = await task_orchestrator.abandon_task(
         task_id=task_id,
-        workspace_id=task.workspace_id,
+        project_id=task.project_id,
         caller_session_id=payload.caller_session_id,
         reason=payload.reason or "",
     )
@@ -491,7 +491,7 @@ async def inject_into_task(task_id: str, payload: InjectTaskRequest) -> InjectTa
         raise HTTPException(status_code=422, detail="text is required")
     result = await messaging.inject_into_task(
         task_id=task_id,
-        workspace_id=task.workspace_id,
+        project_id=task.project_id,
         text=payload.text,
         from_session_id=payload.from_session_id,
     )
@@ -513,7 +513,7 @@ async def plan_task_route(task_id: str, payload: PlanTaskRequest) -> PlanRespons
         raise HTTPException(status_code=422, detail="subtasks is required and must be non-empty")
     result = await planning.plan_task(
         task_id=task_id,
-        workspace_id=task.workspace_id,
+        project_id=task.project_id,
         lead_session_id=payload.lead_session_id,
         subtasks=payload.subtasks,
     )
@@ -536,7 +536,7 @@ async def modify_plan_route(task_id: str, payload: PlanTaskRequest) -> PlanRespo
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
     result = await planning.modify_plan(
         task_id=task_id,
-        workspace_id=task.workspace_id,
+        project_id=task.project_id,
         lead_session_id=payload.lead_session_id,
         add=payload.add,
         update=payload.update,
@@ -562,7 +562,7 @@ async def get_plan_route(task_id: str) -> PlanResponse:
         raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
     result = await planning.get_plan(
         task_id=task_id,
-        workspace_id=task.workspace_id,
+        project_id=task.project_id,
     )
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])

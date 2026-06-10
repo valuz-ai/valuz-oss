@@ -30,8 +30,8 @@ import {
   agentsApi,
   connectorsApi,
   useSessionStore,
-  useWorkspaceStore,
-  workspacesApi,
+  useProjectStore,
+  projectsApi,
   providersApi,
   skillsApi,
   usePanelStore,
@@ -39,14 +39,14 @@ import {
   type SessionEventDTO,
   type SessionListItem,
   type TodoItem,
-  type WorkspaceDetail,
-  type WorkspaceListItem,
+  type ProjectDetail,
+  type ProjectListItem,
   type ProviderListItem,
   type ProviderDetail,
   type SkillView,
   type StagingSlugView,
   type StagingSyncStrategy,
-  type WorkspaceFileNode,
+  type ProjectFileNode,
   parseTodosUpdate,
   parseRequiresAction,
   parseActionResolved,
@@ -92,7 +92,7 @@ import {
 import { modelLabel } from "@valuz/shared";
 import { t as _t } from "@valuz/shared/i18n";
 import type { I18nKey } from "@valuz/shared";
-import { useWorkspaceOutlet } from "@valuz/app/layout";
+import { useProjectOutlet } from "@valuz/app/layout";
 import { buildTurns, useStableTurns, type PlanSubtask } from "@valuz/core";
 import { ConversationTurnList } from "@valuz/ui";
 import { usePlatform } from "@valuz/app/platform";
@@ -103,7 +103,7 @@ import { AttachmentParsingDialog } from "../components/AttachmentParsingDialog";
 import { CreateAgentDialog } from "../components/CreateAgentDialog";
 import { getLastTempAgent, setLastTempAgent } from "../lib/last-temp-agent";
 
-function toFileTree(nodes: WorkspaceFileNode[], prefix = ""): FileTreeNode[] {
+function toFileTree(nodes: ProjectFileNode[], prefix = ""): FileTreeNode[] {
   return nodes.map((n) => {
     const path = prefix ? `${prefix}/${n.name}` : n.name;
     const result: FileTreeNode = {
@@ -312,7 +312,7 @@ function renderChatplanStatusPill(
 function sessionDetailToListItem(detail: SessionDetail): SessionListItem {
   return {
     id: detail.id,
-    workspace_id: detail.workspace_id,
+    project_id: detail.project_id,
     name: detail.name,
     status: detail.status,
     origin: detail.origin,
@@ -384,7 +384,7 @@ export const ConversationPage = () => {
   const { revealInFinder } = usePlatform();
   const { id = NEW_SESSION_ID } = useParams<{ id: string }>();
   const location = useLocation();
-  const { setRightPanel, setHeader, setHideHeader } = useWorkspaceOutlet();
+  const { setRightPanel, setHeader, setHideHeader } = useProjectOutlet();
   const panelCollapsed = usePanelStore((s) => s.collapsed);
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
   const [searchParams] = useSearchParams();
@@ -394,7 +394,7 @@ export const ConversationPage = () => {
   const [sessionTriggerMode, setSessionTriggerMode] = useState<string | null>(
     null,
   );
-  // Workspace-agent handle for the open session (Project Task lead/member).
+  // Project-agent handle for the open session (Project Task lead/member).
   const [sessionAgentSlug, setSessionAgentSlug] = useState<string | null>(null);
   // Project conversations pick a configured project agent instead of a raw
   // model. ``projectAgents`` is the member roster for the active project;
@@ -518,9 +518,9 @@ export const ConversationPage = () => {
   const titleTriggerRef = useRef<HTMLButtonElement>(null);
   const [titleDeleting, setTitleDeleting] = useState(false);
   const [titleDeleteInFlight, setTitleDeleteInFlight] = useState(false);
-  const [workspaces, setWorkspaces] = useState<WorkspaceListItem[]>([]);
+  const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null,
   );
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
@@ -693,7 +693,7 @@ export const ConversationPage = () => {
   type SubmissionEntry = {
     state: SkillSubmissionState;
     errorMessage?: string;
-    boundToWorkspaceLabel?: string | null;
+    boundToProjectLabel?: string | null;
     // Live snapshot of the staged slug's contents — populated by the
     // page's scan poll. Drives both the "save" gate (we only enable the
     // save button when files are actually present) and the file tree
@@ -909,7 +909,7 @@ export const ConversationPage = () => {
   const sidebarSessions = useSessionStore((state) => state.sessions);
   const setSidebarSessions = useSessionStore((state) => state.setSessions);
   const fetchSidebarSessions = useSessionStore((state) => state.fetchSessions);
-  const upsertWorkspace = useWorkspaceStore((s) => s.upsertWorkspace);
+  const upsertProject = useProjectStore((s) => s.upsertProject);
   // Server-stored attachments + async parse status, owned by the shared hook:
   // upload-on-attach, poll ``parsing → ready|failed``, and live progress for
   // the composer chips + context panel. ``setSessionAttachments`` is the
@@ -930,36 +930,36 @@ export const ConversationPage = () => {
   const [availableSkills, setAvailableSkills] = useState<SkillView[]>([]);
   const [selectedComposerSkill, setSelectedComposerSkill] =
     useState<SkillView | null>(null);
-  const [workspaceSkills, setWorkspaceSkills] = useState<SkillView[]>([]);
+  const [projectSkills, setProjectSkills] = useState<SkillView[]>([]);
   const [fileTree, setFileTree] = useState<FileTreeNode[]>([]);
 
-  const activeWorkspace = useMemo(
+  const activeProject = useMemo(
     () =>
-      (workspaces.find((w) => w.id === selectedWorkspaceId) as
-        | WorkspaceDetail
+      (projects.find((w) => w.id === selectedProjectId) as
+        | ProjectDetail
         | undefined) ?? null,
-    [selectedWorkspaceId, workspaces],
+    [selectedProjectId, projects],
   );
 
-  // Project KB bindings — loaded for project workspaces only and
+  // Project KB bindings — loaded for project projects only and
   // rendered **read-only** in the session panel (per product rule,
   // binding edits happen on the project detail page and apply to the
   // next session). ``handleExpandKbFolder`` is still wired so the
   // user can drill folders to inspect what's selected; only the
   // toggle handler is withheld. Passing ``null`` for chat /
-  // skill-creator workspaces makes the hook no-op so those panels
+  // skill-creator projects makes the hook no-op so those panels
   // show no KB tree.
   const {
     kbTree: projectKbTree,
     bindings: projectKbBindings,
     handleExpandKbFolder: handleExpandProjectKbFolder,
   } = useProjectKbBindings(
-    activeWorkspace?.kind === "project" ? selectedWorkspaceId : null,
+    activeProject?.kind === "project" ? selectedProjectId : null,
   );
 
   // Global KB document tree for the attachment picker. Loads lazily —
   // only when the picker is open — and is independent of the
-  // workspace (chat sessions have no project scope; the picker shows
+  // project (chat sessions have no project scope; the picker shows
   // every KB for both chat and project conversations).
   const {
     kbTree: pickerKbTree,
@@ -1082,7 +1082,7 @@ export const ConversationPage = () => {
   // bridge as ``mcp__harness__submit_skill`` (Claude Agent SDK) or
   // plain ``submit_skill`` (deepagents/codex). Match either — the
   // kernel doesn't normalise.
-  const submissionWorkspaceLabel = useMemo(() => {
+  const submissionProjectLabel = useMemo(() => {
     if (selectedSession?.name) return selectedSession.name;
     return null;
   }, [selectedSession]);
@@ -1111,14 +1111,14 @@ export const ConversationPage = () => {
           files_touched: filesTouched,
         });
         const boundLabel =
-          res.bound_to_workspace_id && res.creation_context.kind === "project"
-            ? submissionWorkspaceLabel
+          res.bound_to_project_id && res.creation_context.kind === "project"
+            ? submissionProjectLabel
             : null;
         setSubmissionStates((prev) => ({
           ...prev,
           [toolId]: {
             state: "confirmed",
-            boundToWorkspaceLabel: boundLabel,
+            boundToProjectLabel: boundLabel,
           },
         }));
         toast.success(t("skill.savedToLib" as Parameters<typeof t>[0]));
@@ -1134,7 +1134,7 @@ export const ConversationPage = () => {
         toast.error(msg);
       }
     },
-    [submissionWorkspaceLabel],
+    [submissionProjectLabel],
   );
 
   const handleDismissSubmission = useCallback(
@@ -1302,7 +1302,7 @@ export const ConversationPage = () => {
                 // The automation page is at ``/automations`` and reads
                 // ``?automation=<id>`` for direct linking. We use a soft
                 // navigation so the conversation stays mounted in the
-                // workspace sidebar.
+                // project sidebar.
                 navigate(
                   `/automations?automation=${encodeURIComponent(automationId)}`,
                 );
@@ -1465,7 +1465,7 @@ export const ConversationPage = () => {
           filesTouched={filesTouched}
           state={entry.state}
           errorMessage={entry.errorMessage}
-          boundToWorkspaceLabel={entry.boundToWorkspaceLabel}
+          boundToProjectLabel={entry.boundToProjectLabel}
           stagedFiles={entry.stagedFiles}
           stagingPath={entry.stagingPath}
           onConfirm={() =>
@@ -1522,22 +1522,22 @@ export const ConversationPage = () => {
     [runtimeList],
   );
 
-  // 09-assistant: the 📁 chip's dropdown options — every project workspace.
-  // ``WorkspaceListItem`` carries no member count, so the count is left
+  // 09-assistant: the 📁 chip's dropdown options — every project project.
+  // ``ProjectListItem`` carries no member count, so the count is left
   // undefined for now (chip renders fine without it).
   const composerProjects = useMemo<ComposerProjectItem[]>(
     () =>
-      workspaces
+      projects
         .filter((w) => w.kind === "project")
         .map((w) => ({ id: w.id, name: w.name })),
-    [workspaces],
+    [projects],
   );
 
   // 09-assistant: whether the conversation currently targets 临时对话
   // (chat-default / non-project). The page stores the ``"chat-default"``
-  // sentinel for 临时, so derive temp-ness from the resolved workspace kind
+  // sentinel for 临时, so derive temp-ness from the resolved project kind
   // rather than a literal null.
-  const isTempConversation = activeWorkspace?.kind !== "project";
+  const isTempConversation = activeProject?.kind !== "project";
 
   // Agent options for the composer's 🤖 chip. Candidates depend on the 📁
   // chip: 临时对话 → the "我的" library (``myAgents``); a project → its
@@ -1673,10 +1673,10 @@ export const ConversationPage = () => {
     defaultsLoading,
   ]);
 
-  // For project workspace "/" mention, only show enabled/bound skills
+  // For project project "/" mention, only show enabled/bound skills
   const composerMentionSkills = useMemo(() => {
-    if (activeWorkspace?.kind === "project") {
-      return workspaceSkills
+    if (activeProject?.kind === "project") {
+      return projectSkills
         .filter((s) => s.enabled)
         .map((s) => ({
           id: s.id,
@@ -1691,11 +1691,11 @@ export const ConversationPage = () => {
       slug: s.slug,
       description: s.description,
     }));
-  }, [activeWorkspace?.kind, workspaceSkills, availableSkills]);
+  }, [activeProject?.kind, projectSkills, availableSkills]);
 
   // Slug → display-name map for rendering inline ``/skill-slug`` chips
   // in past user messages. We blend availableSkills (the global picker
-  // catalog) and workspaceSkills (project-bound skills) so chips render
+  // catalog) and projectSkills (project-bound skills) so chips render
   // even for project-only skills that wouldn't appear in the global
   // catalog.
   const skillsBySlug = useMemo(() => {
@@ -1703,11 +1703,11 @@ export const ConversationPage = () => {
     for (const s of availableSkills) {
       if (s.slug) map[s.slug] = { name: s.name };
     }
-    for (const s of workspaceSkills) {
+    for (const s of projectSkills) {
       if (s.slug) map[s.slug] = { name: s.name };
     }
     return map;
-  }, [availableSkills, workspaceSkills]);
+  }, [availableSkills, projectSkills]);
 
   // Initial load fetches the latest ``TURN_PAGE_SIZE`` turns through the
   // turn-aligned window endpoint instead of pulling every event. Earlier
@@ -1875,12 +1875,12 @@ export const ConversationPage = () => {
   /**
    * Re-fetch the *one* session this page is currently rendering.
    *
-   * Replaces the previous ``refreshSessions(workspaceId, preferredId)``
-   * which did ``GET /v1/sessions?workspace_id=…`` and ``find()``-d the
+   * Replaces the previous ``refreshSessions(projectId, preferredId)``
+   * which did ``GET /v1/sessions?project_id=…`` and ``find()``-d the
    * row we cared about. That pattern had two problems:
    *
-   *   1. It needed a workspace id to call the list endpoint, but the
-   *      ``selectedWorkspaceId`` captured in callback closures could be
+   *   1. It needed a project id to call the list endpoint, but the
+   *      ``selectedProjectId`` captured in callback closures could be
    *      stale (the ``"chat-default"`` sentinel before
    *      ``ensureSession``'s state update settled). The post-turn
    *      refresh would then list against a non-existent project id,
@@ -1888,11 +1888,11 @@ export const ConversationPage = () => {
    *      ``selectedSessionId`` — the symptom users saw as "refresh"
    *      ".
    *   2. The page only ever renders one session at a time. Listing a
-   *      whole workspace's sessions just to ``find()`` one was
+   *      whole project's sessions just to ``find()`` one was
    *      wasteful and brittle.
    *
    * The clean replacement uses ``GET /v1/sessions/{id}`` directly. No
-   * workspace id needed; one round-trip; the result feeds both the
+   * project id needed; one round-trip; the result feeds both the
    * one-row ``sessions[]`` (the optimistic-merge code paths still
    * mutate this) and ``selectedSessionId``.
    */
@@ -1931,12 +1931,12 @@ export const ConversationPage = () => {
     setError(null);
     try {
       const [wsResponse, chListResponse] = await Promise.all([
-        workspacesApi.list(),
+        projectsApi.list(),
         providersApi
           .list()
           .catch(() => ({ providers: [] as ProviderListItem[] })),
       ]);
-      setWorkspaces(wsResponse.workspaces);
+      setProjects(wsResponse.projects);
       const details = await Promise.all(
         chListResponse.providers
           .filter((c) => c.enabled)
@@ -1949,11 +1949,11 @@ export const ConversationPage = () => {
       //   /conversation/new           — fresh draft, no session yet
       //   /conversation/{session_id}  — existing session, fetch detail
       //
-      // For the fresh-draft case we set ``selectedWorkspaceId`` to the
+      // For the fresh-draft case we set ``selectedProjectId`` to the
       // ``"chat-default"`` sentinel so skill autocomplete still loads
       // (the backend skills router treats it as the global chat-scope
       // key); the file tree 404s and renders empty — correct for a
-      // not-yet-allocated workdir. The real workspace materializes
+      // not-yet-allocated workdir. The real project materializes
       // when the user sends the first message and ``ensureSession``
       // navigates us to ``/conversation/{real-id}``.
       if (id === NEW_SESSION_ID) {
@@ -1967,12 +1967,12 @@ export const ConversationPage = () => {
         const projectParam = searchParams.get("project");
         const presetProject =
           projectParam &&
-          wsResponse.workspaces.some(
+          wsResponse.projects.some(
             (w) => w.id === projectParam && w.kind === "project",
           )
             ? projectParam
             : null;
-        setSelectedWorkspaceId(presetProject ?? "chat-default");
+        setSelectedProjectId(presetProject ?? "chat-default");
         setSessions([]);
         setSelectedSessionId(null);
         // CRITICAL: also clear the conversation state (events / todos
@@ -1989,13 +1989,13 @@ export const ConversationPage = () => {
       // Existing session path — one round-trip via the dedicated
       // ``GET /v1/sessions/{id}`` endpoint feeds every piece of state
       // the page needs: trigger_meta (skill-creator banner restore),
-      // workspace_id (right panel cwd / file tree), the session row
+      // project_id (right panel cwd / file tree), the session row
       // itself (composer status + optimistic-merge target).
       try {
         const sessionDetail = await sessionsApi.get(id);
         setSessionTriggerMode(sessionDetail.trigger_meta?.mode ?? null);
         setSessionAgentSlug(sessionDetail.agent_slug ?? null);
-        setSelectedWorkspaceId(sessionDetail.workspace_id);
+        setSelectedProjectId(sessionDetail.project_id);
         setSessions([sessionDetailToListItem(sessionDetail)]);
         // Skip the events refetch when bootstrap re-fires onto the
         // same session id we're already on — the URL change from
@@ -2017,14 +2017,14 @@ export const ConversationPage = () => {
         // typed / clicked.
         setSessionTriggerMode(null);
         setSessionAgentSlug(null);
-        setSelectedWorkspaceId(null);
+        setSelectedProjectId(null);
         setSessions([]);
         setSelectedSessionId(null);
         setError("Session not found.");
       }
     } catch (cause) {
       setError(
-        cause instanceof Error ? cause.message : "Failed to load workspace.",
+        cause instanceof Error ? cause.message : "Failed to load project.",
       );
     } finally {
       setLoading(false);
@@ -2037,28 +2037,28 @@ export const ConversationPage = () => {
 
   // Load all skills for composer autocomplete
   useEffect(() => {
-    if (!selectedWorkspaceId) return;
+    if (!selectedProjectId) return;
     skillsApi
-      .list(selectedWorkspaceId)
+      .list(selectedProjectId)
       .then((catalog) => {
         setAvailableSkills(catalog.skills);
       })
       .catch(() => {
         setAvailableSkills([]);
       });
-  }, [selectedWorkspaceId]);
+  }, [selectedProjectId]);
 
   // Load the project's configured member agents. Project conversations
   // pick one of these (instead of a raw model); the composer renders them
   // as an Agent selector. Default the picker to the first agent.
   useEffect(() => {
-    if (!selectedWorkspaceId || activeWorkspace?.kind !== "project") {
+    if (!selectedProjectId || activeProject?.kind !== "project") {
       setProjectAgents([]);
       return;
     }
     let cancelled = false;
     agentsApi
-      .listMembers(selectedWorkspaceId)
+      .listMembers(selectedProjectId)
       .then((res) => {
         if (cancelled) return;
         setProjectAgents(res.agents);
@@ -2075,7 +2075,7 @@ export const ConversationPage = () => {
     return () => {
       cancelled = true;
     };
-  }, [selectedWorkspaceId, activeWorkspace?.kind]);
+  }, [selectedProjectId, activeProject?.kind]);
 
   // 09-assistant: load the "我的" agent library once. These back the 🤖 chip
   // when the 📁 chip is on 临时对话 (no project member roster).
@@ -2099,7 +2099,7 @@ export const ConversationPage = () => {
     // so the new agent is present in the roster the composer renders from.
   }, [agentParam]);
 
-  // 09-assistant: when the 📁 chip sits on 临时对话 (non-project workspace)
+  // 09-assistant: when the 📁 chip sits on 临时对话 (non-project project)
   // and no session exists yet, default the 🤖 chip to the first "我的" agent.
   // Empty library → null; handleSend then nudges the user to pick/create
   // (10-new-conversation-guidance). The project case is handled by the
@@ -2107,7 +2107,7 @@ export const ConversationPage = () => {
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (selectedSession) return; // existing session is frozen (ADR-006)
-    if (activeWorkspace?.kind === "project") return; // project path elsewhere
+    if (activeProject?.kind === "project") return; // project path elsewhere
     setSelectedAgentSlug((prev) => {
       // A freshly-created agent handed off via ?agent= (「去临时对话」) wins as
       // soon as it appears in the reloaded roster.
@@ -2125,38 +2125,38 @@ export const ConversationPage = () => {
       return myAgents[0]?.slug ?? null;
     });
     // Re-run only on the data that decides the default — existence of a
-    // session (frozen), the workspace kind, the candidate roster, and the
+    // session (frozen), the project kind, the candidate roster, and the
     // explicit ?agent= hand-off.
-  }, [activeWorkspace?.kind, myAgents, selectedSession, agentParam]);
+  }, [activeProject?.kind, myAgents, selectedSession, agentParam]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  // Load bound skills for project workspace context panel
+  // Load bound skills for project project context panel
   useEffect(() => {
-    if (!selectedWorkspaceId || activeWorkspace?.kind !== "project") return;
+    if (!selectedProjectId || activeProject?.kind !== "project") return;
     skillsApi
-      .workspaceCatalog(selectedWorkspaceId)
+      .projectCatalog(selectedProjectId)
       .then((catalog) => {
-        setWorkspaceSkills(catalog.skills);
+        setProjectSkills(catalog.skills);
       })
       .catch(() => {
-        setWorkspaceSkills([]);
+        setProjectSkills([]);
       });
-  }, [selectedWorkspaceId, activeWorkspace?.kind]);
+  }, [selectedProjectId, activeProject?.kind]);
 
-  // Load workspace file tree for the right context panel's Files tab.
-  // Loaded for both project AND chat workspaces — chat sessions write
+  // Load project file tree for the right context panel's Files tab.
+  // Loaded for both project AND chat projects — chat sessions write
   // generated artifacts into their managed cwd, and the user wants
   // those visible in the right rail too (under the "Generated files" label).
   const refreshFileTree = useCallback(() => {
-    if (!selectedWorkspaceId) {
+    if (!selectedProjectId) {
       setFileTree([]);
       return;
     }
-    workspacesApi
-      .listFiles(selectedWorkspaceId, { depth: 3 })
+    projectsApi
+      .listFiles(selectedProjectId, { depth: 3 })
       .then((res) => setFileTree(toFileTree(res.files)))
       .catch(() => setFileTree([]));
-  }, [selectedWorkspaceId]);
+  }, [selectedProjectId]);
 
   useEffect(() => {
     refreshFileTree();
@@ -2165,7 +2165,7 @@ export const ConversationPage = () => {
   // Auto-refresh on turn end: when ``sending`` flips false, the agent
   // has just finished writing whatever artifacts it was going to. Pull
   // a fresh tree so the panel reflects new files without the user
-  // having to switch workspaces or hit refresh manually.
+  // having to switch projects or hit refresh manually.
   const prevSendingRef = useRef(sending);
   useEffect(() => {
     if (prevSendingRef.current && !sending) {
@@ -2179,11 +2179,11 @@ export const ConversationPage = () => {
 
   const ensureSession = useCallback(async (navigateOnCreate = true) => {
     if (selectedSession) return selectedSession;
-    if (!selectedWorkspaceId) throw new Error("No active workspace.");
+    if (!selectedProjectId) throw new Error("No active project.");
     // For quick-chat (kind="chat"), send the ``"chat-default"`` sentinel so
-    // the backend allocates a fresh, isolated chat workspace + cwd for this
-    // session. Project conversations keep passing their real workspace id.
-    const isChat = activeWorkspace?.kind === "chat";
+    // the backend allocates a fresh, isolated chat project + cwd for this
+    // session. Project conversations keep passing their real project id.
+    const isChat = activeProject?.kind === "chat";
     // 09-assistant §2.1/§2.2: every session binds to an agent — project
     // conversations to the chosen 派驻 member, 临时对话 to the picked "我的"
     // agent. There is no agentless path; the backend derives
@@ -2195,7 +2195,7 @@ export const ConversationPage = () => {
       throw new Error("No agent selected.");
     }
     const created = await sessionsApi.create({
-      workspace_id: isChat ? "chat-default" : selectedWorkspaceId,
+      project_id: isChat ? "chat-default" : selectedProjectId,
       agent_slug: selectedAgentSlug,
       provider_id: selectedProviderId ?? undefined,
       model_id: selectedModelId ?? undefined,
@@ -2210,7 +2210,7 @@ export const ConversationPage = () => {
     if (isChat) setLastTempAgent(selectedAgentSlug);
     // Update local state IMMEDIATELY (before navigate / sendMessage)
     // so the rest of ``handleSend`` and the SSE subscription closures
-    // — which capture ``selectedWorkspaceId`` and friends — see the
+    // — which capture ``selectedProjectId`` and friends — see the
     // freshly minted ids. This is what the old ``refreshSessions``
     // race ultimately failed at.
     setSelectedSessionId(created.id);
@@ -2228,27 +2228,27 @@ export const ConversationPage = () => {
           )
         : [createdItem, ...sidebarSessions],
     );
-    if (created.workspace_id !== selectedWorkspaceId) {
-      // Quick-chat: the backend just minted a fresh workspace + cwd
-      // for this session. Pull the authoritative ``WorkspaceDetail``
+    if (created.project_id !== selectedProjectId) {
+      // Quick-chat: the backend just minted a fresh project + cwd
+      // for this session. Pull the authoritative ``ProjectDetail``
       // (cwd lives on the backend — host writes flow through
       // ``fs_registry`` and we never derive it locally) and merge.
       try {
-        const wsDetail = await workspacesApi.get(created.workspace_id);
-        setWorkspaces((prev) => {
+        const wsDetail = await projectsApi.get(created.project_id);
+        setProjects((prev) => {
           const filtered = prev.filter((w) => w.id !== wsDetail.id);
           return [...filtered, wsDetail];
         });
-        // Also push into the global workspace store so the layout's
-        // "New Chat" filter (``allWorkspaces.filter(kind === "chat")``)
+        // Also push into the global project store so the layout's
+        // "New Chat" filter (``allProjects.filter(kind === "chat")``)
         // immediately sees this row — without it, the new session
         // would still be filtered out of the chat group until the
         // path-change ``fetchProjects`` round-trip completes.
-        upsertWorkspace(wsDetail);
+        upsertProject(wsDetail);
       } catch {
         /* non-fatal — file tree falls back gracefully */
       }
-      setSelectedWorkspaceId(created.workspace_id);
+      setSelectedProjectId(created.project_id);
     }
     void fetchSidebarSessions();
     // Promote the URL from ``/conversation/new`` (or any other
@@ -2269,12 +2269,12 @@ export const ConversationPage = () => {
     }
     return created;
   }, [
-    selectedWorkspaceId,
-    activeWorkspace?.kind,
+    selectedProjectId,
+    activeProject?.kind,
     fetchSidebarSessions,
     sidebarSessions,
     setSidebarSessions,
-    upsertWorkspace,
+    upsertProject,
     selectedSession,
     selectedProviderId,
     selectedModelId,
@@ -3326,7 +3326,7 @@ export const ConversationPage = () => {
     // Sync the composer selector to whatever the kernel locked at session
     // creation. Both ids must come from the session (not just locked_model_id)
     // — the composer matches on (providerId, modelId) pairs, so a missing
-    // provider id makes the selector silently fall back to the workspace
+    // provider id makes the selector silently fall back to the project
     // default's display label even when the session is wired to a different
     // model end-to-end.
     if (selectedSession.locked_provider_id) {
@@ -3578,15 +3578,15 @@ export const ConversationPage = () => {
         />
       );
     }
-    // Unified panel for both project and chat workspaces. Chat (kind="chat")
+    // Unified panel for both project and chat projects. Chat (kind="chat")
     // is treated as a "special project" — same component, same visual style,
     // but with KB binding / project instructions / file tree / scheduled
     // tasks omitted. The panel's section visibility is data-driven: pass
     // ``undefined`` for sections that don't apply.
-    const isProject = activeWorkspace?.kind === "project";
+    const isProject = activeProject?.kind === "project";
     // 09-assistant Phase B: 临时对话 collapses to a 2-column layout — no right
     // context panel until/unless a live session exists. Returning ``null``
-    // makes the layout drop the aside column (WorkspaceLayoutBase reserves it
+    // makes the layout drop the aside column (ProjectLayoutBase reserves it
     // only when ``resolvedRightPanel`` is truthy). Flipping the 📁 chip back
     // to 临时 recomputes this to ``null`` and the column slides away. A live
     // chat session keeps the panel so its generated files / todos stay
@@ -3653,7 +3653,7 @@ export const ConversationPage = () => {
         // the user can drill in to inspect), but deliberately omit
         // ``onToggleBinding`` — editing happens on the project detail
         // page and takes effect for the next session. Chat /
-        // skill-creator workspaces pass ``undefined`` so the section
+        // skill-creator projects pass ``undefined`` so the section
         // doesn't render at all.
         kbTree={isProject ? projectKbTree : undefined}
         bindings={isProject ? projectKbBindings : undefined}
@@ -3667,14 +3667,14 @@ export const ConversationPage = () => {
         fileTreeInTab={isProject}
         rootPath={
           isProject
-            ? ((activeWorkspace as WorkspaceDetail)?.root_path ?? undefined)
+            ? ((activeProject as ProjectDetail)?.root_path ?? undefined)
             : t("conversation.workDir" as Parameters<typeof t>[0])
         }
         onOpenInFinder={() => {
-          const ws = activeWorkspace as WorkspaceDetail | null;
+          const ws = activeProject as ProjectDetail | null;
           // Prefer the kernel-resolved cwd (project + chat both have one);
           // fall back to root_path so a stale backend that hasn't
-          // populated ``cwd`` yet still works for project workspaces.
+          // populated ``cwd`` yet still works for project projects.
           const path = ws?.cwd ?? ws?.root_path;
           if (!path) {
             toast.info(t("conversation.noWorkDir" as Parameters<typeof t>[0]));
@@ -3683,13 +3683,13 @@ export const ConversationPage = () => {
           void revealInFinder(path);
         }}
         onFileDoubleClick={(relPath) => {
-          // FileTreeNode.path is relative to the workspace cwd (built
-          // by ``toFileTree`` from ``WorkspaceFileNode``). Resolve to
+          // FileTreeNode.path is relative to the project cwd (built
+          // by ``toFileTree`` from ``ProjectFileNode``). Resolve to
           // an absolute path before handing off to the main process,
           // which calls ``shell.openPath`` — opens files in their
           // OS-associated app (.py -> VSCode/PyCharm, .csv -> Excel/
           // Numbers, .md -> Typora/system editor, etc.).
-          const ws = activeWorkspace as WorkspaceDetail | null;
+          const ws = activeProject as ProjectDetail | null;
           const cwd = ws?.cwd ?? ws?.root_path;
           if (!cwd) return;
           const sep = cwd.endsWith("/") ? "" : "/";
@@ -3702,7 +3702,7 @@ export const ConversationPage = () => {
       />
     );
   }, [
-    activeWorkspace,
+    activeProject,
     fileTree,
     panelCollapsed,
     panelSetCollapsed,
@@ -3743,7 +3743,7 @@ export const ConversationPage = () => {
 
   // Synchronously reset all panel-driving data on session change.
   // ``fileTree`` / ``sessionAttachments`` / ``attachments`` are all
-  // refreshed asynchronously (per-workspace fetch, per-session fetch,
+  // refreshed asynchronously (per-project fetch, per-session fetch,
   // user-queued composer state) so without this the right-panel
   // collapsed effect below would run a SECOND time with the previous
   // session's stale ``hasData = true`` and edge-trigger an unwanted
@@ -3757,13 +3757,13 @@ export const ConversationPage = () => {
   }, [selectedSessionId, setSessionAttachments]);
 
   // Drive the right-panel collapsed state from per-session data:
-  //   * Project workspaces always have meaningful panel content
+  //   * Project projects always have meaningful panel content
   //     (instructions / skills / KB / file tree) — open by default,
   //     and re-open on every session switch within the project.
-  //   * Chat workspaces start collapsed and auto-expand on the
+  //   * Chat projects start collapsed and auto-expand on the
   //     empty → has-data edge (todos / attachments / files). Manual
   //     collapses survive subsequent growth (we only edge-trigger).
-  const isProjectWorkspace = activeWorkspace?.kind === "project";
+  const isProjectProject = activeProject?.kind === "project";
   const prevSessionIdRef = useRef<string | null>(null);
   const prevHasDataRef = useRef(false);
   useEffect(() => {
@@ -3800,7 +3800,7 @@ export const ConversationPage = () => {
       panelSetCollapsed(!selectedSessionId);
       return;
     }
-    if (isProjectWorkspace) return;
+    if (isProjectProject) return;
     const hasData =
       (todos?.length ?? 0) > 0 ||
       sessionAttachments.length > 0 ||
@@ -3812,7 +3812,7 @@ export const ConversationPage = () => {
   }, [
     selectedSessionId,
     id,
-    isProjectWorkspace,
+    isProjectProject,
     todos,
     sessionAttachments,
     fileTree,
@@ -3970,9 +3970,9 @@ export const ConversationPage = () => {
                   {agentNameBySlug.get(sessionAgentSlug) ?? sessionAgentSlug}
                 </span>
               ) : null}
-              {activeWorkspace?.name && !isSkillCreatorMode ? (
+              {activeProject?.name && !isSkillCreatorMode ? (
                 <span className="shrink-0 rounded-md bg-surface-soft px-2 py-0.5 text-2xs text-ink-meta">
-                  {activeWorkspace.name}
+                  {activeProject.name}
                 </span>
               ) : null}
             </div>
@@ -4235,7 +4235,7 @@ export const ConversationPage = () => {
             // Project conversations configure skills per-agent, so the inline
             // skill picker is hidden there; the assistant (non-project) chat
             // keeps it for global ``/`` skills.
-            showSkillButton={!isProjectWorkspace}
+            showSkillButton={!isProjectProject}
             autoFocus
             onSend={() => {
               void handleSend();
@@ -4288,7 +4288,7 @@ export const ConversationPage = () => {
             // session creation; the agent itself is never modified); for an
             // EXISTING temp session runtime/model are read-only (frozen,
             // ADR-006) but visible, and effort stays editable (live-reconcile).
-            allowAgentBrainOverride={!isProjectWorkspace}
+            allowAgentBrainOverride={!isProjectProject}
             agentModelOverridden={agentModelOverridden}
             // ADR-006: once a session exists both chips freeze (the locked
             // 🤖 chip shows the bound ``sessionAgentSlug``).
@@ -4300,28 +4300,28 @@ export const ConversationPage = () => {
               setComposerTouched(false);
             }}
             // 09-assistant 📁 project chip: switches the draft between 临时对话
-            // (chat-default) and a project workspace. The page stores the
+            // (chat-default) and a project project. The page stores the
             // ``"chat-default"`` sentinel for 临时, so the chip sees ``null``
-            // when the active workspace isn't a project, and a change to
+            // when the active project isn't a project, and a change to
             // ``null`` maps back to the sentinel. Frozen once a session exists.
             projects={composerProjects}
-            selectedWorkspaceId={
-              isProjectWorkspace ? selectedWorkspaceId : null
+            selectedProjectId={
+              isProjectProject ? selectedProjectId : null
             }
-            workspaceLocked={selectedSession != null}
-            onWorkspaceChange={(idOrNull) => {
-              setSelectedWorkspaceId(idOrNull ?? "chat-default");
-              // The picked skill belongs to the previous workspace scope —
+            projectLocked={selectedSession != null}
+            onProjectChange={(idOrNull) => {
+              setSelectedProjectId(idOrNull ?? "chat-default");
+              // The picked skill belongs to the previous project scope —
               // drop it so a project-scoped skill can't leak into a 临时 send
               // (and vice versa). availableSkills reloads off the new id.
               setSelectedComposerSkill(null);
               setComposerTouched(true);
             }}
             onAddAgent={
-              isProjectWorkspace && selectedWorkspaceId
+              isProjectProject && selectedProjectId
                 ? () =>
                     navigate(
-                      `/projects/${encodeURIComponent(selectedWorkspaceId)}`,
+                      `/projects/${encodeURIComponent(selectedProjectId)}`,
                     )
                 : () => setCreateAgentOpen(true)
             }
@@ -4330,7 +4330,7 @@ export const ConversationPage = () => {
             // even with an empty library — handleSend then nudges the user to
             // pick/create an agent (10-new-conversation-guidance).
             sendDisabled={
-              isProjectWorkspace &&
+              isProjectProject &&
               !selectedSession &&
               (composerAgents.length === 0 || !selectedAgentSlug)
             }

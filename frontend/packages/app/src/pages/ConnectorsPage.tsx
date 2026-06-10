@@ -26,7 +26,7 @@ import {
 } from "@valuz/core";
 import { t as _t } from "@valuz/shared/i18n";
 import type { ResourceCategory } from "@valuz/shared";
-import { useWorkspaceOutlet } from "@valuz/app/layout";
+import { useProjectOutlet } from "@valuz/app/layout";
 import {
   ConnectorAddDialog,
   ConnectorConnectDialog,
@@ -147,7 +147,7 @@ export const ConnectorsPage = () => {
     setRightPanel,
     setAsideClassName,
     setMainClassName,
-  } = useWorkspaceOutlet();
+  } = useProjectOutlet();
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
 
   const [connectors, setConnectors] = useState<ConnectorItem[]>([]);

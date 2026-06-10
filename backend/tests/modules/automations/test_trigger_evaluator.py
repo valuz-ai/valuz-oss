@@ -30,7 +30,7 @@ def _row(**overrides: object) -> AutomationRow:
         "name": "test",
         "agent_kind": "project_member",
         "agent_slug": "qa",
-        "workspace_id": "ws1",
+        "project_id": "ws1",
         "prompt_template": "p",
         "trigger_kind": "cron",
         "cron_expr": "0 9 * * *",

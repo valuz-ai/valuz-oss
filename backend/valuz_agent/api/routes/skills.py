@@ -27,8 +27,8 @@ from valuz_agent.infra.eventbus import event_bus
 from valuz_agent.modules.sessions.schemas import SessionModelSelection
 from valuz_agent.modules.sessions.service import SessionService
 from valuz_agent.modules.skills.events import (
+    PROJECT_SKILLS_CHANGED,
     SKILL_CHANGED,
-    WORKSPACE_SKILLS_CHANGED,
 )
 from valuz_agent.modules.skills.models import (
     SessionSkillImportConfirmRequest,
@@ -76,15 +76,15 @@ router = APIRouter(tags=["skills"])
 
 @router.get("/v1/skills")
 async def list_skills(
-    workspace_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
     svc: SkillLibraryService = Depends(get_skill_service),
 ) -> dict:
-    target_workspace_id = workspace_id or "chat-default"
+    target_project_id = project_id or "chat-default"
     try:
-        catalog = await svc.list_catalog(target_workspace_id)
+        catalog = await svc.list_catalog(target_project_id)
     except KeyError as exc:
         raise HTTPException(
-            status_code=404, detail=f"Unknown workspace: {target_workspace_id}"
+            status_code=404, detail=f"Unknown project: {target_project_id}"
         ) from exc
 
     from valuz_agent.ports.resource_enhancer import get_resource_enhancer
@@ -107,10 +107,10 @@ async def create_skill(
 
 @router.get("/v1/skills/tags", response_model=SkillTagsResponse)
 async def list_tags(
-    workspace_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
     svc: SkillLibraryService = Depends(get_skill_service),
 ) -> SkillTagsResponse:
-    return SkillTagsResponse(tags=await svc.list_all_tags(workspace_id))
+    return SkillTagsResponse(tags=await svc.list_all_tags(project_id))
 
 
 # ------------------------------------------------------------------
@@ -125,13 +125,13 @@ async def skill_events_stream(request: Request) -> EventSourceResponse:
     def _on_skill_changed(**payload: object) -> None:
         queue.put_nowait({"event": SKILL_CHANGED, "data": json.dumps(payload, default=str)})
 
-    def _on_workspace_changed(**payload: object) -> None:
+    def _on_project_changed(**payload: object) -> None:
         queue.put_nowait(
-            {"event": WORKSPACE_SKILLS_CHANGED, "data": json.dumps(payload, default=str)}
+            {"event": PROJECT_SKILLS_CHANGED, "data": json.dumps(payload, default=str)}
         )
 
     event_bus.subscribe(SKILL_CHANGED, _on_skill_changed)
-    event_bus.subscribe(WORKSPACE_SKILLS_CHANGED, _on_workspace_changed)
+    event_bus.subscribe(PROJECT_SKILLS_CHANGED, _on_project_changed)
 
     async def _event_generator():
         try:
@@ -147,9 +147,9 @@ async def skill_events_stream(request: Request) -> EventSourceResponse:
             handlers = event_bus._handlers.get(SKILL_CHANGED, [])
             if _on_skill_changed in handlers:
                 handlers.remove(_on_skill_changed)
-            handlers = event_bus._handlers.get(WORKSPACE_SKILLS_CHANGED, [])
-            if _on_workspace_changed in handlers:
-                handlers.remove(_on_workspace_changed)
+            handlers = event_bus._handlers.get(PROJECT_SKILLS_CHANGED, [])
+            if _on_project_changed in handlers:
+                handlers.remove(_on_project_changed)
 
     return EventSourceResponse(_event_generator())
 
@@ -182,24 +182,24 @@ class SkillCreateChatStartRequest(SessionModelSelection):
     """
 
 
-def _resolve_workspace_for_creation(context: SkillCreationContext) -> str:
-    """Pick the kernel workspace a skill-creator session should run in.
+def _resolve_project_for_creation(context: SkillCreationContext) -> str:
+    """Pick the kernel project a skill-creator session should run in.
 
     - ``chat`` and ``skills_library`` both run in ``chat-default`` so the
       session has a usable cwd / channel / capability set, but the
       submission tool reads ``creation_context.kind`` to decide which
       side-effects to apply on confirmation.
-    - ``project`` requires an explicit ``workspace_id`` and runs the
+    - ``project`` requires an explicit ``project_id`` and runs the
       session in that project so the agent has access to the project
       cwd, KB bindings, etc.
     """
     if context.kind == "project":
-        if not context.workspace_id:
+        if not context.project_id:
             raise HTTPException(
                 status_code=422,
-                detail="creation_context.workspace_id is required when kind='project'",
+                detail="creation_context.project_id is required when kind='project'",
             )
-        return context.workspace_id
+        return context.project_id
     return "chat-default"
 
 
@@ -214,17 +214,17 @@ async def start_create(
 ) -> SkillCreateStartResponse:
     """Unified launcher for the skill-creator agent loop.
 
-    Opens a kernel session against the workspace appropriate for the
+    Opens a kernel session against the project appropriate for the
     caller's entry point and stamps ``creation_context`` onto session
     metadata so the ``submit_skill`` tool (registered alongside the
     ``skill-creator`` skill at session start) knows where the resulting
     skill should be filed: user library only, or library + project
     binding.
     """
-    workspace_id = _resolve_workspace_for_creation(body.context)
+    project_id = _resolve_project_for_creation(body.context)
     creation_context = body.context.model_dump(exclude_none=True)
     session = await session_svc.create_session(
-        workspace_id=workspace_id,
+        project_id=project_id,
         title=None,
         model_id=body.model_id,
         provider_id=body.provider_id,
@@ -233,7 +233,7 @@ async def start_create(
     )
     return SkillCreateStartResponse(
         session_id=session.id,
-        authoring_workspace_id=session.workspace_id,
+        authoring_project_id=session.project_id,
         creation_context=body.context,
     )
 
@@ -256,7 +256,7 @@ async def start_create_chat(
     """
     payload = body or SkillCreateChatStartRequest()
     session = await session_svc.create_session(
-        workspace_id="chat-default",
+        project_id="chat-default",
         title=None,
         model_id=payload.model_id,
         provider_id=payload.provider_id,
@@ -265,7 +265,7 @@ async def start_create_chat(
     )
     return SkillCreateChatStartResponse(
         session_id=session.id,
-        authoring_workspace_id=session.workspace_id,
+        authoring_project_id=session.project_id,
     )
 
 
@@ -364,7 +364,7 @@ async def sync_staging_endpoint(
             session_id=session_id,
             items=payload.items,
             target_scope=payload.target_scope,
-            workspace_id=payload.workspace_id,
+            project_id=payload.project_id,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -432,7 +432,7 @@ async def confirm_skill_submission(
     Promotes the staged slug into the user library at
     ``~/.agents/skills/{slug}/`` and applies the per-entry-point side
     effects encoded in the session's ``creation_context``: ``project``
-    sessions also bind the new skill to their workspace; ``chat`` /
+    sessions also bind the new skill to their project; ``chat`` /
     ``skills_library`` write to the library only.
 
     Body fields (``summary``, ``change_kind``, ``files_touched``) are
@@ -443,7 +443,7 @@ async def confirm_skill_submission(
     """
     body = payload or SkillSubmissionConfirmRequest()
     try:
-        skill, ctx_dict, bound_workspace_id = await svc.confirm_submission(
+        skill, ctx_dict, bound_project_id = await svc.confirm_submission(
             session_id=session_id,
             slug=slug,
             summary=body.summary,
@@ -458,7 +458,7 @@ async def confirm_skill_submission(
     return SkillSubmissionConfirmResponse(
         skill=skill,
         creation_context=SkillCreationContext(**ctx_dict),
-        bound_to_workspace_id=bound_workspace_id,
+        bound_to_project_id=bound_project_id,
     )
 
 
@@ -484,7 +484,7 @@ def dismiss_skill_submission(
 async def import_archive_preview(
     file: Annotated[UploadFile, File(...)],
     target_scope: Annotated[str, Form()] = "user",
-    workspace_id: Annotated[str | None, Form()] = None,
+    project_id: Annotated[str | None, Form()] = None,
     svc: SkillLibraryService = Depends(get_skill_service),
 ) -> SkillImportArchivePreview:
     suffix = Path(file.filename or "skill.zip").suffix or ".zip"
@@ -495,7 +495,7 @@ async def import_archive_preview(
         return await svc.import_archive_preview(
             archive_path=temp_path,
             target_scope=target_scope,
-            workspace_id=workspace_id,
+            project_id=project_id,
         )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -536,7 +536,7 @@ async def import_url_preview(
         return await svc.import_url_preview(
             url=payload.url,
             target_scope=payload.target_scope,
-            workspace_id=payload.workspace_id,
+            project_id=payload.project_id,
         )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -565,11 +565,11 @@ async def confirm_url_import(
 @router.get("/v1/skills/{skill_id}", response_model=SkillDetail)
 async def get_skill(
     skill_id: str,
-    workspace_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
     svc: SkillLibraryService = Depends(get_skill_service),
 ) -> SkillDetail:
     try:
-        return await svc.get_skill_detail(skill_id, workspace_id=workspace_id)
+        return await svc.get_skill_detail(skill_id, project_id=project_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_id}") from exc
 
@@ -578,11 +578,11 @@ async def get_skill(
 async def update_skill(
     skill_id: str,
     payload: SkillUpdateRequest,
-    workspace_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
     svc: SkillLibraryService = Depends(get_skill_service),
 ) -> SkillView:
     try:
-        return await svc.update_skill(skill_id, payload, workspace_id=workspace_id)
+        return await svc.update_skill(skill_id, payload, project_id=project_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_id}") from exc
 
@@ -610,14 +610,14 @@ async def copy_skill(
 )
 async def delete_skill(
     skill_id: str,
-    workspace_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
     mode: str = Query(default="dry_run"),
     svc: SkillLibraryService = Depends(get_skill_service),
 ) -> SkillDeletePreview | Response | None:
     if mode not in {"dry_run", "confirm"}:
         raise HTTPException(status_code=422, detail="Unsupported delete mode")
     try:
-        result = await svc.delete_skill(skill_id, workspace_id=workspace_id, mode=mode)
+        result = await svc.delete_skill(skill_id, project_id=project_id, mode=mode)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_id}") from exc
     if mode == "confirm":
@@ -633,11 +633,11 @@ async def delete_skill(
 @router.get("/v1/skills/{skill_id}/files", response_model=list[SkillFileNode])
 async def list_skill_files(
     skill_id: str,
-    workspace_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
     svc: SkillLibraryService = Depends(get_skill_service),
 ) -> list[SkillFileNode]:
     try:
-        return await svc.list_skill_files(skill_id, workspace_id=workspace_id)
+        return await svc.list_skill_files(skill_id, project_id=project_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_id}") from exc
 
@@ -646,11 +646,11 @@ async def list_skill_files(
 async def get_skill_file(
     skill_id: str,
     file_path: str,
-    workspace_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
     svc: SkillLibraryService = Depends(get_skill_service),
 ) -> SkillFileContent:
     try:
-        return await svc.read_skill_file(skill_id, file_path, workspace_id=workspace_id)
+        return await svc.read_skill_file(skill_id, file_path, project_id=project_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_id}") from exc
 
@@ -663,31 +663,31 @@ async def get_skill_file(
 async def update_skill_file(
     skill_id: str,
     payload: SkillFileAction,
-    workspace_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
     svc: SkillLibraryService = Depends(get_skill_service),
 ) -> SkillFileContent:
     try:
-        return await svc.write_skill_file(skill_id, payload, workspace_id=workspace_id)
+        return await svc.write_skill_file(skill_id, payload, project_id=project_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown skill: {skill_id}") from exc
 
 
 # ------------------------------------------------------------------
-# Workspace skill config endpoints
+# Project skill config endpoints
 # ------------------------------------------------------------------
 
 
-@router.get("/v1/workspaces/{workspace_id}/skills", response_model=SkillsCatalog)
-async def workspace_skills_catalog(
-    workspace_id: str,
+@router.get("/v1/projects/{project_id}/skills", response_model=SkillsCatalog)
+async def project_skills_catalog(
+    project_id: str,
     svc: SkillLibraryService = Depends(get_skill_service),
 ) -> SkillsCatalog:
     try:
-        return await svc.list_catalog(workspace_id)
+        return await svc.list_catalog(project_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Unknown workspace: {workspace_id}") from exc
+        raise HTTPException(status_code=404, detail=f"Unknown project: {project_id}") from exc
 
 
-# NOTE: workspace skill *binding* endpoints (PUT skills / scan / state) were
+# NOTE: project skill *binding* endpoints (PUT skills / scan / state) were
 # removed — skills bind on the Agent now (08-agents-module). The GET above
 # stays: it still feeds the conversation composer's skill-insert chips.

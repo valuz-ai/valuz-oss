@@ -6,8 +6,8 @@ deciding what that string is. Resolution order:
 1. **Explicit override**: the request body specifies ``model_id``.
 2. **Provider default**: a ``valuz_provider`` row was selected (provider id
    in the request) — its ``default_model`` wins.
-3. **Workspace default**: forthcoming. ``valuz_workspace_extension`` will gain
-   a ``default_model_id`` column when we expose per-workspace model selection.
+3. **Project default**: forthcoming. ``valuz_project_extension`` will gain
+   a ``default_model_id`` column when we expose per-project model selection.
 4. **Default provider's default model**: REP-107 — when nothing above applies,
    read ``is_default=True`` provider's ``default_model`` so the user's
    "settings -> default provider" pick actually drives entry points (skill creator,
@@ -63,7 +63,7 @@ def set_system_provider(provider: SystemProviderPort | None) -> None:
 @dataclass(frozen=True)
 class ModelResolution:
     model: str
-    source: str  # "request" | "channel" | "workspace" | "fallback"
+    source: str  # "request" | "channel" | "project" | "fallback"
     # Free-form hint carried through from the request. ``None`` for
     # legacy callers that haven't been updated to pass an explicit
     # runtime. The value is **not** validated here — ``provider_resolver
@@ -83,7 +83,7 @@ async def resolve_model(
     request_model_id: str | None = None,
     request_provider_id: str | None = None,
     request_runtime_id: str | None = None,
-    workspace_default_model_id: str | None = None,
+    project_default_model_id: str | None = None,
 ) -> ModelResolution:
     """Pick the kernel model name for a new session.
 
@@ -121,10 +121,10 @@ async def resolve_model(
                 runtime_hint=request_runtime_id,
             )
 
-    if workspace_default_model_id:
+    if project_default_model_id:
         return ModelResolution(
-            workspace_default_model_id,
-            source="workspace",
+            project_default_model_id,
+            source="project",
             runtime_hint=request_runtime_id,
         )
 

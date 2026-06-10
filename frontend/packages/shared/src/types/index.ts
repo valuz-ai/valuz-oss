@@ -8,7 +8,7 @@ export * from "./skill";
 export * from "./system";
 export * from "./user";
 export * from "./conversation";
-export * from "./workspace";
+export * from "./project";
 export * from "./i18n";
 export * from "./provider";
 export * from "./resource";

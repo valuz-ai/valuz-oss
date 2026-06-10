@@ -4,12 +4,11 @@
 #
 # This hook replaces the upstream one by being loaded first via ``hookspath``.
 
-import os
 import glob
+import os
 import pathlib
 
-from PyInstaller import compat
-from PyInstaller import isolated
+from PyInstaller import compat, isolated
 from PyInstaller.utils.hooks import (
     collect_submodules,
     copy_metadata,

@@ -1,7 +1,7 @@
 import type { FileTreeNode } from "@valuz/ui";
-import type { WorkspaceFileNode } from "@valuz/core";
+import type { ProjectFileNode } from "@valuz/core";
 
-/** Map ``workspacesApi.listFiles`` raw nodes onto ``ProjectFileTree``'s
+/** Map ``projectsApi.listFiles`` raw nodes onto ``ProjectFileTree``'s
  *  ``FileTreeNode`` shape:
  *  - rename ``type: "directory"`` → ``"folder"``
  *  - compute the cumulative slash-joined ``path`` each child needs to
@@ -11,7 +11,7 @@ import type { WorkspaceFileNode } from "@valuz/core";
  *  right-rail Files tab so the two surfaces share the same tree
  *  semantics. */
 export function toFileTree(
-  nodes: WorkspaceFileNode[],
+  nodes: ProjectFileNode[],
   prefix = "",
 ): FileTreeNode[] {
   return nodes.map((n) => {

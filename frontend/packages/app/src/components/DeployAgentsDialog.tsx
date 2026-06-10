@@ -23,8 +23,8 @@ import { AgentIconGlyph, pickAgentIcon } from "./agent-icons";
 export interface DeployAgentsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Target project workspace id. */
-  workspaceId: string;
+  /** Target project project id. */
+  projectId: string;
   /** Library agents available to派驻. */
   agents: Agent[];
   /** Current members of this project (to render the已派驻 state). */
@@ -44,7 +44,7 @@ export interface DeployAgentsDialogProps {
 export const DeployAgentsDialog = ({
   open,
   onOpenChange,
-  workspaceId,
+  projectId,
   agents,
   members,
   onChanged,
@@ -95,14 +95,14 @@ export const DeployAgentsDialog = ({
     setBusySlug(agent.slug);
     try {
       if (willDeploy) {
-        await agentsApi.deploy(workspaceId, {
+        await agentsApi.deploy(projectId, {
           source_agent_slug: agent.slug,
         });
       } else {
         const m = agent.kernel_agent_id
           ? memberByKernelId.get(agent.kernel_agent_id)
           : undefined;
-        if (m) await agentsApi.deleteMember(workspaceId, m.member.agent_slug);
+        if (m) await agentsApi.deleteMember(projectId, m.member.agent_slug);
       }
       await refresh();
     } catch (err) {

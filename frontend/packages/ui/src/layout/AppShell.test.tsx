@@ -16,7 +16,7 @@ describe('AppShell', () => {
       </AppShell>
     )
 
-    expect(screen.getByRole('navigation', { name: 'Workspace sections' })).toBeTruthy()
+    expect(screen.getByRole('navigation', { name: 'Project sections' })).toBeTruthy()
     expect(screen.getByText('Primary content')).toBeTruthy()
     expect(screen.getByText('Context panel')).toBeTruthy()
   })
@@ -36,12 +36,12 @@ describe('AppShell', () => {
   it('renders a custom sidebar when provided', () => {
     render(
       <AppShell sidebar={<div>Prototype sidebar</div>} shellClassName="bg-[#F8F9FB]">
-        <div>Workspace body</div>
+        <div>Project body</div>
       </AppShell>
     )
 
     expect(screen.getByText('Prototype sidebar')).toBeTruthy()
-    expect(screen.getByText('Workspace body')).toBeTruthy()
-    expect(screen.queryByRole('navigation', { name: 'Workspace sections' })).toBeNull()
+    expect(screen.getByText('Project body')).toBeTruthy()
+    expect(screen.queryByRole('navigation', { name: 'Project sections' })).toBeNull()
   })
 })

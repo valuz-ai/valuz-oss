@@ -15,7 +15,7 @@ single-flight ``_active_ids`` guard, stranded-run reconciliation on startup,
    per-trigger guards without churning the datastore.
 
 2. **Session creation goes through the bound agent.** ``_execute_run``
-   resolves ``(workspace_id, agent_slug)`` into a project member and calls
+   resolves ``(project_id, agent_slug)`` into a project member and calls
    ``SessionService.create_session(agent_slug=...)`` — the model / provider
    / runtime / instructions / skills all flow from the agent. No more
    ``_resolve_fire_target`` two-tier model_id fallback.
@@ -52,12 +52,12 @@ def _render_template(template: str, variables: dict[str, str]) -> str:
 def _build_template_variables(
     *,
     row: AutomationRow,
-    workspace_name: str,
+    project_name: str,
     effective_tz: str,
 ) -> dict[str, str]:
     """Compose the variable map for ``{{...}}`` substitution.
 
-    Same vocabulary as the legacy runner (workspace / now / today / yesterday
+    Same vocabulary as the legacy runner (project / now / today / yesterday
     / etc.) — the schedule-side template variables already pinned to the
     user's effective tz, and that contract carries over unchanged.
     ``last_run_at`` is rendered in the effective tz too so successive runs
@@ -83,8 +83,8 @@ def _build_template_variables(
         last_run_at_local = last.astimezone(tz).isoformat()
 
     return {
-        "workspace.id": row.workspace_id,
-        "workspace.name": workspace_name,
+        "project.id": row.project_id,
+        "project.name": project_name,
         # ``task.*`` aliases preserved for prompt-template compatibility with
         # the legacy schedule prompts users may carry over — see the variable
         # vocabulary in the v0 schedule README. New prompts should use
@@ -233,7 +233,7 @@ class InProcessAutomationRunner:
                 run = AutomationRunRow(
                     id=uuid4().hex,
                     automation_id=row.id,
-                    workspace_id=row.workspace_id,
+                    project_id=row.project_id,
                     trigger_type="recovered_skip",
                     status="skipped",
                     triggered_at=row.next_run_at or now,
@@ -291,7 +291,7 @@ class InProcessAutomationRunner:
                 run = AutomationRunRow(
                     id=uuid4().hex,
                     automation_id=row.id,
-                    workspace_id=row.workspace_id,
+                    project_id=row.project_id,
                     trigger_type=trigger_type,
                     status="queued",
                     triggered_at=now,
@@ -335,11 +335,11 @@ class InProcessAutomationRunner:
 
             self._active_ids.add(automation_id)
             try:
-                workspace_name = await self._resolve_workspace_name(db, row.workspace_id)
+                project_name = await self._resolve_project_name(db, row.project_id)
                 effective_tz = self._effective_tz_for(row)
                 variables = _build_template_variables(
                     row=row,
-                    workspace_name=workspace_name,
+                    project_name=project_name,
                     effective_tz=effective_tz,
                 )
                 rendered_prompt = _render_template(row.prompt_template, variables)
@@ -348,15 +348,15 @@ class InProcessAutomationRunner:
                 #
                 # ``chat`` — create a fresh session bound to the agent and
                 #   send the rendered prompt as one user turn. The original
-                #   schedule semantic; works on chat or project workspaces.
+                #   schedule semantic; works on chat or projects.
                 #
                 # ``task`` — kick off a project task with the bound agent
                 #   as Lead. The rendered prompt becomes the task goal; the
                 #   lead plans + dispatches sub-members via the existing
-                #   task orchestrator. Only valid on project workspaces
+                #   task orchestrator. Only valid on projects
                 #   (validated at the service layer; defence-in-depth here
                 #   just falls through to chat if a row somehow stored
-                #   ``task`` on a chat workspace).
+                #   ``task`` on a chat project).
                 if row.action_kind == "task":
                     await self._execute_task_kickoff(
                         ds=ds,
@@ -374,7 +374,7 @@ class InProcessAutomationRunner:
                     # provider / runtime override surface remains. The agent's
                     # ``AgentConfig`` is the single source of truth.
                     session = await session_svc.create_session(
-                        workspace_id=row.workspace_id,
+                        project_id=row.project_id,
                         origin="automation",
                         title=f"{t('backend.automation.titlePrefix')} {row.name}",
                         agent_slug=row.agent_slug,
@@ -496,7 +496,7 @@ class InProcessAutomationRunner:
         try:
             title = rendered_prompt[:60] if len(rendered_prompt) > 60 else rendered_prompt
             task = await task_orchestrator.kickoff(
-                workspace_id=row.workspace_id,
+                project_id=row.project_id,
                 goal=rendered_prompt,
                 lead_agent_slug=row.agent_slug,
                 title=title or row.name,
@@ -594,22 +594,22 @@ class InProcessAutomationRunner:
             logger.exception("Falling back to UTC after preferences lookup failure")
             return "UTC"
 
-    async def _resolve_workspace_name(self, db: Any, workspace_id: str) -> str:
-        """Look up the workspace's display name for ``{{workspace.name}}``.
+    async def _resolve_project_name(self, db: Any, project_id: str) -> str:
+        """Look up the project's display name for ``{{project.name}}``.
 
-        Falls back to the id if the workspace was deleted out from under the
+        Falls back to the id if the project was deleted out from under the
         automation — the run still fires, the prompt just renders a UUID in
         place of the friendly name.
         """
-        from valuz_agent.modules.projects.datastore import WorkspaceDatastore
+        from valuz_agent.modules.projects.datastore import ProjectDatastore
 
         try:
-            row = await WorkspaceDatastore(db).get_by_id(workspace_id)
+            row = await ProjectDatastore(db).get_by_id(project_id)
             if row is not None:
                 return row.name
         except Exception:
-            logger.exception("Failed to resolve workspace name for %s", workspace_id)
-        return workspace_id
+            logger.exception("Failed to resolve project name for %s", project_id)
+        return project_id
 
     def _build_session_service(self, db: Any) -> Any:
         """Construct a per-fire ``SessionService`` with all collaborators.
@@ -624,22 +624,22 @@ class InProcessAutomationRunner:
         from valuz_agent.integrations.skills_official import OfficialSkillSource
         from valuz_agent.modules.connectors.datastore import ConnectorDatastore
         from valuz_agent.modules.docs.datastore import DocumentDatastore
-        from valuz_agent.modules.projects.datastore import WorkspaceDatastore
-        from valuz_agent.modules.projects.service import WorkspaceService
+        from valuz_agent.modules.projects.datastore import ProjectDatastore
+        from valuz_agent.modules.projects.service import ProjectService
         from valuz_agent.modules.providers.datastore import ProviderDatastore
         from valuz_agent.modules.sessions.service import SessionService
         from valuz_agent.modules.skills.datastore import SkillDatastore
 
-        workspace_ds = WorkspaceDatastore(db)
-        workspace_svc = WorkspaceService(datastore=workspace_ds, event_bus=event_bus)
+        project_ds = ProjectDatastore(db)
+        project_svc = ProjectService(datastore=project_ds, event_bus=event_bus)
         secrets = _secret_store()
 
         return SessionService(
             event_bus=event_bus,
-            workspace_svc=workspace_svc,
+            project_svc=project_svc,
             providers=ProviderDatastore(db),
             skills=SkillDatastore(db),
-            workspaces=workspace_ds,
+            projects=project_ds,
             docs=DocumentDatastore(db),
             secrets=secrets,
             connectors=ConnectorDatastore(db),

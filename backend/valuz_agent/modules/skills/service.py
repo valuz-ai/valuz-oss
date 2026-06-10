@@ -19,12 +19,12 @@ from valuz_agent.integrations.skills_filesystem import (
     _read_text,
 )
 from valuz_agent.modules.projects.service import (
-    WorkspaceService,
+    ProjectService,
 )
 from valuz_agent.modules.skills.datastore import SkillDatastore
 from valuz_agent.modules.skills.events import (
+    PROJECT_SKILLS_CHANGED,
     SKILL_CHANGED,
-    WORKSPACE_SKILLS_CHANGED,
 )
 from valuz_agent.modules.skills.models import (
     SessionSkillImportConfirmRequest,
@@ -82,7 +82,7 @@ class SkillLibraryService:
         self,
         datastore: SkillDatastore,
         skill_source: FilesystemSkillSource,
-        workspace_service: WorkspaceService,
+        project_service: ProjectService,
         event_bus: EventBus,
         extra_sources: list | None = None,
         auth_facade: object | None = None,
@@ -91,16 +91,16 @@ class SkillLibraryService:
         self._ds = datastore
         self._source = skill_source
         self._extra_sources = extra_sources or []
-        self._workspaces = workspace_service
+        self._projects = project_service
         self._bus = event_bus
         self._auth = auth_facade
         self._remote_registry = remote_registry
 
     async def list_catalog(
-        self, workspace_id: str, *, user_id: str = "local-user", org_id: str | None = None
+        self, project_id: str, *, user_id: str = "local-user", org_id: str | None = None
     ) -> SkillsCatalog:
-        workspace = await self._workspaces.get_workspace(workspace_id)
-        items = self._ds.list_workspace_skills(workspace, self._source)
+        project = await self._projects.get_project(project_id)
+        items = self._ds.list_project_skill_manifests(project, self._source)
         # ``creation_origin`` is host bookkeeping kept only in
         # ``valuz_skill_index`` (never SKILL.md), so it isn't on the
         # filesystem-scanned manifest — overlay it from the DB here. A
@@ -116,28 +116,28 @@ class SkillLibraryService:
             SkillView(**item.model_dump(), creation_origin=_origin(item.id)) for item in items
         ]
 
-        from valuz_agent.modules.skills.contracts import RuntimeContext, WorkspaceRef
+        from valuz_agent.modules.skills.contracts import ProjectRef, RuntimeContext
 
         ctx = RuntimeContext(
             user_id=user_id,
             org_id=org_id,
-            workspace=WorkspaceRef(
-                id=workspace.id,
-                slug=workspace.id,
-                kind=workspace.kind,
-                root_path=workspace.root_path,
+            project=ProjectRef(
+                id=project.id,
+                slug=project.id,
+                kind=project.kind,
+                root_path=project.root_path,
             )
-            if hasattr(workspace, "kind")
+            if hasattr(project, "kind")
             else None,
         )
-        # Compute the same enabled set ``list_workspace_skills`` uses for the
+        # Compute the same enabled set ``list_project_skills`` uses for the
         # filesystem source so the extra-source branch below can mirror its
         # ``enabled`` semantics. Without this, official / built-in skills
         # (e.g. skill-creator) always rendered ``enabled=False`` in the UI even
         # after the user toggled them on — capability_resolver wrote the path
         # into ``project-config.json`` correctly but the catalog never read it
         # back for extra-sourced skills.
-        enabled_paths = self._ds.enabled_skill_paths(workspace)
+        enabled_paths = self._ds.enabled_skill_paths(project)
         has_official_entitlement = await self._check_entitlement("skills:official")
         for source in self._extra_sources:
             for manifest in source.list_skills(ctx):
@@ -153,7 +153,7 @@ class SkillLibraryService:
                 elif view.scope == "official" and (has_official_entitlement or is_bundled):
                     view.is_locked = False
                     view.lock_reason = None
-                view.enabled = workspace.kind == "chat" or view.path in enabled_paths
+                view.enabled = project.kind == "chat" or view.path in enabled_paths
                 skills.append(view)
 
         # Remote registry (SaaS catalog) — commercial version injects via
@@ -162,7 +162,7 @@ class SkillLibraryService:
             try:
                 for manifest in self._remote_registry.list_remote_skills(ctx):
                     view = SkillView(**manifest.model_dump(), creation_origin="remote")
-                    view.enabled = workspace.kind == "chat" or view.path in enabled_paths
+                    view.enabled = project.kind == "chat" or view.path in enabled_paths
                     skills.append(view)
             except Exception:
                 pass
@@ -205,7 +205,7 @@ class SkillLibraryService:
 
         skills.sort(key=_sort_key)
 
-        return SkillsCatalog(workspace_id=workspace_id, skills=skills)
+        return SkillsCatalog(project_id=project_id, skills=skills)
 
     async def startup_scan(self) -> None:
         # Serialize concurrent scans (see ``_scan_lock``): each acquirer commits
@@ -223,16 +223,16 @@ class SkillLibraryService:
         for source in self._extra_sources:
             all_manifests.extend(source.list_skills(ctx))
 
-        for workspace in await self._workspaces.list_workspaces():
-            if workspace.kind == "project" and workspace.root_path:
-                from valuz_agent.modules.skills.contracts import WorkspaceRef
+        for project in await self._projects.list_projects():
+            if project.kind == "project" and project.root_path:
+                from valuz_agent.modules.skills.contracts import ProjectRef
 
                 project_ctx = RuntimeContext(
-                    workspace=WorkspaceRef(
-                        id=workspace.id,
-                        slug=workspace.id,
-                        kind=workspace.kind,
-                        root_path=workspace.root_path,
+                    project=ProjectRef(
+                        id=project.id,
+                        slug=project.id,
+                        kind=project.kind,
+                        root_path=project.root_path,
                     ),
                 )
                 all_manifests.extend(self._source.list_skills(project_ctx))
@@ -297,17 +297,17 @@ class SkillLibraryService:
 
     async def set_skill_enabled(
         self,
-        workspace_id: str,
+        project_id: str,
         skill_path: str,
         enabled: bool,
     ) -> SkillsCatalog:
-        workspace = await self._workspaces.get_workspace(workspace_id)
-        self._ds.set_skill_enabled(workspace, skill_path, enabled)
-        self._bus.publish(WORKSPACE_SKILLS_CHANGED, workspace_id=workspace_id)
-        return await self.list_catalog(workspace_id)
+        project = await self._projects.get_project(project_id)
+        self._ds.set_skill_enabled(project, skill_path, enabled)
+        self._bus.publish(PROJECT_SKILLS_CHANGED, project_id=project_id)
+        return await self.list_catalog(project_id)
 
-    async def resolve_skill_dirs_for_workspace(self, workspace_id: str) -> list[str]:
-        catalog = await self.list_catalog(workspace_id)
+    async def resolve_skill_dirs_for_project(self, project_id: str) -> list[str]:
+        catalog = await self.list_catalog(project_id)
         return [skill.path for skill in catalog.skills if skill.enabled]
 
     # ── Staging (Scenario B + D3 accept) ──────────────────────────────────
@@ -322,11 +322,11 @@ class SkillLibraryService:
         session_id: str,
         items: list,  # type: ignore[type-arg]
         target_scope: str = "user",
-        workspace_id: str | None = None,
+        project_id: str | None = None,
     ) -> list:  # type: ignore[type-arg]
         from valuz_agent.modules.skills import staging
 
-        target_root = await self._target_root_for_scope(target_scope, workspace_id)
+        target_root = await self._target_root_for_scope(target_scope, project_id)
         results = []
         for item in items:
             result = staging.sync_slug(
@@ -356,7 +356,7 @@ class SkillLibraryService:
                 continue
             try:
                 written = await self._resolve_created_skill(
-                    Path(result.written_path), workspace_id=workspace_id
+                    Path(result.written_path), project_id=project_id
                 )
             except KeyError:
                 continue
@@ -403,33 +403,33 @@ class SkillLibraryService:
         return None
 
     async def _target_root_for_scope(
-        self, target_scope: str, workspace_id: str | None
+        self, target_scope: str, project_id: str | None
     ) -> Path | None:
         """Resolve the target skill-library directory for sync / create.
 
         - "user" (default) → _default_user_skill_root() (controlled by
           VALUZ_USER_SKILLS_DIR env var).
-        - "project" → <workspace.root_path>/.claude/skills/. Requires
-          workspace_id pointing at a project workspace.
+        - "project" → <project.root_path>/.claude/skills/. Requires
+          project_id pointing at a project.
         - "official" / "tenant" → not supported here; raise to surface a clear
           error rather than silently writing to the wrong place.
         """
         if target_scope == "user":
             return _default_user_skill_root()
         if target_scope == "project":
-            if not workspace_id:
-                raise ValueError("workspace_id required when target_scope='project'")
-            workspace = await self._workspaces.get_workspace(workspace_id)
-            if workspace.kind != "project" or not workspace.root_path:
-                raise ValueError("target workspace is not a project workspace")
-            return Path(workspace.root_path) / ".claude" / "skills"
+            if not project_id:
+                raise ValueError("project_id required when target_scope='project'")
+            project = await self._projects.get_project(project_id)
+            if project.kind != "project" or not project.root_path:
+                raise ValueError("target project is not a project")
+            return Path(project.root_path) / ".claude" / "skills"
         raise ValueError(f"unsupported target_scope: {target_scope!r}")
 
     async def create_skill(self, payload: SkillCreateRequest) -> SkillView:
-        workspace = await self._resolve_workspace(payload.workspace_id)
+        project = await self._resolve_project(payload.project_id)
         skill_dir = await self._allocate_skill_dir(
             target_scope=payload.target_scope,
-            workspace_id=payload.workspace_id,
+            project_id=payload.project_id,
             name=payload.name,
         )
         self._write_manifest(
@@ -438,14 +438,14 @@ class SkillLibraryService:
             description=payload.description,
             instructions_markdown=payload.instructions_markdown,
         )
-        if payload.target_scope == "project" and workspace is not None:
-            self._ds.set_skill_enabled(workspace, str(skill_dir), True)
-        elif payload.add_to_workspace and workspace is not None and workspace.kind == "project":
-            self._ds.set_skill_enabled(workspace, str(skill_dir), True)
-        result = await self._finalize_origin(skill_dir, "created", payload.workspace_id)
+        if payload.target_scope == "project" and project is not None:
+            self._ds.set_skill_enabled(project, str(skill_dir), True)
+        elif payload.add_to_project and project is not None and project.kind == "project":
+            self._ds.set_skill_enabled(project, str(skill_dir), True)
+        result = await self._finalize_origin(skill_dir, "created", payload.project_id)
         self._bus.publish(SKILL_CHANGED, skill_id=result.id, reason="created")
         self._bus.publish(
-            WORKSPACE_SKILLS_CHANGED, workspace_id=payload.workspace_id or "chat-default"
+            PROJECT_SKILLS_CHANGED, project_id=payload.project_id or "chat-default"
         )
         return result
 
@@ -453,9 +453,9 @@ class SkillLibraryService:
         self,
         skill_id: str,
         payload: SkillUpdateRequest,
-        workspace_id: str | None = None,
+        project_id: str | None = None,
     ) -> SkillView:
-        skill = await self._resolve_skill(skill_id=skill_id, workspace_id=workspace_id)
+        skill = await self._resolve_skill(skill_id=skill_id, project_id=project_id)
         manifest_path = _detect_manifest(Path(skill.path))
         if manifest_path is None:
             raise KeyError(skill_id)
@@ -478,7 +478,7 @@ class SkillLibraryService:
             ),
             encoding="utf-8",
         )
-        result = await self._resolve_skill(skill_id=skill_id, workspace_id=workspace_id)
+        result = await self._resolve_skill(skill_id=skill_id, project_id=project_id)
         self._bus.publish(SKILL_CHANGED, skill_id=skill_id, reason="updated")
         return result
 
@@ -488,12 +488,12 @@ class SkillLibraryService:
         payload: SkillCopyRequest,
     ) -> SkillView:
         source_skill = await self._resolve_skill(
-            skill_id=skill_id, workspace_id=payload.workspace_id
+            skill_id=skill_id, project_id=payload.project_id
         )
         source_dir = Path(source_skill.path)
         target_dir = await self._allocate_skill_dir(
             target_scope="user",
-            workspace_id=payload.workspace_id,
+            project_id=payload.project_id,
             name=payload.new_name,
         )
         await asyncio.to_thread(shutil.copytree, source_dir, target_dir)
@@ -513,23 +513,23 @@ class SkillLibraryService:
                 ),
                 encoding="utf-8",
             )
-        workspace = await self._resolve_workspace(payload.workspace_id)
-        if payload.add_to_workspace and workspace is not None and workspace.kind == "project":
-            self._ds.set_skill_enabled(workspace, str(target_dir), True)
+        project = await self._resolve_project(payload.project_id)
+        if payload.add_to_project and project is not None and project.kind == "project":
+            self._ds.set_skill_enabled(project, str(target_dir), True)
         # A "duplicate" is the user's deliberate creation act in their
         # library, not an external sync — mark it "created" so the copy
         # lands under the "创建" badge in the .agents group.
-        return await self._finalize_origin(target_dir, "created", payload.workspace_id)
+        return await self._finalize_origin(target_dir, "created", payload.project_id)
 
     async def delete_skill(
         self,
         skill_id: str,
-        workspace_id: str | None = None,
+        project_id: str | None = None,
         mode: SkillDeleteMode = "dry_run",
     ) -> SkillDeletePreview | None:
         from valuz_agent.modules.skills.errors import SourceReadonly
 
-        skill = await self._resolve_skill(skill_id=skill_id, workspace_id=workspace_id)
+        skill = await self._resolve_skill(skill_id=skill_id, project_id=project_id)
         if not skill.deletable:
             raise SourceReadonly()
         affected_projects = await self._affected_projects(skill.path)
@@ -543,11 +543,11 @@ class SkillLibraryService:
         skill_dir = Path(skill.path)
         if skill_dir.exists():
             shutil.rmtree(skill_dir)
-        for workspace in await self._workspaces.list_workspaces():
-            if workspace.kind == "project":
-                self._ds.remove_skill_path_from_workspace(workspace, skill.path)
+        for project in await self._projects.list_projects():
+            if project.kind == "project":
+                self._ds.remove_skill_path_from_project(project, skill.path)
         self._bus.publish(SKILL_CHANGED, skill_id=skill_id, reason="deleted")
-        self._bus.publish(WORKSPACE_SKILLS_CHANGED, workspace_id=workspace_id or "chat-default")
+        self._bus.publish(PROJECT_SKILLS_CHANGED, project_id=project_id or "chat-default")
         return None
 
     async def import_from_session_confirm(
@@ -570,9 +570,9 @@ class SkillLibraryService:
                 name=payload.name,
                 description=description,
                 target_scope=payload.target_scope,
-                workspace_id=payload.workspace_id,
+                project_id=payload.project_id,
                 instructions_markdown=body,
-                add_to_workspace=payload.add_to_workspace,
+                add_to_project=payload.add_to_project,
             )
         )
 
@@ -580,7 +580,7 @@ class SkillLibraryService:
         self,
         archive_path: str,
         target_scope: str,
-        workspace_id: str | None = None,
+        project_id: str | None = None,
     ) -> SkillImportArchivePreview:
         # Archive extraction is blocking CPU/disk — keep it off the event loop.
         extracted_root = await asyncio.to_thread(self._extract_archive, Path(archive_path))
@@ -594,7 +594,7 @@ class SkillLibraryService:
             preview_id=preview_id,
             skill_root=skill_root,
             target_scope=target_scope,
-            workspace_id=workspace_id,
+            project_id=project_id,
         )
 
     async def import_directory_preview(
@@ -617,7 +617,7 @@ class SkillLibraryService:
             preview_id=preview_id,
             skill_root=skill_root,
             target_scope=payload.target_scope,
-            workspace_id=payload.workspace_id,
+            project_id=payload.project_id,
         )
 
     async def confirm_archive_import(
@@ -631,7 +631,7 @@ class SkillLibraryService:
         target_name = payload.name or preview_root.name
         target_dir = await self._allocate_skill_dir(
             target_scope=payload.target_scope,
-            workspace_id=payload.workspace_id,
+            project_id=payload.project_id,
             name=target_name,
         )
         await asyncio.to_thread(shutil.copytree, preview_root, target_dir)
@@ -651,21 +651,21 @@ class SkillLibraryService:
                 ),
                 encoding="utf-8",
             )
-        workspace = await self._resolve_workspace(payload.workspace_id)
-        if payload.target_scope == "project" and workspace is not None:
-            self._ds.set_skill_enabled(workspace, str(target_dir), True)
-        elif payload.add_to_workspace and workspace is not None and workspace.kind == "project":
-            self._ds.set_skill_enabled(workspace, str(target_dir), True)
+        project = await self._resolve_project(payload.project_id)
+        if payload.target_scope == "project" and project is not None:
+            self._ds.set_skill_enabled(project, str(target_dir), True)
+        elif payload.add_to_project and project is not None and project.kind == "project":
+            self._ds.set_skill_enabled(project, str(target_dir), True)
         self._cleanup_preview(payload.preview_id)
-        return await self._finalize_origin(target_dir, "imported", payload.workspace_id)
+        return await self._finalize_origin(target_dir, "imported", payload.project_id)
 
     # ------------------------------------------------------------------
     # Tags aggregation (T1.2)
     # ------------------------------------------------------------------
 
-    async def list_all_tags(self, workspace_id: str | None = None) -> list[str]:
-        workspace_id = workspace_id or "chat-default"
-        catalog = await self.list_catalog(workspace_id)
+    async def list_all_tags(self, project_id: str | None = None) -> list[str]:
+        project_id = project_id or "chat-default"
+        catalog = await self.list_catalog(project_id)
         seen: set[str] = set()
         ordered: list[str] = []
         for skill in catalog.skills:
@@ -682,9 +682,9 @@ class SkillLibraryService:
     async def list_skill_files(
         self,
         skill_id: str,
-        workspace_id: str | None = None,
+        project_id: str | None = None,
     ) -> list[SkillFileNode]:
-        skill = await self._resolve_skill(skill_id=skill_id, workspace_id=workspace_id)
+        skill = await self._resolve_skill(skill_id=skill_id, project_id=project_id)
         skill_dir = Path(skill.path)
         if not skill_dir.exists():
             return []
@@ -694,11 +694,11 @@ class SkillLibraryService:
         self,
         skill_id: str,
         file_path: str,
-        workspace_id: str | None = None,
+        project_id: str | None = None,
     ) -> SkillFileContent:
         from valuz_agent.modules.skills.errors import SkillNotFound
 
-        skill = await self._resolve_skill(skill_id=skill_id, workspace_id=workspace_id)
+        skill = await self._resolve_skill(skill_id=skill_id, project_id=project_id)
         skill_dir = Path(skill.path)
         target = (skill_dir / file_path).resolve()
         if not str(target).startswith(str(skill_dir.resolve())):
@@ -714,11 +714,11 @@ class SkillLibraryService:
         self,
         skill_id: str,
         action: SkillFileAction,
-        workspace_id: str | None = None,
+        project_id: str | None = None,
     ) -> SkillFileContent:
         from valuz_agent.modules.skills.errors import SourceReadonly
 
-        skill = await self._resolve_skill(skill_id=skill_id, workspace_id=workspace_id)
+        skill = await self._resolve_skill(skill_id=skill_id, project_id=project_id)
         if skill.readonly or skill.is_locked:
             raise SourceReadonly()
         skill_dir = Path(skill.path)
@@ -755,9 +755,9 @@ class SkillLibraryService:
     async def get_skill_detail(
         self,
         skill_id: str,
-        workspace_id: str | None = None,
+        project_id: str | None = None,
     ) -> SkillDetail:
-        skill = await self._resolve_skill(skill_id=skill_id, workspace_id=workspace_id)
+        skill = await self._resolve_skill(skill_id=skill_id, project_id=project_id)
         skill_dir = Path(skill.path)
         manifest_path = _detect_manifest(skill_dir)
         instructions_md: str | None = None
@@ -801,7 +801,7 @@ class SkillLibraryService:
         self,
         url: str,
         target_scope: str = "user",
-        workspace_id: str | None = None,
+        project_id: str | None = None,
     ) -> SkillImportArchivePreview:
         from valuz_agent.modules.skills.errors import SkillImportFailed
 
@@ -833,7 +833,7 @@ class SkillLibraryService:
             skill_roots=skill_roots,
             fetched_root=fetched_root,
             target_scope=target_scope,
-            workspace_id=workspace_id,
+            project_id=project_id,
             source_url=url,
             cleanup_root=staging_dir,
         )
@@ -867,7 +867,7 @@ class SkillLibraryService:
         skill_roots: list[Path],
         fetched_root: Path,
         target_scope: str,
-        workspace_id: str | None,
+        project_id: str | None,
         source_url: str,
         cleanup_root: Path,
     ) -> SkillImportArchivePreview:
@@ -900,7 +900,7 @@ class SkillLibraryService:
                 preview_id=preview_id,
                 skill_root=root,
                 target_scope=target_scope,
-                workspace_id=workspace_id,
+                project_id=project_id,
             )
             try:
                 relpath = str(root.relative_to(fetched_root))
@@ -948,22 +948,22 @@ class SkillLibraryService:
         final_name = payload.name or skill_root.name
         target_dir = await self._allocate_skill_dir(
             target_scope=payload.target_scope,
-            workspace_id=payload.workspace_id,
+            project_id=payload.project_id,
             name=final_name,
         )
         await asyncio.to_thread(shutil.copytree, skill_root, target_dir, dirs_exist_ok=True)
 
-        workspace = await self._resolve_workspace(payload.workspace_id)
-        if payload.target_scope == "project" and workspace is not None:
-            self._ds.set_skill_enabled(workspace, str(target_dir), True)
-        elif payload.add_to_workspace and workspace is not None and workspace.kind == "project":
-            self._ds.set_skill_enabled(workspace, str(target_dir), True)
+        project = await self._resolve_project(payload.project_id)
+        if payload.target_scope == "project" and project is not None:
+            self._ds.set_skill_enabled(project, str(target_dir), True)
+        elif payload.add_to_project and project is not None and project.kind == "project":
+            self._ds.set_skill_enabled(project, str(target_dir), True)
         # Capture provenance before cleanup pops it.
         origin = _import_origins.get(payload.preview_id)
         self._cleanup_preview(payload.preview_id)
         # URL import gets the same "imported" badge as archive / directory
         # imports — host bookkeeping in valuz_skill_index, never SKILL.md.
-        skill = await self._finalize_origin(target_dir, "imported", payload.workspace_id)
+        skill = await self._finalize_origin(target_dir, "imported", payload.project_id)
         if origin is not None:
             await self._ds.set_origin_metadata(skill.id, origin.model_dump_json())
         return skill
@@ -1220,7 +1220,7 @@ class SkillLibraryService:
         per-entry-point side effects encoded in the session's
         ``creation_context``.
 
-        Returns ``(skill, creation_context, bound_to_workspace_id)``.
+        Returns ``(skill, creation_context, bound_to_project_id)``.
         """
         from valuz_agent.adapters import kernel_store
         from valuz_agent.modules.skills import staging
@@ -1236,20 +1236,20 @@ class SkillLibraryService:
         # ``creation_context`` is set by the explicit
         # ``/v1/skills/create/start`` launcher, but organic chat sessions
         # that just happen to use the skill-creator skill never go
-        # through that endpoint. Infer from the session's workspace
+        # through that endpoint. Infer from the session's project
         # instead so the right side-effects fire (project-scoped session
         # → bind to project; chat session → library only).
         if "kind" not in creation_context:
-            inferred_workspace_id = str(kernel_session.project_id or "")
-            workspace = await self._resolve_workspace(inferred_workspace_id)
-            if workspace is not None and workspace.kind == "project":
+            inferred_project_id = str(kernel_session.project_id or "")
+            project = await self._resolve_project(inferred_project_id)
+            if project is not None and project.kind == "project":
                 creation_context["kind"] = "project"
-                creation_context["workspace_id"] = inferred_workspace_id
+                creation_context["project_id"] = inferred_project_id
             else:
                 creation_context["kind"] = "chat"
 
         # Locate the staged slug. The staging dir resolves to
-        # ``{workspace_cwd}/.skill-staging/`` — the ``submit_skill`` tool
+        # ``{project_cwd}/.skill-staging/`` — the ``submit_skill`` tool
         # rejects calls where the slug isn't already at that location,
         # so reaching this code path with the slug missing means either
         # the staging was wiped between submission and confirm or the
@@ -1280,13 +1280,13 @@ class SkillLibraryService:
         except Exception:  # noqa: BLE001
             pass
 
-        bound_workspace_id: str | None = None
+        bound_project_id: str | None = None
         if creation_context["kind"] == "project":
-            bound_workspace_id = creation_context.get("workspace_id")
-            if bound_workspace_id:
-                workspace = await self._resolve_workspace(bound_workspace_id)
-                if workspace is not None and workspace.kind == "project":
-                    self._ds.set_skill_enabled(workspace, str(result.written_path), True)
+            bound_project_id = creation_context.get("project_id")
+            if bound_project_id:
+                project = await self._resolve_project(bound_project_id)
+                if project is not None and project.kind == "project":
+                    self._ds.set_skill_enabled(project, str(result.written_path), True)
 
         # Best-effort cleanup of the staging slug after promotion.
         try:
@@ -1295,7 +1295,7 @@ class SkillLibraryService:
             pass
 
         skill = await self._resolve_created_skill(
-            Path(result.written_path), workspace_id=bound_workspace_id
+            Path(result.written_path), project_id=bound_project_id
         )
         # The skill-creator AI flow landing a skill is a "created" act.
         # creation_origin is host bookkeeping in valuz_skill_index — the
@@ -1312,12 +1312,12 @@ class SkillLibraryService:
             summary=summary or "",
             files_touched=list(files_touched or []),
         )
-        if bound_workspace_id:
-            self._bus.publish(WORKSPACE_SKILLS_CHANGED, workspace_id=bound_workspace_id)
+        if bound_project_id:
+            self._bus.publish(PROJECT_SKILLS_CHANGED, project_id=bound_project_id)
         else:
-            self._bus.publish(WORKSPACE_SKILLS_CHANGED, workspace_id="chat-default")
+            self._bus.publish(PROJECT_SKILLS_CHANGED, project_id="chat-default")
 
-        return skill, creation_context, bound_workspace_id
+        return skill, creation_context, bound_project_id
 
     def dismiss_submission(self, session_id: str, slug: str) -> bool:
         """Discard the staged slug — no library write, no DB write.
@@ -1337,10 +1337,10 @@ class SkillLibraryService:
     # Private helpers
     # ------------------------------------------------------------------
 
-    async def _resolve_workspace(self, workspace_id: str | None):  # type: ignore[no-untyped-def]
-        if workspace_id is None:
+    async def _resolve_project(self, project_id: str | None):  # type: ignore[no-untyped-def]
+        if project_id is None:
             return None
-        return await self._workspaces.get_workspace(workspace_id)
+        return await self._projects.get_project(project_id)
 
     async def _check_entitlement(self, entitlement: str) -> bool:
         if self._auth is None:
@@ -1351,28 +1351,28 @@ class SkillLibraryService:
         except Exception:
             return False
 
-    async def _resolve_skill(self, skill_id: str, workspace_id: str | None = None) -> SkillView:
-        workspace_id = workspace_id or "chat-default"
-        catalog = await self.list_catalog(workspace_id)
+    async def _resolve_skill(self, skill_id: str, project_id: str | None = None) -> SkillView:
+        project_id = project_id or "chat-default"
+        catalog = await self.list_catalog(project_id)
         for skill in catalog.skills:
             if skill.id == skill_id:
                 return skill
         raise KeyError(skill_id)
 
     async def _resolve_created_skill(
-        self, skill_dir: Path, workspace_id: str | None = None
+        self, skill_dir: Path, project_id: str | None = None
     ) -> SkillView:
-        workspace_id = workspace_id or "chat-default"
-        catalog = await self.list_catalog(workspace_id)
+        project_id = project_id or "chat-default"
+        catalog = await self.list_catalog(project_id)
         resolved = str(skill_dir.resolve(strict=False))
         for skill in catalog.skills:
             if str(Path(skill.path).resolve(strict=False)) == resolved:
                 return skill
-        fallback_workspace = next(
-            (item.id for item in await self._workspaces.list_workspaces() if item.kind == "chat"),
+        fallback_project = next(
+            (item.id for item in await self._projects.list_projects() if item.kind == "chat"),
             "chat-default",
         )
-        catalog = await self.list_catalog(fallback_workspace)
+        catalog = await self.list_catalog(fallback_project)
         for skill in catalog.skills:
             if str(Path(skill.path).resolve(strict=False)) == resolved:
                 return skill
@@ -1382,7 +1382,7 @@ class SkillLibraryService:
         self,
         skill_dir: Path,
         origin: Literal["created", "imported"],
-        workspace_id: str | None = None,
+        project_id: str | None = None,
     ) -> SkillView:
         """Index a freshly-written skill folder and stamp its creation origin.
 
@@ -1400,7 +1400,7 @@ class SkillLibraryService:
             await self.startup_scan()
         except Exception:  # noqa: BLE001
             pass
-        skill = await self._resolve_created_skill(skill_dir, workspace_id=workspace_id)
+        skill = await self._resolve_created_skill(skill_dir, project_id=project_id)
         await self._ds.set_creation_origin(skill.id, origin)
         skill.creation_origin = origin
         return skill
@@ -1408,11 +1408,11 @@ class SkillLibraryService:
     async def _allocate_skill_dir(
         self,
         target_scope: str,
-        workspace_id: str | None,
+        project_id: str | None,
         name: str,
     ) -> Path:
         slug = self._slugify(name)
-        root = await self._scope_root(target_scope=target_scope, workspace_id=workspace_id)
+        root = await self._scope_root(target_scope=target_scope, project_id=project_id)
         root.mkdir(parents=True, exist_ok=True)
         candidate = root / slug
         suffix = 1
@@ -1421,15 +1421,15 @@ class SkillLibraryService:
             candidate = root / f"{slug}-{suffix}"
         return candidate
 
-    async def _scope_root(self, target_scope: str, workspace_id: str | None) -> Path:
+    async def _scope_root(self, target_scope: str, project_id: str | None) -> Path:
         if target_scope == "user":
             return _default_user_skill_root()
-        if workspace_id is None:
-            raise ValueError("workspace_id is required for project-scoped skills")
-        workspace = await self._workspaces.get_workspace(workspace_id)
-        if workspace.kind != "project":
-            raise ValueError("project-scoped skills require a project workspace")
-        return Path(workspace.root_path) / ".claude" / "skills"
+        if project_id is None:
+            raise ValueError("project_id is required for project-scoped skills")
+        project = await self._projects.get_project(project_id)
+        if project.kind != "project":
+            raise ValueError("project-scoped skills require a project")
+        return Path(project.root_path) / ".claude" / "skills"
 
     def _write_manifest(
         self,
@@ -1482,14 +1482,14 @@ class SkillLibraryService:
     async def _affected_projects(self, skill_path: str) -> list[SkillDeleteAffectedProject]:
         resolved = str(Path(skill_path).expanduser().resolve(strict=False))
         affected: list[SkillDeleteAffectedProject] = []
-        for workspace in await self._workspaces.list_workspaces():
-            if workspace.kind != "project":
+        for project in await self._projects.list_projects():
+            if project.kind != "project":
                 continue
-            if resolved in self._ds.enabled_skill_paths(workspace):
+            if resolved in self._ds.enabled_skill_paths(project):
                 affected.append(
                     SkillDeleteAffectedProject(
-                        workspace_id=workspace.id,
-                        name=workspace.name,
+                        project_id=project.id,
+                        name=project.name,
                     )
                 )
         return affected
@@ -1596,7 +1596,7 @@ class SkillLibraryService:
         preview_id: str,
         skill_root: Path,
         target_scope: str,
-        workspace_id: str | None,
+        project_id: str | None,
     ) -> SkillImportArchivePreview:
         manifest_path = _detect_manifest(skill_root)
         if manifest_path is None:
@@ -1605,7 +1605,7 @@ class SkillLibraryService:
         name = str(metadata.get("name") or skill_root.name)
         description = str(metadata.get("description") or "Imported local skill")
         tags = metadata.get("tags") if isinstance(metadata.get("tags"), list) else []
-        target_root = await self._scope_root(target_scope=target_scope, workspace_id=workspace_id)
+        target_root = await self._scope_root(target_scope=target_scope, project_id=project_id)
         slug = self._slugify(name)
         suggested_name = None
         name_conflict = (target_root / slug).exists()

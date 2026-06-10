@@ -44,14 +44,14 @@ The whole repo is organized around this principle:
 
 Everything edition-specific flows through **`packages/core/src/edition/`**:
 
-- `profile.ts` — `EditionProfile`, `FeatureFlags`, `ServiceDescriptor`, `DesktopRouteModule`, `SettingsSectionModule`, `WorkspacePanelModule` types.
+- `profile.ts` — `EditionProfile`, `FeatureFlags`, `ServiceDescriptor`, `DesktopRouteModule`, `SettingsSectionModule`, `ProjectPanelModule` types.
 - `personal-profile.ts` — personal baseline.
 - `registries/{desktop-routes,settings-sections,service-panels}.ts` — per-edition module lists.
 - `resolve.ts` — `resolveEdition()` / `getActiveProfile()` (build-time).
 - `registry-store.ts` — **runtime** mutable store (Zustand) seeded from the active profile.
 - `plugin.ts` — `PluginManifest` + `registerPlugin()` + `loadPluginFromUrl()`.
 
-### Adding a route / settings section / workspace panel
+### Adding a route / settings section / project panel
 
 Edit **registries only**. The app shell discovers entries through the store.
 
@@ -69,7 +69,7 @@ Built-in tabs (model, general, parsing, system-logs, about) live in `pages/setti
 
 ### Adding enterprise capability
 
-- Append to `enterpriseDesktopRoutes` / `enterpriseSettingsSections` / `enterpriseWorkspacePanels` / `enterpriseServiceOverlay`.
+- Append to `enterpriseDesktopRoutes` / `enterpriseSettingsSections` / `enterpriseProjectPanels` / `enterpriseServiceOverlay`.
 - Concrete module code goes under `packages/core/src/enterprise/{team,sso,audit}/`.
 - Native sidecars: add a `ServiceDescriptor` in `apps/desktop/src/main/services/descriptors.ts` and register Electron IPC/runtime support under `apps/desktop/src/main/`.
 
@@ -85,7 +85,7 @@ import { registerPlugin } from '@valuz/core'
 await registerPlugin({
   id: 'my-plugin',
   version: '0.0.1',
-  routes: [{ id: 'foo', path: '/foo', label: 'Foo', description: '…', layout: 'workspace', showInNav: true, edition: 'personal' }],
+  routes: [{ id: 'foo', path: '/foo', label: 'Foo', description: '…', layout: 'project', showInNav: true, edition: 'personal' }],
   settingsSections: [...],
   services: [...],
 })
@@ -170,7 +170,7 @@ All user-facing strings must use `t()` calls — no hardcoded Chinese or English
 ## What NOT to do
 
 - Don't hardcode routes in `apps/desktop/src/routes/router.tsx` — it must build from `useRegistryStore`.
-- Don't hardcode nav items in `DesktopWorkspaceLayout` — it derives from `desktopRoutes` where `layout === 'workspace' && showInNav`.
+- Don't hardcode nav items in `DesktopProjectLayout` — it derives from `desktopRoutes` where `layout === 'project' && showInNav`.
 - Don't hardcode settings tabs in `SettingsPage` — it renders sidebar from `settingsSections` registry and content from `SECTION_MAP` / overlay `component`.
 - Don't create `apps/*-enterprise` directories.
 - Don't branch on `edition` inside a page component. Fork at the registry layer instead.
@@ -192,7 +192,7 @@ All user-facing strings must use `t()` calls — no hardcoded Chinese or English
 
 ## Tailwind
 
-Tailwind v4 with CSS `@theme`. Single source of truth: `packages/ui/src/styles/workspace.css` (re-exported by `@valuz/ui`). `packages/ui/tailwind.preset.ts` exports TS design tokens for non-CSS consumers (charts, inline styles) — it is **not** a Tailwind v3 preset.
+Tailwind v4 with CSS `@theme`. Single source of truth: `packages/ui/src/styles/project.css` (re-exported by `@valuz/ui`). `packages/ui/tailwind.preset.ts` exports TS design tokens for non-CSS consumers (charts, inline styles) — it is **not** a Tailwind v3 preset.
 
 Apps use `@tailwindcss/vite` + `tailwindcss()` plugin. No `tailwind.config.ts` needed.
 

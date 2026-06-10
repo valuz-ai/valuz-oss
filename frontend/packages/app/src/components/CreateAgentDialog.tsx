@@ -28,14 +28,14 @@ import {
   agentsApi,
   connectorsApi,
   skillsApi,
-  workspacesApi,
+  projectsApi,
   useModelDefaults,
   useTranslation,
   type Agent,
   type ConnectorItem,
   type EffortLevel,
   type SkillView,
-  type WorkspaceListItem,
+  type ProjectListItem,
 } from "@valuz/core";
 import { AgentModelPicker, type AgentModelSelection } from "./AgentModelPicker";
 import { CatalogPickerDialog } from "./CatalogPickerDialog";
@@ -106,7 +106,7 @@ export const CreateAgentDialog = ({
   // ── Next-step state ──
   const [createdSlug, setCreatedSlug] = useState<string | null>(null);
   const [createdName, setCreatedName] = useState("");
-  const [projects, setProjects] = useState<WorkspaceListItem[]>([]);
+  const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [targetProject, setTargetProject] = useState("");
   const [deploying, setDeploying] = useState(false);
   // Suppresses the onCreated callback when we close after navigating away.
@@ -172,7 +172,7 @@ export const CreateAgentDialog = ({
       const [skillRes, connRes] = await Promise.all([
         skillsApi
           .list()
-          .catch(() => ({ workspace_id: "", skills: [] as SkillView[] })),
+          .catch(() => ({ project_id: "", skills: [] as SkillView[] })),
         connectorsApi
           .list()
           .catch(() => ({ connectors: [] as ConnectorItem[] })),
@@ -222,10 +222,10 @@ export const CreateAgentDialog = ({
       setCreatedSlug(created.slug);
       setCreatedName(created.name);
       // Load deploy targets for the next-step card.
-      const wsRes = await workspacesApi
+      const wsRes = await projectsApi
         .list()
-        .catch(() => ({ workspaces: [] }));
-      const projs = wsRes.workspaces.filter((w) => w.kind === "project");
+        .catch(() => ({ projects: [] }));
+      const projs = wsRes.projects.filter((w) => w.kind === "project");
       setProjects(projs);
       setTargetProject(projs[0]?.id ?? "");
       setStep("next");

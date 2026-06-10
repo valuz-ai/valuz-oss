@@ -25,21 +25,21 @@ class AutomationRunNotFound(NotFoundError):
     message = "Automation run not found"
 
 
-class AutomationWorkspaceNotFound(NotFoundError):
+class AutomationProjectNotFound(NotFoundError):
     error_code = 404_713
-    message = "Automation workspace not found"
+    message = "Automation project not found"
 
 
-class AgentNotInWorkspace(NotFoundError):
-    """The (workspace_id, agent_slug) pair doesn't resolve to a project member.
+class AgentNotInProject(NotFoundError):
+    """The (project_id, agent_slug) pair doesn't resolve to a project member.
 
     Distinct from ``AgentNotFound`` (library agent missing): this fires at
-    bind/fire time when the workspace was found but the chosen agent isn't
+    bind/fire time when the project was found but the chosen agent isn't
     a member of it.
     """
 
     error_code = 404_714
-    message = "Agent is not a member of this workspace"
+    message = "Agent is not a member of this project"
 
 
 class AgentNotFound(NotFoundError):
@@ -89,17 +89,17 @@ class AutomationAgentRequired(UnprocessableEntityError):
 
 
 class AutomationTaskOnlyOnProject(UnprocessableEntityError):
-    """``action_kind="task"`` requires a project workspace.
+    """``action_kind="task"`` requires a project.
 
     Task mode kicks off a project task with the bound agent as Lead — the
     task orchestrator needs a project context (multiple members, the
-    project's task table, project plan). Chat workspaces don't have that
+    project's task table, project plan). Chat projects don't have that
     structure, so we reject the combination at the API edge with a clear
     message rather than failing mid-fire inside ``task_orchestrator.kickoff``.
     """
 
     error_code = 422_717
-    message = "Task mode is only available for project workspaces"
+    message = "Task mode is only available for projects"
 
 
 # ── 409 ────────────────────────────────────────────────────────────────
@@ -123,11 +123,11 @@ class AutomationAlreadyQueued(ConflictError):
 # ── 403 ────────────────────────────────────────────────────────────────
 
 
-class AutomationCrossWorkspaceDenied(ForbiddenError):
-    """A session in workspace A is trying to mutate an automation in
-    workspace B. ``automation`` MCP tool enforces this — project sessions
+class AutomationCrossProjectDenied(ForbiddenError):
+    """A session in project A is trying to mutate an automation in
+    project B. ``automation`` MCP tool enforces this — project sessions
     must stay in their project; chat sessions can reach across only when
     ``scope=all``."""
 
     error_code = 403_711
-    message = "Automation belongs to a different workspace"
+    message = "Automation belongs to a different project"

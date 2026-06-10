@@ -8,7 +8,7 @@
 > wins on backend mechanics.
 
 Python/FastAPI on an Agent Harness kernel. The **host**
-(`valuz_agent/`) owns the workspace UX, skill catalog, KB, providers, MCP
+(`valuz_agent/`) owns the project UX, skill catalog, KB, providers, MCP
 catalog, scheduling, tasks, and OAuth; the **kernel** (`kernel/`) owns
 Project/Agent/Session/Event persistence and the runtime adapters. The two meet
 only at the adapter seam (§6).
@@ -152,11 +152,11 @@ session-creation time:
 | Adapter | Job |
 |---------|-----|
 | `kernel_sync` | sync facade over the kernel's async `StorePort` (only importer of `src.adapters` / `src.runtimes`) |
-| `capability_resolver` | workspace + extras → kernel skills / MCP set |
+| `capability_resolver` | project + extras → kernel skills / MCP set |
 | `model_resolver` | request + provider + default → concrete model id |
 | `mcp_resolver` | slug + creds → `list[McpServerConfig]` |
 | `event_sse_adapter` | kernel `events` table → SSE frames |
-| `system_prompt_builder` | agent instructions + workspace context → system prompt |
+| `system_prompt_builder` | agent instructions + project context → system prompt |
 
 If you need kernel behavior, add it behind an adapter — do not import kernel
 internals from `api/`, `modules/`, or `integrations/`.
@@ -184,7 +184,7 @@ code. Add a capability by defining a port, then a default integration.
 - `infra/fs_registry.FsRegistry` is the single gate for host filesystem writes.
   Hardcoded `~/.claude/...` or ad-hoc `Path.home()` outside `config.py` and the
   registry are forbidden. The kernel manages its own subtree under each
-  `project.cwd`; get the cwd from `workspace_cwd(...)` and let the kernel take
+  `project.cwd`; get the cwd from `project_cwd(...)` and let the kernel take
   it from there.
 
 ## Adding an endpoint (contract-first recipe)

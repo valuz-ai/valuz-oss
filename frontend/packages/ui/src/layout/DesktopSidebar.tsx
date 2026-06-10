@@ -60,7 +60,7 @@ export interface DesktopSidebarRecents {
   earlier?: DesktopSidebarItem[];
 }
 
-/** A project workspace entry in the sidebar's "项目" section. Sessions no
+/** A project project entry in the sidebar's "项目" section. Sessions no
  * longer nest under projects — all sessions (project + chat) live in the
  * unified RECENTS section below. */
 export interface DesktopSidebarProjectGroup {
@@ -99,7 +99,7 @@ export interface DesktopSidebarBottomItem {
     | "connectors"
     | "projectTasks";
   /** Which sidebar region the item renders in (PRD-NEXT §3.4 IA). */
-  group: "workspace" | "library" | "settings";
+  group: "project" | "library" | "settings";
   /** Optional trailing count badge (e.g. running-runs count on Activity).
    *  Falsy / 0 → no badge. */
   badgeCount?: number;
@@ -472,7 +472,7 @@ export interface DesktopSidebarRecentItem {
 
 export interface DesktopSidebarProps {
   activePath: string;
-  /** One entry per project workspace. */
+  /** One entry per project project. */
   projectGroups: DesktopSidebarProjectGroup[];
   bottomItems: DesktopSidebarBottomItem[];
   /** Optional Recents list rendered under the Activity link. Folded shows
@@ -577,7 +577,7 @@ export const DesktopSidebar = ({
                 </TooltipContent>
               </Tooltip>
               {bottomItems
-                .filter((item) => item.group === "workspace")
+                .filter((item) => item.group === "project")
                 .map((item) => {
                   const Icon = BOTTOM_ICON_MAP[item.icon];
                   return (
@@ -612,7 +612,7 @@ export const DesktopSidebar = ({
             <div className="flex-1" />
             {/* Bottom: Library (Agents / Skills / Connectors / Knowledge) then
                 Settings. Library lives down here so the top stays focused on
-                ``Assistant`` and other workspace verbs; configuration-y
+                ``Assistant`` and other project verbs; configuration-y
                 resources sit together near Settings. */}
             <div className="flex flex-col items-center gap-2 pb-4">
               {bottomItems
@@ -681,11 +681,11 @@ export const DesktopSidebar = ({
                   />
                   <span>{t("sidebar.newConversation")}</span>
                 </SidebarLink>
-                {/* Workspace utility links (PRD-NEXT §3.4): 小助手 / 自动化，
+                {/* Project utility links (PRD-NEXT §3.4): 小助手 / 自动化，
                   紧跟新对话。Library 分组在「项目」之后单独成区，设置固定在
                   sidebar 最底部。 */}
                 {bottomItems
-                  .filter((item) => item.group === "workspace")
+                  .filter((item) => item.group === "project")
                   .map((item) => {
                     const Icon = BOTTOM_ICON_MAP[item.icon];
                     return (
@@ -718,7 +718,7 @@ export const DesktopSidebar = ({
 
                 {/* RECENTS — rendered as Activity's sub-items: no group
                     label, no row icons, title indented to line up with
-                    Activity's label (pl-[33px] matches the workspace-link
+                    Activity's label (pl-[33px] matches the project-link
                     icon column). Color steps down to ``ink-meta`` so the
                     rows read as secondary to the top-level nav. Folded
                     shows 3; a tail chevron toggles to 8. Live runs get a
@@ -931,7 +931,7 @@ export const DesktopSidebar = ({
             {/* Bottom-pinned: Library + Settings. Library (Agents / Skills /
                 Connectors / Knowledge) sits right above Settings so resource
                 management groups with app config; the scrollable nav above
-                stays focused on workspace verbs + projects. ``relative z-10``
+                stays focused on project verbs + projects. ``relative z-10``
                 so links sit in front of the absolute-positioned mascot. */}
             <div className="relative z-10 flex flex-col gap-0.5 px-3 pb-4 pt-2">
               {libraryItems.length > 0 && (

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.infra.db import async_commit_with_retry
 from valuz_agent.integrations.skills_filesystem import FilesystemSkillSource
-from valuz_agent.modules.skills.contracts import RuntimeContext, SkillManifest, WorkspaceRef
+from valuz_agent.modules.skills.contracts import ProjectRef, RuntimeContext, SkillManifest
 from valuz_agent.modules.skills.models import (
     ProjectSkillConfigRow,
     SkillIndexRow,
@@ -84,11 +84,11 @@ class SkillDatastore:
         await self._db.execute(sa_delete(SkillIndexRow).where(SkillIndexRow.id == skill_id))
         await async_commit_with_retry(self._db, where="SkillDatastore.delete")
 
-    async def list_project_skills(self, workspace_id: str) -> list[ProjectSkillConfigRow]:
+    async def list_project_skills(self, project_id: str) -> list[ProjectSkillConfigRow]:
         return list(
             (
                 await self._db.execute(
-                    select(ProjectSkillConfigRow).filter_by(workspace_id=workspace_id)
+                    select(ProjectSkillConfigRow).filter_by(project_id=project_id)
                 )
             )
             .scalars()
@@ -96,47 +96,47 @@ class SkillDatastore:
         )
 
     async def set_project_skills(
-        self, workspace_id: str, rows: list[ProjectSkillConfigRow]
+        self, project_id: str, rows: list[ProjectSkillConfigRow]
     ) -> None:
         await self._db.execute(
             sa_delete(ProjectSkillConfigRow).where(
-                ProjectSkillConfigRow.workspace_id == workspace_id
+                ProjectSkillConfigRow.project_id == project_id
             )
         )
         self._db.add_all(rows)
         await async_commit_with_retry(self._db, where="SkillDatastore.set_project_skills")
 
     # ------------------------------------------------------------------
-    # Filesystem-based workspace skill config (JSON project-config.json)
+    # Filesystem-based project skill config (JSON project-config.json)
     # ------------------------------------------------------------------
 
-    def list_workspace_skills(
+    def list_project_skill_manifests(
         self,
-        workspace: _WorkspaceLike,
+        project: _ProjectLike,
         source: FilesystemSkillSource,
     ) -> list[SkillManifest]:
         context = RuntimeContext(
-            workspace=WorkspaceRef(
-                id=workspace.id,
-                slug=workspace.id,
-                kind=workspace.kind,
-                root_path=workspace.root_path,
+            project=ProjectRef(
+                id=project.id,
+                slug=project.id,
+                kind=project.kind,
+                root_path=project.root_path,
             ),
         )
         manifests = source.list_skills(context)
-        enabled_paths = self.enabled_skill_paths(workspace)
+        enabled_paths = self.enabled_skill_paths(project)
 
         items: list[SkillManifest] = []
         for manifest in manifests:
-            enabled = workspace.kind == "chat" or manifest.path in enabled_paths
+            enabled = project.kind == "chat" or manifest.path in enabled_paths
             items.append(manifest.model_copy(update={"enabled": enabled}))
         return items
 
-    def enabled_skill_paths(self, workspace: _WorkspaceLike) -> set[str]:
-        if workspace.kind != "project":
+    def enabled_skill_paths(self, project: _ProjectLike) -> set[str]:
+        if project.kind != "project":
             return set()
 
-        config = self._project_config_path(workspace)
+        config = self._project_config_path(project)
         if not config.exists():
             return set()
 
@@ -151,34 +151,34 @@ class SkillDatastore:
                 continue
             candidate = Path(value).expanduser()
             if not candidate.is_absolute():
-                candidate = Path(workspace.root_path) / value
+                candidate = Path(project.root_path) / value
             resolved.add(str(candidate.resolve(strict=False)))
         return resolved
 
     def set_skill_enabled(
         self,
-        workspace: _WorkspaceLike,
+        project: _ProjectLike,
         skill_path: str,
         enabled: bool,
     ) -> set[str]:
-        if workspace.kind != "project":
+        if project.kind != "project":
             return set()
 
-        current = self.enabled_skill_paths(workspace)
+        current = self.enabled_skill_paths(project)
         resolved_path = str(Path(skill_path).expanduser().resolve(strict=False))
         if enabled:
             current.add(resolved_path)
         else:
             current.discard(resolved_path)
-        self._write_enabled_skill_paths(workspace, current)
+        self._write_enabled_skill_paths(project, current)
         return current
 
     def overwrite_enabled_skill_paths(
         self,
-        workspace: _WorkspaceLike,
+        project: _ProjectLike,
         skill_paths: list[str],
     ) -> set[str]:
-        if workspace.kind != "project":
+        if project.kind != "project":
             return set()
 
         resolved: set[str] = set()
@@ -187,68 +187,68 @@ class SkillDatastore:
                 continue
             candidate = Path(skill_path).expanduser()
             if not candidate.is_absolute():
-                candidate = Path(workspace.root_path) / skill_path
+                candidate = Path(project.root_path) / skill_path
             resolved.add(str(candidate.resolve(strict=False)))
-        self._write_enabled_skill_paths(workspace, resolved)
+        self._write_enabled_skill_paths(project, resolved)
         return resolved
 
-    def remove_skill_path_from_workspace(
+    def remove_skill_path_from_project(
         self,
-        workspace: _WorkspaceLike,
+        project: _ProjectLike,
         skill_path: str,
     ) -> None:
-        if workspace.kind != "project":
+        if project.kind != "project":
             return
-        current = self.enabled_skill_paths(workspace)
+        current = self.enabled_skill_paths(project)
         current.discard(str(Path(skill_path).expanduser().resolve(strict=False)))
-        self._write_enabled_skill_paths(workspace, current)
+        self._write_enabled_skill_paths(project, current)
 
-    def scan(self, workspace: _WorkspaceLike, source: FilesystemSkillSource) -> int:
-        return len(self.list_workspace_skills(workspace, source))
+    def scan(self, project: _ProjectLike, source: FilesystemSkillSource) -> int:
+        return len(self.list_project_skill_manifests(project, source))
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _project_config_path(self, workspace: _WorkspaceLike) -> Path:
-        return Path(workspace.root_path) / ".claude" / self._config_name
+    def _project_config_path(self, project: _ProjectLike) -> Path:
+        return Path(project.root_path) / ".claude" / self._config_name
 
-    def _read_config(self, workspace: _WorkspaceLike) -> dict:
-        config = self._project_config_path(workspace)
+    def _read_config(self, project: _ProjectLike) -> dict:
+        config = self._project_config_path(project)
         if not config.exists():
             return {}
         return json.loads(config.read_text(encoding="utf-8"))
 
-    def _write_config(self, workspace: _WorkspaceLike, data: dict) -> None:
-        config_path = self._project_config_path(workspace)
+    def _write_config(self, project: _ProjectLike, data: dict) -> None:
+        config_path = self._project_config_path(project)
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
     def _write_enabled_skill_paths(
-        self, workspace: _WorkspaceLike, enabled_paths: set[str]
+        self, project: _ProjectLike, enabled_paths: set[str]
     ) -> None:
-        data = self._read_config(workspace)
+        data = self._read_config(project)
         data["skills_enabled"] = sorted(
-            self._normalize_ref(workspace, path) for path in enabled_paths
+            self._normalize_ref(project, path) for path in enabled_paths
         )
-        self._write_config(workspace, data)
+        self._write_config(project, data)
 
-    def get_mcp_servers(self, workspace: _WorkspaceLike) -> list[str]:
-        if workspace.kind != "project" or not workspace.root_path:
+    def get_mcp_servers(self, project: _ProjectLike) -> list[str]:
+        if project.kind != "project" or not project.root_path:
             return []
-        data = self._read_config(workspace)
+        data = self._read_config(project)
         value = data.get("mcp_servers", [])
         return value if isinstance(value, list) else []
 
-    def set_mcp_servers(self, workspace: _WorkspaceLike, slugs: list[str]) -> None:
-        data = self._read_config(workspace)
+    def set_mcp_servers(self, project: _ProjectLike, slugs: list[str]) -> None:
+        data = self._read_config(project)
         data["mcp_servers"] = slugs
-        self._write_config(workspace, data)
+        self._write_config(project, data)
 
-    def _normalize_ref(self, workspace: _WorkspaceLike, skill_path: str) -> str:
+    def _normalize_ref(self, project: _ProjectLike, skill_path: str) -> str:
         candidate = Path(skill_path).expanduser().resolve(strict=False)
-        if workspace.kind == "project" and workspace.root_path:
-            project_skill_root = (Path(workspace.root_path) / ".claude" / "skills").resolve(
+        if project.kind == "project" and project.root_path:
+            project_skill_root = (Path(project.root_path) / ".claude" / "skills").resolve(
                 strict=False
             )
             try:
@@ -259,7 +259,7 @@ class SkillDatastore:
         return str(candidate)
 
 
-class _WorkspaceLike(Protocol):
+class _ProjectLike(Protocol):
     id: str
     kind: str
     root_path: str | None

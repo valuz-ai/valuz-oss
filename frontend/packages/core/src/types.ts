@@ -16,7 +16,7 @@ export type {
   FeatureFlags,
   DesktopRouteModule,
   SettingsSectionModule,
-  WorkspacePanelModule,
+  ProjectPanelModule,
   BrandingProfile,
   NavItemModule,
   ServiceDescriptor,
@@ -79,12 +79,12 @@ export type {
 export type { ModelDefaults, PreferencesResponse } from "./api/settings-api";
 
 export type {
-  WorkspaceListItem,
-  WorkspaceDetail,
-  WorkspaceDeletePreview,
-  WorkspaceFileNode,
+  ProjectListItem,
+  ProjectDetail,
+  ProjectDeletePreview,
+  ProjectFileNode,
   LastSessionPick,
-} from "./api/workspaces-api";
+} from "./api/projects-api";
 
 export type {
   SkillView,

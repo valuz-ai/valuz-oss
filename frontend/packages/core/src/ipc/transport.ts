@@ -17,8 +17,8 @@ const createMockState = (): MockState => ({
   services: getHttpTransportSeed().services,
   events: [
     ...getHttpTransportSeed().events,
-    { type: 'thinking', content: 'Mock transport is warming up the workspace shell.' },
-    { type: 'text_done', content: 'Workspace shell ready.' },
+    { type: 'thinking', content: 'Mock transport is warming up the project shell.' },
+    { type: 'text_done', content: 'Project shell ready.' },
   ],
 })
 

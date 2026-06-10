@@ -298,7 +298,7 @@ const FULLSCREEN_TABLE_CSS = `
     border-radius: 12px;
     border: 1px solid #F0F1F3;
     overflow: hidden;
-    /* Top offset = workspace TopBar height (36px). AppShell's inner
+    /* Top offset = project TopBar height (36px). AppShell's inner
        flex uses p-4 pt-0, so the main card sits flush under the
        topbar; matching that here puts the fullscreen card on the
        same baseline. Other sides match AppShell's 16px outer gutter. */

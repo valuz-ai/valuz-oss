@@ -5,7 +5,7 @@
     "actionKindChatHint": "One agent run per fire.",
     "actionKindLabel": "Mode",
     "actionKindTask": "Task",
-    "actionKindTaskDisabledHint": "Task mode requires a project workspace.",
+    "actionKindTaskDisabledHint": "Task mode requires a project.",
     "actionKindTaskHint": "Kick off a project task with this agent as Lead.",
     "actionNew": "New",
     "agentHint": "Execution model / runtime follow the selected agent.",
@@ -24,7 +24,7 @@
     "dialogTitleEdit": "Edit automation",
     "dialogTitleEditNamed": "Edit \"{name}\"",
     "dialogTitleNew": "New automation",
-    "dialogTitleProject": "New automation in {workspace}",
+    "dialogTitleProject": "New automation in {project}",
     "updateFailed": "Update failed: {error}",
     "updateSuccess": "Updated \"{name}\"",
     "emptyAction": "Create automation",
@@ -44,7 +44,7 @@
     "loadFailed": "Failed to load automations: {error}",
     "pauseFailed": "Pause failed: {error}",
     "pauseSuccess": "Paused \"{name}\"",
-    "pickWorkspaceFirst": "Pick a workspace first",
+    "pickProjectFirst": "Pick a project first",
     "recentExecutions": "Recent executions",
     "noExecutions": "No executions yet",
     "execStatusOk": "Success",
@@ -121,7 +121,7 @@
     "select": "Select",
     "skills": "Skills",
     "uploadToKb": "Upload to knowledge base",
-    "workspaces": "Workspaces"
+    "projects": "Projects"
   },
   "common": {
     "add": "Add",
@@ -336,7 +336,7 @@
     "viewDetails": "View details",
     "viewSession": "View full session",
     "workDir": "Conversation work dir",
-    "workspace": "Workspace",
+    "project": "Project",
     "permissionReview": "Default permission",
     "permissionReviewHint": "Confirm before tool calls (safety first)",
     "permissionAuto": "Auto review",
@@ -444,7 +444,7 @@
     "selectModel": "Select model",
     "selectNewModel": "Select new model →",
     "selectRuntime": "Select runtime",
-    "selectWorkspace": "Please select a workspace",
+    "selectProject": "Please select a project",
     "setModel": "Set model →",
     "simple": "Simple",
     "statusColumn": "Status",
@@ -683,10 +683,10 @@
     "untestedConfirm": "Connection not tested yet. Confirm save?",
     "useApiKey": "Switch to API Key mode →",
     "welcome": "Welcome to Valuz",
-    "heroTitle": "Your AI team,\nall in one workspace.",
+    "heroTitle": "Your AI team,\nall in one workbench.",
     "heroTitleLine1": "Your AI team,",
     "heroTitleLine2": "all in",
-    "heroTitleAccent": "one workspace",
+    "heroTitleAccent": "one workbench",
     "heroTitleSuffix": ".",
     "heroSubtitle": "Give it a goal, and the agent team breaks it down, splits the work, and drives it forward in parallel — with you able to step in at any point; from spec to ship, research to execution, idea to launch, getting the work truly done.",
     "heroSubtitleAccent": "breaks it down, splits the work, and drives it forward in parallel — with you able to step in at any point",
@@ -694,7 +694,7 @@
     "heroSubtitleSuffix": "; from spec to ship, research to execution, idea to launch, getting the work truly done.",
     "startButton": "Get started",
     "heroFootnote": "Conversations, files, and knowledge base all stored locally · Runtime and model under your control",
-    "heroQuote": "Every idea, every discussion, every decision — you and your agents share one workspace.",
+    "heroQuote": "Every idea, every discussion, every decision — you and your agents share one workbench.",
     "assignedToTeam": "Assigned to team",
     "statusRunning": "In progress",
     "statusDone": "Done",
@@ -872,7 +872,7 @@
     "valuzHelper": {
       "name": "Valuz Helper",
       "description": "Valuz onboarding assistant. Ask anything about using Valuz, how to plan tasks, or how to configure agents.",
-      "instructions": "You are the Valuz Helper, Valuz's built-in general assistant and the in-product onboarding guide.\nYou handle everyday Q&A and chat, and you're especially good at helping users get started with Valuz.\n\nYou know Valuz's core concepts:\n- Project: a workspace where an Agent team collaborates. \"Deploying\" an Agent from the library into a project lets it participate.\n- Agent: a configurable execution unit with instructions, skills, equipment (MCP connectors), and a model channel.\n- Quick chat: a non-project chat for ad-hoc questions and lightweight tasks.\n- Skills / equipment: pluggable modules that extend an Agent's abilities.\n\nResponse principles:\n- You're a general assistant: handle everyday questions, writing, lookups, and casual chat normally —\n  don't deflect just because \"I'm a product assistant\".\n- First figure out what the user wants to achieve, then give the shortest workable path.\n  If one sentence suffices, don't expand.\n- For \"how to use Valuz\" questions, lean on your guide role:\n  give concrete steps and entry points (which page, which button), and let the user finish themselves.\n- For deeper professional work (investment research, writing, product work),\n  suggest the user deploy a more specialized Agent in a project instead of struggling alone.\n- Defer to your \"Valuz Handbook\" skill for product specifics;\n  if it's not in the handbook, say \"I'm not sure\" honestly — don't invent.\n- Friendly, concise, actionable, and prefer bullets."
+      "instructions": "You are the Valuz Helper, Valuz's built-in general assistant and the in-product onboarding guide.\nYou handle everyday Q&A and chat, and you're especially good at helping users get started with Valuz.\n\nYou know Valuz's core concepts:\n- Project: a shared space where an Agent team collaborates. \"Deploying\" an Agent from the library into a project lets it participate.\n- Agent: a configurable execution unit with instructions, skills, equipment (MCP connectors), and a model channel.\n- Quick chat: a non-project chat for ad-hoc questions and lightweight tasks.\n- Skills / equipment: pluggable modules that extend an Agent's abilities.\n\nResponse principles:\n- You're a general assistant: handle everyday questions, writing, lookups, and casual chat normally —\n  don't deflect just because \"I'm a product assistant\".\n- First figure out what the user wants to achieve, then give the shortest workable path.\n  If one sentence suffices, don't expand.\n- For \"how to use Valuz\" questions, lean on your guide role:\n  give concrete steps and entry points (which page, which button), and let the user finish themselves.\n- For deeper professional work (investment research, writing, product work),\n  suggest the user deploy a more specialized Agent in a project instead of struggling alone.\n- Defer to your \"Valuz Handbook\" skill for product specifics;\n  if it's not in the handbook, say \"I'm not sure\" honestly — don't invent.\n- Friendly, concise, actionable, and prefer bullets."
     }
   },
   "permission": {
@@ -904,7 +904,7 @@
     "basedOnContext": "Generate report based on project context",
     "browse": "Browse",
     "create": "Create",
-    "createDesc": "Enter a project name and select a directory to create a new workspace.",
+    "createDesc": "Enter a project name and select a directory to create a new project.",
     "createFailed": "Creation failed",
     "createTitle": "Create New Project",
     "created": "Project \"{name}\" created",
@@ -1147,10 +1147,10 @@
         "desc": "Manage your identity, sync scope, and subscription status to keep a consistent research context across devices",
         "statLabel": "Account Health",
         "statValue": "98%",
-        "title": "Account & Workspace"
+        "title": "Account & Projects"
       },
       "appearance": {
-        "desc": "Tune your desktop workspace to your preferred reading rhythm, information density, and brand style",
+        "desc": "Tune your desktop experience to your preferred reading rhythm, information density, and brand style",
         "statLabel": "Current Theme",
         "statValue": "Light",
         "title": "Display & Visual Preferences"
@@ -1233,7 +1233,7 @@
       "modelChannel": "Model Channels",
       "modelChannelDesc": "Configured LLM providers",
       "defaultConfig": "Default Config",
-      "defaultConfigDesc": "Default configuration for new conversations when no workspace override is specified",
+      "defaultConfigDesc": "Default configuration for new conversations when no project override is specified",
       "discoveredModels": "Discover models",
       "followSubscription": "Follow subscription",
       "agentEngine": "Select default agent engine",
@@ -1366,8 +1366,8 @@
       "seriesCount": "{count} series",
       "title": "Data Sources",
       "valuzConnected": "Valuz connected",
-      "workspaceScoped": "Workspace scoped",
-      "workspaceScopedHint": "Granted per workspace"
+      "projectScoped": "Project scoped",
+      "projectScopedHint": "Granted per project"
     },
     "systemLogs": {
       "copiedLines": "Copied {count} lines",
@@ -1483,7 +1483,7 @@
     "aiCreate": "AI create",
     "aiHint": "Card refreshes automatically when AI writes files.",
     "automationFailed": "Automation failed",
-    "boundToWorkspace": "· Bound to {name}",
+    "boundToProject": "· Bound to {name}",
     "builtin": "Built-in",
     "builtinHint": "Bundled with client · Cannot disable",
     "cancelled": "Cancelled, not saved",
@@ -1849,8 +1849,8 @@
     "descriptionPlaceholder": "Click to add a description…",
     "addSkill": "Add skill",
     "addConnector": "Add connector",
-    "skillsSectionHint": "Workspace skills this agent can call. Local runtime skills are always available.",
-    "connectorsSectionHint": "External connectors this agent can call inside the workspace.",
+    "skillsSectionHint": "Project skills this agent can call. Local runtime skills are always available.",
+    "connectorsSectionHint": "External connectors this agent can call inside the project.",
     "instructionsPlaceholder": "Describe in 1-2 paragraphs who this agent is, the method it follows, what it outputs, and what it does NOT do. For example:\n\nRole: (who you are, what outcome you own)\nMethod (in order): 1. … 2. …\nOutput discipline: - …\nBoundaries (don't): - …",
     "effortLabel": "Reasoning effort",
     "effortHint": "Thinking budget for this agent's conversations.",

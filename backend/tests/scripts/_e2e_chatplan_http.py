@@ -3,7 +3,7 @@
 Exercises every new route landed in S1-S5 against a real uvicorn-hosted
 backend with a tmp SQLite DB:
 
-  POST /v1/workspaces/{id}/tasks:draft       (S2)
+  POST /v1/projects/{id}/tasks:draft       (S2)
   POST /v1/tasks/{id}/plan                    (plan_task — first write)
   PATCH /v1/tasks/{id}/plan                   (modify_plan + CAS)
   GET  /v1/tasks/{id}/plan                    (snapshot + current_version)
@@ -49,10 +49,10 @@ _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
-import urllib.request  # noqa: E402
 import urllib.error  # noqa: E402
-import uvicorn  # noqa: E402
+import urllib.request  # noqa: E402
 
+import uvicorn  # noqa: E402
 
 # ── helpers ─────────────────────────────────────────────────────────────
 
@@ -89,20 +89,20 @@ def _expect(condition: bool, label: str) -> None:
     print(f"  ok  {label}")
 
 
-# ── seed helpers (workspace + agent — needed by draft_task) ─────────────
+# ── seed helpers (project + agent — needed by draft_task) ─────────────
 
 
-async def _seed_workspace_and_agent() -> tuple[str, str]:
-    """Insert a project workspace + a project-member agent into the
-    just-bootstrapped DB. Returns (workspace_id, agent_slug)."""
+async def _seed_project_and_agent() -> tuple[str, str]:
+    """Insert a project + a project-member agent into the
+    just-bootstrapped DB. Returns (project_id, agent_slug)."""
     from src.core import AgentConfig  # type: ignore[import-not-found]
 
     from valuz_agent.adapters import kernel_sync
     from valuz_agent.infra.db import async_unit_of_work
     from valuz_agent.modules.agents.datastore import ProjectMemberDatastore
     from valuz_agent.modules.agents.models import ProjectMemberRow
-    from valuz_agent.modules.projects.datastore import WorkspaceDatastore
-    from valuz_agent.modules.projects.models import WorkspaceRow
+    from valuz_agent.modules.projects.datastore import ProjectDatastore
+    from valuz_agent.modules.projects.models import ProjectRow
 
     ws_id = "ws-chatplan-e2e"
     slug = "lead-agent"
@@ -119,8 +119,8 @@ async def _seed_workspace_and_agent() -> tuple[str, str]:
     await asyncio.to_thread(kernel_sync.save_agent_sync, cfg)
 
     async with async_unit_of_work() as db:
-        ws_ds = WorkspaceDatastore(db)
-        ws_row = WorkspaceRow(
+        ws_ds = ProjectDatastore(db)
+        ws_row = ProjectRow(
             id=ws_id,
             name="ChatPlan E2E",
             kind="project",
@@ -130,7 +130,7 @@ async def _seed_workspace_and_agent() -> tuple[str, str]:
 
         member_ds = ProjectMemberDatastore(db)
         member = ProjectMemberRow(
-            workspace_id=ws_id,
+            project_id=ws_id,
             agent_slug=slug,
             kernel_agent_id=kernel_agent_id,
         )
@@ -173,9 +173,9 @@ def main() -> int:
         sys.stderr.write("backend never came up\n")
         return 2
 
-    print("backend up — seeding workspace + agent...")
-    ws_id, slug = asyncio.run(_seed_workspace_and_agent())
-    print(f"  workspace_id={ws_id} agent_slug={slug}")
+    print("backend up — seeding project + agent...")
+    ws_id, slug = asyncio.run(_seed_project_and_agent())
+    print(f"  project_id={ws_id} agent_slug={slug}")
 
     chat_session_id = f"chat-{uuid.uuid4().hex[:8]}"
 
@@ -183,7 +183,7 @@ def main() -> int:
     print("\n[1] POST :draft")
     status, body = _http(
         "POST",
-        f"{base}/v1/workspaces/{ws_id}/tasks:draft",
+        f"{base}/v1/projects/{ws_id}/tasks:draft",
         {
             "goal": "Write a market report on Maotai",
             "lead_agent_slug": slug,
@@ -269,7 +269,7 @@ def main() -> int:
 
     # 6. POST :commit — will FAIL because no provider/credentials are
     # configured for this synthetic test agent. We expect the failure to
-    # be a structured error mentioning a missing provider or workspace
+    # be a structured error mentioning a missing provider or project
     # setup; the test asserts that the endpoint at least handles the
     # call and returns an error, not a 5xx server crash.
     print("\n[6] POST :commit (expected to fail without real provider)")
@@ -322,7 +322,7 @@ def main() -> int:
     print("\n[9] Create another draft and abandon it")
     status, body = _http(
         "POST",
-        f"{base}/v1/workspaces/{ws_id}/tasks:draft",
+        f"{base}/v1/projects/{ws_id}/tasks:draft",
         {
             "goal": "Throwaway",
             "lead_agent_slug": slug,
@@ -347,7 +347,7 @@ def main() -> int:
     asyncio.run(
         _make_task_active_with_mailbox(
             task_id="t-inject-e2e",
-            workspace_id=ws_id,
+            project_id=ws_id,
             originating_session_id=chat_session_id,
         )
     )
@@ -365,7 +365,7 @@ def main() -> int:
 
 
 async def _make_task_active_with_mailbox(
-    *, task_id: str, workspace_id: str, originating_session_id: str
+    *, task_id: str, project_id: str, originating_session_id: str
 ) -> None:
     """Seed an active task with a registered mailbox so :inject has
     a delivery target. This bypasses the kernel session spawn (which
@@ -387,7 +387,7 @@ async def _make_task_active_with_mailbox(
 
         row = TaskRow(
             id=task_id,
-            workspace_id=workspace_id,
+            project_id=project_id,
             file_path=f"/tmp/{task_id}.md",
             title="Inject E2E",
             goal="Test inject path",
@@ -403,7 +403,7 @@ async def _make_task_active_with_mailbox(
         await task_ds.create_task(row)
 
         lead_run = TaskSessionRow(
-            workspace_id=workspace_id,
+            project_id=project_id,
             task_id=task_id,
             session_id=lead_session_id,
             agent_slug="lead-agent",
@@ -412,7 +412,7 @@ async def _make_task_active_with_mailbox(
             status="active",
             label="E2E",
             goal="Test",
-            workspace_mode="shared",
+            project_mode="shared",
             run_dir="/tmp",
         )
         await run_ds.create_run(lead_run)

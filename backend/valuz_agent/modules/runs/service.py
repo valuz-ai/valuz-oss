@@ -1,13 +1,13 @@
 """Activity overview — aggregates running (and recently finished) runs.
 
 A "run" is a kernel session, classified by source:
-- ``assistant``     — chat in the default (kind="chat") workspace
-- ``project_chat``  — chat in a project workspace
+- ``assistant``     — chat in the default (kind="chat") project
+- ``project_chat``  — chat in a project
 - ``task``          — a task's **lead** session (member subtasks never surface
   as standalone runs)
 
 Sessions live in the kernel; the host reads them via the kernel async store and
-enriches with host-owned workspace + task rows. Built directly off the kernel
+enriches with host-owned project + task rows. Built directly off the kernel
 ``Session`` objects (which already carry ``todos`` / ``status`` / ``model``)
 so the overview needs no per-session detail fetch.
 
@@ -24,8 +24,8 @@ from src.core import Session as KernelSession  # type: ignore[import-not-found]
 
 import valuz_agent.boot.kernel  # noqa: F401 — puts kernel on sys.path
 from valuz_agent.adapters import kernel_store
-from valuz_agent.modules.projects.datastore import WorkspaceDatastore
-from valuz_agent.modules.projects.models import WorkspaceRow
+from valuz_agent.modules.projects.datastore import ProjectDatastore
+from valuz_agent.modules.projects.models import ProjectRow
 from valuz_agent.modules.tasks.datastore import (
     TaskDatastore,
     TaskEventDatastore,
@@ -84,11 +84,11 @@ class TodoSnapshot:
 class RunSummary:
     session_id: str
     source_kind: SourceKind
-    workspace_id: str
+    project_id: str
     title: str
     status: str
     updated_at: int  # Unix epoch milliseconds (UTC)
-    workspace_name: str | None = None
+    project_name: str | None = None
     task_id: str | None = None
     current_todo: TodoSnapshot | None = None
     last_message: str | None = None
@@ -132,12 +132,12 @@ def _pick_todo(todos: list[dict[str, Any]] | None) -> TodoSnapshot | None:
 class RunsService:
     def __init__(
         self,
-        workspaces: WorkspaceDatastore,
+        projects: ProjectDatastore,
         task_sessions: TaskSessionDatastore,
         tasks: TaskDatastore,
         task_events: TaskEventDatastore,
     ) -> None:
-        self._workspaces = workspaces
+        self._projects = projects
         self._task_sessions = task_sessions
         self._tasks = tasks
         self._task_events = task_events
@@ -147,8 +147,8 @@ class RunsService:
         sessions: list[KernelSession] = await kernel_store.list_sessions(
             project_id=None, limit=200, offset=0
         )
-        ws_map: dict[str, WorkspaceRow] = {
-            str(r.id): r for r in await self._workspaces.list_workspaces()
+        ws_map: dict[str, ProjectRow] = {
+            str(r.id): r for r in await self._projects.list_projects()
         }
         ts_map: dict[str, TaskSessionRow] = {
             r.session_id: r for r in await self._task_sessions.list_all()
@@ -192,12 +192,12 @@ class RunsService:
         self,
         sess: KernelSession,
         task_session: TaskSessionRow | None,
-        ws_map: dict[str, WorkspaceRow],
+        ws_map: dict[str, ProjectRow],
         task_map: dict[str, TaskRow],
         effective_status: str,
     ) -> RunSummary:
         meta: dict[str, Any] = (sess.metadata or {}).get("valuz") or {}
-        workspace = ws_map.get(str(sess.project_id))
+        project = ws_map.get(str(sess.project_id))
         title = meta.get("name") or meta.get("last_user_message_text") or "Untitled"
         source: SourceKind
         task_id: str | None = None
@@ -215,15 +215,15 @@ class RunsService:
         else:
             source = (
                 "project_chat"
-                if workspace is not None and workspace.kind == "project"
+                if project is not None and project.kind == "project"
                 else "assistant"
             )
             last_output = _truncate_output(await self._latest_assistant_text(sess.id))
         return RunSummary(
             session_id=sess.id,
             source_kind=source,
-            workspace_id=str(sess.project_id),
-            workspace_name=workspace.name if workspace is not None else None,
+            project_id=str(sess.project_id),
+            project_name=project.name if project is not None else None,
             task_id=task_id,
             title=str(title),
             status=effective_status,

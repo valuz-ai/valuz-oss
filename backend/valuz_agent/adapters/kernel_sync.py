@@ -117,7 +117,7 @@ def list_agents_sync(*, status: str = "active") -> list[AgentConfig]:
     creation time descending. Post-filters by ``status`` client-side
     because ``StorePort.list_agents`` does not accept a status filter.
     Paginates internally (limit=200) which is sufficient for MVP; raise
-    a follow-up if the workspace ever exceeds ~200 agents.
+    a follow-up if the project ever exceeds ~200 agents.
     """
     store = _get_store()
     agents: list[AgentConfig] = _run_in_thread(lambda: store.list_agents(limit=200, offset=0))

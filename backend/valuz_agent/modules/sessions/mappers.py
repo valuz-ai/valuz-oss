@@ -26,7 +26,7 @@ def _copy_session(session: KernelSession, /, **overrides: object) -> KernelSessi
     status-only updates would re-break runtime dispatch). V5+messages
     drops ``total_turns`` / ``total_cost_usd`` (now on Message) and adds
     ``todos`` (latest TodoWrite snapshot) and ``runtime_session_id``.
-    ADR-008 (V5+e8d6c87) adds ``instructions`` — the workspace system
+    ADR-008 (V5+e8d6c87) adds ``instructions`` — the project system
     prompt is now session-level state, so dropping it on status copies
     would leave the runtime with an empty prompt mid-session.
     V5+1aae940 (approval contract slice 1) sinks ``permission_mode`` to
@@ -70,7 +70,7 @@ def _session_to_list_item(session: KernelSession) -> SessionListItem:
     raw_task_id = meta.get("task_id")
     return SessionListItem(
         id=session.id,
-        workspace_id=str(session.project_id),
+        project_id=str(session.project_id),
         name=meta.get("name") or None,  # type: ignore[arg-type]
         status=_map_kernel_status(session.status),
         origin=str(meta.get("origin") or "user"),
@@ -109,7 +109,7 @@ def _session_to_detail(session: KernelSession) -> SessionDetail:
     effort = settings.effort if settings is not None else None
     return SessionDetail(
         id=session.id,
-        workspace_id=str(session.project_id),
+        project_id=str(session.project_id),
         name=meta.get("name") or None,  # type: ignore[arg-type]
         status=_map_kernel_status(session.status),
         origin=str(meta.get("origin") or "user"),

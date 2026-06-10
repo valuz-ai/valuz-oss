@@ -57,9 +57,9 @@ interface SkillSubmissionCardProps {
   /** When ``state === "error"``, the message to display under the card. */
   errorMessage?: string;
   /** When ``state === "confirmed"`` and the entry was a project, the
-   * human-readable workspace label to confirm the binding ("已绑定到
+   * human-readable project label to confirm the binding ("已绑定到
    * Project 名称"). Omit for chat / skills_library entries. */
-  boundToWorkspaceLabel?: string | null;
+  boundToProjectLabel?: string | null;
   /** Live file listing from the staging directory — when present and
    * non-empty, the card surfaces a collapsible tree so the user can
    * eyeball what they're about to save. ``undefined`` means the page
@@ -81,7 +81,7 @@ export const SkillSubmissionCard = memo(function SkillSubmissionCard({
   filesTouched,
   state,
   errorMessage,
-  boundToWorkspaceLabel,
+  boundToProjectLabel,
   stagedFiles,
   stagingPath,
   onConfirm,
@@ -212,10 +212,10 @@ export const SkillSubmissionCard = memo(function SkillSubmissionCard({
           {state === "confirmed" ? (
             <p className="mt-2 text-xs text-ink-body">
               {t("skill.savedToLib")}
-              {boundToWorkspaceLabel ? (
+              {boundToProjectLabel ? (
                 <span className="text-ink-meta">
                   {" "}
-                  {t("skill.boundToWorkspace", { name: boundToWorkspaceLabel })}
+                  {t("skill.boundToProject", { name: boundToProjectLabel })}
                 </span>
               ) : null}
             </p>

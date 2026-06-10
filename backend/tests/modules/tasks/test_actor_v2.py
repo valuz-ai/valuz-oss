@@ -114,7 +114,7 @@ async def test_lead_loop_runs_turns_until_shutdown() -> None:
             initial_prompt="initial brief",
             role="lead",
             task_id="t1",
-            workspace_id="w1",
+            project_id="w1",
         ),
         timeout=2.0,
     )
@@ -152,7 +152,7 @@ async def test_member_loop_notifies_lead_and_self_reaps_on_ttl() -> None:
             initial_prompt="do the thing",
             role="subtask",
             task_id="t1",
-            workspace_id="w1",
+            project_id="w1",
             idle_ttl=0.05,
         ),
         timeout=2.0,
@@ -183,7 +183,7 @@ async def test_terminal_turn_status_breaks_loop_immediately() -> None:
             initial_prompt="brief",
             role="lead",
             task_id="t1",
-            workspace_id="w1",
+            project_id="w1",
         ),
         timeout=2.0,
     )
@@ -262,7 +262,7 @@ def test_build_member_session_injects_skill_scoping(
 
     session = asyncio.run(
         agent_resolver.build_member_session(
-            workspace_id="w1",
+            project_id="w1",
             agent_slug="writer",
             members=fake_members,  # type: ignore[arg-type]
             is_lead=False,
@@ -308,7 +308,7 @@ def test_build_member_session_carries_agent_effort(
 
     session = asyncio.run(
         agent_resolver.build_member_session(
-            workspace_id="w1",
+            project_id="w1",
             agent_slug="writer",
             members=fake_members,  # type: ignore[arg-type]
             is_lead=False,
@@ -349,7 +349,7 @@ def test_build_member_session_no_effort_leaves_model_settings_unset(
 
     session = asyncio.run(
         agent_resolver.build_member_session(
-            workspace_id="w1",
+            project_id="w1",
             agent_slug="writer",
             members=fake_members,  # type: ignore[arg-type]
             is_lead=False,
@@ -394,7 +394,7 @@ def test_build_member_session_sets_goal_mode_for_claude_agent(
     agent_resolver, fake_members = _fake_goal_mode_setup(monkeypatch, "claude_agent")
     session = asyncio.run(
         agent_resolver.build_member_session(
-            workspace_id="w1",
+            project_id="w1",
             agent_slug="writer",
             members=fake_members,  # type: ignore[arg-type]
             is_lead=False,
@@ -415,7 +415,7 @@ def test_build_member_session_goal_mode_falls_back_to_default_for_deepagents(
     agent_resolver, fake_members = _fake_goal_mode_setup(monkeypatch, "deepagents")
     session = asyncio.run(
         agent_resolver.build_member_session(
-            workspace_id="w1",
+            project_id="w1",
             agent_slug="writer",
             members=fake_members,  # type: ignore[arg-type]
             is_lead=False,
@@ -436,7 +436,7 @@ def test_build_member_session_default_when_goal_mode_off(
     agent_resolver, fake_members = _fake_goal_mode_setup(monkeypatch, "claude_agent")
     session = asyncio.run(
         agent_resolver.build_member_session(
-            workspace_id="w1",
+            project_id="w1",
             agent_slug="writer",
             members=fake_members,  # type: ignore[arg-type]
             is_lead=False,
@@ -531,7 +531,7 @@ def test_create_task_gate_rejects_task_sessions(
     monkeypatch.setattr(
         dispatch_mcp.kernel_store,
         "load_session",
-        _as_async(lambda _sid: _sess({"run_kind": "lead", "workspace_id": "w1"})),
+        _as_async(lambda _sid: _sess({"run_kind": "lead", "project_id": "w1"})),
     )
     res = asyncio.run(dispatch_mcp._check_orchestration_gate(ctx))  # type: ignore[arg-type]
     assert isinstance(res, ToolResult) and res.is_error
@@ -540,12 +540,12 @@ def test_create_task_gate_rejects_task_sessions(
     monkeypatch.setattr(
         dispatch_mcp.kernel_store,
         "load_session",
-        _as_async(lambda _sid: _sess({"run_kind": "subtask", "workspace_id": "w1"})),
+        _as_async(lambda _sid: _sess({"run_kind": "subtask", "project_id": "w1"})),
     )
     res = asyncio.run(dispatch_mcp._check_orchestration_gate(ctx))  # type: ignore[arg-type]
     assert isinstance(res, ToolResult) and res.is_error
 
-    # plain conversation but no workspace_id → rejected.
+    # plain conversation but no project_id → rejected.
     monkeypatch.setattr(
         dispatch_mcp.kernel_store,
         "load_session",
@@ -618,7 +618,7 @@ def test_send_to_member_rejects_cross_task(monkeypatch: pytest.MonkeyPatch) -> N
 
     from valuz_agent.modules.tasks import messaging
 
-    other_run = SimpleNamespace(task_id="OTHER", workspace_id="w1")
+    other_run = SimpleNamespace(task_id="OTHER", project_id="w1")
 
     async def _get_run(_sid):
         return other_run
@@ -640,7 +640,7 @@ def test_send_to_member_rejects_cross_task(monkeypatch: pytest.MonkeyPatch) -> N
             from_session_id="lead-T1",
             to_session_id="member-of-OTHER",
             text="hi",
-            workspace_id="w1",
+            project_id="w1",
             task_id="T1",
         )
     )
@@ -764,7 +764,7 @@ def test_build_member_session_carries_effort_for_deepagents(
 
     session = asyncio.run(
         agent_resolver.build_member_session(
-            workspace_id="w1",
+            project_id="w1",
             agent_slug="quickbot",
             members=fake_members,  # type: ignore[arg-type]
             is_lead=False,
@@ -835,7 +835,7 @@ async def test_await_members_all_returns_when_all_keys_done(monkeypatch) -> None
         )
         res = await orch.await_member_results(
             lead_session_id=lead,
-            workspace_id="w1",
+            project_id="w1",
             task_id="t1",
             keys=["A", "B"],
             mode="all",
@@ -864,7 +864,7 @@ async def test_await_members_any_returns_on_first(monkeypatch) -> None:
         mailbox_registry.put(lead, InboxMsg(kind="member_done", from_session="sA", payload={}))
         res = await orch.await_member_results(
             lead_session_id=lead,
-            workspace_id="w1",
+            project_id="w1",
             task_id="t1",
             keys=["A", "B"],
             mode="any",
@@ -892,7 +892,7 @@ async def test_await_members_timeout_returns_partial_with_pending(monkeypatch) -
         mailbox_registry.put(lead, InboxMsg(kind="member_done", from_session="sA", payload={}))
         res = await orch.await_member_results(
             lead_session_id=lead,
-            workspace_id="w1",
+            project_id="w1",
             task_id="t1",
             keys=["A", "B"],
             mode="all",

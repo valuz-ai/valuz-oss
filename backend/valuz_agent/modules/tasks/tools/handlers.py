@@ -98,7 +98,7 @@ logger = logging.getLogger(__name__)
 
 
 def _check_lead_gate(ctx: ExecContext) -> tuple[str, str] | ToolResult:
-    """Verify the caller is a lead session and return (task_id, workspace_id).
+    """Verify the caller is a lead session and return (task_id, project_id).
 
     Returns a ToolResult(is_error=True) when the check fails.
     """
@@ -114,13 +114,13 @@ def _check_lead_gate(ctx: ExecContext) -> tuple[str, str] | ToolResult:
         )
 
     task_id = v.get("task_id", "")
-    workspace_id = v.get("workspace_id", "")
-    if not task_id or not workspace_id:
+    project_id = v.get("project_id", "")
+    if not task_id or not project_id:
         return ToolResult(
-            content="dispatch: lead session is missing task_id or workspace_id in metadata",
+            content="dispatch: lead session is missing task_id or project_id in metadata",
             is_error=True,
         )
-    return task_id, workspace_id
+    return task_id, project_id
 
 
 async def _resolve_plan_writer_task(
@@ -136,11 +136,11 @@ async def _resolve_plan_writer_task(
        from the caller session's metadata (lead path).
     2. Loads the TaskRow.
     3. Runs the writer gate based on task.status:
-       - ``draft``  → caller must be originating session OR same workspace.
+       - ``draft``  → caller must be originating session OR same project.
        - ``active`` → caller must be the lead (strict D6).
        - else      → reject (plan is read-only on terminal/paused tasks).
 
-    Returns ``(task_row, workspace_id, task_id)`` on success or
+    Returns ``(task_row, project_id, task_id)`` on success or
     ``ToolResult(is_error=True)`` on any failure.
 
     Read-only callers (get_plan) should use ``_resolve_plan_reader_task`` instead.
@@ -172,7 +172,7 @@ async def _resolve_plan_writer_task(
     gate_err = _check_plan_writer_gate(sess, task)
     if gate_err is not None:
         return gate_err
-    return task, task.workspace_id, task_id
+    return task, task.project_id, task_id
 
 
 async def _resolve_plan_reader_task(
@@ -180,8 +180,8 @@ async def _resolve_plan_reader_task(
 ) -> tuple[Any, str, str] | ToolResult:
     """Loose variant of ``_resolve_plan_writer_task`` for read-only plan calls.
 
-    Permits any caller in the task's workspace (chat or lead). Useful for
-    get_plan: knowing your own draft / a workspace mate's plan is fine.
+    Permits any caller in the task's project (chat or lead). Useful for
+    get_plan: knowing your own draft / a project mate's plan is fine.
     """
     sess = await kernel_store.load_session(ctx.session_id)
     if sess is None:
@@ -201,16 +201,16 @@ async def _resolve_plan_reader_task(
     if task is None:
         return ToolResult(content=f"plan tool: task {task_id!r} not found", is_error=True)
 
-    caller_ws = getattr(sess, "project_id", "") or v.get("workspace_id", "")
-    if caller_ws != task.workspace_id:
+    caller_ws = getattr(sess, "project_id", "") or v.get("project_id", "")
+    if caller_ws != task.project_id:
         return ToolResult(
             content=(
-                f"plan tool: caller workspace {caller_ws!r} does not match "
-                f"task workspace {task.workspace_id!r}"
+                f"plan tool: caller project {caller_ws!r} does not match "
+                f"task project {task.project_id!r}"
             ),
             is_error=True,
         )
-    return task, task.workspace_id, task_id
+    return task, task.project_id, task_id
 
 
 def _check_plan_writer_gate(sess: Any, task: Any) -> ToolResult | None:
@@ -220,7 +220,7 @@ def _check_plan_writer_gate(sess: Any, task: Any) -> ToolResult | None:
 
     Policy (VALUZ-CHATPLAN D6 strict):
       - ``status == draft``: originating session OR any session in the task's
-        workspace (personal-desktop trust boundary — Q3).
+        project (personal-desktop trust boundary — Q3).
       - ``status == active``: STRICT lead-only. Chat that wants to revise the
         plan mid-execution must go through ``inject_into_task`` (S4) and let
         the lead make the change itself.
@@ -233,14 +233,14 @@ def _check_plan_writer_gate(sess: Any, task: Any) -> ToolResult | None:
         origin = meta.get("originating_session_id")
         if sess.id == origin:
             return None
-        caller_ws = getattr(sess, "project_id", "") or v.get("workspace_id", "")
-        if caller_ws == task.workspace_id:
+        caller_ws = getattr(sess, "project_id", "") or v.get("project_id", "")
+        if caller_ws == task.project_id:
             return None
         return ToolResult(
             content=(
                 f"not authorized: draft task {task.id!r} is held by its originator and "
-                f"workspace members; caller is in workspace {caller_ws!r}, task is in "
-                f"{task.workspace_id!r}"
+                f"project members; caller is in project {caller_ws!r}, task is in "
+                f"{task.project_id!r}"
             ),
             is_error=True,
         )
@@ -266,13 +266,13 @@ def _check_plan_writer_gate(sess: Any, task: Any) -> ToolResult | None:
 
 
 async def _check_orchestration_gate(ctx: ExecContext) -> tuple[str, str] | ToolResult:
-    """Gate for ``create_task`` (M10 附录 E). Returns (workspace_id, agent_slug).
+    """Gate for ``create_task`` (M10 附录 E). Returns (project_id, agent_slug).
 
     Allowed only from a **plain project conversation** session: it must carry a
-    ``workspace_id`` and must NOT already be a task session (``run_kind`` in
+    ``project_id`` and must NOT already be a task session (``run_kind`` in
     {lead, subtask}) — that prevents a task lead/member from recursively
-    spawning nested tasks (附录 E E-3). The workspace must be a project (chat
-    workspaces are ephemeral). Returns a ToolResult(is_error=True) on failure.
+    spawning nested tasks (附录 E E-3). The project must be a project (chat
+    projects are ephemeral). Returns a ToolResult(is_error=True) on failure.
     """
     sess = await kernel_store.load_session(ctx.session_id)
     if sess is None:
@@ -289,36 +289,36 @@ async def _check_orchestration_gate(ctx: ExecContext) -> tuple[str, str] | ToolR
             is_error=True,
         )
 
-    # Workspace = the kernel Session.project_id (authoritative). Plain
-    # conversation sessions don't echo workspace_id into valuz metadata, so
-    # read project_id directly (valuz.workspace_id only exists on task runs).
-    workspace_id = getattr(sess, "project_id", "") or v.get("workspace_id", "")
-    if not workspace_id:
+    # Project = the kernel Session.project_id (authoritative). Plain
+    # conversation sessions don't echo project_id into valuz metadata, so
+    # read project_id directly (valuz.project_id only exists on task runs).
+    project_id = getattr(sess, "project_id", "") or v.get("project_id", "")
+    if not project_id:
         return ToolResult(
-            content="create_task: caller session has no workspace",
+            content="create_task: caller session has no project",
             is_error=True,
         )
 
-    # Restrict to project workspaces — chat workspaces are per-session ephemeral.
+    # Restrict to projects — chat projects are per-session ephemeral.
     from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.modules.projects.datastore import WorkspaceDatastore
+    from valuz_agent.modules.projects.datastore import ProjectDatastore
 
     async with async_unit_of_work(commit=False) as db:
-        ws = await WorkspaceDatastore(db).get_by_id(workspace_id)
+        ws = await ProjectDatastore(db).get_by_id(project_id)
     if ws is None or ws.kind != "project":
         return ToolResult(
-            content="create_task is only available inside a project workspace",
+            content="create_task is only available inside a project",
             is_error=True,
         )
 
     agent_slug: str = v.get("agent_slug") or ""
-    return workspace_id, agent_slug
+    return project_id, agent_slug
 
 
 async def _bound_agent_member(sess: Any) -> dict[str, Any] | None:
     """The conversation's own bound agent, shaped like a ``list_members`` row.
 
-    A project-less *chat* workspace has no deployed project members, but the
+    A project-less *chat* project has no deployed project members, but the
     conversation is still driven by a real agent — its bound library agent
     (e.g. the seeded ``default-assistant``), recorded on the session as
     ``metadata["valuz"]["agent_slug"]`` with the kernel agent at
@@ -365,7 +365,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         gate = _check_lead_gate(ctx)
         if isinstance(gate, ToolResult):
             return gate
-        task_id, workspace_id = gate
+        task_id, project_id = gate
 
         subtask_key: str = (args.get("subtask_key") or "").strip()
         if not subtask_key:
@@ -376,13 +376,13 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
             # same turn via ``await_members``.
             result = await orchestrator.dispatch_async(
                 task_id=task_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 lead_session_id=ctx.session_id,
                 subtask_key=subtask_key,
                 agent=args.get("agent"),
                 goal=args.get("goal"),
                 refs=args.get("refs") or [],
-                workspace_mode=args.get("workspace_mode"),
+                project_mode=args.get("project_mode"),
             )
             return ToolResult(
                 content=json.dumps(result, ensure_ascii=False), is_error="error" in result
@@ -395,11 +395,11 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         gate = _check_lead_gate(ctx)
         if isinstance(gate, ToolResult):
             return gate
-        task_id, workspace_id = gate
+        task_id, project_id = gate
         try:
             result = await orchestrator.await_member_results(
                 lead_session_id=ctx.session_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 keys=args.get("keys"),
                 # Default to "any" for immediate per-member review: return as
@@ -417,7 +417,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         gate = _check_lead_gate(ctx)
         if isinstance(gate, ToolResult):
             return gate
-        task_id, workspace_id = gate
+        task_id, project_id = gate
 
         to_session_id: str = args.get("session_id", "")
         text: str = args.get("text", "")
@@ -429,7 +429,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
                 from_session_id=ctx.session_id,
                 to_session_id=to_session_id,
                 text=text,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
             )
             return ToolResult(
@@ -446,7 +446,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         gate = await _check_orchestration_gate(ctx)
         if isinstance(gate, ToolResult):
             return gate
-        workspace_id, conversation_agent_slug = gate
+        project_id, conversation_agent_slug = gate
 
         goal: str = (args.get("goal") or "").strip()
         if not goal:
@@ -460,7 +460,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
 
         try:
             task_row = await orchestrator.draft_task(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 goal=goal,
                 lead_agent_slug=lead_agent,
                 originating_session_id=ctx.session_id,
@@ -482,20 +482,20 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         except ValueError as exc:
             return ToolResult(content=f"draft_task: {exc}", is_error=True)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("draft_task handler error in workspace %s", workspace_id)
+            logger.exception("draft_task handler error in project %s", project_id)
             return ToolResult(content=f"draft_task failed: {exc}", is_error=True)
 
     async def _commit_task_handler(args: dict[str, Any], ctx: ExecContext) -> ToolResult:
         # commit_task is the writer-gate-protected state transition: only the
-        # draft's originator (or a same-workspace chat) can flip it active.
+        # draft's originator (or a same-project chat) can flip it active.
         resolved = await _resolve_plan_writer_task(ctx, args)
         if isinstance(resolved, ToolResult):
             return resolved
-        task, workspace_id, task_id = resolved
+        task, project_id, task_id = resolved
         try:
             result = await orchestrator.commit_task(
                 task_id=task_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 caller_session_id=ctx.session_id,
                 lead_agent_slug_override=args.get("lead_agent_slug"),
             )
@@ -511,11 +511,11 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         resolved = await _resolve_plan_writer_task(ctx, args)
         if isinstance(resolved, ToolResult):
             return resolved
-        task, workspace_id, task_id = resolved
+        task, project_id, task_id = resolved
         try:
             result = await orchestrator.abandon_task(
                 task_id=task_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 caller_session_id=ctx.session_id,
                 reason=(args.get("reason") or ""),
             )
@@ -530,7 +530,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
     async def _inject_into_task_handler(args: dict[str, Any], ctx: ExecContext) -> ToolResult:
         # VALUZ-CHATPLAN S4: chat → running-lead intervention. Auth is looser
         # than the writer gate (a chat session may not be the originator AND
-        # the task is past draft) — workspace-member is enough because the
+        # the task is past draft) — project-member is enough because the
         # lead retains full authority over what to do with the message.
         task_id = (args.get("task_id") or "").strip()
         text = args.get("text") or ""
@@ -554,16 +554,16 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
             )
 
         v: dict[str, Any] = (sess.metadata or {}).get("valuz", {})
-        caller_ws = getattr(sess, "project_id", "") or v.get("workspace_id", "")
+        caller_ws = getattr(sess, "project_id", "") or v.get("project_id", "")
         origin = (task.metadata_ or {}).get("originating_session_id")
         is_originator = bool(origin) and sess.id == origin
-        is_workspace_mate = bool(caller_ws) and caller_ws == task.workspace_id
-        if not (is_originator or is_workspace_mate):
+        is_project_mate = bool(caller_ws) and caller_ws == task.project_id
+        if not (is_originator or is_project_mate):
             return ToolResult(
                 content=(
                     f"inject_into_task: FORBIDDEN — caller is neither the task's "
-                    f"originator nor a session in the task's workspace "
-                    f"(task workspace {task.workspace_id!r})"
+                    f"originator nor a session in the task's project "
+                    f"(task project {task.project_id!r})"
                 ),
                 is_error=True,
             )
@@ -571,7 +571,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         try:
             result = await messaging.inject_into_task(
                 task_id=task_id,
-                workspace_id=task.workspace_id,
+                project_id=task.project_id,
                 text=text,
                 from_session_id=ctx.session_id,
             )
@@ -585,7 +585,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
 
     async def _resume_task_handler(args: dict[str, Any], ctx: ExecContext) -> ToolResult:
         # Chat-side resume. Same auth model as inject_into_task: caller must
-        # be the task's originator OR a session in the same workspace —
+        # be the task's originator OR a session in the same project —
         # state-machine + orchestrator.resume_task already validates that the
         # task is paused/blocked (terminal/draft/active rejected with a
         # human-readable reason in the dict it returns).
@@ -606,16 +606,16 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
             return ToolResult(content=f"resume_task: task {task_id!r} not found", is_error=True)
 
         v: dict[str, Any] = (sess.metadata or {}).get("valuz", {})
-        caller_ws = getattr(sess, "project_id", "") or v.get("workspace_id", "")
+        caller_ws = getattr(sess, "project_id", "") or v.get("project_id", "")
         origin = (task.metadata_ or {}).get("originating_session_id")
         is_originator = bool(origin) and sess.id == origin
-        is_workspace_mate = bool(caller_ws) and caller_ws == task.workspace_id
-        if not (is_originator or is_workspace_mate):
+        is_project_mate = bool(caller_ws) and caller_ws == task.project_id
+        if not (is_originator or is_project_mate):
             return ToolResult(
                 content=(
                     "resume_task: FORBIDDEN — caller is neither the task's "
-                    "originator nor a session in the task's workspace "
-                    f"(task workspace {task.workspace_id!r})"
+                    "originator nor a session in the task's project "
+                    f"(task project {task.project_id!r})"
                 ),
                 is_error=True,
             )
@@ -623,7 +623,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         try:
             result = await orchestrator.resume_task(
                 task_id=task_id,
-                workspace_id=task.workspace_id,
+                project_id=task.project_id,
                 actor=ctx.session_id,
             )
             return ToolResult(
@@ -638,7 +638,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         gate = await _check_orchestration_gate(ctx)
         if isinstance(gate, ToolResult):
             return gate
-        workspace_id, conversation_agent_slug = gate
+        project_id, conversation_agent_slug = gate
 
         goal: str = (args.get("goal") or "").strip()
         if not goal:
@@ -655,7 +655,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
 
         try:
             task_row = await orchestrator.kickoff(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 goal=goal,
                 lead_agent_slug=lead_agent,
                 refs=args.get("refs") or [],
@@ -677,36 +677,36 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
                 )
             )
         except Exception as exc:  # noqa: BLE001
-            logger.exception("create_task handler error in workspace %s", workspace_id)
+            logger.exception("create_task handler error in project %s", project_id)
             return ToolResult(content=f"create_task failed: {exc}", is_error=True)
 
     async def _list_tasks_handler(args: dict[str, Any], ctx: ExecContext) -> ToolResult:
         gate = await _check_orchestration_gate(ctx)
         if isinstance(gate, ToolResult):
             return gate
-        workspace_id, _agent_slug = gate
+        project_id, _agent_slug = gate
         try:
             tasks = await queries.list_tasks(
-                workspace_id,
+                project_id,
                 status=args.get("status"),
                 mine_session_id=ctx.session_id if args.get("mine_only") else None,
                 limit=int(args.get("limit") or 20),
             )
             return ToolResult(content=json.dumps({"tasks": tasks}, ensure_ascii=False))
         except Exception as exc:  # noqa: BLE001
-            logger.exception("list_tasks handler error in workspace %s", workspace_id)
+            logger.exception("list_tasks handler error in project %s", project_id)
             return ToolResult(content=f"list_tasks failed: {exc}", is_error=True)
 
     async def _get_task_handler(args: dict[str, Any], ctx: ExecContext) -> ToolResult:
         gate = await _check_orchestration_gate(ctx)
         if isinstance(gate, ToolResult):
             return gate
-        workspace_id, _agent_slug = gate
+        project_id, _agent_slug = gate
         task_id = (args.get("task_id") or "").strip()
         if not task_id:
             return ToolResult(content="get_task: task_id is required", is_error=True)
         try:
-            detail = await queries.get_task(task_id, workspace_id)
+            detail = await queries.get_task(task_id, project_id)
             if detail is None:
                 return ToolResult(
                     content=f"task {task_id!r} not found in this project", is_error=True
@@ -719,23 +719,23 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
     async def _list_members_handler(args: dict[str, Any], ctx: ExecContext) -> ToolResult:
         # Read-only roster query — allowed for BOTH a task lead AND a plain
         # project-conversation launcher (so it can inspect the team before
-        # create_task). NOT lead-gated; just needs a workspace. Resolve from
+        # create_task). NOT lead-gated; just needs a project. Resolve from
         # valuz metadata (task runs) or session.project_id (launcher).
         sess = await kernel_store.load_session(ctx.session_id)
         if sess is None:
             return ToolResult(content="list_members: caller session not found", is_error=True)
         v: dict[str, Any] = (sess.metadata or {}).get("valuz", {})
-        workspace_id = v.get("workspace_id", "") or getattr(sess, "project_id", "")
-        if not workspace_id:
+        project_id = v.get("project_id", "") or getattr(sess, "project_id", "")
+        if not project_id:
             return ToolResult(
-                content="list_members: caller session has no workspace", is_error=True
+                content="list_members: caller session has no project", is_error=True
             )
 
         try:
-            members = await queries.list_members(workspace_id)
+            members = await queries.list_members(project_id)
             if not members:
                 # Project-less chat fallback (see ``_bound_agent_member``):
-                # a chat workspace has no deployed project members, but the
+                # a chat project has no deployed project members, but the
                 # conversation IS driven by its bound agent. Surface it so the
                 # roster isn't an empty dead-end that makes the caller give up
                 # (e.g. abort an automation create) — the slug is usable
@@ -752,7 +752,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         gate = _check_lead_gate(ctx)
         if isinstance(gate, ToolResult):
             return gate
-        task_id, workspace_id = gate
+        task_id, project_id = gate
 
         summary: str = args.get("summary", "")
         artifacts: list[str] = args.get("artifacts") or []
@@ -761,7 +761,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         try:
             result = await orchestrator.finish_task(
                 task_id=task_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 lead_session_id=ctx.session_id,
                 summary=summary,
                 artifacts=artifacts,
@@ -784,7 +784,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         resolved = await _resolve_plan_writer_task(ctx, args)
         if isinstance(resolved, ToolResult):
             return resolved
-        task, workspace_id, task_id = resolved
+        task, project_id, task_id = resolved
 
         # D10 belt-and-suspenders: once a task is committed (committed_at set
         # OR plan_pre_committed implicit by status=active), reject plan_task.
@@ -806,7 +806,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         try:
             result = await planning.plan_task(
                 task_id=task_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 lead_session_id=ctx.session_id,
                 subtasks=subtasks,
             )
@@ -818,13 +818,13 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
             return ToolResult(content=f"plan_task failed: {exc}", is_error=True)
 
     async def _get_plan_handler(args: dict[str, Any], ctx: ExecContext) -> ToolResult:
-        # get_plan is read-only: any workspace member can read.
+        # get_plan is read-only: any project member can read.
         resolved = await _resolve_plan_reader_task(ctx, args)
         if isinstance(resolved, ToolResult):
             return resolved
-        _task, workspace_id, task_id = resolved
+        _task, project_id, task_id = resolved
         try:
-            result = await planning.get_plan(task_id=task_id, workspace_id=workspace_id)
+            result = await planning.get_plan(task_id=task_id, project_id=project_id)
             return ToolResult(
                 content=json.dumps(result, ensure_ascii=False), is_error="error" in result
             )
@@ -836,12 +836,12 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         resolved = await _resolve_plan_writer_task(ctx, args)
         if isinstance(resolved, ToolResult):
             return resolved
-        _task, workspace_id, task_id = resolved
+        _task, project_id, task_id = resolved
         expected_version_arg = args.get("expected_version")
         try:
             result = await planning.modify_plan(
                 task_id=task_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 lead_session_id=ctx.session_id,
                 add=args.get("add"),
                 update=args.get("update"),
@@ -860,7 +860,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         gate = _check_lead_gate(ctx)
         if isinstance(gate, ToolResult):
             return gate
-        task_id, workspace_id = gate
+        task_id, project_id = gate
         decision = (args.get("decision") or "").strip()
         if decision not in ("approve", "rework"):
             return ToolResult(
@@ -874,7 +874,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         try:
             result = await planning.review_subtask(
                 task_id=task_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 lead_session_id=ctx.session_id,
                 decision=decision,
                 subtask_key=args.get("subtask_key"),
@@ -896,7 +896,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         gate = _check_lead_gate(ctx)
         if isinstance(gate, ToolResult):
             return gate
-        task_id, workspace_id = gate
+        task_id, project_id = gate
 
         # Resolve target session id from explicit arg or via subtask_key →
         # latest_run_session_id on the plan node.
@@ -915,7 +915,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
             from valuz_agent.modules.tasks.plan import TaskPlan
 
             async with async_unit_of_work(commit=False) as db:
-                task = await TaskDatastore(db).get_task_by_workspace(workspace_id, task_id)
+                task = await TaskDatastore(db).get_task_by_project(project_id, task_id)
             if task is None:
                 return ToolResult(
                     content=f"stop_subtask: task {task_id!r} not found", is_error=True

@@ -45,7 +45,7 @@ def _seed_lead(db_factory, tmp_path, *, lead_session_id="lead-1"):
     try:
         db.add(
             TaskSessionRow(
-                workspace_id="w1",
+                project_id="w1",
                 task_id="t1",
                 session_id=lead_session_id,
                 agent_slug="lead-agent",
@@ -54,7 +54,7 @@ def _seed_lead(db_factory, tmp_path, *, lead_session_id="lead-1"):
                 status="active",
                 label="Kickoff",
                 goal="old goal",
-                workspace_mode="shared",
+                project_mode="shared",
                 run_dir=str(tmp_path),
             )
         )
@@ -69,7 +69,7 @@ async def test_delivers_revise_goal_message_to_registered_lead(db_factory, tmp_p
     mailbox_registry.register("lead-1")
 
     res = await messaging.notify_lead_goal_revised(
-        task_id="t1", workspace_id="w1", new_goal="NEW GOAL"
+        task_id="t1", project_id="w1", new_goal="NEW GOAL"
     )
 
     assert res["delivered"] is True
@@ -88,7 +88,7 @@ async def test_offline_lead_returns_lead_offline_not_delivered(db_factory, tmp_p
     _seed_lead(db_factory, tmp_path, lead_session_id="lead-1")
     # lead run exists but its mailbox is NOT registered (already finished)
 
-    res = await messaging.notify_lead_goal_revised(task_id="t1", workspace_id="w1", new_goal="NEW")
+    res = await messaging.notify_lead_goal_revised(task_id="t1", project_id="w1", new_goal="NEW")
 
     assert res["delivered"] is False
     assert res["reason"] == "LEAD_OFFLINE"
@@ -98,7 +98,7 @@ async def test_offline_lead_returns_lead_offline_not_delivered(db_factory, tmp_p
 @pytest.mark.asyncio
 async def test_no_lead_run_returns_no_lead(db_factory, tmp_path):
     # no lead session seeded for the task
-    res = await messaging.notify_lead_goal_revised(task_id="t1", workspace_id="w1", new_goal="NEW")
+    res = await messaging.notify_lead_goal_revised(task_id="t1", project_id="w1", new_goal="NEW")
 
     assert res["delivered"] is False
     assert res["reason"] == "NO_LEAD"

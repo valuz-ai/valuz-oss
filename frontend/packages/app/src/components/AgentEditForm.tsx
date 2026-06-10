@@ -74,7 +74,7 @@ export const AgentEditForm = ({
         connectorsApi
           .list()
           .catch(() => ({ connectors: [] as ConnectorItem[] })),
-        skillsApi.list().catch(() => ({ workspace_id: "", skills: [] })),
+        skillsApi.list().catch(() => ({ project_id: "", skills: [] })),
       ]);
       if (cancelled) return;
       setConnectors(

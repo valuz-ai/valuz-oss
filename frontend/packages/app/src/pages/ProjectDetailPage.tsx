@@ -34,7 +34,7 @@ import {
 import { FilePenLine, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
-  workspacesApi,
+  projectsApi,
   sessionsApi,
   providersApi,
   automationsApi,
@@ -52,8 +52,8 @@ import {
   type AutomationItem,
   type RuntimeId,
   type Trigger,
-  type WorkspaceDetail,
-  type WorkspaceFileNode,
+  type ProjectDetail,
+  type ProjectFileNode,
   type ProviderDetail,
   type ProviderListItem,
   type ConnectorItem,
@@ -64,7 +64,7 @@ import {
 } from "@valuz/core";
 import { modelLabel } from "@valuz/shared";
 import type { SessionListItem } from "@valuz/shared";
-import { useWorkspaceOutlet } from "@valuz/app/layout";
+import { useProjectOutlet } from "@valuz/app/layout";
 import { usePlatform } from "@valuz/app/platform";
 import { useProjectKbBindings, useKbDocTree } from "@valuz/app/hooks";
 import { RUNTIME_DISPLAY_NAME, useTranslation } from "@valuz/core";
@@ -470,12 +470,12 @@ export const ProjectDetailPage = () => {
     setHeader,
     setMainClassName,
     setContentInnerClassName,
-  } = useWorkspaceOutlet();
+  } = useProjectOutlet();
   const panelCollapsed = usePanelStore((s) => s.collapsed);
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
 
   // Global sessions list — already fetched + kept fresh by
-  // ``DesktopWorkspaceLayout``. Filter to this project to render the
+  // ``DesktopProjectLayout``. Filter to this project to render the
   // per-project Recents below the composer (PRD §03 2).
   const allSessions = useSessionStore((s) => s.sessions);
   const renameSession = useSessionStore((s) => s.renameSession);
@@ -486,19 +486,19 @@ export const ProjectDetailPage = () => {
   // ``task_id != null``): they're an implementation detail of the
   // task run and live behind the task detail page, not on the
   // project's conversation list. Same filter pair as the sidebar
-  // RECENTS in DesktopWorkspaceLayout.
+  // RECENTS in DesktopProjectLayout.
   const projectSessions = useMemo(
     () =>
       allSessions.filter(
         (s) =>
-          s.workspace_id === id && s.status !== "created" && s.task_id == null,
+          s.project_id === id && s.status !== "created" && s.task_id == null,
       ),
     [allSessions, id],
   );
 
   // Project detail page always has meaningful panel content
   // (instructions / skills / KB / file tree). Layout defaults the
-  // panel to collapsed for chat workspaces; flip it open when the
+  // panel to collapsed for chat projects; flip it open when the
   // user enters a project (or switches to another). Subsequent
   // manual collapses inside the same project are respected — the
   // effect only re-runs when ``id`` changes.
@@ -506,7 +506,7 @@ export const ProjectDetailPage = () => {
     if (id) panelSetCollapsed(false);
   }, [id, panelSetCollapsed]);
 
-  const [workspace, setWorkspace] = useState<WorkspaceDetail | null>(null);
+  const [project, setProject] = useState<ProjectDetail | null>(null);
   // Lead-dispatch tasks for this project, shown in the centre history area
   // below Recents (PRD-NEXT §3.4). Non-critical for the project home.
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -591,11 +591,11 @@ export const ProjectDetailPage = () => {
       if (!id) return;
       navigate(`/agents/${encodeURIComponent(slug)}`, {
         state: {
-          fromProject: { id, name: workspace?.name ?? decodeURIComponent(id) },
+          fromProject: { id, name: project?.name ?? decodeURIComponent(id) },
         },
       });
     },
-    [id, navigate, workspace?.name],
+    [id, navigate, project?.name],
   );
 
   const confirmMemberDelete = useCallback(async () => {
@@ -723,7 +723,7 @@ export const ProjectDetailPage = () => {
   // ``modelDefaults.default_effort`` alongside the model picker below.
   const { defaults: modelDefaults, loading: defaultsLoading } =
     useModelDefaults();
-  // Per-project memory: the picker seeds from the workspace's most
+  // Per-project memory: the picker seeds from the project's most
   // recent session before falling back to Settings → Default. So if
   // the user mostly drives this project with Deep Agents but their
   // global default is Claude Code, the project still opens in Deep
@@ -731,7 +731,7 @@ export const ProjectDetailPage = () => {
   const { pick: lastPick, loading: lastPickLoading } = useProjectLastUsed(id);
   // Seed sequence (highest wins on first pass; once any source lands
   // we don't override until the user manually picks something else):
-  //   1. Project last-used (per-workspace memory)
+  //   1. Project last-used (per-project memory)
   //   2. Global Settings → Default
   // Either source is enough — we wait until both fetches are done
   // before deciding so we don't briefly flash the global default and
@@ -778,7 +778,7 @@ export const ProjectDetailPage = () => {
   const [kbPickerOpen, setKbPickerOpen] = useState(false);
   // Global KB document tree for the attachment picker — loads lazily
   // when the picker opens. Distinct from ``useProjectKbBindings``:
-  // that drives the workspace binding tree (kb/folder/document
+  // that drives the project binding tree (kb/folder/document
   // granularity, editable here on the project page), this one is the
   // file picker's navigable source (every KB, file-selectable only).
   const {
@@ -840,7 +840,7 @@ export const ProjectDetailPage = () => {
   // (which ``fetchData`` does). Same depth-3 listing as initial load.
   const refreshFileTree = useCallback(() => {
     if (!id) return;
-    workspacesApi
+    projectsApi
       .listFiles(id, { depth: 3 })
       .then((res) => setFileTree(toFileTree(res.files)))
       .catch(() => setFileTree([]));
@@ -848,21 +848,21 @@ export const ProjectDetailPage = () => {
 
   const fetchData = useCallback(async () => {
     try {
-      const ws = await workspacesApi.get(id);
-      setWorkspace(ws);
+      const ws = await projectsApi.get(id);
+      setProject(ws);
       setInstructions(ws.instructions_md ?? "");
 
       const [filesRes, chListRes] = await Promise.all([
-        workspacesApi
+        projectsApi
           .listFiles(id, { depth: 3 })
-          .catch(() => ({ files: [] as WorkspaceFileNode[] })),
+          .catch(() => ({ files: [] as ProjectFileNode[] })),
         providersApi
           .list()
           .catch(() => ({ providers: [] as ProviderListItem[] })),
       ]);
       setFileTree(toFileTree(filesRes.files));
       // Skills are bound on the Agent now (08-agents-module), not the
-      // project — no per-workspace skill catalog fetch here.
+      // project — no per-project skill catalog fetch here.
       // KB tree + bindings are owned by ``useProjectKbBindings``.
 
       const details = await Promise.all(
@@ -885,7 +885,7 @@ export const ProjectDetailPage = () => {
       try {
         const [connRes, mcpRes] = await Promise.all([
           connectorsApi.list(),
-          workspacesApi
+          projectsApi
             .getMcpServers(id)
             .catch(() => ({ slugs: [] as string[] })),
         ]);
@@ -934,7 +934,7 @@ export const ProjectDetailPage = () => {
       // sessions on next index.
       try {
         const session = await sessionsApi.create({
-          workspace_id: id ?? undefined,
+          project_id: id ?? undefined,
           agent_slug: selectedAgentSlug ?? undefined,
           permission_mode: selectedPermissionMode,
         });
@@ -962,14 +962,14 @@ export const ProjectDetailPage = () => {
     trigger: Trigger;
     action_kind: ActionKind;
   }) => {
-    // Project detail page is bound to a specific project workspace by URL —
-    // ``workspace_kind="project"`` + the project's id is the only valid pair
+    // Project detail page is bound to a specific project project by URL —
+    // ``project_kind="project"`` + the project's id is the only valid pair
     // here. agent_kind is "project_member" (chat-only library_agent has no
     // meaning inside a project).
     await automationsApi.create({
       name: data.name,
-      workspace_kind: "project",
-      workspace_id: id,
+      project_kind: "project",
+      project_id: id,
       agent_kind: "project_member",
       agent_slug: data.agent_slug,
       prompt_template: data.prompt_template,
@@ -1025,21 +1025,21 @@ export const ProjectDetailPage = () => {
   );
 
   const handleOpenInFinder = () => {
-    if (workspace?.root_path) {
-      void revealInFinder(workspace.root_path);
+    if (project?.root_path) {
+      void revealInFinder(project.root_path);
     }
   };
 
   const handleFileDoubleClick = (relPath: string) => {
     const fileName = relPath.split("/").pop() ?? relPath;
     if (!isTextFile(fileName)) {
-      if (workspace?.root_path) {
-        void revealInFinder(`${workspace.root_path}/${relPath}`);
+      if (project?.root_path) {
+        void revealInFinder(`${project.root_path}/${relPath}`);
       }
       return;
     }
     // Text file: read content and show preview dialog
-    if (workspace?.root_path) {
+    if (project?.root_path) {
       setPreviewFileName(fileName);
       setPreviewContent(null);
       setPreviewOpen(true);
@@ -1051,7 +1051,7 @@ export const ProjectDetailPage = () => {
         }
       ).valuzDesktop
         ?.invoke<{ content: string | null }>("read_file_content", {
-          path: `${workspace.root_path}/${relPath}`,
+          path: `${project.root_path}/${relPath}`,
         })
         .then((res) => setPreviewContent(res.content))
         .catch(() => setPreviewContent(null));
@@ -1061,7 +1061,7 @@ export const ProjectDetailPage = () => {
   const handleInstructionsChange = async (md: string) => {
     setInstructions(md);
     try {
-      await workspacesApi.updateInstructions(id, md);
+      await projectsApi.updateInstructions(id, md);
     } catch {
       toast.error(t("project.saveFailed" as Parameters<typeof t>[0]));
     }
@@ -1075,7 +1075,7 @@ export const ProjectDetailPage = () => {
     if (chatSessionId) return { id: chatSessionId };
     if (!selectedAgentSlug) throw new Error("no-agent-selected");
     const session = await sessionsApi.create({
-      workspace_id: id,
+      project_id: id,
       agent_slug: selectedAgentSlug,
       permission_mode: selectedPermissionMode,
     });
@@ -1145,7 +1145,7 @@ export const ProjectDetailPage = () => {
       } catch (err) {
         // Surface the backend message (kickoff has a few well-known
         // 4xx reasons: lead agent has no model provider pinned, lead
-        // not a member, workspace not found, ...). Logging too so the
+        // not a member, project not found, ...). Logging too so the
         // dev console keeps the full stack for debugging.
         console.error("[tasksApi.kickoff] failed", err);
         const msg = err instanceof Error ? err.message : String(err);
@@ -1164,7 +1164,7 @@ export const ProjectDetailPage = () => {
     void performChatSend();
   };
 
-  const displayName = workspace?.name ?? decodeURIComponent(id);
+  const displayName = project?.name ?? decodeURIComponent(id);
 
   // Only show KBs that have at least one binding in the context panel.
   // A KB is "added" when any binding's target_id matches the kb id itself
@@ -1264,7 +1264,7 @@ export const ProjectDetailPage = () => {
         onDeleteScheduledTask={handleDeleteScheduledTask}
         fileTree={fileTree}
         fileTreeInTab
-        rootPath={workspace?.root_path ?? ""}
+        rootPath={project?.root_path ?? ""}
         onRefreshFiles={refreshFileTree}
         onFileClick={(path) => {
           const fileName = path.split("/").pop() ?? path;
@@ -1276,8 +1276,8 @@ export const ProjectDetailPage = () => {
           void revealInFinder(path);
         }}
         onDeleteFile={async (path: string) => {
-          const fullPath = workspace?.root_path
-            ? `${workspace.root_path}/${path}`
+          const fullPath = project?.root_path
+            ? `${project.root_path}/${path}`
             : path;
           const result = await deleteFile(fullPath);
           if (result.success) {
@@ -1318,7 +1318,7 @@ export const ProjectDetailPage = () => {
     addedKbTree,
     bindings,
     fileTree,
-    workspace,
+    project,
     displayName,
     scheduledTasks,
     handleToggleScheduledTask,
@@ -1511,7 +1511,7 @@ export const ProjectDetailPage = () => {
 
       {/* Project automation create — uses the same agent-driven dialog
           as the global Automation page, with task mode enabled (this is
-          a project workspace) and candidates resolved from the project's
+          a project project) and candidates resolved from the project's
           members. ``description`` keeps the existing project-specific
           hint copy ("Tasks created here are linked to this project"). */}
       <CreateAutomationDialog
@@ -1529,7 +1529,7 @@ export const ProjectDetailPage = () => {
       <DeployAgentsDialog
         open={addAgentOpen}
         onOpenChange={setAddAgentOpen}
-        workspaceId={id}
+        projectId={id}
         agents={libraryAgents}
         members={rawMembers}
         onChanged={loadMembers}

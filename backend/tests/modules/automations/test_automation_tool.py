@@ -8,7 +8,7 @@ the service builder so the test focuses on:
 - required-field guards (name, prompt_template, agent_slug, trigger)
 - trigger discriminated-union coercion
 - scope coercion (project forces ``this``; chat defaults to ``all``)
-- cross-workspace denial for project sessions
+- cross-project denial for project sessions
 
 Service-layer behaviour itself is covered in ``test_automation_service``,
 so the asserts here are deliberately thin (e.g. "request reached
@@ -46,19 +46,19 @@ class StubService:
     def _record(self, method: str, **kwargs: Any) -> None:
         self.calls.append((method, kwargs))
 
-    async def create(self, payload, *, calling_session_workspace_id=None):  # type: ignore[no-untyped-def]
+    async def create(self, payload, *, calling_session_project_id=None):  # type: ignore[no-untyped-def]
         self._record(
             "create",
             payload=payload,
-            calling_session_workspace_id=calling_session_workspace_id,
+            calling_session_project_id=calling_session_project_id,
         )
         self._next_id += 1
         automation_id = f"auto-{self._next_id}"
         item = AutomationItemResponse(
             automation_id=automation_id,
-            workspace_id=payload.workspace_id or "ws-auto",
-            workspace_name="ws",
-            workspace_kind=payload.workspace_kind,
+            project_id=payload.project_id or "ws-auto",
+            project_name="ws",
+            project_kind=payload.project_kind,
             name=payload.name,
             agent_kind=payload.agent_kind,
             agent_slug=payload.agent_slug,
@@ -91,9 +91,9 @@ class StubService:
         self._record("list_all_automations")
         return list(self._rows.values())
 
-    async def list_automations_in_workspace(self, workspace_id):  # type: ignore[no-untyped-def]
-        self._record("list_automations_in_workspace", workspace_id=workspace_id)
-        return [r for r in self._rows.values() if r.workspace_id == workspace_id]
+    async def list_automations_in_project(self, project_id):  # type: ignore[no-untyped-def]
+        self._record("list_automations_in_project", project_id=project_id)
+        return [r for r in self._rows.values() if r.project_id == project_id]
 
     async def pause(self, automation_id):  # type: ignore[no-untyped-def]
         self._record("pause", automation_id=automation_id)
@@ -145,12 +145,12 @@ def _detail(automation_id: str, label: str) -> Any:
     )()
 
 
-def _row(automation_id: str = "auto-x", workspace_id: str = "ws-1") -> AutomationItemResponse:
+def _row(automation_id: str = "auto-x", project_id: str = "ws-1") -> AutomationItemResponse:
     return AutomationItemResponse(
         automation_id=automation_id,
-        workspace_id=workspace_id,
-        workspace_name="ws",
-        workspace_kind="project",
+        project_id=project_id,
+        project_name="ws",
+        project_kind="project",
         name="Test",
         agent_kind="project_member",
         agent_slug="qa",
@@ -174,12 +174,12 @@ def stub_service() -> StubService:
 def patched_dispatch(monkeypatch: pytest.MonkeyPatch, stub_service: StubService):
     """Patch the session-context resolver + service builder so the
     dispatcher runs against the stub without needing a DB."""
-    workspace_id = {"value": "ws-proj"}
-    workspace_kind = {"value": "project"}
+    project_id = {"value": "ws-proj"}
+    project_kind = {"value": "project"}
     session_agent_slug = {"value": None}
 
     async def _fake_session_context(session_id: str):  # noqa: ARG001
-        return workspace_id["value"], workspace_kind["value"], session_agent_slug["value"]
+        return project_id["value"], project_kind["value"], session_agent_slug["value"]
 
     async def _fake_build_service(db):  # noqa: ARG001
         return stub_service
@@ -203,7 +203,7 @@ def patched_dispatch(monkeypatch: pytest.MonkeyPatch, stub_service: StubService)
     # The dispatch imports async_unit_of_work locally; patch where it's used.
     monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", _fake_async_unit_of_work)
 
-    return workspace_id, workspace_kind, session_agent_slug
+    return project_id, project_kind, session_agent_slug
 
 
 # ── Routing + validation ────────────────────────────────────────────
@@ -286,9 +286,9 @@ class TestAgentKindByContext:
     async def test_project_session_should_create_as_project_member(
         self, patched_dispatch: Any, stub_service: StubService
     ) -> None:
-        workspace_id, workspace_kind, session_agent_slug = patched_dispatch
-        workspace_kind["value"] = "project"
-        workspace_id["value"] = "ws-proj"
+        project_id, project_kind, session_agent_slug = patched_dispatch
+        project_kind["value"] = "project"
+        project_id["value"] = "ws-proj"
 
         await mod.automation_invoke(
             AutomationToolPayload(
@@ -302,17 +302,17 @@ class TestAgentKindByContext:
         assert stub_service.calls[0][0] == "create"
         payload = stub_service.calls[0][1]["payload"]
         assert payload.agent_kind == "project_member"
-        assert payload.workspace_kind == "project"
-        # Project sessions never forward a calling workspace — the row binds
-        # to the workspace_id field, not the calling-session inference path.
-        assert stub_service.calls[0][1]["calling_session_workspace_id"] is None
+        assert payload.project_kind == "project"
+        # Project sessions never forward a calling project — the row binds
+        # to the project_id field, not the calling-session inference path.
+        assert stub_service.calls[0][1]["calling_session_project_id"] is None
 
     async def test_chat_session_should_create_as_library_agent(
         self, patched_dispatch: Any, stub_service: StubService
     ) -> None:
-        workspace_id, workspace_kind, session_agent_slug = patched_dispatch
-        workspace_kind["value"] = "chat"
-        workspace_id["value"] = "ws-chat-existing"
+        project_id, project_kind, session_agent_slug = patched_dispatch
+        project_kind["value"] = "chat"
+        project_id["value"] = "ws-chat-existing"
 
         await mod.automation_invoke(
             AutomationToolPayload(
@@ -325,10 +325,10 @@ class TestAgentKindByContext:
         )
         payload = stub_service.calls[0][1]["payload"]
         assert payload.agent_kind == "library_agent"
-        assert payload.workspace_kind == "chat"
-        # Chat sessions DO forward the calling workspace so library agents
+        assert payload.project_kind == "chat"
+        # Chat sessions DO forward the calling project so library agents
         # land in the user's current chat ws (not a fresh one).
-        assert stub_service.calls[0][1]["calling_session_workspace_id"] == "ws-chat-existing"
+        assert stub_service.calls[0][1]["calling_session_project_id"] == "ws-chat-existing"
 
     async def test_chat_create_should_default_agent_slug_to_session_agent(
         self, patched_dispatch: Any, stub_service: StubService
@@ -336,9 +336,9 @@ class TestAgentKindByContext:
         """A project-less chat omits agent_slug → it defaults to the session's
         bound agent (the agent the user is talking to / default-assistant), so
         creation succeeds without any list_members round-trip."""
-        workspace_id, workspace_kind, session_agent_slug = patched_dispatch
-        workspace_kind["value"] = "chat"
-        workspace_id["value"] = "ws-chat-1"
+        project_id, project_kind, session_agent_slug = patched_dispatch
+        project_kind["value"] = "chat"
+        project_id["value"] = "ws-chat-1"
         session_agent_slug["value"] = "default-assistant"
 
         result = await mod.automation_invoke(
@@ -359,8 +359,8 @@ class TestAgentKindByContext:
     async def test_chat_create_explicit_agent_slug_overrides_session_default(
         self, patched_dispatch: Any, stub_service: StubService
     ) -> None:
-        workspace_id, workspace_kind, session_agent_slug = patched_dispatch
-        workspace_kind["value"] = "chat"
+        project_id, project_kind, session_agent_slug = patched_dispatch
+        project_kind["value"] = "chat"
         session_agent_slug["value"] = "default-assistant"
 
         await mod.automation_invoke(
@@ -380,8 +380,8 @@ class TestAgentKindByContext:
     ) -> None:
         """The chat default must NOT leak into project sessions — they still
         require an explicit project-member slug."""
-        workspace_id, workspace_kind, session_agent_slug = patched_dispatch
-        workspace_kind["value"] = "project"
+        project_id, project_kind, session_agent_slug = patched_dispatch
+        project_kind["value"] = "project"
         # Even if the project conversation has a bound agent, project create
         # is not auto-defaulted (the lead must pick the right member).
         session_agent_slug["value"] = "some-conversation-agent"
@@ -451,16 +451,16 @@ class TestTriggerCoercion:
         assert payload.trigger.kind == "manual"
 
 
-# ── Scope coercion + cross-workspace denial ─────────────────────────
+# ── Scope coercion + cross-project denial ─────────────────────────
 
 
-class TestScopeAndCrossWorkspace:
+class TestScopeAndCrossProject:
     async def test_chat_list_should_default_to_all_scope(
         self, patched_dispatch: Any, stub_service: StubService
     ) -> None:
-        workspace_id, workspace_kind, session_agent_slug = patched_dispatch
-        workspace_kind["value"] = "chat"
-        workspace_id["value"] = "ws-chat-1"
+        project_id, project_kind, session_agent_slug = patched_dispatch
+        project_kind["value"] = "chat"
+        project_id["value"] = "ws-chat-1"
 
         await mod.automation_invoke(AutomationToolPayload(action="list"))
         # ``all`` scope hits ``list_all_automations``.
@@ -472,25 +472,25 @@ class TestScopeAndCrossWorkspace:
         # Even with scope="all" the project-session coercion forces ``this``.
         await mod.automation_invoke(AutomationToolPayload(action="list", scope="all"))
         assert any(
-            c[0] == "list_automations_in_workspace" and c[1]["workspace_id"] == "ws-proj"
+            c[0] == "list_automations_in_project" and c[1]["project_id"] == "ws-proj"
             for c in stub_service.calls
         )
 
-    async def test_project_session_should_deny_cross_workspace_mutate(
+    async def test_project_session_should_deny_cross_project_mutate(
         self,
         patched_dispatch: Any,
         stub_service: StubService,
     ) -> None:
-        # Pre-seed an automation living in a DIFFERENT workspace.
+        # Pre-seed an automation living in a DIFFERENT project.
         stub_service._rows["auto-other"] = _row(  # noqa: SLF001
-            automation_id="auto-other", workspace_id="ws-other-project"
+            automation_id="auto-other", project_id="ws-other-project"
         )
         result = await mod.automation_invoke(
             AutomationToolPayload(action="pause", automation_id="auto-other")
         )
         decoded = json.loads(result)
         assert decoded["ok"] is False
-        assert decoded["error_code"] == "CROSS_WORKSPACE_DENIED"
+        assert decoded["error_code"] == "CROSS_PROJECT_DENIED"
 
 
 # ── Decorated ``automation`` thin wrapper trigger coercion ─────────

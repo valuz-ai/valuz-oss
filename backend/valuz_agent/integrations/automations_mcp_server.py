@@ -15,21 +15,21 @@ POST /internal/mcp/automations/mcp
 Permission model
 ================
 
-The tool resolves the calling kernel session into ``(workspace_id,
-workspace_kind)`` and lets:
+The tool resolves the calling kernel session into ``(project_id,
+project_kind)`` and lets:
 
 - **Chat session** — manage every user-level automation (list / pause /
   resume / run / remove across the whole library when ``scope=all``,
   which is the default for chat). ``create`` defaults to materialising
-  a fresh chat workspace named after the automation; if the chat session
-  has its own workspace_id (the common case) the automation binds there
+  a fresh chat project named after the automation; if the chat session
+  has its own project_id (the common case) the automation binds there
   instead.
 - **Project session** — ``scope`` is forced to ``this``, ``create`` binds
-  to the project workspace, ``agent_slug`` must resolve to a project
-  member of the current workspace.
+  to the project, ``agent_slug`` must resolve to a project
+  member of the current project.
 
 This keeps a project-side LLM from accidentally listing or mutating
-unrelated workspaces' automations.
+unrelated projects' automations.
 
 Key differences from the legacy ``cronjob`` tool
 ================================================
@@ -90,7 +90,7 @@ def _current_session_id() -> str:
 
 
 async def _resolve_session_context(session_id: str) -> tuple[str | None, str, str | None]:
-    """Resolve ``(workspace_id, workspace_kind, bound_agent_slug)`` for the call.
+    """Resolve ``(project_id, project_kind, bound_agent_slug)`` for the call.
 
     ``bound_agent_slug`` is the agent the calling conversation is bound to —
     recorded on the kernel session as ``metadata["valuz"]["agent_slug"]``. For a
@@ -101,14 +101,14 @@ async def _resolve_session_context(session_id: str) -> tuple[str | None, str, st
     a project-less chat.
 
     Returns ``(None, "chat", <slug|None>)`` when the kernel session has been
-    GC'd or the host can't find its workspace — the agent should still be able
-    to operate on user-level automations even when its origin chat workspace is
+    GC'd or the host can't find its project — the agent should still be able
+    to operate on user-level automations even when its origin chat project is
     gone. The caller then forwards ``None`` to ``AutomationService.create``
-    which lazy-creates a fresh chat workspace named after the automation.
+    which lazy-creates a fresh chat project named after the automation.
     """
     from valuz_agent.adapters import kernel_store
     from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.modules.projects.datastore import WorkspaceDatastore
+    from valuz_agent.modules.projects.datastore import ProjectDatastore
 
     kernel_session = await kernel_store.load_session(session_id)
     if kernel_session is None:
@@ -124,7 +124,7 @@ async def _resolve_session_context(session_id: str) -> tuple[str | None, str, st
             bound_agent_slug = slug
 
     async with async_unit_of_work(commit=False) as db:
-        ws = await WorkspaceDatastore(db).get_by_id(project_id)
+        ws = await ProjectDatastore(db).get_by_id(project_id)
     if ws is None:
         return None, "chat", bound_agent_slug
     return ws.id, ws.kind, bound_agent_slug
@@ -149,8 +149,8 @@ async def _build_automation_service(db: Any) -> Any:
     from valuz_agent.modules.automations.service import AutomationService
     from valuz_agent.modules.connectors.datastore import ConnectorDatastore
     from valuz_agent.modules.connectors.service import ConnectorService
-    from valuz_agent.modules.projects.datastore import WorkspaceDatastore
-    from valuz_agent.modules.projects.service import WorkspaceService
+    from valuz_agent.modules.projects.datastore import ProjectDatastore
+    from valuz_agent.modules.projects.service import ProjectService
     from valuz_agent.modules.settings.preferences import (
         get_default_locale,
         get_effective_default_timezone,
@@ -161,8 +161,8 @@ async def _build_automation_service(db: Any) -> Any:
     # automation the LLM creates without an explicit timezone is scheduled on
     # the user's local clock (and that resolved tz is persisted on the row).
     default_tz = await get_effective_default_timezone(db)
-    workspace_svc = WorkspaceService(
-        datastore=WorkspaceDatastore(db),
+    project_svc = ProjectService(
+        datastore=ProjectDatastore(db),
         event_bus=event_bus,
     )
     connector_svc = ConnectorService(
@@ -173,7 +173,7 @@ async def _build_automation_service(db: Any) -> Any:
     return AutomationService(
         db=db,
         event_bus=event_bus,
-        workspace_service=workspace_svc,
+        project_service=project_svc,
         agent_service=agent_svc,
         locale=locale,
         default_timezone=default_tz,
@@ -192,9 +192,9 @@ def _err(action: str, message: str, code: str | None = None) -> AutomationToolRe
     return AutomationToolResult(action=action, ok=False, message=message, error_code=code)
 
 
-def _coerce_scope(payload: AutomationToolPayload, workspace_kind: str) -> str:
+def _coerce_scope(payload: AutomationToolPayload, project_kind: str) -> str:
     """Project sessions are always ``this``; chat sessions default to ``all``."""
-    if workspace_kind == "project":
+    if project_kind == "project":
         return "this"
     requested = payload.scope
     if requested == "this":
@@ -215,17 +215,17 @@ async def _handle_create(
     *,
     svc: Any,
     payload: AutomationToolPayload,
-    workspace_kind: str,
-    workspace_id: str | None,
+    project_kind: str,
+    project_id: str | None,
     session_agent_slug: str | None = None,
 ) -> AutomationToolResult:
     from valuz_agent.modules.automations.errors import (
         AgentNotFound,
-        AgentNotInWorkspace,
+        AgentNotInProject,
         AutomationAgentRequired,
         AutomationNameEmpty,
+        AutomationProjectNotFound,
         AutomationPromptEmpty,
-        AutomationWorkspaceNotFound,
         IntervalTooShort,
         InvalidCronExpression,
     )
@@ -246,7 +246,7 @@ async def _handle_create(
     # project-member-scoped, hence empty for a project-less chat — that
     # otherwise made the LLM give up before ever calling create.
     effective_agent_slug = payload.agent_slug
-    if not effective_agent_slug and workspace_kind == "chat":
+    if not effective_agent_slug and project_kind == "chat":
         effective_agent_slug = session_agent_slug
     if not effective_agent_slug:
         return _err(
@@ -272,34 +272,34 @@ async def _handle_create(
         )
 
     # Project sessions store project_member; chat sessions store library_agent
-    # (the service then instantiates the library agent into the chat workspace
+    # (the service then instantiates the library agent into the chat project
     # and normalises the slug — see ADR-021 §4).
-    agent_kind = "project_member" if workspace_kind == "project" else "library_agent"
+    agent_kind = "project_member" if project_kind == "project" else "library_agent"
 
     create_payload = AutomationCreatePayload(
         name=payload.name,
-        workspace_kind=workspace_kind,  # type: ignore[arg-type]
-        workspace_id=workspace_id,
+        project_kind=project_kind,  # type: ignore[arg-type]
+        project_id=project_id,
         agent_kind=agent_kind,  # type: ignore[arg-type]
         agent_slug=effective_agent_slug,
         prompt_template=payload.prompt_template,
         trigger=trigger,
     )
 
-    # MCP-from-chat: forward the calling session's workspace_id so library
+    # MCP-from-chat: forward the calling session's project_id so library
     # agents land in the user's current chat rather than a fresh ws.
-    calling_ws = workspace_id if workspace_kind == "chat" else None
+    calling_ws = project_id if project_kind == "chat" else None
 
     try:
-        detail = await svc.create(create_payload, calling_session_workspace_id=calling_ws)
+        detail = await svc.create(create_payload, calling_session_project_id=calling_ws)
     except (
         InvalidCronExpression,
         IntervalTooShort,
         AutomationNameEmpty,
         AutomationPromptEmpty,
         AutomationAgentRequired,
-        AutomationWorkspaceNotFound,
-        AgentNotInWorkspace,
+        AutomationProjectNotFound,
+        AgentNotInProject,
         AgentNotFound,
     ) as exc:
         return _err("create", str(exc.message), code=exc.__class__.__name__)
@@ -316,13 +316,13 @@ async def _handle_create(
     )
 
 
-async def _handle_list(*, svc: Any, workspace_id: str | None, scope: str) -> AutomationToolResult:
+async def _handle_list(*, svc: Any, project_id: str | None, scope: str) -> AutomationToolResult:
     if scope == "all":
         items = await svc.list_all_automations()
     else:
         # Chat sessions narrowed to ``this`` use the singleton chat-default
-        # sentinel; project sessions pass their workspace_id directly.
-        items = await svc.list_automations_in_workspace(workspace_id or "chat-default")
+        # sentinel; project sessions pass their project_id directly.
+        items = await svc.list_automations_in_project(project_id or "chat-default")
     if not items:
         return AutomationToolResult(
             action="list",
@@ -345,11 +345,11 @@ async def _handle_update(
     *,
     svc: Any,
     payload: AutomationToolPayload,
-    workspace_id: str | None,
+    project_id: str | None,
     scope: str,
 ) -> AutomationToolResult:
     from valuz_agent.modules.automations.errors import (
-        AgentNotInWorkspace,
+        AgentNotInProject,
         AutomationAgentRequired,
         AutomationNameEmpty,
         AutomationNotFound,
@@ -364,12 +364,12 @@ async def _handle_update(
     row = await svc._ds.get_automation(payload.automation_id)  # noqa: SLF001
     if row is None:
         return _err("update", "No such automation.", code="AutomationNotFound")
-    if scope == "this" and workspace_id is not None and row.workspace_id != workspace_id:
+    if scope == "this" and project_id is not None and row.project_id != project_id:
         return _err(
             "update",
-            "This automation belongs to a different workspace; switch to "
-            "that workspace's chat to modify it.",
-            code="CROSS_WORKSPACE_DENIED",
+            "This automation belongs to a different project; switch to "
+            "that project's chat to modify it.",
+            code="CROSS_PROJECT_DENIED",
         )
 
     update_payload = AutomationUpdatePayload(
@@ -387,7 +387,7 @@ async def _handle_update(
         AutomationPromptEmpty,
         AutomationAgentRequired,
         AutomationNotFound,
-        AgentNotInWorkspace,
+        AgentNotInProject,
     ) as exc:
         return _err("update", str(exc.message), code=exc.__class__.__name__)
     fresh = await svc._row_to_item(  # noqa: SLF001
@@ -407,7 +407,7 @@ async def _handle_status_change(
     svc: Any,
     action: str,
     payload: AutomationToolPayload,
-    workspace_id: str | None,
+    project_id: str | None,
     scope: str,
 ) -> AutomationToolResult:
     """Shared handler for pause / resume / remove / run — all single-verb
@@ -426,11 +426,11 @@ async def _handle_status_change(
     row = await svc._ds.get_automation(payload.automation_id)  # noqa: SLF001
     if row is None:
         return _err(action, "No such automation.", code="AutomationNotFound")
-    if scope == "this" and workspace_id is not None and row.workspace_id != workspace_id:
+    if scope == "this" and project_id is not None and row.project_id != project_id:
         return _err(
             action,
-            "Automation belongs to a different workspace.",
-            code="CROSS_WORKSPACE_DENIED",
+            "Automation belongs to a different project.",
+            code="CROSS_PROJECT_DENIED",
         )
 
     try:
@@ -455,7 +455,7 @@ async def _handle_status_change(
                 ok=True,
                 message=(
                     f"Queued automation for immediate execution (run_id={run.run_id}). "
-                    "The session it spawns will appear in the workspace shortly."
+                    "The session it spawns will appear in the project shortly."
                 ),
                 automation=await svc._row_to_item(row),  # noqa: SLF001
             )
@@ -490,30 +490,30 @@ async def _dispatch(payload: AutomationToolPayload) -> AutomationToolResult:
     from valuz_agent.infra.db import async_unit_of_work
 
     session_id = _current_session_id()
-    workspace_id, workspace_kind, session_agent_slug = await _resolve_session_context(session_id)
-    scope = _coerce_scope(payload, workspace_kind)
+    project_id, project_kind, session_agent_slug = await _resolve_session_context(session_id)
+    scope = _coerce_scope(payload, project_kind)
 
     async with async_unit_of_work() as db:
         svc = await _build_automation_service(db)
         if payload.action == "list":
-            return await _handle_list(svc=svc, workspace_id=workspace_id, scope=scope)
+            return await _handle_list(svc=svc, project_id=project_id, scope=scope)
         if payload.action == "create":
             return await _handle_create(
                 svc=svc,
                 payload=payload,
-                workspace_kind=workspace_kind,
-                workspace_id=workspace_id,
+                project_kind=project_kind,
+                project_id=project_id,
                 session_agent_slug=session_agent_slug,
             )
         if payload.action == "update":
             return await _handle_update(
-                svc=svc, payload=payload, workspace_id=workspace_id, scope=scope
+                svc=svc, payload=payload, project_id=project_id, scope=scope
             )
         return await _handle_status_change(
             svc=svc,
             action=payload.action,
             payload=payload,
-            workspace_id=workspace_id,
+            project_id=project_id,
             scope=scope,
         )
 
@@ -560,7 +560,7 @@ Actions
   the server falls back to the user's configured/detected timezone, but pass
   it explicitly and state the resolved zone back to the user to confirm.
 - list: returns existing automations. In a chat session, lists across all
-  workspaces by default (set scope="this" to narrow to the current chat).
+  projects by default (set scope="this" to narrow to the current chat).
   In a project session, always scoped to the current project.
 - update / pause / resume / run / remove: require automation_id (get one
   from a prior list).

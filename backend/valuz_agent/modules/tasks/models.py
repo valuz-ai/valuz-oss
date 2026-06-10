@@ -23,7 +23,7 @@ Task (valuz_task):
 
 TaskEvent (valuz_task_event):
   Append-only event log scoped to a task. Monotonic ``sequence`` per
-  (workspace_id, task_id). Types: kickoff | subtask_spawned |
+  (project_id, task_id). Types: kickoff | subtask_spawned |
   subtask_completed | subtask_failed | user_note | goal_revised |
   paused | resumed | stopped | task_completed | task_drafted |
   committed | abandoned | user_inject | user_inject_dropped.
@@ -53,7 +53,7 @@ class TaskRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
 
     __tablename__ = "valuz_task"
 
-    workspace_id: Mapped[str] = mapped_column(String(36), index=True)
+    project_id: Mapped[str] = mapped_column(String(36), index=True)
     # Relative path within project.cwd: tasks/<id>-<slug>.md
     file_path: Mapped[str] = mapped_column(Text)
     title: Mapped[str] = mapped_column(String(256))
@@ -99,12 +99,12 @@ class TaskEventRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     __tablename__ = "valuz_task_event"
 
     __table_args__ = (
-        UniqueConstraint("workspace_id", "task_id", "sequence", name="uq_task_event_ws_task_seq"),
+        UniqueConstraint("project_id", "task_id", "sequence", name="uq_task_event_ws_task_seq"),
     )
 
-    workspace_id: Mapped[str] = mapped_column(String(36), index=True)
+    project_id: Mapped[str] = mapped_column(String(36), index=True)
     task_id: Mapped[str] = mapped_column(String(36), index=True)
-    # Monotonic per (workspace_id, task_id); host assigns on append
+    # Monotonic per (project_id, task_id); host assigns on append
     sequence: Mapped[int] = mapped_column(Integer)
     # kickoff | subtask_spawned | subtask_completed | subtask_failed |
     # user_note | goal_revised | paused | resumed | stopped | task_completed
@@ -122,7 +122,7 @@ class TaskSessionRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
 
     __tablename__ = "valuz_task_session"
 
-    workspace_id: Mapped[str] = mapped_column(String(36), index=True)
+    project_id: Mapped[str] = mapped_column(String(36), index=True)
     # NULL for independent sessions (not yet used; reserved for §3 isolation)
     task_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     # References kernel sessions.id — business key, NO FK constraint
@@ -145,7 +145,7 @@ class TaskSessionRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     # session_id of the lead run that dispatched this subtask
     dispatched_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     # isolated | repo-worktree
-    workspace_mode: Mapped[str] = mapped_column(String(16), default="isolated")
+    project_mode: Mapped[str] = mapped_column(String(16), default="isolated")
     # Absolute path to this run's working directory
     run_dir: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Populated when session completes: {summary, artifacts, status}

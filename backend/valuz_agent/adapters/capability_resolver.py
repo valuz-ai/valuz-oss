@@ -10,7 +10,7 @@ Outputs are pure data — the resolver does no writes. The session router
 takes the result and hands it to the kernel via ``StorePort.save_session``.
 
 Currently covered:
-- ``skills``: workspace-enabled skill paths plus session-attached extras,
+- ``skills``: project-enabled skill paths plus session-attached extras,
   resolved to filesystem absolute paths via the skill index.
 - ``mcp_servers``: enabled MCP-provider slugs are expanded into kernel
   ``McpServerConfig`` rows by ``adapters.mcp_resolver``. The resolver
@@ -37,11 +37,11 @@ from valuz_agent.infra.secret_store import FileSecretStore
 from valuz_agent.integrations.skills_filesystem import FilesystemSkillSource
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.docs.datastore import DocumentDatastore
-from valuz_agent.modules.projects.datastore import WorkspaceDatastore
+from valuz_agent.modules.projects.datastore import ProjectDatastore
 from valuz_agent.modules.skills.contracts import (
+    ProjectRef,
     RuntimeContext,
     SkillManifest,
-    WorkspaceRef,
 )
 from valuz_agent.modules.skills.datastore import SkillDatastore
 
@@ -60,14 +60,14 @@ logger = logging.getLogger(__name__)
 
 # Path to the bundled builtin skill that teaches the agent how to search
 # the project's knowledge base. Auto-injected into ``session.skills`` when
-# the workspace has at least one ``valuz_project_kb_binding`` row.
+# the project has at least one ``valuz_project_kb_binding`` row.
 _BUILTIN_SKILLS_DIR = Path(__file__).resolve().parents[1] / "resources" / "builtin_skills"
 _PROJECT_DOCS_SKILL_DIR = _BUILTIN_SKILLS_DIR / "valuz-project-docs"
 
 
 @dataclass(frozen=True)
 class ResolvedCapabilities:
-    """Inputs the kernel needs to create a session for a valuz workspace."""
+    """Inputs the kernel needs to create a session for a valuz project."""
 
     skills: tuple[str, ...] = ()
     mcp_servers: tuple[McpServerConfig, ...] = ()
@@ -76,9 +76,9 @@ class ResolvedCapabilities:
 
 async def resolve_session_capabilities(
     *,
-    workspaces: WorkspaceDatastore,
+    projects: ProjectDatastore,
     skills: SkillDatastore,
-    workspace_id: str,
+    project_id: str,
     extra_skill_ids: list[str] | None = None,
     skill_source: FilesystemSkillSource | None = None,
     extra_skill_sources: list[_SkillSource] | None = None,
@@ -89,7 +89,7 @@ async def resolve_session_capabilities(
     docs: DocumentDatastore | None = None,
     session_id: str | None = None,
 ) -> ResolvedCapabilities:
-    """Compute kernel-shaped capabilities for a session in ``workspace_id``.
+    """Compute kernel-shaped capabilities for a session in ``project_id``.
 
     The MCP arguments are optional so the resolver stays usable in code paths
     that don't (yet) expose data-source selection. When all three are
@@ -97,24 +97,24 @@ async def resolve_session_capabilities(
     the corresponding ``McpServerConfig`` list.
     """
 
-    workspace = await workspaces.get_by_id(workspace_id)
-    if workspace is None:
-        raise KeyError(workspace_id)
+    project = await projects.get_by_id(project_id)
+    if project is None:
+        raise KeyError(project_id)
 
     skill_paths: list[str] = []
     warnings: list[str] = []
     seen: set[str] = set()
 
-    # 1) Workspace-enabled skills — read from the filesystem-based
+    # 1) Project-enabled skills — read from the filesystem-based
     #    ``project-config.json`` which is the canonical source of truth
-    #    for which skills are enabled for a workspace.  The DB-backed
+    #    for which skills are enabled for a project.  The DB-backed
     #    ``ProjectSkillConfigRow`` table is not currently populated by the
     #    UI's ``set_skill_enabled`` flow; it writes to JSON instead.
-    enabled_paths = skills.enabled_skill_paths(workspace)
+    enabled_paths = skills.enabled_skill_paths(project)
     for path in enabled_paths:
-        absolute = _resolve_to_absolute(path, workspace.root_path)
+        absolute = _resolve_to_absolute(path, project.root_path)
         if absolute is None:
-            warnings.append(f"workspace-enabled skill path is not resolvable: {path!r}")
+            warnings.append(f"project-enabled skill path is not resolvable: {path!r}")
             continue
         if absolute in seen:
             continue
@@ -123,30 +123,30 @@ async def resolve_session_capabilities(
             if fallback:
                 absolute = fallback
             else:
-                warnings.append(f"workspace-enabled skill path does not exist: {absolute!r}")
+                warnings.append(f"project-enabled skill path does not exist: {absolute!r}")
                 continue
         seen.add(absolute)
         skill_paths.append(absolute)
 
-    # 1b) For non-project (chat) workspaces, every user-library skill is
+    # 1b) For non-project (chat) projects, every user-library skill is
     #     implicitly enabled. The skills panel UI advertises them as enabled
-    #     for chat (datastore.list_workspace_skills sets ``enabled=True`` for
-    #     workspace.kind == "chat") and there is no per-workspace toggle to
+    #     for chat (datastore.list_project_skills sets ``enabled=True`` for
+    #     project.kind == "chat") and there is no per-project toggle to
     #     opt out, so the resolver must mirror that for the runtime.
-    if workspace.kind != "project" and (skill_source is not None or extra_skill_sources):
+    if project.kind != "project" and (skill_source is not None or extra_skill_sources):
         ctx = RuntimeContext(
-            workspace=WorkspaceRef(
-                id=workspace.id,
-                slug=workspace.id,
-                kind=workspace.kind,
-                root_path=workspace.root_path,
+            project=ProjectRef(
+                id=project.id,
+                slug=project.id,
+                kind=project.kind,
+                root_path=project.root_path,
             ),
         )
         if skill_source is not None:
             for manifest in skill_source.list_skills(ctx):
                 if manifest.scope != "user":
                     continue
-                absolute = _resolve_to_absolute(manifest.path, workspace.root_path)
+                absolute = _resolve_to_absolute(manifest.path, project.root_path)
                 if absolute is None or absolute in seen:
                     continue
                 if not Path(absolute).is_dir():
@@ -168,7 +168,7 @@ async def resolve_session_capabilities(
                 is_bundled = manifest.origin_label == "Built-in"
                 if not is_bundled and not official_entitled:
                     continue
-                absolute = _resolve_to_absolute(manifest.path, workspace.root_path)
+                absolute = _resolve_to_absolute(manifest.path, project.root_path)
                 if absolute is None or absolute in seen:
                     continue
                 if not Path(absolute).is_dir():
@@ -177,14 +177,14 @@ async def resolve_session_capabilities(
                 skill_paths.append(absolute)
 
     # 2) Session-level extras — opaque skill IDs attached just for this session
-    #    on top of whatever the workspace already enables. Look each one up in
+    #    on top of whatever the project already enables. Look each one up in
     #    the skill index to recover its source_path.
     for skill_id in extra_skill_ids or []:
         row = await skills.get_by_id(skill_id)
         if row is None:
             warnings.append(f"extra skill id not found: {skill_id!r}")
             continue
-        absolute = _resolve_to_absolute(row.source_path, workspace.root_path)
+        absolute = _resolve_to_absolute(row.source_path, project.root_path)
         if absolute is None:
             warnings.append(f"extra skill {skill_id!r} has unresolvable source path")
             continue
@@ -199,17 +199,17 @@ async def resolve_session_capabilities(
     #      product surface. The skill teaches the agent to use
     #      ``doc_search`` / ``list_doc_scope``; the MCP server (mounted
     #      at ``/internal/mcp/docs/{session_id}/mcp``) implements those
-    #      tools scoped to the session's workspace.
+    #      tools scoped to the session's project.
     #
     #      Why unconditional: the skill + MCP form a stable,
     #      prompt-cache-friendly capability layer that mirrors the
-    #      ``valuz_automations`` automation pattern. Whether the workspace
+    #      ``valuz_automations`` automation pattern. Whether the project
     #      actually has KB bindings (or per-turn attachments) is
     #      announced inside ``UserMessage.additional_context`` — that's
     #      the channel for dynamic state. Putting that state in the
     #      skill set or system prompt would invalidate Anthropic's
     #      prompt cache on every binding / attachment change; making
-    #      docs MCP conditional on workspace.kind == "project" had the
+    #      docs MCP conditional on project.kind == "project" had the
     #      same effect across the chat / project boundary.
     #
     #      The pair MUST travel together: a skill without the MCP
@@ -223,9 +223,9 @@ async def resolve_session_capabilities(
             seen.add(absolute)
             skill_paths.append(absolute)
     logger.info(
-        "Auto-injecting always-on baseline skills for workspace %s (kind=%s)",
-        workspace_id,
-        workspace.kind,
+        "Auto-injecting always-on baseline skills for project %s (kind=%s)",
+        project_id,
+        project.kind,
     )
 
     # 3) MCP servers — only when the caller wires the catalog in. Anything
@@ -255,8 +255,8 @@ async def resolve_session_capabilities(
         )
 
     logger.info(
-        "Resolved capabilities for workspace %s: %d skills, %d MCP servers, %d warnings",
-        workspace_id,
+        "Resolved capabilities for project %s: %d skills, %d MCP servers, %d warnings",
+        project_id,
         len(skill_paths),
         len(mcp_configs_list),
         len(warnings),
@@ -349,7 +349,7 @@ def _resolve_to_absolute(path: str | None, project_root: str | None) -> str | No
 
     Accepts the same forms ``SkillDatastore.set_skill_enabled`` accepts:
     absolute paths pass through; relative paths are joined to the
-    workspace root when one exists. Paths whose parent does not exist
+    project root when one exists. Paths whose parent does not exist
     are still returned (the kernel's materializer will raise a clean
     ``SkillSourceMissingError`` later); paths that cannot be normalised
     return ``None`` and bubble up as a warning.

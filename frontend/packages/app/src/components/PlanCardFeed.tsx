@@ -5,7 +5,7 @@
  * Lifecycle:
  *  1. The conversation page hands us the chat session id; whenever the
  *     agent calls ``draft_task`` the originator id matches, and the
- *     resulting task lives in the same workspace.
+ *     resulting task lives in the same project.
  *  2. We poll the task event log via ``useTaskEvents`` and accumulate
  *     ``task_plan_update`` snapshots as a chronological list of cards.
  *  3. ``recordPlanVersion`` in the task store gates which card is the
@@ -48,7 +48,7 @@ export interface PlanCardFeedProps {
    * ids (e.g. by watching its own session-event SSE for
    * ``draft_task`` tool results) and passes them in. */
   taskIds: string[];
-  /** Workspace navigator — typically ``router.navigate``. Called with
+  /** Project navigator — typically ``router.navigate``. Called with
    * the task detail path when the user clicks Open Task Detail / View
    * Final State. */
   onNavigate?: (path: string) => void;

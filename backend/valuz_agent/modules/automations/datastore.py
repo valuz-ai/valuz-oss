@@ -25,10 +25,10 @@ class AutomationDatastore:
 
     # ── Automation rows ───────────────────────────────────────────────
 
-    async def list_automations(self, workspace_id: str | None = None) -> list[AutomationRow]:
+    async def list_automations(self, project_id: str | None = None) -> list[AutomationRow]:
         stmt = select(AutomationRow)
-        if workspace_id:
-            stmt = stmt.filter_by(workspace_id=workspace_id)
+        if project_id:
+            stmt = stmt.filter_by(project_id=project_id)
         stmt = stmt.order_by(AutomationRow.created_at)
         return list((await self._db.execute(stmt)).scalars().all())
 
@@ -52,9 +52,9 @@ class AutomationDatastore:
         await self._db.execute(delete(AutomationRow).where(AutomationRow.id == automation_id))
         await async_commit_with_retry(self._db, where="AutomationDatastore.delete_automation")
 
-    async def delete_all_for_workspace(self, workspace_id: str) -> None:
+    async def delete_all_for_project(self, project_id: str) -> None:
         automation_ids = list(
-            (await self._db.execute(select(AutomationRow.id).filter_by(workspace_id=workspace_id)))
+            (await self._db.execute(select(AutomationRow.id).filter_by(project_id=project_id)))
             .scalars()
             .all()
         )
@@ -63,16 +63,16 @@ class AutomationDatastore:
                 delete(AutomationRunRow).where(AutomationRunRow.automation_id.in_(automation_ids))
             )
         await self._db.execute(
-            delete(AutomationRow).where(AutomationRow.workspace_id == workspace_id)
+            delete(AutomationRow).where(AutomationRow.project_id == project_id)
         )
         await async_commit_with_retry(
-            self._db, where="AutomationDatastore.delete_all_for_workspace"
+            self._db, where="AutomationDatastore.delete_all_for_project"
         )
 
-    async def count_by_workspace(self, workspace_id: str) -> int:
+    async def count_by_project(self, project_id: str) -> int:
         return (
             await self._db.execute(
-                select(func.count()).select_from(AutomationRow).filter_by(workspace_id=workspace_id)
+                select(func.count()).select_from(AutomationRow).filter_by(project_id=project_id)
             )
         ).scalar() or 0
 

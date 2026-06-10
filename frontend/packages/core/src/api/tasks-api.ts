@@ -11,7 +11,7 @@ export const setTasksApiBase = (url: string): void => {
 /** Durable header for a lead-dispatch task. */
 export interface Task {
   id: string;
-  workspace_id: string;
+  project_id: string;
   title: string;
   goal: string;
   /** active | paused | stopped | completed | blocked */
@@ -39,7 +39,7 @@ export interface TaskRun {
   label: string | null;
   goal: string | null;
   dispatched_by: string | null;
-  workspace_mode: string;
+  project_mode: string;
   run_dir: string | null;
   /** {summary, artifacts, status} — populated when the run completes. */
   result_manifest: Record<string, unknown> | null;
@@ -167,9 +167,9 @@ export interface PlanWritePayload {
 const fetchJson = createFetchJson(() => _apiBase);
 
 export const tasksApi = {
-  kickoff(workspaceId: string, payload: KickoffTaskPayload): Promise<Task> {
+  kickoff(projectId: string, payload: KickoffTaskPayload): Promise<Task> {
     return fetchJson(
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/tasks`,
+      `/v1/projects/${encodeURIComponent(projectId)}/tasks`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -178,8 +178,8 @@ export const tasksApi = {
     );
   },
 
-  listTasks(workspaceId: string): Promise<{ tasks: Task[] }> {
-    return fetchJson(`/v1/workspaces/${encodeURIComponent(workspaceId)}/tasks`);
+  listTasks(projectId: string): Promise<{ tasks: Task[] }> {
+    return fetchJson(`/v1/projects/${encodeURIComponent(projectId)}/tasks`);
   },
 
   /** Global cross-project task list, newest activity first. Backs the
@@ -219,11 +219,11 @@ export const tasksApi = {
   /** Open a draft task (status=draft, plan_version=0). No lead session is
    * created; the originating chat session becomes the plan writer. */
   draft(
-    workspaceId: string,
+    projectId: string,
     payload: DraftTaskPayload,
   ): Promise<DraftTaskResponse> {
     return fetchJson(
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/tasks:draft`,
+      `/v1/projects/${encodeURIComponent(projectId)}/tasks:draft`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },

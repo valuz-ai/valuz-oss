@@ -35,17 +35,17 @@ export interface Agent {
   kernel_agent_id: string | null;
 }
 
-/** One派驻 of an agent — the project (workspace) it's deployed into. */
+/** One派驻 of an agent — the project (project) it's deployed into. */
 export interface AgentDeployment {
-  workspace_id: string;
+  project_id: string;
   /** Project-local member handle. */
   agent_slug: string;
 }
 
-/** Membership row linking a workspace to a kernel agent. */
+/** Membership row linking a project to a kernel agent. */
 export interface ProjectMember {
   id: string;
-  workspace_id: string;
+  project_id: string;
   agent_slug: string;
   kernel_agent_id: string;
   source_agent_slug: string | null;
@@ -80,12 +80,12 @@ export interface ConnectorBindingInput {
 export interface DeployAgentPayload {
   source_agent_slug: string;
   /** Optional — backend derives from the source agent's name, unique within
-   *  the target workspace, when omitted (VALUZ-AGENT-SLUG). */
+   *  the target project, when omitted (VALUZ-AGENT-SLUG). */
   agent_slug?: string;
 }
 
 export interface CreateBlankAgentPayload {
-  /** Optional — backend derives from ``name``, unique within the workspace,
+  /** Optional — backend derives from ``name``, unique within the project,
    *  when omitted (VALUZ-AGENT-SLUG). */
   agent_slug?: string;
   name: string;
@@ -169,19 +169,19 @@ export const agentsApi = {
     });
   },
 
-  listMembers(workspaceId: string): Promise<{ agents: MemberWithAgent[] }> {
+  listMembers(projectId: string): Promise<{ agents: MemberWithAgent[] }> {
     return fetchJson(
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/agents`,
+      `/v1/projects/${encodeURIComponent(projectId)}/agents`,
     );
   },
 
   /** v2 派驻: deploy (live-reference) a library agent into a project. */
   deploy(
-    workspaceId: string,
+    projectId: string,
     payload: DeployAgentPayload,
   ): Promise<MemberWithAgent> {
     return fetchJson(
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/agents:deploy`,
+      `/v1/projects/${encodeURIComponent(projectId)}/agents:deploy`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -191,11 +191,11 @@ export const agentsApi = {
   },
 
   createBlank(
-    workspaceId: string,
+    projectId: string,
     payload: CreateBlankAgentPayload,
   ): Promise<MemberWithAgent> {
     return fetchJson(
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/agents`,
+      `/v1/projects/${encodeURIComponent(projectId)}/agents`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -204,9 +204,9 @@ export const agentsApi = {
     );
   },
 
-  deleteMember(workspaceId: string, agentSlug: string): Promise<void> {
+  deleteMember(projectId: string, agentSlug: string): Promise<void> {
     return fetchJson(
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentSlug)}`,
+      `/v1/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentSlug)}`,
       { method: "DELETE" },
     );
   },

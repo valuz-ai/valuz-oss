@@ -42,7 +42,7 @@ async def db(tmp_path) -> AsyncIterator:
         await engine.dispose()
 
 
-async def _deploy_row(db, *, slug: str, kid: str, workspace_id: str, handle: str) -> None:
+async def _deploy_row(db, *, slug: str, kid: str, project_id: str, handle: str) -> None:
     """Insert a library AgentRow + a project member referencing its shared id —
     the post-派驻 state, without going through the kernel-touching deploy path."""
     agents = AgentDatastore(db)
@@ -51,12 +51,12 @@ async def _deploy_row(db, *, slug: str, kid: str, workspace_id: str, handle: str
         AgentRow(slug=slug, name=slug.upper(), source="custom", kernel_agent_id=kid)
     )
     await members.create(
-        ProjectMemberRow(workspace_id=workspace_id, agent_slug=handle, kernel_agent_id=kid)
+        ProjectMemberRow(project_id=project_id, agent_slug=handle, kernel_agent_id=kid)
     )
 
 
 async def test_should_block_delete_when_agent_still_deployed(db) -> None:
-    await _deploy_row(db, slug="analyst", kid="k-1", workspace_id="w1", handle="analyst")
+    await _deploy_row(db, slug="analyst", kid="k-1", project_id="w1", handle="analyst")
     svc = AgentService(db)  # type: ignore[arg-type]
 
     with pytest.raises(AgentStillDeployedError) as exc:
@@ -67,7 +67,7 @@ async def test_should_block_delete_when_agent_still_deployed(db) -> None:
 
 
 async def test_should_allow_delete_after_undeploy(db) -> None:
-    await _deploy_row(db, slug="modeler", kid="k-2", workspace_id="w1", handle="modeler")
+    await _deploy_row(db, slug="modeler", kid="k-2", project_id="w1", handle="modeler")
     svc = AgentService(db)  # type: ignore[arg-type]
 
     # 解除派驻 deletes ONLY the member row — agent row stays.
@@ -94,29 +94,29 @@ async def test_should_block_delete_when_agent_not_deletable(db) -> None:
 
 
 async def test_should_resolve_member_back_to_library_agent(db) -> None:
-    await _deploy_row(db, slug="tracker", kid="k-3", workspace_id="w1", handle="tracker-1")
+    await _deploy_row(db, slug="tracker", kid="k-3", project_id="w1", handle="tracker-1")
     row = await AgentDatastore(db).get_by_kernel_agent_id("k-3")
     assert row is not None and row.slug == "tracker"
 
 
 async def test_should_list_all_deployments_of_a_shared_agent(db) -> None:
-    # Same shared kernel id派驻'd into two workspaces.
-    await _deploy_row(db, slug="pm", kid="k-4", workspace_id="w1", handle="pm")
+    # Same shared kernel id派驻'd into two projects.
+    await _deploy_row(db, slug="pm", kid="k-4", project_id="w1", handle="pm")
     await ProjectMemberDatastore(db).create(
-        ProjectMemberRow(workspace_id="w2", agent_slug="pm", kernel_agent_id="k-4")
+        ProjectMemberRow(project_id="w2", agent_slug="pm", kernel_agent_id="k-4")
     )
     deployments = await ProjectMemberDatastore(db).list_by_kernel_agent("k-4")
-    assert {m.workspace_id for m in deployments} == {"w1", "w2"}
+    assert {m.project_id for m in deployments} == {"w1", "w2"}
 
 
-async def test_list_deployments_service_resolves_workspaces(db) -> None:
-    await _deploy_row(db, slug="reviewer", kid="k-5", workspace_id="w1", handle="reviewer")
+async def test_list_deployments_service_resolves_projects(db) -> None:
+    await _deploy_row(db, slug="reviewer", kid="k-5", project_id="w1", handle="reviewer")
     await ProjectMemberDatastore(db).create(
-        ProjectMemberRow(workspace_id="w2", agent_slug="reviewer", kernel_agent_id="k-5")
+        ProjectMemberRow(project_id="w2", agent_slug="reviewer", kernel_agent_id="k-5")
     )
     svc = AgentService(db)  # type: ignore[arg-type]
     deployments = await svc.list_deployments("reviewer")
-    assert {d["workspace_id"] for d in deployments} == {"w1", "w2"}
+    assert {d["project_id"] for d in deployments} == {"w1", "w2"}
 
 
 async def test_list_deployments_empty_for_never_deployed_agent(db) -> None:

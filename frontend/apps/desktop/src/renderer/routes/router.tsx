@@ -6,7 +6,7 @@ import {
   type RouteObject,
 } from "react-router-dom";
 import { useRegistryStore } from "@valuz/core";
-import { DesktopWorkspaceLayout } from "../layouts/DesktopWorkspaceLayout";
+import { DesktopProjectLayout } from "../layouts/DesktopProjectLayout";
 import { PageLoader } from "@valuz/ui";
 import {
   createAppRouteObjects,
@@ -102,7 +102,7 @@ const buildRouteObjects = (resolved: ResolvedRoute[]): RouteObject[] =>
   createAppRouteObjects({
     routes: resolved,
     Root: DeepLinkRoot,
-    layout: DesktopWorkspaceLayout,
+    layout: DesktopProjectLayout,
   });
 
 /**
@@ -116,7 +116,7 @@ export const router = createAppRouter({
   createRouter: createHashRouter,
   routes: resolvedDesktopRoutes,
   Root: DeepLinkRoot,
-  layout: DesktopWorkspaceLayout,
+  layout: DesktopProjectLayout,
 });
 
 /**

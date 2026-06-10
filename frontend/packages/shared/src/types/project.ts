@@ -1,4 +1,4 @@
-export interface WorkspaceItem {
+export interface ProjectItem {
   id: string
   name: string
   kind: 'chat' | 'project'

@@ -79,7 +79,7 @@ const toMetaToolCall = (
       id: `meta-compiled-${seq}`,
       kind: "kb",
       title: "runtime.context.compiled",
-      subtitle: `workspace ${payload.workspace_id || "none"} · model ${payload.model || "default"}`,
+      subtitle: `project ${payload.project_id || "none"} · model ${payload.model || "default"}`,
       status: "success",
       output: payloadToBlock(payload),
     };

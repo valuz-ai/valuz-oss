@@ -4,7 +4,7 @@ from valuz_agent.ports.tool_provider import RuntimeBuildContext, ToolDef
 
 
 class CoreToolProvider:
-    """Registers doc_search and list_doc_scope for project workspaces."""
+    """Registers doc_search and list_doc_scope for projects."""
 
     @property
     def name(self) -> str:
@@ -15,7 +15,7 @@ class CoreToolProvider:
 
     def list_tools(self, context: RuntimeBuildContext) -> list[ToolDef]:
         tools: list[ToolDef] = []
-        if context.workspace_kind == "project" and context.doc_scope_ids:
+        if context.project_kind == "project" and context.doc_scope_ids:
             tools.append(ToolDef(
                 name="doc_search",
                 description=(
@@ -61,7 +61,7 @@ class CoreToolProvider:
             tools.append(ToolDef(
                 name="list_doc_scope",
                 description=(
-                    "List document scope tree for the workspace. "
+                    "List document scope tree for the project. "
                     "Shows KBs, folders, and documents. "
                     "Pass folder_id to explore a subtree."
                 ),

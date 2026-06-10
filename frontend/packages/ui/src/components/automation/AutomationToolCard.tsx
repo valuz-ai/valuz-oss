@@ -42,9 +42,9 @@ export type AutomationTrigger =
 
 export interface AutomationToolItem {
   automation_id: string;
-  workspace_id: string;
-  workspace_name: string;
-  workspace_kind: "chat" | "project";
+  project_id: string;
+  project_name: string;
+  project_kind: "chat" | "project";
   name: string;
   agent_kind: string;
   agent_slug: string;

@@ -6,7 +6,7 @@ Naming mirrors modules/schedules/datastore.py:
   create_*→ adds + commits, returns Row
   update_*→ merge + commit, returns Row
 
-append_event() assigns a monotonic sequence per (workspace_id, task_id)
+append_event() assigns a monotonic sequence per (project_id, task_id)
 by selecting MAX(sequence) + 1 within the task scope.
 """
 
@@ -46,12 +46,12 @@ class TaskDatastore:
 
     # -- Queries --
 
-    async def list_tasks(self, workspace_id: str) -> list[TaskRow]:
+    async def list_tasks(self, project_id: str) -> list[TaskRow]:
         return list(
             (
                 await self._db.execute(
                     select(TaskRow)
-                    .filter_by(workspace_id=workspace_id)
+                    .filter_by(project_id=project_id)
                     .order_by(TaskRow.created_at.desc())
                 )
             )
@@ -62,11 +62,11 @@ class TaskDatastore:
     async def get_task(self, task_id: str) -> TaskRow | None:
         return await self._db.get(TaskRow, task_id)
 
-    async def get_task_by_workspace(self, workspace_id: str, task_id: str) -> TaskRow | None:
+    async def get_task_by_project(self, project_id: str, task_id: str) -> TaskRow | None:
         return (
             (
                 await self._db.execute(
-                    select(TaskRow).filter_by(workspace_id=workspace_id, id=task_id)
+                    select(TaskRow).filter_by(project_id=project_id, id=task_id)
                 )
             )
             .scalars()
@@ -74,7 +74,7 @@ class TaskDatastore:
         )
 
     async def list_all(self, limit: int | None = 50) -> list[TaskRow]:
-        """All tasks across every workspace, newest activity first.
+        """All tasks across every project, newest activity first.
 
         Powers the sidebar TASKS section: a global, cross-project view of
         "what's running / recently touched". ``limit`` matches the recents
@@ -89,7 +89,7 @@ class TaskDatastore:
         return list((await self._db.execute(stmt)).scalars().all())
 
     async def list_active(self) -> list[TaskRow]:
-        """All ``active`` tasks across every workspace (VALUZ-RESUME Layer 1).
+        """All ``active`` tasks across every project (VALUZ-RESUME Layer 1).
 
         Startup recovery only resumes ``active`` tasks — ``paused``/``stopped``
         are intentional user stops, terminal states need no resume.
@@ -131,12 +131,12 @@ class TaskEventDatastore:
 
     # -- Queries --
 
-    async def list_events(self, workspace_id: str, task_id: str) -> list[TaskEventRow]:
+    async def list_events(self, project_id: str, task_id: str) -> list[TaskEventRow]:
         return list(
             (
                 await self._db.execute(
                     select(TaskEventRow)
-                    .filter_by(workspace_id=workspace_id, task_id=task_id)
+                    .filter_by(project_id=project_id, task_id=task_id)
                     .order_by(TaskEventRow.sequence)
                 )
             )
@@ -146,7 +146,7 @@ class TaskEventDatastore:
 
     async def list_events_after(
         self,
-        workspace_id: str,
+        project_id: str,
         task_id: str,
         after_seq: int,
     ) -> list[TaskEventRow]:
@@ -161,7 +161,7 @@ class TaskEventDatastore:
             (
                 await self._db.execute(
                     select(TaskEventRow)
-                    .filter_by(workspace_id=workspace_id, task_id=task_id)
+                    .filter_by(project_id=project_id, task_id=task_id)
                     .where(TaskEventRow.sequence > after_seq)
                     .order_by(TaskEventRow.sequence)
                 )
@@ -175,7 +175,7 @@ class TaskEventDatastore:
 
     async def latest_event(self, task_id: str) -> TaskEventRow | None:
         """The most recent timeline event for a task (by sequence), across any
-        workspace. Powers the activity overview's per-task "last event" preview;
+        project. Powers the activity overview's per-task "last event" preview;
         keyed on ``task_id`` alone since the caller has only that.
         """
         return (
@@ -191,19 +191,19 @@ class TaskEventDatastore:
 
     async def append_event(
         self,
-        workspace_id: str,
+        project_id: str,
         task_id: str,
         type: str,
         actor: str,
         session_id: str | None = None,
         payload: dict[str, Any] | None = None,
     ) -> TaskEventRow:
-        """Append an event with a monotonic sequence number per (workspace_id, task_id).
+        """Append an event with a monotonic sequence number per (project_id, task_id).
 
         The sequence is MAX(sequence)+1 within the task scope. This read-then-
         write is NOT race-free: concurrent appends (e.g. a v2 lead firing two
         ``dispatch_async`` calls in one turn) can compute the same next_seq and
-        collide on the ``(workspace_id, task_id, sequence)`` unique constraint.
+        collide on the ``(project_id, task_id, sequence)`` unique constraint.
         We retry on that collision, recomputing the sequence each time, so a
         loser re-sequences instead of failing (which previously orphaned the
         caller's half-written row, e.g. a spawned run with no spawn event).
@@ -218,13 +218,13 @@ class TaskEventDatastore:
             max_seq = (
                 await self._db.execute(
                     select(func.max(TaskEventRow.sequence)).filter_by(
-                        workspace_id=workspace_id, task_id=task_id
+                        project_id=project_id, task_id=task_id
                     )
                 )
             ).scalar()
             next_seq = (max_seq or 0) + 1
             row = TaskEventRow(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 sequence=next_seq,
                 type=type,

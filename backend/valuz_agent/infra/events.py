@@ -41,7 +41,7 @@ class Topics:
     AUTH_PRINCIPAL_RESOLVED = "auth.principal.resolved"
 
     # Pre-existing OSS topics (kept for compatibility)
-    WORKSPACE_BINDINGS_CHANGED = "workspace.bindings.changed"
+    PROJECT_BINDINGS_CHANGED = "project.bindings.changed"
 
 
 @dataclass

@@ -84,13 +84,13 @@ class DispatcherService:
         self,
         *,
         task_id: str,
-        workspace_id: str,
+        project_id: str,
         lead_session_id: str,
         subtask_key: str,
         agent: str | None = None,
         goal: str | None = None,
         refs: list[str] | None = None,
-        workspace_mode: str | None = None,
+        project_mode: str | None = None,
     ) -> dict[str, Any]:
         """Dispatch one planned subtask (by key) and await its completion.
 
@@ -107,7 +107,7 @@ class DispatcherService:
             run_ds = TaskSessionDatastore(db)
             member_ds = ProjectMemberDatastore(db)
 
-            task_row = await task_ds.get_task_by_workspace(workspace_id, task_id)
+            task_row = await task_ds.get_task_by_project(project_id, task_id)
             if task_row is None:
                 return {"error": f"task {task_id!r} not found", "status": "failed"}
 
@@ -119,14 +119,14 @@ class DispatcherService:
                 return {"error": resolved, "status": "failed"}
             agent, goal = resolved
 
-            # Determine workspace cwd
-            from valuz_agent.modules.projects.datastore import WorkspaceDatastore
+            # Determine project cwd
+            from valuz_agent.modules.projects.datastore import ProjectDatastore
 
-            ws_ds = WorkspaceDatastore(db)
-            ws_row = await ws_ds.get_by_id(workspace_id)
+            ws_ds = ProjectDatastore(db)
+            ws_row = await ws_ds.get_by_id(project_id)
             if ws_row is None:
-                return {"error": f"workspace {workspace_id!r} not found", "status": "failed"}
-            project_cwd = fs_registry.workspace_cwd(
+                return {"error": f"project {project_id!r} not found", "status": "failed"}
+            project_cwd = fs_registry.project_cwd(
                 ws_row.id,
                 cast(
                     Literal["chat", "project"],
@@ -138,7 +138,7 @@ class DispatcherService:
             # Resolve member working dir: shared project cwd by default (v2.1),
             # isolated git worktree only for repo-worktree mode.
             run_seq = await run_ds.next_sequence(task_id)
-            mode = workspace_mode or "shared"
+            mode = project_mode or "shared"
             # ``repo-worktree`` mode shells out to ``git worktree add`` (blocking
             # subprocess); offload so dispatch never blocks the event loop. The
             # default ``shared`` mode is a no-op Path() and stays instant.
@@ -153,21 +153,21 @@ class DispatcherService:
             # ``## Goal`` header so it doesn't land inside the goal condition.
             member_brief = goal + (f"\n\n## References\n\n{refs_text}" if refs_text else "")
 
-            # Fetch workspace context
-            ws_ctx = await ws_ds.get_context(workspace_id)
-            workspace_instructions_md = ws_ctx.instructions_md if ws_ctx else None
+            # Fetch project context
+            ws_ctx = await ws_ds.get_context(project_id)
+            project_instructions_md = ws_ctx.instructions_md if ws_ctx else None
 
             # Build and save member session
             member_session = await build_member_session(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 agent_slug=agent,
                 members=member_ds,
                 is_lead=False,
                 task_id=task_id,
                 run_dir=str(run_dir),
                 brief=member_brief,
-                workspace_name=ws_row.name,
-                workspace_instructions_md=workspace_instructions_md,
+                project_name=ws_row.name,
+                project_instructions_md=project_instructions_md,
                 # Member sub-run in goal mode: self-loops until its scoped
                 # goal is met, then auto-exits to default before returning
                 # its SubtaskResult to the lead. Lead's review_subtask
@@ -177,7 +177,7 @@ class DispatcherService:
             )
             if member_session is None:
                 return {
-                    "error": f"agent {agent!r} not found in workspace {workspace_id!r}",
+                    "error": f"agent {agent!r} not found in project {project_id!r}",
                     "status": "failed",
                 }
 
@@ -186,7 +186,7 @@ class DispatcherService:
             gap = await _credential_gap(member_session, agent, db=db)
             if gap is not None:
                 await event_ds.append_event(
-                    workspace_id=workspace_id,
+                    project_id=project_id,
                     task_id=task_id,
                     type="subtask_failed",
                     actor=agent,
@@ -199,7 +199,7 @@ class DispatcherService:
 
             # Record run in index (linked to the plan node via subtask_key)
             run_row = TaskSessionRow(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 session_id=member_session.id,
                 agent_slug=agent,
@@ -208,7 +208,7 @@ class DispatcherService:
                 status="active",
                 goal=goal,
                 dispatched_by=lead_session_id,
-                workspace_mode=mode,
+                project_mode=mode,
                 run_dir=str(run_dir),
                 subtask_key=subtask_key,
             )
@@ -216,7 +216,7 @@ class DispatcherService:
 
             # Append spawned event
             await event_ds.append_event(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 type="subtask_spawned",
                 actor=agent,
@@ -231,7 +231,7 @@ class DispatcherService:
 
         # Flip the plan node to in_progress (attempts++, link this run).
         await planning.mark_node_dispatched(
-            workspace_id=workspace_id,
+            project_id=project_id,
             task_id=task_id,
             subtask_key=subtask_key,
             agent=agent,
@@ -270,7 +270,7 @@ class DispatcherService:
             # completion — the lead decides via review_subtask. A genuine run
             # failure (terminated/error) still fails the node so the lead sees
             # it; otherwise the node goes to in_review awaiting the lead's call.
-            task_row2 = await task_ds2.get_task_by_workspace(workspace_id, task_id)
+            task_row2 = await task_ds2.get_task_by_project(project_id, task_id)
             plan2 = TaskPlan.from_dict(task_row2.plan) if task_row2 else None
             if plan2 is not None and plan2.get(subtask_key) is not None:
                 plan2.update_node(subtask_key, status="failed" if failed else "in_review")
@@ -278,7 +278,7 @@ class DispatcherService:
                 await task_ds2.update_task(task_row2)  # type: ignore[arg-type]
                 await planning.emit_plan_update(
                     event_ds2,
-                    workspace_id=workspace_id,
+                    project_id=project_id,
                     task_id=task_id,
                     plan=plan2,
                     actor=agent,
@@ -286,7 +286,7 @@ class DispatcherService:
                 )
             if failed:
                 await event_ds2.append_event(
-                    workspace_id=workspace_id,
+                    project_id=project_id,
                     task_id=task_id,
                     type="subtask_failed",
                     actor=agent,
@@ -304,7 +304,7 @@ class DispatcherService:
         self,
         *,
         task_id: str,
-        workspace_id: str,
+        project_id: str,
         lead_session_id: str,
         keys: list[str],
     ) -> list[dict[str, Any]]:
@@ -321,14 +321,14 @@ class DispatcherService:
 
         # Resolve each key's agent from the plan for skill grouping.
         async with async_unit_of_work(commit=False) as db0:
-            task_row0 = await TaskDatastore(db0).get_task_by_workspace(workspace_id, task_id)
+            task_row0 = await TaskDatastore(db0).get_task_by_project(project_id, task_id)
             plan0 = TaskPlan.from_dict(task_row0.plan) if task_row0 else TaskPlan()
 
         async def _skill_key(agent_slug: str) -> str:
             """Return a deterministic string representing the agent's skills."""
             async with async_unit_of_work(commit=False) as db:
                 member_ds = ProjectMemberDatastore(db)
-                member = await member_ds.get(workspace_id, agent_slug)
+                member = await member_ds.get(project_id, agent_slug)
                 if member is None:
                     return agent_slug
                 agent_cfg = await kernel_store.load_agent(member.kernel_agent_id)
@@ -352,7 +352,7 @@ class DispatcherService:
             async with sem:
                 results[idx] = await self.dispatch(
                     task_id=task_id,
-                    workspace_id=workspace_id,
+                    project_id=project_id,
                     lead_session_id=lead_session_id,
                     subtask_key=subtask_key,
                 )
@@ -373,13 +373,13 @@ class DispatcherService:
         self,
         *,
         task_id: str,
-        workspace_id: str,
+        project_id: str,
         lead_session_id: str,
         subtask_key: str,
         agent: str | None = None,
         goal: str | None = None,
         refs: list[str] | None = None,
-        workspace_mode: str | None = None,
+        project_mode: str | None = None,
     ) -> dict[str, Any]:
         """Start a planned subtask's member actor (non-blocking); return its handle.
 
@@ -396,7 +396,7 @@ class DispatcherService:
             run_ds = TaskSessionDatastore(db)
             member_ds = ProjectMemberDatastore(db)
 
-            task_row = await task_ds.get_task_by_workspace(workspace_id, task_id)
+            task_row = await task_ds.get_task_by_project(project_id, task_id)
             if task_row is None:
                 return {"error": f"task {task_id!r} not found", "status": "failed"}
 
@@ -408,13 +408,13 @@ class DispatcherService:
             _node = _plan.get(subtask_key)
             review_criteria = _node.review_criteria if _node else ""
 
-            from valuz_agent.modules.projects.datastore import WorkspaceDatastore
+            from valuz_agent.modules.projects.datastore import ProjectDatastore
 
-            ws_ds = WorkspaceDatastore(db)
-            ws_row = await ws_ds.get_by_id(workspace_id)
+            ws_ds = ProjectDatastore(db)
+            ws_row = await ws_ds.get_by_id(project_id)
             if ws_row is None:
-                return {"error": f"workspace {workspace_id!r} not found", "status": "failed"}
-            project_cwd = fs_registry.workspace_cwd(
+                return {"error": f"project {project_id!r} not found", "status": "failed"}
+            project_cwd = fs_registry.project_cwd(
                 ws_row.id,
                 cast(
                     Literal["chat", "project"],
@@ -424,7 +424,7 @@ class DispatcherService:
             )
 
             run_seq = await run_ds.next_sequence(task_id)
-            mode = workspace_mode or "shared"
+            mode = project_mode or "shared"
             # ``repo-worktree`` mode shells out to ``git worktree add`` (blocking
             # subprocess); offload so dispatch never blocks the event loop. The
             # default ``shared`` mode is a no-op Path() and stays instant.
@@ -448,19 +448,19 @@ class DispatcherService:
                 )
             )
 
-            ws_ctx = await ws_ds.get_context(workspace_id)
-            workspace_instructions_md = ws_ctx.instructions_md if ws_ctx else None
+            ws_ctx = await ws_ds.get_context(project_id)
+            project_instructions_md = ws_ctx.instructions_md if ws_ctx else None
 
             member_session = await build_member_session(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 agent_slug=agent,
                 members=member_ds,
                 is_lead=False,
                 task_id=task_id,
                 run_dir=str(run_dir),
                 brief=member_brief,
-                workspace_name=ws_row.name,
-                workspace_instructions_md=workspace_instructions_md,
+                project_name=ws_row.name,
+                project_instructions_md=project_instructions_md,
                 lead_session_id=lead_session_id,
                 # Member sub-run in goal mode: kernel wraps the brief into
                 # ``/goal <brief>`` so the member self-loops until its scoped
@@ -472,7 +472,7 @@ class DispatcherService:
             )
             if member_session is None:
                 return {
-                    "error": f"agent {agent!r} not found in workspace {workspace_id!r}",
+                    "error": f"agent {agent!r} not found in project {project_id!r}",
                     "status": "failed",
                 }
 
@@ -480,7 +480,7 @@ class DispatcherService:
             gap = await _credential_gap(member_session, agent, db=db)
             if gap is not None:
                 await event_ds.append_event(
-                    workspace_id=workspace_id,
+                    project_id=project_id,
                     task_id=task_id,
                     type="subtask_failed",
                     actor=agent,
@@ -493,7 +493,7 @@ class DispatcherService:
 
             await run_ds.create_run(
                 TaskSessionRow(
-                    workspace_id=workspace_id,
+                    project_id=project_id,
                     task_id=task_id,
                     session_id=member_session.id,
                     agent_slug=agent,
@@ -502,13 +502,13 @@ class DispatcherService:
                     status="active",
                     goal=goal,
                     dispatched_by=lead_session_id,
-                    workspace_mode=mode,
+                    project_mode=mode,
                     run_dir=str(run_dir),
                     subtask_key=subtask_key,
                 )
             )
             await event_ds.append_event(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 type="subtask_spawned",
                 actor=agent,
@@ -523,7 +523,7 @@ class DispatcherService:
 
         # Flip the plan node to in_progress (attempts++, link this run).
         await planning.mark_node_dispatched(
-            workspace_id=workspace_id,
+            project_id=project_id,
             task_id=task_id,
             subtask_key=subtask_key,
             agent=agent,
@@ -553,7 +553,7 @@ class DispatcherService:
                 initial_prompt=member_brief,
                 role="subtask",
                 task_id=task_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
             )
         )
 

@@ -34,7 +34,7 @@ describe("DesktopSidebar", () => {
             label: "定时任务",
             href: "/scheduled",
             icon: "scheduled",
-            group: "workspace",
+            group: "project",
           },
           {
             id: "settings",
@@ -60,7 +60,7 @@ describe("DesktopSidebar", () => {
         projectGroups={[
           {
             id: "p1",
-            label: "Workspace",
+            label: "Project",
             href: "/projects/p1",
           },
         ]}

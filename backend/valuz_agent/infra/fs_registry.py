@@ -21,7 +21,7 @@ outside this module and ``infra.config``.
 
 The kernel (``backend/kernel/``) is exempt from this rule — it owns its own
 materialization roots under ``project.cwd`` and we feed it a clean cwd path
-via ``workspace_cwd()``.
+via ``project_cwd()``.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from typing import Literal
 
 from valuz_agent.infra.config import settings
 
-WorkspaceKind = Literal["chat", "project"]
+ProjectKind = Literal["chat", "project"]
 SkillSource = Literal["claude", "codex"]
 
 
@@ -56,28 +56,28 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    # ---- FS-3 — workspace cwd (project.cwd in V5 kernel terms) ----
+    # ---- FS-3 — project cwd (project.cwd in V5 kernel terms) ----
 
-    def workspace_cwd(
-        self, project_id: str, kind: WorkspaceKind, root_path: str | None = None
+    def project_cwd(
+        self, project_id: str, kind: ProjectKind, root_path: str | None = None
     ) -> Path:
-        """Return the absolute cwd for a workspace.
+        """Return the absolute cwd for a project.
 
         - ``kind="project"``: caller-supplied ``root_path`` is used as-is. The
           path must already be absolute; it is not created.
         - ``kind="chat"``: a managed cwd is allocated under
-          ``data_dir/workspaces/{project_id}/`` and created on demand. This
+          ``data_dir/projects/{project_id}/`` and created on demand. This
           satisfies V5's invariant that ``project.cwd`` is always present.
         """
         if kind == "project":
             if not root_path:
-                raise ValueError("project workspace requires an explicit root_path")
+                raise ValueError("project requires an explicit root_path")
             path = Path(root_path).expanduser()
             if not path.is_absolute():
-                raise ValueError(f"workspace root_path must be absolute: {root_path}")
+                raise ValueError(f"project root_path must be absolute: {root_path}")
             return path
 
-        path = self.data_dir() / "workspaces" / project_id
+        path = self.data_dir() / "projects" / project_id
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -100,12 +100,12 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    # ---- FS-7 — skill-creator staging (workspace-cwd-keyed) ----
+    # ---- FS-7 — skill-creator staging (project-cwd-keyed) ----
     #
-    # Staging lives **inside the workspace cwd** under ``.skill-staging/``
+    # Staging lives **inside the project cwd** under ``.skill-staging/``
     # so the agent can write to it via a relative ``./`` path it computes
     # from ``$PWD`` (its actual working directory). No session_id appears
-    # in the path — concurrent sessions in the same workspace share this
+    # in the path — concurrent sessions in the same project share this
     # subdir and rely on slug uniqueness; ``submit_skill`` validates the
     # slug is present at the expected path before the user is shown a
     # confirmation card.
@@ -116,13 +116,13 @@ class FsRegistry:
     # staged content from before this refactor doesn't disappear.
     SKILL_STAGING_SUBDIR = ".skill-staging"
 
-    def skill_staging_root_for_workspace(self, workspace_cwd: str | Path) -> Path:
-        path = Path(workspace_cwd) / self.SKILL_STAGING_SUBDIR
+    def skill_staging_root_for_project(self, project_cwd: str | Path) -> Path:
+        path = Path(project_cwd) / self.SKILL_STAGING_SUBDIR
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def skill_staging_dir_for_workspace(self, workspace_cwd: str | Path, slug: str) -> Path:
-        path = self.skill_staging_root_for_workspace(workspace_cwd) / slug
+    def skill_staging_dir_for_project(self, project_cwd: str | Path, slug: str) -> Path:
+        path = self.skill_staging_root_for_project(project_cwd) / slug
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -202,7 +202,7 @@ class FsRegistry:
     def project_skill_dir(self, project_cwd: str | Path, slug: str) -> Path:
         return self.project_skill_root(project_cwd) / slug
 
-    # ---- FS-11 — task workspace directories (lead-dispatch-mvp §S6) ----
+    # ---- FS-11 — task project directories (lead-dispatch-mvp §S6) ----
     #
     # Layout under project.cwd:
     #   tasks/<task_id>-<slug>.md       — task narrative file (file-as-truth)
@@ -364,25 +364,25 @@ class FsRegistry:
     # ---- FS-13 — onboarding example project directory ----
     #
     # User-visible directory for the onboarding "示例项目".  Lives under
-    # ``user_workspace_root`` (default ``~/Valuz``) so it appears in the
+    # ``user_project_root`` (default ``~/Valuz``) so it appears in the
     # user's home folder rather than in the hidden ``~/.valuz`` data dir.
 
     def example_project_dir(self) -> Path:
         """Return (and create) the example-project directory.
 
-        ``<user_workspace_root>/示例项目`` — created on demand.
+        ``<user_project_root>/示例项目`` — created on demand.
         Used exclusively by the onboarding ``POST /v1/onboarding/example-project``
-        endpoint; the path is then handed to ``WorkspaceService.create_project``
+        endpoint; the path is then handed to ``ProjectService.create_project``
         as ``root_path``.
         """
-        path = settings.user_workspace_root / "示例项目"
+        path = settings.user_project_root / "示例项目"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
     # ---- FS-12 — memory store directories (memory-system-design §2.1) ----
     #
     #   global  → <data_dir>/memory/                       (cross-project, per-user)
-    #   project → <project_cwd>/.valuz/memory/             (workspace, cross-session+task)
+    #   project → <project_cwd>/.valuz/memory/             (project, cross-session+task)
     #   task    → <project_cwd>/.valuz/memory/tasks/<id>/  (single task, lead+members)
     #
     # Each scope dir holds topic files ``<name>.md`` (frontmatter) + a single

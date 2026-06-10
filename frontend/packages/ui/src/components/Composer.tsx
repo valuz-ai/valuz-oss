@@ -206,7 +206,7 @@ export interface RuntimeSelectorItem {
 }
 
 export interface ComposerAgentItem {
-  /** Workspace-local agent handle (the ``agent_slug``). */
+  /** Project-local agent handle (the ``agent_slug``). */
   slug: string;
   /** Display name. */
   name: string;
@@ -217,7 +217,7 @@ export interface ComposerAgentItem {
 }
 
 export interface ComposerProjectItem {
-  /** Workspace id (project). */
+  /** Project id (project). */
   id: string;
   /** Display name. */
   name: string;
@@ -367,14 +367,14 @@ export interface ComposerProps {
   /** Project options for the 📁 chip. When provided (even empty) the chip
    *  renders. ``undefined`` hides it (callers not yet wired). */
   projects?: ComposerProjectItem[];
-  /** Currently selected workspace. ``null`` = 临时对话 (chat-default); a
+  /** Currently selected project. ``null`` = 临时对话 (chat-default); a
    *  project id otherwise. */
-  selectedWorkspaceId?: string | null;
+  selectedProjectId?: string | null;
   /** Called when the user switches project/临时. ``null`` => 临时. */
-  onWorkspaceChange?: (id: string | null) => void;
-  /** Read-only display once a session exists (workspace frozen at creation,
+  onProjectChange?: (id: string | null) => void;
+  /** Read-only display once a session exists (project frozen at creation,
    *  ADR-006). */
-  workspaceLocked?: boolean;
+  projectLocked?: boolean;
   /** Entry point to create/add an agent to the project. */
   onAddAgent?: () => void;
   /** Disable the send button regardless of content (e.g. no agent picked). */
@@ -445,9 +445,9 @@ export const Composer = ({
   agentModelOverridden = false,
   agentLocked = false,
   projects,
-  selectedWorkspaceId,
-  onWorkspaceChange,
-  workspaceLocked = false,
+  selectedProjectId,
+  onProjectChange,
+  projectLocked = false,
   onAddAgent,
   sendDisabled = false,
   mode = "chat",
@@ -1053,12 +1053,12 @@ export const Composer = ({
     agents?.find((a) => a.slug === selectedAgentSlug) ?? null;
 
   // Project-selector mode (📁 chip). When ``projects`` is provided the chip
-  // renders; ``selectedWorkspaceId == null`` means 临时对话 (chat-default).
+  // renders; ``selectedProjectId == null`` means 临时对话 (chat-default).
   const projectMode = projects !== undefined;
   const selectedProject =
-    selectedWorkspaceId == null
+    selectedProjectId == null
       ? null
-      : (projects?.find((p) => p.id === selectedWorkspaceId) ?? null);
+      : (projects?.find((p) => p.id === selectedProjectId) ?? null);
   const projectTriggerLabel = selectedProject
     ? selectedProject.name
     : t("conversation.tempChat" as Parameters<typeof t>[0]);
@@ -1532,38 +1532,38 @@ export const Composer = ({
           </div>
           <div className="flex items-center gap-2">
             {/* 09-assistant 📁 project chip — switches the conversation
-                between 临时对话 (chat-default) and a project workspace.
+                between 临时对话 (chat-default) and a project project.
                 Sits immediately before the 🤖 agent chip so the two read
                 "📁 🤖" left-to-right. Frozen once a session exists
-                (``workspaceLocked``, ADR-006). */}
+                (``projectLocked``, ADR-006). */}
             {projectMode && (
               <div className="relative" ref={projectRef}>
                 <button
                   type="button"
                   className={cn(
                     "flex h-7 items-center gap-1 rounded-lg px-2 text-xs transition-colors duration-[120ms]",
-                    workspaceLocked
+                    projectLocked
                       ? "cursor-not-allowed text-ink-muted"
                       : "text-ink-body hover:bg-surface-soft hover:text-ink-heading",
                     projectOpen &&
-                      !workspaceLocked &&
+                      !projectLocked &&
                       "bg-surface-soft text-ink-heading",
                   )}
                   onClick={() => {
-                    if (!workspaceLocked) setProjectOpen((v) => !v);
+                    if (!projectLocked) setProjectOpen((v) => !v);
                   }}
                 >
                   <FolderClosed className="h-3 w-3 shrink-0" />
                   <span className="max-w-[160px] truncate">
                     {projectTriggerLabel}
                   </span>
-                  {workspaceLocked ? (
+                  {projectLocked ? (
                     <Lock className="h-3 w-3 shrink-0 opacity-70" />
                   ) : (
                     <ChevronDown className="h-3 w-3 shrink-0" />
                   )}
                 </button>
-                {projectOpen && !workspaceLocked && (
+                {projectOpen && !projectLocked && (
                   <div
                     className={cn(
                       "absolute left-0 z-50 min-w-[260px] rounded-lg border border-surface-border bg-surface shadow-lg",
@@ -1571,16 +1571,16 @@ export const Composer = ({
                     )}
                   >
                     <div className="max-h-[320px] overflow-y-auto p-1">
-                      {/* 临时对话 row — selected when selectedWorkspaceId == null */}
+                      {/* 临时对话 row — selected when selectedProjectId == null */}
                       <button
                         type="button"
                         onClick={() => {
-                          onWorkspaceChange?.(null);
+                          onProjectChange?.(null);
                           setProjectOpen(false);
                         }}
                         className={cn(
                           "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-surface-muted",
-                          selectedWorkspaceId == null && "bg-surface-muted",
+                          selectedProjectId == null && "bg-surface-muted",
                         )}
                       >
                         <span className="flex min-w-0 flex-1 flex-col">
@@ -1599,7 +1599,7 @@ export const Composer = ({
                             )}
                           </span>
                         </span>
-                        {selectedWorkspaceId == null && (
+                        {selectedProjectId == null && (
                           <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
                         )}
                       </button>
@@ -1607,13 +1607,13 @@ export const Composer = ({
                         <div className="my-1 h-px bg-surface-border" />
                       )}
                       {projects?.map((p) => {
-                        const sel = p.id === selectedWorkspaceId;
+                        const sel = p.id === selectedProjectId;
                         return (
                           <button
                             key={p.id}
                             type="button"
                             onClick={() => {
-                              onWorkspaceChange?.(p.id);
+                              onProjectChange?.(p.id);
                               setProjectOpen(false);
                             }}
                             className={cn(

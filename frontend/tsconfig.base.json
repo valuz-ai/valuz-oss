@@ -32,7 +32,7 @@
       "@valuz/app/routes": ["./packages/app/src/routes/index.ts"],
       "@valuz/app/lib/*": ["./packages/app/src/lib/*"],
       "@valuz/ui/tailwind-preset": ["./packages/ui/tailwind.preset.ts"],
-      "@valuz/ui/styles/workspace.css": ["./packages/ui/src/styles/workspace.css"],
+      "@valuz/ui/styles/project.css": ["./packages/ui/src/styles/project.css"],
       "@valuz/ui/components/ui/*": ["./packages/ui/src/components/ui/*"],
       "@valuz/ui/hooks/*": ["./packages/ui/src/hooks/*"],
       "@valuz/ui/lib/*": ["./packages/ui/src/lib/*"]

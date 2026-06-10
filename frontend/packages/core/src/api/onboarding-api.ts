@@ -19,7 +19,7 @@ export const setOnboardingApiBase = (url: string): void => {
 export type OnboardingTeamId = "general" | "investment" | "product";
 
 export interface ExampleProjectResponse {
-  workspace_id: string;
+  project_id: string;
   project_name: string;
 }
 

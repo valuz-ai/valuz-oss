@@ -9,8 +9,8 @@ Joins:
 
 - ``session.metadata["valuz"]`` → run_kind / task_id / agent_slug
 - ``valuz_task_session`` (``TaskSessionDatastore.get_run``) → subtask_key
-- ``valuz_task`` (``TaskDatastore.get_task``) → task_title + workspace_id + plan
-- ``valuz_workspace`` (``WorkspaceDatastore.get_by_id``) → project_title + emoji
+- ``valuz_task`` (``TaskDatastore.get_task``) → task_title + project_id + plan
+- ``valuz_project`` (``ProjectDatastore.get_by_id``) → project_title + emoji
 - ``TaskPlan.get(subtask_key)`` → subtask_label
 """
 
@@ -27,7 +27,7 @@ from src.core import Session  # type: ignore[import-not-found]
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.decisions.schemas import DecisionEntry
-from valuz_agent.modules.projects.datastore import WorkspaceDatastore
+from valuz_agent.modules.projects.datastore import ProjectDatastore
 from valuz_agent.modules.tasks.datastore import (
     TaskDatastore,
     TaskSessionDatastore,
@@ -81,7 +81,7 @@ async def enrich_pending(
     - The task row was deleted (race between event broadcast and our
       lookup — silently drop)
 
-    Joins are best-effort: a deleted workspace or missing plan node
+    Joins are best-effort: a deleted project or missing plan node
     degrades to ``None`` on the enriched field, NOT a failed entry.
     """
     v = _valuz_metadata(session)
@@ -131,9 +131,9 @@ async def enrich_pending(
 
         project_title: str | None = None
         project_emoji: str | None = None
-        workspace_id = task.workspace_id
-        if workspace_id:
-            ws = await WorkspaceDatastore(db).get_by_id(workspace_id)
+        project_id = task.project_id
+        if project_id:
+            ws = await ProjectDatastore(db).get_by_id(project_id)
             if ws is not None:
                 project_title = ws.name
                 project_emoji = ws.icon
@@ -142,7 +142,7 @@ async def enrich_pending(
         pending_id=pending_id,
         session_id=session_id,
         task_id=task_id,
-        project_id=workspace_id or None,
+        project_id=project_id or None,
         subtask_key=subtask_key,
         agent_slug=agent_slug,
         project_title=project_title,

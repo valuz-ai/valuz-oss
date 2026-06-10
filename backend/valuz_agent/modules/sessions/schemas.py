@@ -7,7 +7,7 @@ the same nullable ``model_id`` / ``provider_id`` shape and feeds it
 through the shared ``adapters.model_resolver.resolve_model`` precedence:
 
     explicit model_id → channel.default_model →
-    workspace default (forthcoming) → global fallback.
+    project default (forthcoming) → global fallback.
 
 Keeping the input contract in one place stops drift like
 ``POST /v1/skills/create/chat/start`` quietly hard-coding the channel

@@ -7,8 +7,6 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 _SCRIPTS_DIR = str(Path(__file__).resolve().parents[2] / "i18n" / "scripts")
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)

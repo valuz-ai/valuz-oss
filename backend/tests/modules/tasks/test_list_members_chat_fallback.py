@@ -1,7 +1,7 @@
 """Layer-3 of the project-less-chat automation fix: ``list_members`` must not
 be an empty dead-end in a chat.
 
-A chat workspace has no deployed *project* members, but the conversation is
+A chat project has no deployed *project* members, but the conversation is
 driven by its bound agent. ``_bound_agent_member`` shapes that bound agent
 into a ``list_members`` row so the handler can surface it as a fallback — the
 slug is then directly usable as an automation's ``agent_slug``.

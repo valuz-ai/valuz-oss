@@ -35,6 +35,12 @@ VERSION_TABLE = "alembic_version_host"
 _OWNERSHIP_MARKER_TABLE = "valuz_provider"
 _OWNERSHIP_MARKER_COLUMN = "user_id"
 
+# Marker table for the workspace→project naming cutover: the host baseline was
+# regenerated with ``valuz_project`` (and ``valuz_workspace_context`` folded
+# into it), so the presence of the old ``valuz_workspace`` table identifies a
+# pre-rename install that must be wiped + rebuilt.
+_RENAME_MARKER_TABLE = "valuz_workspace"
+
 
 def drop_stale_host_tables(engine: Engine | None = None) -> None:
     """Clean-up probe for the ``user_id`` ownership cutover — host counterpart
@@ -67,21 +73,30 @@ def drop_stale_host_tables(engine: Engine | None = None) -> None:
         inspector = inspect(engine)
         existing = set(inspector.get_table_names())
 
-        if _OWNERSHIP_MARKER_TABLE not in existing:
-            return  # fresh install — nothing to wipe
-        marker_cols = {c["name"] for c in inspector.get_columns(_OWNERSHIP_MARKER_TABLE)}
-        if _OWNERSHIP_MARKER_COLUMN in marker_cols:
-            return  # already on the post-ownership schema
+        reason: str | None = None
+        if _RENAME_MARKER_TABLE in existing:
+            # workspace→project naming cutover: the baseline was regenerated
+            # with ``valuz_project`` (context table folded in); any DB still
+            # carrying ``valuz_workspace`` predates the cutover.
+            reason = f"pre-rename host schema detected ({_RENAME_MARKER_TABLE} exists)"
+        elif _OWNERSHIP_MARKER_TABLE in existing:
+            marker_cols = {c["name"] for c in inspector.get_columns(_OWNERSHIP_MARKER_TABLE)}
+            if _OWNERSHIP_MARKER_COLUMN not in marker_cols:
+                reason = (
+                    f"pre-user_id host schema detected "
+                    f"({_OWNERSHIP_MARKER_TABLE} lacks {_OWNERSHIP_MARKER_COLUMN})"
+                )
+
+        if reason is None:
+            return  # fresh install or already on the current baseline
 
         stale = sorted(t for t in existing if t.startswith("valuz_"))
         if VERSION_TABLE in existing:
             stale.append(VERSION_TABLE)
 
         logger.warning(
-            "Pre-user_id host schema detected (%s lacks %s) — dropping %d host "
-            "table(s) for a fresh baseline rebuild",
-            _OWNERSHIP_MARKER_TABLE,
-            _OWNERSHIP_MARKER_COLUMN,
+            "%s — dropping %d host table(s) for a fresh baseline rebuild",
+            reason,
             len(stale),
         )
         with engine.begin() as conn:

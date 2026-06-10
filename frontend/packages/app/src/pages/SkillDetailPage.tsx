@@ -20,7 +20,7 @@ import {
 } from "@valuz/ui";
 import { skillsApi } from "@valuz/core";
 import type { SkillDetail } from "@valuz/core";
-import { useWorkspaceOutlet } from "@valuz/app/layout";
+import { useProjectOutlet } from "@valuz/app/layout";
 import { toast } from "sonner";
 import { useTranslation } from "@valuz/core";
 
@@ -55,7 +55,7 @@ export const SkillDetailPage = () => {
   const { t } = useTranslation();
   const { skillId = "" } = useParams();
   const navigate = useNavigate();
-  const { setHeader } = useWorkspaceOutlet();
+  const { setHeader } = useProjectOutlet();
 
   const [skill, setSkill] = useState<SkillDetail | null>(null);
   const [files, setFiles] = useState<TreeNode[]>([]);

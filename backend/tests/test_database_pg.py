@@ -43,8 +43,8 @@ class TestPostgresConfig:
     def test_async_engine_connects(self) -> None:
         import asyncio
 
-        from sqlalchemy.ext.asyncio import create_async_engine
         from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import create_async_engine
 
         from valuz_agent.infra.config import Settings
 

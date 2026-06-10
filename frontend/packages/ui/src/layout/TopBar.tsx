@@ -79,7 +79,7 @@ export const TopBar = ({
                   onClick={onToggleSidebar}
                   className="flex h-[22px] w-[22px] items-center justify-center rounded-[5px] text-ink-body transition-colors hover:bg-surface-muted"
                 >
-                  {/* Mirror of the right-panel toggle in the workspace
+                  {/* Mirror of the right-panel toggle in the project
                       layout: rounded rect + a divider line whose position
                       signals the sidebar state. Collapsed pushes the line
                       further LEFT (sidebar squeezed off) and shortens it

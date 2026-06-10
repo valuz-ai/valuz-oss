@@ -5,18 +5,18 @@ import { routes } from './router'
 import { resolvedDesktopRoutes } from './route-registry'
 
 describe('desktop routes', () => {
-  it('registers prototype parity routes as hidden workspace routes', () => {
+  it('registers prototype parity routes as hidden project routes', () => {
     const hiddenPrototypeRoutes = ['tool-calls', 'context-panel', 'overlays', 'scheduled']
 
     for (const routeId of hiddenPrototypeRoutes) {
       const route = resolvedDesktopRoutes.find((candidate) => candidate.id === routeId)
       expect(route).toBeDefined()
-      expect(route?.layout).toBe('workspace')
+      expect(route?.layout).toBe('project')
       expect(route?.showInNav).toBe(false)
     }
   })
 
-  it('renders the personal conversation workspace route', async () => {
+  it('renders the personal conversation project route', async () => {
     const router = createMemoryRouter(routes, {
       initialEntries: ['/conversation/local-agent'],
     })
@@ -26,7 +26,7 @@ describe('desktop routes', () => {
     expect((await screen.findAllByText('英伟达 Q4 财报分析')).length).toBeGreaterThan(0)
   })
 
-  it('renders the fe-style desktop sidebar chrome around workspace routes', async () => {
+  it('renders the fe-style desktop sidebar chrome around project routes', async () => {
     const router = createMemoryRouter(routes, {
       initialEntries: ['/knowledge'],
     })

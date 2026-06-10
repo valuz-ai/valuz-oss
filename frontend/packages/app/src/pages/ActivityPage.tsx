@@ -22,7 +22,7 @@ import {
   useRunningRuns,
   useSessionEvents,
   useTranslation,
-  useWorkspaceStore,
+  useProjectStore,
   type RunSummary,
 } from "@valuz/core";
 import {
@@ -30,7 +30,7 @@ import {
   summarizeSegmentPhrase,
   type SessionEventDTO,
 } from "@valuz/shared";
-import { useWorkspaceOutlet } from "@valuz/app/layout";
+import { useProjectOutlet } from "@valuz/app/layout";
 
 type SourceFilter = "all" | "chat" | "task";
 type TimeBucket = "today" | "yesterday" | "thisWeek" | "earlier";
@@ -263,9 +263,9 @@ const RunningCard = ({
 export const ActivityPage = () => {
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { setHeader, setContentInnerClassName } = useWorkspaceOutlet();
+  const { setHeader, setContentInnerClassName } = useProjectOutlet();
   const { runs: running } = useRunningRuns();
-  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const projects = useProjectStore((s) => s.projects);
 
   const [filter, setFilter] = useState<SourceFilter>("all");
   const [finished, setFinished] = useState<RunSummary[]>([]);
@@ -349,27 +349,27 @@ export const ActivityPage = () => {
   }, [refreshFinished]);
 
   // Label: ``<project> · <kind>`` for project-scoped runs, bare ``<kind>``
-  // for the default workspace. Prefixing the default chats with the
-  // workspace name ("New chat") just reads as "New chat · Chat" — redundant
+  // for the default project. Prefixing the default chats with the
+  // project name ("New chat") just reads as "New chat · Chat" — redundant
   // — so we drop the scope there and only keep it when it carries real
   // information (the project name). Chats carry their scope in
-  // ``source_kind`` directly; tasks don't, so look the workspace kind up by id.
-  const workspaceKindById = useMemo(
-    () => new Map(workspaces.map((w) => [w.id, w.kind])),
-    [workspaces],
+  // ``source_kind`` directly; tasks don't, so look the project kind up by id.
+  const projectKindById = useMemo(
+    () => new Map(projects.map((w) => [w.id, w.kind])),
+    [projects],
   );
 
   const sourceLabel = (r: RunSummary): string => {
     const isProject =
       r.source_kind === "project_chat" ||
       (r.source_kind === "task" &&
-        workspaceKindById.get(r.workspace_id) === "project");
+        projectKindById.get(r.project_id) === "project");
     const kind =
       r.source_kind === "task"
         ? t(tk("activity.taskTag"))
         : t(tk("activity.chatTag"));
     if (!isProject) return kind;
-    const scope = r.workspace_name ?? "Project";
+    const scope = r.project_name ?? "Project";
     return `${scope} · ${kind}`;
   };
 

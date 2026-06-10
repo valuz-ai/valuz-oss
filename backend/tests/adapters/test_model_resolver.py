@@ -115,15 +115,15 @@ async def test_should_use_provider_default_when_no_request_model() -> None:
     assert res.source == "provider"
 
 
-async def test_should_use_workspace_default_when_no_provider_default() -> None:
+async def test_should_use_project_default_when_no_provider_default() -> None:
     provider = _FakeProvider(id="ch-x", default_model=None)
     res = await resolve_model(
         providers=_FakeProviderDatastore([provider]),
         request_provider_id="ch-x",
-        workspace_default_model_id="workspace-pinned-model",
+        project_default_model_id="project-pinned-model",
     )
-    assert res.model == "workspace-pinned-model"
-    assert res.source == "workspace"
+    assert res.model == "project-pinned-model"
+    assert res.source == "project"
 
 
 async def test_should_fall_back_to_default_model_when_nothing_specified() -> None:

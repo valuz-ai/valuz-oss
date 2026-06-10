@@ -17,7 +17,7 @@ import {
   type Agent,
 } from "@valuz/core";
 import type { ResourceCategory } from "@valuz/shared";
-import { useWorkspaceOutlet } from "@valuz/app/layout";
+import { useProjectOutlet } from "@valuz/app/layout";
 import { pickAgentIcon } from "../components/agent-icons";
 import { AgentDetailView } from "../components/AgentDetailView";
 import { CreateAgentDialog } from "../components/CreateAgentDialog";
@@ -57,7 +57,7 @@ export const AgentsPage = () => {
     setRightPanel,
     setAsideClassName,
     setMainClassName,
-  } = useWorkspaceOutlet();
+  } = useProjectOutlet();
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);

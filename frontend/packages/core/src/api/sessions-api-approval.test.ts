@@ -18,7 +18,7 @@ describe("parseRequiresAction", () => {
   it("should decode shell_command payload and decisions array", () => {
     const payload = {
       command: "ls /tmp",
-      cwd: "/Users/test/workspace",
+      cwd: "/Users/test/project",
       network: false,
       reason: "List temp dir",
     };

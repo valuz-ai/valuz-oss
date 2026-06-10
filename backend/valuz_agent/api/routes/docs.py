@@ -11,7 +11,6 @@ from valuz_agent.modules.docs.service import (
     DocumentListItem,
     ImportTaskResult,
     KbDetail,
-    KbListItem,
     KbTreeNode,
 )
 
@@ -39,7 +38,7 @@ class ReindexRequest(BaseModel):
 
 class SearchRequest(BaseModel):
     query: str
-    workspace_id: str
+    project_id: str
     top_k: int = 5
     folder_ids: list[str] | None = None
     document_ids: list[str] | None = None
@@ -169,7 +168,7 @@ async def search_docs(
 ) -> dict[str, list[DocSearchHit]]:
     return {
         "hits": await svc.search_docs(
-            body.workspace_id,
+            body.project_id,
             body.query,
             body.top_k,
             folder_ids=body.folder_ids,
@@ -215,16 +214,16 @@ async def delete_doc(
 # ── Project KB bindings ───────────────────────────────────────────────
 
 
-@router.get("/v1/workspaces/{workspace_id}/kb-bindings")
+@router.get("/v1/projects/{project_id}/kb-bindings")
 async def list_bindings(
-    workspace_id: str,
+    project_id: str,
     svc: DocumentLibraryService = Depends(get_document_service),
 ) -> dict[str, list[dict[str, str]]]:
-    rows = await svc.list_project_bindings(workspace_id)
+    rows = await svc.list_project_bindings(project_id)
     return {
         "bindings": [
             {
-                "workspace_id": r.workspace_id,
+                "project_id": r.project_id,
                 "binding_kind": r.binding_kind,
                 "target_id": r.target_id,
             }
@@ -233,20 +232,20 @@ async def list_bindings(
     }
 
 
-@router.put("/v1/workspaces/{workspace_id}/kb-bindings")
+@router.put("/v1/projects/{project_id}/kb-bindings")
 async def update_bindings(
-    workspace_id: str,
+    project_id: str,
     body: UpdateBindingsRequest,
     svc: DocumentLibraryService = Depends(get_document_service),
 ) -> dict[str, list[dict[str, str]]]:
     rows = await svc.update_project_bindings(
-        workspace_id,
+        project_id,
         [{"binding_kind": b.binding_kind, "target_id": b.target_id} for b in body.bindings],
     )
     return {
         "bindings": [
             {
-                "workspace_id": r.workspace_id,
+                "project_id": r.project_id,
                 "binding_kind": r.binding_kind,
                 "target_id": r.target_id,
             }
@@ -255,10 +254,10 @@ async def update_bindings(
     }
 
 
-@router.delete("/v1/workspaces/{workspace_id}/kb-bindings")
+@router.delete("/v1/projects/{project_id}/kb-bindings")
 async def remove_bindings(
-    workspace_id: str,
+    project_id: str,
     svc: DocumentLibraryService = Depends(get_document_service),
 ) -> dict[str, bool]:
-    await svc.remove_project_bindings(workspace_id)
+    await svc.remove_project_bindings(project_id)
     return {"ok": True}

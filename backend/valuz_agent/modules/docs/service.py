@@ -169,7 +169,7 @@ class ImportTaskResult:
     processed_items: int
     failed_items: int
     kb_id: str | None = None
-    workspace_id: str | None = None
+    project_id: str | None = None
     created_at: int | None = None
     errors: list[ImportTaskItemError] = field(default_factory=list)
 
@@ -309,7 +309,7 @@ def _task_to_result(row: DocumentImportTaskRow) -> ImportTaskResult:
         processed_items=row.processed_items,
         failed_items=row.failed_items,
         kb_id=row.kb_id,
-        workspace_id=row.workspace_id,
+        project_id=row.project_id,
         created_at=row.created_at,
         errors=_decode_task_errors(getattr(row, "errors_json", None)),
     )
@@ -1072,13 +1072,13 @@ class DocumentLibraryService:
 
     async def search_docs(
         self,
-        workspace_id: str,
+        project_id: str,
         query: str,
         top_k: int = 5,
         folder_ids: list[str] | None = None,
         document_ids: list[str] | None = None,
     ) -> list[DocSearchHit]:
-        scope_ids = await self.resolve_doc_scope(workspace_id)
+        scope_ids = await self.resolve_doc_scope(project_id)
         if not scope_ids:
             return []
 
@@ -1129,37 +1129,37 @@ class DocumentLibraryService:
 
     # ── Project binding (D3 minimal cover) ────────────────────────────
 
-    async def list_project_bindings(self, workspace_id: str) -> list[ProjectKbBindingRow]:
-        return await self._ds.list_bindings(workspace_id)
+    async def list_project_bindings(self, project_id: str) -> list[ProjectKbBindingRow]:
+        return await self._ds.list_bindings(project_id)
 
     async def update_project_bindings(
         self,
-        workspace_id: str,
+        project_id: str,
         bindings: list[dict[str, str]],
     ) -> list[ProjectKbBindingRow]:
         rows = [
             ProjectKbBindingRow(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 binding_kind=b["binding_kind"],
                 target_id=b["target_id"],
             )
             for b in bindings
         ]
         minimized = await self._minimize_bindings(rows)
-        await self._ds.set_bindings(workspace_id, minimized)
-        self._bus.publish("workspace.bindings.changed", workspace_id=workspace_id)
-        return await self._ds.list_bindings(workspace_id)
+        await self._ds.set_bindings(project_id, minimized)
+        self._bus.publish("project.bindings.changed", project_id=project_id)
+        return await self._ds.list_bindings(project_id)
 
-    async def remove_project_bindings(self, workspace_id: str) -> None:
-        await self._ds.remove_all_bindings(workspace_id)
+    async def remove_project_bindings(self, project_id: str) -> None:
+        await self._ds.remove_all_bindings(project_id)
 
-    async def count_project_bindings(self, workspace_id: str) -> int:
-        return await self._ds.count_bindings(workspace_id)
+    async def count_project_bindings(self, project_id: str) -> int:
+        return await self._ds.count_bindings(project_id)
 
     # ── Scope resolution ──────────────────────────────────────────────
 
-    async def resolve_doc_scope(self, workspace_id: str) -> list[str]:
-        bindings = await self._ds.list_bindings(workspace_id)
+    async def resolve_doc_scope(self, project_id: str) -> list[str]:
+        bindings = await self._ds.list_bindings(project_id)
         doc_ids: set[str] = set()
         for b in bindings:
             if b.binding_kind == "kb":
@@ -1183,8 +1183,8 @@ class DocumentLibraryService:
                 result[did] = row.preview_text_path
         return result
 
-    async def build_doc_scope_tree(self, workspace_id: str) -> DocScopeTreeView:
-        bindings = await self._ds.list_bindings(workspace_id)
+    async def build_doc_scope_tree(self, project_id: str) -> DocScopeTreeView:
+        bindings = await self._ds.list_bindings(project_id)
         if not bindings:
             return DocScopeTreeView(knowledge_bases=(), total_documents=0)
 

@@ -2,13 +2,13 @@
 
 Agent (valuz_agent):
   Stateless blueprint layer — method, default runtime/model, skill refs,
-  connector type declarations. Global across workspaces; MVP is official
+  connector type declarations. Global across projects; MVP is official
   (read-only seed). Source-of-truth for ``deploy_agent``.
 
 Project Member (valuz_project_member):
-  Per-workspace mapping of a project-local handle ("agent_slug") to a
+  Per-project mapping of a project-local handle ("agent_slug") to a
   kernel AgentConfig row. Created when a source agent is instantiated or
-  when a blank agent is added to a workspace.
+  when a blank agent is added to a project.
 """
 
 from __future__ import annotations
@@ -62,15 +62,15 @@ class AgentRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
 
 
 class ProjectMemberRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
-    """Per-workspace agent membership row — maps a slug handle to a kernel agent."""
+    """Per-project agent membership row — maps a slug handle to a kernel agent."""
 
     __tablename__ = "valuz_project_member"
 
     __table_args__ = (
-        UniqueConstraint("workspace_id", "agent_slug", name="uq_project_member_ws_slug"),
+        UniqueConstraint("project_id", "agent_slug", name="uq_project_member_ws_slug"),
     )
 
-    workspace_id: Mapped[str] = mapped_column(String(36), index=True)
+    project_id: Mapped[str] = mapped_column(String(36), index=True)
     # Project-local human handle — used as the ``agent`` param in dispatch calls
     agent_slug: Mapped[str] = mapped_column(String(128))
     # References kernel ``agents.id`` — business key, NO FK constraint (per repo convention)

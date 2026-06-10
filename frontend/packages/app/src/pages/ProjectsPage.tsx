@@ -18,31 +18,31 @@ import {
 } from "@valuz/ui";
 import { toast } from "sonner";
 import { FolderKanban, Plus } from "lucide-react";
-import { workspacesApi, type WorkspaceListItem } from "@valuz/core";
+import { projectsApi, type ProjectListItem } from "@valuz/core";
 import { usePlatform } from "@valuz/app/platform";
 import { useTranslation } from "@valuz/core";
-import { useWorkspaceOutlet } from "@valuz/app/layout";
+import { useProjectOutlet } from "@valuz/app/layout";
 
 export const ProjectsPage = () => {
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { selectDirectory } = usePlatform();
-  const { setHeader, setHeaderClassName } = useWorkspaceOutlet();
-  const [projects, setProjects] = useState<WorkspaceListItem[]>([]);
+  const { setHeader, setHeaderClassName } = useProjectOutlet();
+  const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [newRootPath, setNewRootPath] = useState("");
   const [createError, setCreateError] = useState("");
-  const [deleteTarget, setDeleteTarget] = useState<WorkspaceListItem | null>(
+  const [deleteTarget, setDeleteTarget] = useState<ProjectListItem | null>(
     null,
   );
 
   const fetchProjects = useCallback(async () => {
     try {
-      const data = await workspacesApi.list();
-      setProjects(data.workspaces.filter((w) => w.kind === "project"));
+      const data = await projectsApi.list();
+      setProjects(data.projects.filter((w) => w.kind === "project"));
     } catch {
       toast.error(t("project.loadFailed" as Parameters<typeof t>[0]));
     } finally {
@@ -111,7 +111,7 @@ export const ProjectsPage = () => {
     if (!trimmedName || !trimmedPath) return;
     setCreateError("");
     try {
-      await workspacesApi.create({ name: trimmedName, root_path: trimmedPath });
+      await projectsApi.create({ name: trimmedName, root_path: trimmedPath });
       toast.success(
         t("project.created" as Parameters<typeof t>[0], { name: trimmedName }),
       );
@@ -136,7 +136,7 @@ export const ProjectsPage = () => {
   const handleDelete = async () => {
     if (!deleteTarget) return;
     try {
-      await workspacesApi.delete(deleteTarget.id);
+      await projectsApi.delete(deleteTarget.id);
       toast.success(
         t("project.deleted" as Parameters<typeof t>[0], {
           name: deleteTarget.name,

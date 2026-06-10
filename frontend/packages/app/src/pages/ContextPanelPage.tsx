@@ -1,9 +1,9 @@
 import { useEffect } from "react";
 import { ChatContextPanel, ProjectContextPanel } from "@valuz/ui";
-import { useWorkspaceOutlet } from "@valuz/app/layout";
+import { useProjectOutlet } from "@valuz/app/layout";
 
 export const ContextPanelPage = () => {
-  const { setRightPanel } = useWorkspaceOutlet();
+  const { setRightPanel } = useProjectOutlet();
 
   useEffect(() => {
     setRightPanel(<ProjectContextPanel />);

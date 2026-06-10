@@ -18,7 +18,7 @@ from valuz_agent.adapters.event_sse_adapter import _translate_kernel_event
 def test_should_translate_requires_action_for_shell_command_subject():
     payload = {
         "command": "ls /tmp",
-        "cwd": "/Users/test/workspace",
+        "cwd": "/Users/test/project",
         "network": False,
         "reason": "List temp dir",
     }

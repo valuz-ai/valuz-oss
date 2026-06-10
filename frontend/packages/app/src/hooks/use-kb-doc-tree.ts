@@ -71,7 +71,7 @@ export interface UseKbDocTreeResult {
 
 /**
  * Loads the **global** knowledge-base document tree for the
- * conversation attachment picker — independent of any workspace
+ * conversation attachment picker — independent of any project
  * binding (chat sessions have no project to scope to). When
  * ``enabled`` is false the hook stays idle and returns an empty
  * tree, so callers can gate it behind "the picker is open" without

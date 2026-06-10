@@ -8,11 +8,11 @@ package), and confirms tool discovery returns ``doc_search`` and
 
 import asyncio
 import os
+import socket
 import threading
 import time
-import uuid
-import socket
 import urllib.request
+import uuid
 
 import uvicorn
 

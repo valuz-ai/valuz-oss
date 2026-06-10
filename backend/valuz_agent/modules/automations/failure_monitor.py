@@ -191,7 +191,7 @@ async def perform_sweep(
             AutomationRunRow(
                 id=uuid4().hex,
                 automation_id=fresh.id,
-                workspace_id=fresh.workspace_id,
+                project_id=fresh.project_id,
                 trigger_type="system",
                 status="auto_paused_notice",
                 triggered_at=now,
@@ -215,7 +215,7 @@ async def perform_sweep(
             try:
                 publish_event(
                     "automation.auto_paused",
-                    workspace_id=fresh.workspace_id,
+                    project_id=fresh.project_id,
                     automation_id=fresh.id,
                     failed=c.failed,
                     total=c.total,

@@ -7,7 +7,7 @@ import { useTranslation } from "@valuz/core";
  *
  * When a task is ``active`` it reads "Running" with a sliding-highlight
  * sweep — reusing the global ``shimmer-text`` keyframe (see
- * ``@valuz/ui`` workspace.css) that ConversationTurnList rides for
+ * ``@valuz/ui`` project.css) that ConversationTurnList rides for
  * in-progress turns, so a live task's status visibly signals "still
  * running". Every other status falls back to its plain localized label.
  */

@@ -1,7 +1,7 @@
 """Connector datastore — async SQLAlchemy ORM access.
 
-DB methods are ``async``; the per-workspace filesystem helpers
-(``get_workspace_connectors`` / ``set_workspace_connectors``) read/write
+DB methods are ``async``; the per-project filesystem helpers
+(``get_project_connectors`` / ``set_project_connectors``) read/write
 ``.claude/project-config.json`` with no DB and stay plain ``def``.
 """
 
@@ -70,21 +70,21 @@ class ConnectorDatastore:
         return True
 
     # ------------------------------------------------------------------
-    # Per-workspace connector selection (persisted in project-config.json)
+    # Per-project connector selection (persisted in project-config.json)
     # ------------------------------------------------------------------
 
-    def get_workspace_connectors(self, workspace: _WorkspaceLike) -> list[str]:
-        if workspace.kind != "project" or not workspace.root_path:
+    def get_project_connectors(self, project: _ProjectLike) -> list[str]:
+        if project.kind != "project" or not project.root_path:
             return []
-        config_path = Path(workspace.root_path) / ".claude" / "project-config.json"
+        config_path = Path(project.root_path) / ".claude" / "project-config.json"
         if not config_path.exists():
             return []
         raw = json.loads(config_path.read_text(encoding="utf-8"))
         value = raw.get("connectors", [])
         return value if isinstance(value, list) else []
 
-    def set_workspace_connectors(self, workspace: _WorkspaceLike, slugs: list[str]) -> None:
-        config_path = Path(workspace.root_path) / ".claude" / "project-config.json"  # type: ignore[arg-type]
+    def set_project_connectors(self, project: _ProjectLike, slugs: list[str]) -> None:
+        config_path = Path(project.root_path) / ".claude" / "project-config.json"  # type: ignore[arg-type]
         config_path.parent.mkdir(parents=True, exist_ok=True)
         data: dict = {}
         if config_path.exists():
@@ -93,7 +93,7 @@ class ConnectorDatastore:
         config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-class _WorkspaceLike(Protocol):
+class _ProjectLike(Protocol):
     id: str
     kind: str
     root_path: str | None

@@ -4,40 +4,40 @@ let _apiBase =
   (import.meta as unknown as Record<string, Record<string, string> | undefined>)
     .env?.VITE_API_BASE_URL || "http://localhost:8000";
 
-export const setWorkspacesApiBase = (url: string): void => {
+export const setProjectsApiBase = (url: string): void => {
   _apiBase = url;
 };
 
-export interface WorkspaceListItem {
+export interface ProjectListItem {
   id: string;
   name: string;
   kind: "chat" | "project";
   root_path: string | null;
   icon: string | null;
   /** Resolved working directory the kernel runs sessions in.
-   * Project workspaces: equals ``root_path``.
-   * Chat workspaces: managed dir under ``data_dir/workspaces/{id}/``. */
+   * Project projects: equals ``root_path``.
+   * Chat projects: managed dir under ``data_dir/projects/{id}/``. */
   cwd: string | null;
 }
 
-export interface WorkspaceDetail extends WorkspaceListItem {
+export interface ProjectDetail extends ProjectListItem {
   instructions_md: string | null;
   memory_summary: string | null;
 }
 
-export interface WorkspaceDeletePreview {
+export interface ProjectDeletePreview {
   session_count: number;
   doc_binding_count: number;
   schedule_count: number;
   skill_config_count: number;
 }
 
-export interface WorkspaceFileNode {
+export interface ProjectFileNode {
   name: string;
   type: "file" | "directory";
   size: number | null;
   modified: string | null;
-  children?: WorkspaceFileNode[];
+  children?: ProjectFileNode[];
 }
 
 export interface LastSessionPick {
@@ -53,39 +53,39 @@ export interface ProjectCreateRequest {
 
 const fetchJson = createFetchJson(() => _apiBase);
 
-export const workspacesApi = {
-  list(): Promise<{ workspaces: WorkspaceListItem[] }> {
-    return fetchJson("/v1/workspaces");
+export const projectsApi = {
+  list(): Promise<{ projects: ProjectListItem[] }> {
+    return fetchJson("/v1/projects");
   },
 
-  get(workspaceId: string): Promise<WorkspaceDetail> {
-    return fetchJson(`/v1/workspaces/${encodeURIComponent(workspaceId)}`);
+  get(projectId: string): Promise<ProjectDetail> {
+    return fetchJson(`/v1/projects/${encodeURIComponent(projectId)}`);
   },
 
   /**
-   * Most-recent (runtime, provider, model) picked in this workspace.
+   * Most-recent (runtime, provider, model) picked in this project.
    * Used by the project composer to seed pickers with the user's last
    * choice instead of the global Settings default. All three fields
-   * are ``null`` when the workspace has no prior session.
+   * are ``null`` when the project has no prior session.
    */
-  getLastSessionPick(workspaceId: string): Promise<LastSessionPick> {
+  getLastSessionPick(projectId: string): Promise<LastSessionPick> {
     return fetchJson(
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/last-session-pick`,
+      `/v1/projects/${encodeURIComponent(projectId)}/last-session-pick`,
     );
   },
 
-  create(payload: ProjectCreateRequest): Promise<WorkspaceDetail> {
-    return fetchJson("/v1/workspaces", {
+  create(payload: ProjectCreateRequest): Promise<ProjectDetail> {
+    return fetchJson("/v1/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
   },
 
-  rename(workspaceId: string, name: string): Promise<WorkspaceDetail> {
+  rename(projectId: string, name: string): Promise<ProjectDetail> {
     const qs = new URLSearchParams({ name });
     return fetchJson(
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}?${qs}`,
+      `/v1/projects/${encodeURIComponent(projectId)}?${qs}`,
       {
         method: "PATCH",
       },
@@ -93,12 +93,12 @@ export const workspacesApi = {
   },
 
   updateInstructions(
-    workspaceId: string,
+    projectId: string,
     instructionsMd: string,
   ): Promise<{ ok: boolean }> {
     const qs = new URLSearchParams({ instructions_md: instructionsMd });
     return fetchJson(
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/instructions?${qs}`,
+      `/v1/projects/${encodeURIComponent(projectId)}/instructions?${qs}`,
       {
         method: "PUT",
       },
@@ -106,42 +106,42 @@ export const workspacesApi = {
   },
 
   listFiles(
-    workspaceId: string,
+    projectId: string,
     opts?: { depth?: number; includeHidden?: boolean },
-  ): Promise<{ files: WorkspaceFileNode[] }> {
+  ): Promise<{ files: ProjectFileNode[] }> {
     const qs = new URLSearchParams();
     if (opts?.depth !== undefined) qs.set("depth", String(opts.depth));
     if (opts?.includeHidden) qs.set("include_hidden", "true");
     const suffix = qs.toString() ? `?${qs}` : "";
     return fetchJson(
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/files${suffix}`,
+      `/v1/projects/${encodeURIComponent(projectId)}/files${suffix}`,
     );
   },
 
-  deletePreview(workspaceId: string): Promise<WorkspaceDeletePreview> {
+  deletePreview(projectId: string): Promise<ProjectDeletePreview> {
     return fetchJson(
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/delete-preview`,
+      `/v1/projects/${encodeURIComponent(projectId)}/delete-preview`,
     );
   },
 
-  delete(workspaceId: string): Promise<void> {
-    return fetchJson(`/v1/workspaces/${encodeURIComponent(workspaceId)}`, {
+  delete(projectId: string): Promise<void> {
+    return fetchJson(`/v1/projects/${encodeURIComponent(projectId)}`, {
       method: "DELETE",
     });
   },
 
-  getMcpServers(workspaceId: string): Promise<{ slugs: string[] }> {
+  getMcpServers(projectId: string): Promise<{ slugs: string[] }> {
     return fetchJson(
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/connectors`,
+      `/v1/projects/${encodeURIComponent(projectId)}/connectors`,
     );
   },
 
   setMcpServers(
-    workspaceId: string,
+    projectId: string,
     slugs: string[],
   ): Promise<{ ok: boolean }> {
     return fetchJson(
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/connectors`,
+      `/v1/projects/${encodeURIComponent(projectId)}/connectors`,
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },

@@ -17,7 +17,7 @@ export * from "./api/settings-api";
 export * from "./api/skills-api";
 export * from "./api/system-api";
 export * from "./api/tasks-api";
-export * from "./api/workspaces-api";
+export * from "./api/projects-api";
 export * from "./config/features";
 export * from "./conversation";
 export * from "./hooks";

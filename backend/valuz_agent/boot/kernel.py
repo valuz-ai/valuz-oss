@@ -298,8 +298,8 @@ def get_kernel_routers() -> list:
     history (one row per ``run_turn``, with usage + todo snapshots).
 
     Per ADR-008 the kernel's ``app.routes.agents`` is *not* mounted here.
-    Valuz keeps a private synthetic agent per workspace
-    (``agent-<workspace_id>``); exposing the kernel CRUD surface would
+    Valuz keeps a private synthetic agent per project
+    (``agent-<project_id>``); exposing the kernel CRUD surface would
     leak those rows to any frontend listing them, and we have no
     user-facing agent gallery yet. If/when product introduces agent
     presets, this decision is revisited in a new ADR.

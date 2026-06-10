@@ -178,7 +178,7 @@ class TaskOrchestrator:
 
     async def kickoff(
         self,
-        workspace_id: str,
+        project_id: str,
         goal: str,
         lead_agent_slug: str,
         refs: list[str] | None = None,
@@ -208,7 +208,7 @@ class TaskOrchestrator:
         invoking ``task_orchestrator.kickoff``.
         """
         return await self._lifecycle.kickoff(
-            workspace_id=workspace_id,
+            project_id=project_id,
             goal=goal,
             lead_agent_slug=lead_agent_slug,
             refs=refs,
@@ -225,7 +225,7 @@ class TaskOrchestrator:
     async def draft_task(
         self,
         *,
-        workspace_id: str,
+        project_id: str,
         goal: str,
         lead_agent_slug: str,
         originating_session_id: str,
@@ -240,7 +240,7 @@ class TaskOrchestrator:
         to follow up with ``plan_task`` (lifting plan_version to 1) before
         committing.
 
-        Raises ``ValueError`` if the workspace doesn't exist or the agent isn't
+        Raises ``ValueError`` if the project doesn't exist or the agent isn't
         a member of it (same validations as ``kickoff``). Raises
         ``BriefTooLongError`` (subclass of ValueError) when ``goal`` exceeds
         the goal-mode payload cap — fails before any DB write so the chat
@@ -257,19 +257,19 @@ class TaskOrchestrator:
             event_ds = TaskEventDatastore(db)
             member_ds = ProjectMemberDatastore(db)
 
-            from valuz_agent.modules.projects.datastore import WorkspaceDatastore
+            from valuz_agent.modules.projects.datastore import ProjectDatastore
 
-            ws_ds = WorkspaceDatastore(db)
-            ws_row = await ws_ds.get_by_id(workspace_id)
+            ws_ds = ProjectDatastore(db)
+            ws_row = await ws_ds.get_by_id(project_id)
             if ws_row is None:
-                raise ValueError(f"workspace {workspace_id!r} not found")
-            lead_member = await member_ds.get(workspace_id, lead_agent_slug)
+                raise ValueError(f"project {project_id!r} not found")
+            lead_member = await member_ds.get(project_id, lead_agent_slug)
             if lead_member is None:
                 raise ValueError(
-                    f"lead agent {lead_agent_slug!r} is not a member of workspace {workspace_id!r}"
+                    f"lead agent {lead_agent_slug!r} is not a member of project {project_id!r}"
                 )
 
-            project_cwd = fs_registry.workspace_cwd(
+            project_cwd = fs_registry.project_cwd(
                 ws_row.id,
                 cast(
                     Literal["chat", "project"],
@@ -292,7 +292,7 @@ class TaskOrchestrator:
 
             task_row = TaskRow(
                 id=task_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 file_path=file_path,
                 title=task_title,
                 goal=goal,
@@ -302,7 +302,7 @@ class TaskOrchestrator:
                 # Draft-period holder = originating chat (logically); we still
                 # record the lead agent slug for UI clarity. The actual plan
                 # writer gate uses metadata.originating_session_id +
-                # workspace match (see dispatch_mcp._check_plan_writer_gate).
+                # project match (see dispatch_mcp._check_plan_writer_gate).
                 current_holder=lead_agent_slug,
                 metadata_=metadata,
                 plan_version=0,
@@ -311,7 +311,7 @@ class TaskOrchestrator:
             await task_ds.create_task(task_row)
 
             await event_ds.append_event(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 type="task_drafted",
                 actor=originating_session_id,
@@ -328,7 +328,7 @@ class TaskOrchestrator:
         self,
         *,
         task_id: str,
-        workspace_id: str,
+        project_id: str,
         caller_session_id: str,
         lead_agent_slug_override: str | None = None,
     ) -> dict[str, Any]:
@@ -354,7 +354,7 @@ class TaskOrchestrator:
             run_ds = TaskSessionDatastore(db)
             member_ds = ProjectMemberDatastore(db)
 
-            task_row = await task_ds.get_task_by_workspace(workspace_id, task_id)
+            task_row = await task_ds.get_task_by_project(project_id, task_id)
             if task_row is None:
                 return {"error": f"task {task_id!r} not found"}
             if task_row.status != "draft":
@@ -371,21 +371,21 @@ class TaskOrchestrator:
                 return {"error": "commit_task: plan has no work to do (all nodes already done)"}
 
             lead_slug = lead_agent_slug_override or task_row.lead_agent_slug
-            lead_member = await member_ds.get(workspace_id, lead_slug)
+            lead_member = await member_ds.get(project_id, lead_slug)
             if lead_member is None:
                 return {
                     "error": (
-                        f"lead agent {lead_slug!r} is not a member of workspace {workspace_id!r}"
+                        f"lead agent {lead_slug!r} is not a member of project {project_id!r}"
                     )
                 }
 
-            from valuz_agent.modules.projects.datastore import WorkspaceDatastore
+            from valuz_agent.modules.projects.datastore import ProjectDatastore
 
-            ws_ds = WorkspaceDatastore(db)
-            ws_row = await ws_ds.get_by_id(workspace_id)
+            ws_ds = ProjectDatastore(db)
+            ws_row = await ws_ds.get_by_id(project_id)
             if ws_row is None:
-                return {"error": f"workspace {workspace_id!r} not found"}
-            project_cwd = fs_registry.workspace_cwd(
+                return {"error": f"project {project_id!r} not found"}
+            project_cwd = fs_registry.project_cwd(
                 ws_row.id,
                 cast(
                     Literal["chat", "project"],
@@ -412,22 +412,22 @@ class TaskOrchestrator:
                 + (f"\n## References\n\n{refs_text}\n" if refs_text else "")
             )
 
-            from valuz_agent.modules.projects.datastore import WorkspaceDatastore as WsDs
+            from valuz_agent.modules.projects.datastore import ProjectDatastore as WsDs
 
             ws_ds2 = WsDs(db)
-            ws_ctx = await ws_ds2.get_context(workspace_id)
-            workspace_instructions_md = ws_ctx.instructions_md if ws_ctx else None
+            ws_ctx = await ws_ds2.get_context(project_id)
+            project_instructions_md = ws_ctx.instructions_md if ws_ctx else None
 
             lead_session = await build_member_session(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 agent_slug=lead_slug,
                 members=member_ds,
                 is_lead=True,
                 task_id=task_id,
                 run_dir=lead_cwd,
                 brief=lead_brief,
-                workspace_name=ws_row.name,
-                workspace_instructions_md=workspace_instructions_md,
+                project_name=ws_row.name,
+                project_instructions_md=project_instructions_md,
                 dispatch_mode="async",
                 goal_mode=True,
                 plan_pre_committed=True,  # ← key flag (VALUZ-CHATPLAN D10)
@@ -448,7 +448,7 @@ class TaskOrchestrator:
 
             # DB writes: create lead run row + flip task status + append event
             lead_run = TaskSessionRow(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 session_id=lead_session.id,
                 agent_slug=lead_slug,
@@ -457,7 +457,7 @@ class TaskOrchestrator:
                 status="active",
                 label="Committed",
                 goal=task_row.goal,
-                workspace_mode="shared",
+                project_mode="shared",
                 run_dir=lead_cwd,
             )
             await run_ds.create_run(lead_run)
@@ -476,7 +476,7 @@ class TaskOrchestrator:
             await task_ds.update_task(task_row)
 
             await event_ds.append_event(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 type="committed",
                 actor=caller_session_id,
@@ -500,7 +500,7 @@ class TaskOrchestrator:
                 initial_prompt=lead_brief,
                 role="lead",
                 task_id=task_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
             )
         )
 
@@ -515,7 +515,7 @@ class TaskOrchestrator:
         self,
         *,
         task_id: str,
-        workspace_id: str,
+        project_id: str,
         caller_session_id: str,
         reason: str = "",
     ) -> dict[str, Any]:
@@ -528,7 +528,7 @@ class TaskOrchestrator:
             task_ds = TaskDatastore(db)
             event_ds = TaskEventDatastore(db)
 
-            task_row = await task_ds.get_task_by_workspace(workspace_id, task_id)
+            task_row = await task_ds.get_task_by_project(project_id, task_id)
             if task_row is None:
                 return {"error": f"task {task_id!r} not found"}
             if task_row.status != "draft":
@@ -542,7 +542,7 @@ class TaskOrchestrator:
             task_row.status = "abandoned"
             await task_ds.update_task(task_row)
             await event_ds.append_event(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 type="abandoned",
                 actor=caller_session_id,
@@ -559,13 +559,13 @@ class TaskOrchestrator:
         self,
         *,
         task_id: str,
-        workspace_id: str,
+        project_id: str,
         lead_session_id: str,
         subtask_key: str,
         agent: str | None = None,
         goal: str | None = None,
         refs: list[str] | None = None,
-        workspace_mode: str | None = None,
+        project_mode: str | None = None,
     ) -> dict[str, Any]:
         """Dispatch one planned subtask (by key) and await its completion.
 
@@ -578,13 +578,13 @@ class TaskOrchestrator:
         """
         return await self._dispatcher.dispatch(
             task_id=task_id,
-            workspace_id=workspace_id,
+            project_id=project_id,
             lead_session_id=lead_session_id,
             subtask_key=subtask_key,
             agent=agent,
             goal=goal,
             refs=refs,
-            workspace_mode=workspace_mode,
+            project_mode=project_mode,
         )
 
     # ------------------------------------------------------------------
@@ -595,7 +595,7 @@ class TaskOrchestrator:
         self,
         *,
         task_id: str,
-        workspace_id: str,
+        project_id: str,
         lead_session_id: str,
         keys: list[str],
     ) -> list[dict[str, Any]]:
@@ -610,7 +610,7 @@ class TaskOrchestrator:
         """
         return await self._dispatcher.dispatch_batch(
             task_id=task_id,
-            workspace_id=workspace_id,
+            project_id=project_id,
             lead_session_id=lead_session_id,
             keys=keys,
         )
@@ -635,7 +635,7 @@ class TaskOrchestrator:
         initial_prompt: str,
         role: Literal["lead", "subtask"],
         task_id: str,
-        workspace_id: str,
+        project_id: str,
         idle_ttl: float | None = None,
     ) -> None:
         """Persistent actor loop: run turn → idle → await mailbox → repeat.
@@ -650,7 +650,7 @@ class TaskOrchestrator:
             initial_prompt=initial_prompt,
             role=role,
             task_id=task_id,
-            workspace_id=workspace_id,
+            project_id=project_id,
             idle_ttl=idle_ttl,
         )
 
@@ -668,14 +668,14 @@ class TaskOrchestrator:
         """
         await self._coordination._notify_lead_member_idle(session_id, status)
 
-    async def _lead_idle_with_no_pending(self, task_id: str, workspace_id: str) -> bool:
+    async def _lead_idle_with_no_pending(self, task_id: str, project_id: str) -> bool:
         """True when a lead has nothing left to wait for after a turn.
 
         Thin delegator onto :class:`CoordinationService` (ADR-023 Step 3b).
         Kept as a method so the actor loop drives it via the bound host (and
         tests can stub ``orch._lead_idle_with_no_pending``).
         """
-        return await self._coordination._lead_idle_with_no_pending(task_id, workspace_id)
+        return await self._coordination._lead_idle_with_no_pending(task_id, project_id)
 
     @staticmethod
     def _last_assistant_summary(session_id: str) -> str:
@@ -697,7 +697,7 @@ class TaskOrchestrator:
         *,
         lead_session_id: str,
         task_id: str,
-        workspace_id: str,
+        project_id: str,
         final_status: str,
     ) -> None:
         """Close a task when its lead actor-loop ends without an explicit
@@ -722,7 +722,7 @@ class TaskOrchestrator:
             event_ds = TaskEventDatastore(db)
             run_ds = TaskSessionDatastore(db)
 
-            task = await task_ds.get_task_by_workspace(workspace_id, task_id)
+            task = await task_ds.get_task_by_project(project_id, task_id)
             if task is None or task.status != "active":
                 return  # already closed by finish_task / stop / intervene
             if self._members.has_live_members(task_id):
@@ -803,7 +803,7 @@ class TaskOrchestrator:
                 # unresolved-subtasks-no-error blocked case below.
                 await task_ds.update_task_status(task_id, "blocked")
                 await event_ds.append_event(
-                    workspace_id=workspace_id,
+                    project_id=project_id,
                     task_id=task_id,
                     type="task_blocked",
                     actor=lead_session_id,
@@ -823,7 +823,7 @@ class TaskOrchestrator:
                 # (not a hard error, but not done either).
                 await task_ds.update_task_status(task_id, "blocked")
                 await event_ds.append_event(
-                    workspace_id=workspace_id,
+                    project_id=project_id,
                     task_id=task_id,
                     type="task_blocked",
                     actor=lead_session_id,
@@ -849,7 +849,7 @@ class TaskOrchestrator:
                 ended_at=now_ms(),
             )
             await event_ds.append_event(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 type="task_completed",
                 actor=lead_session_id,
@@ -874,11 +874,11 @@ class TaskOrchestrator:
         Best-effort + idempotent (re-running converges on current run/node state).
         """
         async with async_unit_of_work(commit=False) as db:
-            task_ids = [(t.id, t.workspace_id) for t in await TaskDatastore(db).list_active()]
+            task_ids = [(t.id, t.project_id) for t in await TaskDatastore(db).list_active()]
         recovered = 0
-        for task_id, workspace_id in task_ids:
+        for task_id, project_id in task_ids:
             try:
-                if await self._recover_one_task(task_id, workspace_id):
+                if await self._recover_one_task(task_id, project_id):
                     recovered += 1
             except Exception:  # noqa: BLE001
                 logger.exception("recover_active_tasks: failed for task %s", task_id)
@@ -888,7 +888,7 @@ class TaskOrchestrator:
             )
         return recovered
 
-    async def _recover_one_task(self, task_id: str, workspace_id: str) -> bool:
+    async def _recover_one_task(self, task_id: str, project_id: str) -> bool:
         """Reconcile one active task's members + re-drive its lead.
 
         Used by both Layer 1 (startup) and Layer 2 (user 'resume'). Returns False
@@ -906,7 +906,7 @@ class TaskOrchestrator:
             task_ds = TaskDatastore(db)
             run_ds = TaskSessionDatastore(db)
             event_ds = TaskEventDatastore(db)
-            task = await task_ds.get_task_by_workspace(workspace_id, task_id)
+            task = await task_ds.get_task_by_project(project_id, task_id)
             if task is None or task.status not in ("active", "paused"):
                 return False
             runs = await run_ds.list_runs(task_id)
@@ -963,7 +963,7 @@ class TaskOrchestrator:
                 await task_ds.update_task(task)
                 await planning.emit_plan_update(
                     event_ds,
-                    workspace_id=workspace_id,
+                    project_id=project_id,
                     task_id=task_id,
                     plan=plan,
                     actor="system",
@@ -1009,7 +1009,7 @@ class TaskOrchestrator:
                     initial_prompt=brief or "继续完成你的子任务,完成后会汇报给 lead。",
                     role="subtask",
                     task_id=task_id,
-                    workspace_id=workspace_id,
+                    project_id=project_id,
                 )
             )
         await _evict_runtime(lead_session_id)
@@ -1025,7 +1025,7 @@ class TaskOrchestrator:
                 initial_prompt=lead_brief,
                 role="lead",
                 task_id=task_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
             )
         )
         return True
@@ -1049,7 +1049,7 @@ class TaskOrchestrator:
             logger.warning("interrupt failed for session %s", session_id, exc_info=True)
 
     async def stop_task(
-        self, task_id: str, workspace_id: str, *, target_status: str = "paused"
+        self, task_id: str, project_id: str, *, target_status: str = "paused"
     ) -> bool:
         """User-initiated cascade halt → ``paused`` (pause) or ``stopped`` (stop).
 
@@ -1073,7 +1073,7 @@ class TaskOrchestrator:
             task_ds = TaskDatastore(db)
             run_ds = TaskSessionDatastore(db)
             event_ds = TaskEventDatastore(db)
-            task = await task_ds.get_task_by_workspace(workspace_id, task_id)
+            task = await task_ds.get_task_by_project(project_id, task_id)
             if task is None:
                 return False
             # pause: only an active task. stop: an active OR already-paused task.
@@ -1110,14 +1110,14 @@ class TaskOrchestrator:
             if parked:
                 await planning.emit_plan_update(
                     event_ds,
-                    workspace_id=workspace_id,
+                    project_id=project_id,
                     task_id=task_id,
                     plan=plan,
                     actor="user",
                     session_id=lead_session_id,
                 )
             await event_ds.append_event(
-                workspace_id,
+                project_id,
                 task_id,
                 target_status,  # "paused" | "stopped" — drives UI status + timer
                 actor="user",
@@ -1139,7 +1139,7 @@ class TaskOrchestrator:
     async def resume_task(
         self,
         task_id: str,
-        workspace_id: str,
+        project_id: str,
         *,
         actor: str = "user",
     ) -> dict[str, Any]:
@@ -1186,7 +1186,7 @@ class TaskOrchestrator:
             task_ds = TaskDatastore(db)
             event_ds = TaskEventDatastore(db)
             run_ds = TaskSessionDatastore(db)
-            task = await task_ds.get_task_by_workspace(workspace_id, task_id)
+            task = await task_ds.get_task_by_project(project_id, task_id)
             if task is None:
                 return {"ok": False, "error": f"task {task_id!r} not found", "prior_status": None}
             prior_status = task.status
@@ -1223,9 +1223,9 @@ class TaskOrchestrator:
                         ended_at=None,
                     )
             await event_ds.append_event(
-                workspace_id, task_id, "resumed", actor=actor, payload={"from": prior_status}
+                project_id, task_id, "resumed", actor=actor, payload={"from": prior_status}
             )
-        ok = await self._recover_one_task(task_id, workspace_id)
+        ok = await self._recover_one_task(task_id, project_id)
         return {"ok": ok, "prior_status": prior_status, "resumed": ok}
 
     async def stop_member(self, session_id: str) -> bool:
@@ -1246,13 +1246,13 @@ class TaskOrchestrator:
             if run is None or run.kind != "subtask":
                 return False
             task_id = run.task_id or ""
-            workspace_id = run.workspace_id
+            project_id = run.project_id
             lead_session_id = run.dispatched_by or ""
             subtask_key = run.subtask_key
             agent_slug = run.agent_slug
             await run_ds.update_run_by_session(session_id=session_id, status="rejected")
             if subtask_key:
-                task = await task_ds.get_task_by_workspace(workspace_id, task_id)
+                task = await task_ds.get_task_by_project(project_id, task_id)
                 if task is not None:
                     plan = TaskPlan.from_dict(task.plan)
                     if plan.get(subtask_key) is not None:
@@ -1265,14 +1265,14 @@ class TaskOrchestrator:
                         await task_ds.update_task(task)
                         await planning.emit_plan_update(
                             event_ds,
-                            workspace_id=workspace_id,
+                            project_id=project_id,
                             task_id=task_id,
                             plan=plan,
                             actor="user",
                             session_id=lead_session_id or None,
                         )
             await event_ds.append_event(
-                workspace_id,
+                project_id,
                 task_id,
                 "subtask_stopped",
                 actor="user",
@@ -1306,7 +1306,7 @@ class TaskOrchestrator:
         final_status: str,
         role: Literal["lead", "subtask"],
         task_id: str,
-        workspace_id: str,
+        project_id: str,
         via_shutdown: bool = False,
     ) -> None:
         """Finalize a session once its actor loop ends; record member result.
@@ -1352,7 +1352,7 @@ class TaskOrchestrator:
             await self._auto_finalize_lead_task(
                 lead_session_id=session_id,
                 task_id=task_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 final_status=final_status,
             )
             return
@@ -1395,7 +1395,7 @@ class TaskOrchestrator:
                     key = run.subtask_key if run else None
                     if key:
                         task_ds = TaskDatastore(db)
-                        task_row = await task_ds.get_task_by_workspace(workspace_id, task_id)
+                        task_row = await task_ds.get_task_by_project(project_id, task_id)
                         if task_row is not None:
                             plan = TaskPlan.from_dict(task_row.plan)
                             if plan.get(key) is not None:
@@ -1404,14 +1404,14 @@ class TaskOrchestrator:
                                 await task_ds.update_task(task_row)
                                 await planning.emit_plan_update(
                                     event_ds,
-                                    workspace_id=workspace_id,
+                                    project_id=project_id,
                                     task_id=task_id,
                                     plan=plan,
                                     actor=agent_slug,
                                     session_id=session_id,
                                 )
                     await event_ds.append_event(
-                        workspace_id=workspace_id,
+                        project_id=project_id,
                         task_id=task_id,
                         type="subtask_failed",
                         actor=agent_slug,
@@ -1425,13 +1425,13 @@ class TaskOrchestrator:
         self,
         *,
         task_id: str,
-        workspace_id: str,
+        project_id: str,
         lead_session_id: str,
         subtask_key: str,
         agent: str | None = None,
         goal: str | None = None,
         refs: list[str] | None = None,
-        workspace_mode: str | None = None,
+        project_mode: str | None = None,
     ) -> dict[str, Any]:
         """Start a planned subtask's member actor (non-blocking); return its handle.
 
@@ -1444,13 +1444,13 @@ class TaskOrchestrator:
         """
         return await self._dispatcher.dispatch_async(
             task_id=task_id,
-            workspace_id=workspace_id,
+            project_id=project_id,
             lead_session_id=lead_session_id,
             subtask_key=subtask_key,
             agent=agent,
             goal=goal,
             refs=refs,
-            workspace_mode=workspace_mode,
+            project_mode=project_mode,
         )
 
     # send_to_member / inject_into_task implementations live in
@@ -1464,7 +1464,7 @@ class TaskOrchestrator:
         self,
         *,
         lead_session_id: str,
-        workspace_id: str,
+        project_id: str,
         task_id: str,
         keys: list[str] | None = None,
         mode: str = "all",
@@ -1479,7 +1479,7 @@ class TaskOrchestrator:
         """
         return await self._coordination.await_member_results(
             lead_session_id=lead_session_id,
-            workspace_id=workspace_id,
+            project_id=project_id,
             task_id=task_id,
             keys=keys,
             mode=mode,
@@ -1490,7 +1490,7 @@ class TaskOrchestrator:
         self,
         *,
         task_id: str,
-        workspace_id: str,
+        project_id: str,
         pending_keys: set[str],
     ) -> dict[str, dict[str, Any]]:
         """Backstop for bad-case #3 (VALUZ-RESUME §5.4): a member whose kernel
@@ -1502,7 +1502,7 @@ class TaskOrchestrator:
         """
         return await self._coordination._heartbeat_pending(
             task_id=task_id,
-            workspace_id=workspace_id,
+            project_id=project_id,
             pending_keys=pending_keys,
         )
 
@@ -1523,7 +1523,7 @@ class TaskOrchestrator:
         self,
         *,
         task_id: str,
-        workspace_id: str,
+        project_id: str,
         lead_session_id: str,
         summary: str,
         artifacts: list[str] | None = None,
@@ -1570,7 +1570,7 @@ class TaskOrchestrator:
 
             # Guard: don't let a "completed" finish leave planned work behind.
             if final_status == "completed":
-                task_row = await task_ds.get_task_by_workspace(workspace_id, task_id)
+                task_row = await task_ds.get_task_by_project(project_id, task_id)
                 if task_row is not None:
                     plan = TaskPlan.from_dict(task_row.plan)
                     unresolved = [
@@ -1603,7 +1603,7 @@ class TaskOrchestrator:
                 )
 
                 await event_ds.append_event(
-                    workspace_id=workspace_id,
+                    project_id=project_id,
                     task_id=task_id,
                     type=event_type,
                     actor=lead_session_id,

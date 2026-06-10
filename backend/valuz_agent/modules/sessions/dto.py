@@ -14,7 +14,7 @@ from dataclasses import dataclass
 @dataclass
 class SessionListItem:
     id: str
-    workspace_id: str
+    project_id: str
     name: str | None
     status: str
     origin: str
@@ -23,7 +23,7 @@ class SessionListItem:
     # Provider id stamped at session creation. Surfaced here (not just on
     # SessionDetail) because the desktop sidebar's session list feeds the
     # composer's model selector — without provider id, the selector can't
-    # match the locked model and falls back to the workspace default.
+    # match the locked model and falls back to the project default.
     # (Original symptom: composer showed claude-sonnet-4-6 even after the
     # user picked deepseek-v4-pro at create time.)
     locked_provider_id: str | None
@@ -76,17 +76,17 @@ class SessionDetail(SessionListItem):
     # "all done" (preserved by the kernel's change-only semantics).
     todos: list[TodoItem] | None = None
     # Frozen system-prompt append captured at session creation from the
-    # workspace's then-current ``instructions_md`` (see ADR-008). The
-    # runtime hands this verbatim to the model on every turn; workspace
-    # edits after creation do *not* mutate it. ``None`` when the workspace
+    # project's then-current ``instructions_md`` (see ADR-008). The
+    # runtime hands this verbatim to the model on every turn; project
+    # edits after creation do *not* mutate it. ``None`` when the project
     # had no instructions at create time. Frontend session panels should
-    # render this — NOT the live workspace ``instructions_md`` — so users
+    # render this — NOT the live project ``instructions_md`` — so users
     # see the prompt the running agent actually has.
     instructions: str | None = None
-    # Workspace-local agent handle for this session, when it was created from
-    # a workspace agent (e.g. a Project Task lead/member — stored in
+    # Project-local agent handle for this session, when it was created from
+    # a project agent (e.g. a Project Task lead/member — stored in
     # ``metadata["valuz"]["agent_slug"]`` by ``build_member_session``). ``None``
-    # for plain chat sessions that aren't bound to a named workspace agent.
+    # for plain chat sessions that aren't bound to a named project agent.
     agent_slug: str | None = None
 
 

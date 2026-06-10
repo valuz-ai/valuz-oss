@@ -10,9 +10,9 @@
  * 2. **Trigger tabs** — Cron / Interval. Cron retains the legacy
  *    `CronInput` for parity; Interval is a simple seconds input with
  *    minimum 30s (server-enforced floor matching the runner tick).
- * 3. **Workspace target** is only shown when the dialog is opened from
+ * 3. **Project target** is only shown when the dialog is opened from
  *    the global automation page. When opened inside a project, the
- *    workspace is fixed and hidden.
+ *    project is fixed and hidden.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -115,8 +115,8 @@ export interface CreateAutomationDialogProps {
   /** Default selection — usually the first member / first library agent. */
   defaultAgentSlug?: string;
   /**
-   * Whether the bound workspace can host project-task automations. Maps
-   * to ``workspace_kind === "project"`` at the call site. When false,
+   * Whether the bound project can host project-task automations. Maps
+   * to ``project_kind === "project"`` at the call site. When false,
    * the Task mode toggle is rendered but disabled with a hint —
    * matches the backend ``AutomationTaskOnlyOnProject`` constraint.
    */
@@ -202,7 +202,7 @@ export const CreateAutomationDialog = ({
 
   // Execution mode toggle. Defaults to ``chat`` for create flows; edit
   // mode seeds from ``initial.action_kind``. When ``allowTaskMode`` is
-  // false (chat workspaces) the Task radio is disabled and we coerce
+  // false (chat projects) the Task radio is disabled and we coerce
   // ``task`` back to ``chat`` at submit time as a defence-in-depth.
   const [actionKind, setActionKind] = useState<ActionKind>("chat");
 
@@ -229,7 +229,7 @@ export const CreateAutomationDialog = ({
       setPrompt(initial.prompt_template);
       setAgentSlug(initial.agent_slug);
       // Edit mode: seed from the existing row. If the row stored ``task``
-      // but the workspace no longer permits it (e.g. moved to chat by an
+      // but the project no longer permits it (e.g. moved to chat by an
       // admin), coerce back to ``chat`` so the dialog renders a valid
       // state — the user can still change it without an inconsistent
       // initial render.
@@ -350,7 +350,7 @@ export const CreateAutomationDialog = ({
       prompt_template: prompt.trim(),
       agent_slug: agentSlug,
       trigger: buildTrigger(),
-      // Defence-in-depth: if the workspace doesn't permit task mode, the
+      // Defence-in-depth: if the project doesn't permit task mode, the
       // submit always coerces to chat regardless of the local toggle.
       action_kind: allowTaskMode ? actionKind : "chat",
     });
@@ -381,7 +381,7 @@ export const CreateAutomationDialog = ({
               instruction so the user picks the mode before writing the
               prompt — the same prompt reads differently depending on
               whether it's a single turn or a task goal. Task mode is
-              only valid on project workspaces; on chat we render the
+              only valid on project projects; on chat we render the
               toggle but disable the Task pill with a hint. */}
           <FormField
             label={t("automation.actionKindLabel" as Parameters<typeof t>[0])}

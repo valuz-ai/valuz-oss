@@ -101,6 +101,16 @@ async def bootstrap_schema() -> None:
 
     settings.data_dir.mkdir(parents=True, exist_ok=True)
 
+    # One-shot courtesy rename from the workspace→project naming cutover:
+    # managed chat cwds moved from ``data_dir/workspaces/`` to
+    # ``data_dir/projects/``. The DB is wiped by the cutover fingerprint,
+    # but the directories hold user files — carry them over instead of
+    # orphaning them. No-op once the new directory exists.
+    legacy_dir = settings.data_dir / "workspaces"
+    target_dir = settings.data_dir / "projects"
+    if legacy_dir.is_dir() and not target_dir.exists():
+        legacy_dir.rename(target_dir)
+
     # 1. Kernel alembic (its own ``alembic_version`` row).
     run_kernel_migrations()
 
@@ -179,8 +189,8 @@ async def init_kernel(app: FastAPI) -> None:
     backfill_global_agent_tools()
 
 
-async def ensure_workspace_kernel_mirrors() -> None:
-    """Boot-time safety net: every valuz workspace must have a kernel
+async def ensure_project_kernel_mirrors() -> None:
+    """Boot-time safety net: every valuz project must have a kernel
     project + agent row, otherwise ``orchestrator.run_turn`` raises
     ``ProjectNotFoundError`` on the first message and the user sees the
     session fail with no clear cause. Idempotent — re-mirrors existing
@@ -191,21 +201,21 @@ async def ensure_workspace_kernel_mirrors() -> None:
     from valuz_agent.infra.db import async_unit_of_work
     from valuz_agent.infra.eventbus import event_bus
     from valuz_agent.modules.projects.datastore import (
-        WorkspaceDatastore,
+        ProjectDatastore,
     )
-    from valuz_agent.modules.projects.service import WorkspaceService
+    from valuz_agent.modules.projects.service import ProjectService
 
     async with async_unit_of_work() as db:
-        svc = WorkspaceService(WorkspaceDatastore(db), event_bus)
+        svc = ProjectService(ProjectDatastore(db), event_bus)
         await svc.ensure_all_kernel_mirrors()
 
 
 def install_binding_change_listener() -> None:
-    """Wire ``workspace.bindings.changed`` → docs caps refresh.
+    """Wire ``project.bindings.changed`` → docs caps refresh.
 
     DocumentLibraryService publishes this event whenever a project's
     KB bindings are added / removed (see docs/service.py:742). The
-    subscriber walks every active session in that workspace and
+    subscriber walks every active session in that project and
     re-evaluates its docs skill+MCP slice — so binding a document
     to a project propagates to all open sessions immediately,
     rather than only to whatever new session the user creates next.
@@ -216,12 +226,12 @@ def install_binding_change_listener() -> None:
     """
     from valuz_agent.infra.eventbus import event_bus
     from valuz_agent.modules.sessions.capabilities import (
-        refresh_docs_capabilities_for_workspace,
+        refresh_docs_capabilities_for_project,
     )
 
     event_bus.subscribe(
-        "workspace.bindings.changed",
-        refresh_docs_capabilities_for_workspace,
+        "project.bindings.changed",
+        refresh_docs_capabilities_for_project,
     )
 
 

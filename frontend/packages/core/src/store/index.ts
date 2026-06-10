@@ -10,4 +10,4 @@ export * from "./session-store";
 export * from "./settings-store";
 export * from "./task-store";
 export * from "./system-store";
-export * from "./workspace-store";
+export * from "./project-store";

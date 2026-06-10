@@ -1,4 +1,4 @@
-"""Tests for the capability resolver — focused on the chat-workspace
+"""Tests for the capability resolver — focused on the chat-project
 user-library skill auto-include behavior added to fix the
 "Unknown skill: <slug>" error in chat sessions.
 """
@@ -37,20 +37,20 @@ def _user_skills(caps_skills: tuple[str, ...]) -> tuple[str, ...]:
 
 
 @dataclass
-class _FakeWorkspace:
+class _FakeProject:
     id: str
     kind: str
     root_path: str | None
 
 
-class _FakeWorkspaceDatastore:
-    def __init__(self, workspace: _FakeWorkspace) -> None:
-        self._workspace = workspace
+class _FakeProjectDatastore:
+    def __init__(self, project: _FakeProject) -> None:
+        self._project = project
 
-    async def get_by_id(self, workspace_id: str) -> _FakeWorkspace | None:
-        if workspace_id != self._workspace.id:
+    async def get_by_id(self, project_id: str) -> _FakeProject | None:
+        if project_id != self._project.id:
             return None
-        return self._workspace
+        return self._project
 
 
 class _FakeSkillDatastore:
@@ -59,8 +59,8 @@ class _FakeSkillDatastore:
     def __init__(self, enabled_paths: set[str] | None = None) -> None:
         self._enabled_paths = enabled_paths or set()
 
-    def enabled_skill_paths(self, workspace: _FakeWorkspace) -> set[str]:
-        if workspace.kind != "project":
+    def enabled_skill_paths(self, project: _FakeProject) -> set[str]:
+        if project.kind != "project":
             return set()
         return self._enabled_paths
 
@@ -104,17 +104,17 @@ def _manifest_for(skill_dir: Path, *, scope: str = "user") -> SkillManifest:
     )
 
 
-def test_chat_workspace_auto_includes_user_library_skills(tmp_path: Path) -> None:
-    """A chat workspace with a user-library skill should ship that skill in
+def test_chat_project_auto_includes_user_library_skills(tmp_path: Path) -> None:
+    """A chat project with a user-library skill should ship that skill in
     Session.skills so the kernel materializes it for /skill-name dispatch."""
     skill_dir = _make_skill_dir(tmp_path, "reportify-ai")
-    workspace = _FakeWorkspace(id="ws-chat", kind="chat", root_path=None)
+    project = _FakeProject(id="ws-chat", kind="chat", root_path=None)
 
     caps = asyncio.run(
         resolve_session_capabilities(
-            workspaces=_FakeWorkspaceDatastore(workspace),
+            projects=_FakeProjectDatastore(project),
             skills=_FakeSkillDatastore(),
-            workspace_id="ws-chat",
+            project_id="ws-chat",
             skill_source=_FakeSkillSource([_manifest_for(skill_dir)]),
         )
     )
@@ -123,10 +123,10 @@ def test_chat_workspace_auto_includes_user_library_skills(tmp_path: Path) -> Non
     assert _DOCS_SKILL_PATH in caps.skills
 
 
-def test_project_workspace_does_not_auto_include_user_library_skills(
+def test_project_does_not_auto_include_user_library_skills(
     tmp_path: Path,
 ) -> None:
-    """Project workspaces preserve their opt-in semantics — user-library
+    """Projects preserve their opt-in semantics — user-library
     skills are NOT auto-included; only paths in project-config.json are.
 
     The valuz-project-docs builtin skill is auto-injected into every
@@ -134,13 +134,13 @@ def test_project_workspace_does_not_auto_include_user_library_skills(
     manifest stays excluded even when nothing else is enabled.
     """
     skill_dir = _make_skill_dir(tmp_path, "reportify-ai")
-    workspace = _FakeWorkspace(id="ws-proj", kind="project", root_path=str(tmp_path / "proj"))
+    project = _FakeProject(id="ws-proj", kind="project", root_path=str(tmp_path / "proj"))
 
     caps = asyncio.run(
         resolve_session_capabilities(
-            workspaces=_FakeWorkspaceDatastore(workspace),
+            projects=_FakeProjectDatastore(project),
             skills=_FakeSkillDatastore(enabled_paths=set()),
-            workspace_id="ws-proj",
+            project_id="ws-proj",
             skill_source=_FakeSkillSource([_manifest_for(skill_dir)]),
         )
     )
@@ -148,16 +148,16 @@ def test_project_workspace_does_not_auto_include_user_library_skills(
     assert str(skill_dir.resolve(strict=False)) not in caps.skills
 
 
-def test_chat_workspace_without_skill_source_yields_empty(tmp_path: Path) -> None:
+def test_chat_project_without_skill_source_yields_empty(tmp_path: Path) -> None:
     """Backward compat: callers that don't pass a skill_source still work and
     simply produce no skills (legacy behavior preserved)."""
-    workspace = _FakeWorkspace(id="ws-chat", kind="chat", root_path=None)
+    project = _FakeProject(id="ws-chat", kind="chat", root_path=None)
 
     caps = asyncio.run(
         resolve_session_capabilities(
-            workspaces=_FakeWorkspaceDatastore(workspace),
+            projects=_FakeProjectDatastore(project),
             skills=_FakeSkillDatastore(),
-            workspace_id="ws-chat",
+            project_id="ws-chat",
             skill_source=None,
         )
     )
@@ -167,18 +167,18 @@ def test_chat_workspace_without_skill_source_yields_empty(tmp_path: Path) -> Non
     assert _DOCS_SKILL_PATH in caps.skills
 
 
-def test_chat_workspace_skips_non_user_scoped_manifests(tmp_path: Path) -> None:
+def test_chat_project_skips_non_user_scoped_manifests(tmp_path: Path) -> None:
     """Only user-scoped manifests are auto-included for chat — project-scoped
-    ones (e.g. workspace-local skills surfaced by the same source) are not."""
+    ones (e.g. project-local skills surfaced by the same source) are not."""
     user_dir = _make_skill_dir(tmp_path, "user-skill")
     proj_dir = _make_skill_dir(tmp_path, "proj-skill")
-    workspace = _FakeWorkspace(id="ws-chat", kind="chat", root_path=None)
+    project = _FakeProject(id="ws-chat", kind="chat", root_path=None)
 
     caps = asyncio.run(
         resolve_session_capabilities(
-            workspaces=_FakeWorkspaceDatastore(workspace),
+            projects=_FakeProjectDatastore(project),
             skills=_FakeSkillDatastore(),
-            workspace_id="ws-chat",
+            project_id="ws-chat",
             skill_source=_FakeSkillSource(
                 [
                     _manifest_for(user_dir, scope="user"),
@@ -191,18 +191,18 @@ def test_chat_workspace_skips_non_user_scoped_manifests(tmp_path: Path) -> None:
     assert _user_skills(caps.skills) == (str(user_dir.resolve(strict=False)),)
 
 
-def test_chat_workspace_dedupes_against_extras(tmp_path: Path) -> None:
+def test_chat_project_dedupes_against_extras(tmp_path: Path) -> None:
     """If the same path appears in both extras and the user library, it
     should only be materialized once (resolver uses ``seen`` to dedupe)."""
     skill_dir = _make_skill_dir(tmp_path, "shared")
-    workspace = _FakeWorkspace(id="ws-chat", kind="chat", root_path=None)
+    project = _FakeProject(id="ws-chat", kind="chat", root_path=None)
 
     # Inject the same path through the user library; extras path is empty.
     caps = asyncio.run(
         resolve_session_capabilities(
-            workspaces=_FakeWorkspaceDatastore(workspace),
+            projects=_FakeProjectDatastore(project),
             skills=_FakeSkillDatastore(),
-            workspace_id="ws-chat",
+            project_id="ws-chat",
             skill_source=_FakeSkillSource([_manifest_for(skill_dir)]),
         )
     )
@@ -210,13 +210,13 @@ def test_chat_workspace_dedupes_against_extras(tmp_path: Path) -> None:
     assert caps.skills.count(str(skill_dir.resolve(strict=False))) == 1
 
 
-def test_chat_workspace_includes_bundled_official_skill_without_entitlement(
+def test_chat_project_includes_bundled_official_skill_without_entitlement(
     tmp_path: Path,
 ) -> None:
     """Bundled official skills (origin_label=='Built-in') ship with the
     client and are always available — even without ``official_entitled``."""
     skill_dir = _make_skill_dir(tmp_path, "skill-creator")
-    workspace = _FakeWorkspace(id="ws-chat", kind="chat", root_path=None)
+    project = _FakeProject(id="ws-chat", kind="chat", root_path=None)
 
     bundled = SkillManifest(
         id=f"official:{skill_dir.name}",
@@ -233,9 +233,9 @@ def test_chat_workspace_includes_bundled_official_skill_without_entitlement(
 
     caps = asyncio.run(
         resolve_session_capabilities(
-            workspaces=_FakeWorkspaceDatastore(workspace),
+            projects=_FakeProjectDatastore(project),
             skills=_FakeSkillDatastore(),
-            workspace_id="ws-chat",
+            project_id="ws-chat",
             extra_skill_sources=[_FakeSkillSource([bundled])],
             official_entitled=False,
         )
@@ -244,14 +244,14 @@ def test_chat_workspace_includes_bundled_official_skill_without_entitlement(
     assert _user_skills(caps.skills) == (str(skill_dir.resolve(strict=False)),)
 
 
-def test_chat_workspace_excludes_unbundled_official_skill_without_entitlement(
+def test_chat_project_excludes_unbundled_official_skill_without_entitlement(
     tmp_path: Path,
 ) -> None:
     """Externally installed official skills require the
     ``skills:official`` entitlement — without it the resolver excludes them
     so they are never materialized into the runtime cwd."""
     skill_dir = _make_skill_dir(tmp_path, "premium-skill")
-    workspace = _FakeWorkspace(id="ws-chat", kind="chat", root_path=None)
+    project = _FakeProject(id="ws-chat", kind="chat", root_path=None)
 
     locked = SkillManifest(
         id=f"official:{skill_dir.name}",
@@ -269,9 +269,9 @@ def test_chat_workspace_excludes_unbundled_official_skill_without_entitlement(
 
     caps = asyncio.run(
         resolve_session_capabilities(
-            workspaces=_FakeWorkspaceDatastore(workspace),
+            projects=_FakeProjectDatastore(project),
             skills=_FakeSkillDatastore(),
-            workspace_id="ws-chat",
+            project_id="ws-chat",
             extra_skill_sources=[_FakeSkillSource([locked])],
             official_entitled=False,
         )
@@ -280,14 +280,14 @@ def test_chat_workspace_excludes_unbundled_official_skill_without_entitlement(
     assert _user_skills(caps.skills) == ()
 
 
-def test_chat_workspace_includes_unbundled_official_skill_when_entitled(
+def test_chat_project_includes_unbundled_official_skill_when_entitled(
     tmp_path: Path,
 ) -> None:
     """When ``official_entitled=True`` (Reportify connected with
     ``skills:official``), externally installed official skills get
     materialized into the runtime cwd."""
     skill_dir = _make_skill_dir(tmp_path, "premium-skill")
-    workspace = _FakeWorkspace(id="ws-chat", kind="chat", root_path=None)
+    project = _FakeProject(id="ws-chat", kind="chat", root_path=None)
 
     locked = SkillManifest(
         id=f"official:{skill_dir.name}",
@@ -304,9 +304,9 @@ def test_chat_workspace_includes_unbundled_official_skill_when_entitled(
 
     caps = asyncio.run(
         resolve_session_capabilities(
-            workspaces=_FakeWorkspaceDatastore(workspace),
+            projects=_FakeProjectDatastore(project),
             skills=_FakeSkillDatastore(),
-            workspace_id="ws-chat",
+            project_id="ws-chat",
             extra_skill_sources=[_FakeSkillSource([locked])],
             official_entitled=True,
         )
@@ -315,13 +315,13 @@ def test_chat_workspace_includes_unbundled_official_skill_when_entitled(
     assert _user_skills(caps.skills) == (str(skill_dir.resolve(strict=False)),)
 
 
-def test_project_workspace_does_not_auto_include_official_skills(
+def test_project_does_not_auto_include_official_skills(
     tmp_path: Path,
 ) -> None:
-    """Project workspaces preserve opt-in semantics for every scope —
+    """Projects preserve opt-in semantics for every scope —
     official skills are not auto-included even when entitled."""
     skill_dir = _make_skill_dir(tmp_path, "skill-creator")
-    workspace = _FakeWorkspace(id="ws-proj", kind="project", root_path=str(tmp_path / "proj"))
+    project = _FakeProject(id="ws-proj", kind="project", root_path=str(tmp_path / "proj"))
 
     bundled = SkillManifest(
         id=f"official:{skill_dir.name}",
@@ -338,27 +338,27 @@ def test_project_workspace_does_not_auto_include_official_skills(
 
     caps = asyncio.run(
         resolve_session_capabilities(
-            workspaces=_FakeWorkspaceDatastore(workspace),
+            projects=_FakeProjectDatastore(project),
             skills=_FakeSkillDatastore(enabled_paths=set()),
-            workspace_id="ws-proj",
+            project_id="ws-proj",
             extra_skill_sources=[_FakeSkillSource([bundled])],
             official_entitled=True,
         )
     )
 
     # The valuz-project-docs builtin may be present (auto-injected for
-    # project workspaces); only the bundled official skill must NOT be.
+    # projects); only the bundled official skill must NOT be.
     assert str(skill_dir.resolve(strict=False)) not in caps.skills
 
 
-def test_unknown_workspace_raises_key_error() -> None:
-    workspace = _FakeWorkspace(id="ws-existing", kind="chat", root_path=None)
+def test_unknown_project_raises_key_error() -> None:
+    project = _FakeProject(id="ws-existing", kind="chat", root_path=None)
 
     with pytest.raises(KeyError):
         asyncio.run(
             resolve_session_capabilities(
-                workspaces=_FakeWorkspaceDatastore(workspace),
+                projects=_FakeProjectDatastore(project),
                 skills=_FakeSkillDatastore(),
-                workspace_id="ws-missing",
+                project_id="ws-missing",
             )
         )

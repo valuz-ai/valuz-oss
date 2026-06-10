@@ -7,7 +7,7 @@ import type {
   NavItemModule,
   ServiceDescriptor,
   SettingsSectionModule,
-  WorkspacePanelModule,
+  ProjectPanelModule,
 } from "./profile";
 import type { SlotMap, SlotRegistration } from "./registries/slots";
 import { personalProfile } from "./personal-profile";
@@ -23,7 +23,7 @@ interface RegistryState {
   features: FeatureFlags;
   desktopRoutes: DesktopRouteModule[];
   settingsSections: SettingsSectionModule[];
-  workspacePanels: WorkspacePanelModule[];
+  projectPanels: ProjectPanelModule[];
   services: ServiceDescriptor[];
   branding: BrandingProfile;
   navItems: NavItemModule[];
@@ -45,8 +45,8 @@ interface RegistryState {
   registerSettingsSection: (section: SettingsSectionModule) => () => void;
   unregisterSettingsSection: (id: string) => void;
 
-  registerWorkspacePanel: (panel: WorkspacePanelModule) => () => void;
-  unregisterWorkspacePanel: (id: string) => void;
+  registerProjectPanel: (panel: ProjectPanelModule) => () => void;
+  unregisterProjectPanel: (id: string) => void;
 
   registerService: (descriptor: ServiceDescriptor) => () => void;
   unregisterService: (name: string) => void;
@@ -85,7 +85,7 @@ export const useRegistryStore = create<RegistryState>((set) => ({
   features: seed.features,
   desktopRoutes: [...seed.desktopRoutes],
   settingsSections: [...seed.settingsSections],
-  workspacePanels: [...seed.workspacePanels],
+  projectPanels: [...seed.projectPanels],
   services: [...seed.services],
   branding: seed.branding,
   navItems: [...seed.navItems],
@@ -101,7 +101,7 @@ export const useRegistryStore = create<RegistryState>((set) => ({
       features: personalProfile.features,
       desktopRoutes: [...personalProfile.desktopRoutes],
       settingsSections: [...personalProfile.settingsSections],
-      workspacePanels: [...personalProfile.workspacePanels],
+      projectPanels: [...personalProfile.projectPanels],
       services: [...personalProfile.services],
       branding: personalProfile.branding,
       navItems: [...personalProfile.navItems],
@@ -115,7 +115,7 @@ export const useRegistryStore = create<RegistryState>((set) => ({
       features: profile.features,
       desktopRoutes: [...profile.desktopRoutes],
       settingsSections: [...profile.settingsSections],
-      workspacePanels: [...profile.workspacePanels],
+      projectPanels: [...profile.projectPanels],
       services: [...profile.services],
       branding: profile.branding,
       navItems: [...profile.navItems],
@@ -157,19 +157,19 @@ export const useRegistryStore = create<RegistryState>((set) => ({
       settingsSections: state.settingsSections.filter((s) => s.id !== id),
     })),
 
-  registerWorkspacePanel: (panel) => {
+  registerProjectPanel: (panel) => {
     set((state) => ({
-      workspacePanels: upsertById(state.workspacePanels, panel),
+      projectPanels: upsertById(state.projectPanels, panel),
     }));
     return () => {
       set((state) => ({
-        workspacePanels: state.workspacePanels.filter((p) => p.id !== panel.id),
+        projectPanels: state.projectPanels.filter((p) => p.id !== panel.id),
       }));
     };
   },
-  unregisterWorkspacePanel: (id) =>
+  unregisterProjectPanel: (id) =>
     set((state) => ({
-      workspacePanels: state.workspacePanels.filter((p) => p.id !== id),
+      projectPanels: state.projectPanels.filter((p) => p.id !== id),
     })),
 
   registerService: (descriptor) => {
@@ -236,7 +236,7 @@ export const getRegistrySnapshot = (): EditionProfile => {
     features: state.features,
     desktopRoutes: state.desktopRoutes,
     settingsSections: state.settingsSections,
-    workspacePanels: state.workspacePanels,
+    projectPanels: state.projectPanels,
     services: state.services,
     branding: state.branding,
     navItems: state.navItems,

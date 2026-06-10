@@ -5,6 +5,6 @@
  */
 
 export { PlatformProvider, usePlatform, WebPlatformProvider } from "./platform";
-export type { WorkspaceOutletContext } from "./layout";
-export { useWorkspaceOutlet } from "./layout";
+export type { ProjectOutletContext } from "./layout";
+export { useProjectOutlet } from "./layout";
 export { toast } from "sonner";

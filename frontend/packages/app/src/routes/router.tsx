@@ -94,7 +94,7 @@ const withRouteOverride = (
 const isResolvedRoute = (route: ExtraAppRoute): route is ResolvedRoute =>
   "layout" in route && "Component" in route;
 
-const toWorkspaceChild = (
+const toProjectChild = (
   route: ResolvedRoute,
   routeOverrides?: AppRouteOverrides,
 ): RouteObject => {
@@ -125,7 +125,7 @@ export interface CreateAppRouteObjectsOptions {
   extraRoutes?: ExtraAppRoute[];
   Root: ComponentType;
   layout?: ComponentType;
-  WorkspaceLayout?: ComponentType;
+  ProjectLayout?: ComponentType;
   fallbackPath?: string;
 }
 
@@ -136,10 +136,10 @@ export function createAppRouteObjects({
   extraRoutes = [],
   Root,
   layout,
-  WorkspaceLayout,
+  ProjectLayout,
   fallbackPath = "/",
 }: CreateAppRouteObjectsOptions): RouteObject[] {
-  const Layout = layout ?? WorkspaceLayout;
+  const Layout = layout ?? ProjectLayout;
   if (!Layout) {
     throw new Error("createAppRouteObjects requires a layout component");
   }
@@ -150,9 +150,9 @@ export function createAppRouteObjects({
   );
   const appRoutes = [...(routes ?? resolved ?? []), ...extraResolvedRoutes];
 
-  const workspaceChildren = appRoutes
-    .filter((route) => route.layout === "workspace")
-    .map((route) => toWorkspaceChild(route, routeOverrides));
+  const projectChildren = appRoutes
+    .filter((route) => route.layout === "project")
+    .map((route) => toProjectChild(route, routeOverrides));
   const standaloneRoutes = appRoutes
     .filter((route) => route.layout === "standalone")
     .map((route) => toStandaloneRoute(route, routeOverrides));
@@ -164,7 +164,7 @@ export function createAppRouteObjects({
         {
           path: "/",
           element: <Layout />,
-          children: workspaceChildren,
+          children: projectChildren,
         },
         ...standaloneRoutes,
         ...extraRouteObjects,

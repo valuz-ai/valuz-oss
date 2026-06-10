@@ -1,6 +1,6 @@
 """Slug derivation for agent identifiers (backend-authoritative).
 
-``agent_slug`` is a workspace-local handle (the ``agent`` param in dispatch
+``agent_slug`` is a project-local handle (the ``agent`` param in dispatch
 calls, the key shown in ``list_members``) and library agents carry a global
 ``slug``. Users only ever type a display name; the backend derives the slug
 so non-UI callers (MCP tools, scripts) get the same treatment as the UI.

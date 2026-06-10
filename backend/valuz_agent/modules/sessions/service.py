@@ -38,15 +38,15 @@ import valuz_agent.boot.kernel  # noqa: F401 — side-effect: puts kernel on sys
 from valuz_agent.adapters import kernel_store, kernel_sync
 from valuz_agent.adapters.capability_resolver import resolve_session_capabilities
 from valuz_agent.adapters.model_resolver import resolve_model
-from valuz_agent.adapters.system_prompt_builder import build_workspace_system_prompt
+from valuz_agent.adapters.system_prompt_builder import build_project_system_prompt
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.secret_store import FileSecretStore
 from valuz_agent.integrations.skills_filesystem import FilesystemSkillSource
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.docs.datastore import DocumentDatastore
-from valuz_agent.modules.projects.datastore import WorkspaceDatastore
-from valuz_agent.modules.projects.service import WorkspaceService
+from valuz_agent.modules.projects.datastore import ProjectDatastore
+from valuz_agent.modules.projects.service import ProjectService
 from valuz_agent.modules.providers.datastore import ProviderDatastore
 from valuz_agent.modules.sessions.attachments import (
     _attachment_specs,
@@ -111,13 +111,13 @@ class SessionService:
     def __init__(
         self,
         event_bus: EventBus,
-        workspace_svc: WorkspaceService,
+        project_svc: ProjectService,
         providers: ProviderDatastore,
         skills: SkillDatastore,
-        workspaces: WorkspaceDatastore,
+        projects: ProjectDatastore,
         # KB integration — optional. When supplied, session creation
         # auto-injects the ``valuz-project-docs`` builtin skill into
-        # ``session.skills`` if the workspace has any KB binding. Tests that
+        # ``session.skills`` if the project has any KB binding. Tests that
         # don't care about KB can omit it.
         docs: DocumentDatastore | None = None,
         # MCP integration — optional so legacy callers (and tests that don't
@@ -127,12 +127,12 @@ class SessionService:
         secrets: FileSecretStore | None = None,
         connectors: ConnectorDatastore | None = None,
         # User-library skill source — when supplied, chat (non-project)
-        # workspaces auto-include every discovered user-scoped skill in
+        # projects auto-include every discovered user-scoped skill in
         # ``Session.skills``. Tests that don't care about skill discovery
         # can omit it.
         skill_source: FilesystemSkillSource | None = None,
         # Additional skill sources (e.g. ``OfficialSkillSource``) walked
-        # alongside ``skill_source`` for chat workspaces. Each source's
+        # alongside ``skill_source`` for chat projects. Each source's
         # manifests are filtered by scope inside the resolver. Optional —
         # tests that only care about user skills can omit it.
         extra_skill_sources: list | None = None,
@@ -147,10 +147,10 @@ class SessionService:
         runtime_port: object | None = None,
     ) -> None:
         self._bus = event_bus
-        self._workspace_svc = workspace_svc
+        self._project_svc = project_svc
         self._providers = providers
         self._skills = skills
-        self._workspaces = workspaces
+        self._projects = projects
         self._secrets = secrets
         self._connectors = connectors
         self._docs = docs
@@ -174,17 +174,17 @@ class SessionService:
         except Exception:  # noqa: BLE001
             return False
 
-    async def _auto_default_mcp_slugs(self, workspace_id: str) -> list[str]:
+    async def _auto_default_mcp_slugs(self, project_id: str) -> list[str]:
         if self._connectors is None:
             return []
 
-        workspace_row = await self._workspaces.get_by_id(workspace_id)
-        is_project = workspace_row is not None and workspace_row.kind == "project"
+        project_row = await self._projects.get_by_id(project_id)
+        is_project = project_row is not None and project_row.kind == "project"
 
         try:
             if is_project:
-                return await self._connectors.get_workspace_connectors(workspace_row)  # type: ignore[arg-type]
-            # Chat workspace: all enabled connectors that are connected or unknown
+                return await self._connectors.get_project_connectors(project_row)  # type: ignore[arg-type]
+            # Chat project: all enabled connectors that are connected or unknown
             return [
                 conn.slug
                 for conn in await self._connectors.list_enabled()
@@ -198,16 +198,16 @@ class SessionService:
     # Queries
     # ------------------------------------------------------------------ #
 
-    def get_workspace_last_pick(self, workspace_id: str) -> dict[str, str | None] | None:
+    def get_project_last_pick(self, project_id: str) -> dict[str, str | None] | None:
         """Return the most recent (runtime, provider, model) the user picked
-        in this workspace.
+        in this project.
 
-        Reads the latest kernel session of the workspace and surfaces the
+        Reads the latest kernel session of the project and surfaces the
         three composer-relevant fields. The frontend uses this to seed
         the picker on new-session entry so users don't have to re-pick
         the same runtime/model every time they re-open the same project.
 
-        Returns ``None`` if the workspace has no sessions yet (caller
+        Returns ``None`` if the project has no sessions yet (caller
         falls back to the global Settings → Default tuple).
 
         Skips sessions whose ``locked_provider_id`` is missing — OAuth
@@ -217,7 +217,7 @@ class SessionService:
         those incomplete rows.
         """
         sessions = kernel_sync.list_sessions_sync(
-            project_id=workspace_id,
+            project_id=project_id,
             limit=10,
         )
         for s in sessions:
@@ -234,7 +234,7 @@ class SessionService:
 
     def list_sessions(
         self,
-        workspace_id: str | None = None,
+        project_id: str | None = None,
         query: str | None = None,
     ) -> list[SessionListItem]:
         # Task-internal sessions (lead / dispatched sub-runs) belong to
@@ -244,7 +244,7 @@ class SessionService:
         # excluding task sessions, so we get exactly N chats — no over-
         # fetching, no chat/task ratio assumptions.
         sessions = kernel_sync.list_user_sessions_sync(
-            project_id=workspace_id,
+            project_id=project_id,
             limit=200,
         )
         items = [_session_to_list_item(s) for s in sessions]
@@ -327,13 +327,13 @@ class SessionService:
     # Commands
     # ------------------------------------------------------------------ #
 
-    async def _resolve_bound_kernel_agent_id(self, workspace_id: str, agent_slug: str) -> str:
+    async def _resolve_bound_kernel_agent_id(self, project_id: str, agent_slug: str) -> str:
         """Resolve a session's bound agent to a kernel ``AgentConfig`` id.
 
         Two binding sources, tried in order:
 
         1. **Project member** — project conversations bind ``agent_slug`` to a
-           per-workspace ``ProjectMemberRow`` (the 派驻 agent).
+           per-project ``ProjectMemberRow`` (the 派驻 agent).
         2. **Global library agent** — temp / quick-chat conversations bind to a
            global library agent (e.g. the seeded ``default-assistant``), which is
            NOT a member of any project. The 09-assistant design has no agentless
@@ -351,7 +351,7 @@ class SessionService:
         from valuz_agent.modules.agents.service import AgentService
 
         async with async_unit_of_work(commit=False) as _db:
-            member = await ProjectMemberDatastore(_db).get(workspace_id, agent_slug)
+            member = await ProjectMemberDatastore(_db).get(project_id, agent_slug)
             if member is not None:
                 return member.kernel_agent_id
 
@@ -370,7 +370,7 @@ class SessionService:
     async def _create_agent_bound_session(
         self,
         *,
-        workspace_id: str,
+        project_id: str,
         agent_slug: str,
         origin: str,
         title: str | None,
@@ -412,14 +412,14 @@ class SessionService:
             )
 
         # Temp / quick-chat sessions bind a global library agent to a fresh,
-        # isolated chat workspace — materialize it first (same as the raw-model
+        # isolated chat project — materialize it first (same as the raw-model
         # path) so the runtime is isolated from sibling chats and the library
         # agent isn't (wrongly) looked up as a member of "chat-default".
-        if workspace_id == "chat-default" and self._workspace_svc:
-            fresh_ws = await self._workspace_svc.create_chat_workspace_for_session()
-            workspace_id = fresh_ws.id
+        if project_id == "chat-default" and self._project_svc:
+            fresh_ws = await self._project_svc.create_chat_project_for_session()
+            project_id = fresh_ws.id
 
-        kernel_agent_id = await self._resolve_bound_kernel_agent_id(workspace_id, agent_slug)
+        kernel_agent_id = await self._resolve_bound_kernel_agent_id(project_id, agent_slug)
 
         agent = await kernel_store.load_agent(kernel_agent_id)
         if agent is None:
@@ -490,15 +490,15 @@ class SessionService:
         except ProviderNotResolvable as exc:
             raise SessionNotRunnable(str(exc)) from exc
 
-        # Snapshot the workspace prompt + the agent's persona instructions.
-        workspace_row = await self._workspaces.get_by_id(workspace_id)
-        workspace_ctx = await self._workspaces.get_context(workspace_id)
-        workspace_prompt = build_workspace_system_prompt(
-            workspace_name=workspace_row.name if workspace_row else "",
-            instructions_md=workspace_ctx.instructions_md if workspace_ctx else None,
+        # Snapshot the project prompt + the agent's persona instructions.
+        project_row = await self._projects.get_by_id(project_id)
+        project_ctx = await self._projects.get_context(project_id)
+        project_prompt = build_project_system_prompt(
+            project_name=project_row.name if project_row else "",
+            instructions_md=project_ctx.instructions_md if project_ctx else None,
         )
         # VALUZ-CHATPLAN S3: project-conversation agents (i.e. chat sessions
-        # bound to a workspace agent) carry the chat task playbook so the
+        # bound to a project agent) carry the chat task playbook so the
         # model knows to draft → plan → commit (with user "go") instead of
         # creating tasks straight away, and to inject mid-flight rather
         # than starting new tasks. Lead/member agents have their own
@@ -507,7 +507,7 @@ class SessionService:
         from valuz_agent.adapters.agent_resolver import CHAT_TASK_PLAYBOOK
 
         instructions = "\n\n".join(
-            p for p in (agent.instructions, workspace_prompt, CHAT_TASK_PLAYBOOK) if p and p.strip()
+            p for p in (agent.instructions, project_prompt, CHAT_TASK_PLAYBOOK) if p and p.strip()
         )
 
         effective_permission_mode = _coerce_session_permission_mode(
@@ -580,7 +580,7 @@ class SessionService:
 
         kernel_session = KernelSession(
             id=session_id,
-            project_id=workspace_id,
+            project_id=project_id,
             agent_id=kernel_agent_id,
             runtime_provider=runtime_provider,
             model=effective_model,
@@ -598,13 +598,13 @@ class SessionService:
         self._bus.publish(
             SESSION_CREATED,
             session_id=session_id,
-            workspace_id=workspace_id,
+            project_id=project_id,
         )
         return _session_to_detail(kernel_session)
 
     async def create_session(
         self,
-        workspace_id: str,
+        project_id: str,
         origin: str = "user",
         title: str | None = None,
         trigger_meta: dict[str, str] | None = None,
@@ -617,7 +617,7 @@ class SessionService:
         effort: str | None = None,
         agent_slug: str | None = None,
     ) -> SessionDetail:
-        """Create a new kernel session for *workspace_id*.
+        """Create a new kernel session for *project_id*.
 
         Resolves model + capabilities from the valuz catalog, persists a kernel
         ``Session`` row, and publishes the ``SESSION_CREATED`` event.
@@ -631,7 +631,7 @@ class SessionService:
         """
         if agent_slug:
             return await self._create_agent_bound_session(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 agent_slug=agent_slug,
                 origin=origin,
                 title=title,
@@ -643,16 +643,16 @@ class SessionService:
                 override_provider_id=provider_id,
                 override_effort=effort,
             )
-        # Quick-chat sessions get an ephemeral, single-use workspace each
+        # Quick-chat sessions get an ephemeral, single-use project each
         # time. ``"chat-default"`` is the sentinel the chat launchers send
-        # — we materialize a fresh ``kind="chat"`` workspace + kernel
-        # project (with its own cwd under ``data_dir/workspaces/{id}/``)
+        # — we materialize a fresh ``kind="chat"`` project + kernel
+        # project (with its own cwd under ``data_dir/projects/{id}/``)
         # so the runtime is isolated from sibling chats. Skill scoping
         # still uses the literal ``"chat-default"`` string as the scope
-        # key, independent of any specific workspace id.
-        if workspace_id == "chat-default" and self._workspace_svc:
-            fresh_ws = await self._workspace_svc.create_chat_workspace_for_session()
-            workspace_id = fresh_ws.id
+        # key, independent of any specific project id.
+        if project_id == "chat-default" and self._project_svc:
+            fresh_ws = await self._project_svc.create_chat_project_for_session()
+            project_id = fresh_ws.id
 
         # Apply app-level defaults from Settings → "Default model" (the
         # global runtime/provider/model/effort tuple users configure
@@ -691,7 +691,7 @@ class SessionService:
                     effort = await _prefs.get_default_effort(_pref_db)
 
         # Resolve model.
-        workspace_row = await self._workspaces.get_by_id(workspace_id)
+        project_row = await self._projects.get_by_id(project_id)
         resolution = await resolve_model(
             providers=self._providers,
             request_model_id=model_id,
@@ -735,7 +735,7 @@ class SessionService:
         if resolved_provider_id is None:
             raise SessionNotRunnable(
                 "no provider selected — pick a model provider before creating "
-                "a session, or configure a workspace default"
+                "a session, or configure a project default"
             )
         if self._secrets is None:
             raise RuntimeError(
@@ -777,7 +777,7 @@ class SessionService:
         # as "explicitly none". An explicit non-empty list is also honoured.
         effective_mcp_slugs = mcp_provider_slugs
         if effective_mcp_slugs is None and self._connectors is not None:
-            effective_mcp_slugs = await self._auto_default_mcp_slugs(workspace_id)
+            effective_mcp_slugs = await self._auto_default_mcp_slugs(project_id)
 
         # Allocate session id up-front so capability resolution can stamp
         # it into the in-process docs MCP URL (the URL embeds the session
@@ -788,9 +788,9 @@ class SessionService:
         # Resolve skills / mcp_servers.
         try:
             caps = await resolve_session_capabilities(
-                workspaces=self._workspaces,
+                projects=self._projects,
                 skills=self._skills,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 skill_source=self._skill_source,
                 extra_skill_sources=self._extra_skill_sources,
                 official_entitled=await self._has_official_entitlement(),
@@ -807,18 +807,18 @@ class SessionService:
             caps_skills = caps.skills
             caps_mcp = caps.mcp_servers
 
-        agent_id = WorkspaceService._kernel_agent_id(workspace_id)
+        agent_id = ProjectService._kernel_agent_id(project_id)
 
-        # Per ADR-008: snapshot the workspace's current ``instructions_md``
+        # Per ADR-008: snapshot the project's current ``instructions_md``
         # into ``Session.instructions`` at create time. The runtime reads
         # the session field, not the agent — so this is the moment that
-        # locks the system prompt for the session's lifetime. Workspace
+        # locks the system prompt for the session's lifetime. Project
         # edits after this point apply only to *future* sessions.
-        workspace_row = await self._workspaces.get_by_id(workspace_id)
-        workspace_ctx = await self._workspaces.get_context(workspace_id)
-        session_instructions = build_workspace_system_prompt(
-            workspace_name=workspace_row.name if workspace_row else "",
-            instructions_md=workspace_ctx.instructions_md if workspace_ctx else None,
+        project_row = await self._projects.get_by_id(project_id)
+        project_ctx = await self._projects.get_context(project_id)
+        session_instructions = build_project_system_prompt(
+            project_name=project_row.name if project_row else "",
+            instructions_md=project_ctx.instructions_md if project_ctx else None,
         )
 
         # Build the valuz metadata blob.
@@ -835,7 +835,7 @@ class SessionService:
         # ``submit_skill`` confirm flow can apply per-entry side-effects
         # on user confirmation. Stored only when the caller passes it;
         # for organic sessions (no launcher), the confirm endpoint
-        # infers the kind from the session's workspace at confirm time.
+        # infers the kind from the session's project at confirm time.
         if creation_context:
             valuz_meta["creation_context"] = {str(k): str(v) for k, v in creation_context.items()}
 
@@ -871,7 +871,7 @@ class SessionService:
 
         kernel_session = KernelSession(
             id=session_id,
-            project_id=workspace_id,
+            project_id=project_id,
             agent_id=agent_id,
             runtime_provider=runtime_provider,
             model=resolution.model,
@@ -889,7 +889,7 @@ class SessionService:
         self._bus.publish(
             SESSION_CREATED,
             session_id=session_id,
-            workspace_id=workspace_id,
+            project_id=project_id,
         )
 
         detail = _session_to_detail(kernel_session)
@@ -904,7 +904,7 @@ class SessionService:
         model_id: str | None = None,
     ) -> SessionDetail:
         """Kick off an async agent turn in the background.  Returns immediately."""
-        # Lazy refresh — if the user bound docs to this workspace AFTER
+        # Lazy refresh — if the user bound docs to this project AFTER
         # the session was created, the docs skill+MCP would be missing
         # from session.{skills,mcp_servers} (capability_resolver only
         # fires at create-time). The proactive eventbus subscriber
@@ -1078,10 +1078,10 @@ class SessionService:
             pending_attachments = await _load_pending_attachments(session_id)
             consumed_attachment_ids = [row.id for row in pending_attachments]
             attachment_specs = _attachment_specs(pending_attachments)
-            workspace_id = str(session.project_id)
+            project_id = str(session.project_id)
             additional_context = await _build_additional_context(
                 session_id,
-                workspace_id,
+                project_id,
                 pending_attachments,
             )
             user_msg = UserMessage(
@@ -1499,14 +1499,14 @@ class SessionService:
             "rule_id": result.rule_id,
         }
 
-    def count_sessions_for_workspace(self, workspace_id: str) -> int:
-        """Return the number of kernel sessions for this workspace (project_id)."""
-        sessions = kernel_sync.list_sessions_sync(project_id=workspace_id, limit=1000)
+    def count_sessions_for_project(self, project_id: str) -> int:
+        """Return the number of kernel sessions for this project (project_id)."""
+        sessions = kernel_sync.list_sessions_sync(project_id=project_id, limit=1000)
         return len(sessions)
 
-    def delete_sessions_for_workspace(self, workspace_id: str) -> int:
-        """Delete all kernel sessions (and their events) for this workspace."""
-        sessions = kernel_sync.list_sessions_sync(project_id=workspace_id, limit=1000)
+    def delete_sessions_for_project(self, project_id: str) -> int:
+        """Delete all kernel sessions (and their events) for this project."""
+        sessions = kernel_sync.list_sessions_sync(project_id=project_id, limit=1000)
         for s in sessions:
             kernel_sync.delete_session_sync(s.id)
         return len(sessions)

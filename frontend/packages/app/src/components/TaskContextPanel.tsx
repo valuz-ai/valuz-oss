@@ -72,13 +72,13 @@ export interface TaskContextPanelProps {
   /** All runs in the task (lead + sub-Runs). Lead is identified by
    *  ``run.kind === "lead"`` so callers don't pass it separately. */
   runs: TaskRun[];
-  /** Workspace members — used to surface ``agent.model`` next to each
+  /** Project members — used to surface ``agent.model`` next to each
    *  team row. Optional: if absent, rows fall back to run status only. */
   members?: MemberWithAgent[];
   /** The lead's subtask plan (from the latest ``task_plan_update`` event).
    *  Empty until the lead calls ``plan_task``. */
   plannedSubtasks?: PlannedSubtask[];
-  /** Project file tree for the workspace this task runs in. When
+  /** Project file tree for the project this task runs in. When
    *  provided, the panel switches into a tabbed shell with a "项目文件"
    *  tab alongside the context sections. Absent → tabs hide and we
    *  fall back to the legacy single-pane layout. */
@@ -90,7 +90,7 @@ export interface TaskContextPanelProps {
    *  project home rail uses (see ``FileRefreshButton``). Optional;
    *  hides the button when absent. */
   onRefreshFiles?: () => void;
-  /** Reveal the workspace cwd in the OS file manager. Optional; hides
+  /** Reveal the project cwd in the OS file manager. Optional; hides
    *  the button when absent. */
   onOpenInFinder?: () => void;
 }
@@ -104,9 +104,9 @@ export interface TaskContextPanelProps {
  *   3. 🏃 运行记录    — lead Run + sub-Runs, click → conversation
  *
  * Sits inside AppShell's right-panel slot via
- * ``useWorkspaceOutlet().setRightPanel(<TaskContextPanel … />)`` so it
+ * ``useProjectOutlet().setRightPanel(<TaskContextPanel … />)`` so it
  * inherits the standard ``rounded-[14px] border bg-card`` card shell and
- * the collapse toggle the rest of the workspace pages use.
+ * the collapse toggle the rest of the project pages use.
  *
  * Deliberately removed in v30 (per PRD §3.5 v30 changelog):
  *   - Live stream views (Lead / Subtask)  — center timeline carries the
@@ -380,8 +380,8 @@ export const TaskContextPanel = ({
         >
           <TabsTrigger value="context" className="after:!opacity-0">
             {/* Match the project home / conversation rail label
-                ("工作区" / "Workspace") — same surface, same word. */}
-            {t("conversation.workspace" as Parameters<typeof t>[0])}
+                ("工作区" / "Project") — same surface, same word. */}
+            {t("conversation.project" as Parameters<typeof t>[0])}
           </TabsTrigger>
           <TabsTrigger value="files" className="after:!opacity-0">
             {/* Reuse the project home / conversation key so the rail

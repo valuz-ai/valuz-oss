@@ -56,10 +56,10 @@ Trigger = Annotated[
 # ── Agent reference ───────────────────────────────────────────────────
 
 
-# ``project_member`` — already a member of the bound workspace. Picker shows
+# ``project_member`` — already a member of the bound project. Picker shows
 # the project's instantiated agents.
 # ``library_agent``  — picked from the global ``LIBRARY/Agents``. Service
-# instantiates it into the bound chat workspace at create time, so what
+# instantiates it into the bound chat project at create time, so what
 # lands in storage always normalises to ``project_member``. The frontend
 # still sends the kind so the picker UI can show the right list.
 AgentKind = Literal["project_member", "library_agent"]
@@ -72,7 +72,7 @@ AgentKind = Literal["project_member", "library_agent"]
 # send_message_sync. Original ScheduleService semantic.
 # ``task`` — kick off a project task with the bound agent as Lead; the
 # rendered prompt becomes the task goal. Only valid for project
-# workspaces (validated at create / update time).
+# projects (validated at create / update time).
 ActionKind = Literal["chat", "task"]
 
 
@@ -80,15 +80,15 @@ ActionKind = Literal["chat", "task"]
 
 
 class AutomationCreatePayload(BaseModel):
-    """Two-level routing on ``(workspace_kind, workspace_id)`` — see ADR-021 §4.
+    """Two-level routing on ``(project_kind, project_id)`` — see ADR-021 §4.
 
-    - ``workspace_kind="chat"`` + ``workspace_id=None``  → service lazy-creates
-      a fresh chat workspace named after the automation. Automation page
+    - ``project_kind="chat"`` + ``project_id=None``  → service lazy-creates
+      a fresh chat project named after the automation. Automation page
       "Chat" picker path.
-    - ``workspace_kind="chat"`` + ``workspace_id=<id>``  → bind to that
-      existing chat workspace. ``automation create`` MCP-from-chat path.
-    - ``workspace_kind="project"`` + ``workspace_id=<id>`` → bind to the
-      project workspace. Required for project-kind automations.
+    - ``project_kind="chat"`` + ``project_id=<id>``  → bind to that
+      existing chat project. ``automation create`` MCP-from-chat path.
+    - ``project_kind="project"`` + ``project_id=<id>`` → bind to the
+      project. Required for project-kind automations.
 
     ``agent_kind`` + ``agent_slug`` together identify the executing agent:
 
@@ -100,8 +100,8 @@ class AutomationCreatePayload(BaseModel):
 
     name: str = Field(min_length=1, max_length=50)
 
-    workspace_kind: Literal["chat", "project"]
-    workspace_id: str | None = None
+    project_kind: Literal["chat", "project"]
+    project_id: str | None = None
 
     agent_kind: AgentKind
     agent_slug: str = Field(min_length=1)
@@ -112,7 +112,7 @@ class AutomationCreatePayload(BaseModel):
 
     # Execution mode (see ``ActionKind`` docstring). Default ``chat`` keeps
     # callers that omit the field on the simple-task path; the service
-    # rejects ``task`` on chat workspaces.
+    # rejects ``task`` on chat projects.
     action_kind: ActionKind = "chat"
 
 
@@ -125,7 +125,7 @@ class AutomationUpdatePayload(BaseModel):
     populated row would race the CheckConstraint.
 
     Cross-kind agent swap (``library_agent`` → ``project_member`` or
-    vice-versa) is intentionally not supported on update — the workspace
+    vice-versa) is intentionally not supported on update — the project
     binding makes those rows fundamentally different. Delete + recreate.
     """
 
@@ -133,9 +133,9 @@ class AutomationUpdatePayload(BaseModel):
     prompt_template: str | None = None
     trigger: Trigger | None = None
     agent_slug: str | None = None
-    # Switching action_kind on update is allowed (within the workspace's
-    # constraint — task only on project workspaces). The service validates
-    # the resulting (workspace_kind, action_kind) pair.
+    # Switching action_kind on update is allowed (within the project's
+    # constraint — task only on projects). The service validates
+    # the resulting (project_kind, action_kind) pair.
     action_kind: ActionKind | None = None
 
 
@@ -144,9 +144,9 @@ class AutomationUpdatePayload(BaseModel):
 
 class AutomationItemResponse(BaseModel):
     automation_id: str
-    workspace_id: str
-    workspace_name: str
-    workspace_kind: str
+    project_id: str
+    project_name: str
+    project_kind: str
 
     name: str
     agent_kind: str
@@ -174,9 +174,9 @@ class AutomationItemResponse(BaseModel):
 
 
 class AutomationGroupResponse(BaseModel):
-    workspace_id: str
-    workspace_name: str
-    workspace_kind: str
+    project_id: str
+    project_name: str
+    project_kind: str
     automations: list[AutomationItemResponse]
 
 
@@ -191,7 +191,7 @@ class AutomationDetailResponse(AutomationItemResponse):
 class AutomationRunItemResponse(BaseModel):
     run_id: str
     automation_id: str
-    workspace_id: str
+    project_id: str
     trigger_type: str
     status: str
     triggered_at: int
@@ -232,27 +232,27 @@ class AutomationRunAcceptedResponse(BaseModel):
     status: str
 
 
-class AutomationWorkspaceTarget(BaseModel):
-    """One selectable target in the workspace picker on the create form.
+class AutomationProjectTarget(BaseModel):
+    """One selectable target in the project picker on the create form.
 
     Composition rule mirrors the old schedule one:
-    - A fixed "Chat" sentinel at the top (``workspace_id=None``).
-    - Every project workspace by stable order.
+    - A fixed "Chat" sentinel at the top (``project_id=None``).
+    - Every project by stable order.
 
-    Chat workspaces aren't listed individually — each chat-bound automation
+    Chat projects aren't listed individually — each chat-bound automation
     allocates its own row at create time (or reuses the calling chat's
-    workspace via the ``automation`` MCP tool), so a global list of them
+    project via the ``automation`` MCP tool), so a global list of them
     would be UI noise.
     """
 
     id: str
     name: str
     kind: Literal["chat", "project"]
-    workspace_id: str | None
+    project_id: str | None
 
 
-class AutomationWorkspaceTargetsResponse(BaseModel):
-    targets: list[AutomationWorkspaceTarget]
+class AutomationProjectTargetsResponse(BaseModel):
+    targets: list[AutomationProjectTarget]
 
 
 # ── MCP tool surface (replaces the legacy ``cronjob`` schema) ────────
@@ -279,7 +279,7 @@ class AutomationToolPayload(BaseModel):
     scope: str | None = Field(
         default=None,
         description=(
-            "`this` = current workspace only; `all` = entire user library "
+            "`this` = current project only; `all` = entire user library "
             "(only honoured in chat sessions). Omit to use the natural "
             "default: chat sessions see all automations; project sessions "
             "see only the current project regardless of value."

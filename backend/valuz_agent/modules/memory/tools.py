@@ -134,7 +134,7 @@ async def _memory_write_handler(args: dict[str, Any], ctx: ExecContext) -> ToolR
 _SCOPE_PROP = {
     "type": "string",
     "enum": ["global", "project", "task"],
-    "description": "global=cross-project user memory; project=this workspace; task=this task.",
+    "description": "global=cross-project user memory; project=this project; task=this task.",
 }
 
 _GET_PARAMS = {

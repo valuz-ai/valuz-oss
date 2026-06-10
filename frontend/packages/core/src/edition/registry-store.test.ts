@@ -37,7 +37,7 @@ describe("registry store", () => {
       path: "/plugin",
       label: "Plugin",
       description: "Runtime-added route",
-      layout: "workspace",
+      layout: "project",
       showInNav: true,
       edition: "personal",
     });
@@ -77,7 +77,7 @@ describe("registerPlugin", () => {
           path: "/test-plugin",
           label: "Test Plugin",
           description: "Runtime-registered route from a plugin",
-          layout: "workspace",
+          layout: "project",
           showInNav: true,
           edition: "personal",
         },

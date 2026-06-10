@@ -300,20 +300,20 @@ class DocumentDatastore:
 
     # ── ProjectKbBinding ──────────────────────────────────────────────
 
-    async def list_bindings(self, workspace_id: str) -> list[ProjectKbBindingRow]:
+    async def list_bindings(self, project_id: str) -> list[ProjectKbBindingRow]:
         return list(
             (
                 await self._db.execute(
-                    select(ProjectKbBindingRow).filter_by(workspace_id=workspace_id)
+                    select(ProjectKbBindingRow).filter_by(project_id=project_id)
                 )
             )
             .scalars()
             .all()
         )
 
-    async def set_bindings(self, workspace_id: str, bindings: list[ProjectKbBindingRow]) -> None:
+    async def set_bindings(self, project_id: str, bindings: list[ProjectKbBindingRow]) -> None:
         await self._db.execute(
-            delete(ProjectKbBindingRow).where(ProjectKbBindingRow.workspace_id == workspace_id)
+            delete(ProjectKbBindingRow).where(ProjectKbBindingRow.project_id == project_id)
         )
         now = now_ms()
         for b in bindings:
@@ -322,18 +322,18 @@ class DocumentDatastore:
             self._db.add(b)
         await async_commit_with_retry(self._db, where="docs.set_bindings")
 
-    async def count_bindings(self, workspace_id: str) -> int:
+    async def count_bindings(self, project_id: str) -> int:
         return (
             await self._db.execute(
                 select(func.count())
                 .select_from(ProjectKbBindingRow)
-                .filter_by(workspace_id=workspace_id)
+                .filter_by(project_id=project_id)
             )
         ).scalar() or 0
 
-    async def remove_all_bindings(self, workspace_id: str) -> None:
+    async def remove_all_bindings(self, project_id: str) -> None:
         await self._db.execute(
-            delete(ProjectKbBindingRow).where(ProjectKbBindingRow.workspace_id == workspace_id)
+            delete(ProjectKbBindingRow).where(ProjectKbBindingRow.project_id == project_id)
         )
         await async_commit_with_retry(self._db, where="docs.remove_all_bindings")
 

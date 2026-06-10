@@ -3,12 +3,12 @@
 import os
 from unittest.mock import patch
 
-from valuz_agent.modules.skills.contracts import RuntimeContext
 from valuz_agent.integrations.skills_filesystem import (
     FilesystemSkillSource,
     _extract_frontmatter,
     _folder_birthtime,
 )
+from valuz_agent.modules.skills.contracts import RuntimeContext
 
 
 class TestExtractFrontmatter:
@@ -106,7 +106,7 @@ class TestFilesystemSkillSource:
         skill_dir.mkdir()
         (skill_dir / "SKILL.md").write_text(
             '---\nname: "Ext"\ndescription: "D"\nicon: "rocket"\n'
-            'argument-hint: "query"\ncontext: "workspace"\n'
+            'argument-hint: "query"\ncontext: "project"\n'
             'origin-label: "Custom"\n---\n\nBody\n'
         )
 
@@ -115,7 +115,7 @@ class TestFilesystemSkillSource:
         m = manifests[0]
         assert m.icon == "rocket"
         assert m.argument_hint == "query"
-        assert m.context == "workspace"
+        assert m.context == "project"
         assert m.origin_label == "Custom"
 
     def test_should_return_empty_when_dir_missing(self, tmp_path, monkeypatch):

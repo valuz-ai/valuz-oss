@@ -1,7 +1,7 @@
 """DecisionAggregator + enrichment unit tests (ADR-022).
 
 The aggregator's snapshot mutations are DB-backed only through
-``enrich_pending`` (which joins ``valuz_task`` / ``valuz_workspace`` /
+``enrich_pending`` (which joins ``valuz_task`` / ``valuz_project`` /
 ``valuz_task_session``). We bind a tmp SQLite async engine, seed the
 business rows, fabricate kernel ``Session`` + ``Event`` objects, and
 drive ``_handle_event`` / ``subscribe`` / ``snapshot`` directly — no
@@ -25,7 +25,7 @@ from sqlalchemy.orm import sessionmaker
 from valuz_agent.infra.database import Base
 from valuz_agent.modules.decisions.aggregator import DecisionAggregator
 from valuz_agent.modules.decisions.service import enrich_pending
-from valuz_agent.modules.projects.models import WorkspaceRow
+from valuz_agent.modules.projects.models import ProjectRow
 from valuz_agent.modules.tasks.models import TaskRow, TaskSessionRow
 
 
@@ -41,7 +41,7 @@ def db_factory(tmp_path, monkeypatch):
         tables=[
             TaskRow.__table__,
             TaskSessionRow.__table__,
-            WorkspaceRow.__table__,
+            ProjectRow.__table__,
         ],
     )
     async_engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
@@ -54,17 +54,17 @@ def _seed(
     db_factory,
     *,
     task_id="t1",
-    workspace_id="w1",
+    project_id="w1",
     session_id="sub-sess",
     subtask_key="arch-design",
 ) -> None:
     db = db_factory()
     try:
-        db.add(WorkspaceRow(id=workspace_id, name="全栈开发", kind="project", icon="🛠"))
+        db.add(ProjectRow(id=project_id, name="全栈开发", kind="project", icon="🛠"))
         db.add(
             TaskRow(
                 id=task_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 file_path="/tmp/t.md",
                 title="打豆豆小游戏",
                 goal="g",
@@ -88,7 +88,7 @@ def _seed(
         db.add(
             TaskSessionRow(
                 id="run1",
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 session_id=session_id,
                 agent_slug="architect",

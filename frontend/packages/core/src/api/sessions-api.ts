@@ -215,7 +215,7 @@ export type { RuntimeId } from "@valuz/shared";
 import type { RuntimeId } from "@valuz/shared";
 
 export interface SessionCreateRequest {
-  workspace_id: string;
+  project_id: string;
   title?: string | null;
   // V5: ``model`` is locked at session creation. Either pass an explicit model
   // id, or pass a provider id and let the backend pick its default model.
@@ -348,9 +348,9 @@ const fetchJson = createFetchJson(() => _apiBase);
 export type SessionStreamCallback = (event: SessionEventDTO) => void;
 
 export const sessionsApi = {
-  list(workspaceId?: string): Promise<{ sessions: SessionListItem[] }> {
+  list(projectId?: string): Promise<{ sessions: SessionListItem[] }> {
     const qs = new URLSearchParams();
-    if (workspaceId) qs.set("workspace_id", workspaceId);
+    if (projectId) qs.set("project_id", projectId);
     const suffix = qs.toString() ? `?${qs}` : "";
     return fetchJson(`/v1/sessions${suffix}`);
   },

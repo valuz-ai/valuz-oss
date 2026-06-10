@@ -24,7 +24,6 @@ Run from ``backend/``:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import sys
@@ -145,14 +144,12 @@ def main() -> None:
     # ── 3. Seed a project/agent/session/message + todo_update event ─
     print("\n[3/4] Seed kernel data via kernel_sync")
 
-    # Use the host's session API to create the workspace + session so
-    # all the valuz scaffolding (workspace row, channel binding) gets
+    # Use the host's session API to create the project + session so
+    # all the valuz scaffolding (project row, channel binding) gets
     # the same shape that real users would produce. Then drop down to
     # kernel_sync for the synthetic Message + todo_update.
-    from valuz_agent.adapters import kernel_sync  # noqa: E402
-
     # Need a project + agent on the kernel side (the host's
-    # SessionService needs a workspace; seed one directly via the
+    # SessionService needs a project; seed one directly via the
     # kernel store to keep this script independent of the channel/
     # provider boot path).
     from src.core.agent_config import AgentConfig as KernelAgent  # type: ignore[import-not-found]
@@ -161,6 +158,8 @@ def main() -> None:
     from src.core.types import Message as KernelMessage  # type: ignore[import-not-found]
     from src.core.types import Session as KernelSession  # type: ignore[import-not-found]
     from src.core.types import UserMessage as KernelUserMessage  # type: ignore[import-not-found]
+
+    from valuz_agent.adapters import kernel_sync  # noqa: E402
 
     project_id = uuid.uuid4().hex
     agent_id = uuid.uuid4().hex
@@ -171,11 +170,11 @@ def main() -> None:
         KernelProject(
             id=project_id,
             name="e2e-project",
-            cwd=str(tmp_root / "workspace"),
+            cwd=str(tmp_root / "project"),
             agent_id=agent_id,
         )
     )
-    (tmp_root / "workspace").mkdir(exist_ok=True)
+    (tmp_root / "project").mkdir(exist_ok=True)
     kernel_sync.save_session_sync(
         KernelSession(
             id=session_id,

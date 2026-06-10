@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 async def _build_additional_context(
     session_id: str,
-    workspace_id: str,
+    project_id: str,
     attachment_rows=None,  # type: ignore[no-untyped-def]
 ) -> str:
     """Compose the per-turn ``<additional-context>`` block for a session.
@@ -105,7 +105,7 @@ async def _build_additional_context(
         #    them at all and biases first searches toward the right KB.
         ds = DocumentDatastore(db)
         try:
-            bindings = await ds.list_bindings(workspace_id)
+            bindings = await ds.list_bindings(project_id)
         except Exception:  # noqa: BLE001 — never block a turn on docs lookup
             bindings = []
         if bindings:
@@ -116,7 +116,7 @@ async def _build_additional_context(
         # 3) Memory (memory-system-design §3.4): global core in full +
         #    project/task index (full bodies on demand via memory_get).
         #    MVP injects via additional-context (per-turn) rather than the
-        #    frozen system prompt — build_workspace_system_prompt must stay
+        #    frozen system prompt — build_project_system_prompt must stay
         #    byte-identical to the user-visible instructions_md. Guarded so a
         #    memory lookup never blocks a turn.
         try:
@@ -126,7 +126,7 @@ async def _build_additional_context(
             g = injection_assembler.global_block()
             if g.strip():
                 mem_parts.append(g.strip())
-            proj = await kernel_store.load_project(workspace_id)
+            proj = await kernel_store.load_project(project_id)
             project_cwd = getattr(proj, "cwd", "") if proj else ""
             task_id = None
             sess = await kernel_store.load_session(session_id)

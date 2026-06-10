@@ -191,7 +191,7 @@ func buildSpecs(p *runtime.Paths, target, host string, port int, reload bool, ba
 			Bin:          "uv",
 			Args:         args,
 			Cwd:          p.BackendDir,
-			ReadyURL:     fmt.Sprintf("http://%s:%d/v1/workspaces", host, port),
+			ReadyURL:     fmt.Sprintf("http://%s:%d/v1/projects", host, port),
 			ReadyTimeout: 30 * time.Second,
 		})
 	}

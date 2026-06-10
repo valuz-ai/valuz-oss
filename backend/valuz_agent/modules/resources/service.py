@@ -2,8 +2,6 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from valuz_agent.modules.resources.guard import check_resource_guard
-
 
 class ResourceFacade:
     """Unified coordination layer for built-in resource guard + remote sync.
@@ -26,10 +24,10 @@ class ResourceFacade:
             agent_svc = AgentService(self._db)  # type: ignore[arg-type]
             await agent_svc.delete_agent(resource_id)
         elif resource_type == "connector":
-            from valuz_agent.modules.connectors.datastore import ConnectorDatastore
-            from valuz_agent.modules.connectors.service import ConnectorService
             from valuz_agent.infra.config import settings
             from valuz_agent.infra.secret_store import FileSecretStore
+            from valuz_agent.modules.connectors.datastore import ConnectorDatastore
+            from valuz_agent.modules.connectors.service import ConnectorService
 
             conn_svc = ConnectorService(
                 ConnectorDatastore(self._db),

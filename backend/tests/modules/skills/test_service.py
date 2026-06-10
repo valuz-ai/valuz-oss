@@ -1,13 +1,13 @@
 """Tests for SkillLibraryService — Phase 5 coverage."""
 
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 
-from valuz_agent.modules.skills.contracts import RuntimeContext, SkillManifest, WorkspaceRef
+from valuz_agent.infra.eventbus import EventBus
+from valuz_agent.integrations.skills_filesystem import FilesystemSkillSource
+from valuz_agent.modules.skills.contracts import ProjectRef, RuntimeContext, SkillManifest
 from valuz_agent.modules.skills.errors import PreviewExpired, SourceReadonly
 from valuz_agent.modules.skills.models import (
     SessionSkillImportConfirmRequest,
@@ -16,14 +16,11 @@ from valuz_agent.modules.skills.models import (
     SkillUpdateRequest,
 )
 from valuz_agent.modules.skills.service import SkillLibraryService
-from valuz_agent.infra.eventbus import EventBus
-from valuz_agent.integrations.skills_filesystem import FilesystemSkillSource
-
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
-class FakeWorkspace:
+class FakeProject:
     def __init__(
         self, id: str = "ws-1", kind: str = "chat", root_path: str | None = None, name: str = "test"
     ):
@@ -35,18 +32,18 @@ class FakeWorkspace:
         self.memory_summary = None
 
 
-class FakeWorkspaceService:
-    def __init__(self, workspaces: list | None = None):
-        self._workspaces = workspaces or [FakeWorkspace(), FakeWorkspace(id="chat-default")]
+class FakeProjectService:
+    def __init__(self, projects: list | None = None):
+        self._projects = projects or [FakeProject(), FakeProject(id="chat-default")]
 
-    async def get_workspace(self, workspace_id: str):
-        for ws in self._workspaces:
-            if ws.id == workspace_id:
+    async def get_project(self, project_id: str):
+        for ws in self._projects:
+            if ws.id == project_id:
                 return ws
-        raise KeyError(workspace_id)
+        raise KeyError(project_id)
 
-    async def list_workspaces(self):
-        return self._workspaces
+    async def list_projects(self):
+        return self._projects
 
 
 class FakeSkillDatastore:
@@ -54,44 +51,44 @@ class FakeSkillDatastore:
         self._enabled: dict[str, set[str]] = {}
         self._rows: dict[str, object] = {}
 
-    def list_workspace_skills(self, workspace, source):
+    def list_project_skill_manifests(self, project, source):
         ctx = RuntimeContext(
-            workspace=WorkspaceRef(
-                id=workspace.id,
-                slug=workspace.id,
-                kind=workspace.kind,
-                root_path=workspace.root_path,
+            project=ProjectRef(
+                id=project.id,
+                slug=project.id,
+                kind=project.kind,
+                root_path=project.root_path,
             ),
         )
         manifests = source.list_skills(ctx)
-        enabled = self._enabled.get(workspace.id, set())
+        enabled = self._enabled.get(project.id, set())
         result = []
         for m in manifests:
-            is_enabled = workspace.kind == "chat" or m.path in enabled
+            is_enabled = project.kind == "chat" or m.path in enabled
             result.append(m.model_copy(update={"enabled": is_enabled}))
         return result
 
-    def enabled_skill_paths(self, workspace):
-        return self._enabled.get(workspace.id, set())
+    def enabled_skill_paths(self, project):
+        return self._enabled.get(project.id, set())
 
-    def set_skill_enabled(self, workspace, skill_path, enabled):
-        paths = self._enabled.setdefault(workspace.id, set())
+    def set_skill_enabled(self, project, skill_path, enabled):
+        paths = self._enabled.setdefault(project.id, set())
         if enabled:
             paths.add(str(Path(skill_path).expanduser().resolve(strict=False)))
         else:
             paths.discard(str(Path(skill_path).expanduser().resolve(strict=False)))
         return paths
 
-    def overwrite_enabled_skill_paths(self, workspace, skill_paths):
-        self._enabled[workspace.id] = set(skill_paths)
-        return self._enabled[workspace.id]
+    def overwrite_enabled_skill_paths(self, project, skill_paths):
+        self._enabled[project.id] = set(skill_paths)
+        return self._enabled[project.id]
 
-    def remove_skill_path_from_workspace(self, workspace, skill_path):
-        paths = self._enabled.get(workspace.id, set())
+    def remove_skill_path_from_project(self, project, skill_path):
+        paths = self._enabled.get(project.id, set())
         paths.discard(str(Path(skill_path).expanduser().resolve(strict=False)))
 
-    def scan(self, workspace, source):
-        return len(self.list_workspace_skills(workspace, source))
+    def scan(self, project, source):
+        return len(self.list_project_skill_manifests(project, source))
 
     async def get_by_id(self, skill_id):
         return self._rows.get(skill_id)
@@ -118,8 +115,8 @@ class FakeSkillDatastore:
     def is_ignored(self, skill_id, content_hash=None):
         return False
 
-    def set_project_skills(self, workspace_id, rows):
-        self._enabled[workspace_id] = set()
+    def set_project_skills(self, project_id, rows):
+        self._enabled[project_id] = set()
 
 
 def _make_skill_dir(root: Path, name: str, body: str = "Test skill.") -> Path:
@@ -145,7 +142,7 @@ def svc(skill_root, monkeypatch):
     return SkillLibraryService(
         datastore=FakeSkillDatastore(),
         skill_source=FilesystemSkillSource(),
-        workspace_service=FakeWorkspaceService(),
+        project_service=FakeProjectService(),
         event_bus=bus,
     ), bus
 
@@ -227,7 +224,6 @@ class TestListCatalog:
         # Fake a manifest entry with None timestamp by monkeypatching the
         # source. Easier: add an "extra source" returning a manifest with
         # folder_created_at=None. SkillLibraryService exposes that knob.
-        from valuz_agent.modules.skills.contracts import SkillManifest
 
         class _NullTimeSource:
             name = "null-time"

@@ -4,8 +4,8 @@ from typing import Any, Protocol
 
 @dataclass
 class RuntimeBuildContext:
-    workspace_id: str
-    workspace_kind: str
+    project_id: str
+    project_kind: str
     session_id: str | None
     capabilities: set[str]
     entitlements: list[str]

@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { useServices } from './use-services'
 import { useAppStore } from '../store/app-store'
 
-export const useWorkspaceShell = () => {
+export const useProjectShell = () => {
   const edition = useAppStore((state) => state.edition)
   const features = useAppStore((state) => state.features)
   const navItems = useAppStore((state) => state.navItems)

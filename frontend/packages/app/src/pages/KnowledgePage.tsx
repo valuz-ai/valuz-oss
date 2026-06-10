@@ -59,7 +59,7 @@ import type {
   KbListItem,
   KbTreeNode,
 } from "@valuz/core";
-import { useWorkspaceOutlet } from "@valuz/app/layout";
+import { useProjectOutlet } from "@valuz/app/layout";
 import { usePlatform } from "@valuz/app/platform";
 import { useTranslation } from "@valuz/core";
 import { CreateKbDialog } from "../components";
@@ -263,7 +263,7 @@ export const KnowledgePage = () => {
     setHeader,
     setHeaderClassName,
     setContentInnerClassName,
-  } = useWorkspaceOutlet();
+  } = useProjectOutlet();
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
 
   useEffect(() => {

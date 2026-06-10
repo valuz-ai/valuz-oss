@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 async def emit_plan_update(
     event_ds: TaskEventDatastore,
     *,
-    workspace_id: str,
+    project_id: str,
     task_id: str,
     plan: TaskPlan,
     actor: str,
@@ -51,7 +51,7 @@ async def emit_plan_update(
 ) -> None:
     """Append a ``task_plan_update`` snapshot event (frontend Todo panel)."""
     await event_ds.append_event(
-        workspace_id=workspace_id,
+        project_id=project_id,
         task_id=task_id,
         type="task_plan_update",
         actor=actor,
@@ -87,7 +87,7 @@ def render_plan_md(task_row: TaskRow, plan: TaskPlan) -> None:
 async def plan_task(
     *,
     task_id: str,
-    workspace_id: str,
+    project_id: str,
     lead_session_id: str,
     subtasks: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -104,7 +104,7 @@ async def plan_task(
     async with async_unit_of_work() as db:
         task_ds = TaskDatastore(db)
         event_ds = TaskEventDatastore(db)
-        task_row = await task_ds.get_task_by_workspace(workspace_id, task_id)
+        task_row = await task_ds.get_task_by_project(project_id, task_id)
         if task_row is None:
             return {"error": f"task {task_id!r} not found"}
         existing = TaskPlan.from_dict(task_row.plan)
@@ -121,7 +121,7 @@ async def plan_task(
         task_row.plan_version = (task_row.plan_version or 0) + 1
         await task_ds.update_task(task_row)
         await event_ds.append_event(
-            workspace_id=workspace_id,
+            project_id=project_id,
             task_id=task_id,
             type="task_planned",
             actor=lead_session_id,
@@ -130,7 +130,7 @@ async def plan_task(
         )
         await emit_plan_update(
             event_ds,
-            workspace_id=workspace_id,
+            project_id=project_id,
             task_id=task_id,
             plan=plan,
             actor=lead_session_id,
@@ -144,7 +144,7 @@ async def plan_task(
         }
 
 
-async def get_plan(*, task_id: str, workspace_id: str) -> dict[str, Any]:
+async def get_plan(*, task_id: str, project_id: str) -> dict[str, Any]:
     """Return the plan snapshot + ready keys + status counts (read-only).
 
     Includes ``current_version`` so the caller knows what to pass as
@@ -152,7 +152,7 @@ async def get_plan(*, task_id: str, workspace_id: str) -> dict[str, Any]:
     """
     async with async_unit_of_work(commit=False) as db:
         task_ds = TaskDatastore(db)
-        task_row = await task_ds.get_task_by_workspace(workspace_id, task_id)
+        task_row = await task_ds.get_task_by_project(project_id, task_id)
         if task_row is None:
             return {"error": f"task {task_id!r} not found"}
         plan = TaskPlan.from_dict(task_row.plan)
@@ -168,7 +168,7 @@ async def get_plan(*, task_id: str, workspace_id: str) -> dict[str, Any]:
 async def modify_plan(
     *,
     task_id: str,
-    workspace_id: str,
+    project_id: str,
     lead_session_id: str,
     add: list[dict[str, Any]] | None = None,
     update: list[dict[str, Any]] | None = None,
@@ -194,7 +194,7 @@ async def modify_plan(
     async with async_unit_of_work() as db:
         task_ds = TaskDatastore(db)
         event_ds = TaskEventDatastore(db)
-        task_row = await task_ds.get_task_by_workspace(workspace_id, task_id)
+        task_row = await task_ds.get_task_by_project(project_id, task_id)
         if task_row is None:
             return {"error": f"task {task_id!r} not found"}
         current_version = task_row.plan_version or 0
@@ -222,7 +222,7 @@ async def modify_plan(
         task_row.plan_version = current_version + 1
         await task_ds.update_task(task_row)
         await event_ds.append_event(
-            workspace_id=workspace_id,
+            project_id=project_id,
             task_id=task_id,
             type="plan_revised",
             actor=lead_session_id,
@@ -235,7 +235,7 @@ async def modify_plan(
         )
         await emit_plan_update(
             event_ds,
-            workspace_id=workspace_id,
+            project_id=project_id,
             task_id=task_id,
             plan=plan,
             actor=lead_session_id,
@@ -252,7 +252,7 @@ async def modify_plan(
 async def review_subtask(
     *,
     task_id: str,
-    workspace_id: str,
+    project_id: str,
     lead_session_id: str,
     decision: str,
     subtask_key: str | None = None,
@@ -273,7 +273,7 @@ async def review_subtask(
     async with async_unit_of_work(commit=False) as db:
         task_ds = TaskDatastore(db)
         run_ds = TaskSessionDatastore(db)
-        task_row = await task_ds.get_task_by_workspace(workspace_id, task_id)
+        task_row = await task_ds.get_task_by_project(project_id, task_id)
         if task_row is None:
             return {"error": f"task {task_id!r} not found"}
         plan = TaskPlan.from_dict(task_row.plan)
@@ -293,7 +293,7 @@ async def review_subtask(
             task_ds = TaskDatastore(db)
             event_ds = TaskEventDatastore(db)
             run_ds = TaskSessionDatastore(db)
-            task_row = await task_ds.get_task_by_workspace(workspace_id, task_id)
+            task_row = await task_ds.get_task_by_project(project_id, task_id)
             plan = TaskPlan.from_dict(task_row.plan)
             node = plan.get(key)
             plan.update_node(key, status="done", review_feedback=None)
@@ -304,7 +304,7 @@ async def review_subtask(
                     ended_at=now_ms(),
                 )
             await event_ds.append_event(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 type="subtask_reviewed",
                 actor=lead_session_id,
@@ -312,7 +312,7 @@ async def review_subtask(
                 payload={"subtask_key": key, "decision": "approve", "feedback": feedback or ""},
             )
             await event_ds.append_event(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 type="subtask_completed",
                 actor=(node.agent or "") if node else "",
@@ -323,7 +323,7 @@ async def review_subtask(
             await task_ds.update_task(task_row)
             await emit_plan_update(
                 event_ds,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 plan=plan,
                 actor=lead_session_id,
@@ -355,7 +355,7 @@ async def review_subtask(
     async with async_unit_of_work() as db:
         task_ds = TaskDatastore(db)
         event_ds = TaskEventDatastore(db)
-        task_row = await task_ds.get_task_by_workspace(workspace_id, task_id)
+        task_row = await task_ds.get_task_by_project(project_id, task_id)
         plan = TaskPlan.from_dict(task_row.plan)
         plan.update_node(
             key,
@@ -363,7 +363,7 @@ async def review_subtask(
             review_feedback=feedback,
         )
         await event_ds.append_event(
-            workspace_id=workspace_id,
+            project_id=project_id,
             task_id=task_id,
             type="subtask_reviewed",
             actor=lead_session_id,
@@ -374,7 +374,7 @@ async def review_subtask(
         await task_ds.update_task(task_row)
         await emit_plan_update(
             event_ds,
-            workspace_id=workspace_id,
+            project_id=project_id,
             task_id=task_id,
             plan=plan,
             actor=lead_session_id,
@@ -439,7 +439,7 @@ def resolve_dispatch_node(
 
 async def mark_node_dispatched(
     *,
-    workspace_id: str,
+    project_id: str,
     task_id: str,
     subtask_key: str,
     agent: str,
@@ -449,7 +449,7 @@ async def mark_node_dispatched(
     async with async_unit_of_work() as db:
         task_ds = TaskDatastore(db)
         event_ds = TaskEventDatastore(db)
-        task_row = await task_ds.get_task_by_workspace(workspace_id, task_id)
+        task_row = await task_ds.get_task_by_project(project_id, task_id)
         if task_row is None:
             return
         plan = TaskPlan.from_dict(task_row.plan)
@@ -467,7 +467,7 @@ async def mark_node_dispatched(
         await task_ds.update_task(task_row)
         await emit_plan_update(
             event_ds,
-            workspace_id=workspace_id,
+            project_id=project_id,
             task_id=task_id,
             plan=plan,
             actor=agent,
@@ -475,7 +475,7 @@ async def mark_node_dispatched(
         )
 
 
-async def mark_in_review(*, task_id: str, workspace_id: str, member_session_id: str) -> None:
+async def mark_in_review(*, task_id: str, project_id: str, member_session_id: str) -> None:
     """Lead-side: flip the member's plan node to in_review on member_done.
 
     Runs inside the lead's actor loop (single actor, D7) so plan writes stay
@@ -491,7 +491,7 @@ async def mark_in_review(*, task_id: str, workspace_id: str, member_session_id: 
             key = run.subtask_key if run else None
             if not key:
                 return
-            task_row = await task_ds.get_task_by_workspace(workspace_id, task_id)
+            task_row = await task_ds.get_task_by_project(project_id, task_id)
             if task_row is None:
                 return
             plan = TaskPlan.from_dict(task_row.plan)
@@ -503,7 +503,7 @@ async def mark_in_review(*, task_id: str, workspace_id: str, member_session_id: 
             await task_ds.update_task(task_row)
             await emit_plan_update(
                 event_ds,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 plan=plan,
                 actor="system",

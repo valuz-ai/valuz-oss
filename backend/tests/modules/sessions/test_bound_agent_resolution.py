@@ -60,10 +60,10 @@ def patch_uow(db, monkeypatch):
     monkeypatch.setattr(session_service, "async_unit_of_work", _fake_uow)
 
 
-async def _resolve(workspace_id: str, agent_slug: str) -> str:
+async def _resolve(project_id: str, agent_slug: str) -> str:
     # The resolver reads no instance state — a bare stand-in for ``self`` is fine.
     return await SessionService._resolve_bound_kernel_agent_id(
-        SimpleNamespace(), workspace_id, agent_slug
+        SimpleNamespace(), project_id, agent_slug
     )
 
 
@@ -80,7 +80,7 @@ async def test_should_resolve_global_library_agent_when_not_a_project_member(db,
         )
     )
 
-    # chat-default workspace has no members → falls back to the library agent.
+    # chat-default project has no members → falls back to the library agent.
     resolved = await _resolve("chat-default", DEFAULT_ASSISTANT_SLUG)
 
     assert resolved == "ker-default-assistant"
@@ -101,7 +101,7 @@ async def test_should_prefer_project_member_over_library_agent(db, patch_uow) ->
     )
     await ProjectMemberDatastore(db).create(
         ProjectMemberRow(
-            workspace_id="ws-proj",
+            project_id="ws-proj",
             agent_slug="architect",
             kernel_agent_id="ker-member",
         )

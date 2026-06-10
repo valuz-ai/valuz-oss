@@ -2,7 +2,7 @@
 extracted from ``TaskOrchestrator`` in the T1.1 split).
 
 Pins the dict shapes the dispatch MCP tools depend on — list_tasks
-filtering/limit/run-counts, get_task projection + workspace scoping, and the
+filtering/limit/run-counts, get_task projection + project scoping, and the
 list_members degraded path when the kernel agent can't be loaded.
 
 DB fixture mirrors ``test_chatplan_s4`` — tmp SQLite + monkeypatched
@@ -50,7 +50,7 @@ def _add_task(
     tmp_path,
     *,
     task_id: str,
-    workspace_id: str = "w1",
+    project_id: str = "w1",
     status: str = "active",
     originator: str = "chat-1",
     title: str = "T",
@@ -60,7 +60,7 @@ def _add_task(
         db.add(
             TaskRow(
                 id=task_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 file_path=str(tmp_path / f"{task_id}.md"),
                 title=title,
                 goal="do it",
@@ -76,12 +76,12 @@ def _add_task(
         db.close()
 
 
-def _add_run(db_factory, tmp_path, *, task_id, workspace_id="w1", session_id, status="active"):
+def _add_run(db_factory, tmp_path, *, task_id, project_id="w1", session_id, status="active"):
     db = db_factory()
     try:
         db.add(
             TaskSessionRow(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 session_id=session_id,
                 agent_slug="member-a",
@@ -91,7 +91,7 @@ def _add_run(db_factory, tmp_path, *, task_id, workspace_id="w1", session_id, st
                 label="L",
                 goal="g",
                 subtask_key="s1",
-                workspace_mode="shared",
+                project_mode="shared",
                 run_dir=str(tmp_path),
             )
         )
@@ -171,8 +171,8 @@ async def test_get_task_projects_detail_and_runs(db_factory, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_get_task_returns_none_for_other_workspace(db_factory, tmp_path):
-    _add_task(db_factory, tmp_path, task_id="t1", workspace_id="w1")
+async def test_get_task_returns_none_for_other_project(db_factory, tmp_path):
+    _add_task(db_factory, tmp_path, task_id="t1", project_id="w1")
 
     assert await queries.get_task("t1", "w2") is None
 
@@ -185,7 +185,7 @@ async def test_get_task_surfaces_latest_event_summary(db_factory, tmp_path):
         for seq, summary in enumerate(["first", "latest"]):
             db.add(
                 TaskEventRow(
-                    workspace_id="w1",
+                    project_id="w1",
                     task_id="t1",
                     sequence=seq,
                     type="subtask_completed",
@@ -212,7 +212,7 @@ async def test_list_members_degrades_when_agent_not_loadable(db_factory, tmp_pat
     try:
         db.add(
             ProjectMemberRow(
-                workspace_id="w1",
+                project_id="w1",
                 agent_slug="researcher",
                 kernel_agent_id="ka-1",
                 source_agent_slug="researcher-template",

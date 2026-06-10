@@ -1,6 +1,6 @@
 """Connector ORM model.
 
-A connector represents an MCP server the user has wired into their workspace.
+A connector represents an MCP server the user has wired into their project.
 There are three flavours:
 
 - ``builtin``: First-party data sources bundled with Valuz (e.g. the

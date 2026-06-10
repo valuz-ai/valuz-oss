@@ -1,7 +1,7 @@
-"""agent_resolver — resolve workspace members and build kernel Sessions for dispatch.
+"""agent_resolver — resolve project members and build kernel Sessions for dispatch.
 
 Slice 1 scope (lead-dispatch-mvp §S3):
-  resolve_member_agent — workspace_id + agent_slug → AgentConfig or None.
+  resolve_member_agent — project_id + agent_slug → AgentConfig or None.
 
 Slice 2 scope (lead-dispatch-mvp §S3 / H-T6):
   DISPATCH_PLAYBOOK — the §1.5 methodology text injected into lead sessions only.
@@ -34,7 +34,7 @@ from valuz_agent.adapters.capability_resolver import (
     always_on_skill_paths,
     resolve_skill_slugs_to_paths,
 )
-from valuz_agent.adapters.system_prompt_builder import build_workspace_system_prompt
+from valuz_agent.adapters.system_prompt_builder import build_project_system_prompt
 from valuz_agent.modules.agents.datastore import ProjectMemberDatastore
 
 logger = logging.getLogger(__name__)
@@ -223,7 +223,7 @@ ROLE_SUMMARY_LIMIT = 400
 
 
 # Playbook nudge appended to project-conversation agents (i.e. chat sessions
-# in a workspace that can spawn tasks). Teaches the model when to use
+# in a project that can spawn tasks). Teaches the model when to use
 # ``draft_task`` vs ``create_task`` and when to ``inject_into_task`` instead
 # of starting a new task mid-execution. NOT applied to lead/member agents —
 # their playbooks (DISPATCH_PLAYBOOK / COMMITTED_LEAD_PLAYBOOK) cover their
@@ -231,7 +231,7 @@ ROLE_SUMMARY_LIMIT = 400
 CHAT_TASK_PLAYBOOK = """\
 ## Task playbook (chat mode)
 
-You are the user's chat partner inside a workspace. When the user asks
+You are the user's chat partner inside a project. When the user asks
 you to "do" something that needs orchestration (multiple steps, parallel
 sub-work, or a longer-running job), follow this flow.
 
@@ -274,17 +274,17 @@ You may modify the plan of a DRAFT task directly with ``modify_plan``
 
 1. KNOW THE TEAM FIRST.
 
-   ⚠️ ``list_members`` is an MCP TOOL CALL — it returns the workspace's
+   ⚠️ ``list_members`` is an MCP TOOL CALL — it returns the project's
    agent roster (slugs + role_summary) from the database. It is NOT a
    filesystem lookup. **DO NOT** use Bash / Read / ls to search for
-   agents — this workspace's team is NOT defined in ``.claude/agents/``
-   or any other directory. Agents are workspace-scoped DB rows,
+   agents — this project's team is NOT defined in ``.claude/agents/``
+   or any other directory. Agents are project-scoped DB rows,
    accessible only via the ``list_members`` MCP tool.
 
    Hard rule: BEFORE the FIRST ``draft_task`` / ``create_task`` of a
    conversation, you MUST emit a ``list_members()`` tool call and read
    its result. Skip this and the next call will fail with
-   ``agent <slug> is not a member of workspace`` — slugs you invent
+   ``agent <slug> is not a member of project`` — slugs you invent
    (``claude``, ``assistant``, ``lead``, ``Frontend Engineer``, …)
    are not real members.
 
@@ -381,7 +381,7 @@ def summarize_role(instructions: str | None) -> str:
 
 async def build_member_roster(
     *,
-    workspace_id: str,
+    project_id: str,
     members: ProjectMemberDatastore,
     exclude_slug: str,
 ) -> str:
@@ -391,7 +391,7 @@ async def build_member_roster(
     can route sub-tasks to the right agent without first calling
     ``list_members``. Excludes the lead itself.
     """
-    rows = await members.list_by_workspace(workspace_id)
+    rows = await members.list_by_project(project_id)
     lines: list[str] = []
     for row in rows:
         if row.agent_slug == exclude_slug:
@@ -418,21 +418,21 @@ async def build_member_roster(
 
 
 async def resolve_member_agent(
-    workspace_id: str,
+    project_id: str,
     agent_slug: str,
     members: ProjectMemberDatastore,
 ) -> AgentConfig | None:
-    """Resolve a workspace-local agent slug to its kernel AgentConfig.
+    """Resolve a project-local agent slug to its kernel AgentConfig.
 
     Returns None when:
-      - No ProjectMemberRow exists for (workspace_id, agent_slug)
+      - No ProjectMemberRow exists for (project_id, agent_slug)
       - The kernel agent row is missing (orphaned membership)
 
     Callers should handle None as "agent not found" and surface a 404.
     """
-    member = await members.get(workspace_id, agent_slug)
+    member = await members.get(project_id, agent_slug)
     if member is None:
-        logger.debug("resolve_member_agent: no membership for %s/%s", workspace_id, agent_slug)
+        logger.debug("resolve_member_agent: no membership for %s/%s", project_id, agent_slug)
         return None
 
     agent = await kernel_store.load_agent(member.kernel_agent_id)
@@ -440,7 +440,7 @@ async def resolve_member_agent(
         logger.warning(
             "resolve_member_agent: orphaned member row — kernel agent %s missing for %s/%s",
             member.kernel_agent_id,
-            workspace_id,
+            project_id,
             agent_slug,
         )
     return agent
@@ -468,7 +468,7 @@ async def _resolve_agent_provider(
     if not provider_id:
         logger.warning(
             "agent_resolver: agent %s (%s) has no provider_id in metadata — "
-            "metadata keys=%s. Re-add the agent via the project workspace "
+            "metadata keys=%s. Re-add the agent via the project "
             "dialog so the provider pin is written.",
             agent.id,
             agent.name,
@@ -517,15 +517,15 @@ async def _resolve_agent_provider(
 
 async def build_member_session(
     *,
-    workspace_id: str,
+    project_id: str,
     agent_slug: str,
     members: ProjectMemberDatastore,
     is_lead: bool,
     task_id: str,
     run_dir: str,
     brief: str,
-    workspace_name: str = "",
-    workspace_instructions_md: str | None = None,
+    project_name: str = "",
+    project_instructions_md: str | None = None,
     model_override: str | None = None,
     providers: object | None = None,
     secrets: object | None = None,
@@ -540,8 +540,8 @@ async def build_member_session(
     Caller must persist the returned Session via ``kernel_sync.save_session_sync``.
 
     Args:
-        workspace_id: The valuz workspace id (= kernel project id).
-        agent_slug: The workspace-local agent handle.
+        project_id: The valuz project id (= kernel project id).
+        agent_slug: The project-local agent handle.
         members: Open ProjectMemberDatastore instance.
         is_lead: True for the task lead session; False for subtask sessions.
         task_id: The valuz task id (for metadata).
@@ -550,20 +550,20 @@ async def build_member_session(
                  subrun_dir is only used for opt-in repo-worktree isolation.
         brief: Text injected as the session brief — for leads this is the
                full task goal/md; for subtasks it is the scoped goal+refs.
-        workspace_name: Optional workspace display name (for system prompt).
-        workspace_instructions_md: Optional workspace-level instructions.
+        project_name: Optional project display name (for system prompt).
+        project_instructions_md: Optional project-level instructions.
         model_override: Override the agent's default model when provided.
 
     Session fields set:
         cwd = run_dir (K-PR3)
-        instructions = agent.instructions + workspace_prompt
+        instructions = agent.instructions + project_prompt
                        + (DISPATCH_PLAYBOOK if is_lead else "") + brief
-        metadata["valuz"] = {workspace_id, agent_slug, task_id, run_kind}
+        metadata["valuz"] = {project_id, agent_slug, task_id, run_kind}
         runtime_provider, model, skills, mcp_servers, permission_mode from agent
     """
-    member_row = await members.get(workspace_id, agent_slug)
+    member_row = await members.get(project_id, agent_slug)
     if member_row is None:
-        logger.debug("build_member_session: no membership for %s/%s", workspace_id, agent_slug)
+        logger.debug("build_member_session: no membership for %s/%s", project_id, agent_slug)
         return None
 
     agent = await kernel_store.load_agent(member_row.kernel_agent_id)
@@ -571,7 +571,7 @@ async def build_member_session(
         logger.warning(
             "build_member_session: orphaned member — kernel agent %s missing for %s/%s",
             member_row.kernel_agent_id,
-            workspace_id,
+            project_id,
             agent_slug,
         )
         return None
@@ -584,9 +584,9 @@ async def build_member_session(
         assert_goal_brief_length(brief)
 
     # Build the instructions string (§S3 point ③)
-    workspace_prompt = build_workspace_system_prompt(
-        workspace_name=workspace_name,
-        instructions_md=workspace_instructions_md,
+    project_prompt = build_project_system_prompt(
+        project_name=project_name,
+        instructions_md=project_instructions_md,
     )
     # Lead-only: dispatch playbook + a roster of dispatchable members (with
     # their role summaries) so the lead can route sub-tasks accurately.
@@ -602,7 +602,7 @@ async def build_member_session(
             playbook_block = DISPATCH_PLAYBOOK_V2 if dispatch_mode == "async" else DISPATCH_PLAYBOOK
     roster_block = (
         await build_member_roster(
-            workspace_id=workspace_id, members=members, exclude_slug=agent_slug
+            project_id=project_id, members=members, exclude_slug=agent_slug
         )
         if is_lead
         else ""
@@ -648,7 +648,7 @@ async def build_member_session(
         p
         for p in [
             agent.instructions,
-            workspace_prompt,
+            project_prompt,
             roster_block,
             skills_block,
             playbook_block,
@@ -716,7 +716,7 @@ async def build_member_session(
 
     session = Session(
         id=session_id,
-        project_id=workspace_id,
+        project_id=project_id,
         agent_id=agent.id,
         cwd=run_dir,
         mode=session_mode,
@@ -730,7 +730,7 @@ async def build_member_session(
         permission_mode=agent.permission_mode,
         metadata={
             "valuz": {
-                "workspace_id": workspace_id,
+                "project_id": project_id,
                 "agent_slug": agent_slug,
                 "task_id": task_id,
                 "run_kind": run_kind,

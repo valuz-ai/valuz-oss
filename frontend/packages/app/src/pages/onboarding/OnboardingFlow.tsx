@@ -48,9 +48,9 @@ export const OnboardingFlow = () => {
   // — we do NOT mark onboarded on failure.
   const enterExampleProject = async (teamId: OnboardingTeamId) => {
     try {
-      const { workspace_id } = await onboardingApi.createExampleProject(teamId);
+      const { project_id } = await onboardingApi.createExampleProject(teamId);
       markOnboarded();
-      navigate(`/projects/${workspace_id}`);
+      navigate(`/projects/${project_id}`);
     } catch (err) {
       toast.error(
         _t("onboarding.createProjectFailed" as Parameters<typeof _t>[0]),

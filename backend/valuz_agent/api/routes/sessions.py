@@ -42,7 +42,7 @@ class SessionCreateRequest(SessionModelSelection):
     live-reconcilable (kernel V5+bba3014) via dedicated PATCH routes.
     """
 
-    workspace_id: str
+    project_id: str
     title: str | None = None
     # Slugs of MCP data sources to enable for this session (e.g. ["reportify"]).
     # The frontend's data-source picker provides them; ``adapters.mcp_resolver``
@@ -183,11 +183,11 @@ class SessionEventWindowResponse(BaseModel):
 
 @router.get("")
 def list_sessions(
-    workspace_id: str | None = None,
+    project_id: str | None = None,
     q: str | None = None,
     svc: SessionService = Depends(get_session_service),
 ) -> dict[str, list[SessionListItem]]:
-    return {"sessions": svc.list_sessions(workspace_id=workspace_id, query=q)}
+    return {"sessions": svc.list_sessions(project_id=project_id, query=q)}
 
 
 @router.get("/{session_id}")
@@ -204,7 +204,7 @@ async def create_session(
     svc: SessionService = Depends(get_session_service),
 ) -> SessionDetail:
     return await svc.create_session(
-        body.workspace_id,
+        body.project_id,
         title=body.title,
         model_id=body.model_id,
         provider_id=body.provider_id,

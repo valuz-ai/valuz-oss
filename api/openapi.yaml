@@ -167,28 +167,28 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [workspace_id, agent_slug]
+                      required: [project_id, agent_slug]
                       properties:
-                        workspace_id: {type: string}
+                        project_id: {type: string}
                         agent_slug:
                           type: string
                           description: Project-local member handle.
         "404":
           description: Agent not found
-  /v1/workspaces/{workspace_id}/agents:
+  /v1/projects/{project_id}/agents:
     get:
-      summary: List workspace member agents
-      operationId: listWorkspaceAgents
+      summary: List project member agents
+      operationId: listProjectAgents
       tags: [agents]
       parameters:
-        - name: workspace_id
+        - name: project_id
           in: path
           required: true
           schema:
             type: string
       responses:
         "200":
-          description: Workspace member agents
+          description: Project member agents
           content:
             application/json:
               schema:
@@ -200,11 +200,11 @@ paths:
                     items:
                       $ref: "#/components/schemas/MemberWithAgent"
     post:
-      summary: Create a blank (template-free) agent in a workspace
+      summary: Create a blank (template-free) agent in a project
       operationId: createBlankAgent
       tags: [agents]
       parameters:
-        - name: workspace_id
+        - name: project_id
           in: path
           required: true
           schema:
@@ -223,14 +223,14 @@ paths:
               schema:
                 $ref: "#/components/schemas/MemberWithAgent"
         "409":
-          description: Agent slug already exists in workspace
-  /v1/workspaces/{workspace_id}/agents:deploy:
+          description: Agent slug already exists in project
+  /v1/projects/{project_id}/agents:deploy:
     post:
       summary: Deploy (派驻, live-reference) a library agent into a project
       operationId: deployAgent
       tags: [agents]
       parameters:
-        - name: workspace_id
+        - name: project_id
           in: path
           required: true
           schema:
@@ -251,14 +251,14 @@ paths:
         "404":
           description: Source agent not found
         "409":
-          description: Agent slug already exists in workspace
-  /v1/workspaces/{workspace_id}/agents/{agent_slug}:
+          description: Agent slug already exists in project
+  /v1/projects/{project_id}/agents/{agent_slug}:
     delete:
-      summary: Delete a workspace agent and its kernel AgentConfig
-      operationId: deleteWorkspaceAgent
+      summary: Delete a project agent and its kernel AgentConfig
+      operationId: deleteProjectAgent
       tags: [agents]
       parameters:
-        - name: workspace_id
+        - name: project_id
           in: path
           required: true
           schema:
@@ -273,13 +273,13 @@ paths:
           description: Deleted
         "404":
           description: Agent not found
-  /v1/workspaces/{workspace_id}/tasks:
+  /v1/projects/{project_id}/tasks:
     post:
       summary: Kickoff a lead-dispatch task
       operationId: kickoffTask
       tags: [tasks]
       parameters:
-        - name: workspace_id
+        - name: project_id
           in: path
           required: true
           schema: {type: string}
@@ -297,13 +297,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/Task"
         "400":
-          description: Workspace or lead agent not found
+          description: Project or lead agent not found
     get:
-      summary: List workspace tasks
+      summary: List project tasks
       operationId: listTasks
       tags: [tasks]
       parameters:
-        - name: workspace_id
+        - name: project_id
           in: path
           required: true
           schema: {type: string}
@@ -322,7 +322,7 @@ paths:
                       $ref: "#/components/schemas/Task"
   /v1/tasks:
     get:
-      summary: List tasks across every workspace
+      summary: List tasks across every project
       description: |
         Global, cross-project task list ordered by updated_at desc. Powers the
         sidebar TASKS section so users can see what's running regardless of
@@ -811,9 +811,9 @@ paths:
                   items:
                     type: string
                     format: binary
-                workspace_id:
+                project_id:
                   type: string
-                  description: Optional workspace to bind imported docs
+                  description: Optional project to bind imported docs
       responses:
         "200":
           description: Import task created
@@ -986,20 +986,20 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiError"
 
-  /v1/workspaces/{workspace_id}/docs:
+  /v1/projects/{project_id}/docs:
     get:
-      summary: List documents bound to a workspace
-      operationId: listWorkspaceDocs
+      summary: List documents bound to a project
+      operationId: listProjectDocs
       tags: [docs]
       parameters:
-        - name: workspace_id
+        - name: project_id
           in: path
           required: true
           schema:
             type: string
       responses:
         "200":
-          description: Workspace document list
+          description: Project document list
           content:
             application/json:
               schema:
@@ -1011,11 +1011,11 @@ paths:
                     items:
                       $ref: "#/components/schemas/DocumentListItem"
     put:
-      summary: Update workspace document bindings
-      operationId: updateWorkspaceBindings
+      summary: Update project document bindings
+      operationId: updateProjectBindings
       tags: [docs]
       parameters:
-        - name: workspace_id
+        - name: project_id
           in: path
           required: true
           schema:
@@ -1025,7 +1025,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/WorkspaceBindingsRequest"
+              $ref: "#/components/schemas/ProjectBindingsRequest"
       responses:
         "200":
           description: Bindings updated
@@ -1045,7 +1045,7 @@ paths:
       operationId: listSkills
       tags: [skills]
       parameters:
-        - name: workspace_id
+        - name: project_id
           in: query
           schema:
             type: string
@@ -1145,7 +1145,7 @@ paths:
         On `fork` an automatic `<slug>-vN` is suggested unless `new_slug` is
         provided. Default `target_scope=user` writes into the user skill
         library (controlled by VALUZ_USER_SKILLS_DIR); `target_scope=project`
-        requires `workspace_id`.
+        requires `project_id`.
       operationId: syncSkillStaging
       tags: [skills]
       parameters:
@@ -1171,7 +1171,7 @@ paths:
         "409":
           description: Fork target already exists
         "422":
-          description: Invalid target scope or workspace
+          description: Invalid target scope or project
 
   /v1/skills/staging/{session_id}/optimize:
     post:
@@ -1227,7 +1227,7 @@ paths:
                 target_scope:
                   type: string
                   default: user
-                workspace_id:
+                project_id:
                   type: string
       responses:
         "200":
@@ -1319,7 +1319,7 @@ paths:
       operationId: listSkillTags
       tags: [skills]
       parameters:
-        - name: workspace_id
+        - name: project_id
           in: query
           schema:
             type: string
@@ -1355,7 +1355,7 @@ paths:
           required: true
           schema:
             type: string
-        - name: workspace_id
+        - name: project_id
           in: query
           schema:
             type: string
@@ -1378,7 +1378,7 @@ paths:
           required: true
           schema:
             type: string
-        - name: workspace_id
+        - name: project_id
           in: query
           schema:
             type: string
@@ -1405,7 +1405,7 @@ paths:
           required: true
           schema:
             type: string
-        - name: workspace_id
+        - name: project_id
           in: query
           schema:
             type: string
@@ -1461,7 +1461,7 @@ paths:
           required: true
           schema:
             type: string
-        - name: workspace_id
+        - name: project_id
           in: query
           schema:
             type: string
@@ -1484,7 +1484,7 @@ paths:
           required: true
           schema:
             type: string
-        - name: workspace_id
+        - name: project_id
           in: query
           schema:
             type: string
@@ -1518,7 +1518,7 @@ paths:
           required: true
           schema:
             type: string
-        - name: workspace_id
+        - name: project_id
           in: query
           schema:
             type: string
@@ -1530,25 +1530,25 @@ paths:
               schema:
                 $ref: "#/components/schemas/SkillFileContent"
 
-  /v1/workspaces/{workspace_id}/skills:
+  /v1/projects/{project_id}/skills:
     get:
-      summary: Workspace skills catalog
-      operationId: workspaceSkillsCatalog
+      summary: Project skills catalog
+      operationId: projectSkillsCatalog
       tags: [skills]
       parameters:
-        - name: workspace_id
+        - name: project_id
           in: path
           required: true
           schema:
             type: string
       responses:
         "200":
-          description: Skills catalog for workspace
+          description: Skills catalog for project
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/SkillsCatalog"
-    # NOTE: workspace skill binding (PUT skills / scan / state) was removed —
+    # NOTE: project skill binding (PUT skills / scan / state) was removed —
     # skills bind on the Agent now (08-agents-module). GET stays: it still
     # feeds the conversation composer's skill-insert chips.
 
@@ -1560,7 +1560,7 @@ paths:
       operationId: listSessions
       tags: [sessions]
       parameters:
-        - name: workspace_id
+        - name: project_id
           in: query
           schema:
             type: string
@@ -1978,7 +1978,7 @@ paths:
       tags: [onboarding]
       description: |
         One-shot endpoint called at the end of the onboarding flow.
-        Creates ~/Valuz/示例项目, binds it as a workspace, and deploys
+        Creates ~/Valuz/示例项目, binds it as a project, and deploys
         the four official agents for the selected preset team.
         Fully idempotent — safe to call again if the user re-runs onboarding.
       requestBody:
@@ -1989,13 +1989,13 @@ paths:
               $ref: "#/components/schemas/ExampleProjectRequest"
       responses:
         "200":
-          description: Workspace created or reused successfully
+          description: Project created or reused successfully
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ExampleProjectResponse"
         "422":
-          description: Invalid team_id or workspace creation error
+          description: Invalid team_id or project creation error
           content:
             application/json:
               schema:
@@ -2031,14 +2031,14 @@ components:
   schemas:
     RunSummary:
       type: object
-      required: [session_id, source_kind, workspace_id, title, status, updated_at]
+      required: [session_id, source_kind, project_id, title, status, updated_at]
       properties:
         session_id: {type: string}
         source_kind:
           type: string
           enum: [assistant, project_chat, task]
-        workspace_id: {type: string}
-        workspace_name: {type: string, nullable: true}
+        project_id: {type: string}
+        project_name: {type: string, nullable: true}
         task_id: {type: string, nullable: true}
         title: {type: string}
         status: {type: string}
@@ -2161,7 +2161,7 @@ components:
       required: [name]
       properties:
         # Optional — backend derives from ``name``, unique within the
-        # workspace, when omitted (VALUZ-AGENT-SLUG).
+        # project, when omitted (VALUZ-AGENT-SLUG).
         agent_slug: {type: string, nullable: true}
         name: {type: string}
         instructions: {type: string, default: ""}
@@ -2188,14 +2188,14 @@ components:
       properties:
         source_agent_slug: {type: string}
         # Optional — backend derives from the source agent's name, unique
-        # within the target workspace, when omitted (VALUZ-AGENT-SLUG).
+        # within the target project, when omitted (VALUZ-AGENT-SLUG).
         agent_slug: {type: string, nullable: true}
     ProjectMember:
       type: object
-      required: [id, workspace_id, agent_slug, kernel_agent_id]
+      required: [id, project_id, agent_slug, kernel_agent_id]
       properties:
         id: {type: string}
-        workspace_id: {type: string}
+        project_id: {type: string}
         agent_slug: {type: string}
         kernel_agent_id: {type: string}
         source_agent_slug: {type: string, nullable: true}
@@ -2252,10 +2252,10 @@ components:
             finalizes, with no re-drive.
     Task:
       type: object
-      required: [id, workspace_id, title, goal, status, created_by, lead_agent_slug, current_holder, file_path, created_at, updated_at]
+      required: [id, project_id, title, goal, status, created_by, lead_agent_slug, current_holder, file_path, created_at, updated_at]
       properties:
         id: {type: string}
-        workspace_id: {type: string}
+        project_id: {type: string}
         title: {type: string}
         goal: {type: string}
         status: {type: string}
@@ -2267,7 +2267,7 @@ components:
         updated_at: {type: integer, format: int64, description: "Unix epoch milliseconds (UTC). Format via new Date(ms)."}
     TaskRun:
       type: object
-      required: [id, session_id, agent_slug, sequence, kind, status, workspace_mode]
+      required: [id, session_id, agent_slug, sequence, kind, status, project_mode]
       properties:
         id: {type: string}
         session_id: {type: string}
@@ -2278,7 +2278,7 @@ components:
         label: {type: string, nullable: true}
         goal: {type: string, nullable: true}
         dispatched_by: {type: string, nullable: true}
-        workspace_mode: {type: string}
+        project_mode: {type: string}
         run_dir: {type: string, nullable: true}
         result_manifest:
           type: object
@@ -2456,7 +2456,7 @@ components:
           type: integer
         failed_items:
           type: integer
-        workspace_id:
+        project_id:
           type: string
           nullable: true
         created_at:
@@ -2466,11 +2466,11 @@ components:
 
     SearchRequest:
       type: object
-      required: [query, workspace_id]
+      required: [query, project_id]
       properties:
         query:
           type: string
-        workspace_id:
+        project_id:
           type: string
         top_k:
           type: integer
@@ -2520,11 +2520,11 @@ components:
       properties:
         folder_path:
           type: string
-        workspace_id:
+        project_id:
           type: string
           nullable: true
 
-    WorkspaceBindingsRequest:
+    ProjectBindingsRequest:
       type: object
       required: [document_ids]
       properties:
@@ -2679,9 +2679,9 @@ components:
 
     SkillsCatalog:
       type: object
-      required: [workspace_id, skills]
+      required: [project_id, skills]
       properties:
-        workspace_id:
+        project_id:
           type: string
         skills:
           type: array
@@ -2708,13 +2708,13 @@ components:
           type: string
           enum: [user, project, official, tenant]
           default: user
-        workspace_id:
+        project_id:
           type: string
           nullable: true
         instructions_markdown:
           type: string
           nullable: true
-        add_to_workspace:
+        add_to_project:
           type: boolean
           default: false
 
@@ -2737,10 +2737,10 @@ components:
       properties:
         new_name:
           type: string
-        workspace_id:
+        project_id:
           type: string
           nullable: true
-        add_to_workspace:
+        add_to_project:
           type: boolean
           default: false
 
@@ -2753,7 +2753,7 @@ components:
         enabled:
           type: boolean
 
-    WorkspaceSkillsUpdateRequest:
+    ProjectSkillsUpdateRequest:
       type: object
       properties:
         skills_enabled:
@@ -2776,20 +2776,20 @@ components:
           type: string
           enum: [user, project, official, tenant]
           default: user
-        workspace_id:
+        project_id:
           type: string
           nullable: true
-        add_to_workspace:
+        add_to_project:
           type: boolean
           default: false
 
     SkillCreateChatStartResponse:
       type: object
-      required: [session_id, authoring_workspace_id]
+      required: [session_id, authoring_project_id]
       properties:
         session_id:
           type: string
-        authoring_workspace_id:
+        authoring_project_id:
           type: string
 
     StagingFileNode:
@@ -2871,7 +2871,7 @@ components:
           type: string
           enum: [user, project, official, tenant]
           default: user
-        workspace_id:
+        project_id:
           type: string
           nullable: true
 
@@ -2943,9 +2943,9 @@ components:
 
     SkillDeleteAffectedProject:
       type: object
-      required: [workspace_id, name]
+      required: [project_id, name]
       properties:
-        workspace_id:
+        project_id:
           type: string
         name:
           type: string
@@ -3030,10 +3030,10 @@ components:
           type: string
           enum: [user, project, official, tenant]
           default: user
-        workspace_id:
+        project_id:
           type: string
           nullable: true
-        add_to_workspace:
+        add_to_project:
           type: boolean
           default: false
 
@@ -3047,7 +3047,7 @@ components:
           type: string
           enum: [user, project, official, tenant]
           default: user
-        workspace_id:
+        project_id:
           type: string
           nullable: true
 
@@ -3055,11 +3055,11 @@ components:
 
     SessionListItem:
       type: object
-      required: [id, workspace_id, status, origin, updated_at]
+      required: [id, project_id, status, origin, updated_at]
       properties:
         id:
           type: string
-        workspace_id:
+        project_id:
           type: string
         name:
           type: string
@@ -3084,7 +3084,7 @@ components:
             to SessionListItem so the desktop sidebar's session list can drive
             the composer's (providerId, modelId) model selector without an extra
             detail fetch — without this, the composer falls back to the
-            workspace default provider even though the session is wired to a
+            project default provider even though the session is wired to a
             different model end-to-end.
         updated_at:
           type: integer
@@ -3182,20 +3182,20 @@ components:
               nullable: true
               description: |
                 Frozen system-prompt append captured at session creation
-                from the workspace's then-current ``instructions_md``
+                from the project's then-current ``instructions_md``
                 (ADR-008). The runtime hands this verbatim to the model
-                on every turn; workspace edits after creation do *not*
-                mutate this field. null when the workspace had no
+                on every turn; project edits after creation do *not*
+                mutate this field. null when the project had no
                 instructions at session-create time. Frontend session
-                panels should render this — NOT the live workspace
+                panels should render this — NOT the live project
                 ``instructions_md`` — so users see the prompt the
                 running agent actually has.
             agent_slug:
               type: string
               nullable: true
               description: |
-                Workspace-local agent handle for this session when it was
-                created from a named workspace agent (e.g. a Project Task
+                Project-local agent handle for this session when it was
+                created from a named project agent (e.g. a Project Task
                 lead/member). null for plain chat sessions.
 
     RuntimeListItem:
@@ -3334,9 +3334,9 @@ components:
 
     SessionCreateRequest:
       type: object
-      required: [workspace_id]
+      required: [project_id]
       properties:
-        workspace_id:
+        project_id:
           type: string
         title:
           type: string
@@ -3346,7 +3346,7 @@ components:
           nullable: true
           description: |
             Optional explicit model id. ``null`` falls back to the bound
-            provider's default model, then the workspace default, then a
+            provider's default model, then the project default, then a
             global fallback (kernel V5 dropped MODEL_CATALOG so any
             string is forwarded verbatim to the SDK).
         provider_id:
@@ -3686,7 +3686,7 @@ components:
           type: string
           enum: [user, project, official, tenant]
           default: user
-        workspace_id:
+        project_id:
           type: string
           nullable: true
 
@@ -3703,10 +3703,10 @@ components:
           type: string
           enum: [user, project, official, tenant]
           default: user
-        workspace_id:
+        project_id:
           type: string
           nullable: true
-        add_to_workspace:
+        add_to_project:
           type: boolean
           default: false
 

@@ -23,8 +23,8 @@ import {
   useSettingsStore,
   useTaskStore,
   useTranslation,
-  useWorkspaceStore,
-  workspacesApi,
+  useProjectStore,
+  projectsApi,
   type RunSummary,
 } from "@valuz/core";
 import {
@@ -72,11 +72,11 @@ import {
 } from "../components/DecisionInbox";
 import { usePlatform } from "../platform";
 import { UpdateButton } from "../components/UpdateButton";
-import type { WorkspaceOutletContext } from "./types";
+import type { ProjectOutletContext } from "./types";
 
 export type DirectoryFieldMode = "input" | "picker";
 
-export interface WorkspaceLayoutBaseProps {
+export interface ProjectLayoutBaseProps {
   logoSrc: string;
   logoMenuContentStyle?: CSSProperties;
   directoryFieldMode?: DirectoryFieldMode;
@@ -110,12 +110,12 @@ function useNavItems(): DesktopSidebarBottomItem[] {
     label: t(item.label as Parameters<typeof t>[0]),
     href: item.href,
     icon: NAV_ICON_MAP[item.id] ?? "settings",
-    group: item.navGroup ?? "workspace",
+    group: item.navGroup ?? "project",
     badgeCount: item.id === "activity" ? runningCount : undefined,
   }));
 }
 
-export function WorkspaceLayoutBase({
+export function ProjectLayoutBase({
   logoSrc,
   logoMenuContentStyle,
   directoryFieldMode = "picker",
@@ -125,7 +125,7 @@ export function WorkspaceLayoutBase({
   projectDialogExtraFields,
   rightPanel: controlledRightPanel,
   mascotSrc = null,
-}: WorkspaceLayoutBaseProps) {
+}: ProjectLayoutBaseProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const platform = usePlatform();
@@ -137,8 +137,8 @@ export function WorkspaceLayoutBase({
   const desktopRoutes = useRegistryStore((state) => state.desktopRoutes);
   const fetchSessions = useSessionStore((state) => state.fetchSessions);
   const fetchAllTasks = useTaskStore((state) => state.fetchAllTasks);
-  const allWorkspaces = useWorkspaceStore((state) => state.workspaces);
-  const setAllWorkspaces = useWorkspaceStore((state) => state.setWorkspaces);
+  const allProjects = useProjectStore((state) => state.projects);
+  const setAllProjects = useProjectStore((state) => state.setProjects);
   const rightPanelCollapsed = usePanelStore((state) => state.collapsed);
   const togglePanel = usePanelStore((state) => state.toggle);
 
@@ -177,12 +177,12 @@ export function WorkspaceLayoutBase({
 
   const fetchProjects = useCallback(async () => {
     try {
-      const data = await workspacesApi.list();
-      setAllWorkspaces(data.workspaces);
+      const data = await projectsApi.list();
+      setAllProjects(data.projects);
     } catch {
       // Sidebar projects are non-critical; page-level calls surface errors.
     }
-  }, [setAllWorkspaces]);
+  }, [setAllProjects]);
 
   useEffect(() => {
     hydrateTheme();
@@ -268,14 +268,14 @@ export function WorkspaceLayoutBase({
 
   const projectGroups: DesktopSidebarProjectGroup[] = useMemo(
     () =>
-      allWorkspaces
-        .filter((workspace) => workspace.kind === "project")
+      allProjects
+        .filter((project) => project.kind === "project")
         .map((project) => ({
           id: project.id,
           label: project.name,
           href: `/projects/${project.id}`,
         })),
-    [allWorkspaces],
+    [allProjects],
   );
 
   // Sidebar RECENTS — merge the live-running and finished run lists, sort
@@ -392,7 +392,7 @@ export function WorkspaceLayoutBase({
     if (!trimmedName || !trimmedPath) return;
     setCreateError("");
     try {
-      const ws = await workspacesApi.create({
+      const ws = await projectsApi.create({
         name: trimmedName,
         root_path: trimmedPath,
       });
@@ -429,7 +429,7 @@ export function WorkspaceLayoutBase({
     return t(raw as Parameters<typeof t>[0]);
   }, [desktopRoutes, location.pathname, branding.appName, t]);
 
-  const outletContext: WorkspaceOutletContext = {
+  const outletContext: ProjectOutletContext = {
     setRightPanel,
     setHeader: setPageHeader,
     setHeaderClassName,
@@ -646,8 +646,8 @@ export function WorkspaceLayoutBase({
             collapsed={sidebarCollapsed}
             onAddProject={() => setCreateOpen(true)}
             onProjectOpenInFinder={(projectId) => {
-              const ws = allWorkspaces.find(
-                (workspace) => workspace.id === projectId,
+              const ws = allProjects.find(
+                (project) => project.id === projectId,
               );
               if (!ws?.root_path) {
                 toast.error(t("sidebar.projectRootNotSet"));
@@ -664,7 +664,7 @@ export function WorkspaceLayoutBase({
             onProjectRename={(projectId, newName) => {
               const trimmed = newName.trim();
               if (!trimmed) return;
-              workspacesApi
+              projectsApi
                 .rename(projectId, trimmed)
                 .then(() => {
                   toast.success(t("sidebar.renamed"));
@@ -673,8 +673,8 @@ export function WorkspaceLayoutBase({
                 .catch(() => toast.error(t("sidebar.renameFailed")));
             }}
             onProjectRemove={(projectId) => {
-              const ws = allWorkspaces.find(
-                (workspace) => workspace.id === projectId,
+              const ws = allProjects.find(
+                (project) => project.id === projectId,
               );
               if (!ws) return;
               if (
@@ -684,7 +684,7 @@ export function WorkspaceLayoutBase({
               ) {
                 return;
               }
-              workspacesApi
+              projectsApi
                 .delete(projectId)
                 .then(() => {
                   toast.success(t("sidebar.removed"));

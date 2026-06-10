@@ -119,10 +119,10 @@ async def run_session_to_idle(
         # before handing off to the runtime (agent-harness 3e742fc), so the
         # detail fetch returns ``running`` and the frontend live view engages
         # on open. No host-side pre-persist needed.
-        workspace_id = str(loaded_session.project_id) if loaded_session else ""
+        project_id = str(loaded_session.project_id) if loaded_session else ""
         try:
             additional_context = await _build_additional_context(
-                session_id, workspace_id, pending_attachments
+                session_id, project_id, pending_attachments
             )
         except Exception:  # noqa: BLE001
             additional_context = ""
@@ -300,7 +300,7 @@ def _member_run_dir(project_cwd: Any, task_id: str, run_seq: int, mode: str) -> 
     Default ("shared"/legacy "isolated"): the **project cwd itself** — members
     read and write project files natively (skills are scoped via prompt, see
     build_member_session). ``repo-worktree``: an isolated git worktree (opt-in
-    hard isolation when the workspace is a git repo).
+    hard isolation when the project is a git repo).
     """
     if mode == "repo-worktree":
         return fs_registry.subrun_dir(project_cwd, task_id, run_seq, "repo-worktree")
@@ -341,9 +341,9 @@ class ActorRunner:
 
       * ``_run_turn_with_sink(session_id, content) -> str``
       * ``_finalize_actor(*, session_id, last_content, final_status, role,
-        task_id, workspace_id) -> None``
+        task_id, project_id) -> None``
       * ``_notify_lead_member_idle(session_id, status) -> None``
-      * ``_lead_idle_with_no_pending(task_id, workspace_id) -> bool``
+      * ``_lead_idle_with_no_pending(task_id, project_id) -> bool``
     """
 
     def __init__(self, host: Any | None = None) -> None:
@@ -389,7 +389,7 @@ class ActorRunner:
         initial_prompt: str,
         role: Literal["lead", "subtask"],
         task_id: str,
-        workspace_id: str,
+        project_id: str,
         idle_ttl: float | None = None,
     ) -> None:
         """Persistent actor loop: run turn → idle → await mailbox → repeat.
@@ -450,7 +450,7 @@ class ActorRunner:
                 if (
                     role == "lead"
                     and not mailbox_registry.has_pending(session_id)
-                    and await host._lead_idle_with_no_pending(task_id, workspace_id)
+                    and await host._lead_idle_with_no_pending(task_id, project_id)
                 ):
                     logger.info(
                         "actor loop %s (lead) idle with no in-flight members / unresolved "
@@ -474,7 +474,7 @@ class ActorRunner:
                     if role == "lead" and msg.from_session:
                         await planning.mark_in_review(
                             task_id=task_id,
-                            workspace_id=workspace_id,
+                            project_id=project_id,
                             member_session_id=msg.from_session,
                         )
                     prompt = self._format_member_done(msg)
@@ -488,7 +488,7 @@ class ActorRunner:
                 final_status=final_status,
                 role=role,
                 task_id=task_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
                 via_shutdown=exited_on_shutdown,
             )
 

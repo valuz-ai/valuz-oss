@@ -27,7 +27,7 @@ import type {
   SkillImportPreviewFile,
 } from "@valuz/core";
 import type { ResourceCategory } from "@valuz/shared";
-import { useWorkspaceOutlet } from "@valuz/app/layout";
+import { useProjectOutlet } from "@valuz/app/layout";
 import { SkillAddDialog, SkillEditDialog } from "@valuz/app/components";
 import { useTranslation } from "@valuz/core";
 
@@ -188,7 +188,7 @@ export const SkillsPage = () => {
     setRightPanel,
     setAsideClassName,
     setMainClassName,
-  } = useWorkspaceOutlet();
+  } = useProjectOutlet();
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
   const [skills, setSkills] = useState<SkillView[]>([]);
   const [loading, setLoading] = useState(true);
@@ -425,16 +425,16 @@ export const SkillsPage = () => {
   // Memoised on the skill so the right-panel effect's dep array stays
   // stable across re-renders. Without ``useMemo`` ``toCardSkill`` returns
   // a fresh object each render → effect re-runs → ``setRightPanel`` →
-  // workspace re-renders → effect re-runs → infinite loop.
+  // project re-renders → effect re-runs → infinite loop.
   const currentCardSkill = useMemo(
     () => (currentSkill ? toCardSkill(currentSkill) : null),
     [currentSkill],
   );
 
-  // Hand the SkillDetailPanel off to the workspace's right panel slot
+  // Hand the SkillDetailPanel off to the project's right panel slot
   // instead of rendering it inline. The page-level grid now has a
   // single column and the cards can fill the full main width; the
-  // panel sits in the workspace aside the same way the conversation
+  // panel sits in the project aside the same way the conversation
   // and project-detail pages do. Cleared on unmount so other routes
   // don't inherit a stale skill panel.
   useEffect(() => {

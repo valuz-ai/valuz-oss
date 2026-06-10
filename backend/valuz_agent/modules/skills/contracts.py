@@ -17,12 +17,12 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
-class WorkspaceRef(BaseModel):
+class ProjectRef(BaseModel):
     """Identity bundle the skill sources receive when listing skills.
 
-    ``slug`` is the stable workspace key in URLs and project filesystems
+    ``slug`` is the stable project key in URLs and project filesystems
     (``root_path/.claude/skills``). ``kind`` lets sources gate their
-    behaviour for chat vs. project workspaces.
+    behaviour for chat vs. projects.
     """
 
     id: str
@@ -35,13 +35,13 @@ class RuntimeContext(BaseModel):
     """Per-request context passed into skill sources.
 
     The fields are intentionally narrow: skill discovery in valuz is a
-    function of ``(user_id, workspace, edition)`` only — model selection,
+    function of ``(user_id, project, edition)`` only — model selection,
     auth, channels, and tools are *not* the skill source's concern.
     """
 
     user_id: str = "local-user"
     org_id: str | None = None
-    workspace: WorkspaceRef | None = None
+    project: ProjectRef | None = None
     edition: str = "personal"
 
 
@@ -86,4 +86,4 @@ class SkillManifest(BaseModel):
     folder_created_at: int | None = None
 
 
-__all__ = ["WorkspaceRef", "RuntimeContext", "SkillManifest"]
+__all__ = ["ProjectRef", "RuntimeContext", "SkillManifest"]

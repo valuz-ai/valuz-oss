@@ -3,12 +3,12 @@ import { Laptop, Layers3, Cloud } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { useI18n } from "../../hooks/use-i18n";
 
-export interface WorkspaceModeSelectorProps {
+export interface ProjectModeSelectorProps {
   value: string;
   onChange: (v: string) => void;
 }
 
-export const WorkspaceModeSelector: FC<WorkspaceModeSelectorProps> = ({
+export const ProjectModeSelector: FC<ProjectModeSelectorProps> = ({
   value,
   onChange,
 }) => {

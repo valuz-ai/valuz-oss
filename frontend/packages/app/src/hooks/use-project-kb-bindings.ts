@@ -92,7 +92,7 @@ function updateChildren(
 export interface UseProjectKbBindingsResult {
   kbTree: KbBindingTreeNode[];
   bindings: BindingItem[];
-  /** Toggle a binding (kb / folder / document) for the workspace. */
+  /** Toggle a binding (kb / folder / document) for the project. */
   handleToggleBinding: (
     kind: "kb" | "folder" | "document",
     targetId: string,
@@ -116,8 +116,8 @@ export interface UseProjectKbBindingsResult {
 
 /**
  * Loads the project's KB tree + binding state and exposes the toggle /
- * expand handlers the ProjectDetailContextPanel expects. ``workspaceId``
- * may be ``null`` while a different (chat) workspace is active —
+ * expand handlers the ProjectDetailContextPanel expects. ``projectId``
+ * may be ``null`` while a different (chat) project is active —
  * the hook then no-ops and returns empty state.
  *
  * Centralized here so DesktopProjectDetailPage and DesktopConversationPage
@@ -126,13 +126,13 @@ export interface UseProjectKbBindingsResult {
  * page reads.
  */
 export function useProjectKbBindings(
-  workspaceId: string | null,
+  projectId: string | null,
 ): UseProjectKbBindingsResult {
   const [kbTree, setKbTree] = useState<KbBindingTreeNode[]>([]);
   const [bindings, setBindings] = useState<BindingItem[]>([]);
 
   const refresh = useCallback(async () => {
-    if (!workspaceId) {
+    if (!projectId) {
       setKbTree([]);
       setBindings([]);
       return;
@@ -140,7 +140,7 @@ export function useProjectKbBindings(
     const [kbListRes, bindingsRes] = await Promise.all([
       kbApi.list().catch(() => ({ knowledge_bases: [] as KbListItem[] })),
       bindingApi
-        .list(workspaceId)
+        .list(projectId)
         .catch(() => ({ bindings: [] as BindingItem[] })),
     ]);
     setBindings(bindingsRes.bindings);
@@ -153,7 +153,7 @@ export function useProjectKbBindings(
       }),
     );
     setKbTree(kbNodes);
-  }, [workspaceId]);
+  }, [projectId]);
 
   useEffect(() => {
     void refresh();
@@ -195,7 +195,7 @@ export function useProjectKbBindings(
 
   const handleToggleBinding = useCallback(
     async (kind: "kb" | "folder" | "document", targetId: string) => {
-      if (!workspaceId) return;
+      if (!projectId) return;
       let newBindings: Array<{ binding_kind: string; target_id: string }>;
 
       if (isDirectlyBound(kind, targetId)) {
@@ -241,13 +241,13 @@ export function useProjectKbBindings(
       }
 
       try {
-        const res = await bindingApi.update(workspaceId, newBindings);
+        const res = await bindingApi.update(projectId, newBindings);
         setBindings(res.bindings);
       } catch {
         toast.error(t("knowledge.bindFailed" as Parameters<typeof t>[0]));
       }
     },
-    [workspaceId, bindings, kbTree, isDirectlyBound, isCoveredByParent],
+    [projectId, bindings, kbTree, isDirectlyBound, isCoveredByParent],
   );
 
   const handleExpandKbFolder = useCallback(
@@ -291,7 +291,7 @@ export function useProjectKbBindings(
 
   const handleSetAddedKbs = useCallback(
     async (kbIds: string[]) => {
-      if (!workspaceId) return;
+      if (!projectId) return;
       const kbIdSet = new Set(kbIds);
 
       // Keep existing bindings whose owning KB is still in kbIds.
@@ -321,18 +321,18 @@ export function useProjectKbBindings(
       }
 
       try {
-        const res = await bindingApi.update(workspaceId, kept);
+        const res = await bindingApi.update(projectId, kept);
         setBindings(res.bindings);
       } catch {
         toast.error(t("knowledge.bindFailed" as Parameters<typeof t>[0]));
       }
     },
-    [workspaceId, bindings, findOwningKbId],
+    [projectId, bindings, findOwningKbId],
   );
 
   const handleRemoveKb = useCallback(
     async (kbId: string) => {
-      if (!workspaceId) return;
+      if (!projectId) return;
       // Drop every binding owned by this KB. ``findOwningKbId`` may
       // return ``null`` for a deep node not in the loaded tree — keep
       // those rather than dropping what we can't attribute to this KB.
@@ -340,18 +340,18 @@ export function useProjectKbBindings(
         .filter((b) => findOwningKbId(b.target_id) !== kbId)
         .map((b) => ({ binding_kind: b.binding_kind, target_id: b.target_id }));
       try {
-        const res = await bindingApi.update(workspaceId, kept);
+        const res = await bindingApi.update(projectId, kept);
         setBindings(res.bindings);
       } catch {
         toast.error(t("knowledge.bindFailed" as Parameters<typeof t>[0]));
       }
     },
-    [workspaceId, bindings, findOwningKbId],
+    [projectId, bindings, findOwningKbId],
   );
 
   const handleSelectAllInKb = useCallback(
     async (kbId: string) => {
-      if (!workspaceId) return;
+      if (!projectId) return;
       // Drop this KB's folder / document bindings, then add a single
       // kb-level binding so the whole KB is back in scope.
       const kept = bindings
@@ -359,13 +359,13 @@ export function useProjectKbBindings(
         .map((b) => ({ binding_kind: b.binding_kind, target_id: b.target_id }));
       kept.push({ binding_kind: "kb", target_id: kbId });
       try {
-        const res = await bindingApi.update(workspaceId, kept);
+        const res = await bindingApi.update(projectId, kept);
         setBindings(res.bindings);
       } catch {
         toast.error(t("knowledge.bindFailed" as Parameters<typeof t>[0]));
       }
     },
-    [workspaceId, bindings, findOwningKbId],
+    [projectId, bindings, findOwningKbId],
   );
 
   return {

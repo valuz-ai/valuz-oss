@@ -6,7 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./tailwind-preset": "./tailwind.preset.ts",
-    "./styles/workspace.css": "./src/styles/workspace.css",
+    "./styles/project.css": "./src/styles/project.css",
     "./components/ui/*": "./src/components/ui/*.tsx",
     "./hooks/*": "./src/hooks/*.ts",
     "./lib/*": "./src/lib/*.ts"

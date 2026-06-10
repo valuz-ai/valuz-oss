@@ -23,6 +23,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.schema import CreateIndex, CreateTable  # noqa: E402
 
+# Force-import every module that defines a Mapped class so Base.metadata
+# sees it. New domains added in the future need to be added here.
+from valuz_agent.modules.schedules import models as _schedules  # noqa: F401, E402
+
 from valuz_agent.infra.database import Base  # noqa: E402
 from valuz_agent.modules.agents import models as _agents  # noqa: F401, E402
 from valuz_agent.modules.connectors import models as _connectors  # noqa: F401, E402
@@ -30,10 +34,6 @@ from valuz_agent.modules.docs import models as _docs  # noqa: F401, E402
 from valuz_agent.modules.parser import models as _parser  # noqa: F401, E402
 from valuz_agent.modules.projects import models as _projects  # noqa: F401, E402
 from valuz_agent.modules.providers import models as _providers  # noqa: F401, E402
-
-# Force-import every module that defines a Mapped class so Base.metadata
-# sees it. New domains added in the future need to be added here.
-from valuz_agent.modules.schedules import models as _schedules  # noqa: F401, E402
 from valuz_agent.modules.sessions import models as _sessions  # noqa: F401, E402
 from valuz_agent.modules.settings import models as _settings_models  # noqa: F401, E402
 from valuz_agent.modules.skills import models as _skills  # noqa: F401, E402

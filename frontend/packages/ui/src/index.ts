@@ -1,4 +1,4 @@
-import "./styles/workspace.css";
+import "./styles/project.css";
 
 export * from "./components/CommandPalette";
 export * from "./components/Composer";
@@ -61,7 +61,7 @@ export * from "./components/onboarding/OnboardingCompletionScreen";
 export * from "./components/onboarding/ParsingModeSelector";
 export * from "./components/onboarding/SetupStepCard";
 export * from "./components/onboarding/StepProgressCard";
-export * from "./components/onboarding/WorkspaceModeSelector";
+export * from "./components/onboarding/ProjectModeSelector";
 export * from "./components/project/ConversationSummaryCard";
 export * from "./components/project/FileList";
 export * from "./components/project/InstructionsEditor";

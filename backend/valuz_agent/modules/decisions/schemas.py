@@ -39,7 +39,7 @@ class DecisionEntry(BaseModel):
 
     # ---- Context (UI metadata) ------------------------------------
     project_id: str | None = None
-    """The workspace the task belongs to. Plain chat sessions don't have
+    """The project the task belongs to. Plain chat sessions don't have
     this — but the aggregator filters them out anyway."""
 
     subtask_key: str | None = None

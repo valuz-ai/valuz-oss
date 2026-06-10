@@ -13,7 +13,7 @@ import {
   resolvedDesktopRoutes,
   type ResolvedRoute,
 } from "@valuz/app/routes";
-import { WebWorkspaceLayout } from "./workspace-layout";
+import { WebProjectLayout } from "./project-layout";
 
 export const buildRouteObjects = (
   resolved: ResolvedRoute[] = resolvedDesktopRoutes,
@@ -21,7 +21,7 @@ export const buildRouteObjects = (
   createAppRouteObjects({
     routes: resolved,
     Root: AppSetupRoot,
-    layout: WebWorkspaceLayout,
+    layout: WebProjectLayout,
   });
 
 export const routes: RouteObject[] = buildRouteObjects();
@@ -29,7 +29,7 @@ export const router = createAppRouter({
   createRouter: createBrowserRouter,
   routes: resolvedDesktopRoutes,
   Root: AppSetupRoot,
-  layout: WebWorkspaceLayout,
+  layout: WebProjectLayout,
 });
 
 export const AppRouter = () => {
@@ -40,7 +40,7 @@ export const AppRouter = () => {
         createAppRouteObjects({
           routes: resolveRoutes(desktopRoutes),
           Root: AppSetupRoot,
-          layout: WebWorkspaceLayout,
+          layout: WebProjectLayout,
         }),
       ),
     [desktopRoutes],

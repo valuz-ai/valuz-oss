@@ -18,7 +18,7 @@ import {
 import { cn } from "@valuz/ui";
 import { useTranslation } from "@valuz/core";
 import { useRegistryStore } from "@valuz/core";
-import { useWorkspaceOutlet } from "@valuz/app/layout";
+import { useProjectOutlet } from "@valuz/app/layout";
 
 import { ModelSection } from "./settings/ModelSection";
 import { ConnectorsSection } from "./settings/ConnectorsSection";
@@ -71,7 +71,7 @@ const SECTION_MAP: Record<string, React.ComponentType> = {
 
 export const SettingsPage = () => {
   const [searchParams] = useSearchParams();
-  const { setHideHeader } = useWorkspaceOutlet();
+  const { setHideHeader } = useProjectOutlet();
   const { t } = useTranslation();
   const settingsSections = useRegistryStore((s) => s.settingsSections);
 

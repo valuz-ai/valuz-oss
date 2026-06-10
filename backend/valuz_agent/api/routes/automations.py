@@ -1,7 +1,7 @@
 """HTTP routes for automations.
 
 Replaces ``/v1/schedules/*`` per ADR-021. Same overall shape (list / detail /
-create / update / pause / resume / run-now / runs + workspace-targets and
+create / update / pause / resume / run-now / runs + project-targets and
 trigger validation), with two visible differences:
 
 - Resource path is ``/v1/automations`` and the response field is
@@ -23,10 +23,10 @@ from valuz_agent.modules.automations.schemas import (
     AutomationCreatePayload,
     AutomationDetailResponse,
     AutomationGroupResponse,
+    AutomationProjectTargetsResponse,
     AutomationRunAcceptedResponse,
     AutomationRunItemResponse,
     AutomationUpdatePayload,
-    AutomationWorkspaceTargetsResponse,
     CronValidateRequest,
     CronValidationResultResponse,
     IntervalValidateRequest,
@@ -39,17 +39,17 @@ router = APIRouter(prefix="/v1/automations", tags=["automations"])
 
 @router.get("")
 async def list_automations(
-    workspace_id: str | None = None,
+    project_id: str | None = None,
     svc: AutomationService = Depends(get_automation_service),
 ) -> dict[str, list[AutomationGroupResponse]]:
-    """List automations grouped by workspace.
+    """List automations grouped by project.
 
     Unfiltered global view collapses chat-kind automations into one virtual
-    "Chat" group (each chat automation still owns a distinct workspace_id;
+    "Chat" group (each chat automation still owns a distinct project_id;
     the consolidation is purely a display rule). Filtered view (per
-    project) keeps one group per workspace.
+    project) keeps one group per project.
     """
-    return {"groups": await svc.list_automation_groups(workspace_id)}
+    return {"groups": await svc.list_automation_groups(project_id)}
 
 
 @router.post("", status_code=201)
@@ -59,10 +59,10 @@ async def create_automation(
 ) -> AutomationDetailResponse:
     """Create an automation.
 
-    ``workspace_kind`` and ``agent_kind`` drive the four routing paths from
-    ADR-021 §4. HTTP callers always pass ``calling_session_workspace_id``
+    ``project_kind`` and ``agent_kind`` drive the four routing paths from
+    ADR-021 §4. HTTP callers always pass ``calling_session_project_id``
     as ``None`` here — that field is reserved for the ``automation`` MCP
-    tool, which knows the caller's chat workspace.
+    tool, which knows the caller's chat project.
     """
     return await svc.create(payload)
 
@@ -93,17 +93,17 @@ async def validate_interval(
     return svc.validate_interval(payload.seconds)
 
 
-@router.get("/workspace-targets")
-async def list_workspace_targets(
+@router.get("/project-targets")
+async def list_project_targets(
     svc: AutomationService = Depends(get_automation_service),
-) -> AutomationWorkspaceTargetsResponse:
-    """List workspaces eligible as the target of a new automation.
+) -> AutomationProjectTargetsResponse:
+    """List projects eligible as the target of a new automation.
 
     Owned by the automations module so the rule "Chat sentinel + project
-    workspaces, no ephemeral chat rows" stays adjacent to the create logic
+    projects, no ephemeral chat rows" stays adjacent to the create logic
     that consumes it. The frontend renders the response verbatim.
     """
-    return AutomationWorkspaceTargetsResponse(targets=await svc.list_workspace_targets())
+    return AutomationProjectTargetsResponse(targets=await svc.list_project_targets())
 
 
 @router.get("/{automation_id}")
@@ -123,8 +123,8 @@ async def update_automation(
 ) -> AutomationDetailResponse:
     """Patch fields on an automation.
 
-    ``trigger`` is all-or-nothing; ``agent_slug`` swap is intra-workspace
-    only (cross-workspace / cross-kind changes require delete + recreate
+    ``trigger`` is all-or-nothing; ``agent_slug`` swap is intra-project
+    only (cross-project / cross-kind changes require delete + recreate
     — see ADR-021 §6).
     """
     return await svc.update(automation_id, payload)

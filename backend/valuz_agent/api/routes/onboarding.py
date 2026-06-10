@@ -2,7 +2,7 @@
 
 POST /v1/onboarding/example-project
   Body: { "team_id": "general" | "investment" | "product" }
-  Creates the example project directory, binds it as a project workspace, and
+  Creates the example project directory, binds it as a project, and
   CREATES the chosen team's agents (as the user's own) deployed into that
   project. Also ensures the Valuz Helper exists in the library so the
   user always has an agent ready for the no-project quick chat.
@@ -44,8 +44,8 @@ from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.modules.agents.service import AgentService
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.connectors.service import ConnectorService
-from valuz_agent.modules.projects.datastore import WorkspaceDatastore
-from valuz_agent.modules.projects.service import WorkspaceService
+from valuz_agent.modules.projects.datastore import ProjectDatastore
+from valuz_agent.modules.projects.service import ProjectService
 from valuz_agent.modules.providers.datastore import ProviderDatastore
 from valuz_agent.modules.providers.service import _resolve_model_options
 from valuz_agent.modules.settings.preferences import (
@@ -233,7 +233,7 @@ class ExampleProjectRequest(BaseModel):
 
 
 class ExampleProjectResponse(BaseModel):
-    workspace_id: str
+    project_id: str
     project_name: str
 
 
@@ -252,7 +252,7 @@ async def create_example_project(
 ) -> ExampleProjectResponse:
     """Create (or reuse) the onboarding example project and its team's agents.
 
-    1. Resolve the example project directory and bind it as a project workspace.
+    1. Resolve the example project directory and bind it as a project.
     2. If the project is freshly created, create each of the team's roles as a
        user-owned agent (``source=custom``) deployed into that project. If the
        project already existed (re-run), skip creation so agents aren't
@@ -260,15 +260,15 @@ async def create_example_project(
        onboarding.
     """
     root_path = fs_registry.example_project_dir()
-    # Match WorkspaceService.create_project's normalization (it stores the
+    # Match ProjectService.create_project's normalization (it stores the
     # resolved path) so the idempotent get_by_root_path lookup stays in sync —
     # on macOS /tmp resolves to /private/tmp.
     root_path_str = str(root_path.resolve())
     project_name = _resolve_project_name()
 
     async with async_unit_of_work() as db:
-        workspace_svc = WorkspaceService(
-            datastore=WorkspaceDatastore(db),
+        project_svc = ProjectService(
+            datastore=ProjectDatastore(db),
             event_bus=event_bus,
         )
         connector_svc = ConnectorService(
@@ -277,34 +277,34 @@ async def create_example_project(
         )
         agent_svc = AgentService(db=db, connector_service=connector_svc)  # type: ignore[arg-type]
 
-        # Step 1: create or reuse the workspace.
+        # Step 1: create or reuse the project.
         created_new = False
         try:
-            workspace = await workspace_svc.create_project(
+            project = await project_svc.create_project(
                 name=project_name,
                 root_path=root_path_str,
             )
-            workspace_id = workspace.id
+            project_id = project.id
             created_new = True
             logger.info(
-                "onboarding: created example project workspace %s at %s",
-                workspace_id,
+                "onboarding: created example project %s at %s",
+                project_id,
                 root_path_str,
             )
         except ValueError as exc:
             msg = str(exc)
             if "already bound" in msg:
-                existing = await WorkspaceDatastore(db).get_by_root_path(root_path_str)
+                existing = await ProjectDatastore(db).get_by_root_path(root_path_str)
                 if existing is None:
                     raise HTTPException(
                         status_code=500,
-                        detail=f"path already bound but workspace not found: {root_path_str}",
+                        detail=f"path already bound but project not found: {root_path_str}",
                     ) from exc
-                workspace_id = existing.id
+                project_id = existing.id
                 logger.info(
-                    "onboarding: reusing existing example project workspace %s "
+                    "onboarding: reusing existing example project %s "
                     "(skipping agent creation)",
-                    workspace_id,
+                    project_id,
                 )
             else:
                 raise HTTPException(status_code=422, detail=msg) from exc
@@ -333,7 +333,7 @@ async def create_example_project(
             for role in _get_team_roster(body.team_id):
                 try:
                     await agent_svc.create_blank_agent(
-                        workspace_id=workspace_id,
+                        project_id=project_id,
                         agent_slug=None,
                         name=role["name"],
                         description=role["description"],
@@ -350,8 +350,8 @@ async def create_example_project(
                     )
 
         logger.info(
-            "onboarding: workspace %s — created %d agent(s) (new=%s)",
-            workspace_id,
+            "onboarding: project %s — created %d agent(s) (new=%s)",
+            project_id,
             created,
             created_new,
         )
@@ -362,7 +362,7 @@ async def create_example_project(
         await _ensure_valuz_helper(db)
 
     return ExampleProjectResponse(
-        workspace_id=workspace_id,
+        project_id=project_id,
         project_name=project_name,
     )
 

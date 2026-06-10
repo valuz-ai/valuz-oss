@@ -42,7 +42,7 @@ const waitForHealth = async (
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/v1/workspaces`);
+      const res = await fetch(`http://127.0.0.1:${port}/v1/projects`);
       if (res.ok) return true;
     } catch {
       // Not ready yet

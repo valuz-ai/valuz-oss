@@ -19,7 +19,7 @@ import {
   useRuntimes,
   usePanelStore,
   useSessionAttachments,
-  workspacesApi,
+  projectsApi,
   type ProviderDetail,
   type RuntimeId,
   type SessionListItem,
@@ -170,18 +170,18 @@ export const ConversationsHomePage = () => {
 
   const bootstrap = useCallback(async () => {
     try {
-      // Each quick-chat is now its own ephemeral chat workspace, so the
+      // Each quick-chat is now its own ephemeral chat project, so the
       // "recent chats" list aggregates sessions across every chat-kind
-      // workspace rather than reading from a single singleton id.
+      // project rather than reading from a single singleton id.
       const [wsResponse, sessResponse] = await Promise.all([
-        workspacesApi.list(),
+        projectsApi.list(),
         sessionsApi.list(),
       ]);
       const chatWsIds = new Set(
-        wsResponse.workspaces.filter((w) => w.kind === "chat").map((w) => w.id),
+        wsResponse.projects.filter((w) => w.kind === "chat").map((w) => w.id),
       );
       const chatSessions = sessResponse.sessions.filter((s) =>
-        chatWsIds.has(s.workspace_id),
+        chatWsIds.has(s.project_id),
       );
       setRecentSessions(chatSessions.slice(0, 5));
     } catch {
@@ -227,13 +227,13 @@ export const ConversationsHomePage = () => {
   };
 
   // ``"chat-default"`` is a server-side sentinel: each ``POST /v1/sessions``
-  // with this id allocates a brand-new ephemeral chat workspace (and a
+  // with this id allocates a brand-new ephemeral chat project (and a
   // fresh kernel project + cwd), so quick-chats never share working
   // directories with one another. ADR-006: model_provider is locked at
   // session creation, so the composer's pick rides on the create call —
   // sendMessage ignores it.
   const sessionPayload = () => ({
-    workspace_id: "chat-default",
+    project_id: "chat-default",
     mcp_provider_slugs: enabledSlugs.length > 0 ? enabledSlugs : undefined,
     provider_id: selectedProviderId ?? undefined,
     model_id: selectedModelId ?? undefined,
@@ -297,7 +297,7 @@ export const ConversationsHomePage = () => {
       {/* Top-right mascot — ``position: fixed`` anchors to the
           viewport (not the page or scroll container), so it sits in
           the window's top-right regardless of any scroll context.
-          ``top-[60px]`` clears the workspace TopBar (h-12 = 48 px);
+          ``top-[60px]`` clears the project TopBar (h-12 = 48 px);
           ``right-6`` keeps a 24 px breathing margin from the window
           edge. Only mounted on the home page so it doesn't bleed
           onto other routes.

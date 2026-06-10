@@ -404,7 +404,7 @@ export const executionLog = [
 
 export const onboardingSteps = [
   {
-    id: "workspace",
+    id: "project",
     eyebrow: "Step 1",
     title: "连接你的工作空间",
     desc: "选择本地优先还是云端协同，决定 Valuz 如何访问模型、文件与知识资产。",

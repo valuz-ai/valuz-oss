@@ -45,7 +45,7 @@ beforeEach(() => {
   markOnboardedMock.mockClear();
   createExampleProjectMock.mockReset();
   createExampleProjectMock.mockResolvedValue({
-    workspace_id: "ws-1",
+    project_id: "ws-1",
     project_name: "示例项目",
   });
 });

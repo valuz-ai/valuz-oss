@@ -3,12 +3,12 @@ import { parseDeepLink } from "./deep-link-utils";
 
 describe("parseDeepLink", () => {
   it("parses valuz-oss protocol links", () => {
-    const parsed = parseDeepLink("valuz-oss://open/workspace?project=abc");
+    const parsed = parseDeepLink("valuz-oss://open/project?project=abc");
 
     expect(parsed).toEqual({
-      raw: "valuz-oss://open/workspace?project=abc",
+      raw: "valuz-oss://open/project?project=abc",
       host: "open",
-      pathname: "/workspace",
+      pathname: "/project",
       search: "?project=abc",
     });
   });

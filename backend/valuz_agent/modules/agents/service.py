@@ -95,7 +95,7 @@ def backfill_global_agent_tools() -> int:
     backfill walks every active agent and appends any missing baseline:
 
     - **All agents** get the always-on in-process tools (memory + submit_skill).
-    - **Non-lead-clone agents** (the conversation/base agents — workspace
+    - **Non-lead-clone agents** (the conversation/base agents — project
       synthetic + members) additionally get the task launcher/observability
       tools (create_task / list_tasks / get_task) so a project conversation can
       spawn + track tasks. Lead clones (``…__lead__…``) are skipped for these —
@@ -133,7 +133,7 @@ class MemberAlreadyExistsError(Exception):
 class AgentStillDeployedError(Exception):
     """Raised when deleting an agent that is still派驻'd into one or more projects.
 
-    v2 delete guard: prevents orphaning a task holder. Carries the workspace
+    v2 delete guard: prevents orphaning a task holder. Carries the project
     count so the UI can prompt "解除派驻 first".
     """
 
@@ -355,20 +355,20 @@ class AgentService:
     # ------------------------------------------------------------------
 
     async def list_deployments(self, slug: str) -> list[dict[str, Any]]:
-        """List every派驻 of an agent — the workspaces it's deployed into.
+        """List every派驻 of an agent — the projects it's deployed into.
 
         Powers the agent detail page's「派驻于 N 个项目」panel + the delete-guard
-        UX. Returns ``[{workspace_id, agent_slug}]`` (the project-local handle);
-        the frontend resolves workspace display names from its own store. Empty
+        UX. Returns ``[{project_id, agent_slug}]`` (the project-local handle);
+        the frontend resolves project display names from its own store. Empty
         when the agent has never been deployed (no shared kernel config yet).
         """
         row = await self.get_agent(slug)
         if not row.kernel_agent_id:
             return []
         members = await self._members.list_by_kernel_agent(row.kernel_agent_id)
-        return [{"workspace_id": m.workspace_id, "agent_slug": m.agent_slug} for m in members]
+        return [{"project_id": m.project_id, "agent_slug": m.agent_slug} for m in members]
 
-    async def list_members(self, workspace_id: str) -> list[dict[str, Any]]:
+    async def list_members(self, project_id: str) -> list[dict[str, Any]]:
         """Return members with their resolved kernel agent summary.
 
         Each item: {member: ProjectMemberRow, agent: AgentConfig | None}
@@ -377,7 +377,7 @@ class AgentService:
         """
         from valuz_agent.adapters import kernel_store
 
-        members = await self._members.list_by_workspace(workspace_id)
+        members = await self._members.list_by_project(project_id)
         result: list[dict[str, Any]] = []
         for m in members:
             try:
@@ -386,7 +386,7 @@ class AgentService:
                 logger.warning(
                     "list_members: could not load kernel agent %s for member %s/%s",
                     m.kernel_agent_id,
-                    workspace_id,
+                    project_id,
                     m.agent_slug,
                 )
                 agent = None
@@ -406,7 +406,7 @@ class AgentService:
 
     async def deploy_agent(
         self,
-        workspace_id: str,
+        project_id: str,
         source_agent_slug: str,
         agent_slug: str | None = None,
         dedupe: bool = True,
@@ -423,23 +423,23 @@ class AgentService:
         ``dedupe`` (default True) enforces ONE派驻 per agent per project — the
         project-member UX. The automation runner passes ``dedupe=False`` because
         it intentionally creates a distinct member handle per automation that may
-        reference the same source agent in the same workspace.
+        reference the same source agent in the same project.
         """
         from valuz_agent.modules.agents.slug import derive_slug, ensure_unique_slug
 
         source_agent = await self.get_agent(source_agent_slug)
 
         # Project-local handle: derive from the source agent's display name,
-        # unique within THIS workspace (CJK-preserving). The handle is a
+        # unique within THIS project (CJK-preserving). The handle is a
         # per-project path component; the underlying agent is shared.
         agent_slug = (agent_slug or "").strip()
         if not agent_slug:
-            taken = {m.agent_slug for m in await self._members.list_by_workspace(workspace_id)}
+            taken = {m.agent_slug for m in await self._members.list_by_project(project_id)}
             agent_slug = ensure_unique_slug(derive_slug(source_agent.name), taken)
 
-        if await self._members.get(workspace_id, agent_slug) is not None:
+        if await self._members.get(project_id, agent_slug) is not None:
             raise MemberAlreadyExistsError(
-                f"agent '{agent_slug}' already exists in workspace '{workspace_id}'"
+                f"agent '{agent_slug}' already exists in project '{project_id}'"
             )
 
         # Lazily build the shared kernel config (backfills seeded rows) and
@@ -450,14 +450,14 @@ class AgentService:
         # same agent twice into one project is meaningless). Keyed on the shared
         # ``kernel_agent_id``. Skipped for the automation runner (see ``dedupe``).
         if dedupe:
-            existing_members = await self._members.list_by_workspace(workspace_id)
+            existing_members = await self._members.list_by_project(project_id)
             if any(m.kernel_agent_id == kernel_agent_id for m in existing_members):
                 raise MemberAlreadyExistsError(
-                    f"agent '{source_agent_slug}' is already deployed to workspace '{workspace_id}'"
+                    f"agent '{source_agent_slug}' is already deployed to project '{project_id}'"
                 )
 
         member = ProjectMemberRow(
-            workspace_id=workspace_id,
+            project_id=project_id,
             agent_slug=agent_slug,
             kernel_agent_id=kernel_agent_id,
             # Provenance: keep the library agent slug so the UI can open the
@@ -478,7 +478,7 @@ class AgentService:
 
     async def create_blank_agent(
         self,
-        workspace_id: str,
+        project_id: str,
         agent_slug: str | None,
         name: str,
         instructions: str,
@@ -513,7 +513,7 @@ class AgentService:
             }
         )
         return await self.deploy_agent(
-            workspace_id=workspace_id,
+            project_id=project_id,
             source_agent_slug=row.slug,
             agent_slug=agent_slug or None,
         )
@@ -526,15 +526,15 @@ class AgentService:
     # Delete member
     # ------------------------------------------------------------------
 
-    async def delete_member(self, workspace_id: str, agent_slug: str) -> None:
+    async def delete_member(self, project_id: str, agent_slug: str) -> None:
         """解除派驻: delete ONLY the membership row.
 
         v2 live-reference: the kernel ``AgentConfig`` is SHARED across projects,
         so undeploying must NOT delete it (other projects may still派驻 it). The
         agent itself lives on in the library;真删 happens via ``delete_agent``.
         """
-        member = await self._members.get(workspace_id, agent_slug)
+        member = await self._members.get(project_id, agent_slug)
         if member is None:
             raise MemberNotFoundError(agent_slug)
 
-        await self._members.delete(workspace_id, agent_slug)
+        await self._members.delete(project_id, agent_slug)

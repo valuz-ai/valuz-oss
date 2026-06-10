@@ -1,7 +1,7 @@
-export type { WorkspaceOutletContext } from "./types";
-export { useWorkspaceOutlet } from "./types";
+export type { ProjectOutletContext } from "./types";
+export { useProjectOutlet } from "./types";
 export {
-  WorkspaceLayoutBase,
+  ProjectLayoutBase,
   type DirectoryFieldMode,
-  type WorkspaceLayoutBaseProps,
-} from "./WorkspaceLayoutBase";
+  type ProjectLayoutBaseProps,
+} from "./ProjectLayoutBase";

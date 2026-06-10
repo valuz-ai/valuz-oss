@@ -10,9 +10,9 @@ interface SessionStoreState {
   setSessions: (sessions: SessionListItem[]) => void;
   setActiveSession: (sessionId: string | null) => void;
 
-  fetchSessions: (workspaceId?: string) => Promise<void>;
+  fetchSessions: (projectId?: string) => Promise<void>;
   createSession: (
-    workspaceId: string,
+    projectId: string,
     title?: string,
   ) => Promise<SessionListItem>;
   renameSession: (sessionId: string, name: string) => Promise<void>;
@@ -27,24 +27,24 @@ export const useSessionStore = create<SessionStoreState>((set) => ({
   setSessions: (sessions) => set({ sessions }),
   setActiveSession: (activeSessionId) => set({ activeSessionId }),
 
-  fetchSessions: async (workspaceId?: string) => {
+  fetchSessions: async (projectId?: string) => {
     set({ loading: true });
     try {
-      const { sessions } = await sessionsApi.list(workspaceId);
+      const { sessions } = await sessionsApi.list(projectId);
       set({ sessions });
     } finally {
       set({ loading: false });
     }
   },
 
-  createSession: async (workspaceId: string, title?: string) => {
+  createSession: async (projectId: string, title?: string) => {
     const detail = await sessionsApi.create({
-      workspace_id: workspaceId,
+      project_id: projectId,
       title,
     });
     const item: SessionListItem = {
       id: detail.id,
-      workspace_id: detail.workspace_id,
+      project_id: detail.project_id,
       name: detail.name,
       status: detail.status,
       origin: detail.origin,

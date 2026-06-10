@@ -85,7 +85,7 @@ class DocumentImportTaskRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     total_items: Mapped[int] = mapped_column(Integer, default=0)
     processed_items: Mapped[int] = mapped_column(Integer, default=0)
     failed_items: Mapped[int] = mapped_column(Integer, default=0)
-    workspace_id: Mapped[str | None] = mapped_column(String(36))
+    project_id: Mapped[str | None] = mapped_column(String(36))
     # JSON list[{doc_id, filename, plugin_id, error, occurred_at}] —
     # populated when a plugin attempt fails (whether the doc later
     # succeeds via fallback or not). Surfaces "this rescan had N
@@ -98,9 +98,9 @@ class ProjectKbBindingRow(Base, OwnedMixin):
 
     __tablename__ = "valuz_project_kb_binding"
 
-    workspace_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     binding_kind: Mapped[str] = mapped_column(String(16), primary_key=True)
     target_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     created_at: Mapped[int] = mapped_column(BigInteger, default=None)
 
-    __table_args__ = (Index("ix_binding_workspace", "workspace_id"),)
+    __table_args__ = (Index("ix_binding_project", "project_id"),)

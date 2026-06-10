@@ -58,7 +58,7 @@ class SkillIndexRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
 class ProjectSkillConfigRow(Base, OwnedMixin):
     __tablename__ = "valuz_project_skill_config"
 
-    workspace_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     skill_path: Mapped[str] = mapped_column(Text, primary_key=True)
     added_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
 
@@ -128,7 +128,7 @@ class SkillDetail(SkillView):
 
 
 class SkillsCatalog(BaseModel):
-    workspace_id: str
+    project_id: str
     skills: list[SkillView]
 
 
@@ -141,7 +141,7 @@ class SkillStateRequest(BaseModel):
     enabled: bool
 
 
-class WorkspaceSkillsUpdateRequest(BaseModel):
+class ProjectSkillsUpdateRequest(BaseModel):
     skills_enabled: list[str] = Field(default_factory=list)
 
 
@@ -153,9 +153,9 @@ class SkillCreateRequest(BaseModel):
     name: str
     description: str = ""
     target_scope: SkillTargetScope = "user"
-    workspace_id: str | None = None
+    project_id: str | None = None
     instructions_markdown: str | None = None
-    add_to_workspace: bool = False
+    add_to_project: bool = False
 
 
 class SkillUpdateRequest(BaseModel):
@@ -166,8 +166,8 @@ class SkillUpdateRequest(BaseModel):
 
 class SkillCopyRequest(BaseModel):
     new_name: str
-    workspace_id: str | None = None
-    add_to_workspace: bool = False
+    project_id: str | None = None
+    add_to_project: bool = False
 
 
 class SessionSkillImportConfirmRequest(BaseModel):
@@ -175,8 +175,8 @@ class SessionSkillImportConfirmRequest(BaseModel):
     name: str
     description: str = ""
     target_scope: SkillTargetScope = "user"
-    workspace_id: str | None = None
-    add_to_workspace: bool = False
+    project_id: str | None = None
+    add_to_project: bool = False
 
 
 class SkillCreateChatStartResponse(BaseModel):
@@ -187,7 +187,7 @@ class SkillCreateChatStartResponse(BaseModel):
     """
 
     session_id: str
-    authoring_workspace_id: str
+    authoring_project_id: str
 
 
 SkillCreationKind = Literal["chat", "project", "skills_library"]
@@ -200,13 +200,13 @@ class SkillCreationContext(BaseModel):
     metadata to apply the right side-effects on confirmation:
 
     - ``chat``: write to user library only.
-    - ``project``: write to user library + bind to the workspace.
+    - ``project``: write to user library + bind to the project.
     - ``skills_library``: write to user library only (entry from the
       skills page itself).
     """
 
     kind: SkillCreationKind
-    workspace_id: str | None = None  # required when kind == "project"
+    project_id: str | None = None  # required when kind == "project"
 
 
 class SkillCreateStartRequest(BaseModel):
@@ -215,7 +215,7 @@ class SkillCreateStartRequest(BaseModel):
     Replaces ``POST /v1/skills/create/chat/start`` (which is preserved as
     a thin shim) and consolidates the three product entry points (chat /
     project / skills_library) behind one endpoint. The session is created
-    against the workspace appropriate for the kind, and the
+    against the project appropriate for the kind, and the
     ``creation_context`` is stamped onto session metadata so the
     downstream ``submit_skill`` tool can apply the right side-effects.
     """
@@ -227,7 +227,7 @@ class SkillCreateStartRequest(BaseModel):
 
 class SkillCreateStartResponse(BaseModel):
     session_id: str
-    authoring_workspace_id: str
+    authoring_project_id: str
     creation_context: SkillCreationContext
 
 
@@ -249,7 +249,7 @@ class SkillSubmissionConfirmRequest(BaseModel):
 class SkillSubmissionConfirmResponse(BaseModel):
     skill: SkillView
     creation_context: SkillCreationContext
-    bound_to_workspace_id: str | None = None
+    bound_to_project_id: str | None = None
 
 
 class SkillSubmissionDismissResponse(BaseModel):
@@ -259,7 +259,7 @@ class SkillSubmissionDismissResponse(BaseModel):
 
 
 class SkillDeleteAffectedProject(BaseModel):
-    workspace_id: str
+    project_id: str
     name: str
 
 
@@ -305,15 +305,15 @@ class SkillImportArchivePreview(BaseModel):
 class SkillImportDirectoryPreviewRequest(BaseModel):
     directory_path: str
     target_scope: SkillTargetScope = "user"
-    workspace_id: str | None = None
+    project_id: str | None = None
 
 
 class SkillImportArchiveConfirmRequest(BaseModel):
     preview_id: str
     name: str | None = None
     target_scope: SkillTargetScope = "user"
-    workspace_id: str | None = None
-    add_to_workspace: bool = False
+    project_id: str | None = None
+    add_to_project: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +391,7 @@ class StagingSyncItem(BaseModel):
 class StagingSyncRequest(BaseModel):
     items: list[StagingSyncItem]
     target_scope: SkillTargetScope = "user"
-    workspace_id: str | None = None  # required for target_scope="project"
+    project_id: str | None = None  # required for target_scope="project"
 
 
 class StagingSyncItemResult(BaseModel):
@@ -425,12 +425,12 @@ class StagingOptimizeResponse(BaseModel):
 class SkillImportUrlPreviewRequest(BaseModel):
     url: str
     target_scope: SkillTargetScope = "user"
-    workspace_id: str | None = None
+    project_id: str | None = None
 
 
 class SkillImportUrlConfirmRequest(BaseModel):
     preview_id: str
     name: str | None = None
     target_scope: SkillTargetScope = "user"
-    workspace_id: str | None = None
-    add_to_workspace: bool = False
+    project_id: str | None = None
+    add_to_project: bool = False

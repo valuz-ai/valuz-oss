@@ -72,9 +72,9 @@ def reset_providers_cmd(
     ),
 ) -> None:
     """Reset the provider table to a known-good state."""
+    from valuz_agent.boot.schema import run_host_migrations
     from valuz_agent.infra.database import async_engine
     from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.boot.schema import run_host_migrations
     from valuz_agent.modules.providers.datastore import ProviderDatastore
     from valuz_agent.modules.providers.service import ProviderListItem, reset_providers
 
@@ -111,8 +111,8 @@ def cleanup_seed_agents_cmd() -> None:
     creation. Keeps the system ``default-assistant``; skips any agent still
     deployed into a project (``delete_agent`` raises for those). Safe to re-run.
     """
-    from valuz_agent.infra.db import async_unit_of_work
     from valuz_agent.boot.schema import run_host_migrations
+    from valuz_agent.infra.db import async_unit_of_work
     from valuz_agent.modules.agents.service import AgentService
     from valuz_agent.modules.connectors.datastore import ConnectorDatastore
     from valuz_agent.modules.connectors.service import ConnectorService

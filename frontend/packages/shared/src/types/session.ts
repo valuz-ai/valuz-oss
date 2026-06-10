@@ -27,7 +27,7 @@ export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface SessionListItem {
   id: string;
-  workspace_id: string;
+  project_id: string;
   name: string | null;
   status: "created" | "running" | "idle" | "failed" | "cancelled" | "archived";
   origin: "user" | "schedule";
@@ -38,7 +38,7 @@ export interface SessionListItem {
    * the list shape because the desktop sidebar's session list feeds the
    * composer's model selector — the selector matches on (providerId, modelId)
    * pairs, so without provider_id the locked model can't be displayed and
-   * falls back to the workspace default provider.
+   * falls back to the project default provider.
    */
   locked_provider_id: string | null;
   runtime_provider: string;
@@ -107,17 +107,17 @@ export interface SessionDetail extends SessionListItem {
   todos?: TodoItem[] | null;
   /**
    * Frozen system-prompt append captured at session creation from the
-   * workspace's then-current `instructions_md` (ADR-008). The runtime
-   * hands this verbatim to the model on every turn; workspace edits
-   * after creation do *not* mutate this field. `null` when the workspace
+   * project's then-current `instructions_md` (ADR-008). The runtime
+   * hands this verbatim to the model on every turn; project edits
+   * after creation do *not* mutate this field. `null` when the project
    * had no instructions at session-create time. Session panels should
-   * render this — NOT the live workspace `instructions_md` — so users
+   * render this — NOT the live project `instructions_md` — so users
    * see the prompt the running agent actually has.
    */
   instructions?: string | null;
   /**
-   * Workspace-local agent handle when the session was created from a named
-   * workspace agent (e.g. a Project Task lead/member). `null` for plain chat
+   * Project-local agent handle when the session was created from a named
+   * project agent (e.g. a Project Task lead/member). `null` for plain chat
    * sessions not bound to a named agent.
    */
   agent_slug?: string | null;

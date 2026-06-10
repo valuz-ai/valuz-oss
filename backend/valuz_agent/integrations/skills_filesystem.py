@@ -161,9 +161,9 @@ def _discover_roots(ctx: RuntimeContext) -> list[tuple[str, Path, str]]:
     if not roots:
         roots.append(("user", valuz_root, "valuz"))
 
-    workspace = ctx.workspace
-    if workspace and workspace.kind == "project" and workspace.root_path:
-        project_root = Path(workspace.root_path)
+    project = ctx.project
+    if project and project.kind == "project" and project.root_path:
+        project_root = Path(project.root_path)
         roots.append(("project", project_root / ".claude" / "skills", "project"))
 
     return roots

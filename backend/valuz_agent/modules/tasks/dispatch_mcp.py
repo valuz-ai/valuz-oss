@@ -5,7 +5,7 @@ mechanism (same pattern as ``providers/tools_skill_creator.py``):
 
   dispatch          — NON-BLOCKING spawn of a planned subtask (returns a handle)
   await_members     — block (in-turn) to collect finished members' results
-  list_members      — list workspace members (slug/runtime/description)
+  list_members      — list project members (slug/runtime/description)
   finish_task       — close the task with a summary and optional artifacts
   (+ send / plan_task / get_plan / modify_plan / review_subtask)
 

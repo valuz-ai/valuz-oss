@@ -4,7 +4,7 @@ import type {
   FeatureFlags,
   ServiceDescriptor,
   SettingsSectionModule,
-  WorkspacePanelModule,
+  ProjectPanelModule,
 } from './profile'
 import { useRegistryStore } from './registry-store'
 
@@ -20,7 +20,7 @@ export interface PluginManifest {
   version: string
   routes?: DesktopRouteModule[]
   settingsSections?: SettingsSectionModule[]
-  workspacePanels?: WorkspacePanelModule[]
+  projectPanels?: ProjectPanelModule[]
   services?: ServiceDescriptor[]
   activate?: (ctx: PluginContext) => void | Promise<void>
   deactivate?: () => void | Promise<void>
@@ -57,8 +57,8 @@ export const registerPlugin = async (manifest: PluginManifest): Promise<LoadedPl
   for (const section of manifest.settingsSections ?? []) {
     disposers.push(store.registerSettingsSection(section))
   }
-  for (const panel of manifest.workspacePanels ?? []) {
-    disposers.push(store.registerWorkspacePanel(panel))
+  for (const panel of manifest.projectPanels ?? []) {
+    disposers.push(store.registerProjectPanel(panel))
   }
   for (const service of manifest.services ?? []) {
     disposers.push(store.registerService(service))

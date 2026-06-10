@@ -1,11 +1,11 @@
 // Design token source-of-truth. Mirrors the CSS custom properties declared
-// in src/styles/workspace.css (which is what Tailwind v4 actually consumes
+// in src/styles/project.css (which is what Tailwind v4 actually consumes
 // at build time via `@import "tailwindcss"` + `@theme`). This TS export lets
 // app code reference the same tokens type-safely.
 //
 // NOTE: Tailwind v4 drops JS presets in favor of CSS `@theme`. Apps do not
 // merge this object into a `tailwind.config.ts`; they import the stylesheet
-// from `@valuz/ui` (which re-exports workspace.css via the package entry).
+// from `@valuz/ui` (which re-exports project.css via the package entry).
 // This file therefore serves as the canonical token registry for non-CSS
 // consumers (charts, inline styles, docs).
 

@@ -190,7 +190,7 @@ export interface ProjectContextPanelProps {
   showTodos?: boolean;
   /**
    * Project Instructions markdown. ``undefined`` hides the section entirely
-   * (used by the chat-default workspace, which has no project-level prompt).
+   * (used by the chat-default project, which has no project-level prompt).
    */
   instructions?: string;
   onInstructionsChange?: (value: string) => void;
@@ -257,8 +257,8 @@ export interface ProjectContextPanelProps {
   onDeleteScheduledTask?: (taskId: string) => void;
   onManageScheduledTasks?: () => void;
   fileTree?: FileTreeNode[];
-  /** Section title for the file-tree accordion. Project workspaces use
-   * "{t("project.projectFiles")}"; chat workspaces use "生成的文件" — the underlying tree
+  /** Section title for the file-tree accordion. Project projects use
+   * "{t("project.projectFiles")}"; chat projects use "生成的文件" — the underlying tree
    * is the same component, only the label changes per context. */
   fileTreeTitle?: string;
   /** Render the file tree as a top-level tab instead of an accordion. This is
@@ -287,7 +287,7 @@ export interface ProjectContextPanelProps {
    *  accordion. Project home uses this so the user can see Project
    *  README / Agent Team / Docs at a glance without clicking. ``false``
    *  (default) keeps the exclusive single-open behaviour the chat
-   *  workspace rail relies on. */
+   *  project rail relies on. */
   multiOpen?: boolean;
   /** Optional controlled collapsed state. When provided, the panel uses this
    * value instead of its internal state — useful when an external chrome
@@ -315,7 +315,7 @@ function KbTreeRow({
   expanded: Set<string>;
   onToggle: (id: string) => void;
   onExpand: (id: string) => void;
-  /** Returns true when the workspace binding table has an exact row for
+  /** Returns true when the project binding table has an exact row for
    * ``(node.kind, node.id)``. Drives the checked-state visual. */
   isDirectlyBound?: (kind: "kb" | "folder" | "document", id: string) => boolean;
   /** Returns true when an ancestor row is bound (and therefore implicitly
@@ -340,7 +340,7 @@ function KbTreeRow({
   const isMissing = node.status === "missing";
   const isKbOrFolder = node.kind === "kb" || node.kind === "folder";
 
-  // Tri-state binding indicator. ``direct`` means the workspace has a
+  // Tri-state binding indicator. ``direct`` means the project has a
   // row for this exact (kind,id); ``covered`` means an ancestor row
   // implicitly includes it. We render the same checkbox for both but
   // ``covered`` is half-opacity and click is a no-op — toggling the
@@ -782,16 +782,16 @@ export const ProjectDetailContextPanel = ({
   const { t } = useI18n();
 
   // Resolve default titles through i18n when caller doesn't override.
-  // Default header label is the conversation workspace name; the project
+  // Default header label is the conversation project name; the project
   // detail page overrides this with its own ``title`` prop.
-  const resolvedTitle = title ?? t("conversation.workspace");
+  const resolvedTitle = title ?? t("conversation.project");
   const resolvedInstructionsTitle =
     instructionsTitle ?? t("project.instruction");
   const resolvedScheduledTasksTitle =
     scheduledTasksTitle ?? t("project.scheduledTasks");
   const resolvedFileTreeTitle = fileTreeTitle ?? t("project.fileTree");
 
-  // Section visibility — chat workspace omits sections it has no data for.
+  // Section visibility — chat project omits sections it has no data for.
   const showInstructions = instructions !== undefined;
   const showScheduled =
     scheduledTasks !== undefined || onAddScheduledTask !== undefined;
@@ -800,7 +800,7 @@ export const ProjectDetailContextPanel = ({
   const showUploadedFiles = uploadedFiles !== undefined;
   const visibleUploadedFiles = uploadedFiles ?? [];
   // Files section shows whenever the caller provides a fileTree array. Chat
-  // workspaces should pass ``undefined`` to hide the section altogether.
+  // projects should pass ``undefined`` to hide the section altogether.
   const showFiles = fileTree !== undefined;
   const defaultOpenSection =
     initialOpenSection !== undefined
@@ -843,7 +843,7 @@ export const ProjectDetailContextPanel = ({
   //    render and each section toggles independently. AccordionSection
   //    keeps its own internal open state.
   //  - multiOpen=false  → single-open accordion driven by
-  //    ``openSection`` (legacy chat workspace behaviour).
+  //    ``openSection`` (legacy chat project behaviour).
   const sectionState = (id: string, defaultOpen = false) =>
     multiOpen
       ? { defaultOpen: true }
@@ -1095,7 +1095,7 @@ export const ProjectDetailContextPanel = ({
         </AccordionSection>
       )}
 
-      {/* Instructions — project-only; chat workspace omits this. */}
+      {/* Instructions — project-only; chat project omits this. */}
       {showInstructions && (
         <AccordionSection
           {...sectionState("instructions", initialOpenSection === undefined)}
@@ -1127,7 +1127,7 @@ export const ProjectDetailContextPanel = ({
 
       {/* Member agents (PRD-NEXT §3.4) — the project's agent team. Caller
           passes ``members`` (even empty) to show the section; ``undefined``
-          hides it (chat workspaces have no team). */}
+          hides it (chat projects have no team). */}
       {members !== undefined && (
         <AccordionSection
           {...sectionState("members")}
@@ -1248,7 +1248,7 @@ export const ProjectDetailContextPanel = ({
         </AccordionSection>
       )}
 
-      {/* Skills — project workspaces only. Chat workspaces have
+      {/* Skills — project projects only. Chat projects have
           no per-conversation binding semantics (the global skill
           catalog applies to every chat), so the panel skips this
           section to avoid suggesting configurability that isn't
@@ -1405,7 +1405,7 @@ export const ProjectDetailContextPanel = ({
       {/* Uploaded files (session attachments) */}
       {uploadedFilesSection}
 
-      {/* Scheduled — project-only; chat workspace omits this. */}
+      {/* Scheduled — project-only; chat project omits this. */}
       {showScheduled && (
         <AccordionSection
           {...sectionState("scheduled", (scheduledTasks ?? []).length > 0)}

@@ -30,7 +30,7 @@ import {
   connectorsApi,
   skillsApi,
   useResourceGuard,
-  workspacesApi,
+  projectsApi,
   useTranslation,
   type Agent,
   type AgentDeployment,
@@ -38,7 +38,7 @@ import {
   type EffortLevel,
   type SkillView,
   type UpdateAgentPayload,
-  type WorkspaceListItem,
+  type ProjectListItem,
 } from "@valuz/core";
 import { modelLabel } from "@valuz/shared";
 import { AgentModelPicker, type AgentModelSelection } from "./AgentModelPicker";
@@ -72,7 +72,7 @@ export const AgentDetailView = ({
   const { t } = useTranslation();
 
   const [agent, setAgent] = useState<Agent | null>(null);
-  const [projects, setProjects] = useState<WorkspaceListItem[]>([]);
+  const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [deployments, setDeployments] = useState<AgentDeployment[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -119,11 +119,11 @@ export const AgentDetailView = ({
     try {
       const [tpl, wsRes, depRes] = await Promise.all([
         agentsApi.getAgent(slug),
-        workspacesApi.list(),
+        projectsApi.list(),
         agentsApi.listDeployments(slug),
       ]);
       setAgent(tpl);
-      setProjects(wsRes.workspaces.filter((w) => w.kind === "project"));
+      setProjects(wsRes.projects.filter((w) => w.kind === "project"));
       setDeployments(depRes.deployments);
     } catch {
       toast.error(t("common.error"));
@@ -192,7 +192,7 @@ export const AgentDetailView = ({
       const [skillRes, connRes] = await Promise.all([
         skillsApi
           .list()
-          .catch(() => ({ workspace_id: "", skills: [] as SkillView[] })),
+          .catch(() => ({ project_id: "", skills: [] as SkillView[] })),
         connectorsApi
           .list()
           .catch(() => ({ connectors: [] as ConnectorItem[] })),
@@ -225,7 +225,7 @@ export const AgentDetailView = ({
   };
 
   // Member slug is backend-derived from the source agent's name, unique
-  // within the target workspace (VALUZ-AGENT-SLUG) — no client computation.
+  // within the target project (VALUZ-AGENT-SLUG) — no client computation.
 
   const openInstantiate = useCallback(() => {
     setTargetProject(projects[0]?.id ?? "");
@@ -618,11 +618,11 @@ export const AgentDetailView = ({
             <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
               {deployments.map((d, i) => {
                 const name =
-                  projects.find((p) => p.id === d.workspace_id)?.name ??
-                  d.workspace_id;
+                  projects.find((p) => p.id === d.project_id)?.name ??
+                  d.project_id;
                 return (
                   <span
-                    key={`${d.workspace_id}:${d.agent_slug}`}
+                    key={`${d.project_id}:${d.agent_slug}`}
                     className="flex items-center gap-1.5"
                   >
                     {i > 0 && <span className="text-ink-muted">·</span>}
@@ -630,7 +630,7 @@ export const AgentDetailView = ({
                       type="button"
                       onClick={() =>
                         navigate(
-                          `/projects/${encodeURIComponent(d.workspace_id)}`,
+                          `/projects/${encodeURIComponent(d.project_id)}`,
                         )
                       }
                       className="text-ink-body transition-colors hover:text-ink-heading"
@@ -897,7 +897,7 @@ export const AgentDetailView = ({
               </Select>
             </DialogField>
             {/* Member slug is derived on the backend from the source
-                agent's name, unique within the target workspace
+                agent's name, unique within the target project
                 (VALUZ-AGENT-SLUG). Users don't see or edit it. */}
           </div>
 

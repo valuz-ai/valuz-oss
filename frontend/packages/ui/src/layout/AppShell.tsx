@@ -116,10 +116,10 @@ export const AppShell = ({
           </div>
 
           <nav
-            aria-label="Workspace sections"
+            aria-label="Project sections"
             className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 pt-3"
           >
-            <div className="label-mono px-3 pb-1 pt-2">Workspace</div>
+            <div className="label-mono px-3 pb-1 pt-2">Project</div>
             {navItems.map((item) => {
               const active = isActivePath(activePath, item.path);
               return (

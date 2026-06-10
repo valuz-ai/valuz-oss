@@ -1,5 +1,5 @@
 /**
- * Shared Vite config factory for @valuz workspace apps.
+ * Shared Vite config factory for @valuz project apps.
  *
  * Provides the common plugin stack (react, tailwindcss, i18n HMR),
  * edition define, and package alias resolution. Each app extends the

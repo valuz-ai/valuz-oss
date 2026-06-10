@@ -198,11 +198,11 @@ class RecoveryService:
         Best-effort + idempotent (re-running converges on current run/node state).
         """
         async with async_unit_of_work(commit=False) as db:
-            task_ids = [(t.id, t.workspace_id) for t in await TaskDatastore(db).list_active()]
+            task_ids = [(t.id, t.project_id) for t in await TaskDatastore(db).list_active()]
         recovered = 0
-        for task_id, workspace_id in task_ids:
+        for task_id, project_id in task_ids:
             try:
-                if await self._recover_one_task(task_id, workspace_id):
+                if await self._recover_one_task(task_id, project_id):
                     recovered += 1
             except Exception:  # noqa: BLE001
                 logger.exception("recover_active_tasks: failed for task %s", task_id)
@@ -212,7 +212,7 @@ class RecoveryService:
             )
         return recovered
 
-    async def _recover_one_task(self, task_id: str, workspace_id: str) -> bool:
+    async def _recover_one_task(self, task_id: str, project_id: str) -> bool:
         """Reconcile one active task's members + re-drive its lead.
 
         Used by both Layer 1 (startup) and Layer 2 (user 'resume'). Returns False
@@ -229,7 +229,7 @@ class RecoveryService:
             task_ds = TaskDatastore(db)
             run_ds = TaskSessionDatastore(db)
             event_ds = TaskEventDatastore(db)
-            task = await task_ds.get_task_by_workspace(workspace_id, task_id)
+            task = await task_ds.get_task_by_project(project_id, task_id)
             if task is None or task.status not in ("active", "paused"):
                 return False
             runs = await run_ds.list_runs(task_id)
@@ -286,7 +286,7 @@ class RecoveryService:
                 await task_ds.update_task(task)
                 await planning.emit_plan_update(
                     event_ds,
-                    workspace_id=workspace_id,
+                    project_id=project_id,
                     task_id=task_id,
                     plan=plan,
                     actor="system",
@@ -310,7 +310,7 @@ class RecoveryService:
                     initial_prompt=brief or "继续完成你的子任务,完成后会汇报给 lead。",
                     role="subtask",
                     task_id=task_id,
-                    workspace_id=workspace_id,
+                    project_id=project_id,
                 )
             )
         lead_brief = (
@@ -325,7 +325,7 @@ class RecoveryService:
                 initial_prompt=lead_brief,
                 role="lead",
                 task_id=task_id,
-                workspace_id=workspace_id,
+                project_id=project_id,
             )
         )
         return True
@@ -348,7 +348,7 @@ class RecoveryService:
         except Exception:  # noqa: BLE001
             logger.warning("interrupt failed for session %s", session_id, exc_info=True)
 
-    async def stop_task(self, task_id: str, workspace_id: str) -> bool:
+    async def stop_task(self, task_id: str, project_id: str) -> bool:
         """User-initiated cascade stop → ``paused`` (recoverable).
 
         Interrupts the lead + every in-flight member, broadcasts ``shutdown`` to
@@ -361,7 +361,7 @@ class RecoveryService:
             task_ds = TaskDatastore(db)
             run_ds = TaskSessionDatastore(db)
             event_ds = TaskEventDatastore(db)
-            task = await task_ds.get_task_by_workspace(workspace_id, task_id)
+            task = await task_ds.get_task_by_project(project_id, task_id)
             if task is None or task.status != "active":
                 return False
             runs = await run_ds.list_runs(task_id)
@@ -375,7 +375,7 @@ class RecoveryService:
                 await run_ds.update_run_by_session(session_id=sid, status="paused")
             await task_ds.update_task_status(task_id, "paused")
             await event_ds.append_event(
-                workspace_id,
+                project_id,
                 task_id,
                 "stopped",
                 actor="user",
@@ -397,7 +397,7 @@ class RecoveryService:
     async def resume_task(
         self,
         task_id: str,
-        workspace_id: str,
+        project_id: str,
         *,
         actor: str = "user",
     ) -> dict[str, Any]:
@@ -444,7 +444,7 @@ class RecoveryService:
             task_ds = TaskDatastore(db)
             event_ds = TaskEventDatastore(db)
             run_ds = TaskSessionDatastore(db)
-            task = await task_ds.get_task_by_workspace(workspace_id, task_id)
+            task = await task_ds.get_task_by_project(project_id, task_id)
             if task is None:
                 return {"ok": False, "error": f"task {task_id!r} not found", "prior_status": None}
             prior_status = task.status
@@ -481,9 +481,9 @@ class RecoveryService:
                         ended_at=None,
                     )
             await event_ds.append_event(
-                workspace_id, task_id, "resumed", actor=actor, payload={"from": prior_status}
+                project_id, task_id, "resumed", actor=actor, payload={"from": prior_status}
             )
-        ok = await self._recover_one_task(task_id, workspace_id)
+        ok = await self._recover_one_task(task_id, project_id)
         return {"ok": ok, "prior_status": prior_status, "resumed": ok}
 
     async def stop_member(self, session_id: str) -> bool:
@@ -504,13 +504,13 @@ class RecoveryService:
             if run is None or run.kind != "subtask":
                 return False
             task_id = run.task_id or ""
-            workspace_id = run.workspace_id
+            project_id = run.project_id
             lead_session_id = run.dispatched_by or ""
             subtask_key = run.subtask_key
             agent_slug = run.agent_slug
             await run_ds.update_run_by_session(session_id=session_id, status="rejected")
             if subtask_key:
-                task = await task_ds.get_task_by_workspace(workspace_id, task_id)
+                task = await task_ds.get_task_by_project(project_id, task_id)
                 if task is not None:
                     plan = TaskPlan.from_dict(task.plan)
                     if plan.get(subtask_key) is not None:
@@ -523,14 +523,14 @@ class RecoveryService:
                         await task_ds.update_task(task)
                         await planning.emit_plan_update(
                             event_ds,
-                            workspace_id=workspace_id,
+                            project_id=project_id,
                             task_id=task_id,
                             plan=plan,
                             actor="user",
                             session_id=lead_session_id or None,
                         )
             await event_ds.append_event(
-                workspace_id,
+                project_id,
                 task_id,
                 "subtask_stopped",
                 actor="user",

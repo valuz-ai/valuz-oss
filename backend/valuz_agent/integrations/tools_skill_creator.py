@@ -15,7 +15,7 @@ owns the page). Pairing the event payload (``slug``, ``summary``,
 ``change_kind``, ``files_touched``) with the session id at the UI layer
 gives us everything the confirm/dismiss endpoints need without smuggling
 ``session_id`` through the kernel ``ExecContext`` (which only exposes
-``workspace`` and is shared across sessions in the same project).
+``project`` and is shared across sessions in the same project).
 
 Why this lives in valuz, not the kernel
 ---------------------------------------
@@ -93,7 +93,7 @@ async def _submit_skill_handler(args: dict[str, object], context: ExecContext) -
     """Acknowledge the submission, but only if the slug is actually staged.
 
     Validates that the agent wrote ``SKILL.md`` to
-    ``{workspace}/.skill-staging/{slug}/`` before greenlighting the
+    ``{project}/.skill-staging/{slug}/`` before greenlighting the
     submission card. If the file isn't there, returns
     ``is_error=True`` with the exact expected path so the agent's next
     turn can ``mv`` the files into place and call ``submit_skill``
@@ -112,13 +112,13 @@ async def _submit_skill_handler(args: dict[str, object], context: ExecContext) -
     files = args.get("files_touched") or []
     file_count = len(files) if isinstance(files, list) else 0
 
-    workspace_root = (context.workspace or "").strip()
-    if not workspace_root:
-        # Defensive: kernel should always set workspace_root, but if it
+    project_root = (context.project or "").strip()
+    if not project_root:
+        # Defensive: kernel should always set project_root, but if it
         # doesn't, surface a clear error rather than silently passing.
         return ToolResult(
             content=(
-                "Error: workspace root is empty in ExecContext — cannot "
+                "Error: project root is empty in ExecContext — cannot "
                 "validate staging location. Ask the user to retry the "
                 "session."
             ),
@@ -127,7 +127,7 @@ async def _submit_skill_handler(args: dict[str, object], context: ExecContext) -
 
     from pathlib import Path
 
-    expected_dir = Path(workspace_root) / ".skill-staging" / str(slug)
+    expected_dir = Path(project_root) / ".skill-staging" / str(slug)
     skill_md = expected_dir / "SKILL.md"
     if not skill_md.is_file():
         # Most common cause: the agent wrote to ``/tmp/{slug}/`` or some
@@ -144,7 +144,7 @@ async def _submit_skill_handler(args: dict[str, object], context: ExecContext) -
                 f"path:\n\n  {expected_dir}/SKILL.md\n\n"
                 f"Move every file for slug '{slug}' into "
                 f"``./.skill-staging/{slug}/`` (relative to your "
-                f"current working directory `{workspace_root}`), then "
+                f"current working directory `{project_root}`), then "
                 f"call ``submit_skill`` again. Do not write skill files "
                 f"to ``/tmp``, ``~/.agents/skills/``, or any other "
                 f"location — staging files MUST live under "

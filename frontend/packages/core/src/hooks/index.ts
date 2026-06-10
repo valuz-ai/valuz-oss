@@ -22,6 +22,6 @@ export * from "./use-stable-turns";
 export * from "./use-system";
 export * from "./use-theme";
 export * from "./use-tools";
-export * from "./use-workspace";
-export * from "./use-workspace-shell";
+export * from "./use-project";
+export * from "./use-project-shell";
 export * from "./useTranslation";

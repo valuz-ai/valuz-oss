@@ -88,7 +88,7 @@ export interface SkillDetail extends SkillView {
 }
 
 export interface SkillsCatalog {
-  workspace_id: string;
+  project_id: string;
   skills: SkillView[];
 }
 
@@ -100,9 +100,9 @@ export interface SkillCreateRequest {
   name: string;
   description?: string;
   target_scope?: SkillTargetScope;
-  workspace_id?: string;
+  project_id?: string;
   instructions_markdown?: string;
-  add_to_workspace?: boolean;
+  add_to_project?: boolean;
 }
 
 export interface SkillUpdateRequest {
@@ -114,12 +114,12 @@ export interface SkillUpdateRequest {
 
 export interface SkillCopyRequest {
   new_name: string;
-  workspace_id?: string;
-  add_to_workspace?: boolean;
+  project_id?: string;
+  add_to_project?: boolean;
 }
 
 export interface SkillDeletePreview {
-  affected_projects: { workspace_id: string; name: string }[];
+  affected_projects: { project_id: string; name: string }[];
   count: number;
 }
 
@@ -166,29 +166,29 @@ export interface SkillImportArchiveConfirmRequest {
   preview_id: string;
   name?: string;
   target_scope?: SkillTargetScope;
-  workspace_id?: string;
-  add_to_workspace?: boolean;
+  project_id?: string;
+  add_to_project?: boolean;
 }
 
 export interface SkillImportDirectoryPreviewRequest {
   directory_path: string;
   target_scope?: SkillTargetScope;
-  workspace_id?: string;
+  project_id?: string;
 }
 
 const fetchJson = createFetchJson(() => _apiBase);
 
 export const skillsApi = {
-  list(workspaceId?: string): Promise<SkillsCatalog> {
-    const qs = workspaceId
-      ? `?workspace_id=${encodeURIComponent(workspaceId)}`
+  list(projectId?: string): Promise<SkillsCatalog> {
+    const qs = projectId
+      ? `?project_id=${encodeURIComponent(projectId)}`
       : "";
     return fetchJson(`/v1/skills${qs}`);
   },
 
-  get(skillId: string, workspaceId?: string): Promise<SkillDetail> {
-    const qs = workspaceId
-      ? `?workspace_id=${encodeURIComponent(workspaceId)}`
+  get(skillId: string, projectId?: string): Promise<SkillDetail> {
+    const qs = projectId
+      ? `?project_id=${encodeURIComponent(projectId)}`
       : "";
     return fetchJson(`/v1/skills/${encodeURIComponent(skillId)}${qs}`);
   },
@@ -204,10 +204,10 @@ export const skillsApi = {
   update(
     skillId: string,
     payload: SkillUpdateRequest,
-    workspaceId?: string,
+    projectId?: string,
   ): Promise<SkillView> {
-    const qs = workspaceId
-      ? `?workspace_id=${encodeURIComponent(workspaceId)}`
+    const qs = projectId
+      ? `?project_id=${encodeURIComponent(projectId)}`
       : "";
     return fetchJson(`/v1/skills/${encodeURIComponent(skillId)}${qs}`, {
       method: "PATCH",
@@ -226,18 +226,18 @@ export const skillsApi = {
 
   deleteDryRun(
     skillId: string,
-    workspaceId?: string,
+    projectId?: string,
   ): Promise<SkillDeletePreview> {
     const qs = new URLSearchParams({ mode: "dry_run" });
-    if (workspaceId) qs.set("workspace_id", workspaceId);
+    if (projectId) qs.set("project_id", projectId);
     return fetchJson(`/v1/skills/${encodeURIComponent(skillId)}?${qs}`, {
       method: "DELETE",
     });
   },
 
-  deleteConfirm(skillId: string, workspaceId?: string): Promise<void> {
+  deleteConfirm(skillId: string, projectId?: string): Promise<void> {
     const qs = new URLSearchParams({ mode: "confirm" });
-    if (workspaceId) qs.set("workspace_id", workspaceId);
+    if (projectId) qs.set("project_id", projectId);
     return fetchJson(`/v1/skills/${encodeURIComponent(skillId)}?${qs}`, {
       method: "DELETE",
     });
@@ -246,12 +246,12 @@ export const skillsApi = {
   importArchivePreview(
     file: File,
     targetScope?: string,
-    workspaceId?: string,
+    projectId?: string,
   ): Promise<SkillImportArchivePreview> {
     const form = new FormData();
     form.append("file", file);
     if (targetScope) form.append("target_scope", targetScope);
-    if (workspaceId) form.append("workspace_id", workspaceId);
+    if (projectId) form.append("project_id", projectId);
     return fetchJson("/v1/skills/import/archive", {
       method: "POST",
       body: form,
@@ -291,7 +291,7 @@ export const skillsApi = {
   importUrlPreview(
     url: string,
     targetScope?: SkillTargetScope,
-    workspaceId?: string,
+    projectId?: string,
   ): Promise<SkillImportArchivePreview> {
     return fetchJson("/v1/skills/import/url", {
       method: "POST",
@@ -299,7 +299,7 @@ export const skillsApi = {
       body: JSON.stringify({
         url,
         target_scope: targetScope,
-        workspace_id: workspaceId,
+        project_id: projectId,
       }),
     });
   },
@@ -314,19 +314,19 @@ export const skillsApi = {
     });
   },
 
-  listTags(workspaceId?: string): Promise<{ tags: string[] }> {
-    const qs = workspaceId
-      ? `?workspace_id=${encodeURIComponent(workspaceId)}`
+  listTags(projectId?: string): Promise<{ tags: string[] }> {
+    const qs = projectId
+      ? `?project_id=${encodeURIComponent(projectId)}`
       : "";
     return fetchJson(`/v1/skills/tags${qs}`);
   },
 
   listFiles(
     skillId: string,
-    workspaceId?: string,
+    projectId?: string,
   ): Promise<SkillImportPreviewFile[]> {
-    const qs = workspaceId
-      ? `?workspace_id=${encodeURIComponent(workspaceId)}`
+    const qs = projectId
+      ? `?project_id=${encodeURIComponent(projectId)}`
       : "";
     return fetchJson(`/v1/skills/${encodeURIComponent(skillId)}/files${qs}`);
   },
@@ -334,10 +334,10 @@ export const skillsApi = {
   getFileContent(
     skillId: string,
     filePath: string,
-    workspaceId?: string,
+    projectId?: string,
   ): Promise<{ path: string; content: string }> {
-    const qs = workspaceId
-      ? `?workspace_id=${encodeURIComponent(workspaceId)}`
+    const qs = projectId
+      ? `?project_id=${encodeURIComponent(projectId)}`
       : "";
     return fetchJson(
       `/v1/skills/${encodeURIComponent(skillId)}/files/${filePath}${qs}`,
@@ -352,10 +352,10 @@ export const skillsApi = {
       new_path?: string;
       content?: string;
     },
-    workspaceId?: string,
+    projectId?: string,
   ): Promise<{ path: string; content: string }> {
-    const qs = workspaceId
-      ? `?workspace_id=${encodeURIComponent(workspaceId)}`
+    const qs = projectId
+      ? `?project_id=${encodeURIComponent(projectId)}`
       : "";
     return fetchJson(`/v1/skills/${encodeURIComponent(skillId)}/files${qs}`, {
       method: "POST",
@@ -364,14 +364,14 @@ export const skillsApi = {
     });
   },
 
-  workspaceCatalog(workspaceId: string): Promise<SkillsCatalog> {
+  projectCatalog(projectId: string): Promise<SkillsCatalog> {
     return fetchJson(
-      `/v1/workspaces/${encodeURIComponent(workspaceId)}/skills`,
+      `/v1/projects/${encodeURIComponent(projectId)}/skills`,
     );
   },
 
-  // Workspace skill *binding* (scan / setSkillState / overwrite) removed —
-  // skills bind on the Agent now (08-agents-module). ``workspaceCatalog``
+  // Project skill *binding* (scan / setSkillState / overwrite) removed —
+  // skills bind on the Agent now (08-agents-module). ``projectCatalog``
   // above stays: it feeds the conversation composer's skill-insert chips.
 
   eventsStreamUrl(): string {
@@ -413,7 +413,7 @@ export const skillsApi = {
 
   /** User accepts the skill the agent submitted via ``submit_skill``.
    * Promotes the staged slug to ``~/.agents/skills/{slug}/`` and applies
-   * per-context side-effects (project entries also bind to the workspace). */
+   * per-context side-effects (project entries also bind to the project). */
   confirmSubmission(
     sessionId: string,
     slug: string,
@@ -493,7 +493,7 @@ export const skillsApi = {
 
 export interface SkillCreateChatStart {
   session_id: string;
-  authoring_workspace_id: string;
+  authoring_project_id: string;
 }
 
 /** Where the user opened the skill-creator from. The backend persists
@@ -503,9 +503,9 @@ export type SkillCreationKind = "chat" | "project" | "skills_library";
 
 export interface SkillCreationContext {
   kind: SkillCreationKind;
-  /** Required when ``kind === "project"``; identifies the workspace the
+  /** Required when ``kind === "project"``; identifies the project the
    * new skill should be bound to on confirm. */
-  workspace_id?: string;
+  project_id?: string;
 }
 
 export interface SkillCreateStartRequest {
@@ -519,7 +519,7 @@ export interface SkillCreateStartRequest {
 
 export interface SkillCreateStartResponse {
   session_id: string;
-  authoring_workspace_id: string;
+  authoring_project_id: string;
   creation_context: SkillCreationContext;
 }
 
@@ -537,9 +537,9 @@ export interface SkillSubmissionConfirmResponse {
   skill: SkillView;
   creation_context: SkillCreationContext;
   /** Populated when the submission was confirmed under a project entry —
-   * the new skill was bound to this workspace. ``null`` for chat /
+   * the new skill was bound to this project. ``null`` for chat /
    * skills_library entries. */
-  bound_to_workspace_id?: string | null;
+  bound_to_project_id?: string | null;
 }
 
 export interface SkillSubmissionDismissResponse {
@@ -588,7 +588,7 @@ export interface StagingSyncItem {
 export interface StagingSyncRequest {
   items: StagingSyncItem[];
   target_scope?: SkillTargetScope;
-  workspace_id?: string | null;
+  project_id?: string | null;
 }
 
 export interface StagingSyncItemResult {

@@ -179,8 +179,8 @@ def isolated_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # type: igno
 def _session_staging_root(session_id: str) -> Path:
     """Resolve the staging dir the product actually scans for a session.
 
-    The host now keys staging off the session's *workspace cwd*
-    (``data_dir/workspaces/{project_id}/.skill-staging/``) rather than the
+    The host now keys staging off the session's *project cwd*
+    (``data_dir/projects/{project_id}/.skill-staging/``) rather than the
     legacy ``{staging_root}/{session_id}/`` layout, so tests must write the
     agent's staged slugs to the same place the route reads them from.
     """
@@ -211,7 +211,7 @@ def test_start_create_chat_returns_session_id(isolated_app):  # type: ignore[no-
     assert res.status_code == 201, res.text
     body = res.json()
     assert "session_id" in body
-    assert "authoring_workspace_id" in body
+    assert "authoring_project_id" in body
 
 
 def test_scan_returns_empty_slugs_for_fresh_session(isolated_app):  # type: ignore[no-untyped-def]
@@ -332,7 +332,7 @@ def test_sync_unknown_slug_returns_404(isolated_app):  # type: ignore[no-untyped
     assert res.status_code == 404
 
 
-def test_sync_project_scope_requires_workspace_id(isolated_app):  # type: ignore[no-untyped-def]
+def test_sync_project_scope_requires_project_id(isolated_app):  # type: ignore[no-untyped-def]
     client = isolated_app["client"]
     staging: Path = isolated_app["staging"]
     sid = client.post("/v1/skills/create/chat/start").json()["session_id"]

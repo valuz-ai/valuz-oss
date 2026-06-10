@@ -53,15 +53,15 @@ class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     name: Mapped[str] = mapped_column(String(256))
 
     # ── Action (执行什么) ─────────────────────────────────────────────
-    # ``project_member`` rows reference (workspace_id, agent_slug) in
+    # ``project_member`` rows reference (project_id, agent_slug) in
     # ``valuz_project_member``; ``library_agent`` rows reference
     # AgentRow.slug. In storage these distinctions matter mainly for
     # display / ownership semantics — runner resolves either kind through
     # the same project_member lookup (library agents are instantiated
-    # into the bound chat workspace at create time; see ADR-021 §4).
+    # into the bound chat project at create time; see ADR-021 §4).
     agent_kind: Mapped[str] = mapped_column(String(32))
     agent_slug: Mapped[str] = mapped_column(String(128))
-    workspace_id: Mapped[str] = mapped_column(String(36), index=True)
+    project_id: Mapped[str] = mapped_column(String(36), index=True)
     prompt_template: Mapped[str] = mapped_column(Text)
     # Execution mode at fire time:
     # ``chat`` — single agent run (``create_session + send_message_sync``).
@@ -70,7 +70,7 @@ class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     # ``task`` — kick off a full project task with the bound agent as Lead
     #   (``task_orchestrator.kickoff``). The prompt becomes the task goal;
     #   the lead plans + dispatches sub-members per the project task
-    #   protocol. Only valid for project workspaces — chat workspaces don't
+    #   protocol. Only valid for projects — chat projects don't
     #   have the multi-member context the task protocol needs.
     action_kind: Mapped[str] = mapped_column(String(16), default="chat")
 
@@ -94,7 +94,7 @@ class AutomationRunRow(Base, PrimaryKeyMixin, OwnedMixin):
     __tablename__ = "valuz_automation_run"
 
     automation_id: Mapped[str] = mapped_column(String(36), index=True)
-    workspace_id: Mapped[str] = mapped_column(String(36))
+    project_id: Mapped[str] = mapped_column(String(36))
     # ``cron`` / ``interval`` / ``manual`` / ``recovered_skip`` today;
     # ``webhook`` enum value reserved for the follow-up ADR.
     trigger_type: Mapped[str] = mapped_column(String(32))

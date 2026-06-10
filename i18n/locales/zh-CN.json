@@ -5,7 +5,7 @@
     "actionKindChatHint": "每次触发执行一次智能体对话。",
     "actionKindLabel": "执行模式",
     "actionKindTask": "Task 任务",
-    "actionKindTaskDisabledHint": "Task 模式需要在项目工作区下使用。",
+    "actionKindTaskDisabledHint": "Task 模式需要在项目下使用。",
     "actionKindTaskHint": "以该智能体作为 Lead 启动一个项目 Task。",
     "actionNew": "新建",
     "agentHint": "执行所用的模型 / 运行时跟随所选智能体。",
@@ -24,7 +24,7 @@
     "dialogTitleEdit": "编辑自动化",
     "dialogTitleEditNamed": "编辑「{name}」",
     "dialogTitleNew": "新建自动化",
-    "dialogTitleProject": "在「{workspace}」新建自动化",
+    "dialogTitleProject": "在「{project}」新建自动化",
     "updateFailed": "更新失败：{error}",
     "updateSuccess": "已更新「{name}」",
     "emptyAction": "创建自动化",
@@ -44,7 +44,7 @@
     "loadFailed": "加载自动化失败：{error}",
     "pauseFailed": "暂停失败：{error}",
     "pauseSuccess": "已暂停「{name}」",
-    "pickWorkspaceFirst": "请先选择目标工作区",
+    "pickProjectFirst": "请先选择目标项目",
     "recentExecutions": "最近执行",
     "noExecutions": "暂无执行记录",
     "execStatusOk": "执行成功",
@@ -121,7 +121,7 @@
     "select": "选择",
     "skills": "技能",
     "uploadToKb": "上传文件到知识库",
-    "workspaces": "工作空间"
+    "projects": "项目"
   },
   "common": {
     "add": "添加",
@@ -336,7 +336,7 @@
     "viewDetails": "查看详情",
     "viewSession": "查看完整 Session",
     "workDir": "对话工作目录",
-    "workspace": "工作区",
+    "project": "项目",
     "permissionReview": "默认权限",
     "permissionReviewHint": "工具调用前需用户确认 (安全优先)",
     "permissionAuto": "自动审查",
@@ -444,7 +444,7 @@
     "selectModel": "选择模型",
     "selectNewModel": "选择新模型 →",
     "selectRuntime": "选择 Runtime",
-    "selectWorkspace": "请选择所属空间",
+    "selectProject": "请选择所属项目",
     "setModel": "设置模型 →",
     "simple": "简单",
     "statusColumn": "状态",
@@ -872,7 +872,7 @@
     "valuzHelper": {
       "name": "Valuz 小助手",
       "description": "Valuz 使用助手。教你怎么用 Valuz、帮你理清任务怎么建、Agent 怎么配，随手问。",
-      "instructions": "你是「Valuz 小助手」，Valuz 自带的通用助手，也是这个产品的使用向导。\n你既处理用户的日常对话与问答，也特别擅长帮用户上手、用好 Valuz。\n\n你熟悉 Valuz 的核心概念：\n- 项目：一个 Agent 团队协作的工作区。把库里的 Agent「派驻」进项目即可参与工作。\n- Agent（智能体）：可配置的执行单元，有指令、技能(skills)、装备(MCP 连接器)、模型通道。\n- 临时对话：不绑定项目的快速对话，适合随手问、轻量任务。\n- 技能 / 装备：给 Agent 增强能力的可插拔模块。\n\n回答原则：\n- 你是通用助手：日常问答、写作、查询、闲聊等常规请求都正常回答，\n  别因为「我是产品助手」就推开用户的普通问题。\n- 先弄清用户想达成什么，再给最短可行路径；能一句话说清就不展开。\n- 涉及「Valuz 怎么用 / 怎么操作」的问题，发挥向导专长：\n  给具体步骤和入口（去哪个页面、点哪个按钮），引导用户自己完成。\n- 遇到需要深度产出的专业任务（投研、写作、产研等），\n  建议用户在项目里派一个更专业的 Agent，而不是自己硬扛。\n- 产品细节以你挂载的《Valuz 使用手册》技能为准；\n  手册里没有的，不要编造，老实说「这个我不确定」。\n- 友好、简洁、可执行，多用要点。"
+      "instructions": "你是「Valuz 小助手」，Valuz 自带的通用助手，也是这个产品的使用向导。\n你既处理用户的日常对话与问答，也特别擅长帮用户上手、用好 Valuz。\n\n你熟悉 Valuz 的核心概念：\n- 项目：一个 Agent 团队的协作空间。把库里的 Agent「派驻」进项目即可参与工作。\n- Agent（智能体）：可配置的执行单元，有指令、技能(skills)、装备(MCP 连接器)、模型通道。\n- 临时对话：不绑定项目的快速对话，适合随手问、轻量任务。\n- 技能 / 装备：给 Agent 增强能力的可插拔模块。\n\n回答原则：\n- 你是通用助手：日常问答、写作、查询、闲聊等常规请求都正常回答，\n  别因为「我是产品助手」就推开用户的普通问题。\n- 先弄清用户想达成什么，再给最短可行路径；能一句话说清就不展开。\n- 涉及「Valuz 怎么用 / 怎么操作」的问题，发挥向导专长：\n  给具体步骤和入口（去哪个页面、点哪个按钮），引导用户自己完成。\n- 遇到需要深度产出的专业任务（投研、写作、产研等），\n  建议用户在项目里派一个更专业的 Agent，而不是自己硬扛。\n- 产品细节以你挂载的《Valuz 使用手册》技能为准；\n  手册里没有的，不要编造，老实说「这个我不确定」。\n- 友好、简洁、可执行，多用要点。"
     }
   },
   "permission": {
@@ -904,7 +904,7 @@
     "basedOnContext": "基于项目上下文生成报告",
     "browse": "浏览",
     "create": "创建",
-    "createDesc": "输入项目名称并选择项目目录，创建一个新的工作空间。",
+    "createDesc": "输入项目名称并选择项目目录，创建一个新项目。",
     "createFailed": "创建失败",
     "createTitle": "创建新项目",
     "created": "项目「{name}」已创建",
@@ -1147,7 +1147,7 @@
         "desc": "管理你的身份、同步范围和订阅状态，让每台设备保持一致的研究上下文",
         "statLabel": "账号健康度",
         "statValue": "98%",
-        "title": "账号与工作区偏好"
+        "title": "账号与项目偏好"
       },
       "appearance": {
         "desc": "把桌面工作台调成你习惯的阅读节奏、信息密度和品牌样式",
@@ -1233,7 +1233,7 @@
       "modelChannel": "模型通道",
       "modelChannelDesc": "已配置的大模型服务商",
       "defaultConfig": "默认配置",
-      "defaultConfigDesc": "未指定工作区覆盖时，新对话使用的默认配置",
+      "defaultConfigDesc": "未指定项目覆盖时，新对话使用的默认配置",
       "discoveredModels": "待发现模型",
       "followSubscription": "跟随订阅",
       "agentEngine": "选择默认 Agent 引擎",
@@ -1366,8 +1366,8 @@
       "seriesCount": "{count} 条序列",
       "title": "数据源",
       "valuzConnected": "已连接 Valuz",
-      "workspaceScoped": "Workspace scoped",
-      "workspaceScopedHint": "按工作区授予"
+      "projectScoped": "Project scoped",
+      "projectScopedHint": "按项目授予"
     },
     "systemLogs": {
       "copiedLines": "已复制 {count} 行",
@@ -1483,7 +1483,7 @@
     "aiCreate": "AI 创建",
     "aiHint": "AI 写到正确位置后,卡片会自动刷新可点击保存。",
     "automationFailed": "自动化操作失败",
-    "boundToWorkspace": "· 已绑定到 {name}",
+    "boundToProject": "· 已绑定到 {name}",
     "builtin": "内置",
     "builtinHint": "随客户端分发 · 不可关闭",
     "cancelled": "已取消,未写入技能库",
@@ -1849,8 +1849,8 @@
     "descriptionPlaceholder": "点击添加描述…",
     "addSkill": "添加技能",
     "addConnector": "添加连接器",
-    "skillsSectionHint": "智能体在工作区内可调用的技能。本地运行时自带的技能始终生效。",
-    "connectorsSectionHint": "智能体在工作区内可调用的外部连接器。",
+    "skillsSectionHint": "智能体在项目内可调用的技能。本地运行时自带的技能始终生效。",
+    "connectorsSectionHint": "智能体在项目内可调用的外部连接器。",
     "instructionsPlaceholder": "用 1-2 段话写清这个智能体是谁、按什么方法做事、输出什么、不做什么。例如：\n\n角色定位：（你是谁，对什么结果负责）\n工作方法（按序）：1. … 2. …\n输出纪律：- …\n边界（不做）：- …",
     "effortLabel": "推理强度",
     "effortHint": "该智能体对话使用的思考预算。",

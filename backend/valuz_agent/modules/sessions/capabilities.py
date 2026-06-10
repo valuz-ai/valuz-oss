@@ -3,9 +3,9 @@
 ADR-006 freezes ``session.model`` at create time, but skills + MCP stay
 mutable. These helpers (re)install the ``valuz-project-docs`` skill +
 ``valuz_docs`` MCP on a session — or across every active session in a
-workspace when a KB binding changes. Deliberately **sync**: invoked from sync
+project when a KB binding changes. Deliberately **sync**: invoked from sync
 service code (``send_message``) and from the synchronous in-process eventbus
-(``workspace.bindings.changed``); the async host store is driven via the
+(``project.bindings.changed``); the async host store is driven via the
 ``kernel_sync`` thread bridge.
 """
 
@@ -53,7 +53,7 @@ def refresh_docs_capabilities_for_session(session_id: str) -> bool:
     from valuz_agent.adapters.capability_resolver import _PROJECT_DOCS_SKILL_DIR
     from valuz_agent.infra.config import settings as _settings
     from valuz_agent.integrations.docs_mcp_server import docs_mcp_url
-    from valuz_agent.modules.projects.datastore import WorkspaceDatastore
+    from valuz_agent.modules.projects.datastore import ProjectDatastore
 
     session = kernel_sync.load_session_sync(session_id)
     if session is None:
@@ -63,25 +63,25 @@ def refresh_docs_capabilities_for_session(session_id: str) -> bool:
     if session.status in ("terminated",):
         return False
 
-    workspace_id = str(session.project_id)
+    project_id = str(session.project_id)
 
     # Every session (chat + project) carries the docs capability —
     # see ``capability_resolver`` (2.5). The MCP server's tools return
-    # empty results when the workspace has no KB bindings, so chat
+    # empty results when the project has no KB bindings, so chat
     # sessions trivially short-circuit at the tool layer.
     #
     # This function stays SYNC: it's invoked both from sync service code
     # (``send_message``) and from the synchronous in-process eventbus
-    # (``workspace.bindings.changed`` → ``refresh_docs_capabilities_for_workspace``).
-    # The host datastore is now async, so we drive the workspace lookup on a
+    # (``project.bindings.changed`` → ``refresh_docs_capabilities_for_project``).
+    # The host datastore is now async, so we drive the project lookup on a
     # dedicated thread (same bridge ``kernel_sync`` uses for the async kernel
     # store) rather than colour this whole sync surface async.
-    async def _load_workspace():  # type: ignore[no-untyped-def]
+    async def _load_project():  # type: ignore[no-untyped-def]
         async with async_unit_of_work(commit=False) as db:
-            return await WorkspaceDatastore(db).get_by_id(workspace_id)
+            return await ProjectDatastore(db).get_by_id(project_id)
 
-    workspace = kernel_sync._run_in_thread(_load_workspace)  # noqa: SLF001
-    if workspace is None:
+    project = kernel_sync._run_in_thread(_load_project)  # noqa: SLF001
+    if project is None:
         return False
     if not _PROJECT_DOCS_SKILL_DIR.is_dir():
         return False
@@ -177,10 +177,10 @@ def refresh_always_on_mcp_for_session(session_id: str) -> bool:
     return True
 
 
-def refresh_docs_capabilities_for_workspace(workspace_id: str) -> int:
-    """Refresh docs capabilities for every active session in ``workspace_id``.
+def refresh_docs_capabilities_for_project(project_id: str) -> int:
+    """Refresh docs capabilities for every active session in ``project_id``.
 
-    Used as the ``workspace.bindings.changed`` event handler so binding a
+    Used as the ``project.bindings.changed`` event handler so binding a
     document on a project propagates to all open sessions immediately
     (not just to whatever new session the user creates afterwards).
 
@@ -189,11 +189,11 @@ def refresh_docs_capabilities_for_workspace(workspace_id: str) -> int:
     from valuz_agent.adapters import kernel_sync
 
     try:
-        sessions = kernel_sync.list_sessions_sync(project_id=workspace_id, limit=500)
+        sessions = kernel_sync.list_sessions_sync(project_id=project_id, limit=500)
     except Exception:  # noqa: BLE001 — never raise into eventbus handlers
         logger.exception(
-            "refresh_docs_capabilities_for_workspace: failed to list sessions for %s",
-            workspace_id,
+            "refresh_docs_capabilities_for_project: failed to list sessions for %s",
+            project_id,
         )
         return 0
     changed = 0
@@ -211,8 +211,8 @@ def refresh_docs_capabilities_for_workspace(workspace_id: str) -> int:
             )
     if changed:
         logger.info(
-            "workspace.bindings.changed: refreshed docs caps on %d session(s) for workspace %s",
+            "project.bindings.changed: refreshed docs caps on %d session(s) for project %s",
             changed,
-            workspace_id,
+            project_id,
         )
     return changed

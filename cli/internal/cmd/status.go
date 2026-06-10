@@ -37,7 +37,7 @@ func newStatusCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			bp := backendPort()
 			fmt.Printf("backend  :%-5d  %-22s  pid=%s\n",
-				bp, checkHTTP(bp, "/v1/workspaces"), listeningPID(bp))
+				bp, checkHTTP(bp, "/v1/projects"), listeningPID(bp))
 			fmt.Printf("frontend :%-5d  %-22s  pid=%s\n",
 				frontendPort, "(no probe)", listeningPID(frontendPort))
 			return nil

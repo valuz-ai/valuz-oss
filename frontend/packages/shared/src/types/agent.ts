@@ -6,7 +6,7 @@ export type AgentEvent =
   | { type: 'tool_result'; id: string; result: string }
   | { type: 'error'; message: string; recoverable: boolean }
 
-export interface WorkspaceSummary {
+export interface ProjectSummary {
   id: string
   name: string
   mode: 'chat' | 'project'

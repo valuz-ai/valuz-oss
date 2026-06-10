@@ -33,12 +33,12 @@ import {
   type AutomationGroup,
   type AutomationItem,
   type AutomationRunItem,
-  type AutomationWorkspaceTarget,
+  type AutomationProjectTarget,
   type MemberWithAgent,
   type ActionKind,
   type Trigger,
 } from "@valuz/core";
-import { useWorkspaceOutlet } from "@valuz/app/layout";
+import { useProjectOutlet } from "@valuz/app/layout";
 import {
   CreateAutomationDialog,
   type AutomationAgentChoice,
@@ -147,11 +147,11 @@ export const AutomationPage = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { setHeader, setHeaderClassName, setContentInnerClassName } =
-    useWorkspaceOutlet();
+    useProjectOutlet();
 
   const [loading, setLoading] = useState(true);
   const [groups, setGroups] = useState<AutomationGroup[]>([]);
-  const [targets, setTargets] = useState<AutomationWorkspaceTarget[]>([]);
+  const [targets, setTargets] = useState<AutomationProjectTarget[]>([]);
   const [libraryAgents, setLibraryAgents] = useState<Agent[]>([]);
   const [projectMembers, setProjectMembers] = useState<
     Record<string, MemberWithAgent[]>
@@ -166,27 +166,27 @@ export const AutomationPage = () => {
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AutomationItem | null>(null);
   // Edit-mode state: the AutomationDetail whose row was clicked, plus
-  // the workspace it's bound to (drives the agent picker). When set,
+  // the project it's bound to (drives the agent picker). When set,
   // the same dialog opens in edit mode and submits route to the update
   // API. ``null`` = create flow.
   const [editTarget, setEditTarget] = useState<{
     detail: AutomationDetail;
-    workspaceKind: "chat" | "project";
-    workspaceId: string;
+    projectKind: "chat" | "project";
+    projectId: string;
   } | null>(null);
   // Per-group collapse state — mirrors the legacy ScheduledPage so users
-  // can fold the per-workspace tables once they grow long. Persisted
+  // can fold the per-project tables once they grow long. Persisted
   // only for the current page lifetime; the design didn't ask for cross-
   // session persistence.
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<Set<string>>(
     new Set(),
   );
 
-  const toggleGroupCollapsed = useCallback((workspaceId: string) => {
+  const toggleGroupCollapsed = useCallback((projectId: string) => {
     setCollapsedGroupIds((prev) => {
       const next = new Set(prev);
-      if (next.has(workspaceId)) next.delete(workspaceId);
-      else next.add(workspaceId);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
       return next;
     });
   }, []);
@@ -197,7 +197,7 @@ export const AutomationPage = () => {
     try {
       const [groupsRes, targetsRes, agentsRes] = await Promise.all([
         automationsApi.listGroups(),
-        automationsApi.listWorkspaceTargets(),
+        automationsApi.listProjectTargets(),
         agentsApi.listAgents(),
       ]);
       setGroups(groupsRes.groups);
@@ -205,17 +205,17 @@ export const AutomationPage = () => {
       setLibraryAgents(agentsRes.agents);
 
       // Pre-load members per project target so the dialog switch is
-      // instant. Failures per-workspace shouldn't blow up the page.
+      // instant. Failures per-project shouldn't blow up the page.
       const projectTargets = targetsRes.targets.filter(
-        (target) => target.kind === "project" && target.workspace_id,
+        (target) => target.kind === "project" && target.project_id,
       );
       const memberPairs = await Promise.all(
         projectTargets.map(async (target) => {
           try {
-            const res = await agentsApi.listMembers(target.workspace_id!);
-            return [target.workspace_id!, res.agents] as const;
+            const res = await agentsApi.listMembers(target.project_id!);
+            return [target.project_id!, res.agents] as const;
           } catch {
-            return [target.workspace_id!, [] as MemberWithAgent[]] as const;
+            return [target.project_id!, [] as MemberWithAgent[]] as const;
           }
         }),
       );
@@ -395,18 +395,18 @@ export const AutomationPage = () => {
   const selectedTarget = targets.find(
     (target) => target.id === selectedTargetId,
   );
-  // Cache of members per workspace, populated on-demand when an edit
-  // dialog opens. Chat workspaces are lazy-created (one per automation),
+  // Cache of members per project, populated on-demand when an edit
+  // dialog opens. Chat projects are lazy-created (one per automation),
   // so we can't pre-load them all upfront — we fetch when the user
   // actually clicks a row. Project members are pre-loaded in ``loadAll``
   // so the create flow stays instant.
-  const [editWorkspaceMembers, setEditWorkspaceMembers] = useState<
+  const [editProjectMembers, setEditProjectMembers] = useState<
     MemberWithAgent[] | null
   >(null);
 
   /**
-   * Edit mode resolves candidates from the row's workspace members —
-   * for BOTH chat and project workspaces. The chat case is the subtle
+   * Edit mode resolves candidates from the row's project members —
+   * for BOTH chat and project projects. The chat case is the subtle
    * one: ``library_agent`` rows store the instantiated member slug
    * (something like ``qa-engineer-ab12cd34``), not the library agent's
    * own slug, so listing library agents would render an empty picker
@@ -418,7 +418,7 @@ export const AutomationPage = () => {
   const agentChoices: AutomationAgentChoice[] = useMemo(() => {
     if (editTarget) {
       const members =
-        editWorkspaceMembers ?? projectMembers[editTarget.workspaceId] ?? [];
+        editProjectMembers ?? projectMembers[editTarget.projectId] ?? [];
       return members.map((entry) => ({
         slug: entry.member.agent_slug,
         name: entry.agent?.name ?? entry.member.agent_slug,
@@ -430,14 +430,14 @@ export const AutomationPage = () => {
         name: agent.name,
       }));
     }
-    const members = projectMembers[selectedTarget.workspace_id ?? ""] ?? [];
+    const members = projectMembers[selectedTarget.project_id ?? ""] ?? [];
     return members.map((entry) => ({
       slug: entry.member.agent_slug,
       name: entry.agent?.name ?? entry.member.agent_slug,
     }));
   }, [
     editTarget,
-    editWorkspaceMembers,
+    editProjectMembers,
     selectedTarget,
     libraryAgents,
     projectMembers,
@@ -449,14 +449,14 @@ export const AutomationPage = () => {
    * Row mode → AutomationItem doesn't carry ``prompt_template`` (the
    * group listing is intentionally trimmed); we fetch the detail before
    * opening the dialog so all fields are pre-filled in one round trip.
-   * Workspace kind comes from the group the row was clicked under so
+   * Project kind comes from the group the row was clicked under so
    * the agent picker shows the right candidates without an extra lookup.
    */
   const openEditDialog = async (automationId: string) => {
     // Find the AutomationItem itself, not just the group it lives in.
-    // The "Chat" virtual group's ``workspace_id`` is the sentinel
-    // ``"chat"`` (a React-key, not a real workspace), while each
-    // automation row inside carries the real lazy-created workspace
+    // The "Chat" virtual group's ``project_id`` is the sentinel
+    // ``"chat"`` (a React-key, not a real project), while each
+    // automation row inside carries the real lazy-created project
     // it's bound to. Resolving from the item ensures we hand a valid id
     // to ``agentsApi.listMembers``.
     let itemHit: AutomationItem | undefined;
@@ -467,7 +467,7 @@ export const AutomationPage = () => {
       );
       if (found) {
         itemHit = found;
-        kindHit = group.workspace_kind;
+        kindHit = group.project_kind;
         break;
       }
     }
@@ -475,20 +475,20 @@ export const AutomationPage = () => {
     try {
       // Detail + members fetch in parallel: detail for prompt_template +
       // trigger, members so the agent picker has the right candidates
-      // for this exact workspace (load-bearing for chat-kind
-      // automations whose lazy-created workspaces aren't in the
+      // for this exact project (load-bearing for chat-kind
+      // automations whose lazy-created projects aren't in the
       // pre-loaded ``projectMembers`` map).
       const [detail, membersRes] = await Promise.all([
         automationsApi.get(automationId),
-        agentsApi.listMembers(itemHit.workspace_id).catch(() => ({
+        agentsApi.listMembers(itemHit.project_id).catch(() => ({
           agents: [] as MemberWithAgent[],
         })),
       ]);
-      setEditWorkspaceMembers(membersRes.agents);
+      setEditProjectMembers(membersRes.agents);
       setEditTarget({
         detail,
-        workspaceKind: kindHit,
-        workspaceId: itemHit.workspace_id,
+        projectKind: kindHit,
+        projectId: itemHit.project_id,
       });
       setCreateOpen(true);
     } catch (error) {
@@ -523,14 +523,14 @@ export const AutomationPage = () => {
       return;
     }
     if (!selectedTarget) {
-      toast.error(t(k("automation.pickWorkspaceFirst")));
+      toast.error(t(k("automation.pickProjectFirst")));
       return;
     }
     try {
       await automationsApi.create({
         name: data.name,
-        workspace_kind: selectedTarget.kind,
-        workspace_id: selectedTarget.workspace_id,
+        project_kind: selectedTarget.kind,
+        project_id: selectedTarget.project_id,
         agent_kind:
           selectedTarget.kind === "chat" ? "library_agent" : "project_member",
         agent_slug: data.agent_slug,
@@ -551,7 +551,7 @@ export const AutomationPage = () => {
   const handleDialogOpenChange = (open: boolean) => {
     if (!open) {
       setEditTarget(null);
-      setEditWorkspaceMembers(null);
+      setEditProjectMembers(null);
     }
     setCreateOpen(open);
   };
@@ -618,10 +618,10 @@ export const AutomationPage = () => {
               {groups
                 .filter((group) => group.automations.length > 0)
                 .map((group) => (
-                  <section key={group.workspace_id}>
+                  <section key={group.project_id}>
                     <ScheduledTaskTable
                       tasks={group.automations.map(automationToTableRow)}
-                      title={group.workspace_name}
+                      title={group.project_name}
                       taskCountLabel={t(
                         k(
                           group.automations.length === 1
@@ -631,9 +631,9 @@ export const AutomationPage = () => {
                         { count: group.automations.length },
                       )}
                       lastRunLabel={latestGroupRunLabel(group.automations, t)}
-                      collapsed={collapsedGroupIds.has(group.workspace_id)}
+                      collapsed={collapsedGroupIds.has(group.project_id)}
                       onToggleCollapse={() =>
-                        toggleGroupCollapsed(group.workspace_id)
+                        toggleGroupCollapsed(group.project_id)
                       }
                       onRowClick={(id) => {
                         // Edit affordance: clicking a row opens the
@@ -690,11 +690,11 @@ export const AutomationPage = () => {
         onSubmit={handleDialogSubmit}
         agents={agentChoices}
         allowTaskMode={
-          // Task mode only valid on project workspaces (backend rejects
-          // ``task`` on chat). In edit mode the row's existing workspace
+          // Task mode only valid on project projects (backend rejects
+          // ``task`` on chat). In edit mode the row's existing project
           // wins; in create mode the picked target decides.
           editTarget
-            ? editTarget.workspaceKind === "project"
+            ? editTarget.projectKind === "project"
             : selectedTarget?.kind === "project"
         }
         initial={
@@ -718,7 +718,7 @@ export const AutomationPage = () => {
               ? t(k("automation.dialogTitleChat"))
               : selectedTarget
                 ? t(k("automation.dialogTitleProject"), {
-                    workspace: selectedTarget.name,
+                    project: selectedTarget.name,
                   })
                 : t(k("automation.dialogTitleNew"))
         }

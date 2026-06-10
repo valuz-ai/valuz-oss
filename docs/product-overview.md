@@ -84,7 +84,7 @@ an application of Valuz OSS, not its definition.
   tray, global hotkey, local file drag-and-drop.
 - **Local / LAN headless + WebUI** — run the workstation without a GUI and reach
   it from a browser on your own network.
-- **Single-tenant, data stays in.** Your workspace is yours; nothing leaves your
+- **Single-tenant, data stays in.** Your workstation is yours; nothing leaves your
   machine except the LLM calls you authorize.
 
 ### Supported runtimes
@@ -247,7 +247,7 @@ The Knowledge Base ("Docs") holds the private documents agents reason over.
 ### 3.7 Scheduled & Automations
 
 Schedule agent instructions to run on their own — e.g. fetch industry data each
-morning, generate a report every Friday. Runs are grouped by workspace, keep
+morning, generate a report every Friday. Runs are grouped by project, keep
 execution logs, and notify you on completion.
 
 ### 3.8 Runtimes & Model Channels
@@ -331,7 +331,7 @@ right-hand Context Panel (project context, members, and file tree).
 | Area | What it is |
 |------|------------|
 | New conversation | Start a chat (in a project, with an agent, or quick) |
-| Projects | Your agent-team workspaces |
+| Projects | Your agent-team projects |
 | Activity | What's running, at a glance |
 | Agents | The agent library |
 | Knowledge Base | Private document management |

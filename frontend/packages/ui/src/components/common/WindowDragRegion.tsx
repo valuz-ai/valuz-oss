@@ -4,7 +4,7 @@ import type { CSSProperties, FC } from "react";
  * A transparent strip pinned to the top of the window that acts as a drag
  * handle for the frameless Electron window (``titleBarStyle: "hidden"``).
  *
- * Full-screen screens that don't render the workspace ``TopBar`` (the startup
+ * Full-screen screens that don't render the project ``TopBar`` (the startup
  * splash, onboarding, the api-key screen) otherwise have no draggable region,
  * so the window can't be moved while they're shown. ``h-8`` clears the macOS
  * traffic lights, which remain clickable above the drag region. Inert on

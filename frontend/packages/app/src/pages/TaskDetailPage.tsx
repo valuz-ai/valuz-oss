@@ -42,7 +42,7 @@ import {
 import {
   agentsApi,
   tasksApi,
-  workspacesApi,
+  projectsApi,
   useTranslation,
   type IntervenePayload,
   type MemberWithAgent,
@@ -50,7 +50,7 @@ import {
   type TaskEvent,
 } from "@valuz/core";
 import type { FileTreeNode } from "@valuz/ui";
-import { useWorkspaceOutlet } from "@valuz/app/layout";
+import { useProjectOutlet } from "@valuz/app/layout";
 import {
   TaskContextPanel,
   type PlannedSubtask,
@@ -166,9 +166,9 @@ type Translator = (
 ) => string;
 
 /** Resolve an artifact path to an absolute filesystem location. Agents
- *  typically pass workspace-relative paths to ``finish_task`` (e.g.
+ *  typically pass project-relative paths to ``finish_task`` (e.g.
  *  ``"reports/desktop.md"``), but some pass absolute paths too. Join
- *  with the workspace cwd when relative, leave alone when absolute or
+ *  with the project cwd when relative, leave alone when absolute or
  *  cwd is unknown. */
 function resolveArtifactPath(path: string, rootPath: string): string {
   if (!path) return path;
@@ -296,7 +296,7 @@ export const TaskDetailPage = () => {
   const { taskId = "" } = useParams<{ taskId: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { setHeader, setHideHeader, setRightPanel } = useWorkspaceOutlet();
+  const { setHeader, setHideHeader, setRightPanel } = useProjectOutlet();
 
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [members, setMembers] = useState<MemberWithAgent[]>([]);
@@ -332,7 +332,7 @@ export const TaskDetailPage = () => {
 
   useEffect(() => {
     // Task detail is self-titled (the goal card carries the task name +
-    // status badge) — hide the workspace header strip entirely so the
+    // status badge) — hide the project header strip entirely so the
     // app-title "Valuz Agent" doesn't sit above an already-titled page.
     setHeader(null);
     setHideHeader(true);
@@ -350,17 +350,17 @@ export const TaskDetailPage = () => {
     return () => clearInterval(interval);
   }, [status, loadData]);
 
-  // Pull workspace members so the right-rail Team panel can show each
+  // Pull project members so the right-rail Team panel can show each
   // agent's bound model alongside the slug.
-  const workspaceId = detail?.task.workspace_id;
+  const projectId = detail?.task.project_id;
   useEffect(() => {
-    if (!workspaceId) {
+    if (!projectId) {
       setMembers([]);
       return;
     }
     let cancelled = false;
     void agentsApi
-      .listMembers(workspaceId)
+      .listMembers(projectId)
       .then((res) => {
         if (!cancelled) setMembers(res.agents);
       })
@@ -370,35 +370,35 @@ export const TaskDetailPage = () => {
     return () => {
       cancelled = true;
     };
-  }, [workspaceId]);
+  }, [projectId]);
 
   // Pull the project file tree + cwd so the right-rail "项目文件" tab
-  // can show the workspace files alongside the context sections — same
+  // can show the project files alongside the context sections — same
   // surface ProjectDetailPage shows, so users get the same affordance
   // wherever they are in the project. Extracted as a callback so the
   // refresh button on the file panel can call it on demand.
   const refreshFileTree = useCallback(() => {
-    if (!workspaceId) {
+    if (!projectId) {
       setFileTree([]);
       return;
     }
-    void workspacesApi
-      .listFiles(workspaceId, { depth: 3 })
+    void projectsApi
+      .listFiles(projectId, { depth: 3 })
       .then((res) => setFileTree(toFileTree(res.files)))
       .catch(() => setFileTree([]));
-  }, [workspaceId]);
+  }, [projectId]);
 
   useEffect(() => {
-    if (!workspaceId) {
+    if (!projectId) {
       setFileTree([]);
       setRootPath("");
       return;
     }
     let cancelled = false;
     void Promise.all([
-      workspacesApi.get(workspaceId).catch(() => null),
-      workspacesApi
-        .listFiles(workspaceId, { depth: 3 })
+      projectsApi.get(projectId).catch(() => null),
+      projectsApi
+        .listFiles(projectId, { depth: 3 })
         .catch(() => ({ files: [] })),
     ]).then(([ws, filesRes]) => {
       if (cancelled) return;
@@ -408,11 +408,11 @@ export const TaskDetailPage = () => {
     return () => {
       cancelled = true;
     };
-  }, [workspaceId]);
+  }, [projectId]);
 
-  // Reveal the workspace cwd in the OS file manager via the existing
+  // Reveal the project cwd in the OS file manager via the existing
   // ``open_in_finder`` IPC; web fallback copies path to clipboard.
-  const handleOpenWorkspaceInFinder = useCallback(() => {
+  const handleOpenProjectInFinder = useCallback(() => {
     if (!rootPath) return;
     void openArtifact(rootPath, t as Translator);
   }, [rootPath, t]);
@@ -444,7 +444,7 @@ export const TaskDetailPage = () => {
         rootPath={rootPath}
         plannedSubtasks={plannedSubtasks}
         onRefreshFiles={refreshFileTree}
-        onOpenInFinder={rootPath ? handleOpenWorkspaceInFinder : undefined}
+        onOpenInFinder={rootPath ? handleOpenProjectInFinder : undefined}
       />,
     );
     return () => setRightPanel(null);
@@ -711,7 +711,7 @@ export const TaskDetailPage = () => {
           // ``/project-tasks/{id}`` page was retired — task kickoff is now the
           // project composer's "task" mode.
           onClick={() =>
-            navigate(`/projects/${encodeURIComponent(task.workspace_id)}`)
+            navigate(`/projects/${encodeURIComponent(task.project_id)}`)
           }
           className="inline-flex shrink-0 items-center gap-1 text-ink-meta transition-colors hover:text-ink-heading"
         >
@@ -826,7 +826,7 @@ export const TaskDetailPage = () => {
             {/* Artifacts file list (top half of the card per the prototype).
               Each row: 📄 filename + 「由 X 生成」. Path is the raw value
               the lead passed to ``finish_task(artifacts=…)``; we only
-              show the basename so long workspace-relative paths don't
+              show the basename so long project-relative paths don't
               dominate the row. */}
             <div className="overflow-hidden rounded-[8px] border border-[#e6e7e9] bg-white">
               {completionInfo.artifacts.length > 0 && (

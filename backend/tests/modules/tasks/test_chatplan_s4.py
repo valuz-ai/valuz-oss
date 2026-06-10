@@ -63,7 +63,7 @@ def _seed_task(
     tmp_path,
     *,
     task_id: str = "t1",
-    workspace_id: str = "w1",
+    project_id: str = "w1",
     status: str = "active",
     originator: str = "chat-session-1",
     lead_session_id: str | None = "lead-sess-1",
@@ -73,7 +73,7 @@ def _seed_task(
     try:
         task = TaskRow(
             id=task_id,
-            workspace_id=workspace_id,
+            project_id=project_id,
             file_path=str(tmp_path / f"{task_id}.md"),
             title="T",
             goal="do it",
@@ -86,7 +86,7 @@ def _seed_task(
         db.add(task)
         if lead_session_id is not None:
             run = TaskSessionRow(
-                workspace_id=workspace_id,
+                project_id=project_id,
                 task_id=task_id,
                 session_id=lead_session_id,
                 agent_slug="lead-agent",
@@ -95,7 +95,7 @@ def _seed_task(
                 status="active",
                 label="Kickoff",
                 goal="do it",
-                workspace_mode="shared",
+                project_mode="shared",
                 run_dir=str(tmp_path),
             )
             db.add(run)
@@ -113,7 +113,7 @@ def test_inject_into_active_task_with_registered_lead_delivers(db_factory, tmp_p
     result = asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
-            workspace_id="w1",
+            project_id="w1",
             text="actually focus on Q4 earnings",
             from_session_id="chat-session-1",
         )
@@ -129,7 +129,7 @@ def test_inject_appends_user_inject_event_on_delivery(db_factory, tmp_path):
     asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
-            workspace_id="w1",
+            project_id="w1",
             text="hello lead",
             from_session_id="chat-session-1",
         )
@@ -150,7 +150,7 @@ def test_inject_queues_wrapped_message_in_lead_mailbox(db_factory, tmp_path):
     asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
-            workspace_id="w1",
+            project_id="w1",
             text="please pivot to Q4",
             from_session_id="chat-session-1",
         )
@@ -175,7 +175,7 @@ def test_inject_into_active_task_with_offline_lead_drops(db_factory, tmp_path):
     result = asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
-            workspace_id="w1",
+            project_id="w1",
             text="hi",
             from_session_id="chat-session-1",
         )
@@ -190,7 +190,7 @@ def test_inject_offline_lead_appends_user_inject_dropped_event(db_factory, tmp_p
     asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
-            workspace_id="w1",
+            project_id="w1",
             text="hi",
             from_session_id="chat-session-1",
         )
@@ -211,7 +211,7 @@ def test_inject_into_draft_task_rejects_with_task_not_active(db_factory, tmp_pat
     result = asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
-            workspace_id="w1",
+            project_id="w1",
             text="hi",
             from_session_id="chat-session-1",
         )
@@ -229,7 +229,7 @@ def test_inject_into_completed_task_rejects(db_factory, tmp_path):
     result = asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
-            workspace_id="w1",
+            project_id="w1",
             text="hi",
             from_session_id="chat-session-1",
         )
@@ -244,7 +244,7 @@ def test_inject_into_stopped_task_rejects(db_factory, tmp_path):
     result = asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
-            workspace_id="w1",
+            project_id="w1",
             text="hi",
             from_session_id="chat-session-1",
         )
@@ -259,7 +259,7 @@ def test_inject_into_paused_task_is_allowed(db_factory, tmp_path):
     result = asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
-            workspace_id="w1",
+            project_id="w1",
             text="resume soon please",
             from_session_id="chat-session-1",
         )
@@ -277,7 +277,7 @@ def test_inject_with_no_lead_run_returns_no_lead(db_factory, tmp_path):
     result = asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
-            workspace_id="w1",
+            project_id="w1",
             text="hi",
             from_session_id="chat-session-1",
         )
@@ -296,7 +296,7 @@ def test_wrapped_envelope_uses_user_instruction_source_chat_tag(db_factory, tmp_
     asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
-            workspace_id="w1",
+            project_id="w1",
             text="raw user text",
             from_session_id="chat-session-1",
         )

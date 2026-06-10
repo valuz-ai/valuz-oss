@@ -3,7 +3,7 @@
  *
  * Replaces `schedules-api.ts` per ADR-021. Same overall shape (list /
  * detail / create / update / pause / resume / run-now / runs +
- * workspace-targets and trigger validation) with two visible differences:
+ * project-targets and trigger validation) with two visible differences:
  *
  * 1. `Trigger` is a discriminated union — cron / interval / manual
  *    rather than a flat `cron_expr` field.
@@ -46,9 +46,9 @@ export type Trigger = CronTrigger | IntervalTrigger | ManualTrigger;
 
 /**
  * Agent reference kind. `project_member` references a member already
- * instantiated into a project workspace. `library_agent` references an
+ * instantiated into a project project. `library_agent` references an
  * agent in the global LIBRARY/Agents — the backend instantiates it into
- * the bound chat workspace at create time and stores the row as
+ * the bound chat project at create time and stores the row as
  * project_member; the kind is preserved on the row for display.
  */
 export type AgentKind = "project_member" | "library_agent";
@@ -57,11 +57,11 @@ export type AgentKind = "project_member" | "library_agent";
  * Execution mode at fire time.
  *
  * - ``chat`` — single agent run. The rendered prompt drives one session
- *   + send. Original schedule semantic; valid on any workspace.
+ *   + send. Original schedule semantic; valid on any project.
  * - ``task`` — kick off a project task with the bound agent as Lead.
  *   The rendered prompt becomes the task goal; the lead plans + dispatches
- *   sub-members. Only valid on project workspaces (backend rejects
- *   ``task`` on chat workspaces).
+ *   sub-members. Only valid on project projects (backend rejects
+ *   ``task`` on chat projects).
  */
 export type ActionKind = "chat" | "task";
 
@@ -69,9 +69,9 @@ export type ActionKind = "chat" | "task";
 
 export interface AutomationItem {
   automation_id: string;
-  workspace_id: string;
-  workspace_name: string;
-  workspace_kind: "chat" | "project";
+  project_id: string;
+  project_name: string;
+  project_kind: "chat" | "project";
 
   name: string;
   agent_kind: AgentKind;
@@ -92,9 +92,9 @@ export interface AutomationItem {
 }
 
 export interface AutomationGroup {
-  workspace_id: string;
-  workspace_name: string;
-  workspace_kind: "chat" | "project";
+  project_id: string;
+  project_name: string;
+  project_kind: "chat" | "project";
   automations: AutomationItem[];
 }
 
@@ -109,7 +109,7 @@ export interface AutomationDetail extends AutomationItem {
 export interface AutomationRunItem {
   run_id: string;
   automation_id: string;
-  workspace_id: string;
+  project_id: string;
   trigger_type: "cron" | "interval" | "manual" | "recovered_skip";
   status:
     | "queued"
@@ -154,18 +154,18 @@ export interface IntervalValidationResult {
 export interface AutomationCreatePayload {
   name: string;
   /**
-   * Workspace routing:
+   * Project routing:
    *
-   * - `workspace_kind="chat"` + `workspace_id=null` → backend
-   *   lazy-creates a fresh chat workspace named after the automation.
+   * - `project_kind="chat"` + `project_id=null` → backend
+   *   lazy-creates a fresh chat project named after the automation.
    *   Automation page "Chat" picker submits this shape.
-   * - `workspace_kind="chat"` + `workspace_id=<id>` → bind to that
-   *   chat workspace. MCP-from-chat path.
-   * - `workspace_kind="project"` + `workspace_id=<id>` → bind to the
-   *   project. `workspace_id` is required for project payloads.
+   * - `project_kind="chat"` + `project_id=<id>` → bind to that
+   *   chat project. MCP-from-chat path.
+   * - `project_kind="project"` + `project_id=<id>` → bind to the
+   *   project. `project_id` is required for project payloads.
    */
-  workspace_kind: "chat" | "project";
-  workspace_id: string | null;
+  project_kind: "chat" | "project";
+  project_id: string | null;
 
   agent_kind: AgentKind;
   agent_slug: string;
@@ -176,7 +176,7 @@ export interface AutomationCreatePayload {
 
   /**
    * Execution mode. Optional — backend defaults to `"chat"` if omitted.
-   * `"task"` is only valid for project workspaces; the backend rejects
+   * `"task"` is only valid for project projects; the backend rejects
    * (422 ``AutomationTaskOnlyOnProject``) the combination on chat.
    */
   action_kind?: ActionKind;
@@ -197,35 +197,35 @@ export interface AutomationRunAccepted {
 }
 
 /**
- * One option in the workspace picker on the automation-create form. The
+ * One option in the project picker on the automation-create form. The
  * list is fully composed on the backend (Chat sentinel + project rows
- * only) — see `AutomationService.list_workspace_targets`. The frontend
+ * only) — see `AutomationService.list_project_targets`. The frontend
  * renders it verbatim.
  *
  * `id` is the stable identifier used as the React key (`chat-default`
- * for the sentinel; workspace_id for projects). `workspace_id` is what
+ * for the sentinel; project_id for projects). `project_id` is what
  * goes into the create payload — `null` for the Chat sentinel triggers
  * backend lazy-create; the real id for projects.
  */
-export interface AutomationWorkspaceTarget {
+export interface AutomationProjectTarget {
   id: string;
   name: string;
   kind: "chat" | "project";
-  workspace_id: string | null;
+  project_id: string | null;
 }
 
 const fetchJson = createFetchJson(() => _apiBase);
 
 export const automationsApi = {
-  listGroups(workspaceId?: string): Promise<{ groups: AutomationGroup[] }> {
+  listGroups(projectId?: string): Promise<{ groups: AutomationGroup[] }> {
     const qs = new URLSearchParams();
-    if (workspaceId) qs.set("workspace_id", workspaceId);
+    if (projectId) qs.set("project_id", projectId);
     const suffix = qs.toString() ? `?${qs}` : "";
     return fetchJson(`/v1/automations${suffix}`);
   },
 
-  listWorkspaceTargets(): Promise<{ targets: AutomationWorkspaceTarget[] }> {
-    return fetchJson(`/v1/automations/workspace-targets`);
+  listProjectTargets(): Promise<{ targets: AutomationProjectTarget[] }> {
+    return fetchJson(`/v1/automations/project-targets`);
   },
 
   get(automationId: string): Promise<AutomationDetail> {

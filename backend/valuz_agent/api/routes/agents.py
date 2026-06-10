@@ -3,11 +3,11 @@
 Endpoints:
   GET  /v1/agents                        — list all official agents
   GET  /v1/agents/{slug}                 — get single agent
-  GET  /v1/workspaces/{id}/agents                  — list workspace members
-  POST /v1/workspaces/{id}/agents                  — create blank agent
-  POST /v1/workspaces/{id}/agents:deploy            — 派驻 (live-reference) a library agent
-  PATCH /v1/workspaces/{id}/agents/{slug}          — update member agent
-  DELETE /v1/workspaces/{id}/agents/{slug}         — delete member + kernel agent
+  GET  /v1/projects/{id}/agents                  — list project members
+  POST /v1/projects/{id}/agents                  — create blank agent
+  POST /v1/projects/{id}/agents:deploy            — 派驻 (live-reference) a library agent
+  PATCH /v1/projects/{id}/agents/{slug}          — update member agent
+  DELETE /v1/projects/{id}/agents/{slug}         — delete member + kernel agent
 """
 
 from __future__ import annotations
@@ -114,13 +114,13 @@ class DeployAgentRequest(BaseModel):
 
     source_agent_slug: str
     # Optional: backend derives from the source agent's name when omitted,
-    # unique within the target workspace (VALUZ-AGENT-SLUG).
+    # unique within the target project (VALUZ-AGENT-SLUG).
     agent_slug: str | None = None
 
 
 class ProjectMemberResponse(BaseModel):
     id: str
-    workspace_id: str
+    project_id: str
     agent_slug: str
     kernel_agent_id: str
     source_agent_slug: str | None
@@ -211,7 +211,7 @@ async def list_agent_deployments(
     slug: str,
     svc: AgentService = Depends(_get_agent_service),
 ) -> dict:
-    """List the projects (workspaces) this agent is派驻'd into (live-reference).
+    """List the projects (projects) this agent is派驻'd into (live-reference).
 
     Powers the agent detail「派驻于 N 个项目」panel + delete-guard UX.
     """
@@ -293,40 +293,40 @@ async def delete_agent(
 
 
 # ---------------------------------------------------------------------------
-# Workspace member routes
+# Project member routes
 # ---------------------------------------------------------------------------
 
 
 @router.get(
-    "/v1/workspaces/{workspace_id}/agents",
+    "/v1/projects/{project_id}/agents",
     response_model=dict[str, list[MemberWithAgentResponse]],
 )
 async def list_members(
-    workspace_id: str,
+    project_id: str,
     svc: AgentService = Depends(_get_agent_service),
 ) -> dict[str, list[MemberWithAgentResponse]]:
-    """List all agent members in a workspace."""
-    rows = await svc.list_members(workspace_id)
+    """List all agent members in a project."""
+    rows = await svc.list_members(project_id)
     return {"agents": [_member_with_agent(r) for r in rows]}
 
 
 @router.post(
-    "/v1/workspaces/{workspace_id}/agents",
+    "/v1/projects/{project_id}/agents",
     status_code=201,
     response_model=MemberWithAgentResponse,
 )
 async def create_blank_agent(
-    workspace_id: str,
+    project_id: str,
     payload: CreateBlankAgentRequest,
     svc: AgentService = Depends(_get_agent_service),
 ) -> MemberWithAgentResponse:
-    """Create a blank (source-agent-free) agent in a workspace."""
+    """Create a blank (source-agent-free) agent in a project."""
     bindings = (
         [b.model_dump() for b in payload.connector_bindings] if payload.connector_bindings else None
     )
     try:
         result = await svc.create_blank_agent(
-            workspace_id=workspace_id,
+            project_id=project_id,
             agent_slug=payload.agent_slug,
             name=payload.name,
             instructions=payload.instructions,
@@ -343,19 +343,19 @@ async def create_blank_agent(
 
 
 @router.post(
-    "/v1/workspaces/{workspace_id}/agents:deploy",
+    "/v1/projects/{project_id}/agents:deploy",
     status_code=201,
     response_model=MemberWithAgentResponse,
 )
 async def deploy_agent(
-    workspace_id: str,
+    project_id: str,
     payload: DeployAgentRequest,
     svc: AgentService = Depends(_get_agent_service),
 ) -> MemberWithAgentResponse:
-    """派驻: deploy (live-reference) a library agent into a project workspace."""
+    """派驻: deploy (live-reference) a library agent into a project."""
     try:
         result = await svc.deploy_agent(
-            workspace_id=workspace_id,
+            project_id=project_id,
             source_agent_slug=payload.source_agent_slug,
             agent_slug=payload.agent_slug,
         )
@@ -369,16 +369,16 @@ async def deploy_agent(
 
 
 @router.delete(
-    "/v1/workspaces/{workspace_id}/agents/{agent_slug}",
+    "/v1/projects/{project_id}/agents/{agent_slug}",
     status_code=204,
 )
 async def delete_member(
-    workspace_id: str,
+    project_id: str,
     agent_slug: str,
     svc: AgentService = Depends(_get_agent_service),
 ) -> None:
-    """Delete a workspace agent and its kernel AgentConfig."""
+    """Delete a project agent and its kernel AgentConfig."""
     try:
-        await svc.delete_member(workspace_id, agent_slug)
+        await svc.delete_member(project_id, agent_slug)
     except MemberNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"Agent not found: {agent_slug}") from exc

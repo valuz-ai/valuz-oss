@@ -137,10 +137,10 @@ class Settings(BaseSettings):
             _RUNTIME_TOKEN = secrets.token_urlsafe(24)
         return _RUNTIME_TOKEN
 
-    # ── User-facing workspace root ───────────────────────────────────
-    # Base directory for user-visible project workspaces (not hidden).
-    # Defaults to ~/Valuz; override with VALUZ_USER_WORKSPACE_ROOT.
-    user_workspace_root: Path = Path.home() / "Valuz"
+    # ── User-facing project root ───────────────────────────────────
+    # Base directory for user-visible projects (not hidden).
+    # Defaults to ~/Valuz; override with VALUZ_USER_PROJECT_ROOT.
+    user_project_root: Path = Path.home() / "Valuz"
 
     model_config = {"env_prefix": "VALUZ_"}
 

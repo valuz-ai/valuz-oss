@@ -13,7 +13,7 @@ export function useSkillEvents(onSkillChanged?: () => void) {
       callbackRef.current?.()
     })
 
-    source.addEventListener('workspace.skills_changed', () => {
+    source.addEventListener('project.skills_changed', () => {
       callbackRef.current?.()
     })
 

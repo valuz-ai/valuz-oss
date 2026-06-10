@@ -104,7 +104,7 @@ class StagingMeta:
 
 # ── Path resolution ───────────────────────────────────────────────────
 #
-# Staging is rooted **inside the workspace cwd** under
+# Staging is rooted **inside the project cwd** under
 # ``.skill-staging/``. The agent writes there using a relative path it
 # computes from ``$PWD`` — no session_id appears in the path. This works
 # uniformly for sessions launched via ``/v1/skills/create/start`` and for
@@ -115,8 +115,8 @@ class StagingMeta:
 # ``staging_dir_for_session(session_id)`` is preserved as the public
 # entry point so the existing scan / sync / optimize / cleanup flows
 # don't have to change at every call site — internally it now resolves
-# the workspace cwd from the session row and points at
-# ``{workspace_cwd}/.skill-staging/``. When the kernel session can't be
+# the project cwd from the session row and points at
+# ``{project_cwd}/.skill-staging/``. When the kernel session can't be
 # loaded (e.g. the legacy staging endpoint is called for a session that
 # was already cleaned up), we fall back to the pre-refactor
 # ``{settings.skill_staging_dir}/{session_id}/`` path so legacy content
@@ -128,13 +128,13 @@ def staging_root() -> Path:
 
     Pre-refactor sessions wrote here as ``{root}/{session_id}/{slug}/``.
     Kept readable so old content surfaces in scans during the transition;
-    new staged content always lives under the workspace cwd instead.
+    new staged content always lives under the project cwd instead.
     """
     return settings.skill_staging_dir.expanduser()
 
 
-def _resolve_workspace_cwd_for_session(session_id: str) -> Path | None:
-    """Look up the workspace cwd a session is running in.
+def _resolve_project_cwd_for_session(session_id: str) -> Path | None:
+    """Look up the project cwd a session is running in.
 
     Returns ``None`` when the kernel session row is missing — the caller
     decides whether to fall back to the legacy session-keyed staging
@@ -151,35 +151,35 @@ def _resolve_workspace_cwd_for_session(session_id: str) -> Path | None:
         return None
 
     project_id = session.project_id
-    workspace_kind = "chat"
-    workspace_root_path: str | None = None
+    project_kind = "chat"
+    project_root_path: str | None = None
     try:
         from valuz_agent.adapters.kernel_sync import _run_in_thread
-        from valuz_agent.modules.projects.datastore import WorkspaceDatastore
+        from valuz_agent.modules.projects.datastore import ProjectDatastore
 
         async def _read_ws():  # type: ignore[no-untyped-def]
             from valuz_agent.infra.db import async_unit_of_work
 
             async with async_unit_of_work(commit=False) as db:
-                return await WorkspaceDatastore(db).get_by_id(str(project_id))
+                return await ProjectDatastore(db).get_by_id(str(project_id))
 
         # Sync island: this helper is reached from both sync staging paths and
         # the async ``confirm_submission`` (already so, via ``load_session_sync``
-        # above). Read the workspace row through the datastore on a fresh loop —
+        # above). Read the project row through the datastore on a fresh loop —
         # the same thread bridge ``kernel_sync`` uses — so there is no host sync
         # engine here.
         row = _run_in_thread(_read_ws)
         if row is not None:
-            workspace_kind = row.kind if row.kind in ("chat", "project") else "chat"
-            workspace_root_path = row.root_path
-    except Exception:  # noqa: BLE001 — workspace lookup failure → fall through to chat default
+            project_kind = row.kind if row.kind in ("chat", "project") else "chat"
+            project_root_path = row.root_path
+    except Exception:  # noqa: BLE001 — project lookup failure → fall through to chat default
         pass
 
     try:
-        return fs_registry.workspace_cwd(
+        return fs_registry.project_cwd(
             str(project_id),
-            workspace_kind,  # type: ignore[arg-type]
-            workspace_root_path,
+            project_kind,  # type: ignore[arg-type]
+            project_root_path,
         )
     except (ValueError, OSError):
         return None
@@ -188,9 +188,9 @@ def _resolve_workspace_cwd_for_session(session_id: str) -> Path | None:
 def staging_dir_for_session(session_id: str, *, mkdir: bool = False) -> Path:
     """Return the staging directory for a session.
 
-    The returned path is ``{workspace_cwd}/.skill-staging/`` for the
-    workspace the session lives in. Multiple sessions in the same
-    workspace share this directory — slug uniqueness is the
+    The returned path is ``{project_cwd}/.skill-staging/`` for the
+    project the session lives in. Multiple sessions in the same
+    project share this directory — slug uniqueness is the
     differentiator, enforced by ``submit_skill``'s validator and the
     confirm-time conflict check.
 
@@ -203,12 +203,12 @@ def staging_dir_for_session(session_id: str, *, mkdir: bool = False) -> Path:
 
     from valuz_agent.infra.fs_registry import fs_registry
 
-    workspace_cwd = _resolve_workspace_cwd_for_session(session_id)
-    if workspace_cwd is None:
+    project_cwd = _resolve_project_cwd_for_session(session_id)
+    if project_cwd is None:
         # Legacy fallback — keeps in-flight staging content discoverable.
         path = staging_root() / session_id
     else:
-        path = fs_registry.skill_staging_root_for_workspace(workspace_cwd)
+        path = fs_registry.skill_staging_root_for_project(project_cwd)
     if mkdir:
         path.mkdir(parents=True, exist_ok=True)
     return path

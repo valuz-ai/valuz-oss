@@ -9,7 +9,7 @@ import type {
 import {
   personalDesktopRoutes,
   personalSettingsSections,
-  personalWorkspacePanels,
+  personalProjectPanels,
 } from "./registries";
 
 const personalFeatures: FeatureFlags = {
@@ -33,7 +33,7 @@ const personalBranding: BrandingProfile = {
   appName: "Valuz Agent",
 };
 
-// v2 IA (PRD-NEXT §3.4): Workspace (Assistant, Automation) → Projects →
+// v2 IA (PRD-NEXT §3.4): Project (Assistant, Automation) → Projects →
 // Library (Agents, Skills, Connectors, Knowledge) → Settings. Tasks are no
 // longer a top-level entry — they live inside a Project.
 const personalNavItems: NavItemModule[] = [
@@ -46,7 +46,7 @@ const personalNavItems: NavItemModule[] = [
     label: "sidebar.automation",
     href: "/automations",
     position: "top",
-    navGroup: "workspace",
+    navGroup: "project",
     edition: "personal",
   },
   {
@@ -54,7 +54,7 @@ const personalNavItems: NavItemModule[] = [
     label: "nav.activity",
     href: "/activity",
     position: "top",
-    navGroup: "workspace",
+    navGroup: "project",
     edition: "personal",
   },
   {
@@ -105,7 +105,7 @@ export const personalProfile: EditionProfile = {
   services: personalServices,
   desktopRoutes: personalDesktopRoutes,
   settingsSections: personalSettingsSections,
-  workspacePanels: personalWorkspacePanels,
+  projectPanels: personalProjectPanels,
   branding: personalBranding,
   navItems: personalNavItems,
   capabilities: DEFAULT_CAPABILITIES,

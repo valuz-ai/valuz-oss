@@ -16,7 +16,7 @@ import {
 const _warnedMissingKeys = new Set<string>();
 const _isDev =
   typeof import.meta !== "undefined" &&
-  // ``import.meta.env`` shape isn't typed across the workspace; treat
+  // ``import.meta.env`` shape isn't typed across the project; treat
   // it as an opaque record at the call site rather than pulling in a
   // Vite-specific type here.
   (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV === true;

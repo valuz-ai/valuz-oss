@@ -29,16 +29,16 @@ export interface ServiceDescriptor {
   requiredForBoot: boolean;
 }
 
-export type DesktopRouteLayout = "workspace" | "standalone";
+export type DesktopRouteLayout = "project" | "standalone";
 
 export interface DesktopRouteModule {
   id: string;
   path: string;
   label: string;
   description: string;
-  /** Which layout shell wraps this route. Workspace routes nest inside DesktopWorkspaceLayout. */
+  /** Which layout shell wraps this route. Project routes nest inside DesktopProjectLayout. */
   layout: DesktopRouteLayout;
-  /** Whether the route appears in the workspace sidebar nav. */
+  /** Whether the route appears in the project sidebar nav. */
   showInNav: boolean;
   /** Optional inline component. If omitted, the app resolves via its local COMPONENT_MAP by id. */
   component?: ComponentType;
@@ -58,7 +58,7 @@ export interface SettingsSectionModule {
   edition: Edition;
 }
 
-export interface WorkspacePanelModule {
+export interface ProjectPanelModule {
   id: string;
   label: string;
   edition: Edition;
@@ -79,11 +79,11 @@ export interface NavItemModule {
   position: "top" | "bottom";
   /**
    * Sidebar group the item renders in (v2 IA — PRD-NEXT §3.4):
-   * ``workspace`` items sit at the top (Assistant, Automation), ``library``
+   * ``project`` items sit at the top (Assistant, Automation), ``library``
    * items sit under the Library section, ``settings`` is bottom-pinned.
-   * Defaults to ``workspace`` when omitted.
+   * Defaults to ``project`` when omitted.
    */
-  navGroup?: "workspace" | "library" | "settings";
+  navGroup?: "project" | "library" | "settings";
   edition: Edition;
 }
 
@@ -93,7 +93,7 @@ export interface EditionProfile {
   services: ServiceDescriptor[];
   desktopRoutes: DesktopRouteModule[];
   settingsSections: SettingsSectionModule[];
-  workspacePanels: WorkspacePanelModule[];
+  projectPanels: ProjectPanelModule[];
   branding: BrandingProfile;
   navItems: NavItemModule[];
   capabilities: Capabilities;
