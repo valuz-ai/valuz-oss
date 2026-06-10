@@ -66,7 +66,7 @@ async def run_session_to_idle(
     Attaches a BroadcastEventSink so SSE clients following the session still
     receive live events. Cleans up the sink on exit (success or failure).
 
-    ``on_message`` is an optional sync callback invoked with the kernel
+    ``on_message`` is an optional async callback invoked with the kernel
     ``run_turn`` result message after a successful turn — the chat path uses
     it to meter billing; the task member/lead path leaves it ``None`` so its
     behaviour is byte-identical.
@@ -147,7 +147,7 @@ async def run_session_to_idle(
             after_run = await store.load_session(session_id)
             final_status = after_run.status if after_run is not None else "idle"
             if on_message is not None:
-                on_message(message, after_run)
+                await on_message(message, after_run)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "run_session_to_idle: agent turn failed for session %s: %s",

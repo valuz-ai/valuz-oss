@@ -292,7 +292,7 @@ async def send_message(
 ) -> SessionDetail:
     """Start agent execution in background. Returns immediately with running status."""
     billing = get_billing_port()
-    budget = billing.check_budget(user.user_id, estimated_cost=0.0)
+    budget = await billing.check_budget(user.user_id, estimated_cost=0.0)
     if not budget.allowed:
         raise HTTPException(status_code=402, detail=budget.reason or "Budget exceeded")
     return await svc.send_message(

@@ -1,5 +1,10 @@
 """Port: metering, budget checks, and balance queries.
 
+All methods are async — commercial implementations do network I/O
+(cloud wallet / meter endpoints) and several call sites live on the
+event loop (routes, SSE adapters), so a sync contract would force
+blocking HTTP onto the loop (see ADR-003 in the commercial repo).
+
 OSS mode uses ``NoopBillingProvider`` — all operations are no-ops that
 report unlimited budget. The commercial overlay binds a real provider
 via ``set_billing_port()`` in ``api/deps.py`` at app startup.
@@ -35,15 +40,15 @@ class Balance:
 class BillingPort(Protocol):
     """Metering, budget enforcement, and balance queries."""
 
-    def meter(self, event: MeterEvent) -> None:
+    async def meter(self, event: MeterEvent) -> None:
         """Record a billable event."""
         ...
 
-    def check_budget(self, user_id: str, estimated_cost: float = 0.0) -> BudgetStatus:
+    async def check_budget(self, user_id: str, estimated_cost: float = 0.0) -> BudgetStatus:
         """Check whether the user has sufficient budget to proceed."""
         ...
 
-    def get_balance(self, user_id: str) -> Balance:
+    async def get_balance(self, user_id: str) -> Balance:
         """Return the user's current credit balance."""
         ...
 
@@ -51,13 +56,13 @@ class BillingPort(Protocol):
 class NoopBillingProvider:
     """Default billing provider — everything is free, budget is unlimited."""
 
-    def meter(self, event: MeterEvent) -> None:
+    async def meter(self, event: MeterEvent) -> None:
         pass
 
-    def check_budget(self, user_id: str, estimated_cost: float = 0.0) -> BudgetStatus:
+    async def check_budget(self, user_id: str, estimated_cost: float = 0.0) -> BudgetStatus:
         return BudgetStatus(allowed=True)
 
-    def get_balance(self, user_id: str) -> Balance:
+    async def get_balance(self, user_id: str) -> Balance:
         return Balance(credits=float("inf"))
 
 

@@ -42,13 +42,13 @@ async def _run_agent_background(
     byte-identical).
     """
 
-    def _meter(message: Any, after_run: Any) -> None:
+    async def _meter(message: Any, after_run: Any) -> None:
         if message.input_tokens is not None or message.output_tokens is not None:
             from valuz_agent.ports.billing import MeterEvent, get_billing_port
 
             uid = (after_run.metadata if after_run else {}).get("owner_user_id", "local-user")
             try:
-                get_billing_port().meter(
+                await get_billing_port().meter(
                     MeterEvent(
                         user_id=uid,
                         event_type="llm_call",

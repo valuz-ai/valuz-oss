@@ -1000,7 +1000,7 @@ class SessionService:
 
         billing = get_billing_port()
         uid = session.metadata.get("owner_user_id", "local-user")
-        budget = billing.check_budget(uid)
+        budget = await billing.check_budget(uid)
         if not budget.allowed:
             raise BudgetExceeded(budget.reason or "insufficient credits")
 
@@ -1081,7 +1081,7 @@ class SessionService:
 
         billing = get_billing_port()
         uid = session.metadata.get("owner_user_id", "local-user")
-        budget = billing.check_budget(uid)
+        budget = await billing.check_budget(uid)
         if not budget.allowed:
             raise BudgetExceeded(budget.reason or "insufficient credits")
 
@@ -1190,7 +1190,7 @@ class SessionService:
 
                     uid = meta.get("owner_user_id", "local-user")
                     try:
-                        get_billing_port().meter(
+                        await get_billing_port().meter(
                             MeterEvent(
                                 user_id=uid,
                                 event_type="llm_call",

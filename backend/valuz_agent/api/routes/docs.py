@@ -80,7 +80,7 @@ async def list_kbs(
         item.model_dump() if hasattr(item, "model_dump") else item
         for item in rows
     ]
-    items = get_resource_enhancer().enhance("kb", items)
+    items = await get_resource_enhancer().enhance("kb", items)
     return {"knowledge_bases": items}
 
 

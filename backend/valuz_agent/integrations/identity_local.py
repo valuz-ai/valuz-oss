@@ -19,7 +19,7 @@ class LocalIdentityResolver:
     ``user_id`` column (see ``infra.local_identity``).
     """
 
-    def resolve(self, request: Any) -> UserIdentity:
+    async def resolve(self, request: Any) -> UserIdentity:
         return UserIdentity(user_id=resolve_local_user_id())
 
 

@@ -58,9 +58,9 @@ def set_identity_resolver(resolver: IdentityResolver) -> None:
     _identity_resolver = resolver
 
 
-def get_current_user(request: Request) -> UserIdentity:
+async def get_current_user(request: Request) -> UserIdentity:
     """Resolve the current user from the request. OSS → ANONYMOUS."""
-    result = _identity_resolver.resolve(request)
+    result = await _identity_resolver.resolve(request)
     return result or ANONYMOUS
 
 

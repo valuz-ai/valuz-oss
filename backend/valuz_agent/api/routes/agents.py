@@ -186,7 +186,7 @@ async def list_agents(
 
     rows = await svc.list_agents(source=source)
     items = [AgentResponse.model_validate(r).model_dump() for r in rows]
-    items = get_resource_enhancer().enhance("agent", items)
+    items = await get_resource_enhancer().enhance("agent", items)
     return {"agents": items}
 
 
