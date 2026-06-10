@@ -317,9 +317,18 @@ jobs:
       contents: write
     steps:     
       - name: Configure Git Mirror for Checkout
+        shell: powershell
         run: |
-          Add-Content "$env:USERPROFILE\.gitconfig" '[url "https://gh-proxy.org"]'
-          Add-Content "$env:USERPROFILE\.gitconfig" "`tinsteadOf = https://github.com/"
+          Write-Host "Before cleanup:"
+          git config --global --list | Select-String "gh-proxy|insteadOf|insteadof" || Write-Host "No old rewrite config"
+
+          git config --global --remove-section 'url.https://gh-proxy.org/' 2>$null
+          git config --global --remove-section 'url.https://gh-proxy.org/https://github.com/' 2>$null
+
+          git config --global url."https://gh-proxy.org/https://github.com/".insteadOf "https://github.com/"
+
+          Write-Host "After cleanup:"
+          git config --global --get-regexp "url\..*\.insteadof"
 
       - name: Checkout
         uses: actions/checkout@v4
