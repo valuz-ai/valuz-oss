@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "last_updated": "2026-06-02",
+  "last_updated": "2026-06-09",
   "_comment": "Recommended model lists for OAuth subscription channels. Updating these does not require a Python code change — bump last_updated and edit the arrays. API-key channels are NOT covered here; their models come from /v1/models auto-discovery + user manual entry on channel edit.",
   "_sources": {
     "claude-subscription": "https://code.claude.com/docs/en/model-config",
@@ -10,6 +10,7 @@
     "claude-subscription": {
       "default_model": "claude-sonnet-4-6",
       "models": [
+        "claude-fable-5",
         "claude-opus-4-8",
         "claude-opus-4-7",
         "claude-opus-4-6",

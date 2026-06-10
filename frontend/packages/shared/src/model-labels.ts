@@ -13,6 +13,9 @@
  */
 export const MODEL_LABELS: Record<string, string> = {
   // ── Anthropic ──
+  // Fable's id has a single version number (``fable-5``), so the
+  // claude family rule (two digit groups) never matches — exact entry only.
+  "claude-fable-5": "Fable 5",
   "claude-opus-4-8": "Opus 4.8",
   "claude-opus-4-7": "Opus 4.7",
   "claude-opus-4-6": "Opus 4.6",
