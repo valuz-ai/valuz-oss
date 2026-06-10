@@ -549,6 +549,19 @@ async def _resolve_agent_provider(
         return None
 
 
+def embed_agent_config(request: CreateSessionRequest, agent: object) -> CreateSessionRequest:
+    """Return *request* with its ``agent_config`` snapshot replaced by *agent*.
+
+    *agent* is a domain ``AgentConfig`` (e.g. the per-task lead clone from
+    ``_materialize_lead_agent``); it is serialized to the wire schema here so
+    callers never touch the schema layer themselves. The request is a Pydantic
+    model — ``dataclasses.replace`` does not apply.
+    """
+    from app.serializers import agent_config_to_schema
+
+    return request.model_copy(update={"agent_config": agent_config_to_schema(agent)})
+
+
 async def build_member_session(
     *,
     project_id: str,
