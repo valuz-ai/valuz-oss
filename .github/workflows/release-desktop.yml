@@ -317,17 +317,21 @@ jobs:
       contents: write
     steps:     
       - name: Configure Git Mirror for Checkout
-        shell: powershell
+        shell: bash
         run: |
-          Write-Host "Before cleanup:"
-          git config --global --list | Select-String "gh-proxy|insteadOf|insteadof" || Write-Host "No old rewrite config"
+          echo "=== 1. 检查旧的配置 ==="
+          git config --global --list | grep -E "gh-proxy|instead[Oo]f" || echo "No old rewrite config"
 
-          git config --global --remove-section 'url.https://gh-proxy.org/' 2>$null
-          git config --global --remove-section 'url.https://gh-proxy.org/https://github.com/' 2>$null
+          echo "=== 2. 清理旧的错误配置 ==="
+          # Bash 中静默重定向错误输出使用 2>/dev/null
+          git config --global --remove-section 'url.https://gh-proxy.org/' 2>/dev/null || true
+          git config --global --remove-section 'url.https://gh-proxy.org/https://github.com/' 2>/dev/null || true
 
+          echo "=== 3. 写入新的镜像配置 ==="
+          # 注意：镜像站如果需要拼接完整 URL，确保末尾斜杠和前缀匹配
           git config --global url."https://gh-proxy.org/https://github.com/".insteadOf "https://github.com/"
 
-          Write-Host "After cleanup:"
+          echo "=== 4. 验证最终配置 ==="
           git config --global --get-regexp "url\..*\.insteadof"
 
       - name: Checkout
