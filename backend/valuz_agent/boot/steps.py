@@ -127,6 +127,13 @@ async def bootstrap_schema() -> None:
     #    on a dedicated thread (see ``run_host_migrations``).
     run_host_migrations()
 
+    # 3.5 Re-install logging AGAIN — the host chain's ``fileConfig`` clears
+    #     the root handlers exactly like the kernel chain's did in step 1,
+    #     which previously killed the JSON file handler the 服务 log panel
+    #     tails (and, before ``disable_existing_loggers=False`` landed in
+    #     both env.py files, silenced every already-imported valuz logger).
+    configure_logging()
+
     # 4. Pure-insert seeds for built-in rows.
     async with async_unit_of_work() as db:
         await seed_all(db)

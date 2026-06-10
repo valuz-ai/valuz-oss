@@ -119,7 +119,11 @@ async def run_session_to_idle(
         # before handing off to the runtime (agent-harness 3e742fc), so the
         # detail fetch returns ``running`` and the frontend live view engages
         # on open. No host-side pre-persist needed.
-        project_id = str(loaded_session.project_id) if loaded_session else ""
+        project_id = str(
+            (((loaded_session.metadata or {}).get("valuz", {}) or {}).get("project_id") or "")
+            if loaded_session
+            else ""
+        )
         try:
             additional_context = await _build_additional_context(
                 session_id, project_id, pending_attachments
