@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import shutil
 import tarfile
@@ -22,7 +21,6 @@ from valuz_agent.integrations.skills_filesystem import (
 from valuz_agent.modules.projects.service import (
     WorkspaceService,
 )
-from valuz_agent.modules.sessions.datastore import SessionDatastore
 from valuz_agent.modules.skills.datastore import SkillDatastore
 from valuz_agent.modules.skills.events import (
     SKILL_CHANGED,
@@ -85,7 +83,6 @@ class SkillLibraryService:
         datastore: SkillDatastore,
         skill_source: FilesystemSkillSource,
         workspace_service: WorkspaceService,
-        session_datastore: SessionDatastore,
         event_bus: EventBus,
         extra_sources: list | None = None,
         auth_facade: object | None = None,
@@ -95,7 +92,6 @@ class SkillLibraryService:
         self._source = skill_source
         self._extra_sources = extra_sources or []
         self._workspaces = workspace_service
-        self._sessions = session_datastore
         self._bus = event_bus
         self._auth = auth_facade
         self._remote_registry = remote_registry
@@ -558,8 +554,14 @@ class SkillLibraryService:
         self,
         payload: SessionSkillImportConfirmRequest,
     ) -> SkillView:
+        # Session events live in the kernel ``events`` table — fetch them
+        # through the adapter seam. Imported lazily (same pattern as
+        # ``skills/staging.py``) so importing this module never pulls in the
+        # kernel bootstrap.
+        from valuz_agent.adapters import kernel_store
+
         assistant_text = self._collect_session_assistant_text(
-            await self._sessions.list_events(payload.session_id)
+            await kernel_store.get_events(payload.session_id)
         )
         description = payload.description or "Imported from session output"
         body = assistant_text or description
@@ -1499,20 +1501,23 @@ class SkillLibraryService:
 
     @staticmethod
     def _collect_session_assistant_text(events: list) -> str:  # type: ignore[type-arg]
+        """Join the assistant's persisted output across the session.
+
+        Kernel events carry ``type`` + ``data`` (dict). Per-token
+        ``text_delta`` events are never persisted; the durable per-turn
+        text lands in ``assistant_message`` events under ``data["text"]``
+        (``data["content"]`` on older rows — same fallback the SSE
+        adapter applies).
+        """
         chunks: list[str] = []
         for row in events:
-            event_type = getattr(row, "event_type", None)
-            if event_type == "message.assistant.delta":
-                payload_raw = getattr(row, "payload_json", None)
-                if payload_raw:
-                    try:
-                        payload = json.loads(payload_raw)
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                    text = payload.get("text")
-                    if text:
-                        chunks.append(text)
-        return "".join(chunks).strip()
+            if getattr(row, "type", None) != "assistant_message":
+                continue
+            data = getattr(row, "data", None) or {}
+            text = data.get("text") or data.get("content")
+            if text:
+                chunks.append(str(text))
+        return "\n\n".join(chunk.strip() for chunk in chunks).strip()
 
     def _extract_archive(self, archive_path: Path, dest: Path | None = None) -> Path:
         """Extract an archive and return the directory it was extracted into.

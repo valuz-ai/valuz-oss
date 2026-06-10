@@ -115,7 +115,6 @@ async def get_skill_service() -> AsyncGenerator[SkillLibraryService, None]:
                 datastore=WorkspaceDatastore(db),
                 event_bus=event_bus,
             ),
-            session_datastore=SessionDatastore(db),
             event_bus=event_bus,
             extra_sources=[OfficialSkillSource()],
         )

@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from valuz_agent.modules.skills.contracts import RuntimeContext, SkillManifest, WorkspaceRef
 from valuz_agent.modules.skills.errors import PreviewExpired, SourceReadonly
 from valuz_agent.modules.skills.models import (
+    SessionSkillImportConfirmRequest,
     SkillCreateRequest,
     SkillFileAction,
     SkillUpdateRequest,
@@ -45,11 +47,6 @@ class FakeWorkspaceService:
 
     async def list_workspaces(self):
         return self._workspaces
-
-
-class FakeSessionDatastore:
-    async def list_events(self, session_id: str):
-        return []
 
 
 class FakeSkillDatastore:
@@ -149,7 +146,6 @@ def svc(skill_root, monkeypatch):
         datastore=FakeSkillDatastore(),
         skill_source=FilesystemSkillSource(),
         workspace_service=FakeWorkspaceService(),
-        session_datastore=FakeSessionDatastore(),
         event_bus=bus,
     ), bus
 
@@ -426,3 +422,58 @@ class TestTags:
         tags = await service.list_all_tags()
         assert "test" in tags
         assert len(tags) == len(set(tags))
+
+
+class TestImportFromSessionConfirm:
+    """Regression: this path used to call ``SessionDatastore.list_events`` —
+    a method that does not exist (events live in the kernel ``events``
+    table) — so the confirm endpoint raised AttributeError at runtime. It
+    now fetches events through ``adapters.kernel_store.get_events``."""
+
+    @staticmethod
+    def _patch_events(monkeypatch, events):
+        from valuz_agent.adapters import kernel_store
+
+        seen: list[str] = []
+
+        async def fake_get_events(session_id, **kwargs):
+            seen.append(session_id)
+            return events
+
+        monkeypatch.setattr(kernel_store, "get_events", fake_get_events)
+        return seen
+
+    async def test_should_build_skill_body_from_persisted_assistant_events(
+        self, svc, monkeypatch
+    ):
+        service, _ = svc
+        seen = self._patch_events(
+            monkeypatch,
+            [
+                SimpleNamespace(type="user_message", data={"message": "teach me"}),
+                SimpleNamespace(type="assistant_message", data={"text": "First answer."}),
+                SimpleNamespace(type="tool_result", data={"output": "tool noise"}),
+                SimpleNamespace(type="assistant_message", data={"content": "Second answer."}),
+            ],
+        )
+        result = await service.import_from_session_confirm(
+            SessionSkillImportConfirmRequest(session_id="sess-1", name="from-session")
+        )
+        assert seen == ["sess-1"]
+        body = (Path(result.path) / "SKILL.md").read_text(encoding="utf-8")
+        assert "First answer." in body
+        assert "Second answer." in body
+        assert "tool noise" not in body
+
+    async def test_should_fall_back_to_description_when_no_assistant_text(
+        self, svc, monkeypatch
+    ):
+        service, _ = svc
+        self._patch_events(monkeypatch, [])
+        result = await service.import_from_session_confirm(
+            SessionSkillImportConfirmRequest(
+                session_id="sess-2", name="empty-session", description="Fallback body."
+            )
+        )
+        body = (Path(result.path) / "SKILL.md").read_text(encoding="utf-8")
+        assert "Fallback body." in body
