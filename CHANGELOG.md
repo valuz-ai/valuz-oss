@@ -5,9 +5,46 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-06-10
+
+### Features
+
+- Full Windows platform support across the backend, CLI, and frontend — Valuz now builds
+  and runs on Windows. (#53 @hanjixin)
+- `/compact` is surfaced as a unified compaction event across runtimes. (#45 @jiaoqsh)
+- New model channel: `claude-fable-5`, via claude-agent-sdk 0.2.95. (#46 @jiaoqsh)
+
+### Changed
+
+- De-projectized kernel: sessions are now self-sufficient (each embeds its `AgentConfig`
+  snapshot + `cwd`) and reached through an API-shaped client seam; the kernel no longer owns
+  project/agent tables, and the host owns project↔session scoping. Includes the
+  workspace→project rename across the stack. (#50, #51 @Ready22Race)
+- Subscription model catalogs are resolved live instead of being snapshotted into provider
+  rows. (#47 @jiaoqsh)
+- Consolidate the host DB migrations to a single 0001 baseline. (#55 @Ready22Race)
+- `BillingPort` / `IdentityResolver` / `ResourceListEnhancer` ports are now async. (#49 @homeant)
+
+### Fixed
+
+- Restore connector→MCP resolution on the session-creation paths. (#55 @Ready22Race)
+- Composer: let slash commands pass through the skill picker. (#52 @jiaoqsh)
+- Disable the advisor tool behind custom gateways on the Claude runtime. (#48 @jiaoqsh)
+- Windows/Linux autostart: add the `launchdPlistPath` helper. (#54 @hanjixin)
+- Fix a `NameError` in `detect_system_timezone` (missing `sys` import). (#56 @Ready22Race)
+- Add missing third-party packages to the PyInstaller hidden imports. (#57 @hanjixin)
+
+### Docs & Chore
+
+- Windows/macOS release pipeline: move mac/Windows to working runners (`macos-runner-x86`
+  for Intel), drop the NSIS portable target, and add a `gh release upload` fallback so
+  artifacts always land even when electron-builder refuses to publish to a >2h-old
+  release. (#60 @hanjixin)
+- Record the tag-driven desktop release process in `CLAUDE.md`. (#59 @St0neWan9)
+
 ## [0.1.4] - 2026-06-09
 
-### Added
+### Features
 
 - Per-conversation model override: after selecting an agent, temporarily switch the
   runtime / model / reasoning effort for that conversation only — the agent itself is
@@ -62,4 +99,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rename the single-writer lock file, drop a dead helper, and correct the rationale. (#29 @Ready22Race)
 - CI: Node.js 25 with dependency caching. (#14 @hanjixin)
 
+[0.1.5]: https://github.com/valuz-ai/valuz-oss/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/valuz-ai/valuz-oss/compare/v0.1.2...v0.1.4
