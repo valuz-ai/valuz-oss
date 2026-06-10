@@ -48,7 +48,7 @@ jobs:
     name: macOS (arm64)
     needs: set-version
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'mac-arm64' }}
-    runs-on: macos-14
+    runs-on: studio-runner
     environment: CSC_KEY_PASSWORD
     permissions:
       contents: write
@@ -312,7 +312,7 @@ jobs:
     name: Windows (x64)
     needs: set-version
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'windows-x64' }}
-    runs-on: windows-latest
+    runs-on: windows
     permissions:
       contents: write
     steps:
