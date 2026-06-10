@@ -42,6 +42,24 @@ _OWNERSHIP_MARKER_COLUMN = "user_id"
 _RENAME_MARKER_TABLE = "valuz_workspace"
 
 
+def _known_revisions() -> set[str]:
+    """Revision ids present in the current host alembic chain.
+
+    Pre-release the chain is folded into its baseline whenever the schema
+    changes (clean-up policy, no incremental migrations). A dev DB stamped
+    with a since-folded revision id would make ``upgrade head`` fail with
+    "Can't locate revision" — ``drop_stale_host_tables`` uses this set to
+    detect those stamps and wipe instead.
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config(str(ALEMBIC_INI))
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    script = ScriptDirectory.from_config(cfg)
+    return {rev.revision for rev in script.walk_revisions()}
+
+
 def drop_stale_host_tables(engine: Engine | None = None) -> None:
     """Clean-up probe for the ``user_id`` ownership cutover — host counterpart
     to ``boot.kernel.drop_stale_kernel_tables``.
@@ -86,6 +104,18 @@ def drop_stale_host_tables(engine: Engine | None = None) -> None:
                     f"pre-user_id host schema detected "
                     f"({_OWNERSHIP_MARKER_TABLE} lacks {_OWNERSHIP_MARKER_COLUMN})"
                 )
+
+        if reason is None and VERSION_TABLE in existing:
+            # Folded-revision stamp: the chain collapses into its baseline
+            # pre-release, so a DB stamped with a revision id that no longer
+            # exists (e.g. built mid-branch by a since-folded incremental)
+            # would crash ``upgrade head`` with "Can't locate revision".
+            with engine.connect() as conn:
+                stamped = conn.execute(
+                    text(f"SELECT version_num FROM {VERSION_TABLE}")  # noqa: S608
+                ).scalar()
+            if stamped and stamped not in _known_revisions():
+                reason = f"host DB stamped at unknown revision {stamped!r} (since folded)"
 
         if reason is None:
             return  # fresh install or already on the current baseline

@@ -47,7 +47,8 @@ def test_oauth_subscription_rows_seed_null_model_ids() -> None:
     the live descriptor (hydrated from ``subscription_models.json`` each
     boot), so a catalog bump reaches existing installs without a
     migration. A snapshot here would freeze the picker at seed time —
-    the exact bug migration 0002 had to clean up.
+    the exact bug the former ``0002_null_subscription_model_snapshots``
+    migration (since folded into the baseline) had to clean up.
     """
     from valuz_agent.seeds.providers import _row_for
 

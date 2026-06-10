@@ -4,8 +4,15 @@ Every business table carries a required ``user_id`` (the owner id) plus a
 matching ``ix_<table>_user_id`` index. The column is stamped from the
 request-scoped owner ContextVar (``infra.owner_context``); in OSS that resolves
 to the device-derived local install id, under the commercial overlay to the
-logged-in user. Regenerated as a single baseline (folds in the former
-``0002_add_skill_origin``); existing dev DBs are wiped + rebuilt by
+logged-in user.
+
+Pre-release the host chain is kept as this **single baseline**: schema changes
+fold into it rather than accumulating incremental revisions (clean-up policy —
+nothing is shipped yet). Folded so far: ``0002_add_skill_origin``,
+``0002_null_subscription_model_snapshots`` (its seeder-side semantics live in
+code), the de-projectize chain (``valuz_project_session`` index table in, the
+two ``kernel_agent_id`` columns out). Existing dev DBs — including ones stamped
+with a folded revision id — are wiped + rebuilt by
 ``boot.schema.drop_stale_host_tables`` per the dev-stage no-data-preservation
 policy.
 
@@ -46,7 +53,6 @@ def upgrade() -> None:
         sa.Column("readonly", sa.Boolean(), nullable=False),
         sa.Column("deletable", sa.Boolean(), nullable=False),
         sa.Column("avatar", sa.String(length=128), nullable=True),
-        sa.Column("kernel_agent_id", sa.String(length=36), nullable=True),
         sa.Column("id", sa.String(length=36), nullable=False),
         sa.Column("created_at", sa.BigInteger(), nullable=False),
         sa.Column("updated_at", sa.BigInteger(), nullable=False),
@@ -333,7 +339,6 @@ def upgrade() -> None:
         "valuz_project_member",
         sa.Column("project_id", sa.String(length=36), nullable=False),
         sa.Column("agent_slug", sa.String(length=128), nullable=False),
-        sa.Column("kernel_agent_id", sa.String(length=36), nullable=False),
         sa.Column("source_agent_slug", sa.String(length=128), nullable=True),
         sa.Column("id", sa.String(length=36), nullable=False),
         sa.Column("created_at", sa.BigInteger(), nullable=False),
@@ -348,6 +353,29 @@ def upgrade() -> None:
         )
         batch_op.create_index(
             batch_op.f("ix_valuz_project_member_project_id"), ["project_id"], unique=False
+        )
+
+    op.create_table(
+        "valuz_project_session",
+        sa.Column("project_id", sa.String(length=36), nullable=False),
+        sa.Column("session_id", sa.String(length=36), nullable=False),
+        sa.Column("kind", sa.String(length=16), nullable=False),
+        sa.Column("origin", sa.String(length=32), nullable=False),
+        sa.Column("id", sa.String(length=36), nullable=False),
+        sa.Column("created_at", sa.BigInteger(), nullable=False),
+        sa.Column("updated_at", sa.BigInteger(), nullable=False),
+        sa.Column("user_id", sa.String(length=64), nullable=False),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    with op.batch_alter_table("valuz_project_session", schema=None) as batch_op:
+        batch_op.create_index(
+            batch_op.f("ix_valuz_project_session_project_id"), ["project_id"], unique=False
+        )
+        batch_op.create_index(
+            batch_op.f("ix_valuz_project_session_session_id"), ["session_id"], unique=True
+        )
+        batch_op.create_index(
+            batch_op.f("ix_valuz_project_session_user_id"), ["user_id"], unique=False
         )
 
     op.create_table(
@@ -642,6 +670,12 @@ def downgrade() -> None:
         batch_op.drop_index(batch_op.f("ix_valuz_project_skill_config_user_id"))
 
     op.drop_table("valuz_project_skill_config")
+    with op.batch_alter_table("valuz_project_session", schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f("ix_valuz_project_session_user_id"))
+        batch_op.drop_index(batch_op.f("ix_valuz_project_session_session_id"))
+        batch_op.drop_index(batch_op.f("ix_valuz_project_session_project_id"))
+
+    op.drop_table("valuz_project_session")
     with op.batch_alter_table("valuz_project_member", schema=None) as batch_op:
         batch_op.drop_index(batch_op.f("ix_valuz_project_member_project_id"))
         batch_op.drop_index(batch_op.f("ix_valuz_project_member_user_id"))

@@ -161,3 +161,35 @@ class TestDropStaleHostTables:
         # No marker table at all → nothing to wipe.
         drop_stale_host_tables(engine)
         assert set(inspect(engine).get_table_names()) == set()
+
+    def test_drops_when_stamped_at_folded_revision(self, tmp_path) -> None:
+        # Pre-release the chain folds into its baseline; a dev DB built by a
+        # since-folded incremental (e.g. stamped "0004") would crash
+        # ``upgrade head`` with "Can't locate revision" — must wipe instead.
+        engine = create_engine(f"sqlite:///{tmp_path / 'folded.db'}")
+        with engine.begin() as conn:
+            conn.execute(
+                text("CREATE TABLE valuz_provider (id TEXT PRIMARY KEY, user_id TEXT)")
+            )
+            conn.execute(text("CREATE TABLE alembic_version_host (version_num TEXT PRIMARY KEY)"))
+            conn.execute(text("INSERT INTO alembic_version_host VALUES ('0004')"))
+
+        drop_stale_host_tables(engine)
+
+        remaining = set(inspect(engine).get_table_names())
+        assert "valuz_provider" not in remaining
+        assert "alembic_version_host" not in remaining
+
+    def test_noop_when_stamped_at_known_revision(self, tmp_path) -> None:
+        engine = create_engine(f"sqlite:///{tmp_path / 'stamped.db'}")
+        with engine.begin() as conn:
+            conn.execute(
+                text("CREATE TABLE valuz_provider (id TEXT PRIMARY KEY, user_id TEXT)")
+            )
+            conn.execute(text("CREATE TABLE alembic_version_host (version_num TEXT PRIMARY KEY)"))
+            conn.execute(text("INSERT INTO alembic_version_host VALUES ('0001')"))
+
+        drop_stale_host_tables(engine)
+
+        remaining = set(inspect(engine).get_table_names())
+        assert {"valuz_provider", "alembic_version_host"} <= remaining

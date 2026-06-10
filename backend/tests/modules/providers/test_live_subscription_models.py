@@ -3,7 +3,8 @@
 Subscription rows keep ``model_ids IS NULL`` so their picker list and the
 session-time model→channel binding both track ``subscription_models.json``
 via the descriptor, instead of a seed-time snapshot (the stale-picker bug
-class migration 0002 cleans up). These tests pin the resolution path end
+class the former ``0002_null_subscription_model_snapshots`` migration cleaned
+up — since folded into the baseline). These tests pin the resolution path end
 to end:
 
 - NULL row resolves models from the live descriptor list;
