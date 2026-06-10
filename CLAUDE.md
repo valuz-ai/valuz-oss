@@ -42,6 +42,61 @@ Packaging (produces `frontend/apps/desktop/release/valuz-<edition>-<platform>-<a
 - Iterate on Electron only: `--skip-backend --skip-cli`
 - See [docs/architecture.md](docs/architecture.md) §"Distribution" for the bin/libexec layout
 
+## Release process (desktop)
+
+Releases are **tag-driven** and published by `.github/workflows/release-desktop.yml`
+(pushing a `v*` tag triggers it). The tag name is the single source of truth for the
+version — CI strips the `v`, sets `VALUZ_VERSION`, and `build-desktop.sh` overwrites
+`frontend/apps/desktop/package.json`. **Do not hand-bump the version.**
+
+Cutting `vX.Y.Z`:
+
+1. **Pick the version** (SemVer, pre-1.0): bug-fix / small batch → patch (`0.1.x`);
+   feature batch → minor (`0.2.0`).
+2. **Update `CHANGELOG.md`** (Keep a Changelog: Added / Changed / Fixed / Docs & Chore).
+   Credit every entry `(#PR @author)`; use the short SHA for commits pushed straight to
+   main. Land it via PR.
+3. **Create the release = create the tag** (one step; also triggers the build):
+   ```bash
+   gh release create vX.Y.Z --target main --title "Valuz X.Y.Z" --notes-file <notes>
+   ```
+   `<notes>` is the `[X.Y.Z]` section of the CHANGELOG. Title is always `Valuz X.Y.Z`.
+4. CI builds **4 platforms** — mac arm64 (signed+notarized), mac x64 (signed), linux
+   arm64, windows x64 — and electron-builder (`releaseType: release`, `--publish=always`)
+   uploads each artifact to the release matching the tag. It does **not** overwrite the
+   release body, so the notes from step 3 stick.
+
+**The release MUST stay mutable — keep GitHub "immutable releases" OFF for this repo.**
+Immutable releases break the flow two ways:
+- An immutable (published) release **rejects electron-builder's asset upload**
+  (`422 Cannot upload assets to an immutable release`): the build succeeds but publishes
+  nothing.
+- A tag once used by an immutable release is **permanently burned** — it can never be
+  recreated (`Cannot create ref due to creations being restricted`), even after disabling
+  the setting and deleting the release+tag. If a tag gets burned, bump to the next version
+  (this is why `v0.1.3` was abandoned for `v0.1.4`).
+
+Operational recipes:
+- **Rebuild the same version with newer code** (only safe while the release is mutable —
+  deleting a mutable release does NOT burn the tag):
+  ```bash
+  gh release delete vX.Y.Z --yes --cleanup-tag
+  gh release create vX.Y.Z --target main --title "Valuz X.Y.Z" --notes-file <notes>
+  ```
+- **Re-run one platform** (uploads to the existing release, no re-tag):
+  ```bash
+  gh workflow run release-desktop.yml --ref main -f version=vX.Y.Z \
+    -f platform={mac-arm64|mac-x64|linux-arm64|windows-x64}
+  ```
+- **Fix release notes after the fact** (release is mutable):
+  `gh release edit vX.Y.Z --notes-file <notes> --title "Valuz X.Y.Z"`.
+
+Runner quirks:
+- `macos-13` (the mac-x64 runner) is scarce and often sits `queued` for a long time,
+  stalling the whole push-triggered run. The other three platforms upload independently —
+  cancel the stuck run once they're done.
+- Browser-verify any UI change before it goes into a release build.
+
 ## Verification
 
 After any change, always run:
