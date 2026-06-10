@@ -19,7 +19,8 @@ dependencies = [
     # ``>=0.1.68`` bundled a CLI without ``/goal`` → goal-mode turns no-op'd
     # (0-token end_turn); a stale-but-present SDK throws no ImportError, so the
     # floor must be reconciled by hand on every kernel bump (upgrade SOP §2b).
-    "claude-agent-sdk>=0.2.89",
+    # >=0.2.95 bundles CLI 2.1.170 — required for the claude-fable-5 model.
+    "claude-agent-sdk>=0.2.95",
     "openai-agents>=0.14.6",
     # Routes OpenAI-compatible models (incl. Reportify proxy on
     # http://172.20.2.240:8080) through the kernel's deepagents runtime.
