@@ -41,10 +41,9 @@ The lock file path is intentionally inside ``data_dir`` so two distinct
 ``VALUZ_DATA_DIR`` instances (e.g. dev + prod-like via env var) don't
 exclude each other — they're meant to be independent.
 
-POSIX-only for now; Windows would use ``msvcrt.locking`` or
-``portalocker``. The desktop app's first-class platform is macOS so this
-covers the canonical path; Windows users get a clear unsupported error
-when we reach that.
+On macOS / Linux the lock uses ``fcntl.flock(LOCK_EX | LOCK_NB)``.
+On Windows it uses ``msvcrt.locking(LK_NBLCK)``. Both are stdlib — no
+external dependencies.
 """
 
 from __future__ import annotations
@@ -77,10 +76,26 @@ def acquire_single_writer_lock(lock_path: Path) -> None:
         return
 
     if sys.platform == "win32":
-        logger.warning(
-            "Single-writer lock is not implemented on Windows; relying on "
-            "OS-level port collisions to prevent double-start."
-        )
+        import msvcrt  # Windows-only; deferred import to keep Unix importable.
+
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT | os.O_BINARY, 0o644)
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            os.close(fd)
+            msg = (
+                f"another valuz-agent backend already holds {lock_path}; "
+                "refusing to start a second instance."
+            )
+            logger.error(msg)
+            raise AnotherInstanceRunning(msg) from exc
+
+        os.ftruncate(fd, 0)
+        os.write(fd, str(os.getpid()).encode("ascii"))
+        _lock_fd = fd
+        logger.info("Acquired single-writer lock at %s (pid=%d)", lock_path, os.getpid())
         return
 
     import fcntl  # POSIX-only; deferred import to keep Windows importable.

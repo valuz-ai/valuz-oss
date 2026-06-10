@@ -42,8 +42,11 @@ export interface DesktopSidecarResult {
  * 3. Returns null when no bundled binary is found (caller falls back to ``uv run``).
  */
 function resolveServerBinary(): string | null {
+  const serverName =
+    process.platform === "win32" ? "valuz-server.exe" : "valuz-server";
+
   // Production: packaged Electron app
-  const bundled = path.join(process.resourcesPath, "libexec", "valuz-server");
+  const bundled = path.join(process.resourcesPath, "libexec", serverName);
   if (fs.existsSync(bundled)) return bundled;
 
   // Dev: check if the build script has placed a binary in the project tree.
@@ -54,7 +57,7 @@ function resolveServerBinary(): string | null {
     "..",
     "resources",
     "libexec",
-    "valuz-server",
+    serverName,
   );
   if (fs.existsSync(devBinary)) return devBinary;
 
@@ -218,24 +221,37 @@ export const startSidecar = async (
     if (stopped || !child.pid) return;
     stopped = true;
 
-    // Send SIGTERM for graceful shutdown
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // Process may have already exited
-    }
-
-    // Force kill after 5 seconds
-    const timeout = setTimeout(() => {
+    if (process.platform === "win32") {
+      // On Windows, child.kill() without args calls TerminateProcess.
+      // There is no graceful SIGTERM equivalent for child processes.
+      // SQLite WAL mode prevents corruption on abrupt termination, and
+      // session recovery (recover_running_sessions, seal_orphan_pendings)
+      // handles crash cleanup at next startup.
       try {
-        child.kill("SIGKILL");
+        child.kill();
       } catch {
-        // Already dead
+        // Process may have already exited
       }
-    }, 5000);
+    } else {
+      // Send SIGTERM for graceful shutdown
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Process may have already exited
+      }
 
-    // Clean up timeout if process exits on its own
-    child.on("exit", () => clearTimeout(timeout));
+      // Force kill after 5 seconds
+      const timeout = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Already dead
+        }
+      }, 5000);
+
+      // Clean up timeout if process exits on its own
+      child.on("exit", () => clearTimeout(timeout));
+    }
   };
 
   return {

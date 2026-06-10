@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { lstat, readlink, mkdir } from "node:fs/promises";
+import { lstat, readlink, mkdir, copyFile, unlink } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { app } from "electron";
 
@@ -21,23 +23,41 @@ export interface CliInstallResult {
 // In production: Resources/bin/valuz (macOS .app bundle layout).
 // In dev: falls back to cli/build/valuz (Go build output).
 function resolveBundledCliPath(): string {
+  const binaryName = process.platform === "win32" ? "valuz.exe" : "valuz";
   if (app.isPackaged) {
-    return join(process.resourcesPath, "bin", "valuz");
+    return join(process.resourcesPath, "bin", binaryName);
   }
   // Dev fallback — resolve relative to the desktop app root.
-  return join(app.getAppPath(), "..", "..", "cli", "build", "valuz");
+  return join(app.getAppPath(), "..", "..", "cli", "build", binaryName);
 }
 
-// Preferred symlink location on macOS/Linux.
+// Preferred symlink/copy location per platform.
+// macOS/Linux: /usr/local/bin/valuz (symlink)
+// Windows: %APPDATA%\Valuz\valuz.exe (copy — symlinks need Developer Mode)
 function defaultLinkPath(): string {
+  if (process.platform === "win32") {
+    return join(
+      process.env.APPDATA || join(homedir(), "AppData", "Roaming"),
+      "Valuz",
+      "valuz.exe",
+    );
+  }
   return "/usr/local/bin/valuz";
 }
 
-// Check whether the CLI is already linked into PATH.
+// Check whether the CLI is already linked/copied into PATH.
 // Returns the current install status.
 export async function getCliInstallStatus(): Promise<CliInstallStatus> {
   const linkPath = defaultLinkPath();
   const targetPath = resolveBundledCliPath();
+
+  if (process.platform === "win32") {
+    // Windows: check for file existence (not a symlink)
+    if (existsSync(linkPath)) {
+      return { installed: true, linkPath, targetPath };
+    }
+    return { installed: false, linkPath, targetPath };
+  }
 
   try {
     const st = await lstat(linkPath);
@@ -92,6 +112,10 @@ export async function installCliToPath(): Promise<CliInstallResult> {
 
   if (process.platform === "linux") {
     return installLinux(linkPath, targetPath);
+  }
+
+  if (process.platform === "win32") {
+    return installWindows(linkPath, targetPath);
   }
 
   return { success: false, error: "unsupported_platform" };
@@ -162,6 +186,10 @@ export async function uninstallCliFromPath(): Promise<CliInstallResult> {
     return uninstallLinux(linkPath);
   }
 
+  if (process.platform === "win32") {
+    return uninstallWindows(linkPath);
+  }
+
   return { success: false, error: "unsupported_platform" };
 }
 
@@ -197,4 +225,63 @@ async function uninstallLinux(linkPath: string): Promise<CliInstallResult> {
       };
     }
   }
+}
+
+async function installWindows(
+  linkPath: string,
+  targetPath: string,
+): Promise<CliInstallResult> {
+  const destDir = dirname(linkPath);
+  try {
+    await mkdir(destDir, { recursive: true });
+  } catch {
+    // Will fail below if dir can't be created
+  }
+
+  try {
+    await copyFile(targetPath, linkPath);
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Failed to copy CLI binary",
+    };
+  }
+
+  // Add destDir to user PATH via PowerShell.
+  try {
+    const psScript = `[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';${destDir}', 'User')`;
+    await execFileAsync("powershell", ["-NoProfile", "-Command", psScript]);
+  } catch {
+    // PATH update failed — binary is still copied, user can add to PATH manually.
+    return {
+      success: false,
+      error: `CLI copied to ${linkPath} but failed to update PATH automatically. Add ${destDir} to your PATH manually.`,
+    };
+  }
+
+  return { success: true };
+}
+
+async function uninstallWindows(
+  linkPath: string,
+): Promise<CliInstallResult> {
+  try {
+    await unlink(linkPath);
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Failed to remove CLI binary",
+    };
+  }
+
+  // Remove the directory from user PATH via PowerShell.
+  const destDir = dirname(linkPath);
+  try {
+    const psScript = `$p = [Environment]::GetEnvironmentVariable('Path', 'User'); $p = ($p -split ';' | Where-Object { $_ -ne '${destDir}' }) -join ';'; [Environment]::SetEnvironmentVariable('Path', $p, 'User')`;
+    await execFileAsync("powershell", ["-NoProfile", "-Command", psScript]);
+  } catch {
+    // PATH cleanup failed — binary is still removed.
+  }
+
+  return { success: true };
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 )
@@ -51,18 +52,18 @@ func killProcess(cmd *exec.Cmd) {
 	_ = cmd.Process.Kill()
 }
 
-// StopByPid sends sig to a recorded PID. On Windows, process groups
-// are signaled via CTRL_BREAK_EVENT; fallback to PID-only.
+// StopByPid terminates a process by PID using taskkill.
+// sig is used as a hint: SIGKILL triggers taskkill /F (force), anything else
+// is a graceful attempt.
 func StopByPid(pid int, sig syscall.Signal) bool {
-	if pid <= 0 {
+	if pid <= 0 || !isProcessAlive(pid) {
 		return false
 	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
+	args := []string{"/PID", strconv.Itoa(pid)}
+	if sig == syscall.SIGKILL {
+		args = append([]string{"/F"}, args...)
 	}
-	err = proc.Signal(sig)
-	return err == nil
+	return exec.Command("taskkill", args...).Run() == nil
 }
 
 // WaitFor polls until ctx is done or pid no longer exists.

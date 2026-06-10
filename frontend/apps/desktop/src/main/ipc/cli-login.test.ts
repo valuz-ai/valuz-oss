@@ -99,10 +99,13 @@ describe("detectLoginState — codex", () => {
     expect(state).toBe("logged_in");
   });
 
-  it("should report unsupported on win32", async () => {
-    const deps = makeDeps({ platform: () => "win32" });
+  it("should report logged_out on win32 when codex status fails", async () => {
+    const deps = makeDeps({
+      platform: () => "win32",
+      execFile: vi.fn(() => fail("not found")),
+    });
     const state = await detectLoginState("codex", deps);
-    expect(state).toBe("unsupported");
+    expect(state).toBe("logged_out");
   });
 });
 
@@ -288,14 +291,46 @@ describe("launchTerminalWithCommand — linux", () => {
   });
 });
 
-describe("launchTerminalWithCommand — unsupported", () => {
-  it("should refuse to launch on win32", async () => {
-    const deps = makeDeps({ platform: () => "win32" });
-    const result = await launchTerminalWithCommand("claude", deps);
-    expect(result).toEqual({
-      launched: false,
-      error: "unsupported_platform",
+describe("launchTerminalWithCommand — win32", () => {
+  it("should launch via wt.exe when Windows Terminal is available", async () => {
+    const spawnDetached = vi.fn();
+    const execFile = vi.fn(async (file: string, args: string[]) => {
+      if (file === "where" && args[0] === "wt.exe") return ok("C:\\Windows\\wt.exe\n");
+      return ok("");
     });
+    const deps = makeDeps({
+      platform: () => "win32",
+      execFile,
+      spawnDetached,
+    });
+    const result = await launchTerminalWithCommand("claude", deps);
+    expect(result).toEqual({ launched: true });
+    expect(spawnDetached).toHaveBeenCalledWith("wt.exe", [
+      "new-tab",
+      "--",
+      "cmd.exe",
+      "/K",
+      "claude /login",
+    ]);
+  });
+
+  it("should fall back to cmd.exe when Windows Terminal is not available", async () => {
+    const spawnDetached = vi.fn();
+    const execFile = vi.fn(async (file: string, args: string[]) => {
+      if (file === "where" && args[0] === "wt.exe") return fail();
+      return ok("");
+    });
+    const deps = makeDeps({
+      platform: () => "win32",
+      execFile,
+      spawnDetached,
+    });
+    const result = await launchTerminalWithCommand("codex", deps);
+    expect(result).toEqual({ launched: true });
+    expect(spawnDetached).toHaveBeenCalledWith("cmd.exe", [
+      "/K",
+      "codex login",
+    ]);
   });
 });
 

@@ -1,14 +1,14 @@
 // Package runtime resolves where the CLI's sibling components live.
 //
-// Order of resolution per docs/STRUCTURE.md §"Runtime Discovery":
-//  1. Desktop bundle — packaged binaries beside the .app (the running CLI
-//     is at “Valuz.app/Contents/Resources/bin/valuz“)
-//  2. Standalone install — beside the CLI binary (bin/ + libexec/ layout)
-//  3. Development checkout — fall back to repo-relative source
+// Order of resolution per docs/STRUCTURE.md "Runtime Discovery":
+//  1. Desktop bundle - packaged binaries beside the .app (the running CLI
+//     is at "Valuz.app/Contents/Resources/bin/valuz")
+//  2. Standalone install - beside the CLI binary (bin/ + libexec/ layout)
+//  3. Development checkout - fall back to repo-relative source
 //
 // Each mode pins the right backend port (Electron's PERSONAL_PORTS.AGENT_SERVER
-// = 19100 in production; the dev port = 8000) so callers — status probe,
-// install-autostart default, HTTP client — agree on what's actually running.
+// = 19100 in production; the dev port = 8000) so callers - status probe,
+// install-autostart default, HTTP client - agree on what's actually running.
 package runtime
 
 import (
@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // Mode identifies the discovered runtime layout.
@@ -53,11 +54,11 @@ type Paths struct {
 // Discover returns the runtime paths for the current invocation.
 //
 // Detection ladder:
-//  1. If the running CLI sits inside a .app bundle (path matches
-//     “…/Valuz.app/Contents/Resources/bin/valuz“) → ModeBundle
-//  2. If “VALUZ_REPO_ROOT“ is set, or the current cwd / the CLI's
-//     parents look like the repo → ModeDev
-//  3. Otherwise → error (ModeStandalone TODO)
+//  1. If the running CLI sits inside a packaged bundle (macOS .app or
+//     Windows NSIS layout) -> ModeBundle
+//  2. If VALUZ_REPO_ROOT is set, or the current cwd / the CLI's
+//     parents look like the repo -> ModeDev
+//  3. Otherwise -> error (ModeStandalone TODO)
 func Discover() (*Paths, error) {
 	exe, _ := os.Executable()
 	if bundleRoot := detectBundleRoot(exe); bundleRoot != "" {
@@ -83,39 +84,59 @@ func Discover() (*Paths, error) {
 	)
 }
 
-// detectBundleRoot returns the absolute path of the “Contents/Resources“
-// directory when “exe“ resolves inside a “Valuz.app“ Mac bundle, or ""
-// otherwise. Used to decide ModeBundle.
+// detectBundleRoot returns the absolute path of the resources directory
+// when exe resolves inside a packaged install, or "" otherwise.
+//
+// macOS: <...>/Valuz.app/Contents/Resources/bin/valuz
+// Windows (NSIS): <...>/resources/bin/valuz.exe
 func detectBundleRoot(exe string) string {
 	if exe == "" {
 		return ""
 	}
-	exe, err := filepath.EvalSymlinks(exe)
-	if err != nil {
-		// fall through with the original path
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err == nil {
+		exe = resolved
 	}
-	// Expected: <…>/Valuz.app/Contents/Resources/bin/valuz
-	binDir := filepath.Dir(exe)               // …/Resources/bin
-	resourcesDir := filepath.Dir(binDir)      // …/Resources
-	contentsDir := filepath.Dir(resourcesDir) // …/Contents
-	appDir := filepath.Dir(contentsDir)       // …/Valuz.app
-	if filepath.Base(binDir) != "bin" {
-		return ""
+
+	if runtime.GOOS == "darwin" {
+		// Expected: <...>/Valuz.app/Contents/Resources/bin/valuz
+		binDir := filepath.Dir(exe)
+		resourcesDir := filepath.Dir(binDir)
+		contentsDir := filepath.Dir(resourcesDir)
+		appDir := filepath.Dir(contentsDir)
+		if filepath.Base(binDir) != "bin" {
+			return ""
+		}
+		if filepath.Base(resourcesDir) != "Resources" {
+			return ""
+		}
+		if filepath.Base(contentsDir) != "Contents" {
+			return ""
+		}
+		if !hasSuffix(appDir, ".app") {
+			return ""
+		}
+		if !isFile(filepath.Join(resourcesDir, "libexec", "valuz-server")) {
+			return ""
+		}
+		return resourcesDir
 	}
-	if filepath.Base(resourcesDir) != "Resources" {
-		return ""
+
+	if runtime.GOOS == "windows" {
+		// NSIS installs to: C:\...\Valuz\resources\bin\valuz.exe
+		binDir := filepath.Dir(exe)
+		resourcesDir := filepath.Dir(binDir)
+		if filepath.Base(binDir) != "bin" {
+			return ""
+		}
+		serverExe := filepath.Join(resourcesDir, "libexec", "valuz-server.exe")
+		if !isFile(serverExe) {
+			return ""
+		}
+		return resourcesDir
 	}
-	if filepath.Base(contentsDir) != "Contents" {
-		return ""
-	}
-	if !hasSuffix(appDir, ".app") {
-		return ""
-	}
-	// Cheap correctness check: libexec/valuz-server should exist as a sibling.
-	if !isFile(filepath.Join(resourcesDir, "libexec", "valuz-server")) {
-		return ""
-	}
-	return resourcesDir
+
+	return ""
 }
 
 func hasSuffix(s, suffix string) bool {
@@ -127,7 +148,11 @@ func hasSuffix(s, suffix string) bool {
 
 func bundlePaths(resourcesDir string) (*Paths, error) {
 	libexec := filepath.Join(resourcesDir, "libexec")
-	exe := filepath.Join(libexec, "valuz-server")
+	serverName := "valuz-server"
+	if runtime.GOOS == "windows" {
+		serverName = "valuz-server.exe"
+	}
+	exe := filepath.Join(libexec, serverName)
 	if _, err := os.Stat(exe); err != nil {
 		return nil, fmt.Errorf("bundled valuz-server not found at %s: %w", exe, err)
 	}
@@ -136,9 +161,7 @@ func bundlePaths(resourcesDir string) (*Paths, error) {
 		BackendPort: bundleBackendPort,
 		ServerExe:   exe,
 		LibexecDir:  libexec,
-		// Per-user log dir matches valuz_agent.infra.config.settings.log_dir
-		// default (Path.home() / ".valuz" / "app" / "logs").
-		LogDir: filepath.Join(mustHome(), ".valuz", "app", "logs"),
+		LogDir:      filepath.Join(mustHome(), ".valuz", "app", "logs"),
 	}, nil
 }
 
