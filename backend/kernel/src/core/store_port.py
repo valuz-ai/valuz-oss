@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol
 
 from src.core.agent_config import AgentConfig
@@ -65,10 +66,15 @@ class StorePort(Protocol):
         project_id: str | None = None,
         agent_id: str | None = None,
         status: str | None = None,
+        ids: Sequence[str] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Session]:
-        """List sessions ordered by created_at descending."""
+        """List sessions ordered by created_at descending.
+
+        ``ids`` narrows to an explicit id set (bulk fetch for callers that
+        resolve membership elsewhere); combines with the other filters.
+        """
         ...
 
     async def delete_session(self, session_id: str) -> bool:

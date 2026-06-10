@@ -48,6 +48,7 @@ from valuz_agent.modules.docs.datastore import DocumentDatastore
 from valuz_agent.modules.projects.datastore import ProjectDatastore
 from valuz_agent.modules.projects.service import ProjectService
 from valuz_agent.modules.providers.datastore import ProviderDatastore
+from valuz_agent.modules.sessions import project_index
 from valuz_agent.modules.sessions.attachments import (
     _attachment_specs,
     _load_pending_attachments,
@@ -216,10 +217,8 @@ class SessionService:
         Scans a small recent window in case the very latest is one of
         those incomplete rows.
         """
-        sessions = await kernel_store.list_sessions(
-            project_id=project_id,
-            limit=10,
-        )
+        ids = await project_index.list_session_ids(project_id, limit=10)
+        sessions = await kernel_store.list_sessions(ids=ids, limit=10)
         for s in sessions:
             meta = _valuz_meta(s)
             provider_id = meta.get("locked_provider_id") or None
@@ -239,14 +238,14 @@ class SessionService:
     ) -> list[SessionListItem]:
         # Task-internal sessions (lead / dispatched sub-runs) belong to
         # tasks and are reachable from the task detail page; the sidebar
-        # 对话 rail only wants user-initiated chats. The SQL-layer filter
-        # (json_extract on metadata.valuz.task_id) applies LIMIT *after*
-        # excluding task sessions, so we get exactly N chats — no over-
-        # fetching, no chat/task ratio assumptions.
-        sessions = await kernel_store.list_user_sessions(
-            project_id=project_id,
-            limit=200,
-        )
+        # 对话 rail only wants user-initiated chats. The host-side
+        # project↔session index filters by kind *before* the LIMIT, so we
+        # get exactly N chats — no over-fetching, no chat/task ratio
+        # assumptions.
+        ids = await project_index.list_session_ids(project_id, user_only=True, limit=200)
+        sessions = await kernel_store.list_sessions(ids=ids, limit=200)
+        order = {sid: i for i, sid in enumerate(ids)}
+        sessions.sort(key=lambda s: order.get(s.id, len(order)))
         items = [_session_to_list_item(s) for s in sessions]
         if query:
             q = query.lower()
@@ -567,6 +566,7 @@ class SessionService:
         valuz_meta: dict[str, object] = {
             "name": title,
             "origin": origin,
+            "project_id": project_id,
             "trigger_meta": trigger_meta,
             "last_user_message_text": None,
             "locked_provider_id": provider_id,
@@ -592,6 +592,9 @@ class SessionService:
             metadata={"valuz": valuz_meta},
         )
         await kernel_store.save_session(kernel_session)
+        await project_index.record(
+            project_id, session_id, kind="chat", origin=str(origin or "user")
+        )
 
         self._bus.publish(
             SESSION_CREATED,
@@ -823,6 +826,7 @@ class SessionService:
         valuz_meta: dict[str, object] = {
             "name": title,
             "origin": origin,
+            "project_id": project_id,
             "trigger_meta": trigger_meta,
             "last_user_message_text": None,
             "locked_provider_id": resolved_provider_id,
@@ -883,6 +887,9 @@ class SessionService:
             metadata={"valuz": valuz_meta},
         )
         await kernel_store.save_session(kernel_session)
+        await project_index.record(
+            project_id, session_id, kind="chat", origin=str(origin or "user")
+        )
 
         self._bus.publish(
             SESSION_CREATED,
@@ -1327,6 +1334,7 @@ class SessionService:
         if session is None:
             raise _kernel_session_not_found(session_id)
         await kernel_store.delete_session(session_id)
+        await project_index.remove(session_id)
 
     async def get_extra_skills(self, session_id: str) -> list[str]:
         session = await kernel_store.load_session(session_id)
@@ -1479,13 +1487,12 @@ class SessionService:
         }
 
     async def count_sessions_for_project(self, project_id: str) -> int:
-        """Return the number of kernel sessions for this project (project_id)."""
-        sessions = await kernel_store.list_sessions(project_id=project_id, limit=1000)
-        return len(sessions)
+        """Return the number of kernel sessions recorded for this project."""
+        return await project_index.count_for_project(project_id)
 
     async def delete_sessions_for_project(self, project_id: str) -> int:
         """Delete all kernel sessions (and their events) for this project."""
-        sessions = await kernel_store.list_sessions(project_id=project_id, limit=1000)
-        for s in sessions:
-            await kernel_store.delete_session(s.id)
-        return len(sessions)
+        ids = await project_index.remove_for_project(project_id)
+        for sid in ids:
+            await kernel_store.delete_session(sid)
+        return len(ids)

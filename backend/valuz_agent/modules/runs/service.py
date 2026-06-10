@@ -26,6 +26,7 @@ import valuz_agent.boot.kernel  # noqa: F401 — puts kernel on sys.path
 from valuz_agent.adapters import kernel_store
 from valuz_agent.modules.projects.datastore import ProjectDatastore
 from valuz_agent.modules.projects.models import ProjectRow
+from valuz_agent.modules.sessions import project_index
 from valuz_agent.modules.tasks.datastore import (
     TaskDatastore,
     TaskEventDatastore,
@@ -143,9 +144,13 @@ class RunsService:
         self._task_events = task_events
 
     async def list_runs(self, status: str = "running") -> list[RunSummary]:
-        # Kernel sessions via the async store facade (event-loop-native).
+        # Recent sessions come from the host project↔session index; the
+        # kernel rows are bulk-fetched by id (the kernel itself is
+        # project-agnostic).
+        index_rows = await project_index.list_recent(limit=200)
+        proj_by_session = {r.session_id: r.project_id for r in index_rows}
         sessions: list[KernelSession] = await kernel_store.list_sessions(
-            project_id=None, limit=200, offset=0
+            ids=[r.session_id for r in index_rows], limit=200
         )
         ws_map: dict[str, ProjectRow] = {
             str(r.id): r for r in await self._projects.list_projects()
@@ -169,7 +174,16 @@ class RunsService:
                     continue
             elif effective not in _FINISHED_RUN_STATUS:
                 continue
-            out.append(await self._build(sess, task_session, ws_map, task_map, effective))
+            out.append(
+                await self._build(
+                    sess,
+                    task_session,
+                    ws_map,
+                    task_map,
+                    effective,
+                    project_id=proj_by_session.get(sess.id, str(sess.project_id)),
+                )
+            )
 
         out.sort(key=lambda r: r.updated_at, reverse=True)
         return out if status == "running" else out[:_FINISHED_LIMIT]
@@ -195,9 +209,11 @@ class RunsService:
         ws_map: dict[str, ProjectRow],
         task_map: dict[str, TaskRow],
         effective_status: str,
+        *,
+        project_id: str,
     ) -> RunSummary:
         meta: dict[str, Any] = (sess.metadata or {}).get("valuz") or {}
-        project = ws_map.get(str(sess.project_id))
+        project = ws_map.get(project_id)
         title = meta.get("name") or meta.get("last_user_message_text") or "Untitled"
         source: SourceKind
         task_id: str | None = None
@@ -222,7 +238,7 @@ class RunsService:
         return RunSummary(
             session_id=sess.id,
             source_kind=source,
-            project_id=str(sess.project_id),
+            project_id=project_id,
             project_name=project.name if project is not None else None,
             task_id=task_id,
             title=str(title),

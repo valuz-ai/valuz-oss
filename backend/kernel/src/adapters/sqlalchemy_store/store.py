@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -125,11 +127,16 @@ class SQLAlchemyStore:
         project_id: str | None = None,
         agent_id: str | None = None,
         status: str | None = None,
+        ids: Sequence[str] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Session]:
         async with self._session_factory() as db:
             stmt = select(SessionModel).order_by(SessionModel.created_at.desc())
+            if ids is not None:
+                if not ids:
+                    return []
+                stmt = stmt.where(SessionModel.id.in_(list(ids)))
             if project_id is not None:
                 stmt = stmt.where(SessionModel.project_id == project_id)
             if agent_id is not None:

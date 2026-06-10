@@ -45,6 +45,7 @@ from uuid import uuid4
 import valuz_agent.boot.kernel  # noqa: F401
 
 from valuz_agent.adapters import kernel_store
+from valuz_agent.modules.sessions import project_index
 from valuz_agent.adapters.agent_resolver import build_member_session
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.eventbus import EventBus, event_bus as _global_bus
@@ -447,6 +448,9 @@ class TaskOrchestrator:
                 return {"error": f"commit_task: {gap}"}
 
             await kernel_store.save_session(lead_session)
+            await project_index.record(
+                project_id, lead_session.id, kind="task_lead", origin="task"
+            )
 
             # DB writes: create lead run row + flip task status + append event
             lead_run = TaskSessionRow(

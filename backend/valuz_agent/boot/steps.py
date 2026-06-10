@@ -6,9 +6,13 @@ Bodies are moved verbatim from the former ``@app.on_event`` hooks in
 expressed explicitly in ``boot/lifespan.py``.
 """
 
+import logging
+
 from fastapi import FastAPI
 
 from valuz_agent.infra.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def configure_structured_logging() -> None:
@@ -249,6 +253,46 @@ def install_binding_change_listener() -> None:
         "project.bindings.changed",
         _on_bindings_changed,
     )
+
+
+async def reconcile_project_session_index() -> None:
+    """One-shot backfill of the host project↔session index.
+
+    Sessions created before the index landed (or whose record write was
+    lost) are re-registered from the kernel rows while the kernel still
+    carries ``sessions.project_id``. Idempotent — ``record`` upserts on
+    ``session_id``. This step is deleted together with the kernel column
+    once the cutover completes.
+    """
+    from valuz_agent.adapters import kernel_store
+    from valuz_agent.modules.sessions import project_index
+
+    try:
+        known = set(await project_index.list_session_ids(limit=10000))
+        sessions = await kernel_store.list_sessions(limit=1000)
+    except Exception:  # noqa: BLE001 — reconciliation is best-effort
+        logger.exception("project-session index reconciliation failed")
+        return
+    backfilled = 0
+    for sess in sessions:
+        if sess.id in known:
+            continue
+        meta = (sess.metadata or {}).get("valuz") or {}
+        run_kind = meta.get("run_kind")
+        if meta.get("task_id"):
+            kind = "task_lead" if run_kind == "lead" else "task_subtask"
+        else:
+            kind = "chat"
+        origin = str(meta.get("origin") or "user")
+        try:
+            await project_index.record(
+                str(sess.project_id), sess.id, kind=kind, origin=origin
+            )
+            backfilled += 1
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to backfill index row for session %s", sess.id)
+    if backfilled:
+        logger.info("project-session index: backfilled %d row(s)", backfilled)
 
 
 async def recover_stranded_sessions() -> None:

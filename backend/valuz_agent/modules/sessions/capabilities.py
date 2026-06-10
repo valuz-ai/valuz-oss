@@ -181,9 +181,11 @@ async def refresh_docs_capabilities_for_project(project_id: str) -> int:
     Returns the number of sessions whose row actually changed.
     """
     from valuz_agent.adapters import kernel_store
+    from valuz_agent.modules.sessions import project_index
 
     try:
-        sessions = await kernel_store.list_sessions(project_id=project_id, limit=500)
+        ids = await project_index.list_session_ids(project_id, limit=500)
+        sessions = await kernel_store.list_sessions(ids=ids, limit=500)
     except Exception:  # noqa: BLE001 — never raise into eventbus handlers
         logger.exception(
             "refresh_docs_capabilities_for_project: failed to list sessions for %s",

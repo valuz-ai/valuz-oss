@@ -4,6 +4,30 @@ from sqlalchemy.orm import Mapped, mapped_column
 from valuz_agent.infra.database import Base, OwnedMixin, PrimaryKeyMixin, TimestampMixin
 
 
+class ProjectSessionRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
+    """Host-side project↔session index.
+
+    One row per kernel session, written at session-creation time. This is
+    the host's own record of which project a session belongs to and what
+    role it plays — the kernel itself is project-agnostic (its
+    ``sessions.project_id`` column is being retired). All project-scoped
+    session queries (sidebar list, delete-project cascade, runs overview)
+    resolve ids here first, then bulk-fetch the rows from the kernel.
+    """
+
+    __tablename__ = "valuz_project_session"
+
+    project_id: Mapped[str] = mapped_column(String(36), index=True)
+    # References kernel ``sessions.id`` — business key, NO FK constraint.
+    session_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    # 'chat' — user-visible conversation (quick chat / project chat).
+    # 'task_lead' / 'task_subtask' — task-internal runs, hidden from the
+    # conversation list (replaces the json_extract task_id filter).
+    kind: Mapped[str] = mapped_column(String(16), default="chat")
+    # Mirror of metadata.valuz.origin at creation: user | automation | task…
+    origin: Mapped[str] = mapped_column(String(32), default="user")
+
+
 class SessionAttachmentRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     __tablename__ = "valuz_session_attachment"
 

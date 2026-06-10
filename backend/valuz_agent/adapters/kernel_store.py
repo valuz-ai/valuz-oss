@@ -24,6 +24,8 @@ from __future__ import annotations
 # ``from src.core ...`` so ``sys.path`` has the kernel root by the time we
 # resolve those names.
 
+from collections.abc import Sequence
+
 import valuz_agent.boot.kernel  # noqa: F401  (sys.path side-effect)
 
 from src.core import (  # type: ignore[import-not-found]
@@ -98,53 +100,18 @@ async def load_session(session_id: str) -> Session | None:
 async def list_sessions(
     *,
     project_id: str | None = None,
+    status: str | None = None,
+    ids: Sequence[str] | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[Session]:
-    return await _store().list_sessions(project_id=project_id, limit=limit, offset=offset)
+    return await _store().list_sessions(
+        project_id=project_id, status=status, ids=ids, limit=limit, offset=offset
+    )
 
 
 async def delete_session(session_id: str) -> bool:
     return await _store().delete_session(session_id)
-
-
-async def list_user_sessions(
-    *,
-    project_id: str | None = None,
-    limit: int = 50,
-) -> list[Session]:
-    """``list_sessions`` variant that excludes task-internal sessions
-    (lead / dispatched sub-runs) at the SQL layer.
-
-    The kernel's own ``list_sessions`` has no metadata filter, so we run a
-    filtered SELECT here — the single sanctioned place for deep kernel
-    coupling — with a json_extract predicate on
-    ``metadata.valuz.task_id IS NULL``, reusing the kernel's own row→domain
-    converter so results are byte-for-byte identical to ``list_sessions``.
-    The ``LIMIT`` applies *after* the filter so callers get exactly N user
-    sessions. Slated for removal once the host-side project↔session index
-    replaces it.
-    """
-    from sqlalchemy import func, select  # type: ignore[import-not-found]
-
-    from src.adapters.sqlalchemy_store.converters import (  # type: ignore[import-not-found]
-        model_to_session,
-    )
-    from src.adapters.sqlalchemy_store.models import (  # type: ignore[import-not-found]
-        SessionModel,
-    )
-
-    store = _store()
-    session_factory = store._session_factory  # type: ignore[attr-defined]  # noqa: SLF001
-    async with session_factory() as db:
-        stmt = select(SessionModel).where(
-            func.json_extract(SessionModel.metadata_, "$.valuz.task_id").is_(None)
-        )
-        if project_id is not None:
-            stmt = stmt.where(SessionModel.project_id == project_id)
-        stmt = stmt.order_by(SessionModel.created_at.desc()).limit(limit)
-        result = await db.execute(stmt)
-        return [model_to_session(m) for m in result.scalars()]
 
 
 # ---- Event operations ----
@@ -201,7 +168,6 @@ __all__ = [
     "list_agents",
     "list_messages_for_session",
     "list_sessions",
-    "list_user_sessions",
     "load_agent",
     "load_project",
     "load_session",

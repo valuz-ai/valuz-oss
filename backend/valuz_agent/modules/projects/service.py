@@ -16,6 +16,7 @@ from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.docs.datastore import DocumentDatastore
 from valuz_agent.modules.projects.datastore import ProjectDatastore
 from valuz_agent.modules.projects.models import ProjectRow
+from valuz_agent.modules.sessions import project_index
 from valuz_agent.modules.sessions.datastore import SessionDatastore
 from valuz_agent.modules.skills.datastore import SkillDatastore
 
@@ -329,10 +330,9 @@ class ProjectService:
         if row.kind == "chat":
             raise ValueError("Chat project cannot be deleted")
 
-        # Session counts now come from the kernel store.
+        # Session counts come from the host project↔session index.
         try:
-            sessions = await kernel_store.list_sessions(project_id=project_id, limit=1000)
-            session_count = len(sessions)
+            session_count = await project_index.count_for_project(project_id)
         except Exception:  # noqa: BLE001
             session_count = 0
         doc_binding_count = await self._docs.count_bindings(project_id) if self._docs else 0
@@ -357,11 +357,11 @@ class ProjectService:
         if row.kind == "chat":
             raise ValueError("Chat project cannot be deleted")
 
-        # Delete kernel sessions for this project (and their events).
+        # Delete kernel sessions for this project (and their events) — ids
+        # come from the host index, which is cleared in the same sweep.
         try:
-            sessions = await kernel_store.list_sessions(project_id=project_id, limit=1000)
-            for s in sessions:
-                await kernel_store.delete_session(s.id)
+            for sid in await project_index.remove_for_project(project_id):
+                await kernel_store.delete_session(sid)
         except Exception:  # noqa: BLE001
             pass
         if self._docs:

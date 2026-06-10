@@ -26,6 +26,7 @@ import time
 from typing import Any, Literal, cast
 
 from valuz_agent.adapters import kernel_store
+from valuz_agent.modules.sessions import project_index
 from valuz_agent.adapters.agent_resolver import build_member_session
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.eventbus import EventBus
@@ -196,6 +197,9 @@ class DispatcherService:
                 return {"error": gap, "status": "failed", "agent": agent}
 
             await kernel_store.save_session(member_session)
+            await project_index.record(
+                project_id, member_session.id, kind="task_subtask", origin="task"
+            )
 
             # Record run in index (linked to the plan node via subtask_key)
             run_row = TaskSessionRow(
@@ -492,6 +496,9 @@ class DispatcherService:
                 return {"error": gap, "status": "failed", "agent": agent}
 
             await kernel_store.save_session(member_session)
+            await project_index.record(
+                project_id, member_session.id, kind="task_subtask", origin="task"
+            )
 
             await run_ds.create_run(
                 TaskSessionRow(

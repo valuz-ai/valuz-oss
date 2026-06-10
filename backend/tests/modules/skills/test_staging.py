@@ -131,7 +131,9 @@ async def test_scan_reports_same_source_when_meta_hash_matches(
     assert s.source_skill_id == "user:weekly-report"
 
 
-async def test_sync_slug_overwrite_writes_to_user_skill_root(staging_root: Path, tmp_path: Path) -> None:
+async def test_sync_slug_overwrite_writes_to_user_skill_root(
+    staging_root: Path, tmp_path: Path
+) -> None:
     user_skills = tmp_path / "user-skills"
     session_dir = await staging.staging_dir_for_session("sess-4", mkdir=True)
     _write_skill(session_dir / "weekly-report", name="weekly-report")
@@ -160,7 +162,9 @@ async def test_sync_slug_fork_auto_picks_v2_and_bumps_frontmatter(
     assert "version: 2" in forked_md
 
 
-async def test_sync_slug_fork_auto_picks_v3_when_v2_exists(staging_root: Path, tmp_path: Path) -> None:
+async def test_sync_slug_fork_auto_picks_v3_when_v2_exists(
+    staging_root: Path, tmp_path: Path
+) -> None:
     user_skills = tmp_path / "user-skills"
     session_dir = await staging.staging_dir_for_session("sess-6", mkdir=True)
     _write_skill(user_skills / "weekly-report", name="weekly-report", version=1)
@@ -178,7 +182,9 @@ async def test_sync_slug_fork_with_explicit_new_slug(staging_root: Path, tmp_pat
     _write_skill(user_skills / "weekly-report", name="weekly-report", version=1)
     _write_skill(session_dir / "weekly-report", name="weekly-report")
 
-    result = await sync_slug("sess-7", "weekly-report", "fork", new_slug="weekly-report-experimental")
+    result = await sync_slug(
+        "sess-7", "weekly-report", "fork", new_slug="weekly-report-experimental"
+    )
     assert result.new_slug == "weekly-report-experimental"
     assert (user_skills / "weekly-report-experimental" / "SKILL.md").is_file()
 
@@ -223,7 +229,9 @@ async def test_prepare_optimize_copies_and_writes_meta(staging_root: Path, tmp_p
     assert meta.source_content_hash is not None
 
 
-async def test_prepare_optimize_then_scan_reports_same_source(staging_root: Path, tmp_path: Path) -> None:
+async def test_prepare_optimize_then_scan_reports_same_source(
+    staging_root: Path, tmp_path: Path
+) -> None:
     user_skills = tmp_path / "user-skills"
     _write_skill(user_skills / "external-skill", name="external-skill")
 
