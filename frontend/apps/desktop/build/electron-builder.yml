@@ -39,6 +39,10 @@ mac:
   target:
     - dmg
     - dir
+    # zip is what electron-updater downloads to apply a macOS auto-update
+    # (Squirrel.Mac). Without it latest-mac.yml lists only the dmg and the
+    # updater fails with "ZIP file not provided". dmg stays for manual install.
+    - zip
   # No prefix — electron-builder forbids it. Substring match resolves to the
   # Developer ID Application cert in CSC_LINK / login keychain.
   identity: "Beijing Xiaobang Information Technology Co., Ltd. (UUHLDZ2S48)"
