@@ -48,7 +48,7 @@ jobs:
     name: macOS (arm64)
     needs: set-version
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'mac-arm64' }}
-    runs-on: studio-runner
+    runs-on: macos-14
     environment: CSC_KEY_PASSWORD
     permissions:
       contents: write
@@ -126,6 +126,22 @@ jobs:
 
       - name: List artifacts
         run: ls -lh frontend/apps/desktop/release/
+
+      # electron-builder refuses to upload if the release was published >2h ago.
+      # Use gh as a fallback to guarantee the artifact lands in the release.
+      - name: Ensure artifacts uploaded to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ needs.set-version.outputs.version }}"
+          shopt -s nullglob
+          files=(frontend/apps/desktop/release/*.dmg frontend/apps/desktop/release/*.blockmap frontend/apps/desktop/release/latest-mac.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No artifacts found to upload"
+            exit 0
+          fi
+          echo "Uploading ${#files[@]} artifact(s) to release $TAG"
+          gh release upload "$TAG" "${files[@]}" --clobber --repo valuz-ai/valuz-oss
 
       # ── Upload build log on failure ────────────────────────────
       - name: Upload build log
@@ -220,6 +236,22 @@ jobs:
       - name: List artifacts
         run: ls -lh frontend/apps/desktop/release/
 
+      # electron-builder refuses to upload if the release was published >2h ago.
+      # Use gh as a fallback to guarantee the artifact lands in the release.
+      - name: Ensure artifacts uploaded to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ needs.set-version.outputs.version }}"
+          shopt -s nullglob
+          files=(frontend/apps/desktop/release/*.dmg frontend/apps/desktop/release/*.blockmap frontend/apps/desktop/release/latest-mac.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No artifacts found to upload"
+            exit 0
+          fi
+          echo "Uploading ${#files[@]} artifact(s) to release $TAG"
+          gh release upload "$TAG" "${files[@]}" --clobber --repo valuz-ai/valuz-oss
+
       # ── Upload build log on failure ────────────────────────────
       - name: Upload build log
         if: failure()
@@ -295,6 +327,22 @@ jobs:
       - name: List artifacts
         run: ls -lh frontend/apps/desktop/release/
 
+      # electron-builder refuses to upload if the release was published >2h ago.
+      # Use gh as a fallback to guarantee the artifact lands in the release.
+      - name: Ensure artifacts uploaded to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ needs.set-version.outputs.version }}"
+          shopt -s nullglob
+          files=(frontend/apps/desktop/release/*.AppImage frontend/apps/desktop/release/*.deb frontend/apps/desktop/release/*.blockmap frontend/apps/desktop/release/latest-linux.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No artifacts found to upload"
+            exit 0
+          fi
+          echo "Uploading ${#files[@]} artifact(s) to release $TAG"
+          gh release upload "$TAG" "${files[@]}" --clobber --repo valuz-ai/valuz-oss
+
       # ── Upload build log on failure ────────────────────────────
       - name: Upload build artifacts on failure
         if: failure()
@@ -312,30 +360,10 @@ jobs:
     name: Windows (x64)
     needs: set-version
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'windows-x64' }}
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: windows-latest
     permissions:
       contents: write
-    steps:     
-      - name: Configure Git Mirror for Checkout
-        shell: bash
-        run: |
-          echo "=== 1. 清理所有旧的 url 替换规则 ==="
-          # 使用正则强行匹配所有包含 gh-proxy 的 url 配置段并全部删除
-          # 这样不管有没有斜杠、怎么拼接的，都会被一网打尽
-          git config --global --remove-section url.https://gh-proxy.org/ 2>/dev/null || true
-          git config --global --remove-section url.https://gh-proxy.org 2>/dev/null || true
-          git config --global --get-regexp "url\..*" | grep "gh-proxy" | awk '{print $1}' | while read -r section; do
-              # 针对个别顽固的 key 进行精确删除
-              git config --global --unset "$section" 2>/dev/null || true
-          done
-
-          echo "=== 2. 只写入唯一正确的镜像配置 ==="
-          # 注意：这里我们用最简单、最标准的重写（确保代理站后面有斜杠 /）
-          git config --global url."https://gh-proxy.org/".insteadOf "https://github.com/"
-
-          echo "=== 3. 最终验证（此时应该只剩下一行合法的配置） ==="
-          git config --global --get-regexp "url\..*\.insteadof"
-
+    steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Setup pnpm
