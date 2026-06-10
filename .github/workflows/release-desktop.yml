@@ -127,6 +127,22 @@ jobs:
       - name: List artifacts
         run: ls -lh frontend/apps/desktop/release/
 
+      # electron-builder refuses to upload if the release was published >2h ago.
+      # Use gh as a fallback to guarantee the artifact lands in the release.
+      - name: Ensure artifacts uploaded to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ needs.set-version.outputs.version }}"
+          shopt -s nullglob
+          files=(frontend/apps/desktop/release/*.dmg frontend/apps/desktop/release/*.blockmap frontend/apps/desktop/release/latest-mac.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No artifacts found to upload"
+            exit 0
+          fi
+          echo "Uploading ${#files[@]} artifact(s) to release $TAG"
+          gh release upload "$TAG" "${files[@]}" --clobber --repo valuz-ai/valuz-oss
+
       # ── Upload build log on failure ────────────────────────────
       - name: Upload build log
         if: failure()
@@ -143,7 +159,7 @@ jobs:
     name: macOS (x86_64)
     needs: set-version
     if: ${{ github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'mac-x64' }}
-    runs-on: macos-13
+    runs-on: macos-runner-x86
     environment: CSC_KEY_PASSWORD
     permissions:
       contents: write
@@ -220,6 +236,22 @@ jobs:
       - name: List artifacts
         run: ls -lh frontend/apps/desktop/release/
 
+      # electron-builder refuses to upload if the release was published >2h ago.
+      # Use gh as a fallback to guarantee the artifact lands in the release.
+      - name: Ensure artifacts uploaded to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ needs.set-version.outputs.version }}"
+          shopt -s nullglob
+          files=(frontend/apps/desktop/release/*.dmg frontend/apps/desktop/release/*.blockmap frontend/apps/desktop/release/latest-mac.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No artifacts found to upload"
+            exit 0
+          fi
+          echo "Uploading ${#files[@]} artifact(s) to release $TAG"
+          gh release upload "$TAG" "${files[@]}" --clobber --repo valuz-ai/valuz-oss
+
       # ── Upload build log on failure ────────────────────────────
       - name: Upload build log
         if: failure()
@@ -295,6 +327,22 @@ jobs:
       - name: List artifacts
         run: ls -lh frontend/apps/desktop/release/
 
+      # electron-builder refuses to upload if the release was published >2h ago.
+      # Use gh as a fallback to guarantee the artifact lands in the release.
+      - name: Ensure artifacts uploaded to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ needs.set-version.outputs.version }}"
+          shopt -s nullglob
+          files=(frontend/apps/desktop/release/*.AppImage frontend/apps/desktop/release/*.deb frontend/apps/desktop/release/*.blockmap frontend/apps/desktop/release/latest-linux.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No artifacts found to upload"
+            exit 0
+          fi
+          echo "Uploading ${#files[@]} artifact(s) to release $TAG"
+          gh release upload "$TAG" "${files[@]}" --clobber --repo valuz-ai/valuz-oss
+
       # ── Upload build log on failure ────────────────────────────
       - name: Upload build artifacts on failure
         if: failure()
@@ -318,7 +366,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -376,6 +423,23 @@ jobs:
       - name: List artifacts
         shell: bash
         run: ls -lh frontend/apps/desktop/release/
+
+      # electron-builder refuses to upload if the release was published >2h ago.
+      # Use gh as a fallback to guarantee the artifact lands in the release.
+      - name: Ensure artifacts uploaded to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ needs.set-version.outputs.version }}"
+          shopt -s nullglob
+          files=(frontend/apps/desktop/release/*.exe frontend/apps/desktop/release/*.blockmap frontend/apps/desktop/release/latest.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No artifacts found to upload"
+            exit 0
+          fi
+          echo "Uploading ${#files[@]} artifact(s) to release $TAG"
+          gh release upload "$TAG" "${files[@]}" --clobber --repo valuz-ai/valuz-oss
 
       # ── Upload build log on failure ────────────────────────────
       - name: Upload build artifacts on failure

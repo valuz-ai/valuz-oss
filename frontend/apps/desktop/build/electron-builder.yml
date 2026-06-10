@@ -65,7 +65,6 @@ linux:
 win:
   target:
     - nsis
-    - portable
   icon: build/icon.ico
 afterSign: build/afterSign.cjs
 # Auto-update channel. electron-builder writes app-update.yml into the
