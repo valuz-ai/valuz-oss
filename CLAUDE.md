@@ -53,7 +53,7 @@ Cutting `vX.Y.Z`:
 
 1. **Pick the version** (SemVer, pre-1.0): bug-fix / small batch → patch (`0.1.x`);
    feature batch → minor (`0.2.0`).
-2. **Update `CHANGELOG.md`** (Keep a Changelog: Added / Changed / Fixed / Docs & Chore).
+2. **Update `CHANGELOG.md`** (Features / Changed / Fixed / Docs & Chore).
    Credit every entry `(#PR @author)`; use the short SHA for commits pushed straight to
    main. Land it via PR.
 3. **Create the release = create the tag** (one step; also triggers the build):
