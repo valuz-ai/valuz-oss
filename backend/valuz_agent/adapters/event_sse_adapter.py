@@ -127,6 +127,13 @@ def _translate_kernel_event(
         carries the canonical record)
       - ``tool_use``          → ``tool.call.started``
       - ``tool_result``       → ``tool.call.completed``
+      - ``tool_input_delta``  → ``tool.call.input_delta``  (live-only: partial
+        tool-call input JSON streaming in *before* ``tool_use`` — the first
+        delta is the frontend's build-the-card signal, so large-file writes
+        show progress instead of a dead wait)
+      - ``tool_output_delta`` → ``tool.call.output_delta`` (live-only: streamed
+        tool output between started and completed; ``stream`` discriminates
+        codex patch vs stdout)
       - ``session_error``     → ``run.failed``
       - ``usage_update``      → ``runtime.engine.usage``  (V5+messages: replaces
         the dropped ``cost_update`` event; carries token counts +
@@ -293,6 +300,35 @@ def _translate_kernel_event(
     if kernel_type == "thinking_delta":
         return "message.assistant.thinking_delta", _with_message_id(
             {
+                "text": _stringify(data.get("text") or data.get("delta") or ""),
+            },
+            data,
+        )
+
+    if kernel_type == "tool_input_delta":
+        # Live, non-persisted: partial tool-call input JSON streaming in as
+        # the model emits it. Arrives BEFORE the canonical ``tool_use``
+        # (tool.call.started) — the first delta is the frontend's
+        # build-the-card signal, so large-file writes show progress instead
+        # of a dead wait. ``id`` is the tool_use_id that started/completed
+        # also key on; ``name`` lets the card render its real title at once.
+        return "tool.call.input_delta", _with_message_id(
+            {
+                "tool_use_id": _stringify(data.get("id") or ""),
+                "name": _stringify(data.get("name") or ""),
+                "text": _stringify(data.get("text") or data.get("delta") or ""),
+            },
+            data,
+        )
+
+    if kernel_type == "tool_output_delta":
+        # Live, non-persisted: streamed tool output (codex command stdout /
+        # file-change patch) arriving between started and completed. ``stream``
+        # discriminates patch vs stdout when the runtime supplies it.
+        return "tool.call.output_delta", _with_message_id(
+            {
+                "tool_use_id": _stringify(data.get("id") or ""),
+                "stream": _stringify(data.get("stream") or ""),
                 "text": _stringify(data.get("text") or data.get("delta") or ""),
             },
             data,

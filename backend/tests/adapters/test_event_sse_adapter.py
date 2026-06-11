@@ -138,3 +138,35 @@ def test_should_attach_db_row_message_id_before_translating_persisted_event():
     assert legacy_type == "message.user"
     assert payload["text"] == "hi"
     assert payload["message_id"] == "msg-from-row"
+
+
+def test_should_translate_tool_input_delta_to_build_card_signal():
+    # Live, non-persisted partial tool-call input. Carries the tool_use_id
+    # (``id``) the started/completed events also key on, the tool name (so
+    # the card renders its title before the canonical tool_use lands), and
+    # the partial-JSON chunk as ``text``.
+    result = _translate_kernel_event(
+        "tool_input_delta",
+        {"id": "tool-1", "name": "Write", "text": '{"file_path":"/a', "message_id": "msg-w"},
+    )
+    assert result is not None
+    legacy_type, payload = result
+    assert legacy_type == "tool.call.input_delta"
+    assert payload["tool_use_id"] == "tool-1"
+    assert payload["name"] == "Write"
+    assert payload["text"] == '{"file_path":"/a'
+    assert payload["message_id"] == "msg-w"
+
+
+def test_should_translate_tool_output_delta_with_stream_discriminator():
+    result = _translate_kernel_event(
+        "tool_output_delta",
+        {"id": "tool-2", "stream": "patch", "text": "+ added line", "message_id": "msg-o"},
+    )
+    assert result is not None
+    legacy_type, payload = result
+    assert legacy_type == "tool.call.output_delta"
+    assert payload["tool_use_id"] == "tool-2"
+    assert payload["stream"] == "patch"
+    assert payload["text"] == "+ added line"
+    assert payload["message_id"] == "msg-o"

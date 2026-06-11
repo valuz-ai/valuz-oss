@@ -314,6 +314,122 @@ describe("chat-store reducer", () => {
       expect(afterComplete.messages[0]!.tools[0]!.output).toBe("ok");
       expect(afterComplete.messages[0]!.tools[0]!.isError).toBe(false);
     });
+
+    it("should stream tool input via input_delta then reconcile on started", () => {
+      const start = makeState({
+        messages: [
+          {
+            id: "a1",
+            role: "assistant",
+            text: "",
+            thinking: [],
+            tools: [],
+            stopReason: null,
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      });
+      // First input_delta builds a provisional card before started.
+      const afterDelta1 = {
+        ...start,
+        ...reduce(
+          start,
+          frame(1, "tool.call.input_delta", {
+            tool_use_id: "t1",
+            name: "Write",
+            text: '{"file_path":"/a",',
+            message_id: "a1",
+          }),
+        ),
+      };
+      expect(afterDelta1.messages[0]!.tools).toHaveLength(1);
+      expect(afterDelta1.isStreaming).toBe(true);
+
+      const afterDelta2 = {
+        ...afterDelta1,
+        ...reduce(
+          afterDelta1,
+          frame(2, "tool.call.input_delta", {
+            tool_use_id: "t1",
+            text: '"content":"hi"}',
+            message_id: "a1",
+          }),
+        ),
+      };
+      expect(afterDelta2.messages[0]!.tools[0]!.input).toBe(
+        '{"file_path":"/a","content":"hi"}',
+      );
+
+      // started reconciles the same card (no duplicate) with canonical input.
+      const afterStart = {
+        ...afterDelta2,
+        ...reduce(
+          afterDelta2,
+          frame(3, "tool.call.started", {
+            tool_use_id: "t1",
+            name: "Write",
+            input: '{"file_path":"/a.txt","content":"hi"}',
+            message_id: "a1",
+          }),
+        ),
+      };
+      expect(afterStart.messages[0]!.tools).toHaveLength(1);
+      expect(afterStart.messages[0]!.tools[0]!.input).toBe(
+        '{"file_path":"/a.txt","content":"hi"}',
+      );
+    });
+
+    it("should accumulate output_delta then let completed replace it", () => {
+      const start = makeState({
+        messages: [
+          {
+            id: "a1",
+            role: "assistant",
+            text: "",
+            thinking: [],
+            tools: [
+              {
+                id: "t1",
+                name: "Bash",
+                input: "{}",
+                output: null,
+                isError: false,
+              },
+            ],
+            stopReason: null,
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      });
+      const afterOut1 = {
+        ...start,
+        ...reduce(
+          start,
+          frame(1, "tool.call.output_delta", { tool_use_id: "t1", text: "a" }),
+        ),
+      };
+      const afterOut2 = {
+        ...afterOut1,
+        ...reduce(
+          afterOut1,
+          frame(2, "tool.call.output_delta", { tool_use_id: "t1", text: "b" }),
+        ),
+      };
+      expect(afterOut2.messages[0]!.tools[0]!.output).toBe("ab");
+
+      const afterComplete = {
+        ...afterOut2,
+        ...reduce(
+          afterOut2,
+          frame(3, "tool.call.completed", {
+            tool_use_id: "t1",
+            content: "final",
+            is_error: "false",
+          }),
+        ),
+      };
+      expect(afterComplete.messages[0]!.tools[0]!.output).toBe("final");
+    });
   });
 
   describe("seq tracking", () => {

@@ -376,17 +376,80 @@ export const reduce = (
 
     case "tool.call.started": {
       const target = ensureAssistantMessage(state.messages, messageId);
+      const toolId = payload.tool_use_id ?? payload.id ?? `tool-${generateId()}`;
+      // A preceding tool.call.input_delta may already have built a
+      // provisional card for this id (streaming the partial input).
+      const streamed = target.tools.find((t) => t.id === toolId);
       const tool: ChatToolUse = {
-        id: payload.tool_use_id ?? payload.id ?? `tool-${generateId()}`,
-        name: payload.name ?? "tool",
-        input: payload.input ?? "",
-        output: null,
+        id: toolId,
+        name: payload.name ?? streamed?.name ?? "tool",
+        // Canonical full input replaces the partial-JSON preview.
+        input: payload.input ?? streamed?.input ?? "",
+        output: streamed?.output ?? null,
         isError: false,
       };
+      const tools = streamed
+        ? target.tools.map((t) => (t.id === toolId ? tool : t))
+        : [...target.tools, tool];
       const updatedMessages = upsertAssistantMessage(state.messages, target, {
-        tools: [...target.tools, tool],
+        tools,
       });
       return { messages: updatedMessages, lastSeq: nextLastSeq };
+    }
+
+    case "tool.call.input_delta": {
+      // Live partial tool-call input (non-persisted). First chunk builds a
+      // provisional running card so large file writes show immediate
+      // progress; later chunks accumulate. started reconciles to the
+      // canonical full input.
+      const toolId = payload.tool_use_id ?? "";
+      if (!toolId) return { lastSeq: nextLastSeq };
+      const text = payload.text ?? "";
+      const target = ensureAssistantMessage(state.messages, messageId);
+      const existing = target.tools.find((t) => t.id === toolId);
+      const nextTool: ChatToolUse = existing
+        ? { ...existing, input: existing.input + text }
+        : {
+            id: toolId,
+            name: payload.name ?? "tool",
+            input: text,
+            output: null,
+            isError: false,
+          };
+      const tools = existing
+        ? target.tools.map((t) => (t.id === toolId ? nextTool : t))
+        : [...target.tools, nextTool];
+      const updatedMessages = upsertAssistantMessage(state.messages, target, {
+        tools,
+      });
+      return {
+        messages: updatedMessages,
+        isStreaming: true,
+        lastSeq: nextLastSeq,
+      };
+    }
+
+    case "tool.call.output_delta": {
+      // Live streamed tool output (non-persisted) between started and
+      // completed; accumulate onto the matching card. completed later
+      // replaces it with the canonical aggregated output.
+      const toolId = payload.tool_use_id ?? "";
+      if (!toolId) return { lastSeq: nextLastSeq };
+      const text = payload.text ?? "";
+      const updatedMessages = state.messages.map((msg) => {
+        if (!msg.tools.some((t) => t.id === toolId)) return msg;
+        return {
+          ...msg,
+          tools: msg.tools.map((t) =>
+            t.id === toolId ? { ...t, output: (t.output ?? "") + text } : t,
+          ),
+        };
+      });
+      return {
+        messages: updatedMessages,
+        isStreaming: true,
+        lastSeq: nextLastSeq,
+      };
     }
 
     case "tool.call.completed": {
