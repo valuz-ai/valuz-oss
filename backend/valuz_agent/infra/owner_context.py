@@ -5,7 +5,7 @@ with the owner's ``user_id``. Rather than thread that value through 30-odd
 datastore ``create_*`` signatures, the ORM column ``default=`` reads it from this
 ``ContextVar``:
 
-- During an HTTP request, ``OwnerContextMiddleware`` sets it from the resolved
+- During an HTTP request, ``AuthMiddleware`` sets it from the resolved
   ``UserIdentity.user_id`` (OSS → the local install id; commercial → the
   logged-in user's id).
 - Outside a request (boot seeds, automations, the task runner, kernel mirrors)
@@ -49,7 +49,7 @@ def set_default_user_id(user_id: str) -> None:
     """Seed the out-of-request default owner id.
 
     Called once at boot with the resolved local install id so background work
-    that never enters ``OwnerContextMiddleware`` (boot seeds, automations, the
+    that never enters ``AuthMiddleware`` (boot seeds, automations, the
     task runner, kernel mirrors) still stamps a real owner.
     """
     global _default_user_id

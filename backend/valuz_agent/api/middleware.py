@@ -18,14 +18,13 @@ from valuz_agent.infra.owner_context import (
 logger = logging.getLogger("valuz_agent.api.access")
 
 
-class OwnerContextMiddleware(BaseHTTPMiddleware):
-    """Stamp the request's owner id into the ``current_user_id`` ContextVar.
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Resolve the request's identity and stamp the owner id into ContextVar.
 
     Resolves the request's ``UserIdentity`` (OSS → the local install id;
-    commercial overlay → the logged-in user via ``set_identity_resolver``) and
+    commercial overlay → the logged-in user via ``ext.identity``) and
     publishes its ``user_id`` so every row created while handling the request is
-    stamped with that owner (see ``infra.owner_context``). Outside a request the
-    ContextVar default applies, so background work still stamps a real owner.
+    stamped with that owner (see ``infra.owner_context``).
     """
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
@@ -46,6 +45,7 @@ class ErrorHandlerMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         except Exception as exc:
             from fastapi.responses import JSONResponse
+
             if isinstance(exc, ValuzError):
                 return JSONResponse(
                     status_code=exc.status_code,
