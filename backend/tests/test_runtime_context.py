@@ -11,7 +11,7 @@ class TestRuntimeContextMultiTenant:
     def test_org_id_field_exists(self) -> None:
         ctx = RuntimeContext()
         assert ctx.org_id is None
-        assert ctx.user_id == "local-user"
+        assert ctx.user_id == ""
 
     def test_org_id_can_be_set(self) -> None:
         ctx = RuntimeContext(user_id="u1", org_id="org-42")

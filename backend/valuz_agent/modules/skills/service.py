@@ -97,7 +97,7 @@ class SkillLibraryService:
         self._remote_registry = remote_registry
 
     async def list_catalog(
-        self, project_id: str, *, user_id: str = "local-user", org_id: str | None = None
+        self, project_id: str, *, user_id: str = "", org_id: str | None = None
     ) -> SkillsCatalog:
         project = await self._projects.get_project(project_id)
         items = self._ds.list_project_skill_manifests(project, self._source)
@@ -444,9 +444,7 @@ class SkillLibraryService:
             self._ds.set_skill_enabled(project, str(skill_dir), True)
         result = await self._finalize_origin(skill_dir, "created", payload.project_id)
         self._bus.publish(SKILL_CHANGED, skill_id=result.id, reason="created")
-        self._bus.publish(
-            PROJECT_SKILLS_CHANGED, project_id=payload.project_id or "chat-default"
-        )
+        self._bus.publish(PROJECT_SKILLS_CHANGED, project_id=payload.project_id or "chat-default")
         return result
 
     async def update_skill(
@@ -487,9 +485,7 @@ class SkillLibraryService:
         skill_id: str,
         payload: SkillCopyRequest,
     ) -> SkillView:
-        source_skill = await self._resolve_skill(
-            skill_id=skill_id, project_id=payload.project_id
-        )
+        source_skill = await self._resolve_skill(skill_id=skill_id, project_id=payload.project_id)
         source_dir = Path(source_skill.path)
         target_dir = await self._allocate_skill_dir(
             target_scope="user",
@@ -814,9 +810,7 @@ class SkillLibraryService:
             # Network fetch (urlopen, 30s timeout) + archive extraction are
             # blocking — run them off the event loop so a URL skill import never
             # freezes the whole single-threaded server for other requests.
-            fetched_root = await asyncio.to_thread(
-                self._fetch_url_into_staging, url, staging_dir
-            )
+            fetched_root = await asyncio.to_thread(self._fetch_url_into_staging, url, staging_dir)
         except Exception as e:
             shutil.rmtree(staging_dir, ignore_errors=True)
             raise SkillImportFailed(f"Failed to fetch URL: {e}") from e
@@ -984,9 +978,7 @@ class SkillLibraryService:
                 continue
             count += 1
             if count > _MAX_IMPORT_FILE_COUNT:
-                raise SkillImportFailed(
-                    f"Import exceeds the {_MAX_IMPORT_FILE_COUNT}-file limit"
-                )
+                raise SkillImportFailed(f"Import exceeds the {_MAX_IMPORT_FILE_COUNT}-file limit")
             size = path.stat().st_size
             if size > _MAX_IMPORT_FILE_BYTES:
                 raise SkillImportFailed(
@@ -1114,9 +1106,7 @@ class SkillLibraryService:
         # (this path can rate-limit; GITHUB_TOKEN raises the cap when set).
         api_branch = self._github_default_branch(owner, repo)
         if not self._try_download_codeload(owner, repo, api_branch, target):
-            raise ValueError(
-                f"Could not download default branch '{api_branch}' for {owner}/{repo}"
-            )
+            raise ValueError(f"Could not download default branch '{api_branch}' for {owner}/{repo}")
         return api_branch
 
     def _github_default_branch(self, owner: str, repo: str) -> str:
@@ -1528,8 +1518,8 @@ class SkillLibraryService:
         URL import's shared staging dir) so a single ``rmtree`` of that root
         cleans everything up; without it a fresh temp dir is created.
         """
-        staging_dir = dest if dest is not None else Path(
-            tempfile.mkdtemp(prefix="valuz-skill-import-")
+        staging_dir = (
+            dest if dest is not None else Path(tempfile.mkdtemp(prefix="valuz-skill-import-"))
         )
         staging_dir.mkdir(parents=True, exist_ok=True)
         suffix = archive_path.suffix.lower()
