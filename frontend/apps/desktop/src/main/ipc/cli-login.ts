@@ -147,6 +147,10 @@ function resolveBundledCodex(): string | null {
   return resolveBundledBinary(["codex_cli_bin", "bin", binaryName]);
 }
 
+function resolveBundled(tool: CliTool): string | null {
+  return tool === "claude" ? resolveBundledClaude() : resolveBundledCodex();
+}
+
 // Strict markers we require in each CLI's status output before declaring a
 // successful login. The previous heuristics (keychain entry exists / file
 // non-empty) returned true for stale or partially provisioned credentials
@@ -180,7 +184,18 @@ const LINUX_TERMINALS = [
 // both streams so the strict-marker check works regardless.
 const allOutput = (r: ExecResult): string => `${r.stdout}\n${r.stderr}`;
 
-export const detectCliPath = async (
+/**
+ * Resolve which binary to actually invoke for a CLI tool.
+ *
+ * Order:
+ *   1. Global install (``which``/``where``) — if the user has it on PATH, use it.
+ *   2. Bundled binary (PyInstaller bundle / dev venv) — fallback when there is
+ *      no global install. We must NOT spawn a bare ``claude``/``codex`` command
+ *      when the user hasn't installed one globally: that goes through PATH,
+ *      hits some unrelated stub or just ENOENTs, and the real bundled binary
+ *      never gets a chance. Resolve the path first, then execute that path.
+ */
+const resolveCliBinary = async (
   tool: CliTool,
   deps: CliLoginDeps = defaultDeps,
 ): Promise<string | null> => {
@@ -194,74 +209,44 @@ export const detectCliPath = async (
     const path = stdout.trim().split("\n")[0].trim();
     if (path.length > 0) return path;
   } catch {
-    // which/where failed — fall through
+    // which/where failed — fall through to bundled
   }
 
-  // Fallback: use the bundled CLI from the backend's PyInstaller bundle / dev
-  // venv when no global install is found.
-  if (tool === "claude") {
-    return resolveBundledClaude();
-  }
-  if (tool === "codex") {
-    return resolveBundledCodex();
-  }
-
-  return null;
+  return resolveBundled(tool);
 };
+
+export const detectCliPath = async (
+  tool: CliTool,
+  deps: CliLoginDeps = defaultDeps,
+): Promise<string | null> => resolveCliBinary(tool, deps);
 
 export const detectLoginState = async (
   tool: CliTool,
   deps: CliLoginDeps = defaultDeps,
 ): Promise<LoginState> => {
-  // Authoritative path for both CLIs: shell out to the tool's own status
-  // command and require strict marker text in the output. The CLI is the
-  // only thing that knows whether the auth artefact on disk / in keychain
-  // is actually usable — file presence + file mode were too permissive
-  // (stale tokens, half-provisioned files, wrong account types all read
-  // as "logged_in" before).
+  // Resolve the exact binary to invoke — global if installed, bundled
+  // otherwise — so we never spawn a bare ``claude``/``codex`` that relies on
+  // PATH when the user hasn't installed one globally.
+  const binary = await resolveCliBinary(tool, deps);
+  if (!binary) return "logged_out";
+
   if (tool === "claude") {
     try {
-      const result = await deps.execFile("claude", ["auth", "status"]);
+      const result = await deps.execFile(binary, ["auth", "status"]);
       const out = allOutput(result);
       const allPresent = CLAUDE_STATUS_MARKERS.every((m) => out.includes(m));
       return allPresent ? "logged_in" : "logged_out";
     } catch {
-      // Global claude failed — try the bundled claude from the backend
-      const bundled = resolveBundledClaude();
-      if (bundled) {
-        try {
-          const result = await deps.execFile(bundled, ["auth", "status"]);
-          const out = allOutput(result);
-          const allPresent = CLAUDE_STATUS_MARKERS.every((m) =>
-            out.includes(m),
-          );
-          return allPresent ? "logged_in" : "logged_out";
-        } catch {
-          return "logged_out";
-        }
-      }
       return "logged_out";
     }
   }
 
   // tool === 'codex'
   try {
-    const result = await deps.execFile("codex", ["login", "status"]);
+    const result = await deps.execFile(binary, ["login", "status"]);
     const out = allOutput(result);
     return out.includes(CODEX_STATUS_MARKER) ? "logged_in" : "logged_out";
   } catch {
-    // Global codex failed — try the bundled codex from the backend venv,
-    // mirroring the claude branch above.
-    const bundled = resolveBundledCodex();
-    if (bundled) {
-      try {
-        const result = await deps.execFile(bundled, ["login", "status"]);
-        const out = allOutput(result);
-        return out.includes(CODEX_STATUS_MARKER) ? "logged_in" : "logged_out";
-      } catch {
-        return "logged_out";
-      }
-    }
     return "logged_out";
   }
 };
