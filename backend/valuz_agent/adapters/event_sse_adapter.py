@@ -30,6 +30,7 @@ from typing import Any
 from sqlalchemy import text
 
 from valuz_agent.infra.database import async_engine
+from valuz_agent.infra.sse import shielded
 
 POLL_INTERVAL_SECONDS = 0.3
 IDLE_HEARTBEAT_SECONDS = 15.0
@@ -579,7 +580,10 @@ async def iter_events_sse(
     last_emit = asyncio.get_event_loop().time()
 
     # First, drain any DB events we missed (replay on reconnect).
-    frames = await list_events_after(session_id, after_seq=cursor)
+    # ``shielded``: a client disconnect cancels this generator; landing that
+    # cancellation inside an in-flight DB read would tear the pooled
+    # connection down mid-checkin (see ``infra.sse.shielded``).
+    frames = await shielded(list_events_after(session_id, after_seq=cursor))
     for frame in frames:
         yield {"event": frame.event_type, "data": frame.to_sse_data()}
         cursor = frame.seq
@@ -601,7 +605,7 @@ async def iter_events_sse(
             if event is None:
                 # Queue timeout or sentinel (session ended). Poll DB for any
                 # events we might have missed, then check if session is done.
-                db_frames = await list_events_after(session_id, after_seq=cursor)
+                db_frames = await shielded(list_events_after(session_id, after_seq=cursor))
                 for frame in db_frames:
                     yield {"event": frame.event_type, "data": frame.to_sse_data()}
                     cursor = frame.seq

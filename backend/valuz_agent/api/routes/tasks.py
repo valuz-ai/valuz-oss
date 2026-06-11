@@ -29,12 +29,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from valuz_agent.infra.db import async_unit_of_work, get_async_session
+from valuz_agent.infra.sse import shielded
 from valuz_agent.modules.tasks import messaging, planning
 from valuz_agent.modules.tasks.datastore import (
     TaskDatastore,
     TaskEventDatastore,
     TaskSessionDatastore,
 )
+from valuz_agent.modules.tasks.models import TaskEventRow
 from valuz_agent.modules.tasks.orchestrator import task_orchestrator
 
 router = APIRouter(tags=["tasks"])
@@ -284,8 +286,15 @@ async def _iter_task_events_sse(
     while True:
         if is_disconnected is not None and is_disconnected():
             return
-        async with async_unit_of_work(commit=False) as db:
-            rows = await TaskEventDatastore(db).list_events_after(project_id, task_id, cursor)
+
+        # ``shielded``: client disconnect cancels this generator; landing the
+        # cancellation inside the in-flight DB read would tear the pooled
+        # connection down mid-checkin (see ``infra.sse.shielded``).
+        async def _tick_read(after: int) -> list[TaskEventRow]:
+            async with async_unit_of_work(commit=False) as db:
+                return await TaskEventDatastore(db).list_events_after(project_id, task_id, after)
+
+        rows = await shielded(_tick_read(cursor))
         if rows:
             for row in rows:
                 event_payload = EventResponse.model_validate(row).model_dump(mode="json")
