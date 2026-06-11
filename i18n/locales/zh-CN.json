@@ -1666,7 +1666,7 @@
     "showWindow": "显示窗口"
   },
   "updater": {
-    "availableDesc": "发现新版本，立即下载安装。",
+    "availableDesc": "下载完成后，重启应用即可完成更新。",
     "downloadedTitle": "新版本已就绪",
     "downloadedDesc": "更新已下载完成，重启后将自动安装。",
     "downloadNow": "下载更新",

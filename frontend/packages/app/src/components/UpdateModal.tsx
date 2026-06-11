@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { ArrowUpCircle, CheckCircle, Loader2 } from "lucide-react";
+import { Download, CheckCircle, Loader2 } from "lucide-react";
 import { useTranslation, useUpdaterStore } from "@valuz/core";
 import {
   Button,
@@ -46,7 +46,7 @@ export const UpdateModal = ({
             {isDownloaded ? (
               <CheckCircle className="h-5 w-5 text-green-500" />
             ) : (
-              <ArrowUpCircle className="h-5 w-5 text-blue-500" />
+              <Download className="h-5 w-5 text-blue-500" />
             )}
             {isDownloaded
               ? t("updater.downloadedTitle" as Parameters<typeof t>[0])
