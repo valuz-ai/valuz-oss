@@ -16,7 +16,7 @@ Lifecycle:
   after `--` is appended verbatim to the backend command line.
 - `valuz stop [--force]` — reads `.ai/dev/valuz.pid` and SIGTERMs each
   PID's process group; falls back to pattern matching for orphans.
-- `valuz status` — HTTP probe of `:8000/v1/workspaces` + lsof PIDs.
+- `valuz status` — HTTP probe of `:8000/v1/projects` + lsof PIDs.
 - `valuz logs [backend|frontend|launch] [--follow] [-n]` — tail dev logs.
 - `valuz doctor` — `uv` / `pnpm` / `node` / `go` + key paths +
   launchd plist + writer lock + backend probe.
