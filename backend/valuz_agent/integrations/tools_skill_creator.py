@@ -13,9 +13,7 @@ The kernel records a ``tool_use`` event the moment any tool fires; the
 frontend SSE subscriber for that session already knows ``session_id`` (it
 owns the page). Pairing the event payload (``slug``, ``summary``,
 ``change_kind``, ``files_touched``) with the session id at the UI layer
-gives us everything the confirm/dismiss endpoints need without smuggling
-``session_id`` through the kernel ``ExecContext`` (which only exposes
-``project`` and is shared across sessions in the same project).
+gives us everything the confirm/dismiss endpoints need.
 
 Why this lives in valuz, not the kernel
 ---------------------------------------
@@ -112,13 +110,18 @@ async def _submit_skill_handler(args: dict[str, object], context: ExecContext) -
     files = args.get("files_touched") or []
     file_count = len(files) if isinstance(files, list) else 0
 
-    project_root = (context.project or "").strip()
+    # The kernel ExecContext exposes the session cwd as ``workspace``
+    # (sessions are self-sufficient — there is no kernel project record
+    # anymore). Reading the retired ``project`` attribute here raised
+    # AttributeError on every call, so the agent never learned the real
+    # staging path and improvised one — breaking the whole save flow.
+    project_root = (getattr(context, "workspace", "") or "").strip()
     if not project_root:
-        # Defensive: kernel should always set project_root, but if it
+        # Defensive: kernel should always set the workspace, but if it
         # doesn't, surface a clear error rather than silently passing.
         return ToolResult(
             content=(
-                "Error: project root is empty in ExecContext — cannot "
+                "Error: workspace root is empty in ExecContext — cannot "
                 "validate staging location. Ask the user to retry the "
                 "session."
             ),

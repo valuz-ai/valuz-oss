@@ -203,6 +203,30 @@ def _resolve_project_for_creation(context: SkillCreationContext) -> str:
     return "chat-default"
 
 
+async def _default_assistant_slug_if_present() -> str | None:
+    """Resolve the seeded default assistant for the skill-creator launchers.
+
+    Per 09-assistant every conversation binds an agent; the launchers
+    previously minted sessions through the agentless raw-model path, which
+    left the composer with no agent selected and — since a live session
+    locks its binding — no way to pick one: a dead conversation.
+
+    Returns ``None`` when the default assistant doesn't exist yet (fresh
+    install before onboarding seeds it) so the launcher can fall back to
+    the legacy agentless path instead of failing the launch outright.
+    """
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.agents.datastore import AgentDatastore
+    from valuz_agent.modules.agents.seed import DEFAULT_ASSISTANT_SLUG
+
+    try:
+        async with async_unit_of_work(commit=False) as db:
+            row = await AgentDatastore(db).get_agent(DEFAULT_ASSISTANT_SLUG)
+    except Exception:  # noqa: BLE001 — launcher must not die on a lookup hiccup
+        return None
+    return DEFAULT_ASSISTANT_SLUG if row is not None else None
+
+
 @router.post(
     "/v1/skills/create/start",
     response_model=SkillCreateStartResponse,
@@ -220,6 +244,12 @@ async def start_create(
     ``skill-creator`` skill at session start) knows where the resulting
     skill should be filed: user library only, or library + project
     binding.
+
+    The session binds the seeded default assistant when it exists (see
+    ``_default_assistant_slug_if_present``) — the default assistant
+    resolves as a global library agent in any project, and the
+    skill-creator capabilities (skill + ``submit_skill`` tool) ride the
+    always-on baseline, not the agent.
     """
     project_id = _resolve_project_for_creation(body.context)
     creation_context = body.context.model_dump(exclude_none=True)
@@ -230,6 +260,7 @@ async def start_create(
         provider_id=body.provider_id,
         trigger_meta={"mode": "skill-creator"},
         creation_context=creation_context,
+        agent_slug=await _default_assistant_slug_if_present(),
     )
     return SkillCreateStartResponse(
         session_id=session.id,
@@ -262,6 +293,7 @@ async def start_create_chat(
         provider_id=payload.provider_id,
         trigger_meta={"mode": "skill-creator"},
         creation_context={"kind": "chat"},
+        agent_slug=await _default_assistant_slug_if_present(),
     )
     return SkillCreateChatStartResponse(
         session_id=session.id,
