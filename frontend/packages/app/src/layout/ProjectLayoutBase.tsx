@@ -24,6 +24,7 @@ import {
   useTaskStore,
   useTranslation,
   useProjectStore,
+  useUpdaterStore,
   projectsApi,
   type RunSummary,
 } from "@valuz/core";
@@ -165,15 +166,11 @@ export function ProjectLayoutBase({
   );
   const [historyMaxIdx, setHistoryMaxIdx] = useState<number>(historyIdx);
 
-  const updaterBridge = useMemo(() => {
-    type DesktopBridge = { invoke: <T>(ch: string, args?: unknown) => Promise<T> };
-    return (window as Window & { valuzDesktop?: DesktopBridge }).valuzDesktop ?? null;
-  }, []);
-
+  // Re-show the in-app update toast (bottom-left floating card) if the user
+  // dismissed it. The standalone update window is no longer used.
   const handleOpenUpdateWindow = useCallback(() => {
-    if (!updaterBridge) return;
-    void updaterBridge.invoke("updater:show-window");
-  }, [updaterBridge]);
+    useUpdaterStore.getState().show();
+  }, []);
 
   const fetchProjects = useCallback(async () => {
     try {

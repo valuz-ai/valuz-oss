@@ -1666,9 +1666,9 @@
     "showWindow": "Show window"
   },
   "updater": {
-    "availableDesc": "A new version is available. Download and install it now.",
+    "availableDesc": "A new version is available to download.",
     "downloadedTitle": "Update ready",
-    "downloadedDesc": "A new version has been downloaded. Restart to install.",
+    "downloadedDesc": "Update downloaded — restart to install.",
     "downloadNow": "Download update",
     "downloading": "Downloading...",
     "downloadingDesc": "Downloading update, please wait...",

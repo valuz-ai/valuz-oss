@@ -1,4 +1,4 @@
-import { ArrowUpCircle } from "lucide-react";
+import { Download } from "lucide-react";
 import { useTranslation, useUpdaterStore } from "@valuz/core";
 import {
   Tooltip,
@@ -26,7 +26,7 @@ export const UpdateButton = ({ onClick }: UpdateButtonProps) => {
             onClick={onClick}
             className="flex h-[22px] w-[22px] animate-pulse items-center justify-center rounded-[5px] text-blue-500 transition-colors hover:bg-surface-muted"
           >
-            <ArrowUpCircle className="h-4 w-4" />
+            <Download className="h-4 w-4" />
           </button>
         </TooltipTrigger>
         <TooltipContent side="bottom">

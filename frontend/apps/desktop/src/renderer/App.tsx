@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { providersApi } from "@valuz/core";
 import { StartupScreen } from "./components/StartupScreen";
 import { UpdaterListener } from "./components/UpdaterListener";
+import { UpdateToast } from "./components/UpdateToast";
 import { useDesktopStartup } from "./hooks/use-desktop-startup";
 import { ElectronPlatformProvider } from "./lib/electron-platform";
 import { AppRouter } from "./routes/router";
@@ -75,6 +76,7 @@ export const App = () => {
   return (
     <ElectronPlatformProvider>
       <UpdaterListener />
+      <UpdateToast />
       <AppRouter />
     </ElectronPlatformProvider>
   );

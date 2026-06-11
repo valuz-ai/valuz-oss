@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowUpCircle, CheckCircle, Loader2 } from "lucide-react";
+import { Download, CheckCircle, Loader2 } from "lucide-react";
 import { t as _t } from "@valuz/shared/i18n";
 import { Button, Progress } from "@valuz/ui";
 import { DESKTOP_CHANNELS, DESKTOP_EVENTS } from "../../preload/channels";
@@ -110,7 +110,7 @@ export const UpdateWindowApp = () => {
           {isDownloaded ? (
             <CheckCircle className="h-12 w-12 text-green-500" />
           ) : (
-            <ArrowUpCircle className="h-12 w-12 text-blue-500" />
+            <Download className="h-12 w-12 text-blue-500" />
           )}
         </div>
 
