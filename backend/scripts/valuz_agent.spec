@@ -147,14 +147,17 @@ if getattr(sys, 'frozen', False):
     if _internal not in sys.path:
         sys.path.insert(0, _internal)
 
-    # Ensure the bundled Claude CLI (from claude_agent_sdk/_bundled/) is
-    # discoverable by the SDK's subprocess transport.  The SDK's own
-    # ``_find_bundled_cli`` uses ``Path(__file__)`` which may not resolve
-    # correctly inside the PYZ archive — adding the directory to PATH lets
-    # ``shutil.which("claude")`` find it as a reliable fallback.
-    _bundled_dir = os.path.join(_internal, 'claude_agent_sdk', '_bundled')
-    if os.path.isfile(os.path.join(_bundled_dir, 'claude')):
-        os.environ['PATH'] = _bundled_dir + os.pathsep + os.environ.get('PATH', '')
+    _exe_suffix = '.exe' if sys.platform == 'win32' else ''
+
+    # Bundled Claude CLI (claude_agent_sdk/_bundled/claude[.exe])
+    _claude_dir = os.path.join(_internal, 'claude_agent_sdk', '_bundled')
+    if os.path.isfile(os.path.join(_claude_dir, 'claude' + _exe_suffix)):
+        os.environ['PATH'] = _claude_dir + os.pathsep + os.environ.get('PATH', '')
+
+    # Bundled Codex CLI (codex_cli_bin/bin/codex[.exe])
+    _codex_dir = os.path.join(_internal, 'codex_cli_bin', 'bin')
+    if os.path.isfile(os.path.join(_codex_dir, 'codex' + _exe_suffix)):
+        os.environ['PATH'] = _codex_dir + os.pathsep + os.environ.get('PATH', '')
 
 from valuz_agent.__main__ import main
 sys.exit(main())
