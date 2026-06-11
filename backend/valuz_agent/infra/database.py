@@ -13,8 +13,8 @@ from sqlalchemy.orm import (
     mapped_column,
 )
 
+from valuz_agent.infra.auth_context import get_current_user_id
 from valuz_agent.infra.config import settings
-from valuz_agent.infra.owner_context import get_current_user_id
 from valuz_agent.infra.time_utils import now_ms
 
 
@@ -35,11 +35,11 @@ class TimestampMixin:
     )
 
 
-class OwnedMixin:
+class UserMixin:
     """Row ownership — every business table carries the owner's ``user_id``.
 
     Required (``NOT NULL``) and stamped automatically from the request-scoped
-    ``current_user_id`` ContextVar (``infra.owner_context``), which resolves to
+    ``current_user_id`` ContextVar (``infra.auth_context``), which resolves to
     the local install id in OSS and the logged-in user's id under the commercial
     overlay. Indexed because the commercial edition filters every query by owner.
     """

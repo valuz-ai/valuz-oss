@@ -4,20 +4,25 @@ Covers the three moving parts of the cutover:
 
 1. ``infra.local_identity.resolve_local_user_id`` — device-derived, stable,
    persisted once to ``installation.json``.
-2. ``infra.owner_context`` — the request-scoped owner ContextVar + boot default.
-3. ``infra.database.OwnedMixin`` — auto-stamps the active owner on insert.
+2. ``infra.auth_context`` — the request-scoped owner ContextVar. Explicit-only:
+   no implicit fallback; an unset context raises ``LookupError``.
+3. ``infra.database.UserMixin`` — auto-stamps the active owner on insert.
 4. ``boot.schema.drop_stale_host_tables`` — fires only on a pre-cutover schema.
 """
 
 from __future__ import annotations
 
+import contextvars
+
+import pytest
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import StatementError
 from sqlalchemy.orm import DeclarativeBase, Session
 
 from valuz_agent.boot.schema import drop_stale_host_tables
-from valuz_agent.infra import owner_context
+from valuz_agent.infra import auth_context
 from valuz_agent.infra.config import settings
-from valuz_agent.infra.database import OwnedMixin, PrimaryKeyMixin
+from valuz_agent.infra.database import PrimaryKeyMixin, UserMixin
 from valuz_agent.infra.local_identity import resolve_local_user_id
 
 
@@ -59,26 +64,43 @@ class TestResolveLocalUserId:
 # --------------------------------------------------------------------------- #
 # 2. owner context
 # --------------------------------------------------------------------------- #
-class TestOwnerContext:
-    def teardown_method(self) -> None:
-        owner_context.set_default_user_id("")
+class TestAuthContext:
+    """Explicit-only semantics: no boot-seeded global fallback.
 
-    def test_default_fallback(self) -> None:
-        owner_context.set_default_user_id("local-xyz")
-        assert owner_context.get_current_user_id() == "local-xyz"
+    Each case runs inside a fresh ``contextvars.Context`` so the module-level
+    ContextVar starts genuinely unset, regardless of what other tests (or the
+    test runner itself) set in the ambient context.
+    """
 
-    def test_request_override_then_reset(self) -> None:
-        owner_context.set_default_user_id("local-xyz")
-        token = owner_context.set_current_user_id("u-42")
-        assert owner_context.get_current_user_id() == "u-42"
-        owner_context.reset_current_user_id(token)
-        assert owner_context.get_current_user_id() == "local-xyz"
+    def test_unset_context_raises_lookup_error(self) -> None:
+        def probe() -> None:
+            with pytest.raises(LookupError):
+                auth_context.get_current_user_id()
 
-    def test_empty_override_falls_through_to_default(self) -> None:
-        owner_context.set_default_user_id("local-xyz")
-        token = owner_context.set_current_user_id("")
-        assert owner_context.get_current_user_id() == "local-xyz"
-        owner_context.reset_current_user_id(token)
+        contextvars.Context().run(probe)
+
+    def test_set_then_get_then_reset(self) -> None:
+        def roundtrip() -> None:
+            token = auth_context.set_current_user_id("u-42")
+            assert auth_context.get_current_user_id() == "u-42"
+            auth_context.reset_current_user_id(token)
+            # Reset returns to the prior (unset) state — reads fail loudly
+            # again rather than falling back to any implicit owner.
+            with pytest.raises(LookupError):
+                auth_context.get_current_user_id()
+
+        contextvars.Context().run(roundtrip)
+
+    def test_nested_override_restores_outer_owner(self) -> None:
+        def nested() -> None:
+            outer = auth_context.set_current_user_id("local-xyz")
+            inner = auth_context.set_current_user_id("u-42")
+            assert auth_context.get_current_user_id() == "u-42"
+            auth_context.reset_current_user_id(inner)
+            assert auth_context.get_current_user_id() == "local-xyz"
+            auth_context.reset_current_user_id(outer)
+
+        contextvars.Context().run(nested)
 
 
 # --------------------------------------------------------------------------- #
@@ -88,16 +110,12 @@ class _OwnedBase(DeclarativeBase):
     pass
 
 
-class _Thing(_OwnedBase, PrimaryKeyMixin, OwnedMixin):
+class _Thing(_OwnedBase, PrimaryKeyMixin, UserMixin):
     __tablename__ = "t_owned_thing"
 
 
-class TestOwnedMixinStamping:
-    def teardown_method(self) -> None:
-        owner_context.set_default_user_id("")
-
+class TestUserMixinStamping:
     def test_stamps_active_owner_on_insert(self) -> None:
-        owner_context.set_default_user_id("local-owner")
         engine = create_engine("sqlite://")
         _OwnedBase.metadata.create_all(engine)
 
@@ -106,23 +124,33 @@ class TestOwnedMixinStamping:
         assert "user_id" in cols
         assert cols["user_id"]["nullable"] is False
 
-        with Session(engine) as s:
-            token = owner_context.set_current_user_id("u-7")
-            try:
-                row = _Thing()
-                s.add(row)
-                s.commit()
-                rid = row.id
-            finally:
-                owner_context.reset_current_user_id(token)
-            assert s.get(_Thing, rid).user_id == "u-7"
+        def insert_with_owner() -> None:
+            with Session(engine) as s:
+                token = auth_context.set_current_user_id("u-7")
+                try:
+                    row = _Thing()
+                    s.add(row)
+                    s.commit()
+                    rid = row.id
+                finally:
+                    auth_context.reset_current_user_id(token)
+                assert s.get(_Thing, rid).user_id == "u-7"
 
-        # Outside a request override, the boot default is stamped instead.
-        with Session(engine) as s:
-            row = _Thing()
-            s.add(row)
-            s.commit()
-            assert row.user_id == "local-owner"
+        contextvars.Context().run(insert_with_owner)
+
+    def test_insert_without_owner_fails_loudly(self) -> None:
+        # No implicit fallback: an insert from a context that never set the
+        # owner must error out instead of being attributed to the install id.
+        engine = create_engine("sqlite://")
+        _OwnedBase.metadata.create_all(engine)
+
+        def insert_unowned() -> None:
+            with Session(engine) as s:
+                s.add(_Thing())
+                with pytest.raises((LookupError, StatementError)):
+                    s.commit()
+
+        contextvars.Context().run(insert_unowned)
 
 
 # --------------------------------------------------------------------------- #
@@ -156,9 +184,7 @@ class TestDropStaleHostTables:
             conn.execute(text("CREATE TABLE valuz_provider (id TEXT PRIMARY KEY, user_id TEXT)"))
             conn.execute(text("CREATE TABLE valuz_agent (id TEXT PRIMARY KEY, user_id TEXT)"))
             conn.execute(text("CREATE TABLE alembic_version_host (version_num TEXT PRIMARY KEY)"))
-            conn.execute(
-                text(f"INSERT INTO alembic_version_host VALUES ('{BASELINE_REVISION}')")
-            )
+            conn.execute(text(f"INSERT INTO alembic_version_host VALUES ('{BASELINE_REVISION}')"))
 
         drop_stale_host_tables(engine)
 

@@ -1,36 +1,34 @@
 """Port: request-level user identity resolution.
 
-OSS mode returns ``ANONYMOUS`` for every request. The commercial version
-injects a JWT/OIDC-based ``IdentityResolver`` via ``set_identity_resolver()``
-in ``api/deps.py`` at app startup.
+OSS mode returns ``ANONYMOUS`` (a device-derived local user id) for every
+request. The commercial version injects a JWT/OIDC-based ``IdentityResolver``
+via ``ext.identity`` at app startup.
+
+The resolver returns a plain ``user_id`` string — the OSS layer needs nothing
+richer. The commercial overlay adds org / role / entitlement context through
+``AuthHook.after_resolve()``.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any, Protocol
-
-
-@dataclass
-class UserIdentity:
-    # The owner id. Stamped on every business row's ``user_id`` column and
-    # consumed by billing / events / RuntimeContext. OSS → the device-derived
-    # local install id; commercial → the logged-in user's id.
-    user_id: str
-    email: str | None = None
-    display_name: str | None = None
-    org_id: str | None = None
-    roles: list[str] = field(default_factory=list)
-    entitlements: list[str] = field(default_factory=list)
-
-
-ANONYMOUS = UserIdentity(user_id="local-user")
 
 
 class IdentityResolver(Protocol):
     """Resolve the current user from an incoming HTTP request."""
 
-    async def resolve(self, request: Any) -> UserIdentity | None: ...
+    async def resolve(self, request: Any) -> str | None: ...
 
 
-__all__ = ["UserIdentity", "ANONYMOUS", "IdentityResolver"]
+class AuthHook(Protocol):
+    """Post-authentication hook called by ``AuthMiddleware``.
+
+    Runs after identity resolution, before the request handler. Implementations
+    may set additional ``ContextVar``\\s (org, roles, entitlements), or raise a
+    ``ValuzError`` to reject the request (caught by ``ErrorHandlerMiddleware``).
+    """
+
+    async def after_resolve(self, request: Any, user_id: str | None) -> None: ...
+
+
+__all__ = ["IdentityResolver", "AuthHook"]

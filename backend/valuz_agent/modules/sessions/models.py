@@ -1,10 +1,10 @@
 from sqlalchemy import BigInteger, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from valuz_agent.infra.database import Base, OwnedMixin, PrimaryKeyMixin, TimestampMixin
+from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin, UserMixin
 
 
-class ProjectSessionRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
+class ProjectSessionRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     """Host-side project↔session index.
 
     One row per kernel session, written at session-creation time. This is
@@ -28,7 +28,7 @@ class ProjectSessionRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     origin: Mapped[str] = mapped_column(String(32), default="user")
 
 
-class SessionAttachmentRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
+class SessionAttachmentRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     __tablename__ = "valuz_session_attachment"
 
     session_id: Mapped[str] = mapped_column(String(36), index=True)

@@ -45,10 +45,10 @@ from typing import Any
 from sqlalchemy import JSON, BigInteger, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from valuz_agent.infra.database import Base, OwnedMixin, PrimaryKeyMixin, TimestampMixin
+from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin, UserMixin
 
 
-class TaskRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
+class TaskRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     """Durable task header — one row per task kickoff."""
 
     __tablename__ = "valuz_task"
@@ -93,7 +93,7 @@ class TaskRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     committed_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
-class TaskEventRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
+class TaskEventRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     """Append-only event log for one task — timeline backbone."""
 
     __tablename__ = "valuz_task_event"
@@ -117,7 +117,7 @@ class TaskEventRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
-class TaskSessionRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
+class TaskSessionRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     """Index of kernel sessions that belong to a task (runs)."""
 
     __tablename__ = "valuz_task_session"

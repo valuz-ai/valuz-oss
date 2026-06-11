@@ -1,10 +1,10 @@
 from sqlalchemy import BigInteger, Boolean, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from valuz_agent.infra.database import Base, OwnedMixin, PrimaryKeyMixin, TimestampMixin
+from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin, UserMixin
 
 
-class ProviderRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
+class ProviderRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     __tablename__ = "valuz_provider"
 
     name: Mapped[str] = mapped_column(String(128))

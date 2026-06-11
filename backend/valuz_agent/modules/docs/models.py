@@ -1,10 +1,10 @@
 from sqlalchemy import BigInteger, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from valuz_agent.infra.database import Base, OwnedMixin, PrimaryKeyMixin, TimestampMixin
+from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin, UserMixin
 
 
-class KnowledgeBaseRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
+class KnowledgeBaseRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     """Global knowledge base — each KB maps to one local root directory (D1)."""
 
     __tablename__ = "valuz_knowledge_base"
@@ -18,7 +18,7 @@ class KnowledgeBaseRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     __table_args__ = (Index("ux_kb_root_path", "root_path", unique=True),)
 
 
-class KbFolderRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
+class KbFolderRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     """Directory node in a KB tree — preserves folder structure from disk."""
 
     __tablename__ = "valuz_kb_folder"
@@ -38,7 +38,7 @@ class KbFolderRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     )
 
 
-class DocumentRecordRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
+class DocumentRecordRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     """Single document within a KB — indexed in-place, no file copy (D2)."""
 
     __tablename__ = "valuz_document_record"
@@ -75,7 +75,7 @@ class DocumentRecordRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     )
 
 
-class DocumentImportTaskRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
+class DocumentImportTaskRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     __tablename__ = "valuz_document_import_task"
 
     task_type: Mapped[str] = mapped_column(String(32))  # import_files | rescan | reindex
@@ -93,7 +93,7 @@ class DocumentImportTaskRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
     errors_json: Mapped[str | None] = mapped_column(Text, default=None)
 
 
-class ProjectKbBindingRow(Base, OwnedMixin):
+class ProjectKbBindingRow(Base, UserMixin):
     """Three-level project binding (D3) — minimal-cover include set."""
 
     __tablename__ = "valuz_project_kb_binding"

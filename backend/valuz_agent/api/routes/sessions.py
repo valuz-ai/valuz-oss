@@ -10,7 +10,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from valuz_agent.adapters import kernel_client
 from valuz_agent.adapters.event_sse_adapter import iter_events_sse
-from valuz_agent.api.deps import get_current_user, get_session_service
+from valuz_agent.api.deps import get_session_service
 from valuz_agent.infra.db import get_async_session
 from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.modules.sessions.datastore import SessionDatastore
@@ -24,7 +24,6 @@ from valuz_agent.modules.sessions.models import SessionAttachmentRow
 from valuz_agent.modules.sessions.schemas import SessionEffortRequest, SessionModelSelection
 from valuz_agent.modules.sessions.service import SessionService
 from valuz_agent.ports.extensions import ext
-from valuz_agent.ports.identity import UserIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -288,10 +287,14 @@ async def send_message(
     session_id: str,
     body: SessionMessageRequest,
     svc: SessionService = Depends(get_session_service),
-    user: UserIdentity = Depends(get_current_user),
 ) -> SessionDetail:
     """Start agent execution in background. Returns immediately with running status."""
-    budget = await ext.billing.check_budget(user.user_id, estimated_cost=0.0)
+    from valuz_agent.infra.auth_context import get_current_user_id
+
+    user_id = get_current_user_id()
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Unauthenticated")
+    budget = await ext.billing.check_budget(user_id, estimated_cost=0.0)
     if not budget.allowed:
         raise HTTPException(status_code=402, detail=budget.reason or "Budget exceeded")
     return await svc.send_message(

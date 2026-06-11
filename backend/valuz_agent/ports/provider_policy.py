@@ -19,8 +19,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from valuz_agent.ports.identity import UserIdentity
-
 ProviderWriteAction = Literal["create", "update", "enable"]
 
 
@@ -30,7 +28,7 @@ class ProviderWriteContext:
     the provider being written (``"user"`` for member BYOK; ``"managed"`` /
     ``"system"`` are governed elsewhere and normally not gated here)."""
 
-    user: UserIdentity
+    user_id: str
     action: ProviderWriteAction
     provider_source: str = "user"
 

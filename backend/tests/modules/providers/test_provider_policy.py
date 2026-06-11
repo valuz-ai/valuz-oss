@@ -10,9 +10,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from valuz_agent.api.deps import get_current_user, get_provider_service
+from valuz_agent.api.deps import get_current_user_id, get_provider_service
 from valuz_agent.api.routes.providers import router
-from valuz_agent.ports.identity import UserIdentity
 from valuz_agent.ports.provider_policy import (
     AllowAllProviderPolicy,
     PolicyDecision,
@@ -25,7 +24,7 @@ from valuz_agent.ports.provider_policy import (
 @pytest.mark.asyncio
 async def test_default_policy_allows() -> None:
     decision = await get_provider_policy().authorize_write(
-        ProviderWriteContext(user=UserIdentity(user_id="u1"), action="create")
+        ProviderWriteContext(user_id="u1", action="create")
     )
     assert decision.allowed is True
 
@@ -42,7 +41,7 @@ def client() -> TestClient:
     # The deny path short-circuits before the service is touched, but FastAPI
     # still resolves the dependency — stub it so no DB is needed.
     app.dependency_overrides[get_provider_service] = lambda: object()
-    app.dependency_overrides[get_current_user] = lambda: UserIdentity(user_id="u1")
+    app.dependency_overrides[get_current_user_id] = lambda: "u1"
     return TestClient(app)
 
 

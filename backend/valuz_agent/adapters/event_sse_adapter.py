@@ -213,14 +213,19 @@ def _translate_kernel_event(
         # (both callers are async), so fire-and-forget via ``create_task`` —
         # metering must never block or break the SSE stream.
         try:
-            from valuz_agent.infra.owner_context import get_current_user_id
+            from valuz_agent.infra.auth_context import get_current_user_id
             from valuz_agent.ports.billing import MeterEvent
             from valuz_agent.ports.extensions import ext
 
+            uid = data.get("user_id") or get_current_user_id()
+            if uid is None:
+                # Explicitly-anonymous context — nothing to attribute the
+                # usage to; surfaces via the best-effort except below.
+                raise LookupError("usage_update without an owner user_id")
             cost_usd = (input_tokens * 3 + output_tokens * 15) / 1_000_000
             coro = ext.billing.meter(
                 MeterEvent(
-                    user_id=data.get("user_id") or get_current_user_id(),
+                    user_id=uid,
                     event_type="llm_call",
                     cost_usd=cost_usd,
                     metadata={"input_tokens": input_tokens, "output_tokens": output_tokens},

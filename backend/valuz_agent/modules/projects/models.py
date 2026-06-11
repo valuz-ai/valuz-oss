@@ -2,10 +2,10 @@ from pydantic import BaseModel
 from sqlalchemy import Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from valuz_agent.infra.database import Base, OwnedMixin, PrimaryKeyMixin, TimestampMixin
+from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin, UserMixin
 
 
-class ProjectRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
+class ProjectRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     __tablename__ = "valuz_project"
 
     name: Mapped[str] = mapped_column(String(256))

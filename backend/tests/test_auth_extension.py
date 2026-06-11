@@ -2,9 +2,8 @@
 
 Verifies that:
 1. OSS mode → all requests resolve to the local install identity
-2. Custom IdentityResolver injection works
-3. get_current_user returns ANONYMOUS when resolver returns None
-4. Auth middleware injection returns 401 on missing token
+2. Custom IdentityResolver injection works via ext.identity
+3. Auth middleware injection returns 401 on missing token
 """
 
 from __future__ import annotations
@@ -16,9 +15,7 @@ from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-from valuz_agent.api.deps import get_current_user, set_identity_resolver
 from valuz_agent.integrations.identity_local import LocalIdentityResolver
-from valuz_agent.ports.identity import ANONYMOUS, UserIdentity
 
 
 class TestLocalIdentityResolver:
@@ -27,54 +24,8 @@ class TestLocalIdentityResolver:
 
         resolver = LocalIdentityResolver()
         result = await resolver.resolve(MagicMock())
-        # OSS resolves every request to the device-derived local install id
-        # (stamped on every row's ``user_id`` column), not the ANONYMOUS literal.
-        assert result.user_id == resolve_local_user_id()
-        assert result.user_id.startswith("local-")
-        assert result.org_id is None
-
-
-class TestGetCurrentUser:
-    def setup_method(self) -> None:
-        set_identity_resolver(LocalIdentityResolver())
-
-    def teardown_method(self) -> None:
-        set_identity_resolver(LocalIdentityResolver())
-
-    async def test_default_returns_local_install_user(self) -> None:
-        from valuz_agent.infra.local_identity import resolve_local_user_id
-
-        request = MagicMock()
-        user = await get_current_user(request)
-        assert user.user_id == resolve_local_user_id()
-        assert user.org_id is None
-
-    async def test_custom_resolver_injection(self) -> None:
-        class MockResolver:
-            async def resolve(self, request: object) -> UserIdentity:
-                return UserIdentity(
-                    user_id="test-user",
-                    email="test@example.com",
-                    org_id="org-1",
-                    roles=["admin"],
-                )
-
-        set_identity_resolver(MockResolver())
-        request = MagicMock()
-        user = await get_current_user(request)
-        assert user.user_id == "test-user"
-        assert user.org_id == "org-1"
-        assert user.email == "test@example.com"
-
-    async def test_resolver_returning_none_falls_back_to_anonymous(self) -> None:
-        class NoneResolver:
-            async def resolve(self, request: object) -> UserIdentity | None:
-                return None
-
-        set_identity_resolver(NoneResolver())
-        request = MagicMock()
-        user = await get_current_user(request)
-        assert user is ANONYMOUS
+        assert result == resolve_local_user_id()
+        assert result.startswith("local-")
 
 
 class TestAuthMiddlewareIntegration:
@@ -89,9 +40,7 @@ class TestAuthMiddlewareIntegration:
             async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
                 token = request.headers.get("Authorization")
                 if not token:
-                    return JSONResponse(
-                        status_code=401, content={"detail": "Missing token"}
-                    )
+                    return JSONResponse(status_code=401, content={"detail": "Missing token"})
                 return await call_next(request)
 
         app.add_middleware(AuthMiddleware)
@@ -113,9 +62,7 @@ class TestAuthMiddlewareIntegration:
             async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
                 token = request.headers.get("Authorization")
                 if not token:
-                    return JSONResponse(
-                        status_code=401, content={"detail": "Missing token"}
-                    )
+                    return JSONResponse(status_code=401, content={"detail": "Missing token"})
                 return await call_next(request)
 
         app.add_middleware(AuthMiddleware)
@@ -130,29 +77,27 @@ class TestAuthMiddlewareIntegration:
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
 
-    async def test_should_work_with_identity_resolver_and_middleware(self) -> None:
-        """Full integration: middleware validates token, resolver extracts identity."""
+    async def test_custom_resolver_via_ext_identity(self) -> None:
+        """Set ext.identity to a custom resolver; verify it resolves correctly."""
+        from valuz_agent.ports.extensions import ext
 
         class JWTResolver:
-            async def resolve(self, request: object) -> UserIdentity | None:
+            async def resolve(self, request: object) -> str | None:
                 auth = getattr(request, "headers", {}).get("Authorization", "")
                 if auth.startswith("Bearer "):
-                    return UserIdentity(
-                        user_id="jwt-user", org_id="org-jwt"
-                    )
+                    return "jwt-user"
                 return None
 
-        set_identity_resolver(JWTResolver())
+        ext.identity = JWTResolver()
         try:
             request = MagicMock()
             request.headers = {"Authorization": "Bearer valid-token"}
-            user = await get_current_user(request)
-            assert user.user_id == "jwt-user"
-            assert user.org_id == "org-jwt"
+            user_id = await ext.identity.resolve(request)
+            assert user_id == "jwt-user"
 
             request_no_token = MagicMock()
             request_no_token.headers = {}
-            user2 = await get_current_user(request_no_token)
-            assert user2 is ANONYMOUS
+            user_id2 = await ext.identity.resolve(request_no_token)
+            assert user_id2 is None
         finally:
-            set_identity_resolver(LocalIdentityResolver())
+            ext.identity = None

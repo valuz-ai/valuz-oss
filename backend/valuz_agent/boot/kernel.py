@@ -228,7 +228,7 @@ async def init_kernel_dependencies() -> None:
     # events row is stamped with the local install owner (OSS). A ContextVar set
     # on the host thread would not cross into the kernel's own event loop/thread,
     # so we seed the module-level default (thread-independent); the commercial
-    # overlay refines per-request. Mirrors the host's owner_context default seed.
+    # overlay refines per-request. Mirrors the host's auth_context default seed.
     from src.core.owner_context import set_default_owner
 
     from valuz_agent.infra.local_identity import resolve_local_user_id
