@@ -45,12 +45,6 @@ Do not consider work complete until all three pass.
 - Change order: update openapi.yaml first → backend → frontend
 - Frontend types are auto-generated: `make generate-types`
 
-## Project Management
-
-- Issue tracking: Linear
-- Branch naming: `feat/<issue-id>-<short-desc>` or `fix/<issue-id>-<short-desc>`
-- Commit format: `feat: description (VALUZ-123)`
-
 ## Rules
 
 - All changes must pass `make test-all` and `make typecheck`

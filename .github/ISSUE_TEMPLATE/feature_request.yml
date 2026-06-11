@@ -1,0 +1,27 @@
+name: ✨ Feature request
+description: Suggest a new feature or an improvement.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please search existing issues first — if yours already exists, 👍 it instead of opening a new one.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want and why?
+      description: Describe the problem you're trying to solve.
+      placeholder: I'm trying to do X but there's no way to ...
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution (optional)
+      description: If you have an idea for how it should work, describe it.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context (optional)
+      description: Mockups, links, prior art, or anything else.

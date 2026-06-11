@@ -1,0 +1,41 @@
+name: 🐛 Bug report
+description: Report a bug — something broken, crashing, or behaving incorrectly.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please search existing issues first — if yours already exists, 👍 it instead of opening a new one.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected instead. Text is preferred over screenshots (redact any PII).
+      placeholder: When I do X, Y happens. I expected Z instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to '...'
+        2. Click '...'
+        3. See error
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version & OS
+      description: Valuz version (or commit) and your OS.
+      placeholder: v0.1.5 · macOS 14.6 (arm64)
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context (optional)
+      description: Logs, environment, or anything else that helps.
+      render: shell

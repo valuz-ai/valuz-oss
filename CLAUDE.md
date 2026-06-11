@@ -119,12 +119,6 @@ Do not consider work complete until all three pass.
 - Frontend rules: see `frontend/CLAUDE.md` → i18n section (hook rules, JSX wrapping, template literals)
 - Backend: `valuz_agent/i18n.py` provides `t()` for server-side strings
 
-## Project Management
-
-- Issue tracking: Linear (connected via MCP)
-- Branch: `feat/<issue-id>-<short-desc>` or `fix/<issue-id>-<short-desc>`
-- Commit: `feat: description (VALUZ-123)`
-
 ## Escalation
 
 Stop and ask the human when:
