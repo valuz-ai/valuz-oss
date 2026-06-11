@@ -6,6 +6,8 @@ import logging
 import os
 from pathlib import Path
 
+import yaml
+
 from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.modules.skills.contracts import RuntimeContext, SkillManifest
 
@@ -66,6 +68,17 @@ def _compute_dir_hash(skill_dir: Path) -> str:
 
 
 def _extract_frontmatter(raw: str) -> tuple[dict[str, object], str]:
+    """Parse a SKILL.md frontmatter block into ``(metadata, body)``.
+
+    YAML-first: real skills use the full YAML scalar vocabulary — folded
+    (``description: >``) and literal (``|``) block scalars, quoted strings,
+    flow lists, nested mappings. The previous line-splitting parser read the
+    literal ``>`` as the description (and treated colon-bearing continuation
+    lines as new keys), so every block-scalar skill surfaced a one-character
+    description in the library. The legacy parser is kept as a fallback for
+    frontmatter that doesn't parse as YAML at all, so malformed manifests
+    still degrade softly instead of dropping their metadata.
+    """
     if not raw.startswith("---\n"):
         return {}, raw
 
@@ -75,7 +88,28 @@ def _extract_frontmatter(raw: str) -> tuple[dict[str, object], str]:
 
     meta_block = raw[4:closing]
     body = raw[closing + 5 :]
-    metadata: dict[str, object] = {}
+
+    try:
+        parsed_yaml = yaml.safe_load(meta_block)
+    except yaml.YAMLError:
+        parsed_yaml = None
+    if isinstance(parsed_yaml, dict):
+        metadata: dict[str, object] = {}
+        for key, value in parsed_yaml.items():
+            # Block scalars carry a trailing newline (folded) or internal
+            # newlines (literal); consumers render single-line summaries,
+            # so normalize string values to stripped text. YAML reads a
+            # bare ``key:`` as None — keep the legacy "" contract there.
+            if value is None:
+                metadata[str(key)] = ""
+            elif isinstance(value, str):
+                metadata[str(key)] = value.strip()
+            else:
+                metadata[str(key)] = value
+        return metadata, body
+
+    # Legacy fallback — naive line parser for non-YAML-ish frontmatter.
+    fallback: dict[str, object] = {}
     for line in meta_block.splitlines():
         if ":" not in line:
             continue
@@ -83,17 +117,17 @@ def _extract_frontmatter(raw: str) -> tuple[dict[str, object], str]:
         key = key.strip()
         raw_value = value.strip()
         if not raw_value:
-            metadata[key] = ""
+            fallback[key] = ""
             continue
         if raw_value.startswith("[") and raw_value.endswith("]"):
             try:
                 parsed = ast.literal_eval(raw_value)
             except (SyntaxError, ValueError):
                 parsed = []
-            metadata[key] = parsed if isinstance(parsed, list) else []
+            fallback[key] = parsed if isinstance(parsed, list) else []
             continue
-        metadata[key] = raw_value.strip("\"'")
-    return metadata, body
+        fallback[key] = raw_value.strip("\"'")
+    return fallback, body
 
 
 def _detect_manifest(skill_dir: Path) -> Path | None:

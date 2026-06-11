@@ -49,6 +49,46 @@ class TestExtractFrontmatter:
         meta, _ = _extract_frontmatter(raw)
         assert meta["custom-key"] == "custom-value"
 
+    def test_should_fold_block_scalar_description(self):
+        """The reported bug: ``description: >`` surfaced a literal ``>`` as
+        the library-card description. The folded scalar must be joined into
+        the full text — including continuation lines that contain colons."""
+        raw = (
+            "---\n"
+            "name: python-backend-craft\n"
+            "description: >\n"
+            '  This skill should be used when the user asks to "build a backend",\n'
+            '  "create an API", or any task involving: design, testing, deploys.\n'
+            "tags: [python, backend]\n"
+            "---\n"
+            "\nBody"
+        )
+        meta, body = _extract_frontmatter(raw)
+        desc = str(meta["description"])
+        assert desc.startswith("This skill should be used")
+        assert "create an API" in desc and desc.endswith("design, testing, deploys.")
+        assert ">" != desc
+        assert meta["tags"] == ["python", "backend"]
+        assert body.strip() == "Body"
+
+    def test_should_keep_literal_block_scalar_text(self):
+        raw = "---\ndescription: |\n  line one\n  line two\n---\n\nBody"
+        meta, _ = _extract_frontmatter(raw)
+        assert meta["description"] == "line one\nline two"
+
+    def test_should_keep_nested_mapping_out_of_top_level(self):
+        raw = "---\nname: x\nmetadata:\n  short-description: short\n---\n\nBody"
+        meta, _ = _extract_frontmatter(raw)
+        # The nested key must not leak into the top level (the old parser
+        # flattened it); it stays under the ``metadata`` mapping.
+        assert "short-description" not in meta
+        assert meta["metadata"] == {"short-description": "short"}
+
+    def test_should_fall_back_to_line_parser_on_invalid_yaml(self):
+        raw = "---\nname: Test\nbroken: @not yaml\n---\n\nBody"
+        meta, _ = _extract_frontmatter(raw)
+        assert meta["name"] == "Test"
+
 
 class TestFilesystemSkillSource:
     def test_should_discover_skills_in_directory(self, tmp_path, monkeypatch):

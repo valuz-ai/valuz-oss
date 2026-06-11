@@ -98,6 +98,7 @@ dependencies = [
     "pytz>=2026.1.post1",
     "types-pytz>=2026.1.1.20260408",
     "types-croniter>=6.2.2.20260408",
+    "types-pyyaml>=6.0",
     # ``yaml`` is imported eagerly by ``kernel/src/core/skills.py`` (via
     # ``src.core.__init__`` re-export), so any host import of
     # ``from src.core import …`` triggers it. Today it arrives transitively,
