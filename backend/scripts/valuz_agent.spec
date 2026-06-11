@@ -46,25 +46,69 @@ else:
 HERE = Path(SPECPATH).parent
 
 # --- Auto-collect all submodules for third-party packages ---
+# Pip package name → Python import name mapping.
+# collect_submodules handles the rest; if a package is not found, it falls
+# back to adding the bare name as a hidden import.
 _third_party_pkgs = [
+    # Web framework
     "fastapi", "starlette", "pydantic", "pydantic_settings",
     "uvicorn", "sse_starlette", "multipart",
+    # Database
     "sqlalchemy", "aiosqlite", "alembic",
-    "httpx",
+    # HTTP
+    "httpx", "httpcore", "httpx_sse", "h11", "httptools",
+    # LLM providers
     "anthropic", "openai",
+    # Document parsing
     "markitdown", "pymupdf4llm", "pymupdf",
-    "html_to_markdown", "rapidocr",
+    "html_to_markdown", "rapidocr", "mammoth",
+    "markdown_it", "markdownify",
+    "beautifulsoup4",
+    "lxml", "openpyxl", "et_xmlfile",
+    "filetype", "magika",
+    # OCR / ML
+    "onnxruntime", "flatbuffers", "numpy",
+    "opencv-python",
+    # Agent runtimes
     "deepagents", "claude_agent_sdk",
     "codex_cli_bin", "openai_codex",
-    "langchain", "langchain_core",
+    # LangChain ecosystem
+    "langchain", "langchain_core", "langchain_protocol",
     "langchain_openai", "langchain_mcp_adapters",
     "langchain_anthropic", "langchain_google_genai",
     "langgraph",
+    "langgraph.checkpoint",
+    "langgraph.checkpoint.sqlite",
+    "langgraph.prebuilt",
+    "langgraph_sdk", "langsmith",
+    # Google
+    "google.auth", "google.genai",
+    # MCP
     "mcp",
+    # Scheduling
     "croniter", "cron_descriptor", "pytz",
-    "jinja2",
-    "dotenv", "typer", "watchfiles",
-    "yaml",
+    # Data
+    "pandas", "orjson", "ormsgpack", "packaging",
+    # Crypto / security
+    "cryptography", "cffi", "defusedxml",
+    # Templating
+    "jinja2", "mako", "markupsafe",
+    # Config / env
+    "dotenv", "omegaconf",
+    # CLI / logging
+    "typer", "click", "colorlog", "watchfiles",
+    # Serialization
+    "jsonpatch", "jsonpointer", "jsonschema",
+    # Networking
+    "anyio", "certifi", "charset_normalizer", "idna",
+    # Async
+    "greenlet",
+    # Misc
+    "yaml", "networkx", "annotated_types",
+    "distro", "docstring_parser", "nh3",
+    "cobble", "colorama", "jiter",
+    "attr", "pathspec", "iniconfig",
+    "pathspec",
 ]
 _auto_hidden = []
 for _pkg in _third_party_pkgs:
