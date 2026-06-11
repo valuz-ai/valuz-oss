@@ -8,6 +8,8 @@ are meant to be called from FastAPI handler bodies.
 
 from __future__ import annotations
 
+import os
+
 from fastapi import HTTPException
 
 from app.schemas import (
@@ -23,8 +25,11 @@ from src.core import (
 
 
 def validate_skills(skills: list[str]) -> None:
+    # ``os.path.isabs`` matches the OS the kernel runs on: on Windows it accepts
+    # drive-rooted paths (``C:\\...``) and UNC paths, on POSIX it accepts ``/...``.
+    # A bare ``startswith("/")`` check rejected every valid Windows skill path.
     for path in skills:
-        if not path.startswith("/"):
+        if not os.path.isabs(path):
             raise HTTPException(
                 status_code=400,
                 detail=f"skills entries must be absolute paths; got '{path}'.",
