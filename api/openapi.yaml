@@ -1093,6 +1093,37 @@ paths:
               schema:
                 $ref: "#/components/schemas/SkillView"
 
+  /v1/skills/create/start:
+    post:
+      summary: Start an AI skill-authoring session (unified launcher)
+      description: |
+        Unified entry point for the skill-creator agent loop, consolidating
+        the three product entries (chat / project / skills_library) behind
+        one endpoint. Creates a session against the project appropriate for
+        `context.kind` and stamps `creation_context` onto session metadata so
+        the downstream `submit_skill` tool applies the right side-effects on
+        confirmation. The session binds `agent_slug` when given; otherwise the
+        backend picks the default assistant (seeded `default-assistant`, then
+        the onboarding-created `valuz-helper`), falling back to an agentless
+        session when neither exists yet.
+      operationId: startSkillCreate
+      tags: [skills]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SkillCreateStartRequest"
+      responses:
+        "201":
+          description: Authoring session ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillCreateStartResponse"
+        "422":
+          description: context.project_id missing for kind=project
+
   /v1/skills/create/chat/start:
     post:
       summary: Start AI-create-skill chat session
@@ -2774,6 +2805,48 @@ components:
         add_to_project:
           type: boolean
           default: false
+
+    SkillCreationContext:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [chat, project, skills_library]
+        project_id:
+          type: string
+          nullable: true
+          description: Required when kind=project; the project to author in.
+
+    SkillCreateStartRequest:
+      type: object
+      required: [context]
+      properties:
+        context:
+          $ref: "#/components/schemas/SkillCreationContext"
+        agent_slug:
+          type: string
+          nullable: true
+          description: |
+            Agent to bind the authoring conversation to. Omit to let the
+            backend pick the default assistant.
+        model_id:
+          type: string
+          nullable: true
+        provider_id:
+          type: string
+          nullable: true
+
+    SkillCreateStartResponse:
+      type: object
+      required: [session_id, authoring_project_id, creation_context]
+      properties:
+        session_id:
+          type: string
+        authoring_project_id:
+          type: string
+        creation_context:
+          $ref: "#/components/schemas/SkillCreationContext"
 
     SkillCreateChatStartResponse:
       type: object

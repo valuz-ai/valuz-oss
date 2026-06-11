@@ -38,9 +38,12 @@ export interface SkillAddDialogCallbacks {
     preview_id: string;
     name?: string;
   }) => Promise<{ name: string }>;
-  onStartAiCreate: (
-    context: SkillCreationContext,
-  ) => Promise<{ session_id: string }>;
+  /** Navigate to the skill-creator draft conversation for this context.
+   *  Draft-first: the session is minted on the user's first send (with
+   *  the agent they picked in the composer), not when the dialog closes —
+   *  so the conversation gets the same default-agent + switching UX as
+   *  新对话. */
+  onStartAiCreate: (context: SkillCreationContext) => void;
   onLinkPreview: (url: string) => Promise<SkillImportArchivePreview>;
   onLinkConfirm: (data: {
     preview_id: string;
@@ -54,8 +57,6 @@ interface SkillAddDialogProps extends SkillAddDialogCallbacks {
   onComplete: () => void;
   mode?: ImportMode;
   creationContext?: SkillCreationContext;
-  /** Navigate to the AI skill-creator session page. */
-  onNavigateToSession: (sessionId: string) => void;
 }
 
 export function SkillAddDialog({
@@ -64,7 +65,6 @@ export function SkillAddDialog({
   onComplete,
   mode = "ai",
   creationContext,
-  onNavigateToSession,
   onArchivePreview,
   onArchiveConfirm,
   onStartAiCreate,
@@ -154,23 +154,12 @@ export function SkillAddDialog({
 
   /* ── AI / Link handlers ──────────────────────────────── */
 
-  const handleStartCreateChat = async () => {
-    try {
-      const context: SkillCreationContext = creationContext ?? {
-        kind: "skills_library",
-      };
-      const start = await onStartAiCreate(context);
-      handleClose();
-      onNavigateToSession(start.session_id);
-    } catch (err) {
-      toast.error(
-        err instanceof Error
-          ? err.message
-          : t("skill.startFailed" as Parameters<typeof t>[0]),
-      );
-    } finally {
-      setSubmitting(false);
-    }
+  const handleStartCreateChat = () => {
+    const context: SkillCreationContext = creationContext ?? {
+      kind: "skills_library",
+    };
+    handleClose();
+    onStartAiCreate(context);
   };
 
   const handleLinkFetch = async (url: string) => {
@@ -321,7 +310,7 @@ export function SkillAddDialog({
                   </div>
                 </div>
                 <div className="mt-8 flex justify-end">
-                  <Button onClick={() => void handleStartCreateChat()}>
+                  <Button onClick={handleStartCreateChat}>
                     <Sparkles className="h-4 w-4" />
                     {t("skill.openCreator" as Parameters<typeof t>[0])}
                   </Button>

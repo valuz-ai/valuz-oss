@@ -431,6 +431,13 @@ export const ConversationPage = () => {
   const isSkillCreatorMode =
     searchParams.get("mode") === "skill-creator" ||
     sessionTriggerMode === "skill-creator";
+  // Draft-first skill creation (技能库 → 添加技能 → AI 创建): the entry no
+  // longer pre-creates a session (that locked an empty agent binding — a
+  // dead conversation). It lands here as a normal draft carrying the
+  // creation context in the URL; ``ensureSession`` mints the session via
+  // the skills launcher on the first send, with the agent the user picked.
+  const skillKindParam = searchParams.get("skill_kind");
+  const skillProjectParam = searchParams.get("skill_project");
   const shouldRevealPanelFromNavigation =
     (
       location.state as {
@@ -446,6 +453,8 @@ export const ConversationPage = () => {
 
   const refreshStaging = useCallback(async () => {
     if (!isSkillCreatorMode) return;
+    // Draft-first entry: no session exists yet — nothing staged to scan.
+    if (id === NEW_SESSION_ID) return;
     setStagingRefreshing(true);
     try {
       const res = await skillsApi.scanStaging(id);
@@ -2197,17 +2206,35 @@ export const ConversationPage = () => {
     if (!selectedAgentSlug) {
       throw new Error("No agent selected.");
     }
-    const created = await sessionsApi.create({
-      project_id: isChat ? "chat-default" : selectedProjectId,
-      agent_slug: selectedAgentSlug,
-      provider_id: selectedProviderId ?? undefined,
-      model_id: selectedModelId ?? undefined,
-      runtime_id: selectedRuntimeId ?? undefined,
-      mcp_provider_slugs:
-        selectedMcpSlugs.length > 0 ? selectedMcpSlugs : undefined,
-      permission_mode: selectedPermissionMode,
-      effort: selectedEffort,
-    });
+    let created: Awaited<ReturnType<typeof sessionsApi.create>>;
+    if (isSkillCreatorMode) {
+      // Skill-creator draft: mint through the skills launcher so the
+      // session carries trigger_meta + creation_context (the
+      // ``submit_skill`` confirm flow reads them), bound to the agent
+      // picked in the composer — same UX as 新对话.
+      const start = await skillsApi.startCreate({
+        context:
+          skillKindParam === "project" && skillProjectParam
+            ? { kind: "project", project_id: skillProjectParam }
+            : { kind: skillKindParam === "chat" ? "chat" : "skills_library" },
+        agent_slug: selectedAgentSlug,
+        provider_id: selectedProviderId ?? undefined,
+        model_id: selectedModelId ?? undefined,
+      });
+      created = await sessionsApi.get(start.session_id);
+    } else {
+      created = await sessionsApi.create({
+        project_id: isChat ? "chat-default" : selectedProjectId,
+        agent_slug: selectedAgentSlug,
+        provider_id: selectedProviderId ?? undefined,
+        model_id: selectedModelId ?? undefined,
+        runtime_id: selectedRuntimeId ?? undefined,
+        mcp_provider_slugs:
+          selectedMcpSlugs.length > 0 ? selectedMcpSlugs : undefined,
+        permission_mode: selectedPermissionMode,
+        effort: selectedEffort,
+      });
+    }
     // 10-new-conversation-guidance slice 3: remember which agent this 临时对话
     // used so the next new conversation pre-selects it.
     if (isChat) setLastTempAgent(selectedAgentSlug);
@@ -2268,7 +2295,10 @@ export const ConversationPage = () => {
     // churn that was dropping the freshly-attached file from the panel. The
     // send path navigates explicitly (see ``performSend``).
     if (id === NEW_SESSION_ID && navigateOnCreate) {
-      navigate(`/conversation/${created.id}`, { replace: true });
+      navigate(
+        `/conversation/${created.id}${isSkillCreatorMode ? "?mode=skill-creator" : ""}`,
+        { replace: true },
+      );
     }
     return created;
   }, [
@@ -2295,6 +2325,9 @@ export const ConversationPage = () => {
     selectedPermissionMode,
     selectedEffort,
     selectedAgentSlug,
+    isSkillCreatorMode,
+    skillKindParam,
+    skillProjectParam,
     id,
     navigate,
   ]);
@@ -2686,7 +2719,10 @@ export const ConversationPage = () => {
       // navigate→bootstrap churn) it returns cached without navigating, so do
       // the swap here. ``replace:true`` keeps Back from returning to the draft.
       if (id === NEW_SESSION_ID && session.id !== NEW_SESSION_ID) {
-        navigate(`/conversation/${session.id}`, { replace: true });
+        navigate(
+          `/conversation/${session.id}${isSkillCreatorMode ? "?mode=skill-creator" : ""}`,
+          { replace: true },
+        );
       }
 
       // Attachments were already uploaded (on attach) and the backend's

@@ -221,6 +221,12 @@ class SkillCreateStartRequest(BaseModel):
     """
 
     context: SkillCreationContext
+    # Agent to bind the authoring conversation to. ``None`` lets the
+    # backend pick the default assistant (see
+    # ``routes.skills._default_assistant_slug_if_present``); the
+    # draft-first frontend passes the agent the user chose in the
+    # composer so the skill-creator chat behaves exactly like 新对话.
+    agent_slug: str | None = None
     model_id: str | None = None
     provider_id: str | None = None
 

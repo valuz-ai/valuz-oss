@@ -32,6 +32,12 @@ _SEED_PATH = Path(__file__).resolve().parent.parent.parent / "resources" / "agen
 # Editable, not deletable; its brain mirrors the Settings global model default.
 DEFAULT_ASSISTANT_SLUG = "default-assistant"
 
+# The onboarding-created general assistant (Valuz 小助手). OSS ships an empty
+# seed.json, so on real installs THIS is the de-facto default assistant; the
+# slug lives here (next to DEFAULT_ASSISTANT_SLUG) so every consumer that
+# needs "the default agent" resolves the same well-known candidates.
+VALUZ_HELPER_SLUG = "valuz-helper"
+
 
 def _load_agent_definitions() -> list[dict[str, Any]]:
     """Load official agent definitions from the bundled JSON seed file."""

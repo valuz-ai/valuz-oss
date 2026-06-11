@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from valuz_agent.generated.i18n_keys import I18nKey
 from valuz_agent.i18n import t
+from valuz_agent.modules.agents.seed import VALUZ_HELPER_SLUG
 
 
 def _ti(key: str) -> str:
@@ -181,7 +182,7 @@ async def _resolve_deploy_target(db) -> tuple[str, str]:  # type: ignore[no-unty
 # on locale switch.
 # ---------------------------------------------------------------------------
 
-_VALUZ_HELPER_SLUG = "valuz-helper"
+_VALUZ_HELPER_SLUG = VALUZ_HELPER_SLUG
 _VALUZ_HELPER_SKILL = "valuz-handbook"
 _VALUZ_HELPER_AVATAR = "bot"
 
