@@ -111,3 +111,16 @@ def test_falls_back_to_agentless_when_default_assistant_missing(
     assert resp.status_code == 201
     (call,) = svc.calls
     assert call["agent_slug"] is None
+
+
+def test_explicit_agent_slug_wins_over_default(client_and_svc) -> None:
+    """Draft-first frontend passes the composer's pick — it must win."""
+    client, svc = client_and_svc
+    resp = client.post(
+        "/v1/skills/create/start",
+        json={"context": {"kind": "skills_library"}, "agent_slug": "researcher"},
+    )
+
+    assert resp.status_code == 201
+    (call,) = svc.calls
+    assert call["agent_slug"] == "researcher"

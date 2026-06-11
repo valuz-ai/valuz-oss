@@ -23,6 +23,7 @@ import {
 } from "@valuz/core";
 import type {
   SkillView,
+  SkillCreationContext,
   SkillDeletePreview,
   SkillImportPreviewFile,
 } from "@valuz/core";
@@ -223,22 +224,24 @@ export const SkillsPage = () => {
     }
   }, []);
 
-  const handleStartAiCreate = useCallback(async () => {
-    try {
-      const start = await skillsApi.startCreate({
-        context: { kind: "skills_library" },
-      });
-      navigate(
-        `/conversation/${encodeURIComponent(start.session_id)}?mode=skill-creator`,
-      );
-    } catch (err) {
-      toast.error(
-        t("skill.startFailed" as Parameters<typeof t>[0], {
-          error: err instanceof Error ? err.message : "unknown",
-        }),
-      );
-    }
-  }, [navigate, t]);
+  // Draft-first (no pre-created session): land on the same draft page as
+  // 新对话 so the composer's default-agent pick + agent switching work; the
+  // session is minted with the skill-creator context on the first send.
+  const skillCreatorDraftUrl = useCallback(
+    (context: SkillCreationContext) => {
+      const params = new URLSearchParams({ mode: "skill-creator" });
+      params.set("skill_kind", context.kind);
+      if (context.kind === "project" && context.project_id) {
+        params.set("skill_project", context.project_id);
+      }
+      return `/conversation/new?${params.toString()}`;
+    },
+    [],
+  );
+
+  const handleStartAiCreate = useCallback(() => {
+    navigate(skillCreatorDraftUrl({ kind: "skills_library" }));
+  }, [navigate, skillCreatorDraftUrl]);
 
   const openAddDialog = (mode: AddSkillDialogMode) => {
     setAddMode(mode);
@@ -527,7 +530,7 @@ export const SkillsPage = () => {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-[160px]">
-              <DropdownMenuItem onSelect={() => void handleStartAiCreate()}>
+              <DropdownMenuItem onSelect={handleStartAiCreate}>
                 <Sparkles className="h-4 w-4" />
                 {t("skill.aiCreate" as Parameters<typeof t>[0])}
               </DropdownMenuItem>
@@ -601,14 +604,9 @@ export const SkillsPage = () => {
         onComplete={() => void loadSkills()}
         onArchivePreview={(file) => skillsApi.importArchivePreview(file)}
         onArchiveConfirm={(data) => skillsApi.importArchiveConfirm(data)}
-        onStartAiCreate={(context) => skillsApi.startCreate({ context })}
+        onStartAiCreate={(context) => navigate(skillCreatorDraftUrl(context))}
         onLinkPreview={(url) => skillsApi.importUrlPreview(url)}
         onLinkConfirm={(data) => skillsApi.importUrlConfirm(data)}
-        onNavigateToSession={(sessionId) =>
-          navigate(
-            `/conversation/${encodeURIComponent(sessionId)}?mode=skill-creator`,
-          )
-        }
       />
 
       {/* ── Edit Skill Dialog ────────────────────────────────── */}

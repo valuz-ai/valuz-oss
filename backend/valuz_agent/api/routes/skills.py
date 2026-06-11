@@ -204,27 +204,33 @@ def _resolve_project_for_creation(context: SkillCreationContext) -> str:
 
 
 async def _default_assistant_slug_if_present() -> str | None:
-    """Resolve the seeded default assistant for the skill-creator launchers.
+    """Resolve the default assistant for the skill-creator launchers.
 
     Per 09-assistant every conversation binds an agent; the launchers
     previously minted sessions through the agentless raw-model path, which
     left the composer with no agent selected and — since a live session
     locks its binding — no way to pick one: a dead conversation.
 
-    Returns ``None`` when the default assistant doesn't exist yet (fresh
-    install before onboarding seeds it) so the launcher can fall back to
-    the legacy agentless path instead of failing the launch outright.
+    Candidates, in order: the seeded ``default-assistant`` (when a vertical
+    edition ships agent seeds) and the onboarding-created Valuz 小助手
+    (``valuz-helper`` — the de-facto default on OSS installs, whose
+    seed.json is empty). Returns ``None`` when neither exists yet (fresh
+    install before onboarding) so the launcher can fall back to the legacy
+    agentless path instead of failing the launch outright.
     """
     from valuz_agent.infra.db import async_unit_of_work
     from valuz_agent.modules.agents.datastore import AgentDatastore
-    from valuz_agent.modules.agents.seed import DEFAULT_ASSISTANT_SLUG
+    from valuz_agent.modules.agents.seed import DEFAULT_ASSISTANT_SLUG, VALUZ_HELPER_SLUG
 
     try:
         async with async_unit_of_work(commit=False) as db:
-            row = await AgentDatastore(db).get_agent(DEFAULT_ASSISTANT_SLUG)
+            ds = AgentDatastore(db)
+            for slug in (DEFAULT_ASSISTANT_SLUG, VALUZ_HELPER_SLUG):
+                if await ds.get_agent(slug) is not None:
+                    return slug
     except Exception:  # noqa: BLE001 — launcher must not die on a lookup hiccup
         return None
-    return DEFAULT_ASSISTANT_SLUG if row is not None else None
+    return None
 
 
 @router.post(
@@ -260,7 +266,7 @@ async def start_create(
         provider_id=body.provider_id,
         trigger_meta={"mode": "skill-creator"},
         creation_context=creation_context,
-        agent_slug=await _default_assistant_slug_if_present(),
+        agent_slug=body.agent_slug or await _default_assistant_slug_if_present(),
     )
     return SkillCreateStartResponse(
         session_id=session.id,
