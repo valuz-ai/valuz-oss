@@ -116,6 +116,19 @@ logger = logging.getLogger(__name__)
 _STDERR_TAIL_LINES: int = 40
 
 
+# The Claude Agent SDK buffers the CLI's stdout into a single JSON message whose
+# ceiling is ``ClaudeAgentOptions.max_buffer_size`` (SDK default: 1 MB). One
+# message over that cap raises ``SDKJSONDecodeError``, which kills the SDK's
+# message reader ("Fatal error in message reader") and tears down the turn even
+# though the CLI process is healthy. A full ``tool_result`` arrives as one JSON
+# line, and big file reads, large MCP/connector responses, web fetches and
+# base64 images routinely exceed 1 MB (``include_partial_messages`` only streams
+# deltas, not these canonical messages). Raise the ceiling well above the SDK
+# default so a large result can't crash the session.
+# See https://github.com/valuz-ai/valuz-oss/issues/74.
+_MAX_BUFFER_SIZE: int = 32 * 1024 * 1024  # 32 MB
+
+
 # Workflows contributor to ``_build_settings``. Dynamic workflows /
 # ``/deep-research`` are a Pro research-preview opt-in (``enableWorkflows``)
 # stored in the *user* surface (``~/.claude/settings.json`` /
@@ -1225,6 +1238,10 @@ class ClaudeAgentRuntime:
             # full ``assistant_message`` / ``thinking`` events from the
             # AssistantMessage stream remain the canonical record.
             include_partial_messages=True,
+            # Raise the SDK's 1 MB stdout read cap so a large tool_result (big
+            # file read, MCP payload, base64 image) can't crash the message
+            # reader mid-turn. See ``_MAX_BUFFER_SIZE``.
+            max_buffer_size=_MAX_BUFFER_SIZE,
             sandbox=self._build_sandbox_settings(),
         )
         # gate the ``model`` kwarg on a truthy ``self.model``, NOT on whether
