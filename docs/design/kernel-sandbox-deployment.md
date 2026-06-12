@@ -712,3 +712,34 @@ provider key（⑥L1，显式注入避免 codex 订阅渠道 env 兜底问题）
 
 **一句话**：最小版本 = P0 三通道（已建成）+ SandboxProvider(清单) +
 WorkspaceHandle(本地) + L1 凭证 ≈「修 B2–B5 + 写一个 Seatbelt 驱动」。
+
+### B.8 运行与环境校验
+
+**启动**（env 开关,默认不变）：
+
+```bash
+VALUZ_SANDBOX_DRIVER=seatbelt make dev     # 或 ./scripts/dev.sh
+make dev-sandbox                            # 等价便捷目标
+```
+
+env 经 make → dev.sh → `python -m valuz_agent` → `_provision_sandboxed_kernel`
+一路透传:host 在 `create_app` 前 provision 一个 Seatbelt 受限 kernel,切
+http 模式对接(`settings.kernel_mode=http` + url/token + `rebind_client`)。
+不设 `VALUZ_SANDBOX_DRIVER` 则字节级等同进程内模式。
+
+**环境校验(preflight,失败响亮报错而非静默退回)**:
+`seatbelt_preflight()` 在 provision 前检查三个硬条件 —— macOS、
+`sandbox-exec` 存在、kernel 产物(`KERNEL_DIR/app/main.py`)可达。
+
+立场:用户显式要了沙箱(`VALUZ_SANDBOX_DRIVER=seatbelt`),若环境不支持则
+**拒绝启动**(`SystemExit` + 可执行指引),绝不静默退回进程内 —— 否则用户
+以为 agent 被关进沙箱而实际没有,是安全惊吓。需要带警告降级时显式设
+`VALUZ_SANDBOX_FALLBACK=inprocess`。
+
+**reload 安全**:`--reload` 的 reloader 子进程见到父进程设的
+`VALUZ_KERNEL_URL` 即跳过重新 provision,直接连已存活的沙箱(不会spawn第二个)。
+
+**沙箱内 runtime 的前置**(per-session,非 boot 级):codex/claude CLI 的
+登录态目录(`~/.codex`/`~/.claude`)在 profile 中为 **rw**(codex 要写
+`state_*.sqlite`);provider key 经 `SandboxSpec.env` 注入(⑥L1)。host 业务
+DB(+wal/shm)与 secrets 始终 deny。
