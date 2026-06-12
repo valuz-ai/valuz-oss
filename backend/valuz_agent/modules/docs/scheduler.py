@@ -74,6 +74,19 @@ def run_auto_discovery_scan() -> None:
 
 
 async def _arun_auto_discovery_scan() -> None:
+    # Seed the owner ContextVar. This runs in the scheduler's daemon
+    # THREAD (its own ``asyncio.run`` loop), which does NOT inherit the
+    # main thread's ``valuz_current_user_id`` seeded at boot. Per the
+    # ``infra.auth_context`` contract a background runner must set it
+    # itself — otherwise the OwnedMixin ``user_id`` default raises
+    # ``LookupError`` and every rescan task insert (valuz_document_import_task)
+    # fails. ``resolve_local_user_id`` is process-cached, so this returns
+    # the same owner id as the main thread.
+    from valuz_agent.infra.auth_context import set_current_user_id
+    from valuz_agent.infra.local_identity import resolve_local_user_id
+
+    set_current_user_id(resolve_local_user_id())
+
     # Build the SAME configured ParserRouter the request path uses
     # (deps.get_document_service) — routing config + secret resolver +
     # capability gate — so auto-discovered files honour the user's chosen
