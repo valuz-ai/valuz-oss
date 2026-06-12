@@ -98,11 +98,17 @@ def create_app() -> FastAPI:
 
     # Agent Harness V5 kernel — mounted at /api/v1/* (its native prefix).
     # Valuz business routes stay at /v1/* and are progressively migrated to call
-    # into the kernel via valuz_agent.adapters.* helpers.
-    from valuz_agent.boot.kernel import get_kernel_routers
+    # into the kernel via valuz_agent.adapters.* helpers. NOT mounted in http
+    # mode: the kernel runs as a separate process and serves /api/v1/* itself;
+    # mounting the in-process routers here would shadow it with a ghost kernel
+    # bound to a different (host) database (B3).
+    from valuz_agent.infra.config import settings as _settings
 
-    for kernel_router in get_kernel_routers():
-        app.include_router(kernel_router)
+    if not _settings.is_http_kernel:
+        from valuz_agent.boot.kernel import get_kernel_routers
+
+        for kernel_router in get_kernel_routers():
+            app.include_router(kernel_router)
 
     # In-process docs MCP server. Mounted as a Starlette ASGI sub-app
     # because FastMCP owns its own request pipeline (streamable HTTP

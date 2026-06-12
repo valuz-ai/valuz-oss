@@ -118,8 +118,12 @@ async def bootstrap_schema() -> None:
     if legacy_dir.is_dir() and not target_dir.exists():
         legacy_dir.rename(target_dir)
 
-    # 1. Kernel alembic (its own ``alembic_version`` row).
-    run_kernel_migrations()
+    # 1. Kernel alembic (its own ``alembic_version`` row). SKIPPED in
+    #    http mode — the standalone kernel owns its own database and
+    #    migrates it itself (B5); running it here would migrate the
+    #    host file's kernel tables that nothing in http mode reads.
+    if not settings.is_http_kernel:
+        run_kernel_migrations()
 
     # 2. Re-install logging — alembic's fileConfig clobbers handlers.
     from valuz_agent.infra.logging import configure_logging
@@ -160,9 +164,15 @@ async def configure_i18n() -> None:
 
 
 async def init_kernel(app: FastAPI) -> None:
-    from valuz_agent.boot.kernel import init_kernel_dependencies
+    # In-process kernel singletons (store + orchestrator) are NOT created
+    # in http mode — the kernel runs as a separate process and the host
+    # reaches it only through ``HttpKernelClient`` (B3). The host toolkit
+    # MCP server below is installed in BOTH modes: it is the ④ callback
+    # target the sandboxed kernel's runtime calls back into.
+    if not settings.is_http_kernel:
+        from valuz_agent.boot.kernel import init_kernel_dependencies
 
-    await init_kernel_dependencies()
+        await init_kernel_dependencies()
 
     # Install the host toolkit MCP toolsets. The harness tools
     # (dispatch / orchestration / memory / submit_skill) are served by the
@@ -241,6 +251,12 @@ async def recover_stranded_sessions() -> None:
     See ``domains.execution.sessions.recovery`` for rationale. Runs
     after ``init_kernel`` so the kernel store is reachable.
     """
+    # The orphan scans run inside the kernel store — in http mode the
+    # standalone kernel runs them itself at its own startup (B2); the
+    # HttpKernelClient deliberately has no scan_orphan_* methods.
+    if settings.is_http_kernel:
+        return
+
     from valuz_agent.modules.sessions.recovery import (
         recover_running_sessions,
     )
@@ -265,6 +281,10 @@ async def seal_orphan_pendings() -> None:
     ran in the dependency-init startup hook).
     """
     import logging
+
+    # http mode: the standalone kernel seals its own orphans (B2).
+    if settings.is_http_kernel:
+        return
 
     from valuz_agent.adapters import kernel_client
 

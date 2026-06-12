@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Literal
 
 from valuz_agent.infra.config import settings
+from valuz_agent.ports.workspace import LocalWorkspaceHandle, WorkspaceHandle
 
 ProjectKind = Literal["chat", "project"]
 SkillSource = Literal["claude", "codex"]
@@ -80,6 +81,18 @@ class FsRegistry:
         path = self.data_dir() / "projects" / project_id
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def workspace_handle(
+        self, project_id: str, kind: ProjectKind, root_path: str | None = None
+    ) -> WorkspaceHandle:
+        """Return a ``WorkspaceHandle`` for the project's cwd.
+
+        The project-domain seam (see ``ports/workspace.py``): the local
+        form hands back a ``LocalWorkspaceHandle`` over the real cwd; a
+        future remote form would return a handle backed by the kernel
+        file API without changing call sites.
+        """
+        return LocalWorkspaceHandle(self.project_cwd(project_id, kind, root_path))
 
     # ---- FS-4 / FS-5 — doc assets and previews ----
 

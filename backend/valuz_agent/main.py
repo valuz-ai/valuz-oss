@@ -47,6 +47,105 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _provision_sandboxed_kernel(args: argparse.Namespace) -> None:
+    """Spawn a Seatbelt-confined kernel and point the host at it (http mode).
+
+    Host-wide single sandbox (the per-project split is the productionization).
+    Re-entrant under uvicorn ``--reload``: a reloader child sees the env vars
+    the parent set and skips re-provisioning, just connecting to the live
+    sandbox. Mutates the ``settings`` singleton AND the env so both the
+    current process (already-constructed settings) and any re-import path
+    select http mode against the provisioned endpoint.
+    """
+    import asyncio
+    import atexit
+    import logging
+    import os
+
+    from valuz_agent.adapters import kernel_client
+
+    # Already provisioned by a parent process (reload child) — just connect.
+    if os.environ.get("VALUZ_KERNEL_URL"):
+        settings.kernel_mode = "http"
+        settings.kernel_url = os.environ["VALUZ_KERNEL_URL"]
+        settings.kernel_token = os.environ.get("VALUZ_KERNEL_TOKEN")
+        kernel_client.rebind_client()
+        return
+
+    from valuz_agent.integrations.sandbox_seatbelt import (
+        SeatbeltSandboxProvider,
+        seatbelt_preflight,
+    )
+    from valuz_agent.ports.sandbox_provider import MountSpec, SandboxSpec
+
+    log = logging.getLogger("valuz_agent.sandbox")
+
+    # Preflight BEFORE doing any work. The user asked for a sandbox
+    # explicitly (VALUZ_SANDBOX_DRIVER=seatbelt) — if the host can't
+    # provide one we FAIL LOUD rather than silently falling back to the
+    # in-process kernel, which would leave them believing the agent is
+    # confined when it isn't (a security surprise). Set
+    # VALUZ_SANDBOX_FALLBACK=inprocess to opt into a warned degrade.
+    problems = seatbelt_preflight()
+    if problems:
+        msg = "Seatbelt sandbox unavailable: " + "; ".join(problems)
+        if os.environ.get("VALUZ_SANDBOX_FALLBACK") == "inprocess":
+            log.warning("%s — falling back to in-process kernel (UNSANDBOXED)", msg)
+            return
+        raise SystemExit(
+            f"{msg}\n"
+            "Refusing to start unsandboxed after an explicit "
+            "VALUZ_SANDBOX_DRIVER=seatbelt. Fix the environment, unset the "
+            "driver to run in-process, or set VALUZ_SANDBOX_FALLBACK=inprocess "
+            "to degrade with a warning."
+        )
+    data_dir = settings.data_dir
+    sandbox_dir = data_dir / "sandbox"
+    sandbox_dir.mkdir(parents=True, exist_ok=True)
+    projects_dir = data_dir / "projects"
+    projects_dir.mkdir(parents=True, exist_ok=True)
+    host_db = data_dir / settings.db_filename
+
+    # Pass through LLM credentials the sandboxed kernel needs (⑥ L1).
+    passthrough = {
+        k: v
+        for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")
+        if (v := os.environ.get(k)) is not None
+    }
+
+    spec = SandboxSpec(
+        sandbox_id="host-kernel",
+        kernel_db_path=str(sandbox_dir / "kernel.db"),
+        mounts=(
+            MountSpec(target=str(sandbox_dir), source=str(sandbox_dir), mode="rw"),
+            MountSpec(target=str(projects_dir), source=str(projects_dir), mode="rw"),
+        ),
+        env=passthrough,
+        host_callback_url=os.environ.get("VALUZ_BACKEND_BASE_URL", ""),
+        # RED LINE: host business DB (+ wal/shm) and secret store.
+        deny_paths=(
+            str(host_db),
+            str(host_db) + "-wal",
+            str(host_db) + "-shm",
+            str(settings.secrets_dir),
+        ),
+    )
+
+    provider = SeatbeltSandboxProvider()
+    endpoint = asyncio.run(provider.provision(spec))
+    log.warning("kernel running in Seatbelt sandbox at %s", endpoint.base_url)
+
+    settings.kernel_mode = "http"
+    settings.kernel_url = endpoint.base_url
+    settings.kernel_token = endpoint.token
+    os.environ["VALUZ_KERNEL_MODE"] = "http"
+    os.environ["VALUZ_KERNEL_URL"] = endpoint.base_url
+    os.environ["VALUZ_KERNEL_TOKEN"] = endpoint.token
+    kernel_client.rebind_client()
+
+    atexit.register(lambda: asyncio.run(provider.destroy("host-kernel")))
+
+
 def main(argv: list[str] | None = None) -> int:
     import multiprocessing
     import os
@@ -80,6 +179,15 @@ def main(argv: list[str] | None = None) -> int:
     if "VALUZ_BACKEND_BASE_URL" not in os.environ:
         host_for_self = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
         os.environ["VALUZ_BACKEND_BASE_URL"] = f"http://{host_for_self}:{args.port}"
+
+    # Optional: run the kernel inside a local sandbox (the minimal form of
+    # ``docs/design/kernel-sandbox-deployment.md`` §B). When
+    # ``VALUZ_SANDBOX_DRIVER=seatbelt`` is set, provision a sandbox-confined
+    # kernel and switch the host to http mode against it BEFORE the app is
+    # constructed (the transport + router-mount decisions read settings at
+    # import time). Default (unset) is byte-identical in-process mode.
+    if os.environ.get("VALUZ_SANDBOX_DRIVER") == "seatbelt":
+        _provision_sandboxed_kernel(args)
 
     # Capture startup metadata for the desktop ``服务`` panel before
     # uvicorn forks/spawns workers. ``record_listen_port`` is module-

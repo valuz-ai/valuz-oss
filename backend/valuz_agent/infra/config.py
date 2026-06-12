@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     kernel_url: str = "http://127.0.0.1:8400"
     kernel_token: str | None = None
 
+    @property
+    def is_http_kernel(self) -> bool:
+        """True when the kernel runs as a SEPARATE process (subprocess /
+        sandbox / remote) and the host drives it over HTTP. Boot must then
+        skip the in-process kernel bootstrap — migrations, store/orchestrator
+        singletons, kernel router mounting, and orphan scans — because the
+        standalone kernel owns all of that (see
+        ``docs/design/kernel-sandbox-deployment.md`` §B.6 / B2–B5)."""
+        return self.kernel_mode == "http"
+
     # ── Backend self-URL ─────────────────────────────────────────────
     # Where the host's own FastAPI is reachable from inside the same
     # process / container. Used to inject the in-process docs MCP server

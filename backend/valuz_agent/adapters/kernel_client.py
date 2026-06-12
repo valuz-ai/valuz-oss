@@ -488,6 +488,18 @@ def _make_client() -> KernelClient:
 client: KernelClient = _make_client()
 
 
+def rebind_client() -> None:
+    """Re-select the transport from the current ``settings``.
+
+    The module-level ``client`` is chosen once at import. When the kernel
+    endpoint is decided at runtime (e.g. a sandbox provisioned at boot that
+    sets ``kernel_mode=http`` + url/token), call this to swap the live
+    object — the facade functions read the module global per call, so they
+    pick up the new transport without re-import."""
+    global client  # noqa: PLW0603
+    client = _make_client()
+
+
 # Module-level facade — call-site ergonomics match the former kernel_store
 # (``await kernel_client.get_session(...)``), while the swappable object
 # lives behind ``client`` for the HTTP transport.
