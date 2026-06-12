@@ -1659,6 +1659,15 @@
     "failed": "失败",
     "running": "运行中"
   },
+  "menu": {
+    "checkForUpdates": "检查更新",
+    "edit": "编辑",
+    "file": "文件",
+    "reloadWindow": "重新加载窗口",
+    "view": "视图",
+    "website": "Valuz 官网",
+    "window": "窗口"
+  },
   "tray": {
     "checkUpdate": "检查更新",
     "hideWindow": "隐藏窗口",

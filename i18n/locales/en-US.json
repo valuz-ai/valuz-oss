@@ -1659,6 +1659,15 @@
     "failed": "Failed",
     "running": "Running"
   },
+  "menu": {
+    "checkForUpdates": "Check for Updates",
+    "edit": "Edit",
+    "file": "File",
+    "reloadWindow": "Reload Window",
+    "view": "View",
+    "website": "Valuz Website",
+    "window": "Window"
+  },
   "tray": {
     "checkUpdate": "Check for updates",
     "hideWindow": "Hide window",
