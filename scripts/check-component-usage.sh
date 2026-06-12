@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # check-component-usage.sh
-# 检查 components/ui/ 中每个原子组件在使用时是否传了自定义 className 覆盖默认样式，
-# 以及哪些业务组件完全没有使用原子组件。
+# Checks whether each atomic component in components/ui/ is passed a custom
+# className that overrides its default styles at usage sites, and which
+# business components do not use any atomic components at all.
 #
-# 用法: bash scripts/check-component-usage.sh
+# Usage: bash scripts/check-component-usage.sh
 
 set -eo pipefail
 
@@ -76,9 +77,9 @@ while read -r comp name; do
   total=$((custom_count + no_custom_count))
 
   if [ $custom_count -gt 0 ]; then
-    HAS_OVERRIDE="${HAS_OVERRIDE}  ${C_YELLOW}${comp}.tsx → ${name}${C_RESET}  (${custom_count}/${total} 处覆盖 className)\n${custom_sites}"
+    HAS_OVERRIDE="${HAS_OVERRIDE}  ${C_YELLOW}${comp}.tsx → ${name}${C_RESET}  (${custom_count}/${total} sites override className)\n${custom_sites}"
   else
-    NO_OVERRIDE="${NO_OVERRIDE}  ${C_GREEN}✅ ${comp} → ${name} (${total} 处引用)${C_RESET}\n"
+    NO_OVERRIDE="${NO_OVERRIDE}  ${C_GREEN}✅ ${comp} → ${name} (${total} references)${C_RESET}\n"
   fi
 
 done < "$TMP_MAP"
@@ -122,27 +123,27 @@ fi
 
 echo ""
 echo -e "${C_BOLD}═══════════════════════════════════════════════════════════${C_RESET}"
-echo -e "${C_BOLD}  Part 1: 原子组件被使用时是否传了自定义 className${C_RESET}"
+echo -e "${C_BOLD}  Part 1: Atomic components — custom className passed at usage sites${C_RESET}"
 echo -e "${C_BOLD}═══════════════════════════════════════════════════════════${C_RESET}"
 
 echo ""
-echo -e "${C_BOLD}▶ 未被引用的原子组件${C_RESET}"
+echo -e "${C_BOLD}▶ Unused atomic components${C_RESET}"
 echo -e "${C_DIM}─────────────────────────────────────────────────────${C_RESET}"
 if [ -z "$UNUSED" ]; then
-  echo -e "  ${C_GREEN}(无 — 所有组件均被引用)${C_RESET}"
+  echo -e "  ${C_GREEN}(none — all components are referenced)${C_RESET}"
 else
   echo -ne "$UNUSED"
 fi
 
 echo ""
-echo -e "${C_BOLD}▶ 规范使用（未覆盖 className）${C_RESET}"
+echo -e "${C_BOLD}▶ Conforming usage (no className override)${C_RESET}"
 echo -e "${C_DIM}─────────────────────────────────────────────────────${C_RESET}"
 if [ -n "$NO_OVERRIDE" ]; then
   echo -ne "$NO_OVERRIDE"
 fi
 
 echo ""
-echo -e "${C_BOLD}▶ 传了自定义 className（覆盖了默认样式）${C_RESET}"
+echo -e "${C_BOLD}▶ Custom className passed (default styles overridden)${C_RESET}"
 echo -e "${C_DIM}─────────────────────────────────────────────────────${C_RESET}"
 if [ -n "$HAS_OVERRIDE" ]; then
   echo -ne "$HAS_OVERRIDE"
@@ -151,7 +152,7 @@ fi
 echo ""
 echo ""
 echo -e "${C_BOLD}═══════════════════════════════════════════════════════════${C_RESET}"
-echo -e "${C_BOLD}  Part 2: 未使用任何原子组件的业务文件（纯自定义样式）${C_RESET}"
+echo -e "${C_BOLD}  Part 2: Business files using no atomic components (pure custom styling)${C_RESET}"
 echo -e "${C_BOLD}═══════════════════════════════════════════════════════════${C_RESET}"
 echo -ne "$ZERO_SHADCN"
 
