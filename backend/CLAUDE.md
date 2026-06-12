@@ -63,7 +63,11 @@ it: `InProcessKernelClient` (default) and `HttpKernelClient`
 (`adapters/kernel_client_http.py`) for a kernel running as a separate
 process — selected by `VALUZ_KERNEL_MODE=inprocess|http`
 (+ `VALUZ_KERNEL_URL` / `VALUZ_KERNEL_TOKEN`); `VALUZ_KERNEL_DATABASE_URL`
-gives the kernel its own database file. Import rules, all mechanically
+gives the kernel its own database file. Env contract for the split: the
+kernel *server* process reads `KERNEL_AUTH_TOKEN` (and refuses to start
+standalone without it unless `KERNEL_ALLOW_UNAUTHENTICATED=1`); the host
+*client* sends `VALUZ_KERNEL_TOKEN` — the provisioner sets both to the
+same secret. Import rules, all mechanically
 enforced by `scripts/check_module_boundaries.py`:
 `src.adapters` / `src.runtimes` (and their `kernel.`-prefixed spellings)
 are forbidden everywhere; `app.dependencies` / `app.routes` /

@@ -472,19 +472,7 @@ class CodexRuntime:
                 # without it the failure lives only in ``stop_reason`` and
                 # clients render a silent idle (no error card, nothing on
                 # replay).
-                if (
-                    isinstance(session.stop_reason, Error)
-                    and session.stop_reason.category == "execution_error"
-                ):
-                    await self.event_sink.emit(
-                        Event(
-                            type="session_error",
-                            data={
-                                "category": "execution_error",
-                                "message": session.stop_reason.message,
-                            },
-                        )
-                    )
+                await self._emit_session_error_for_stop(session.stop_reason)
             else:
                 session.status = "idle"
                 session.stop_reason = EndTurn()
@@ -678,6 +666,24 @@ class CodexRuntime:
                 "rather than silently accepting every tool call."
             ) from exc
         sync_client._approval_handler = self._approval_handler
+
+    async def _emit_session_error_for_stop(self, stop_reason: StopReason | None) -> None:
+        """Emit ``session_error`` for an execution-error stop reason.
+
+        Companion to the stream-error and runtime-exception paths, which
+        emit inline — this covers turns codex reports as *completed* with
+        ``TurnStatus.failed``. No-op for clean/interrupt/budget stops.
+        """
+        if isinstance(stop_reason, Error) and stop_reason.category == "execution_error":
+            await self.event_sink.emit(
+                Event(
+                    type="session_error",
+                    data={
+                        "category": "execution_error",
+                        "message": stop_reason.message,
+                    },
+                )
+            )
 
     def _register_toolkit_if_eligible(self, session: Session) -> bool:
         """Register the session toolkit on the MCP router.

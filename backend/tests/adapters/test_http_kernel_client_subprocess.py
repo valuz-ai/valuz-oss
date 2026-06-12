@@ -275,3 +275,54 @@ def test_http_client_covers_the_full_protocol_surface() -> None:
     in_process_only = {"scan_orphan_pendings", "scan_orphan_runs", "cleanup_runtime"}
     for name in (set(EXPECTED_ROUTES) | set(EXPECTED_STREAMS)) - in_process_only:
         assert hasattr(HttpKernelClient, name), f"HttpKernelClient lacks {name}"
+
+
+@pytest.mark.asyncio
+async def test_global_sse_stream_delivers_events_with_session_ids(kernel_proc) -> None:
+    """``subscribe_all_events`` carries every session's live events with
+    ``session_id`` stamped on each frame (the DecisionAggregator contract)."""
+    client = HttpKernelClient(kernel_proc, token=TOKEN)
+    try:
+        sids = []
+        for _ in range(2):
+            sid = str(uuid.uuid4())
+            sids.append(sid)
+            await client.create_session(
+                CreateSessionRequest(
+                    id=sid,
+                    agent_config=AgentConfigSchema(name="probe-agent"),
+                    cwd="/tmp/probe-cwd",
+                    runtime_provider="claude_agent",
+                )
+            )
+
+        received: asyncio.Queue = asyncio.Queue()
+
+        async def _follow() -> None:
+            async for item in client.subscribe_all_events():
+                await received.put(item)
+                if received.qsize() >= 2:
+                    return
+
+        follower = asyncio.create_task(_follow())
+        try:
+            await asyncio.sleep(0.5)
+            await client.emit_live_event(sids[0], "session_error", {"category": "G1"})
+            await client.emit_live_event(sids[1], "requires_action", {"pending_id": "p9"})
+
+            frames = [await asyncio.wait_for(received.get(), timeout=10) for _ in range(2)]
+        finally:
+            follower.cancel()
+            try:
+                await follower
+            except asyncio.CancelledError:
+                pass
+
+        by_session = {f.session_id: f for f in frames}
+        assert set(by_session) == set(sids)
+        assert by_session[sids[0]].type == "session_error"
+        assert by_session[sids[0]].data["category"] == "G1"
+        assert by_session[sids[1]].type == "requires_action"
+        assert by_session[sids[1]].data["pending_id"] == "p9"
+    finally:
+        await client.aclose()

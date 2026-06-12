@@ -155,12 +155,20 @@ def stored_event_to_data(ev: Any, *, include_session_id: bool = False) -> EventD
 
 
 def live_event_to_data(event: Event, *, session_id: str | None = None) -> EventData:
-    """Project a live (bus) event to the wire. No ``seq`` — not persisted yet
-    (or never, for delta types)."""
+    """Project a live (bus) event to the wire.
+
+    Persisted events arrive on the bus with their row id stamped into
+    ``data["seq"]`` (see ``PersistThenBroadcastSink``) — surface it as the
+    wire-level ``seq`` so stream consumers can deduplicate against
+    seq-cursor backfills. Live-only delta types carry no ``seq``.
+    """
+    data = dict(event.data)
+    seq = data.pop("seq", None)
     return EventData(
         type=event.type,
-        data=event.data,
+        data=data,
         timestamp=event.timestamp,
+        seq=int(seq) if isinstance(seq, int) else None,
         session_id=session_id,
     )
 

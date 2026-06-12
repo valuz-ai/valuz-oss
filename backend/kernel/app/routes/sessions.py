@@ -491,7 +491,12 @@ async def stream_session_events(
         sink = QueueEventSink()
         # Tap first, then backfill: an event persisted between the
         # backfill read and the tap registration would be lost with the
-        # opposite order. The seq-bearing backfill lets clients dedup.
+        # opposite order. The overlap window (an event that lands in BOTH
+        # the backfill and the live queue) is deduplicated exactly: live
+        # frames of persisted events carry their row id in ``seq`` (see
+        # ``PersistThenBroadcastSink``), so anything at or below the
+        # backfill cursor is skipped. Live-only delta frames have no
+        # ``seq`` and always flow.
         await orchestrator.attach_session_tap(session_id, sink)
         try:
             cursor = after_seq
@@ -518,10 +523,12 @@ async def stream_session_events(
                 except TimeoutError:
                     yield {"event": "heartbeat", "data": "{}"}
                     continue
-                yield {
-                    "event": "event",
-                    "data": _live_event_to_data(event).model_dump_json(),
-                }
+                frame = _live_event_to_data(event)
+                if frame.seq is not None:
+                    if cursor is not None and frame.seq <= cursor:
+                        continue  # already delivered by the backfill
+                    cursor = frame.seq
+                yield {"event": "event", "data": frame.model_dump_json()}
         finally:
             await orchestrator.detach_session_tap(session_id, sink)
 

@@ -91,8 +91,11 @@ class StorePort(Protocol):
 
     # -- Event log --
 
-    async def append_event(self, session_id: str, message_id: str, event: Event) -> None:
-        """Append an event scoped to (session, message)."""
+    async def append_event(self, session_id: str, message_id: str, event: Event) -> int | None:
+        """Append an event scoped to (session, message).
+
+        Returns the persisted row id (the client paging cursor ``seq``)
+        when the backend can report it, else ``None``."""
         ...
 
     async def get_events(

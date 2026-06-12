@@ -410,8 +410,8 @@ class SessionOrchestrator:
         every event is persisted regardless of client state — this is
         what makes reconnect-with-replay correct.
         """
-        from src.adapters.composite_sink import CompositeEventSink
         from src.adapters.database_sink import DatabaseEventSink
+        from src.adapters.persist_then_broadcast_sink import PersistThenBroadcastSink
         from src.adapters.delta_coalescing_sink import DeltaCoalescingSink
 
         session, agent = await self._load_session(session_id)
@@ -458,12 +458,19 @@ class SessionOrchestrator:
 
         bus = self._get_or_create_bus(session_id)
         bus_sink: EventSink = _MessageIdStampSink(bus, message.id)
-        db_sink: EventSink = DatabaseEventSink(self._store, session_id, message.id)
-        composite: EventSink = CompositeEventSink([bus_sink, db_sink])
-        # Coalesce per-token deltas into ~30ms batches before fanning out
-        # to bus + DB. Reduces WS frame count and DB row count without
-        # changing the canonical assistant_message/thinking record.
-        coalesced: EventSink = DeltaCoalescingSink(composite)
+        db_sink = DatabaseEventSink(self._store, session_id, message.id)
+        # Persist FIRST, then broadcast with the row id stamped into
+        # ``data["seq"]`` — live frames of persisted events carry stable
+        # storage coordinates so stream consumers can deduplicate the
+        # backfill/live boundary exactly. Live-only delta types skip the
+        # DB and flow straight through (no added latency on the token
+        # streaming path).
+        persist_then_live: EventSink = PersistThenBroadcastSink(db_sink, bus_sink)
+        # Coalesce per-token deltas into ~30ms batches before the
+        # persist→broadcast pipeline. Reduces WS frame count and DB row
+        # count without changing the canonical assistant_message/thinking
+        # record.
+        coalesced: EventSink = DeltaCoalescingSink(persist_then_live)
         observer = _MessageObserverSink(coalesced)
 
         # Sessions are self-sufficient: ``session.cwd`` is required at
