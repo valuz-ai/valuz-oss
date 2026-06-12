@@ -168,14 +168,11 @@ const fetchJson = createFetchJson(() => _apiBase);
 
 export const tasksApi = {
   kickoff(projectId: string, payload: KickoffTaskPayload): Promise<Task> {
-    return fetchJson(
-      `/v1/projects/${encodeURIComponent(projectId)}/tasks`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      },
-    );
+    return fetchJson(`/v1/projects/${encodeURIComponent(projectId)}/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
   },
 
   listTasks(projectId: string): Promise<{ tasks: Task[] }> {
@@ -197,10 +194,10 @@ export const tasksApi = {
     return fetchJson(`/v1/tasks/${encodeURIComponent(taskId)}/events`);
   },
 
-  /** SSE endpoint URL for a task's event timeline. Subscribers should
-   * connect with ``new EventSource(eventsStreamUrl(id, after_seq))`` and
-   * remember the last received ``id`` so a reconnect can resume from
-   * the cursor (cursor is monotonic per task — no gaps possible). */
+  /** SSE endpoint URL for a task's event timeline. Subscribers connect with
+   * ``fetchEventSource(() => eventsStreamUrl(id, lastSeq), …)`` and remember the
+   * last received ``sequence`` so a reconnect resumes from the cursor (cursor
+   * is monotonic per task — no gaps possible). */
   eventsStreamUrl(taskId: string, afterSeq = 0): string {
     const cursor = afterSeq > 0 ? `?after_seq=${afterSeq}` : "";
     return `${_apiBase}/v1/tasks/${encodeURIComponent(taskId)}/events/stream${cursor}`;

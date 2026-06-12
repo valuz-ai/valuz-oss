@@ -7,7 +7,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from valuz_agent.api.middleware import (
     ErrorHandlerMiddleware,
-    AuthMiddleware,
     TimingMiddleware,
 )
 from valuz_agent.api.routes.agents import router as agents_router
@@ -48,10 +47,16 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    from valuz_agent.ports.extensions import ext
+
     app.add_middleware(ErrorHandlerMiddleware)
     # Inside Timing, wrapping the routes: sets the owner ContextVar so every row
     # created during the request is stamped with the resolved user_id.
-    app.add_middleware(AuthMiddleware)
+    # ``ext.auth_middleware`` is a ``(cls, kwargs)`` tuple — defaults to OSS's
+    # AuthMiddleware; the overlay may swap in a subclass (e.g. to publish its own
+    # per-request ContextVars with a reset boundary, with deps in ``kwargs``).
+    _auth_cls, _auth_kwargs = ext.auth_middleware
+    app.add_middleware(_auth_cls, **_auth_kwargs)
     app.add_middleware(TimingMiddleware)
     app.add_middleware(
         CORSMiddleware,

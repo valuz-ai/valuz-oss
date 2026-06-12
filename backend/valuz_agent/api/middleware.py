@@ -21,20 +21,28 @@ logger = logging.getLogger("valuz_agent.api.access")
 class AuthMiddleware(BaseHTTPMiddleware):
     """Resolve the request's identity and stamp the owner id into ContextVar.
 
-    Resolves the ``user_id`` (OSS → local install id; commercial overlay → the
-    logged-in user via ``ext.identity``) and publishes it so every row created
-    while handling the request is stamped with that owner.
+    Resolves the ``user_id`` via :meth:`resolve_user_id` and publishes it so
+    every row created while handling the request is stamped with that owner.
 
-    When ``ext.auth_hook`` is set the commercial overlay can enrich per-request
-    context (org, roles) or reject the request by raising a ``ValuzError``.
+    Identity resolution is the single overridable seam: OSS returns the local
+    install id; the commercial overlay swaps in a subclass (via
+    ``ext.auth_middleware``) that overrides :meth:`resolve_user_id` to verify
+    a JWT, and may also enrich per-request context (org, roles) or reject the
+    request by raising a ``ValuzError``.
     """
 
+    async def resolve_user_id(self, request: Request) -> str | None:
+        """Return the caller's ``user_id``. OSS default: the local install user.
+
+        Subclasses override this to resolve identity differently (e.g. verify a
+        JWT). It runs inside :meth:`dispatch`, before the request handler.
+        """
+        from valuz_agent.infra.local_identity import resolve_local_user_id
+
+        return resolve_local_user_id()
+
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        from valuz_agent.ports.extensions import ext
-        resolver = ext.identity
-        user_id = await resolver.resolve(request)
-        if ext.auth_hook is not None:
-            await ext.auth_hook.after_resolve(request, user_id)
+        user_id = await self.resolve_user_id(request)
 
         token = set_current_user_id(user_id)
         try:

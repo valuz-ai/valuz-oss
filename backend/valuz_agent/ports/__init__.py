@@ -26,7 +26,6 @@ from valuz_agent.ports.billing import (
     set_billing_port,
 )
 from valuz_agent.ports.docs_runtime import DocsRuntimePort
-from valuz_agent.ports.identity import IdentityResolver
 from valuz_agent.ports.llm_provider import (
     LLMProviderRegistry,
     SystemLLMProvider,
@@ -67,7 +66,6 @@ __all__ = [
     "CapabilityStatus",
     "ConfigField",
     "DocsRuntimePort",
-    "IdentityResolver",
     "LLMProviderRegistry",
     "McpCatalogPort",
     "MeterEvent",

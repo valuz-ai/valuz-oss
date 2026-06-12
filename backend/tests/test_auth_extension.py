@@ -1,9 +1,11 @@
-"""Tests for the authentication extension points (Slice 2).
+"""Tests for the authentication extension points.
 
 Verifies that:
-1. OSS mode → all requests resolve to the local install identity
-2. Custom IdentityResolver injection works via ext.identity
-3. Auth middleware injection returns 401 on missing token
+1. OSS mode → ``AuthMiddleware.resolve_user_id`` returns the local install id.
+2. Identity can be customized by subclassing ``AuthMiddleware`` and overriding
+   ``resolve_user_id`` — the single auth seam (swapped in via
+   ``ext.auth_middleware``, a ``(cls, kwargs)`` tuple).
+3. Auth middleware injection returns 401 on missing token.
 """
 
 from __future__ import annotations
@@ -15,89 +17,90 @@ from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-from valuz_agent.integrations.identity_local import LocalIdentityResolver
+from valuz_agent.api.middleware import AuthMiddleware
 
 
-class TestLocalIdentityResolver:
+class TestResolveUserId:
     async def test_returns_local_install_identity(self) -> None:
+        """OSS default: every request resolves to the device-local install id."""
         from valuz_agent.infra.local_identity import resolve_local_user_id
 
-        resolver = LocalIdentityResolver()
-        result = await resolver.resolve(MagicMock())
+        mw = AuthMiddleware(MagicMock())  # app arg unused by resolve_user_id
+        result = await mw.resolve_user_id(MagicMock())
         assert result == resolve_local_user_id()
         assert result.startswith("local-")
 
+    async def test_subclass_can_override_resolution(self) -> None:
+        """Identity is customized by overriding ``resolve_user_id`` (the seam the
+        commercial overlay uses to verify a JWT)."""
+
+        class JWTAuthMiddleware(AuthMiddleware):
+            async def resolve_user_id(self, request: Request) -> str | None:
+                auth = getattr(request, "headers", {}).get("Authorization", "")
+                return "jwt-user" if auth.startswith("Bearer ") else None
+
+        mw = JWTAuthMiddleware(MagicMock())
+
+        req = MagicMock()
+        req.headers = {"Authorization": "Bearer valid-token"}
+        assert await mw.resolve_user_id(req) == "jwt-user"
+
+        req_no_token = MagicMock()
+        req_no_token.headers = {}
+        assert await mw.resolve_user_id(req_no_token) is None
+
+
+class TestAuthMiddlewareSwapPoint:
+    def test_ext_auth_middleware_is_cls_kwargs_tuple(self) -> None:
+        """The overlay swaps the whole auth middleware via ``ext.auth_middleware``
+        — a ``(cls, kwargs)`` tuple — defaulting to OSS's ``AuthMiddleware``."""
+        from valuz_agent.ports.extensions import ext
+
+        cls, kwargs = ext.auth_middleware
+        assert cls is AuthMiddleware
+        assert isinstance(kwargs, dict)
+
 
 class TestAuthMiddlewareIntegration:
-    """Simulate the pattern a commercial app would use:
-    inject auth middleware that rejects unauthenticated requests.
-    """
+    """Simulate the pattern a commercial app would use: inject auth middleware
+    that rejects unauthenticated requests."""
 
     def test_should_return_401_when_middleware_rejects_unauthenticated(self) -> None:
         app = FastAPI()
 
-        class AuthMiddleware(BaseHTTPMiddleware):
+        class RejectingMiddleware(BaseHTTPMiddleware):
             async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
                 token = request.headers.get("Authorization")
                 if not token:
                     return JSONResponse(status_code=401, content={"detail": "Missing token"})
                 return await call_next(request)
 
-        app.add_middleware(AuthMiddleware)
+        app.add_middleware(RejectingMiddleware)
 
         @app.get("/test")
         def _test_route() -> dict:
             return {"ok": True}
 
-        client = TestClient(app)
-
-        resp = client.get("/test")
+        resp = TestClient(app).get("/test")
         assert resp.status_code == 401
         assert resp.json()["detail"] == "Missing token"
 
     def test_should_pass_when_middleware_accepts_token(self) -> None:
         app = FastAPI()
 
-        class AuthMiddleware(BaseHTTPMiddleware):
+        class RejectingMiddleware(BaseHTTPMiddleware):
             async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
                 token = request.headers.get("Authorization")
                 if not token:
                     return JSONResponse(status_code=401, content={"detail": "Missing token"})
                 return await call_next(request)
 
-        app.add_middleware(AuthMiddleware)
+        app.add_middleware(RejectingMiddleware)
 
         @app.get("/test")
         def _test_route() -> dict:
             return {"ok": True}
 
-        client = TestClient(app)
-
-        resp = client.get("/test", headers={"Authorization": "Bearer test-jwt"})
+        resp = TestClient(app).get("/test", headers={"Authorization": "Bearer test-jwt"})
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
-
-    async def test_custom_resolver_via_ext_identity(self) -> None:
-        """Set ext.identity to a custom resolver; verify it resolves correctly."""
-        from valuz_agent.ports.extensions import ext
-
-        class JWTResolver:
-            async def resolve(self, request: object) -> str | None:
-                auth = getattr(request, "headers", {}).get("Authorization", "")
-                if auth.startswith("Bearer "):
-                    return "jwt-user"
-                return None
-
-        ext.identity = JWTResolver()
-        try:
-            request = MagicMock()
-            request.headers = {"Authorization": "Bearer valid-token"}
-            user_id = await ext.identity.resolve(request)
-            assert user_id == "jwt-user"
-
-            request_no_token = MagicMock()
-            request_no_token.headers = {}
-            user_id2 = await ext.identity.resolve(request_no_token)
-            assert user_id2 is None
-        finally:
-            ext.identity = None

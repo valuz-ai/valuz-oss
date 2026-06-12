@@ -57,7 +57,7 @@ export const decisionsApi = {
   },
 
   /** SSE endpoint URL. Subscribers open with
-   *  ``new EventSource(decisionsApi.streamUrl())``. Listen to named
+   *  ``fetchEventSource(() => decisionsApi.streamUrl(), …)`` and handle named
    *  events: ``snapshot`` / ``added`` / ``resolved``. */
   streamUrl(): string {
     return `${_apiBase}/v1/decisions/stream`;

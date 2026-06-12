@@ -42,7 +42,8 @@ def ensure_local_identity() -> None:
     so an unattributed insert fails loudly instead of being silently owned by
     the install id. OSS derives the id from the device fingerprint and persists
     it once to ``~/.valuz/app/installation.json``; the commercial overlay
-    overrides per-request identity via ``ext.identity``.
+    overrides per-request identity by swapping ``AuthMiddleware`` (overriding
+    ``resolve_user_id``) via ``ext.auth_middleware``.
     """
     from valuz_agent.infra.auth_context import set_current_user_id
     from valuz_agent.infra.local_identity import resolve_local_user_id

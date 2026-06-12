@@ -20,13 +20,6 @@ class TestPortsImportable:
 
         assert McpCatalogPort is not None
 
-    def test_identity_port(self) -> None:
-        from valuz_agent.ports.identity import (
-            IdentityResolver,
-        )
-
-        assert IdentityResolver is not None
-
 
 class TestSystemProviderFallback:
     def teardown_method(self) -> None:
