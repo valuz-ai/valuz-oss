@@ -88,25 +88,26 @@ def build_seatbelt_profile(spec: SandboxSpec) -> str:
         "; --- listen: the kernel binds an HTTP port on loopback ---",
         '(allow network-bind (local ip "localhost:*"))',
         '(allow network-inbound (local ip "localhost:*"))',
-        "; --- read: broad, then RED-LINE denies take precedence ---",
+        "; --- read: broad (RED-LINE denies emitted LAST so they win) ---",
         "(allow file-read*)",
     ]
-
-    # RED LINE — explicit denies for host business DB dir + secret store.
-    for deny in spec.deny_paths:
-        lines.append(f'(deny file-read*  (subpath {_q(deny)}))')
-        lines.append(f'(deny file-write* (subpath {_q(deny)}))')
 
     lines.append("; --- write: project cwd + kernel data dir + tmp only ---")
     for p in (*rw_subpaths, tmpdir):
         lines.append(f'(allow file-write* (subpath {_q(p)}))')
 
-    # CLI login state must stay READABLE so codex/claude can authenticate
-    # inside the sandbox (a common Seatbelt foot-gun if omitted).
-    lines.append("; --- CLI login state (read kept; never written) ---")
+    # The agent CLIs need their own state dirs READ AND WRITE: codex
+    # writes ``~/.codex/state_*.sqlite`` (and claude its caches), so a
+    # read-only allow makes the runtime fail with "attempt to write a
+    # readonly database". These are the agent's own dirs (login state +
+    # runtime state), not host business data — writable is the right call
+    # for the minimal form; the host business DB / secrets stay denied
+    # below regardless.
+    lines.append("; --- agent CLI state dirs (login + runtime, rw) ---")
     for d in (".claude", ".codex"):
-        login = str(Path(home) / d)
-        lines.append(f'(allow file-read*  (subpath {_q(login)}))')
+        cli_dir = str(Path(home) / d)
+        lines.append(f'(allow file-read*  (subpath {_q(cli_dir)}))')
+        lines.append(f'(allow file-write* (subpath {_q(cli_dir)}))')
 
     lines.append("; --- network: host callback (④) + LLM hosts ---")
     lines.append("(allow network-outbound (remote ip \"localhost:*\"))")
@@ -115,6 +116,15 @@ def build_seatbelt_profile(spec: SandboxSpec) -> str:
     # tightening to spec.allowed_domains is the NetworkPolicy upgrade (S1+).
     lines.append('(allow network-outbound (remote tcp "*:443"))')
     lines.append('(allow network-outbound (remote tcp "*:80"))')
+
+    # RED LINE — denies emitted LAST so they override ANY allow above
+    # (Seatbelt is last-match-wins per operation): the host business DB
+    # and secret store stay unreadable/unwritable even when they sit under
+    # a directory the manifest write-allows.
+    lines.append("; --- RED LINE: host business DB + secrets (deny wins) ---")
+    for deny in spec.deny_paths:
+        lines.append(f'(deny file-read*  (subpath {_q(deny)}))')
+        lines.append(f'(deny file-write* (subpath {_q(deny)}))')
 
     return "\n".join(lines) + "\n"
 
