@@ -301,23 +301,34 @@ def always_on_skill_paths() -> list[str]:
     return paths
 
 
-def always_on_http_mcp_servers(session_id: str) -> list[McpHttpServerConfig]:
-    """Built-in HTTP MCP servers every session carries: docs, schedules, connectors.
+def always_on_http_mcp_servers(
+    session_id: str, *, toolkit: str = "base"
+) -> list[McpHttpServerConfig]:
+    """Built-in HTTP MCP servers every session carries: docs, schedules,
+    connectors, and the harness toolkit.
 
     These are always-on for every kind of session (chat / project / task
     dispatch). They are appended after external catalog providers so their
-    reserved ``valuz_*`` names never collide. The shared secret travels in the
-    ``X-Valuz-Internal`` header so a misrouted request can't reach them; the
-    ``X-Valuz-Session-Id`` header scopes each call to the calling session.
+    reserved ``valuz_*`` / ``harness`` names never collide. The shared secret
+    travels in the ``X-Valuz-Internal`` header so a misrouted request can't
+    reach them; the ``X-Valuz-Session-Id`` header scopes each call to the
+    calling session.
 
-    Stable tool list across all sessions (no kind/attachment gating) keeps the
-    Anthropic prompt cache warm. See ADR-009 + ``resolve_session_capabilities``
-    §2.5 for the rationale.
+    ``toolkit`` selects the harness tool surface: ``base`` (orchestration
+    launchers + memory + submit_skill — every ordinary session) or ``lead``
+    (the dispatch set — task-lead sessions). The server name stays
+    ``harness`` either way so the model-visible tool names
+    (``mcp__harness__*``) are stable across kinds.
+
+    Stable tool list across all sessions of a kind keeps the Anthropic
+    prompt cache warm. See ADR-009 + ``resolve_session_capabilities`` §2.5
+    for the rationale.
     """
     from valuz_agent.infra.config import settings as _settings
     from valuz_agent.integrations.automations_mcp_server import automations_mcp_url
     from valuz_agent.integrations.connectors_mcp_server import connectors_mcp_url
     from valuz_agent.integrations.docs_mcp_server import docs_mcp_url
+    from valuz_agent.integrations.toolkit_mcp_server import toolkit_mcp_url
 
     headers = {
         "X-Valuz-Internal": _settings.internal_mcp_token,
@@ -343,7 +354,18 @@ def always_on_http_mcp_servers(session_id: str) -> list[McpHttpServerConfig]:
             transport="http",
             headers=dict(headers),
         ),
+        McpHttpServerConfig(
+            name="harness",
+            url=toolkit_mcp_url(base_url=base, toolset=toolkit),
+            transport="http",
+            headers=dict(headers),
+        ),
     ]
+
+
+def harness_toolkit_for_run_kind(run_kind: str | None) -> str:
+    """Map a session's ``metadata.valuz.run_kind`` to its harness toolset."""
+    return "lead" if run_kind == "lead" else "base"
 
 
 def _resolve_to_absolute(path: str | None, project_root: str | None) -> str | None:

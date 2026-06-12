@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import logging
 
-from src.core.tool_registry import register_tool
 from src.core.tools import ExecContext, ToolDef, ToolResult
 
 # Side-effect import — surfaces ``src.core...`` on sys.path. Without this,
@@ -196,19 +195,15 @@ SUBMIT_SKILL_TOOL_DECLARATION = ToolDef(
 )
 
 
-def register_submit_skill_tool() -> None:
-    """Wire the executable handler into the kernel's global tool registry.
-
-    Idempotent — re-registering replaces the existing entry under the
-    same name. Safe to call from app startup.
-    """
-    register_tool(SUBMIT_SKILL_TOOL_DEF)
-    logger.info("Registered tool: %s", SUBMIT_SKILL_TOOL_NAME)
+def build_submit_skill_tool_defs() -> tuple[ToolDef, ...]:
+    """Return the submit_skill def (live handler) for the host toolkit
+    MCP server."""
+    return (SUBMIT_SKILL_TOOL_DEF,)
 
 
 __all__ = [
     "SUBMIT_SKILL_TOOL_NAME",
     "SUBMIT_SKILL_TOOL_DEF",
     "SUBMIT_SKILL_TOOL_DECLARATION",
-    "register_submit_skill_tool",
+    "build_submit_skill_tool_defs",
 ]

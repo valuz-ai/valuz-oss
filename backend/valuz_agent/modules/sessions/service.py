@@ -832,22 +832,15 @@ class SessionService:
         # Synthetic per-project assistant config, built in memory and embedded
         # as the session's snapshot (mirrors what the kernel mirror used to
         # store in the agents table: identity + the conversation tool set).
-        from valuz_agent.modules.projects.service import (
-            _ensure_memory_tools_declared,
-            _ensure_orchestration_declared,
-            _ensure_submit_skill_declared,
-        )
-
-        synthetic_tools = _ensure_orchestration_declared(
-            _ensure_memory_tools_declared(_ensure_submit_skill_declared(()))
-        )
+        # Tool surfaces ride the session's ``harness`` MCP entry (appended
+        # with the always-on servers below) — the synthetic config carries
+        # no tool declarations.
         agent_config = KernelAgentConfig(
             id=agent_id,
             name=title or "Assistant",
             model=resolution.model,
             runtime_provider=runtime_provider,
             instructions="",  # the session field below is the source of truth
-            tools=synthetic_tools,
             permission_mode="full_access",
         )
 

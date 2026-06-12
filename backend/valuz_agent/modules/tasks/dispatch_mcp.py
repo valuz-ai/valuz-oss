@@ -21,15 +21,15 @@ as ``mcp__harness__dispatch`` etc. Member sessions whose agents also
 carry the declarations are still blocked by the handler gate.
 
 Usage (startup):
-    from valuz_agent.modules.tasks.dispatch_mcp import register_dispatch_tools
-    register_dispatch_tools(orchestrator)
+    from valuz_agent.modules.tasks.dispatch_mcp import build_task_tool_defs
+    install_toolkit_toolsets(... build_task_tool_defs(orchestrator) ...)
 
 ADR-023 Step 4: this module is now a thin re-export shim. The static,
 import-safe surface (tool names, JSON-schema parameters,
 ``ToolDef(handler=None)`` declarations, ``strip_dispatch_tools`` /
 ``ensure_orchestration_tools_on_agent``) lives in ``tools/declarations.py``;
 the thin args → service-call → ToolResult handlers and
-``register_dispatch_tools`` live in ``tools/handlers.py``. Keeping this module
+``build_task_tool_defs`` live in ``tools/handlers.py``. Keeping this module
 name + its public surface stable means existing import sites (app.py,
 projects/service.py, agents/service.py, lifecycle._materialize_lead_agent) keep
 working unchanged.
@@ -92,7 +92,7 @@ from valuz_agent.modules.tasks.tools.handlers import (
     _check_plan_writer_gate,
     _resolve_plan_reader_task,
     _resolve_plan_writer_task,
-    register_dispatch_tools,
+    build_task_tool_defs,
 )
 
 __all__ = [
@@ -128,7 +128,7 @@ __all__ = [
     "LIST_TASKS_TOOL_DECLARATION",
     "GET_TASK_TOOL_DECLARATION",
     "ensure_orchestration_tools_on_agent",
-    "register_dispatch_tools",
+    "build_task_tool_defs",
     # Additional re-exports kept for completeness (used by tests / internal
     # callers that reference the per-tool declarations or names).
     "ABANDON_TASK_TOOL_NAME",

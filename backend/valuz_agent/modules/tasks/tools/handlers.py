@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING, Any
 import valuz_agent.boot.kernel  # noqa: F401
 
 from src.core import ToolDef, ToolResult
-from src.core.tool_registry import register_tool
 from src.core.tools import ExecContext
 
 from valuz_agent.adapters import kernel_client
@@ -39,7 +38,6 @@ from valuz_agent.modules.tasks.tools.declarations import (
     CREATE_TASK_TOOL_NAME,
     DISPATCH_TOOL_DECLARATION,
     DISPATCH_TOOL_NAME,
-    DISPATCH_TOOL_NAMES,
     DRAFT_TASK_TOOL_DECLARATION,
     DRAFT_TASK_TOOL_NAME,
     FINISH_TASK_TOOL_DECLARATION,
@@ -348,17 +346,26 @@ async def _bound_agent_member(sess: Any) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
-def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
-    """Wire executable handlers into the kernel's global tool registry.
+def build_task_tool_defs(orchestrator: TaskOrchestrator) -> tuple[ToolDef, ...]:
+    """Build the full task tool set (dispatch + orchestration) with live handlers.
 
     Captures *orchestrator* in closures so the handlers can reach host
     singletons without importing at module level (avoids circular imports
-    at startup). Idempotent — re-registering replaces existing entries.
+    at startup). The host toolkit MCP server partitions the returned defs
+    into its ``base`` / ``lead`` toolsets by declaration name.
 
     Must be called after ``init_kernel_dependencies()`` (i.e. from the
-    async ``init_kernel`` startup hook in api/app.py).
+    async startup steps), once the tasks orchestrator exists.
     """
     import json
+
+    _defs: list[ToolDef] = []
+
+    def register_tool(td: ToolDef) -> None:
+        # Local shadow of the former kernel-registry call — the body below
+        # is unchanged; defs are collected and served over the host's
+        # toolkit MCP server instead of the kernel's in-process registry.
+        _defs.append(td)
 
     async def _dispatch_handler(args: dict[str, Any], ctx: ExecContext) -> ToolResult:
         gate = await _check_lead_gate(ctx)
@@ -1113,6 +1120,7 @@ def register_dispatch_tools(orchestrator: TaskOrchestrator) -> None:
         )
     )
     logger.info(
-        "Registered dispatch tools: %s",
-        ", ".join(DISPATCH_TOOL_NAMES),
+        "Built task tool defs: %s",
+        ", ".join(sorted(t.name for t in _defs)),
     )
+    return tuple(_defs)

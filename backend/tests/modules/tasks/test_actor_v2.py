@@ -605,8 +605,10 @@ def test_strip_dispatch_tools_removes_lead_only() -> None:
     assert again is stripped
 
 
-async def test_materialize_lead_agent_builds_clone_with_dispatch_tools() -> None:
-    """The lead clone has a deterministic id and carries the mode's dispatch tools."""
+async def test_materialize_lead_agent_builds_clone_without_tool_decls() -> None:
+    """The lead clone keeps its deterministic identity stamp but carries no
+    tool declarations — the dispatch surface rides the lead session's
+    ``harness`` MCP entry (lead toolset of the host toolkit server)."""
     from src.core import AgentConfig  # type: ignore[import-not-found]
 
     from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
@@ -615,12 +617,7 @@ async def test_materialize_lead_agent_builds_clone_with_dispatch_tools() -> None
     orch = TaskOrchestrator()
     clone = await orch._materialize_lead_agent(base, dispatch_mode="async")
     assert clone.id == "base1__lead__async"
-    names = {t.name for t in clone.tools}
-    assert "dispatch" in names
-    assert "await_members" in names
-    assert "send" in names
-    assert "finish_task" in names
-    assert "create_task" not in names
+    assert tuple(clone.tools or ()) == ()
 
 
 def test_send_to_member_rejects_cross_task(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -661,22 +658,24 @@ def test_send_to_member_rejects_cross_task(monkeypatch: pytest.MonkeyPatch) -> N
     assert "not a member of this task" in res["error"]
 
 
-async def test_orchestration_tools_include_list_and_get() -> None:
-    """Conversation agents carry the launcher + observability + chat-plan
-    surface (VALUZ-CHATPLAN S2); the per-task lead clone drops launcher /
-    draft-state tools but keeps the plan-write tools (plan_task / modify_plan
-    / get_plan) via DISPATCH_TOOL_DECLARATIONS."""
+async def test_toolset_partition_matches_declaration_sets() -> None:
+    """The host toolkit MCP server's toolsets are partitioned by the
+    declaration name sets: ``base`` serves the conversation surface
+    (launchers + observability + chat-plan, VALUZ-CHATPLAN S2), ``lead``
+    serves the dispatch surface. The lead clone itself carries no tool
+    declarations — its surface rides the session's ``harness`` MCP entry."""
     from src.core import AgentConfig  # type: ignore[import-not-found]
 
     from valuz_agent.modules.tasks.dispatch_mcp import (
+        DISPATCH_TOOL_DECLARATIONS,
         ORCHESTRATION_TOOL_DECLARATIONS,
-        ensure_orchestration_tools_on_agent,
     )
     from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
 
     names = {d.name for d in ORCHESTRATION_TOOL_DECLARATIONS}
     # Launcher + observability + VALUZ-CHATPLAN draft-mode tools all surfaced
-    # on conversation agents so the chat-as-control-surface flow works.
+    # on conversation (base-toolset) sessions so the chat-as-control-surface
+    # flow works.
     assert names == {
         "list_members",
         "create_task",
@@ -695,31 +694,8 @@ async def test_orchestration_tools_include_list_and_get() -> None:
         "resume_task",
     }
 
-    # Conversation agent surfaces all of them.
-    conv = ensure_orchestration_tools_on_agent(AgentConfig(id="a", name="a", tools=()))
-    conv_names = {t.name for t in conv.tools}
-    assert names <= conv_names
-
-    # Lead clone drops launcher/draft-state tools but keeps the dispatch
-    # toolset (including plan_task / modify_plan / get_plan via
-    # DISPATCH_TOOL_DECLARATIONS). Names should appear exactly once on the
-    # clone — the new dedup in _materialize_lead_agent prevents duplicates
-    # when a tool sits in both ORCHESTRATION and DISPATCH declarations.
-    clone = await TaskOrchestrator()._materialize_lead_agent(conv, dispatch_mode="async")
-    clone_tool_names = [t.name for t in clone.tools]
-    clone_names = set(clone_tool_names)
-    # Launcher / draft-mode tools stripped:
-    for stripped in (
-        "create_task",
-        "list_tasks",
-        "get_task",
-        "draft_task",
-        "commit_task",
-        "abandon_task",
-        "inject_into_task",
-    ):
-        assert stripped not in clone_names, f"{stripped} should be dropped from lead"
-    # Lead toolset present:
+    # Lead toolset: dispatch surface incl. the plan-write tools.
+    lead_names = {d.name for d in DISPATCH_TOOL_DECLARATIONS}
     for kept in (
         "dispatch",
         "await_members",
@@ -731,12 +707,16 @@ async def test_orchestration_tools_include_list_and_get() -> None:
         "modify_plan",
         "get_plan",
     ):
-        assert kept in clone_names, f"{kept} should be on lead clone"
-    # No duplicates (every name appears at most once).
-    assert len(clone_tool_names) == len(clone_names), (
-        f"lead clone has duplicate tools: {clone_tool_names}"
-    )
+        assert kept in lead_names, f"{kept} should be in the lead toolset"
+    # Launcher / draft-mode tools are NOT in the lead toolset:
+    for stripped in ("create_task", "list_tasks", "draft_task", "commit_task"):
+        assert stripped not in lead_names, f"{stripped} should not be in lead toolset"
 
+    # The clone is a pure identity stamp.
+    clone = await TaskOrchestrator()._materialize_lead_agent(
+        AgentConfig(id="a", name="a", tools=()), dispatch_mode="async"
+    )
+    assert tuple(clone.tools or ()) == ()
 
 
 def test_build_member_session_carries_effort_for_deepagents(

@@ -147,8 +147,9 @@ async def test_member_resolution_builds_snapshot_from_library_row(db, patch_uow)
     assert config.name == "研究员"
     assert config.model == "claude-opus-4-8"
     assert config.instructions == "dig deep"
-    # Conversation tool set is applied by build_agent_config.
-    assert any(t.name == "create_task" for t in config.tools)
+    # Tool surfaces ride the session's ``harness`` MCP entry now — the
+    # snapshot carries no tool declarations.
+    assert tuple(config.tools or ()) == ()
 
 
 async def test_resolution_carries_connector_types_into_mcp_servers(db, patch_uow) -> None:

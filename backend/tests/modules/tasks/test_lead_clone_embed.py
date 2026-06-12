@@ -78,11 +78,12 @@ def test_embed_lead_clone_into_create_request(monkeypatch: pytest.MonkeyPatch) -
 
     embedded = embed_agent_config(request, clone)
 
-    # Same request type, snapshot swapped for the clone (with dispatch tools).
+    # Same request type, snapshot swapped for the clone. The clone carries
+    # no tool declarations — the dispatch surface rides the lead session's
+    # ``harness`` MCP entry.
     assert type(embedded) is type(request)
     assert embedded.agent_config.id == clone.id
-    tool_names = {t.name for t in embedded.agent_config.tools or ()}
-    assert "dispatch_subtask" in tool_names or "plan_task" in tool_names, tool_names
+    assert tuple(embedded.agent_config.tools or ()) == ()
 
     # Everything else the builder resolved survives untouched.
     assert embedded.id == request.id

@@ -19,7 +19,6 @@ import logging
 from typing import Any
 
 from src.core import ToolDef, ToolResult
-from src.core.tool_registry import register_tool
 from src.core.tools import ExecContext
 
 import valuz_agent.boot.kernel  # noqa: F401
@@ -194,8 +193,14 @@ MEMORY_TOOL_DECLARATIONS: tuple[ToolDef, ...] = (
 )
 
 
-def register_memory_tools() -> None:
-    """Register memory_get / memory_write handlers in the kernel tool registry."""
+def build_memory_tool_defs() -> tuple[ToolDef, ...]:
+    """Build the memory_get / memory_write defs (live handlers) for the
+    host toolkit MCP server."""
+    _defs: list[ToolDef] = []
+
+    def register_tool(td: ToolDef) -> None:
+        _defs.append(td)
+
     register_tool(
         ToolDef(
             name=MEMORY_GET_TOOL_NAME,
@@ -214,4 +219,5 @@ def register_memory_tools() -> None:
             read_only=False,
         )
     )
-    logger.info("Registered memory tools: %s, %s", MEMORY_GET_TOOL_NAME, MEMORY_WRITE_TOOL_NAME)
+    logger.info("Built memory tool defs: %s, %s", MEMORY_GET_TOOL_NAME, MEMORY_WRITE_TOOL_NAME)
+    return tuple(_defs)

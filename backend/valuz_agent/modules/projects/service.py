@@ -7,10 +7,6 @@ from pathlib import Path
 from valuz_agent.adapters import kernel_client
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.fs_registry import fs_registry
-from valuz_agent.integrations.tools_skill_creator import (
-    SUBMIT_SKILL_TOOL_DECLARATION,
-    SUBMIT_SKILL_TOOL_NAME,
-)
 from valuz_agent.modules.automations.datastore import AutomationDatastore
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.docs.datastore import DocumentDatastore
@@ -19,41 +15,6 @@ from valuz_agent.modules.projects.models import ProjectRow
 from valuz_agent.modules.sessions import project_index
 from valuz_agent.modules.sessions.datastore import SessionDatastore
 from valuz_agent.modules.skills.datastore import SkillDatastore
-
-
-def _ensure_submit_skill_declared(prior_tools: tuple) -> tuple:  # type: ignore[type-arg]
-    """Add the ``submit_skill`` declaration if the agent doesn't already
-    have one. Idempotent — re-mirrors leave the tuple unchanged."""
-    for tool in prior_tools:
-        if getattr(tool, "name", None) == SUBMIT_SKILL_TOOL_NAME:
-            return prior_tools
-    return tuple(prior_tools) + (SUBMIT_SKILL_TOOL_DECLARATION,)
-
-
-def _ensure_memory_tools_declared(prior_tools: tuple) -> tuple:  # type: ignore[type-arg]
-    """Declare memory_get / memory_write on the agent so the runtime surfaces
-    them to the model (handlers are attached from the registry at runtime).
-    Idempotent — only appends declarations the agent is missing."""
-    from valuz_agent.modules.memory.tools import MEMORY_TOOL_DECLARATIONS
-
-    have = {getattr(t, "name", None) for t in prior_tools}
-    missing = tuple(d for d in MEMORY_TOOL_DECLARATIONS if d.name not in have)
-    return tuple(prior_tools) + missing if missing else tuple(prior_tools)
-
-
-def _ensure_orchestration_declared(prior_tools: tuple) -> tuple:  # type: ignore[type-arg]
-    """Declare the task launcher/observability tools (create_task / list_tasks /
-    get_task) on the project synthetic agent so a PROJECT conversation can
-    spawn + track tasks (VALUZ-TASK / M10 附录 E). Gated to projects at
-    call time by ``_check_orchestration_gate`` — harmless on chat-default
-    projects. Idempotent. (The per-task lead clone strips these — they are
-    conversation-only.)"""
-    from valuz_agent.modules.tasks.dispatch_mcp import ORCHESTRATION_TOOL_DECLARATIONS
-
-    have = {getattr(t, "name", None) for t in prior_tools}
-    missing = tuple(d for d in ORCHESTRATION_TOOL_DECLARATIONS if d.name not in have)
-    return tuple(prior_tools) + missing if missing else tuple(prior_tools)
-
 
 # Kernel V5+1aae940 collapses ``permission_mode`` to a 3-value enum;
 # every legacy value (set on dev DBs by the previous host code) maps to

@@ -1135,43 +1135,14 @@ class LifecycleService:
         """
         from dataclasses import replace
 
-        from valuz_agent.modules.tasks.dispatch_mcp import (
-            DISPATCH_TOOL_DECLARATIONS,
-            LEAD_ONLY_TOOL_NAMES,
-            ORCHESTRATION_TOOL_NAMES,
-        )
-
-        # sync/async share one lead toolset (non-blocking dispatch +
-        # await_members + plan/review/finish); the modes differ only in the
-        # session driver (one-shot run_session_to_idle vs persistent actor loop).
-        declarations = DISPATCH_TOOL_DECLARATIONS
-        # Start from the base tools minus any dispatch/launcher tools, then add
-        # exactly this mode's dispatch declarations — so the clone never carries
-        # stale dispatch tools or the conversation-only launcher/observability
-        # tools (create_task / list_tasks / get_task / draft_task / commit_task /
-        # abandon_task).
-        #
-        # VALUZ-CHATPLAN S2: plan_task / modify_plan / get_plan are now also
-        # advertised on chat agents (via ORCHESTRATION_TOOL_DECLARATIONS) so a
-        # base chat agent might carry them. They are NOT in ``drop`` (they
-        # legitimately belong on the lead), so we'd duplicate them when we add
-        # DISPATCH_TOOL_DECLARATIONS. Also dedupe against the upcoming
-        # declarations' names so the clone advertises each tool exactly once.
-        decl_names = {getattr(d, "name", None) for d in declarations}
-        drop = LEAD_ONLY_TOOL_NAMES | ORCHESTRATION_TOOL_NAMES | decl_names
-        base_tools = tuple(
-            t for t in (base_agent.tools or ()) if getattr(t, "name", None) not in drop
-        )
-        # Lead sessions must also carry the always-on in-process baseline tools
-        # (memory + submit_skill). The base member agent normally already has
-        # them via _prepare_conversation_tools, but a base created before they
-        # landed would be missing them — ensure them on the clone too.
-        from valuz_agent.modules.agents.service import _ensure_global_tools_declared
-
+        # Tool surfaces ride the session's ``harness`` MCP entry now
+        # (``build_member_session(is_lead=True)`` points it at the ``lead``
+        # toolset of the host toolkit MCP server) — the clone carries no
+        # tool declarations of its own. It survives as an identity stamp:
+        # the ``__lead__{mode}`` id marks the embedded snapshot as a lead
+        # clone for queries/diagnostics.
         clone_id = f"{base_agent.id}__lead__{dispatch_mode}"
-        clone = _ensure_global_tools_declared(
-            replace(base_agent, id=clone_id, tools=base_tools + tuple(declarations))
-        )
+        clone = replace(base_agent, id=clone_id, tools=())
         # The clone exists only as the lead session's embedded snapshot —
         # the kernel has no agents table to materialize it into.
         return clone

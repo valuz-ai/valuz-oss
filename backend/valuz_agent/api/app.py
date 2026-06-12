@@ -125,6 +125,15 @@ def create_app() -> FastAPI:
 
     app.mount("/internal/mcp/connectors", build_connectors_mcp_asgi())
 
+    # In-process toolkit MCP server — serves the harness tools (dispatch /
+    # orchestration / memory / submit_skill) per toolset. Sessions reference
+    # it via an ``mcp_servers`` entry named ``harness`` so every runtime
+    # consumes host tools through its standard MCP client path.
+    from valuz_agent.integrations.toolkit_mcp_server import build_toolkit_mcp_asgi
+
+    app.mount("/internal/mcp/toolkit/base", build_toolkit_mcp_asgi("base"))
+    app.mount("/internal/mcp/toolkit/lead", build_toolkit_mcp_asgi("lead"))
+
     # Startup/shutdown orchestration lives in ``boot/lifespan.py`` (bound via
     # ``lifespan=lifespan`` above). The startup order is load-bearing; see the
     # order table in the boot-refactor exec plan.
