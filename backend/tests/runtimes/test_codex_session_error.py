@@ -88,3 +88,33 @@ def test_failed_turn_status_maps_to_execution_error() -> None:
     assert isinstance(stop, Error)
     assert stop.category == "execution_error"
     assert stop.message == "provider exploded"
+
+
+def test_stop_reason_mapping_covers_every_turn_status() -> None:
+    """Parametrized over ALL TurnStatus members so a new enum value can't
+    silently fall into the budget-exhausted fallback unnoticed."""
+    from types import SimpleNamespace
+
+    from openai_codex.generated.v2_all import TurnStatus
+
+    expected = {
+        TurnStatus.completed: EndTurn,
+        TurnStatus.interrupted: Error,  # user_interrupt
+        TurnStatus.failed: Error,  # execution_error
+        TurnStatus.in_progress: BudgetExhausted,  # defensive fallback
+    }
+    assert set(expected) == set(TurnStatus), (
+        "TurnStatus gained a member — decide its stop-reason mapping in "
+        "_stop_reason_from_turn and extend this table"
+    )
+
+    for status, cls in expected.items():
+        turn_done = SimpleNamespace(
+            turn=SimpleNamespace(status=status, error=SimpleNamespace(message="m"))
+        )
+        stop = _stop_reason_from_turn(turn_done)  # type: ignore[arg-type]
+        assert isinstance(stop, cls), (status, stop)
+        if status == TurnStatus.interrupted:
+            assert stop.category == "user_interrupt"
+        if status == TurnStatus.failed:
+            assert stop.category == "execution_error"

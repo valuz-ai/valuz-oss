@@ -16,28 +16,42 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 
+const startupState = {
+  services: [],
+  logs: [],
+  loading: false,
+  checking: false,
+  ready: false,
+  error: null,
+  retry: () => undefined,
+};
+
 vi.mock("./hooks/use-desktop-startup", () => ({
-  useDesktopStartup: () => ({
-    services: [],
-    logs: [],
-    loading: false,
-    checking: false,
-    ready: false,
-    error: null,
-    retry: () => undefined,
-  }),
+  useDesktopStartup: () => startupState,
 }));
 
 vi.mock("./routes/router", () => ({
   AppRouter: () => <div>Desktop app ready</div>,
 }));
 
+vi.mock("@valuz/app/lib/onboarding", () => ({
+  isOnboarded: () => true, // skip the providers probe in the ready case
+}));
+
 describe("startup screen under the platform provider", () => {
   it("renders the not-ready branch without a usePlatform provider crash", async () => {
     // A bare render throwing "usePlatform() must be used inside
     // <PlatformProvider>" is exactly the regression this guards against.
+    startupState.ready = false;
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: /VALUZ/i })).toBeTruthy();
+  });
+
+  it("renders the routed shell once ready", async () => {
+    startupState.ready = true;
+    render(<App />);
+
+    expect(await screen.findByText("Desktop app ready")).toBeTruthy();
   });
 });

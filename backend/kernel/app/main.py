@@ -29,13 +29,23 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # standalone kernel exposes session mutation, the full event stream
     # and the usage read surface — refuse to serve all of that
     # unauthenticated unless the operator opts in explicitly.
-    if not config.auth_token and os.getenv("KERNEL_ALLOW_UNAUTHENTICATED") != "1":
-        raise RuntimeError(
-            "Standalone kernel refuses to start without auth: set "
-            "KERNEL_AUTH_TOKEN (bearer token required on every request), "
-            "or set KERNEL_ALLOW_UNAUTHENTICATED=1 to explicitly opt in "
-            "to an open instance (loopback-only development)."
-        )
+    if not config.auth_token:
+        if os.getenv("KERNEL_ALLOW_UNAUTHENTICATED") != "1":
+            raise RuntimeError(
+                "Standalone kernel refuses to start without auth: set "
+                "KERNEL_AUTH_TOKEN (bearer token required on every request). "
+                "See backend/CLAUDE.md §kernel boundary for the development "
+                "opt-out."
+            )
+        # The unauthenticated opt-in is loopback-only — and that must be
+        # ENFORCED, not documented: AppConfig.host defaults to 0.0.0.0, so
+        # a bare opt-in would otherwise expose session mutation, the full
+        # event stream and the usage surface on every interface.
+        if config.host not in ("127.0.0.1", "localhost", "::1"):
+            raise RuntimeError(
+                "KERNEL_ALLOW_UNAUTHENTICATED=1 requires a loopback bind: "
+                f"set HOST=127.0.0.1 (got {config.host!r})."
+            )
     await init_dependencies(config)
     async with mcp_router_lifespan():
         yield

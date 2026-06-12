@@ -163,12 +163,21 @@ def live_event_to_data(event: Event, *, session_id: str | None = None) -> EventD
     seq-cursor backfills. Live-only delta types carry no ``seq``.
     """
     data = dict(event.data)
-    seq = data.pop("seq", None)
+    raw_seq = data.pop("seq", None)
+    seq: int | None = None
+    if raw_seq is not None:
+        # Defensive coercion: a JSON round-trip through a bus can turn the
+        # stamp into a float/str — silently dropping it would invisibly
+        # disable boundary dedup for that frame.
+        try:
+            seq = int(raw_seq)
+        except (TypeError, ValueError):
+            seq = None
     return EventData(
         type=event.type,
         data=data,
         timestamp=event.timestamp,
-        seq=int(seq) if isinstance(seq, int) else None,
+        seq=seq,
         session_id=session_id,
     )
 

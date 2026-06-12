@@ -222,10 +222,15 @@ async def test_sse_subscription_delivers_live_events(kernel_proc) -> None:
 
         follower = asyncio.create_task(_follow())
         try:
-            # Give the stream a moment to attach its tap, then emit.
-            await asyncio.sleep(0.5)
-            await client.emit_live_event(session_id, "session_error", {"category": "Live"})
-            frame = await asyncio.wait_for(received.get(), timeout=10)
+            # Emit on a retry loop until the stream observes a frame —
+            # robust to subscription-attach latency without a fixed sleep.
+            async def _emit_until_received() -> None:
+                while received.empty():
+                    await client.emit_live_event(session_id, "session_error", {"category": "Live"})
+                    await asyncio.sleep(0.1)
+
+            await asyncio.wait_for(_emit_until_received(), timeout=10)
+            frame = await received.get()
             assert frame.type == "session_error"
             assert frame.data["category"] == "Live"
             assert frame.seq is None  # live frame, not a DB row
@@ -298,16 +303,29 @@ async def test_global_sse_stream_delivers_events_with_session_ids(kernel_proc) -
 
         received: asyncio.Queue = asyncio.Queue()
 
+        seen_sessions: set = set()
+
         async def _follow() -> None:
             async for item in client.subscribe_all_events():
+                # The first emit retries until observed — keep one frame
+                # per session so repeats don't crowd out the second one.
+                if item.session_id in seen_sessions:
+                    continue
+                seen_sessions.add(item.session_id)
                 await received.put(item)
-                if received.qsize() >= 2:
+                if len(seen_sessions) >= 2:
                     return
 
         follower = asyncio.create_task(_follow())
         try:
-            await asyncio.sleep(0.5)
-            await client.emit_live_event(sids[0], "session_error", {"category": "G1"})
+            # Emit on a retry loop until the follower observes a frame —
+            # robust to subscription-attach latency without a fixed sleep.
+            async def _emit_until_received() -> None:
+                while received.empty():
+                    await client.emit_live_event(sids[0], "session_error", {"category": "G1"})
+                    await asyncio.sleep(0.1)
+
+            await asyncio.wait_for(_emit_until_received(), timeout=10)
             await client.emit_live_event(sids[1], "requires_action", {"pending_id": "p9"})
 
             frames = [await asyncio.wait_for(received.get(), timeout=10) for _ in range(2)]
@@ -326,3 +344,101 @@ async def test_global_sse_stream_delivers_events_with_session_ids(kernel_proc) -
         assert by_session[sids[1]].data["pending_id"] == "p9"
     finally:
         await client.aclose()
+
+
+def _spawn_kernel(db_path, port, extra_env):
+    env = dict(os.environ)
+    # The auth posture under test must come from ``extra_env`` alone — a
+    # token inherited from the parent environment would defeat the
+    # no-token cases.
+    env.pop("KERNEL_AUTH_TOKEN", None)
+    env.pop("KERNEL_ALLOW_UNAUTHENTICATED", None)
+    env.update(
+        {
+            "DATABASE_URL": f"sqlite+aiosqlite:///{db_path}",
+            "PYTHONPATH": str(kb.KERNEL_DIR),
+            **extra_env,
+        }
+    )
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--log-level",
+            "warning",
+        ],
+        cwd=str(kb.KERNEL_DIR),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+
+
+def _wait_exit_or_health(proc, base_url, deadline_s=20):
+    """Return ('exited', output) or ('healthy', '')."""
+    deadline = time.monotonic() + deadline_s
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return "exited", (proc.stdout.read().decode() if proc.stdout else "")
+        try:
+            if httpx.get(f"{base_url}/health", timeout=1.0).status_code == 200:
+                return "healthy", ""
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(0.2)
+    proc.kill()
+    raise RuntimeError("kernel neither exited nor became healthy")
+
+
+def test_standalone_kernel_refuses_to_start_without_auth_token(tmp_path):
+    """PR #87 review: the fail-fast gate itself had zero coverage."""
+    port = _free_port()
+    proc = _spawn_kernel(tmp_path / "k.db", port, extra_env={})
+    state, output = _wait_exit_or_health(proc, f"http://127.0.0.1:{port}")
+    assert state == "exited"
+    assert "refuses to start without auth" in output
+
+
+def test_unauthenticated_optin_requires_loopback_bind(tmp_path):
+    """KERNEL_ALLOW_UNAUTHENTICATED=1 with a non-loopback bind must die —
+    AppConfig.host defaults to 0.0.0.0, so the opt-in alone must never
+    expose the surface on all interfaces."""
+    port = _free_port()
+    proc = _spawn_kernel(
+        tmp_path / "k.db",
+        port,
+        extra_env={"KERNEL_ALLOW_UNAUTHENTICATED": "1", "HOST": "0.0.0.0"},
+    )
+    state, output = _wait_exit_or_health(proc, f"http://127.0.0.1:{port}")
+    assert state == "exited"
+    assert "requires a loopback bind" in output
+
+
+def test_unauthenticated_optin_on_loopback_starts_open(tmp_path):
+    """The explicit loopback opt-in still works for development."""
+    port = _free_port()
+    # NB: kernel schema isn't migrated here — /health and the auth posture
+    # are what's under test, not data routes.
+    proc = _spawn_kernel(
+        tmp_path / "k.db",
+        port,
+        extra_env={"KERNEL_ALLOW_UNAUTHENTICATED": "1", "HOST": "127.0.0.1"},
+    )
+    try:
+        state, _ = _wait_exit_or_health(proc, f"http://127.0.0.1:{port}")
+        assert state == "healthy"
+        # No token middleware installed — a tokenless request reaches routes.
+        resp = httpx.get(f"http://127.0.0.1:{port}/api/v1/sessions", timeout=5.0)
+        assert resp.status_code != 401
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()

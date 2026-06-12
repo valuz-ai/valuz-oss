@@ -57,11 +57,18 @@ class _FakeKernelWs:
     async def _handler(self, ws: Any) -> None:
         raw = await ws.recv()
         self.received.append(json.loads(raw))
+        if not self.frames:
+            return  # dropped-channel case: close immediately, no terminal frame
         for frame in self.frames:
             await ws.send(json.dumps(frame))
-        # Keep the socket open briefly so the client reads every frame
-        # before any close race.
-        await asyncio.sleep(0.2)
+        # Hold the socket open until the CLIENT closes — deterministic on
+        # loaded CI, no fixed sleep. (The client disconnects after its
+        # terminal frame; the empty-frames case ends via wait_closed too,
+        # mapping to KernelUnavailableError client-side.)
+        try:
+            await asyncio.wait_for(ws.wait_closed(), timeout=10)
+        except TimeoutError:
+            pass
 
     async def __aenter__(self) -> _FakeKernelWs:
         self._server = await websockets.serve(self._handler, "127.0.0.1", self.port)

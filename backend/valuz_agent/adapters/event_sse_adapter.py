@@ -598,7 +598,10 @@ async def iter_events_sse(
             # below never re-reads what was already delivered live —
             # fixing the legacy double-delivery after busy turns.
             if event.seq is not None:
-                if event.seq <= cursor:
+                # ``cursor`` is int-typed today (after_seq defaults to 0),
+                # but guard anyway so a future None-cursor caller degrades
+                # to no-dedup instead of a TypeError in the SSE pump.
+                if cursor is not None and event.seq <= cursor:
                     continue
                 cursor = event.seq
             translated = _translate_kernel_event(event.type, event.data)

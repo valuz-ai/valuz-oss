@@ -50,6 +50,16 @@ class PersistThenBroadcastSink:
                 data={**event.data, "seq": seq},
                 timestamp=event.timestamp,
             )
+        elif "seq" in event.data:
+            # ``seq`` is a RESERVED key on the live wire: consumers advance
+            # their dedup cursor on it. A non-persisted event whose payload
+            # happens to carry an (agent-controllable) ``seq`` must not be
+            # allowed to fast-forward the cursor past legitimate events.
+            stamped = Event(
+                type=event.type,
+                data={k: v for k, v in event.data.items() if k != "seq"},
+                timestamp=event.timestamp,
+            )
         try:
             await self._live.emit(stamped)
         except Exception:  # noqa: BLE001 — a dead live sink must not block persistence
