@@ -32,6 +32,7 @@ the docker / microVM drivers (design §3.6).
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import os
 import re
 import secrets
@@ -39,17 +40,87 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, Literal
 
 import httpx
 
 from valuz_agent.boot.kernel import KERNEL_DIR
 from valuz_agent.ports.sandbox_provider import (
+    MountGrant,
+    MountSpec,
     SandboxEndpoint,
     SandboxProvisionError,
     SandboxSpec,
 )
 
 _BIND_LINE = re.compile(r"Uvicorn running on https?://127\.0\.0\.1:(\d+)")
+
+# Standard macOS sandbox-extension classes, keyed by mount mode. These match
+# the ``(extension "...")`` class the profile pre-declares; the values are
+# the ``APP_SANDBOX_READ[_WRITE]`` symbol values exported by libsandbox.
+_EXTENSION_CLASS = {
+    "rw": b"com.apple.app-sandbox.read-write",
+    "ro": b"com.apple.app-sandbox.read",
+}
+
+
+class _IssueSpi:
+    """Lazy ctypes binding to ``sandbox_extension_issue_file`` (host side).
+
+    The host is unsandboxed, so it can issue path-bound tokens for any path
+    it can access. ``available`` is False off macOS / if the SPI is absent.
+    """
+
+    _loaded = False
+    available = False
+    _issue: Any = None
+
+    @classmethod
+    def load(cls) -> None:
+        if cls._loaded:
+            return
+        cls._loaded = True
+        if sys.platform != "darwin":
+            return
+        try:
+            lib = ctypes.CDLL(None)
+            issue = lib.sandbox_extension_issue_file
+            issue.restype = ctypes.c_void_p  # raw ptr (token is malloc'd char*)
+            issue.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint64]
+            cls._issue = issue
+            cls.available = True
+        except (OSError, AttributeError):
+            cls.available = False
+
+
+def issue_extension(host_path: str, mode: Literal["rw", "ro"] = "rw") -> str:
+    """Issue a sandbox-extension token granting ``mode`` access to
+    ``host_path`` to whoever consumes it inside a sandbox.
+
+    Returns the opaque token string. Raises ``SandboxProvisionError`` if the
+    SPI is unavailable or the issue fails.
+
+    Two load-bearing details learned empirically:
+
+    - **flags MUST be 0.** ``flags=1`` makes the SPI return the literal
+      string ``"invalid"`` (a 7-byte non-token) — silently useless.
+    - **realpath the path.** Seatbelt and the extension match on the REAL
+      path; ``/var`` → ``/private/var`` etc. must be resolved first or the
+      consumed extension won't match the actual file access.
+    """
+    _IssueSpi.load()
+    if not _IssueSpi.available:
+        raise SandboxProvisionError(
+            "sandbox_extension_issue_file unavailable (not macOS or SPI missing)"
+        )
+    real = os.path.realpath(str(Path(host_path).expanduser()))
+    ptr = _IssueSpi._issue(_EXTENSION_CLASS[mode], real.encode(), 0)
+    if not ptr:
+        raise SandboxProvisionError(f"failed to issue extension for {real!r}")
+    token = ctypes.cast(ptr, ctypes.c_char_p).value
+    if token is None or token == b"invalid":
+        raise SandboxProvisionError(f"extension issue returned no valid token for {real!r}")
+    return token.decode()
 
 
 def seatbelt_preflight() -> list[str]:
@@ -73,6 +144,50 @@ def seatbelt_preflight() -> list[str]:
     if not (KERNEL_DIR / "app" / "main.py").exists():
         problems.append(f"kernel artifact missing: {KERNEL_DIR / 'app' / 'main.py'}")
     return problems
+
+
+def host_sandbox_rw_mounts() -> tuple[MountSpec, ...]:
+    """The writable dirs a host-wide kernel sandbox needs — enumerated from
+    ``fs_registry``/``settings`` so the manifest stays complete as paths
+    evolve, rather than hardcoded in the boot wiring.
+
+    Skill materialization writes symlinks into ``<cwd>/.agents/skills`` and
+    ``<cwd>/.claude/skills`` under each project root, and skill *creation*
+    writes new packs into the user/official skill roots — all of which must
+    be writable or the runtime fails with "Operation not permitted" the
+    moment it tries to set a skill up (the reported bug).
+
+    "Dynamic" coverage by construction: we write-allow the ROOTS (the user
+    project root, the chat-cwd root, every skill root), so any project or
+    skill created UNDER them after provision works without re-provisioning.
+    A project bound OUTSIDE these roots (an arbitrary folder) is the one
+    case a single host-wide sandbox can't reach — that needs a per-project
+    sandbox (design §3.5) and is logged, not silently dropped.
+
+    Read access to skill *sources* is already granted by the profile's
+    broad ``(allow file-read*)``; this list is strictly the write set.
+    """
+    from valuz_agent.infra.config import settings
+    from valuz_agent.infra.fs_registry import fs_registry as fr
+
+    dirs: list[Path] = [
+        settings.data_dir / "sandbox",  # the kernel's private DB
+        settings.data_dir / "projects",  # managed chat cwds
+        settings.user_project_root,  # real projects + their .agents|.claude/skills
+        fr.official_skill_root(),  # official skill bootstrap
+        fr.user_skill_root("claude"),  # user skill creation / submit
+        *fr.legacy_user_skill_roots(),  # ~/.claude/skills, ~/.codex/skills
+    ]
+    seen: set[str] = set()
+    mounts: list[MountSpec] = []
+    for d in dirs:
+        d.mkdir(parents=True, exist_ok=True)
+        key = os.path.realpath(str(d))
+        if key in seen:
+            continue
+        seen.add(key)
+        mounts.append(MountSpec(target=str(d), source=str(d), mode="rw"))
+    return tuple(mounts)
 
 
 def build_seatbelt_profile(spec: SandboxSpec) -> str:
@@ -119,6 +234,21 @@ def build_seatbelt_profile(spec: SandboxSpec) -> str:
     lines.append("; --- write: project cwd + kernel data dir + tmp only ---")
     for p in (*rw_subpaths, tmpdir):
         lines.append(f'(allow file-write* (subpath {_q(p)}))')
+
+    # Dynamic mount: pre-declare that this long-lived sandbox HONOURS macOS
+    # sandbox-extension tokens of the standard read-write class. This grants
+    # NOTHING on its own (no token = no access); it only lets the host
+    # extend the live sandbox to a NEW external path after boot — a project
+    # bound to a folder outside the static mounts above — by issuing a
+    # path-bound token the kernel consumes (see kernel/app/sandbox_control.py
+    # and integrations/sandbox_runtime.py). Without this line a consumed
+    # token is inert, so it is the load-bearing half of the no-restart
+    # dynamic-mount path. Backward-compatible: a sandbox that never receives
+    # a token behaves exactly as before.
+    lines.append("; --- dynamic mount: honour rw sandbox-extension tokens ---")
+    lines.append(
+        '(allow file-read* file-write* (extension "com.apple.app-sandbox.read-write"))'
+    )
 
     # The agent CLIs need their own state dirs READ AND WRITE: codex
     # writes ``~/.codex/state_*.sqlite`` (and claude its caches), so a
@@ -174,6 +304,24 @@ class SeatbeltSandboxProvider:
         self._procs: dict[str, subprocess.Popen[bytes]] = {}
         self._endpoints: dict[str, SandboxEndpoint] = {}
 
+    @classmethod
+    def from_existing(cls, sandbox_id: str, base_url: str, token: str) -> SeatbeltSandboxProvider:
+        """A provider that does NOT own the sandbox process — it only knows
+        the endpoint, enough to issue/deliver dynamic grants.
+
+        The dynamic-mount path runs in whichever host process serves the API
+        (under uvicorn ``--reload`` that is a child that never called
+        ``provision``). Issuing a token needs only the host's privilege (any
+        unsandboxed process), and delivering it needs only the endpoint — so
+        this seeds ``_endpoints`` from the env the provisioner published,
+        with no ``_procs`` entry (``destroy`` here is a no-op).
+        """
+        self = cls()
+        self._endpoints[sandbox_id] = SandboxEndpoint(
+            sandbox_id=sandbox_id, base_url=base_url, token=token
+        )
+        return self
+
     async def provision(self, spec: SandboxSpec) -> SandboxEndpoint:
         problems = seatbelt_preflight()
         if problems:
@@ -226,6 +374,56 @@ class SeatbeltSandboxProvider:
         if proc is not None:
             self._terminate(proc)
 
+    async def bind_workspace(
+        self, sandbox_id: str, host_path: str, mode: Literal["rw", "ro"] = "rw"
+    ) -> MountGrant:
+        """Issue a sandbox-extension token for ``host_path`` and have the
+        running kernel consume it — extending the live sandbox to that path
+        without a restart. ``kernel_cwd == host_path`` (host and sandbox
+        share a filesystem locally), so the caller need not rewrite cwd.
+        """
+        ep = self._endpoints.get(sandbox_id)
+        if ep is None:
+            raise SandboxProvisionError(f"unknown sandbox {sandbox_id!r} — provision first")
+        real = os.path.realpath(str(Path(host_path).expanduser()))
+        token = issue_extension(real, mode)  # host-side, ctypes
+        try:
+            async with httpx.AsyncClient() as c:
+                r = await c.post(
+                    f"{ep.base_url}/internal/sandbox/grant",
+                    headers={"Authorization": f"Bearer {ep.token}"},
+                    json={"token": token, "path": real, "mode": mode},
+                    timeout=10.0,
+                )
+                r.raise_for_status()
+                handle = r.json()["data"]["handle"]
+        except httpx.HTTPError as exc:
+            raise SandboxProvisionError(
+                f"kernel rejected workspace grant for {real!r}: {exc}"
+            ) from exc
+        # grant_id encodes the kernel-side handle for unbind.
+        return MountGrant(
+            grant_id=str(handle),
+            kernel_cwd=host_path,  # unchanged locally — same filesystem
+            host_path=real,
+            mode=mode,
+        )
+
+    async def unbind_workspace(self, sandbox_id: str, grant_id: str) -> None:
+        ep = self._endpoints.get(sandbox_id)
+        if ep is None:
+            return
+        try:
+            async with httpx.AsyncClient() as c:
+                await c.post(
+                    f"{ep.base_url}/internal/sandbox/revoke",
+                    headers={"Authorization": f"Bearer {ep.token}"},
+                    json={"handle": int(grant_id)},
+                    timeout=10.0,
+                )
+        except (httpx.HTTPError, ValueError):
+            pass  # best-effort revoke; sandbox teardown reclaims everything
+
     # ---- internals -----------------------------------------------------
 
     async def _migrate(self, kernel_db_path: str) -> None:
@@ -268,6 +466,10 @@ class SeatbeltSandboxProvider:
                 "DATABASE_URL": db_url,
                 "KERNEL_AUTH_TOKEN": token,
                 "PYTHONPATH": str(KERNEL_DIR),
+                # Mount the self-extension control plane so the host can
+                # grant new external paths into this live sandbox after boot
+                # (see kernel/app/sandbox_control.py).
+                "KERNEL_SANDBOX_CONTROL": "1",
                 **spec.env,  # ⑥ L1 credential injection (provider keys)
             }
         )

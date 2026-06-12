@@ -212,3 +212,63 @@ async def test_provision_raises_on_preflight_failure(monkeypatch, tmp_path) -> N
     provider = sb.SeatbeltSandboxProvider()
     with pytest.raises(SandboxProvisionError, match="preflight failed"):
         await provider.provision(_spec(tmp_path))
+
+
+# ---- skill dependency mounts (the "Operation not permitted" bug) -------
+
+
+def test_host_rw_mounts_cover_project_and_skill_roots(monkeypatch, tmp_path) -> None:
+    """The writable manifest must include the user project root and every
+    skill root — skill materialization writes symlinks into a project's
+    .agents/.claude/skills, and skill creation writes to the skill roots."""
+    from valuz_agent.infra.config import settings
+    from valuz_agent.integrations.sandbox_seatbelt import host_sandbox_rw_mounts
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "app")
+    monkeypatch.setattr(settings, "user_project_root", tmp_path / "Valuz")
+
+    sources = {m.source for m in host_sandbox_rw_mounts()}
+    assert all(m.mode == "rw" for m in host_sandbox_rw_mounts())
+    # The user project root (where real projects + their .agents/skills live).
+    assert str(tmp_path / "Valuz") in sources
+    # The managed chat-cwd root.
+    assert str(tmp_path / "app" / "projects") in sources
+    # The kernel's private DB dir.
+    assert str(tmp_path / "app" / "sandbox") in sources
+
+
+@darwin_only
+def test_skill_materialization_path_is_writable_under_profile(tmp_path, monkeypatch) -> None:
+    """Live proof of the fix: a process under the profile can create the
+    exact path that failed — <project>/.agents/skills/<name> — while the
+    host business DB stays denied."""
+    from valuz_agent.infra.config import settings
+    from valuz_agent.integrations.sandbox_seatbelt import (
+        build_seatbelt_profile,
+        host_sandbox_rw_mounts,
+    )
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "app")
+    monkeypatch.setattr(settings, "user_project_root", tmp_path / "Valuz")
+    host_db = tmp_path / "app" / "valuz.db"
+    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    host_db.write_text("SECRET")
+
+    profile = build_seatbelt_profile(
+        SandboxSpec(
+            sandbox_id="h",
+            kernel_db_path=str(tmp_path / "app" / "sandbox" / "kernel.db"),
+            mounts=host_sandbox_rw_mounts(),
+            deny_paths=(str(host_db),),
+        )
+    )
+    skill_dir = tmp_path / "Valuz" / "proj" / ".agents" / "skills" / "valuz-project-docs"
+    make = subprocess.run(
+        ["sandbox-exec", "-p", profile, "/bin/sh", "-c", f"mkdir -p {skill_dir}"],
+        capture_output=True,
+    )
+    assert make.returncode == 0  # the reported bug is fixed
+    deny = subprocess.run(
+        ["sandbox-exec", "-p", profile, "/bin/cat", str(host_db)], capture_output=True
+    )
+    assert deny.returncode != 0  # RED LINE still holds

@@ -125,6 +125,18 @@ class HttpKernelClient:
     # -- sessions -----------------------------------------------------
 
     async def create_session(self, req: CreateSessionRequest) -> SessionData:
+        # Dynamic mount: the kernel runs in a sandbox, so its cwd must be
+        # reachable there. For a project under the static mounts this is a
+        # no-op; for an external folder bound after boot it issues a sandbox
+        # extension the running kernel consumes (no restart). ``kernel_cwd``
+        # is the original path locally, the staged path in a cloud driver —
+        # so we always send back what the registry returns.
+        if req.cwd:
+            from valuz_agent.integrations import sandbox_runtime
+
+            kernel_cwd = await sandbox_runtime.ensure_workspace_granted(req.cwd)
+            if kernel_cwd != req.cwd:
+                req = req.model_copy(update={"cwd": kernel_cwd})
         result = await self._request(
             "POST", "/api/v1/sessions", json_body=req.model_dump(mode="json")
         )

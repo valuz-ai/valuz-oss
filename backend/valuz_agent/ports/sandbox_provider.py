@@ -89,6 +89,43 @@ class SandboxEndpoint:
     """The ``KERNEL_AUTH_TOKEN`` the kernel was started with."""
 
 
+@dataclass(frozen=True)
+class MountGrant:
+    """The runtime counterpart of ``MountSpec``: the receipt for a host path
+    made reachable inside an *already-running* sandbox.
+
+    ``MountSpec`` is the *provision-time* request (a static manifest entry);
+    a ``MountGrant`` is what ``bind_workspace`` returns AFTER the sandbox is
+    up — the ② dynamic-mount face (see
+    ``docs/design/kernel-sandbox-deployment.md`` §C). It lets a project
+    created/bound while the kernel is already serving become reachable
+    without a restart, and carries the handle to revoke that access.
+
+    ``kernel_cwd`` is the cloud seam — the path the kernel must use as the
+    session cwd:
+
+    - **Local (Seatbelt):** host and sandbox share a filesystem, so
+      ``kernel_cwd == host_path`` (unchanged); the binding is realised as a
+      macOS *sandbox extension* the kernel consumes live. Nothing is copied.
+    - **Cloud:** files are staged into a unified workspace root, so
+      ``kernel_cwd`` is the in-sandbox staged path (e.g.
+      ``/workspace/{project_id}``), which differs from ``host_path``.
+
+    The caller (``HttpKernelClient.create_session``) always uses
+    ``kernel_cwd`` for the session, so the same call site is correct for
+    both forms.
+    """
+
+    grant_id: str
+    """Opaque handle for ``unbind_workspace`` — the kernel-side extension
+    handle (local) or the staging-session id (cloud)."""
+    kernel_cwd: str
+    """The cwd the kernel must use for sessions under this path."""
+    host_path: str
+    """The original host path that was bound (canonical/realpath)."""
+    mode: Literal["rw", "ro"] = "rw"
+
+
 class SandboxProvider(Protocol):
     """Port: provision / observe / tear down a kernel endpoint.
 
@@ -114,6 +151,24 @@ class SandboxProvider(Protocol):
 
     async def destroy(self, sandbox_id: str) -> None:
         """Tear the sandbox down. Idempotent — a no-op if already gone."""
+        ...
+
+    async def bind_workspace(
+        self, sandbox_id: str, host_path: str, mode: Literal["rw", "ro"] = "rw"
+    ) -> MountGrant:
+        """Make ``host_path`` reachable inside an ALREADY-RUNNING sandbox.
+
+        The dynamic counterpart to the provision-time manifest: called when
+        a project whose cwd is outside the static mounts is bound while the
+        kernel is already serving. Local drivers issue+consume a sandbox
+        extension (no restart, no copy); a cloud driver stages the files.
+        Idempotent per ``(sandbox_id, host_path)``. Raises
+        ``SandboxProvisionError`` if the grant cannot be delivered.
+        """
+        ...
+
+    async def unbind_workspace(self, sandbox_id: str, grant_id: str) -> None:
+        """Revoke a prior ``bind_workspace`` grant. Idempotent."""
         ...
 
 

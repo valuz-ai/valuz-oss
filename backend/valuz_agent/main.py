@@ -76,7 +76,7 @@ def _provision_sandboxed_kernel(args: argparse.Namespace) -> None:
         SeatbeltSandboxProvider,
         seatbelt_preflight,
     )
-    from valuz_agent.ports.sandbox_provider import MountSpec, SandboxSpec
+    from valuz_agent.ports.sandbox_provider import SandboxSpec
 
     log = logging.getLogger("valuz_agent.sandbox")
 
@@ -102,8 +102,6 @@ def _provision_sandboxed_kernel(args: argparse.Namespace) -> None:
     data_dir = settings.data_dir
     sandbox_dir = data_dir / "sandbox"
     sandbox_dir.mkdir(parents=True, exist_ok=True)
-    projects_dir = data_dir / "projects"
-    projects_dir.mkdir(parents=True, exist_ok=True)
     host_db = data_dir / settings.db_filename
 
     # Pass through LLM credentials the sandboxed kernel needs (⑥ L1).
@@ -113,13 +111,17 @@ def _provision_sandboxed_kernel(args: argparse.Namespace) -> None:
         if (v := os.environ.get(k)) is not None
     }
 
+    # Writable manifest enumerated from fs_registry — project roots + all
+    # skill dependency dirs — so skill materialization (symlinks into a
+    # project's .agents|.claude/skills) and skill creation don't hit
+    # "Operation not permitted". See host_sandbox_rw_mounts.
+    from valuz_agent.integrations.sandbox_seatbelt import host_sandbox_rw_mounts
+
+    mounts = host_sandbox_rw_mounts()
     spec = SandboxSpec(
         sandbox_id="host-kernel",
         kernel_db_path=str(sandbox_dir / "kernel.db"),
-        mounts=(
-            MountSpec(target=str(sandbox_dir), source=str(sandbox_dir), mode="rw"),
-            MountSpec(target=str(projects_dir), source=str(projects_dir), mode="rw"),
-        ),
+        mounts=mounts,
         env=passthrough,
         host_callback_url=os.environ.get("VALUZ_BACKEND_BASE_URL", ""),
         # RED LINE: host business DB (+ wal/shm) and secret store.
@@ -142,6 +144,16 @@ def _provision_sandboxed_kernel(args: argparse.Namespace) -> None:
     os.environ["VALUZ_KERNEL_URL"] = endpoint.base_url
     os.environ["VALUZ_KERNEL_TOKEN"] = endpoint.token
     kernel_client.rebind_client()
+
+    # Register the live sandbox so session creation can dynamically grant
+    # external project paths into it (② dynamic mount). The static mounts
+    # are already reachable; this covers folders bound after boot. A
+    # reload child that skipped provisioning lazily activates from env.
+    from valuz_agent.integrations import sandbox_runtime
+
+    sandbox_runtime.activate(
+        provider, "host-kernel", tuple(m.source for m in mounts)
+    )
 
     atexit.register(lambda: asyncio.run(provider.destroy("host-kernel")))
 

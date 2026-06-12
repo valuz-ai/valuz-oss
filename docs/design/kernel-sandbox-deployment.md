@@ -678,6 +678,19 @@ class SandboxProvider(Protocol):
 (allow network-outbound (remote tcp "*:443"))        ; LLM（最小版宽松）
 ```
 
+**技能与项目依赖目录（挂载清单完整性）**：rw 白名单由
+`host_sandbox_rw_mounts()` 从 fs_registry 枚举 —— 项目根（`~/Valuz`）、
+聊天 cwd 根、以及全部技能根（`~/.agents/skills`、`official_skill_root`、
+`~/.claude/skills`、`~/.codex/skills`）。技能物化把符号链接写进
+`<cwd>/.agents/skills` 与 `.claude/skills`，技能创建写进技能根 —— 漏掉
+任一目录，runtime 一旦 set up 技能就 "Operation not permitted"。
+
+**动态覆盖（按根授权）**：Seatbelt profile 在进程启动时一次性固定，无法对
+运行中的沙箱追加规则。因此 write-allow 的是**根目录**而非具体项目 —— 在
+`~/Valuz` 和各技能根**之下**动态新建的项目/技能无需重新 provision 即生效。
+唯一不覆盖的是绑定到这些根**之外**的任意文件夹项目，那是单一 host-wide
+沙箱的固有边界，需 per-project 沙箱（§3.5）。
+
 **红线（强制）**：host 的 `valuz.db` 所在目录与 `secrets_dir` 显式
 `deny`，`~/.valuz` 不整体放行 —— 这正是沙箱化的意义。
 
@@ -743,3 +756,76 @@ http 模式对接(`settings.kernel_mode=http` + url/token + `rebind_client`)。
 登录态目录(`~/.codex`/`~/.claude`)在 profile 中为 **rw**(codex 要写
 `state_*.sqlite`);provider key 经 `SandboxSpec.env` 注入(⑥L1)。host 业务
 DB(+wal/shm)与 secrets 始终 deny。
+
+---
+
+## 附录 C · 长命 kernel + 动态挂载（macOS sandbox extensions，2026-06-12）
+
+> 解决的问题:沙箱在 boot 时 profile 固化文件权限。**沙箱已启动后**,用户
+> 新建 project 映射一个静态 mount 之外的外部目录,如何在**不重启整个 kernel**
+> 的前提下把该路径实时挂进运行中的沙箱?这是核心不变式("外面套一层关住整个
+> kernel,给 kernel 一台电脑")下唯一不破坏该不变式的动态挂载手段。
+
+### C.1 机制:三方协作的 sandbox extension
+
+macOS `sandbox_extension_issue_file` / `consume` / `release`(libsystem_sandbox
+SPI,无公开头文件;是 Apple powerbox 与 Chromium/WebKit renderer 动态文件访问
+的同一底层,事实上稳定 ABI):
+
+1. **profile 预声明**(provision 时一次性,零风险):
+   `(allow file-read* file-write* (extension "com.apple.app-sandbox.read-write"))`
+   —— 仅表示"我接受这一类别的合法令牌",无令牌则不放行任何路径。
+2. **宿主签发**(host 未沙箱化,有权访问该路径):
+   `issue_extension(realpath, "rw")` → 224 字节 HMAC 令牌。
+   **两个实测坑**:`flags` 必须为 0(`flags=1` 返回字面量 `"invalid"`);
+   路径必须先 `realpath`(Seatbelt 按真实路径匹配)。
+3. **kernel 消费**(已在沙箱内、已运行):`sandbox_extension_consume(token)`
+   → handle。此刻该路径活,**进程不重启**;`release(handle)` 撤销。
+
+**承载性已实测确认**(本机):
+- 完整生命周期:consume 前 DENIED → consume 后 OK → release 后 DENIED;
+  宿主侧文件真实可见(非假象)。
+- **子进程继承**:kernel 进程 consume 后,它 fork/exec 的 codex/claude CLI
+  子进程**继承**该权限(无需自己 consume)—— agent 真正的文件访问在子进程,
+  这一条是设计成立的关键。
+
+### C.2 抽象(云端就位)
+
+| 落点 | 文件 | 职责 |
+|---|---|---|
+| 抽象 | `ports/sandbox_provider.py` | `MountGrant`(`MountSpec` 的运行时对应物)+ `bind_workspace`/`unbind_workspace`。`kernel_cwd` 是**云端缝**:本地 == 入参路径(同一文件系统),云端 == staging 后的 `/workspace/{id}` |
+| host 签发 | `integrations/sandbox_seatbelt.py` | `issue_extension`;`SeatbeltSandboxProvider.bind_workspace`(issue + POST grant)、`from_existing`(reload 子进程用) |
+| kernel 消费 | `kernel/app/sandbox_control.py` | 自包含 ctypes consume/release + `/internal/sandbox/{grant,revoke}`;仅 `KERNEL_SANDBOX_CONTROL=1` 时挂载;**不 import host**,kernel 保持宿主无关 |
+| host 注册表 | `integrations/sandbox_runtime.py` | `ensure_workspace_granted(cwd) -> kernel_cwd`:静态根/进程内模式下 no-op;外部路径 issue 一次 + 缓存 + 锁;失败降级返回原 cwd(不阻塞建会话) |
+| 唯一缝 | `adapters/kernel_client_http.py::create_session` | 所有建会话调用方(sessions/tasks/dispatcher/orchestrator)都汇流于此;仅 http transport(沙箱/远端)需要 |
+
+**为什么是 `create_session` 这一处**:host 侧所有 `kernel_client.create_session`
+最终走 `client.create_session(req)`,HTTP transport 是单一咽喉。每次建会话前
+`ensure_workspace_granted(req.cwd)` 幂等地确保 cwd 在沙箱内可达 —— 静态根下的
+project(`~/Valuz`、`data_dir/projects`)直接放行;boot 后绑定的外部目录才
+issue 扩展。"首次"与"动态新 project"由同一路径统一覆盖。
+
+**reload 健壮性**:`sandbox_runtime` **从 env 惰性激活** —— 任何带
+`VALUZ_SANDBOX_DRIVER=seatbelt` + `VALUZ_KERNEL_URL` 的 host 进程首次调用时
+自激活(用 `from_existing` 构造只持有 endpoint 的 provider,签发只需宿主特权 +
+endpoint)。不依赖 uvicorn 如何在 provision/serve 之间拆分进程。
+
+### C.3 边界与代价
+
+- **零回归**:profile 预声明那行向后兼容(无令牌即原行为);未设沙箱时
+  `ensure_workspace_granted` 全程 no-op 返回原 cwd。
+- **SPI 风险**:`sandbox_extension_*` 是私有 SPI,需 ctypes 取符号 + 钉版本
+  回归(每个 macOS 大版本跑一遍探针)。off-macOS / SPI 缺失时 endpoint 答 501、
+  `issue_extension` 抛 `SandboxProvisionError`,不崩。
+- **云端不走此路**:extensions 是 macOS 本地专属;云沙箱挂统一工作区路径 +
+  文件 API staging(`kernel_cwd` 返回 `/workspace/{id}`),是 `bind_workspace`
+  的另一实现 —— 抽象已就位,下一步落地。
+
+### C.4 验证
+
+- 单元:profile 含预声明行;`issue_extension` 真令牌(>50 字节、非 `"invalid"`);
+  `sandbox_runtime` 静态根 no-op / 外部路径 issue 一次 / 失败降级(fake provider)。
+- **端到端(macOS)**:真实 `sandbox-exec` kernel(挂控制面)consume 一个
+  host 为**未挂载**外部路径签发的令牌,返回 live handle,接受 revoke ——
+  证明跨进程边界的 no-restart 动态授权。
+- 文件:`tests/integrations/test_sandbox_dynamic_mount.py`(9 通过)。

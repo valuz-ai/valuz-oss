@@ -95,3 +95,11 @@ app.include_router(run_router)
 app.include_router(events_router)
 app.include_router(usage_router)
 mount_mcp_router(app)
+
+# Self-extension control plane — only when running inside a sandbox that
+# expects dynamic path grants (the Seatbelt provider sets the env). A
+# vanilla standalone kernel never exposes it.
+from app import sandbox_control  # noqa: E402
+
+if sandbox_control.should_mount():
+    app.include_router(sandbox_control.router)
