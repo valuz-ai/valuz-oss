@@ -174,3 +174,41 @@ async def test_provision_rejects_non_macos(monkeypatch, tmp_path) -> None:
     provider = SeatbeltSandboxProvider()
     with pytest.raises(SandboxProvisionError, match="macOS"):
         await provider.provision(_spec(tmp_path))
+
+
+# ---- preflight ---------------------------------------------------------
+
+
+def test_preflight_clean_on_this_host() -> None:
+    """On the CI/dev macOS host the three hard requirements hold."""
+    from valuz_agent.integrations.sandbox_seatbelt import seatbelt_preflight
+
+    if sys.platform == "darwin":
+        assert seatbelt_preflight() == []
+
+
+def test_preflight_flags_non_macos(monkeypatch) -> None:
+    from valuz_agent.integrations import sandbox_seatbelt as sb
+
+    monkeypatch.setattr(sb.sys, "platform", "linux")
+    problems = sb.seatbelt_preflight()
+    assert any("not macOS" in p for p in problems)
+
+
+def test_preflight_flags_missing_sandbox_exec(monkeypatch) -> None:
+    from valuz_agent.integrations import sandbox_seatbelt as sb
+
+    monkeypatch.setattr(sb.sys, "platform", "darwin")
+    monkeypatch.setattr(sb.shutil, "which", lambda _name: None)
+    problems = sb.seatbelt_preflight()
+    assert any("sandbox-exec not found" in p for p in problems)
+
+
+@pytest.mark.asyncio
+async def test_provision_raises_on_preflight_failure(monkeypatch, tmp_path) -> None:
+    from valuz_agent.integrations import sandbox_seatbelt as sb
+
+    monkeypatch.setattr(sb, "seatbelt_preflight", lambda: ["not macOS (test)"])
+    provider = sb.SeatbeltSandboxProvider()
+    with pytest.raises(SandboxProvisionError, match="preflight failed"):
+        await provider.provision(_spec(tmp_path))

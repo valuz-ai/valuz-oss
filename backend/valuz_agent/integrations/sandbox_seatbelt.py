@@ -35,6 +35,7 @@ import asyncio
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -49,6 +50,29 @@ from valuz_agent.ports.sandbox_provider import (
 )
 
 _BIND_LINE = re.compile(r"Uvicorn running on https?://127\.0\.0\.1:(\d+)")
+
+
+def seatbelt_preflight() -> list[str]:
+    """Return the reasons this host can't run the Seatbelt driver (empty =
+    OK). A pure check — call it BEFORE spawning so the failure is upfront
+    and actionable instead of a cryptic mid-provision error.
+
+    Validates the three hard requirements: macOS, the ``sandbox-exec``
+    binary, and a reachable kernel artifact (``app/main.py`` under
+    ``KERNEL_DIR``). Credential/CLI-login checks are per-session, not
+    boot-level, so they're out of scope here.
+    """
+    problems: list[str] = []
+    if sys.platform != "darwin":
+        problems.append(
+            f"not macOS (sys.platform={sys.platform!r}); sandbox-exec is "
+            "macOS-only — use the docker driver elsewhere"
+        )
+    if shutil.which("sandbox-exec") is None:
+        problems.append("sandbox-exec not found on PATH (expected /usr/bin/sandbox-exec)")
+    if not (KERNEL_DIR / "app" / "main.py").exists():
+        problems.append(f"kernel artifact missing: {KERNEL_DIR / 'app' / 'main.py'}")
+    return problems
 
 
 def build_seatbelt_profile(spec: SandboxSpec) -> str:
@@ -151,10 +175,10 @@ class SeatbeltSandboxProvider:
         self._endpoints: dict[str, SandboxEndpoint] = {}
 
     async def provision(self, spec: SandboxSpec) -> SandboxEndpoint:
-        if sys.platform != "darwin":
+        problems = seatbelt_preflight()
+        if problems:
             raise SandboxProvisionError(
-                "SeatbeltSandboxProvider requires macOS (sandbox-exec); use "
-                "the docker driver elsewhere."
+                "SeatbeltSandboxProvider preflight failed: " + "; ".join(problems)
             )
         token = secrets.token_urlsafe(24)
         db_url = f"sqlite+aiosqlite:///{spec.kernel_db_path}"

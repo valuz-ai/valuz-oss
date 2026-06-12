@@ -15,6 +15,9 @@ help: ## Show this help
 dev: ## Start backend + frontend (foreground; Ctrl+C stops both)
 	bash scripts/dev.sh $(or $(TARGET),all)
 
+dev-sandbox: ## Like dev, but run the kernel in a Seatbelt sandbox (macOS)
+	VALUZ_SANDBOX_DRIVER=seatbelt bash scripts/dev.sh $(or $(TARGET),all)
+
 seed: ## Load seed data into database
 	cd backend && uv run python -m scripts.seed
 

@@ -72,10 +72,33 @@ def _provision_sandboxed_kernel(args: argparse.Namespace) -> None:
         kernel_client.rebind_client()
         return
 
-    from valuz_agent.integrations.sandbox_seatbelt import SeatbeltSandboxProvider
+    from valuz_agent.integrations.sandbox_seatbelt import (
+        SeatbeltSandboxProvider,
+        seatbelt_preflight,
+    )
     from valuz_agent.ports.sandbox_provider import MountSpec, SandboxSpec
 
     log = logging.getLogger("valuz_agent.sandbox")
+
+    # Preflight BEFORE doing any work. The user asked for a sandbox
+    # explicitly (VALUZ_SANDBOX_DRIVER=seatbelt) — if the host can't
+    # provide one we FAIL LOUD rather than silently falling back to the
+    # in-process kernel, which would leave them believing the agent is
+    # confined when it isn't (a security surprise). Set
+    # VALUZ_SANDBOX_FALLBACK=inprocess to opt into a warned degrade.
+    problems = seatbelt_preflight()
+    if problems:
+        msg = "Seatbelt sandbox unavailable: " + "; ".join(problems)
+        if os.environ.get("VALUZ_SANDBOX_FALLBACK") == "inprocess":
+            log.warning("%s — falling back to in-process kernel (UNSANDBOXED)", msg)
+            return
+        raise SystemExit(
+            f"{msg}\n"
+            "Refusing to start unsandboxed after an explicit "
+            "VALUZ_SANDBOX_DRIVER=seatbelt. Fix the environment, unset the "
+            "driver to run in-process, or set VALUZ_SANDBOX_FALLBACK=inprocess "
+            "to degrade with a warning."
+        )
     data_dir = settings.data_dir
     sandbox_dir = data_dir / "sandbox"
     sandbox_dir.mkdir(parents=True, exist_ok=True)
