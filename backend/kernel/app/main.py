@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
-
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from app.config import AppConfig
 from app.dependencies import init_dependencies, shutdown_dependencies
@@ -18,12 +15,40 @@ from app.routes.messages import router as messages_router
 from app.routes.run import router as run_router
 from app.routes.sessions import router as sessions_router
 from app.routes.usage import router as usage_router
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 config = AppConfig()
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # This lifespan only runs when the kernel app is served STANDALONE
+    # (the host mounts the routers directly and never executes it). A
+    # standalone kernel exposes session mutation, the full event stream
+    # and the usage read surface — refuse to serve all of that
+    # unauthenticated unless the operator opts in explicitly.
+    if not config.auth_token:
+        if os.getenv("KERNEL_ALLOW_UNAUTHENTICATED") != "1":
+            raise RuntimeError(
+                "Standalone kernel refuses to start without auth: set "
+                "KERNEL_AUTH_TOKEN (bearer token required on every request). "
+                "See backend/CLAUDE.md §kernel boundary for the development "
+                "opt-out."
+            )
+        # The unauthenticated opt-in is loopback-only — and that must be
+        # ENFORCED, not documented: AppConfig.host defaults to 0.0.0.0, so
+        # a bare opt-in would otherwise expose session mutation, the full
+        # event stream and the usage surface on every interface. IP
+        # literals ONLY: a hostname like ``localhost`` resolves through
+        # DNS/hosts at bind time and could be mapped to a non-loopback
+        # address while a string check passes.
+        if config.host not in ("127.0.0.1", "::1"):
+            raise RuntimeError(
+                "KERNEL_ALLOW_UNAUTHENTICATED=1 requires a loopback bind: "
+                f"set HOST=127.0.0.1 (got {config.host!r})."
+            )
     await init_dependencies(config)
     async with mcp_router_lifespan():
         yield

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-import socket
+import re
 import subprocess
 import sys
 import time
@@ -42,24 +42,16 @@ from valuz_agent.adapters.kernel_client_http import HttpKernelClient
 TOKEN = "test-kernel-token"
 
 
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
+def _migrate_kernel_db(db_path) -> None:
+    """Migrate the kernel chain into a private SQLite file.
 
-
-@pytest.fixture(scope="module")
-def kernel_proc(tmp_path_factory):
-    """Migrate a private SQLite file, then run the kernel app on it as a
-    real subprocess (the provisioning shape a SandboxProvider performs)."""
-    tmp_path = tmp_path_factory.mktemp("kernel-subproc")
-    db_path = tmp_path / "kernel.db"
-
-    # Provision step 1 — migrate the kernel chain into the private file.
-    # ``boot.kernel`` binds settings + stamps DATABASE_URL at import, so
-    # the override must go through VALUZ_KERNEL_DATABASE_URL and a module
-    # re-import (same mechanics as the DB-separation probe), with both
-    # env vars restored afterwards so later tests see the defaults.
+    ``boot.kernel`` binds settings + stamps DATABASE_URL at import, so the
+    override must go through VALUZ_KERNEL_DATABASE_URL and a module
+    re-import (same mechanics as the DB-separation probe), with env vars
+    AND the original module objects restored afterwards — later tests
+    monkeypatch module attributes and must hit the objects
+    already-imported call sites hold.
+    """
     reimport_prefixes = ("valuz_agent.infra.config", "valuz_agent.boot.kernel")
     saved_modules = {
         name: mod for name, mod in sys.modules.items() if name.startswith(reimport_prefixes)
@@ -82,60 +74,26 @@ def kernel_proc(tmp_path_factory):
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = previous_db_url
-        # Restore the ORIGINAL module objects — later tests monkeypatch
-        # module attributes and must hit the objects already-imported
-        # call sites hold, not fresh re-imports.
         for name in [n for n in sys.modules if n.startswith(reimport_prefixes)]:
             sys.modules.pop(name, None)
         sys.modules.update(saved_modules)
 
-    # Provision step 2 — spawn the kernel server.
-    port = _free_port()
-    env = dict(os.environ)
-    env.update(
-        {
-            "DATABASE_URL": f"sqlite+aiosqlite:///{db_path}",
-            "KERNEL_AUTH_TOKEN": TOKEN,
-            "PYTHONPATH": str(kb.KERNEL_DIR),
-        }
-    )
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "app.main:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-            "--log-level",
-            "warning",
-        ],
-        cwd=str(kb.KERNEL_DIR),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
 
-    base_url = f"http://127.0.0.1:{port}"
-    deadline = time.monotonic() + 20
-    last_exc: Exception | None = None
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            out = proc.stdout.read().decode() if proc.stdout else ""
-            raise RuntimeError(f"kernel subprocess exited early:\n{out}")
-        try:
-            if httpx.get(f"{base_url}/health", timeout=1.0).status_code == 200:
-                break
-        except Exception as exc:  # noqa: BLE001
-            last_exc = exc
-        time.sleep(0.2)
-    else:
-        proc.terminate()
-        raise RuntimeError(f"kernel subprocess never became healthy: {last_exc}")
+@pytest.fixture(scope="module")
+def kernel_proc(tmp_path_factory):
+    """Migrate a private SQLite file, then run the kernel app on it as a
+    real subprocess (the provisioning shape a SandboxProvider performs)."""
+    tmp_path = tmp_path_factory.mktemp("kernel-subproc")
+    db_path = tmp_path / "kernel.db"
 
-    yield base_url
+    _migrate_kernel_db(db_path)
+
+    proc = _spawn_kernel(db_path, extra_env={"KERNEL_AUTH_TOKEN": TOKEN})
+    state, port = _wait_exit_or_healthy(proc)
+    if state != "healthy":
+        raise RuntimeError(f"kernel subprocess exited early:\n{port}")
+
+    yield f"http://127.0.0.1:{port}"
     proc.terminate()
     try:
         proc.wait(timeout=10)
@@ -222,10 +180,15 @@ async def test_sse_subscription_delivers_live_events(kernel_proc) -> None:
 
         follower = asyncio.create_task(_follow())
         try:
-            # Give the stream a moment to attach its tap, then emit.
-            await asyncio.sleep(0.5)
-            await client.emit_live_event(session_id, "session_error", {"category": "Live"})
-            frame = await asyncio.wait_for(received.get(), timeout=10)
+            # Emit on a retry loop until the stream observes a frame —
+            # robust to subscription-attach latency without a fixed sleep.
+            async def _emit_until_received() -> None:
+                while received.empty():
+                    await client.emit_live_event(session_id, "session_error", {"category": "Live"})
+                    await asyncio.sleep(0.1)
+
+            await asyncio.wait_for(_emit_until_received(), timeout=10)
+            frame = await received.get()
             assert frame.type == "session_error"
             assert frame.data["category"] == "Live"
             assert frame.seq is None  # live frame, not a DB row
@@ -275,3 +238,210 @@ def test_http_client_covers_the_full_protocol_surface() -> None:
     in_process_only = {"scan_orphan_pendings", "scan_orphan_runs", "cleanup_runtime"}
     for name in (set(EXPECTED_ROUTES) | set(EXPECTED_STREAMS)) - in_process_only:
         assert hasattr(HttpKernelClient, name), f"HttpKernelClient lacks {name}"
+
+
+@pytest.mark.asyncio
+async def test_global_sse_stream_delivers_events_with_session_ids(kernel_proc) -> None:
+    """``subscribe_all_events`` carries every session's live events with
+    ``session_id`` stamped on each frame (the DecisionAggregator contract)."""
+    client = HttpKernelClient(kernel_proc, token=TOKEN)
+    try:
+        sids = []
+        for _ in range(2):
+            sid = str(uuid.uuid4())
+            sids.append(sid)
+            await client.create_session(
+                CreateSessionRequest(
+                    id=sid,
+                    agent_config=AgentConfigSchema(name="probe-agent"),
+                    cwd="/tmp/probe-cwd",
+                    runtime_provider="claude_agent",
+                )
+            )
+
+        received: asyncio.Queue = asyncio.Queue()
+
+        seen_sessions: set = set()
+
+        async def _follow() -> None:
+            async for item in client.subscribe_all_events():
+                # The first emit retries until observed — keep one frame
+                # per session so repeats don't crowd out the second one.
+                if item.session_id in seen_sessions:
+                    continue
+                seen_sessions.add(item.session_id)
+                await received.put(item)
+                if len(seen_sessions) >= 2:
+                    return
+
+        follower = asyncio.create_task(_follow())
+        try:
+            # Emit on a retry loop until the follower observes a frame —
+            # robust to subscription-attach latency without a fixed sleep.
+            async def _emit_until_received() -> None:
+                while received.empty():
+                    await client.emit_live_event(sids[0], "session_error", {"category": "G1"})
+                    await asyncio.sleep(0.1)
+
+            await asyncio.wait_for(_emit_until_received(), timeout=10)
+            await client.emit_live_event(sids[1], "requires_action", {"pending_id": "p9"})
+
+            frames = [await asyncio.wait_for(received.get(), timeout=10) for _ in range(2)]
+        finally:
+            follower.cancel()
+            try:
+                await follower
+            except asyncio.CancelledError:
+                pass
+
+        by_session = {f.session_id: f for f in frames}
+        assert set(by_session) == set(sids)
+        assert by_session[sids[0]].type == "session_error"
+        assert by_session[sids[0]].data["category"] == "G1"
+        assert by_session[sids[1]].type == "requires_action"
+        assert by_session[sids[1]].data["pending_id"] == "p9"
+    finally:
+        await client.aclose()
+
+
+def _spawn_kernel(db_path, extra_env):
+    """Spawn the kernel app on an OS-assigned port (``--port 0``) — the
+    bound port is read back from uvicorn's startup line, so there is no
+    allocate-then-rebind TOCTOU window."""
+    env = dict(os.environ)
+    # The auth posture under test must come from ``extra_env`` alone — a
+    # token inherited from the parent environment would defeat the
+    # no-token cases.
+    env.pop("KERNEL_AUTH_TOKEN", None)
+    env.pop("KERNEL_ALLOW_UNAUTHENTICATED", None)
+    env.update(
+        {
+            "DATABASE_URL": f"sqlite+aiosqlite:///{db_path}",
+            "PYTHONPATH": str(kb.KERNEL_DIR),
+            **extra_env,
+        }
+    )
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "0",
+            "--log-level",
+            "info",  # the bind line is INFO-level — it carries the port
+        ],
+        cwd=str(kb.KERNEL_DIR),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+
+
+_BIND_LINE = re.compile(r"Uvicorn running on http://127\.0\.0\.1:(\d+)")
+
+
+def _wait_exit_or_healthy(proc, deadline_s=30):
+    """Read stdout until the bind line or EOF.
+
+    Returns ``('healthy', port)`` once /health responds, or
+    ``('exited', output)`` when the process dies first (the fail-fast
+    cases). Blocking ``readline`` is safe: uvicorn either prints the bind
+    line or exits (EOF).
+    """
+    lines: list[str] = []
+    while True:
+        raw = proc.stdout.readline()
+        if not raw:
+            proc.wait(timeout=10)
+            return "exited", "".join(lines)
+        text = raw.decode(errors="replace")
+        lines.append(text)
+        m = _BIND_LINE.search(text)
+        if m:
+            port = int(m.group(1))
+            deadline = time.monotonic() + deadline_s
+            while time.monotonic() < deadline:
+                try:
+                    if httpx.get(f"http://127.0.0.1:{port}/health", timeout=1.0).status_code == 200:
+                        return "healthy", port
+                except Exception:  # noqa: BLE001
+                    pass
+                time.sleep(0.1)
+            proc.kill()
+            raise RuntimeError("kernel bound a port but never became healthy")
+
+
+def test_standalone_kernel_refuses_to_start_without_auth_token(tmp_path):
+    """PR #87 review: the fail-fast gate itself had zero coverage."""
+    proc = _spawn_kernel(tmp_path / "k.db", extra_env={})
+    state, output = _wait_exit_or_healthy(proc)
+    assert state == "exited"
+    assert "refuses to start without auth" in output
+
+
+def test_unauthenticated_optin_requires_loopback_bind(tmp_path):
+    """KERNEL_ALLOW_UNAUTHENTICATED=1 with a non-loopback bind must die —
+    AppConfig.host defaults to 0.0.0.0, so the opt-in alone must never
+    expose the surface on all interfaces."""
+    proc = _spawn_kernel(
+        tmp_path / "k.db",
+        extra_env={"KERNEL_ALLOW_UNAUTHENTICATED": "1", "HOST": "0.0.0.0"},
+    )
+    state, output = _wait_exit_or_healthy(proc)
+    assert state == "exited"
+    assert "requires a loopback bind" in output
+
+
+def test_unauthenticated_optin_rejects_localhost_hostname(tmp_path):
+    """``localhost`` is a HOSTNAME — bind-time resolution could map it to a
+    non-loopback address, so the opt-in accepts IP literals only."""
+    proc = _spawn_kernel(
+        tmp_path / "k.db",
+        extra_env={"KERNEL_ALLOW_UNAUTHENTICATED": "1", "HOST": "localhost"},
+    )
+    state, output = _wait_exit_or_healthy(proc)
+    assert state == "exited"
+    assert "requires a loopback bind" in output
+
+
+def test_unauthenticated_optin_on_loopback_starts_open(tmp_path):
+    """The explicit loopback opt-in still works for development — and the
+    open route answers with a real 200, so a crashed server can't read as
+    'auth gate absent'."""
+    db_path = tmp_path / "k.db"
+    _migrate_kernel_db(db_path)
+    proc = _spawn_kernel(
+        db_path,
+        extra_env={"KERNEL_ALLOW_UNAUTHENTICATED": "1", "HOST": "127.0.0.1"},
+    )
+    try:
+        state, port = _wait_exit_or_healthy(proc)
+        assert state == "healthy"
+        # No token middleware installed — a tokenless request reaches the
+        # route and SUCCEEDS (migrated schema: a 500 would fail the test).
+        resp = httpx.get(f"http://127.0.0.1:{port}/api/v1/sessions", timeout=5.0)
+        assert resp.status_code == 200
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+@pytest.mark.asyncio
+async def test_wrong_bearer_is_rejected_on_mutation_route(kernel_proc) -> None:
+    """Symmetric to the open-path test: with KERNEL_AUTH_TOKEN set, the
+    bearer middleware IS installed — a wrong token must be rejected on a
+    session-mutation route before any handler runs."""
+    resp = httpx.post(
+        f"{kernel_proc}/api/v1/sessions",
+        json={"id": "x", "agent_config": {"name": "a"}, "cwd": "/tmp/x"},
+        headers={"Authorization": "Bearer WRONG"},
+        timeout=5.0,
+    )
+    assert resp.status_code == 401

@@ -46,6 +46,11 @@ class DatabaseEventSink:
         self._message_id = message_id
 
     async def emit(self, event: Event) -> None:
+        await self.persist(event)
+
+    async def persist(self, event: Event) -> int | None:
+        """Persist ``event`` and return its row id (``seq``), or ``None``
+        for live-only types / backends that can't report the id."""
         if event.type in _NON_PERSISTED_TYPES:
-            return
-        await self._store.append_event(self._session_id, self._message_id, event)
+            return None
+        return await self._store.append_event(self._session_id, self._message_id, event)
