@@ -72,9 +72,13 @@ are forbidden everywhere; `app.dependencies` / `app.routes` /
 (`SRC_CORE_ALLOWLIST` — AgentConfig builders + tool registration).
 Event reads/subscriptions, usage aggregates and the run-drivers all go
 through the client (the former `broadcast_sink` / raw-SQL SSE adapter /
-analytics-ORM bypasses are retired). The one remaining declared
-in-process integration point is tool-handler registration
-(→ remote phase replaces it with the MCP-over-HTTP toolkit).
+analytics-ORM bypasses are retired). The former in-process
+tool-handler registration is retired too: the harness tools (dispatch /
+orchestration / memory / submit_skill) are served by the host's toolkit
+MCP server (`integrations/toolkit_mcp_server.py`, mounted at
+`/internal/mcp/toolkit/{base,lead}`) and referenced from
+`session.mcp_servers` as the `harness` entry — every runtime consumes
+them through its standard MCP client path, in-process and remote alike.
 
 ## Anatomy of a business module
 

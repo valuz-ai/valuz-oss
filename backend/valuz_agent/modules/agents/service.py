@@ -59,31 +59,12 @@ def _prepare_conversation_tools(agent: AgentConfig) -> AgentConfig:
     skill-creator skill, schedules/docs MCP) is injected per-session by the
     session-build paths instead.
     """
-    from valuz_agent.modules.tasks.dispatch_mcp import (
-        ensure_orchestration_tools_on_agent,
-        strip_dispatch_tools,
-    )
-
-    agent = strip_dispatch_tools(ensure_orchestration_tools_on_agent(agent))
-    return _ensure_global_tools_declared(agent)
-
-
-def _global_tool_declarations() -> tuple[Any, ...]:
-    """The always-on in-process tool declarations every agent must carry:
-    memory (get/write) + submit_skill. Imported lazily to avoid import cycles."""
-    from valuz_agent.modules.memory.tools import MEMORY_TOOL_DECLARATIONS
-    from valuz_agent.integrations.tools_skill_creator import SUBMIT_SKILL_TOOL_DECLARATION
-
-    return tuple(MEMORY_TOOL_DECLARATIONS) + (SUBMIT_SKILL_TOOL_DECLARATION,)
-
-
-def _ensure_global_tools_declared(agent: AgentConfig) -> AgentConfig:
-    """Append any missing always-on in-process tool declarations (idempotent)."""
-    have = {getattr(t, "name", None) for t in (agent.tools or ())}
-    missing = tuple(d for d in _global_tool_declarations() if d.name not in have)
-    if not missing:
-        return agent
-    return replace(agent, tools=tuple(agent.tools or ()) + missing)
+    # Tool surfaces ride the session's ``harness`` MCP entry now (the host
+    # toolkit MCP server serves orchestration + memory + submit_skill to
+    # every session) — agents carry no tool declarations. Strip whatever a
+    # legacy snapshot might still hold so old declarations never reach a
+    # runtime alongside the MCP-served set.
+    return replace(agent, tools=())
 
 
 class MemberNotFoundError(Exception):

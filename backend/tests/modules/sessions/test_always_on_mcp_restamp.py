@@ -40,7 +40,7 @@ def _make_session(*, mcp_servers):
 
 def _stale_trio(token: str):
     base = "http://127.0.0.1:8000/internal/mcp"
-    return tuple(
+    trio = tuple(
         McpHttpServerConfigSchema(
             name=name,
             url=f"{base}/{slug}/mcp",
@@ -53,6 +53,13 @@ def _stale_trio(token: str):
             ("valuz_connectors", "connectors"),
         )
     )
+    harness = McpHttpServerConfigSchema(
+        name="harness",
+        url=f"{base}/toolkit/base/mcp",
+        transport="http",
+        headers={"X-Valuz-Internal": token, "X-Valuz-Session-Id": "sess-1"},
+    )
+    return (*trio, harness)
 
 
 def _patch_client(monkeypatch, session):
@@ -91,8 +98,8 @@ async def test_restamps_stale_token_and_preserves_external(monkeypatch):
     assert len(updates) == 1
     _sid, req = updates[0]
     by_name = {m.name: m for m in req.mcp_servers}
-    # All three always-on entries now carry the live token.
-    for name in ("valuz_docs", "valuz_automations", "valuz_connectors"):
+    # Every always-on entry (incl. the harness toolkit) carries the live token.
+    for name in ("valuz_docs", "valuz_automations", "valuz_connectors", "harness"):
         assert by_name[name].headers["X-Valuz-Internal"] == "NEWTOKEN"
     # The user-attached external connector is untouched.
     assert by_name["valuz-search"].headers == {"Authorization": "Bearer xyz"}

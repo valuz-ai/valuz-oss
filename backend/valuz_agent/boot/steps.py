@@ -163,33 +163,34 @@ async def init_kernel(app: FastAPI) -> None:
 
     await init_kernel_dependencies()
 
-    # Register host-provided custom tools into the kernel's global
-    # tool registry. ``submit_skill`` is the companion to the
-    # bundled skill-creator skill — agents declare it on their
-    # ``tools`` tuple (handler=None) and the registry attaches the
-    # real handler at session-build time. Idempotent.
-    from valuz_agent.integrations.tools_skill_creator import (
-        register_submit_skill_tool,
+    # Install the host toolkit MCP toolsets. The harness tools
+    # (dispatch / orchestration / memory / submit_skill) are served by the
+    # host's in-process MCP server (``integrations/toolkit_mcp_server``)
+    # and referenced from ``session.mcp_servers`` — every runtime consumes
+    # them through its standard MCP client path, in-process and remote
+    # alike. Toolset partition mirrors the former per-agent declarations:
+    # ``base`` (every session) = orchestration launchers + memory +
+    # submit_skill; ``lead`` (task leads) = dispatch set + memory +
+    # submit_skill. The lead gate stays enforced inside each handler.
+    from valuz_agent.integrations.toolkit_mcp_server import install_toolkit_toolsets
+    from valuz_agent.integrations.tools_skill_creator import build_submit_skill_tool_defs
+    from valuz_agent.modules.memory.tools import build_memory_tool_defs
+    from valuz_agent.modules.tasks.dispatch_mcp import build_task_tool_defs
+    from valuz_agent.modules.tasks.orchestrator import task_orchestrator
+    from valuz_agent.modules.tasks.tools.declarations import (
+        DISPATCH_TOOL_DECLARATIONS,
+        ORCHESTRATION_TOOL_DECLARATIONS,
     )
 
-    register_submit_skill_tool()
-
-    # Register the lead-dispatch tools (dispatch / dispatch_batch /
-    # list_members / finish_task). Lead-capable agents declare these on
-    # their ``tools`` tuple (handler=None); the registry attaches the
-    # real handlers (closures over the TaskOrchestrator) here. The lead
-    # gate is enforced inside each handler (kernel Session has no tools
-    # field — see lead-dispatch-mvp §S0①).
-    from valuz_agent.modules.tasks.dispatch_mcp import register_dispatch_tools
-    from valuz_agent.modules.tasks.orchestrator import task_orchestrator
-
-    register_dispatch_tools(task_orchestrator)
-
-    # Register memory_get / memory_write (runtime-agnostic; resolve scope
-    # from the calling session's project cwd + task metadata).
-    from valuz_agent.modules.memory.tools import register_memory_tools
-
-    register_memory_tools()
+    task_defs = build_task_tool_defs(task_orchestrator)
+    by_name = {t.name: t for t in task_defs}
+    orchestration_names = [d.name for d in ORCHESTRATION_TOOL_DECLARATIONS]
+    dispatch_names = [d.name for d in DISPATCH_TOOL_DECLARATIONS]
+    shared = build_memory_tool_defs() + build_submit_skill_tool_defs()
+    install_toolkit_toolsets(
+        base=tuple(by_name[n] for n in orchestration_names if n in by_name) + shared,
+        lead=tuple(by_name[n] for n in dispatch_names if n in by_name) + shared,
+    )
 
 
 def install_binding_change_listener() -> None:
@@ -320,12 +321,16 @@ async def start_mcp_session_managers(app: FastAPI) -> None:
         connectors_mcp_session_manager_run,
     )
     from valuz_agent.integrations.docs_mcp_server import docs_mcp_session_manager_run
+    from valuz_agent.integrations.toolkit_mcp_server import (
+        toolkit_mcp_session_managers_run,
+    )
 
     stack = AsyncExitStack()
     await stack.__aenter__()
     await stack.enter_async_context(docs_mcp_session_manager_run())
     await stack.enter_async_context(automations_mcp_session_manager_run())
     await stack.enter_async_context(connectors_mcp_session_manager_run())
+    await stack.enter_async_context(toolkit_mcp_session_managers_run())
     app.state.docs_mcp_stack = stack
 
 

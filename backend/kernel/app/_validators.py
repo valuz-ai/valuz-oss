@@ -42,11 +42,10 @@ def validate_mcp_servers(servers: list[McpServerConfigSchema]) -> list[McpServer
     for cfg in servers:
         if not cfg.name:
             raise HTTPException(status_code=400, detail="mcp_servers[].name must not be empty.")
-        if cfg.name == "harness":
-            raise HTTPException(
-                status_code=400,
-                detail="mcp_servers[].name 'harness' is reserved for the kernel's own MCP server.",
-            )
+        # NB: ``harness`` used to be reserved for the kernel's in-process
+        # SDK MCP server. That server is retired — the host's toolkit MCP
+        # server now legitimately claims the name (its tools keep the
+        # ``mcp__harness__*`` identity models already know).
         if cfg.name in seen:
             raise HTTPException(
                 status_code=400,

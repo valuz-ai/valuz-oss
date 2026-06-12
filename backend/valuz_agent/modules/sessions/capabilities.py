@@ -147,13 +147,19 @@ async def refresh_always_on_mcp_for_session(session_id: str) -> bool:
     stale), ``False`` when the always-on set already matched (the common case,
     so the prompt cache stays warm).
     """
-    from valuz_agent.adapters.capability_resolver import always_on_http_mcp_servers
+    from valuz_agent.adapters.capability_resolver import (
+        always_on_http_mcp_servers,
+        harness_toolkit_for_run_kind,
+    )
 
     session = await kernel_client.get_session(session_id)
     if session is None or session.status in ("terminated",):
         return False
 
-    fresh = always_on_http_mcp_servers(session_id)
+    run_kind = ((session.metadata or {}).get("valuz", {}) or {}).get("run_kind")
+    fresh = always_on_http_mcp_servers(
+        session_id, toolkit=harness_toolkit_for_run_kind(run_kind)
+    )
     fresh_names = {m.name for m in fresh}
     current = list(session.mcp_servers or ())
     # Drop any existing always-on entry (stale token/url), keep everything

@@ -133,13 +133,15 @@ SRC_CORE_ALLOWLIST = {
     "modules/agents/service.py",
     "modules/sessions/service.py",
     "modules/sessions/mappers.py",
-    # Tool-handler registration (ToolDef/ToolResult/ExecContext): the
-    # declared in-process integration point. Remote phase replaces this
-    # with the host-MCP toolkit (see backend/CLAUDE.md §kernel boundary).
+    # Tool definitions + the host toolkit MCP server that serves them
+    # (ToolDef/ToolResult/ExecContext): the host half of the tool surface.
+    # Sessions reference the server via ``mcp_servers`` — runtimes consume
+    # it over MCP in-process and remote alike.
     "modules/tasks/tools/handlers.py",
     "modules/tasks/tools/declarations.py",
     "modules/memory/tools.py",
     "integrations/tools_skill_creator.py",
+    "integrations/toolkit_mcp_server.py",
 }
 
 
