@@ -44,11 +44,16 @@ async def _run_agent_background(
 
     async def _meter(message: Any, after_run: Any) -> None:
         if message.input_tokens is not None or message.output_tokens is not None:
+            from valuz_agent.infra.auth_context import get_current_user_id
             from valuz_agent.ports.billing import MeterEvent
             from valuz_agent.ports.extensions import ext
 
-            uid = (after_run.metadata if after_run else {}).get("owner_user_id", "local-user")
+            uid = (after_run.metadata if after_run else {}).get(
+                "owner_user_id"
+            ) or get_current_user_id()
             try:
+                if uid is None:
+                    raise LookupError("no owner user_id for billing meter")
                 await ext.billing.meter(
                     MeterEvent(
                         user_id=uid,

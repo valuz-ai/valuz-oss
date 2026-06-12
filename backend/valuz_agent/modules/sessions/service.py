@@ -990,9 +990,14 @@ class SessionService:
         if status in ("cancelled", "archived"):
             raise SessionNotRunnable(f"Session is {status} and cannot accept messages")
 
+        from valuz_agent.infra.auth_context import get_current_user_id
         from valuz_agent.ports.extensions import ext
 
-        uid = session.metadata.get("owner_user_id", "local-user")
+        uid = session.metadata.get("owner_user_id") or get_current_user_id()
+        if uid is None:
+            # Explicit-identity contract: budget enforcement without an owner
+            # is meaningless — fail loudly rather than bill nobody.
+            raise LookupError("owner context not set — cannot check budget")
         budget = await ext.billing.check_budget(uid)
         if not budget.allowed:
             raise BudgetExceeded(budget.reason or "insufficient credits")
@@ -1070,9 +1075,12 @@ class SessionService:
         if status in ("cancelled", "archived"):
             raise SessionNotRunnable(f"Session is {status} and cannot accept messages")
 
+        from valuz_agent.infra.auth_context import get_current_user_id
         from valuz_agent.ports.extensions import ext
 
-        uid = session.metadata.get("owner_user_id", "local-user")
+        uid = session.metadata.get("owner_user_id") or get_current_user_id()
+        if uid is None:
+            raise LookupError("owner context not set — cannot check budget")
         budget = await ext.billing.check_budget(uid)
         if not budget.allowed:
             raise BudgetExceeded(budget.reason or "insufficient credits")
@@ -1156,11 +1164,14 @@ class SessionService:
                 )
 
                 if message.input_tokens is not None or message.output_tokens is not None:
+                    from valuz_agent.infra.auth_context import get_current_user_id
                     from valuz_agent.ports.billing import MeterEvent
                     from valuz_agent.ports.extensions import ext
 
-                    uid = meta.get("owner_user_id", "local-user")
+                    uid = meta.get("owner_user_id") or get_current_user_id()
                     try:
+                        if uid is None:
+                            raise LookupError("no owner user_id for billing meter")
                         await ext.billing.meter(
                             MeterEvent(
                                 user_id=uid,

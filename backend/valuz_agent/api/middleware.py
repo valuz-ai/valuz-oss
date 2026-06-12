@@ -5,35 +5,38 @@ import uuid
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from valuz_agent.infra.auth_context import (
+    reset_current_user_id,
+    set_current_user_id,
+)
 from valuz_agent.infra.errors import ValuzError
 from valuz_agent.infra.logging import (
     reset_request_id,
     set_request_id,
 )
-from valuz_agent.infra.owner_context import (
-    reset_current_user_id,
-    set_current_user_id,
-)
 
 logger = logging.getLogger("valuz_agent.api.access")
 
 
-class OwnerContextMiddleware(BaseHTTPMiddleware):
-    """Stamp the request's owner id into the ``current_user_id`` ContextVar.
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Resolve the request's identity and stamp the owner id into ContextVar.
 
-    Resolves the request's ``UserIdentity`` (OSS → the local install id;
-    commercial overlay → the logged-in user via ``set_identity_resolver``) and
-    publishes its ``user_id`` so every row created while handling the request is
-    stamped with that owner (see ``infra.owner_context``). Outside a request the
-    ContextVar default applies, so background work still stamps a real owner.
+    Resolves the ``user_id`` (OSS → local install id; commercial overlay → the
+    logged-in user via ``ext.identity``) and publishes it so every row created
+    while handling the request is stamped with that owner.
+
+    When ``ext.auth_hook`` is set the commercial overlay can enrich per-request
+    context (org, roles) or reject the request by raising a ``ValuzError``.
     """
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        # Lazy import: ``api.deps`` pulls in the whole service graph, so we keep
-        # it out of module import order.
-        from valuz_agent.api.deps import get_current_user
+        from valuz_agent.ports.extensions import ext
+        resolver = ext.identity
+        user_id = await resolver.resolve(request)
+        if ext.auth_hook is not None:
+            await ext.auth_hook.after_resolve(request, user_id)
 
-        token = set_current_user_id((await get_current_user(request)).user_id)
+        token = set_current_user_id(user_id)
         try:
             return await call_next(request)
         finally:
@@ -46,6 +49,7 @@ class ErrorHandlerMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         except Exception as exc:
             from fastapi.responses import JSONResponse
+
             if isinstance(exc, ValuzError):
                 return JSONResponse(
                     status_code=exc.status_code,

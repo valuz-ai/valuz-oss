@@ -28,7 +28,7 @@ from typing import Literal
 from sqlalchemy import BigInteger, Boolean, CheckConstraint, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from valuz_agent.infra.database import Base, OwnedMixin, PrimaryKeyMixin, TimestampMixin
+from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin, UserMixin
 
 # Canonical set of connector auth strategies. Single source of truth shared
 # by the API schemas, the service layer and the catalog so callers don't
@@ -44,7 +44,7 @@ AuthType = Literal["none", "bearer", "oauth"]
 TransportType = Literal["http", "sse", "stdio"]
 
 
-class ConnectorRow(Base, PrimaryKeyMixin, TimestampMixin, OwnedMixin):
+class ConnectorRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     """One MCP connector installed (or built-in) for the local user."""
 
     __tablename__ = "valuz_connector"

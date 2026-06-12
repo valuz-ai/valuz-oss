@@ -22,14 +22,10 @@ class TestPortsImportable:
 
     def test_identity_port(self) -> None:
         from valuz_agent.ports.identity import (
-            ANONYMOUS,
             IdentityResolver,
-            UserIdentity,
         )
 
-        assert UserIdentity is not None
         assert IdentityResolver is not None
-        assert ANONYMOUS.user_id == "local-user"
 
 
 class TestSystemProviderFallback:

@@ -17,8 +17,9 @@ tasks) — no request object required::
 
 from __future__ import annotations
 
+from valuz_agent.integrations.identity_local import LocalIdentityResolver
 from valuz_agent.ports.billing import BillingPort, NoopBillingProvider
-from valuz_agent.ports.identity import IdentityResolver
+from valuz_agent.ports.identity import AuthHook, IdentityResolver
 from valuz_agent.ports.llm_provider import LLMProviderRegistry, _InMemoryRegistry
 from valuz_agent.ports.provider_policy import AllowAllProviderPolicy, ProviderPolicyPort
 from valuz_agent.ports.resource_enhancer import NoopResourceEnhancer, ResourceListEnhancer
@@ -29,10 +30,11 @@ class Extensions:
 
     def __init__(self) -> None:
         self.billing: BillingPort = NoopBillingProvider()
-        self.identity: IdentityResolver | None = None  # set by boot or overlay
+        self.identity: IdentityResolver = LocalIdentityResolver() # set by boot or overlay
         self.llm_registry: LLMProviderRegistry = _InMemoryRegistry()
         self.policy: ProviderPolicyPort = AllowAllProviderPolicy()
         self.resource_enhancer: ResourceListEnhancer = NoopResourceEnhancer()
+        self.auth_hook: AuthHook | None = None
 
 
 ext = Extensions()

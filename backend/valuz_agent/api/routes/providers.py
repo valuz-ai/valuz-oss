@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from valuz_agent.api.deps import get_current_user, get_provider_service
+from valuz_agent.api.deps import get_current_user_id, get_provider_service
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.providers.datastore import ProviderDatastore
 from valuz_agent.modules.providers.discover import ModelDiscoveryError
@@ -15,7 +15,6 @@ from valuz_agent.modules.providers.service import (
     reset_providers,
 )
 from valuz_agent.ports.extensions import ext
-from valuz_agent.ports.identity import UserIdentity
 from valuz_agent.ports.llm_provider import SystemProviderImmutable
 from valuz_agent.ports.provider_policy import (
     ProviderWriteContext,
@@ -24,14 +23,14 @@ from valuz_agent.ports.provider_policy import (
 router = APIRouter(prefix="/v1/providers", tags=["providers"])
 
 
-async def _enforce_provider_policy(user: UserIdentity, action: str) -> None:
+async def _enforce_provider_policy(user_id: str, action: str) -> None:
     """Ask the bound provider policy whether this write is allowed.
 
     OSS default permits everything; the commercial overlay denies user-provider
     writes when the caller's org has ``lock_member_custom_models`` enabled.
     """
     decision = await ext.policy.authorize_write(
-        ProviderWriteContext(user=user, action=action, provider_source="user")  # type: ignore[arg-type]
+        ProviderWriteContext(user_id=user_id, action=action, provider_source="user")  # type: ignore[arg-type]
     )
     if not decision.allowed:
         raise HTTPException(
@@ -282,7 +281,7 @@ async def get_provider(
 async def create_provider(
     body: ProviderCreateRequest,
     svc: ProviderService = Depends(get_provider_service),
-    user: UserIdentity = Depends(get_current_user),
+    user: str = Depends(get_current_user_id),
 ) -> ProviderDetail:
     """Create a provider channel.
 
@@ -316,7 +315,7 @@ async def update_provider(
     provider_id: str,
     body: ProviderUpdateRequest,
     svc: ProviderService = Depends(get_provider_service),
-    user: UserIdentity = Depends(get_current_user),
+    user: str = Depends(get_current_user_id),
 ) -> ProviderDetail:
     await _enforce_provider_policy(user, "update")
     try:

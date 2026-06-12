@@ -1,10 +1,10 @@
 from sqlalchemy import BigInteger, Boolean, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from valuz_agent.infra.database import Base, OwnedMixin
+from valuz_agent.infra.database import Base, UserMixin
 
 
-class AppSettingRow(Base, OwnedMixin):
+class AppSettingRow(Base, UserMixin):
     __tablename__ = "valuz_app_setting"
 
     key: Mapped[str] = mapped_column(String(128), primary_key=True)
@@ -12,7 +12,7 @@ class AppSettingRow(Base, OwnedMixin):
     updated_at: Mapped[int] = mapped_column(BigInteger)
 
 
-class ShortcutBindingRow(Base, OwnedMixin):
+class ShortcutBindingRow(Base, UserMixin):
     __tablename__ = "valuz_shortcut_binding"
 
     action_id: Mapped[str] = mapped_column(String(128), primary_key=True)
@@ -22,7 +22,7 @@ class ShortcutBindingRow(Base, OwnedMixin):
     updated_at: Mapped[int] = mapped_column(BigInteger)
 
 
-class OnboardingStateRow(Base, OwnedMixin):
+class OnboardingStateRow(Base, UserMixin):
     __tablename__ = "valuz_onboarding_state"
 
     step_id: Mapped[str] = mapped_column(String(64), primary_key=True)

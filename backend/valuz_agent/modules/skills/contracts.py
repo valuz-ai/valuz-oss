@@ -39,7 +39,7 @@ class RuntimeContext(BaseModel):
     auth, channels, and tools are *not* the skill source's concern.
     """
 
-    user_id: str = "local-user"
+    user_id: str = ""
     org_id: str | None = None
     project: ProjectRef | None = None
     edition: str = "personal"

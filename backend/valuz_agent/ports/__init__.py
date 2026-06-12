@@ -26,7 +26,7 @@ from valuz_agent.ports.billing import (
     set_billing_port,
 )
 from valuz_agent.ports.docs_runtime import DocsRuntimePort
-from valuz_agent.ports.identity import ANONYMOUS, IdentityResolver, UserIdentity
+from valuz_agent.ports.identity import IdentityResolver
 from valuz_agent.ports.llm_provider import (
     LLMProviderRegistry,
     SystemLLMProvider,
@@ -61,7 +61,6 @@ from valuz_agent.ports.skill_registry import SkillRegistryPort
 from valuz_agent.ports.tool_provider import ToolProvider
 
 __all__ = [
-    "ANONYMOUS",
     "Balance",
     "BillingPort",
     "BudgetStatus",
@@ -91,7 +90,6 @@ __all__ = [
     "SystemLLMProvider",
     "SystemProviderImmutable",
     "ToolProvider",
-    "UserIdentity",
     "get_billing_port",
     "get_llm_registry",
     "get_provider_policy",

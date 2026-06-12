@@ -32,20 +32,22 @@ def configure_structured_logging() -> None:
 
 
 def ensure_local_identity() -> None:
-    """Resolve the local install owner id and seed the owner ContextVar default.
+    """Resolve the local install owner id and seed the boot context with it.
 
     Runs early — before any schema bootstrap or seed insert — so every row
-    created during boot, and every background-context insert thereafter (seeds,
-    automations, the task runner, kernel mirrors), is stamped with a real owner.
-    OSS derives the id from the device fingerprint and persists it once to
-    ``~/.valuz/app/installation.json``; the commercial overlay overrides
-    per-request identity via ``set_identity_resolver`` and does not depend on
-    this default.
+    created during boot is stamped with a real owner. Background tasks spawned
+    during startup (automation runner, task runner, kernel mirrors) inherit
+    this context via ``asyncio.create_task``. There is deliberately no global
+    fallback: a context that was never seeded raises ``LookupError`` on read,
+    so an unattributed insert fails loudly instead of being silently owned by
+    the install id. OSS derives the id from the device fingerprint and persists
+    it once to ``~/.valuz/app/installation.json``; the commercial overlay
+    overrides per-request identity via ``ext.identity``.
     """
+    from valuz_agent.infra.auth_context import set_current_user_id
     from valuz_agent.infra.local_identity import resolve_local_user_id
-    from valuz_agent.infra.owner_context import set_default_user_id
 
-    set_default_user_id(resolve_local_user_id())
+    set_current_user_id(resolve_local_user_id())
 
 
 def acquire_single_writer_lock() -> None:

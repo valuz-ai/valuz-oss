@@ -6,13 +6,11 @@ from collections.abc import AsyncGenerator
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
-from fastapi import Request
-
+from valuz_agent.infra import auth_context
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.eventbus import event_bus
 from valuz_agent.infra.secret_store import FileSecretStore
 from valuz_agent.integrations.docs_embedded import EmbeddedDocsRuntime
-from valuz_agent.integrations.identity_local import LocalIdentityResolver
 from valuz_agent.integrations.skills_filesystem import FilesystemSkillSource
 from valuz_agent.integrations.skills_official import OfficialSkillSource
 from valuz_agent.modules.automations.datastore import AutomationDatastore
@@ -36,49 +34,17 @@ from valuz_agent.modules.tasks.datastore import (
     TaskEventDatastore,
     TaskSessionDatastore,
 )
-from valuz_agent.ports.identity import ANONYMOUS, IdentityResolver, UserIdentity
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from valuz_agent.modules.automations.service import AutomationService
     from valuz_agent.modules.decisions.aggregator import DecisionAggregator
-    from valuz_agent.modules.skills.contracts import RuntimeContext
-
-# ---------------------------------------------------------------------------
-# Identity resolver — replaceable by commercial app via set_identity_resolver()
-# ---------------------------------------------------------------------------
-
-_identity_resolver: IdentityResolver = LocalIdentityResolver()
 
 
-def set_identity_resolver(resolver: IdentityResolver) -> None:
-    """Replace the identity resolver (called by commercial app at startup)."""
-    from valuz_agent.ports.extensions import ext
-
-    ext.identity = resolver
-
-
-async def get_current_user(request: Request) -> UserIdentity:
-    """Resolve the current user from the request. OSS → ANONYMOUS."""
-    from valuz_agent.ports.extensions import ext
-
-    resolver = ext.identity or _identity_resolver
-    result = await resolver.resolve(request)
-    return result or ANONYMOUS
-
-
-def build_runtime_context(user: UserIdentity | None = None) -> RuntimeContext:
-    """Build a RuntimeContext from a UserIdentity.
-
-    OSS mode: ``user`` is None or ANONYMOUS → ``user_id="local-user", org_id=None``.
-    Commercial mode: fields populated from JWT-resolved identity.
-    """
-    from valuz_agent.modules.skills.contracts import RuntimeContext
-
-    if user is None:
-        user = ANONYMOUS
-    return RuntimeContext(user_id=user.user_id, org_id=user.org_id)
+async def get_current_user_id() -> str | None:
+    """Resolve the current user_id from the request. OSS → ANONYMOUS."""
+    return auth_context.get_current_user_id()
 
 
 @lru_cache

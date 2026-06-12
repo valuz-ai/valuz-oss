@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from valuz_agent.api.middleware import (
     ErrorHandlerMiddleware,
-    OwnerContextMiddleware,
+    AuthMiddleware,
     TimingMiddleware,
 )
 from valuz_agent.api.routes.agents import router as agents_router
@@ -51,7 +51,7 @@ def create_app() -> FastAPI:
     app.add_middleware(ErrorHandlerMiddleware)
     # Inside Timing, wrapping the routes: sets the owner ContextVar so every row
     # created during the request is stamped with the resolved user_id.
-    app.add_middleware(OwnerContextMiddleware)
+    app.add_middleware(AuthMiddleware)
     app.add_middleware(TimingMiddleware)
     app.add_middleware(
         CORSMiddleware,
