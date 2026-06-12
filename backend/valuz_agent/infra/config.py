@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     # running as a separate process at ``kernel_url`` (bare subprocess,
     # sandbox, or remote), authenticated by ``kernel_token``. Override
     # with VALUZ_KERNEL_MODE / VALUZ_KERNEL_URL / VALUZ_KERNEL_TOKEN.
+    #
+    # ENV CONTRACT (two sides, one secret): the standalone kernel
+    # *server* reads ``KERNEL_AUTH_TOKEN`` from its own process env and
+    # refuses to start without it (unless KERNEL_ALLOW_UNAUTHENTICATED=1);
+    # the *host* sends ``VALUZ_KERNEL_TOKEN`` as the bearer. Whoever
+    # provisions the kernel process must set both to the same secret —
+    # see tests/adapters/test_http_kernel_client_subprocess.py for the
+    # canonical wiring.
     kernel_mode: str = "inprocess"
     kernel_url: str = "http://127.0.0.1:8400"
     kernel_token: str | None = None

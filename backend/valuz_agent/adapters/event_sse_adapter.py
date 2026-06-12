@@ -591,11 +591,21 @@ async def iter_events_sse(
                 continue
 
             # Live event from the subscription — translate and yield.
+            # Persisted events arrive with their row id in ``seq`` (see
+            # the kernel's PersistThenBroadcastSink): skip anything the
+            # cursor already covers (no duplicates against backfill or a
+            # previous idle poll) and ADVANCE the cursor so the idle poll
+            # below never re-reads what was already delivered live —
+            # fixing the legacy double-delivery after busy turns.
+            if event.seq is not None:
+                if event.seq <= cursor:
+                    continue
+                cursor = event.seq
             translated = _translate_kernel_event(event.type, event.data)
             if translated is not None:
                 legacy_type, legacy_payload = translated
                 frame = SessionEventFrame(
-                    seq=0,
+                    seq=event.seq or 0,
                     event_type=legacy_type,
                     payload=legacy_payload,
                     timestamp=event.timestamp,  # Unix epoch ms (UTC)
