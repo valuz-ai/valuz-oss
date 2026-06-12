@@ -60,7 +60,6 @@ from openai_codex.generated.v2_all import (
     UserInput,
 )
 from pydantic import RootModel
-
 from src.core.agent_config import AgentConfig
 from src.core.approval_rule_matcher import ExactArgsRuleMatcher, RuntimeApprovalRuleMatcher
 from src.core.events import AVAILABLE_DECISIONS_V1_WITH_SESSION, Event, EventSink
@@ -467,6 +466,25 @@ class CodexRuntime:
             elif completed is not None:
                 session.status = "idle"
                 session.stop_reason = _stop_reason_from_turn(completed)
+                # Turn-level failures (codex reports them as a *completed*
+                # turn with ``TurnStatus.failed``) must surface as a
+                # ``session_error`` event like the other two error paths —
+                # without it the failure lives only in ``stop_reason`` and
+                # clients render a silent idle (no error card, nothing on
+                # replay).
+                if (
+                    isinstance(session.stop_reason, Error)
+                    and session.stop_reason.category == "execution_error"
+                ):
+                    await self.event_sink.emit(
+                        Event(
+                            type="session_error",
+                            data={
+                                "category": "execution_error",
+                                "message": session.stop_reason.message,
+                            },
+                        )
+                    )
             else:
                 session.status = "idle"
                 session.stop_reason = EndTurn()
