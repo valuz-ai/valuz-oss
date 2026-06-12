@@ -38,6 +38,13 @@ if sys.platform == "win32":
 else:
     exe_name = "valuz-server"
 
+# Never strip on Windows: PyInstaller shells out to whatever ``strip`` is on
+# PATH, and the GitHub windows runners expose GNU binutils strip (Strawberry
+# Perl / mingw64), which corrupts MSVC-built PE DLLs — the packaged app then
+# dies at launch with "[PYI-xxxxx:ERROR] Failed to load Python DLL …
+# LoadLibrary". Strip has no size benefit on Windows anyway.
+strip_binaries = sys.platform != "win32"
+
 # --- Source root (backend/) ---
 # This spec lives in ``backend/scripts/``, so ``SPECPATH`` is that dir; the
 # backend root (which holds ``valuz_agent`` / ``kernel`` / ``alembic``) is its
@@ -217,7 +224,7 @@ exe = EXE(
     name=exe_name,
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,
+    strip=strip_binaries,
     upx=False,
     console=True,
     disable_windowed_traceback=False,
@@ -231,7 +238,7 @@ coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
-    strip=True,
+    strip=strip_binaries,
     upx=False,
     name="valuz-server",
 )
