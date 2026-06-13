@@ -1215,7 +1215,7 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
         # UI-terminal but still revivable (resume below proves the closed loop).
         async with async_unit_of_work() as db:
             resp = await tasks_route.intervene(
-                "t1", tasks_route.InterveneRequest(action="stop"), db
+                "t1", tasks_route.InterveneRequest(action="stop"), db, "local-test-owner"
             )
         assert resp.status == "stopped"
         assert set(interrupted) == {"sA", "sB", "lead-s"}
@@ -1228,7 +1228,7 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
         # 2) Resume → active (reconcile + respawn + re-drive lead).
         async with async_unit_of_work() as db:
             resp2 = await tasks_route.intervene(
-                "t1", tasks_route.InterveneRequest(action="resume"), db
+                "t1", tasks_route.InterveneRequest(action="resume"), db, "local-test-owner"
             )
         assert resp2.status == "active"
         await asyncio.sleep(0.05)  # let create_task'd loops run
@@ -1264,14 +1264,18 @@ def test_pause_distinct_from_stop_and_parks_nodes(db_factory, tmp_path, monkeypa
     async def _run() -> None:
         # pause → paused; node parked; member run paused.
         async with async_unit_of_work() as db:
-            r1 = await tasks_route.intervene("t1", tasks_route.InterveneRequest(action="pause"), db)
+            r1 = await tasks_route.intervene(
+                "t1", tasks_route.InterveneRequest(action="pause"), db, "local-test-owner"
+            )
         assert r1.status == "paused"
         assert TaskPlan.from_dict(_task_row(db_factory).plan).get("A").status == "paused"
         assert _runs(db_factory)["sA"] == "paused"
 
         # stop on the already-paused task → stopped (no longer a no-op).
         async with async_unit_of_work() as db:
-            r2 = await tasks_route.intervene("t1", tasks_route.InterveneRequest(action="stop"), db)
+            r2 = await tasks_route.intervene(
+                "t1", tasks_route.InterveneRequest(action="stop"), db, "local-test-owner"
+            )
         assert r2.status == "stopped"
 
     try:
