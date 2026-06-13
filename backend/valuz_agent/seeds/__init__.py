@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from valuz_agent.infra.local_identity import resolve_local_user_id
 from valuz_agent.modules.agents.seed import seed_official_agents
 from valuz_agent.modules.providers.datastore import ProviderDatastore
 from valuz_agent.seeds.providers import seed_builtin_providers
@@ -35,7 +36,7 @@ async def seed_all(db: AsyncSession) -> None:
     onboarding (created on deploy) or creates their own. So a user who skips
     onboarding sees just the default assistant, not a wall of roles.
     """
-    await seed_builtin_providers(ProviderDatastore(db))
+    await seed_builtin_providers(resolve_local_user_id(), ProviderDatastore(db))
     await seed_official_agents(db)
 
 

@@ -20,10 +20,10 @@ class _FakeProviderDatastore:
     def __init__(self, providers: list[_FakeProvider] | None = None) -> None:
         self._by_id = {c.id: c for c in (providers or [])}
 
-    async def get_by_id(self, provider_id: str) -> _FakeProvider | None:
+    async def get_by_id(self, user_id: str, provider_id: str) -> _FakeProvider | None:
         return self._by_id.get(provider_id)
 
-    async def get_default(self) -> _FakeProvider | None:
+    async def get_default(self, user_id: str) -> _FakeProvider | None:
         for c in self._by_id.values():
             if c.is_default:
                 return c

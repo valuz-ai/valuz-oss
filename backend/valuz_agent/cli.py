@@ -86,10 +86,13 @@ def reset_providers_cmd(
     run_host_migrations()
 
     async def _run() -> list[ProviderListItem]:
+        from valuz_agent.infra.local_identity import resolve_local_user_id
+
         async with async_unit_of_work() as db:
             ds = ProviderDatastore(db)
             return await reset_providers(
                 ds,
+                resolve_local_user_id(),
                 drop_table=drop_table,
                 engine=async_engine if drop_table else None,
             )

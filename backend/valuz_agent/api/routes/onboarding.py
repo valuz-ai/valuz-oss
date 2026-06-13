@@ -153,7 +153,9 @@ async def _resolve_deploy_target(db) -> tuple[str, str, str]:  # type: ignore[no
     # Fallback to the first enabled provider. Order is by created_at so we
     # pick the user's earliest deliberate choice, not whatever the seeder
     # happened to insert last.
-    rows = await ProviderDatastore(db).list_providers()
+    from valuz_agent.infra.auth_context import require_current_user_id as _require_uid
+
+    rows = await ProviderDatastore(db).list_providers(_require_uid())
     enabled = [r for r in rows if r.enabled]
     if not enabled:
         raise HTTPException(

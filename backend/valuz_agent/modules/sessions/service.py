@@ -480,7 +480,9 @@ class SessionService:
                 secret_store=FileSecretStore(settings.secrets_dir),
                 event_bus=event_bus,
             )
-            match = await prov_svc.resolve_provider_for_model(effective_model)
+            match = await prov_svc.resolve_provider_for_model(
+                require_current_user_id(), effective_model
+            )
             if match is not None:
                 provider_id = match.id
         if not provider_id:
@@ -737,7 +739,9 @@ class SessionService:
                 secret_store=FileSecretStore(settings.secrets_dir),
                 event_bus=event_bus,
             )
-            match = await prov_svc.resolve_provider_for_model(resolution.model)
+            match = await prov_svc.resolve_provider_for_model(
+                require_current_user_id(), resolution.model
+            )
             if match is not None:
                 resolved_provider_id = match.id
 

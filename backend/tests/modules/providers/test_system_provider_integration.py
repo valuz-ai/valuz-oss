@@ -141,7 +141,7 @@ def _seed_user_row(svc: _SvcHandle) -> ProviderRow:
 class TestListMerge:
     async def test_empty_registry_returns_user_rows_only(self, svc: _SvcHandle) -> None:
         _seed_user_row(svc)
-        items = await svc.service.list_providers()
+        items = await svc.service.list_providers("local-test-owner")
         assert [i.id for i in items] == ["user-1"]
 
     async def test_registry_prepended_before_user_rows(self, svc: _SvcHandle) -> None:
@@ -152,7 +152,7 @@ class TestListMerge:
 
         _seed_user_row(svc)
         get_llm_registry().register(_descriptor())
-        items = await svc.service.list_providers()
+        items = await svc.service.list_providers("local-test-owner")
         assert [i.id for i in items] == ["valuz-channel", "user-1"]
         sys_item = items[0]
         assert sys_item.source == "system"
@@ -167,7 +167,7 @@ class TestListMerge:
         from valuz_agent.ports.llm_provider import get_llm_registry
 
         get_llm_registry().register(_descriptor(enabled=False, unavailable_reason="未登录"))
-        items = await svc.service.list_providers()
+        items = await svc.service.list_providers("local-test-owner")
         assert len(items) == 1
         assert items[0].enabled is False
 
@@ -177,7 +177,7 @@ class TestGetProvider:
         from valuz_agent.ports.llm_provider import get_llm_registry
 
         get_llm_registry().register(_descriptor())
-        detail = await svc.service.get_provider("valuz-channel")
+        detail = await svc.service.get_provider("local-test-owner", "valuz-channel")
         assert detail.id == "valuz-channel"
         assert detail.source == "system"
         assert detail.base_url == "https://cloud.test/v1"
@@ -186,7 +186,7 @@ class TestGetProvider:
 
     async def test_get_unknown_raises_not_found(self, svc: _SvcHandle) -> None:
         with pytest.raises(ProviderNotFound):
-            await svc.service.get_provider("nope")
+            await svc.service.get_provider("local-test-owner", "nope")
 
     async def test_registry_id_takes_precedence_over_user_row(self, svc: _SvcHandle) -> None:
         # Even if a user row somehow shared the id, registry wins —
@@ -195,7 +195,7 @@ class TestGetProvider:
 
         get_llm_registry().register(_descriptor(provider_id="user-1"))
         _seed_user_row(svc)  # also id="user-1"
-        detail = await svc.service.get_provider("user-1")
+        detail = await svc.service.get_provider("local-test-owner", "user-1")
         assert detail.source == "system"
 
 
@@ -207,23 +207,23 @@ class TestWriteGuards:
 
     async def test_update_rejects_system_id(self, svc: _SvcHandle) -> None:
         with pytest.raises(SystemProviderImmutable):
-            await svc.service.update_provider("valuz-channel", name="renamed")
+            await svc.service.update_provider("local-test-owner", "valuz-channel", name="renamed")
 
     async def test_delete_rejects_system_id(self, svc: _SvcHandle) -> None:
         with pytest.raises(SystemProviderImmutable):
-            await svc.service.delete_provider("valuz-channel")
+            await svc.service.delete_provider("local-test-owner", "valuz-channel")
 
     async def test_test_provider_rejects_system_id(self, svc: _SvcHandle) -> None:
         with pytest.raises(SystemProviderImmutable):
-            await svc.service.test_provider("valuz-channel")
+            await svc.service.test_provider("local-test-owner", "valuz-channel")
 
     async def test_discover_models_rejects_system_id(self, svc: _SvcHandle) -> None:
         with pytest.raises(SystemProviderImmutable):
-            await svc.service.discover_models("valuz-channel")
+            await svc.service.discover_models("local-test-owner", "valuz-channel")
 
     async def test_set_default_rejects_system_id(self, svc: _SvcHandle) -> None:
         with pytest.raises(SystemProviderImmutable):
-            await svc.service.set_default("valuz-channel")
+            await svc.service.set_default("local-test-owner", "valuz-channel")
 
 
 class TestDynamicModelList:
@@ -249,7 +249,7 @@ class TestDynamicModelList:
 
     async def test_sync_list_models_overrides_static(self, svc: _SvcHandle) -> None:
         get_llm_registry().register(self._org_descriptor(lambda: ["org-gpt-4o", "org-claude"]))
-        items = await svc.service.list_providers()
+        items = await svc.service.list_providers("local-test-owner")
         org = next(i for i in items if i.id == "valuz-org")
         assert org.model_options == ["org-gpt-4o", "org-claude"]
 
@@ -258,7 +258,7 @@ class TestDynamicModelList:
             return ["m-async"]
 
         get_llm_registry().register(self._org_descriptor(_alist))
-        items = await svc.service.list_providers()
+        items = await svc.service.list_providers("local-test-owner")
         assert next(i for i in items if i.id == "valuz-org").model_options == ["m-async"]
 
     async def test_failure_falls_back_to_static(self, svc: _SvcHandle) -> None:
@@ -266,14 +266,14 @@ class TestDynamicModelList:
             raise RuntimeError("upstream down")
 
         get_llm_registry().register(self._org_descriptor(_boom, model_options=("fallback-model",)))
-        items = await svc.service.list_providers()
+        items = await svc.service.list_providers("local-test-owner")
         assert next(i for i in items if i.id == "valuz-org").model_options == ["fallback-model"]
 
     async def test_empty_list_models_hides_card(self, svc: _SvcHandle) -> None:
         # A descriptor whose dynamic list resolves empty must NOT appear — no
         # noise card for an org with no model of that protocol.
         get_llm_registry().register(self._org_descriptor(lambda: []))
-        items = await svc.service.list_providers()
+        items = await svc.service.list_providers("local-test-owner")
         assert all(i.id != "valuz-org" for i in items)
 
 
@@ -306,7 +306,7 @@ class TestUserProviderHiding:
         get_llm_registry().register(_descriptor())  # a system card stays visible
         set_provider_policy(self._LockedPolicy())
         try:
-            items = await svc.service.list_providers()
+            items = await svc.service.list_providers("local-test-owner")
             ids = [i.id for i in items]
             assert "user-1" not in ids  # personal provider hidden
             assert "valuz-channel" in ids  # system card unaffected
@@ -317,5 +317,5 @@ class TestUserProviderHiding:
     async def test_unlocked_shows_user_rows(self, svc: _SvcHandle) -> None:
         # Default AllowAll policy → user rows visible.
         _seed_user_row(svc)
-        items = await svc.service.list_providers()
+        items = await svc.service.list_providers("local-test-owner")
         assert "user-1" in [i.id for i in items]

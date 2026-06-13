@@ -102,14 +102,14 @@ async def test_null_row_resolves_models_from_live_descriptor(svc: _SvcHandle) ->
     recommended = list(get_provider("claude-subscription").model_options)
     assert recommended, "descriptor list must be hydrated from subscription_models.json"
 
-    row = await svc.service.resolve_provider_for_model(recommended[0])
+    row = await svc.service.resolve_provider_for_model("local-test-owner", recommended[0])
     assert row is not None
     assert row.id == "ch-claude-subscription"
 
 
 async def test_null_row_does_not_resolve_unknown_model(svc: _SvcHandle) -> None:
     svc.seed(_subscription_row(model_ids=None))
-    assert await svc.service.resolve_provider_for_model("not-a-real-model") is None
+    assert await svc.service.resolve_provider_for_model("local-test-owner", "not-a-real-model") is None
 
 
 async def test_explicit_empty_list_does_not_fall_back(svc: _SvcHandle) -> None:
@@ -118,7 +118,7 @@ async def test_explicit_empty_list_does_not_fall_back(svc: _SvcHandle) -> None:
     svc.seed(_subscription_row(model_ids="[]"))
 
     recommended = list(get_provider("claude-subscription").model_options)
-    assert await svc.service.resolve_provider_for_model(recommended[0]) is None
+    assert await svc.service.resolve_provider_for_model("local-test-owner", recommended[0]) is None
 
 
 async def test_customised_list_wins_over_descriptor(svc: _SvcHandle) -> None:
@@ -126,10 +126,10 @@ async def test_customised_list_wins_over_descriptor(svc: _SvcHandle) -> None:
     authoritative: ids only in the descriptor no longer resolve."""
     svc.seed(_subscription_row(model_ids=json.dumps(["my-pinned-model"])))
 
-    row = await svc.service.resolve_provider_for_model("my-pinned-model")
+    row = await svc.service.resolve_provider_for_model("local-test-owner", "my-pinned-model")
     assert row is not None and row.id == "ch-claude-subscription"
 
     recommended = list(get_provider("claude-subscription").model_options)
     only_in_descriptor = [m for m in recommended if m != "my-pinned-model"]
     assert only_in_descriptor
-    assert await svc.service.resolve_provider_for_model(only_in_descriptor[0]) is None
+    assert await svc.service.resolve_provider_for_model("local-test-owner", only_in_descriptor[0]) is None
