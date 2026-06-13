@@ -32,7 +32,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0002"
+revision: str = "0001"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -72,7 +72,7 @@ def upgrade() -> None:
         sa.Column("value_json", sa.Text(), nullable=False),
         sa.Column("updated_at", sa.BigInteger(), nullable=False),
         sa.Column("user_id", sa.String(length=64), nullable=False),
-        sa.PrimaryKeyConstraint("key", "user_id"),
+        sa.PrimaryKeyConstraint("key"),
     )
     with op.batch_alter_table("valuz_app_setting", schema=None) as batch_op:
         batch_op.create_index(batch_op.f("ix_valuz_app_setting_user_id"), ["user_id"], unique=False)
@@ -290,7 +290,7 @@ def upgrade() -> None:
         sa.Column("completed_at", sa.BigInteger(), nullable=True),
         sa.Column("updated_at", sa.BigInteger(), nullable=False),
         sa.Column("user_id", sa.String(length=64), nullable=False),
-        sa.PrimaryKeyConstraint("step_id", "user_id"),
+        sa.PrimaryKeyConstraint("step_id"),
     )
     with op.batch_alter_table("valuz_onboarding_state", schema=None) as batch_op:
         batch_op.create_index(
@@ -483,7 +483,7 @@ def upgrade() -> None:
         sa.Column("completed_at", sa.BigInteger(), nullable=True),
         sa.Column("updated_at", sa.BigInteger(), nullable=False),
         sa.Column("user_id", sa.String(length=64), nullable=False),
-        sa.PrimaryKeyConstraint("setup_id", "user_id"),
+        sa.PrimaryKeyConstraint("setup_id"),
     )
     with op.batch_alter_table("valuz_setup_job", schema=None) as batch_op:
         batch_op.create_index(batch_op.f("ix_valuz_setup_job_user_id"), ["user_id"], unique=False)
@@ -496,7 +496,7 @@ def upgrade() -> None:
         sa.Column("is_custom", sa.Boolean(), nullable=False),
         sa.Column("updated_at", sa.BigInteger(), nullable=False),
         sa.Column("user_id", sa.String(length=64), nullable=False),
-        sa.PrimaryKeyConstraint("action_id", "user_id"),
+        sa.PrimaryKeyConstraint("action_id"),
     )
     with op.batch_alter_table("valuz_shortcut_binding", schema=None) as batch_op:
         batch_op.create_index(

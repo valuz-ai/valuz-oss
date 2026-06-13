@@ -1,8 +1,7 @@
-"""Owner-scoping + composite-PK regression for ``SettingsDatastore``.
+"""Owner-scoping regression for ``SettingsDatastore`` reads + write-stamp.
 
-The load-bearing property: the composite PK ``(key, user_id)`` means two users
-can hold the *same* setting key without one's upsert clobbering the other's
-(the single-column-PK bug this migration fixes).
+The table keeps its original ``key`` primary key; the multi-user change is only
+that ``user_id`` is stamped explicitly on write and reads filter by it.
 """
 
 from __future__ import annotations
@@ -33,27 +32,23 @@ async def _set(sm, owner: str, key: str, value: str) -> None:
 
 
 class TestSettingsOwnerScoping:
-    async def test_same_key_does_not_clobber_across_owners(self, sessionmaker_) -> None:
-        await _set(sessionmaker_, "user-A", "model.default", "A-value")
-        await _set(sessionmaker_, "user-B", "model.default", "B-value")
+    async def test_create_stamps_owner(self, sessionmaker_) -> None:
+        await _set(sessionmaker_, "user-A", "a.key", "v")
         async with sessionmaker_() as db:
-            ds = SettingsDatastore(db)
-            a = await ds.get_setting("user-A", "model.default")
-            b = await ds.get_setting("user-B", "model.default")
-            assert a is not None and a.value_json == "A-value"
-            assert b is not None and b.value_json == "B-value"
+            row = await SettingsDatastore(db).get_setting("user-A", "a.key")
+            assert row is not None and row.user_id == "user-A"
 
     async def test_get_absent_for_other_owner(self, sessionmaker_) -> None:
-        await _set(sessionmaker_, "user-A", "k", "v")
+        await _set(sessionmaker_, "user-A", "a.key", "v")
         async with sessionmaker_() as db:
             ds = SettingsDatastore(db)
-            assert await ds.get_setting("user-A", "k") is not None
-            assert await ds.get_setting("user-B", "k") is None
+            assert await ds.get_setting("user-A", "a.key") is not None
+            assert await ds.get_setting("user-B", "a.key") is None
 
     async def test_list_returns_only_callers_rows(self, sessionmaker_) -> None:
-        await _set(sessionmaker_, "user-A", "k", "v")
-        await _set(sessionmaker_, "user-B", "k", "v")
+        await _set(sessionmaker_, "user-A", "a.key", "v")
+        await _set(sessionmaker_, "user-B", "b.key", "v")
         async with sessionmaker_() as db:
             ds = SettingsDatastore(db)
-            assert {r.user_id for r in await ds.list_settings("user-A")} == {"user-A"}
-            assert {r.user_id for r in await ds.list_settings("user-B")} == {"user-B"}
+            assert {r.key for r in await ds.list_settings("user-A")} == {"a.key"}
+            assert {r.key for r in await ds.list_settings("user-B")} == {"b.key"}

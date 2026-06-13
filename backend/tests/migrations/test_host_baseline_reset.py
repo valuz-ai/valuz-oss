@@ -57,8 +57,8 @@ def test_should_noop_when_stamped_at_baseline(tmp_path) -> None:
 
 
 def test_should_reset_when_stamped_by_legacy_chain(tmp_path) -> None:
-    """Any old multi-revision stamp (0001/0003/0004) → full reset."""
-    for legacy in ("0001", "0003", "0004"):
+    """Any old multi-revision stamp (0002/0003/0004) → full reset."""
+    for legacy in ("0002", "0003", "0004"):
         engine = create_engine(f"sqlite:///{tmp_path / f'at_{legacy}.db'}")
         with engine.begin() as conn:
             _create_host_shape(conn, stamp=legacy)
