@@ -19,10 +19,11 @@ class ResourceFacade:
 
     async def delete_resource(self, resource_id: str, resource_type: str) -> None:
         if resource_type == "agent":
+            from valuz_agent.infra.auth_context import require_current_user_id
             from valuz_agent.modules.agents.service import AgentService
 
             agent_svc = AgentService(self._db)  # type: ignore[arg-type]
-            await agent_svc.delete_agent(resource_id)
+            await agent_svc.delete_agent(require_current_user_id(), resource_id)
         elif resource_type == "connector":
             from valuz_agent.infra.config import settings
             from valuz_agent.infra.secret_store import FileSecretStore

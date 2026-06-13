@@ -218,6 +218,7 @@ async def _default_assistant_slug_if_present() -> str | None:
     install before onboarding) so the launcher can fall back to the legacy
     agentless path instead of failing the launch outright.
     """
+    from valuz_agent.infra.auth_context import require_current_user_id
     from valuz_agent.infra.db import async_unit_of_work
     from valuz_agent.modules.agents.datastore import AgentDatastore
     from valuz_agent.modules.agents.seed import DEFAULT_ASSISTANT_SLUG, VALUZ_HELPER_SLUG
@@ -226,7 +227,7 @@ async def _default_assistant_slug_if_present() -> str | None:
         async with async_unit_of_work(commit=False) as db:
             ds = AgentDatastore(db)
             for slug in (DEFAULT_ASSISTANT_SLUG, VALUZ_HELPER_SLUG):
-                if await ds.get_agent(slug) is not None:
+                if await ds.get_agent(require_current_user_id(), slug) is not None:
                     return slug
     except Exception:  # noqa: BLE001 — launcher must not die on a lookup hiccup
         return None

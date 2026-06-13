@@ -18,6 +18,7 @@ from typing import Any
 
 import valuz_agent.boot.kernel  # noqa: F401 — puts kernel on sys.path
 from valuz_agent.adapters.agent_resolver import _member_agent_config, summarize_role
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.agents.datastore import ProjectMemberDatastore
 from valuz_agent.modules.tasks.datastore import (
@@ -32,7 +33,7 @@ async def list_members(project_id: str) -> list[dict[str, Any]]:
     """Return member descriptors for dispatch tool list_members()."""
     async with async_unit_of_work(commit=False) as db:
         member_ds = ProjectMemberDatastore(db)
-        rows = await member_ds.list_by_project(project_id)
+        rows = await member_ds.list_by_project(require_current_user_id(), project_id)
         result: list[dict[str, Any]] = []
         for row in rows:
             agent_cfg = await _member_agent_config(row, member_ds)

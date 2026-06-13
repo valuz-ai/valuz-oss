@@ -43,7 +43,7 @@ def _build_lead_request(monkeypatch: pytest.MonkeyPatch):
     fake_members = SimpleNamespace(
         get=_async_member_get(),
         # is_lead=True also builds the team roster block for the prompt.
-        list_by_project=_as_async(lambda _pid: []),
+        list_by_project=_as_async(lambda _uid, _pid: []),
     )
     monkeypatch.setattr(
         agent_resolver, "_member_agent_config", _as_async(lambda _m, _ds: fake_agent)

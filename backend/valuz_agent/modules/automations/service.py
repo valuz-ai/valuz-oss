@@ -229,7 +229,7 @@ class AutomationService:
         reference and decide to delete or rebind. The runner converts
         this same lookup failure into a failed run + ADR-012 auto-pause.
         """
-        member = await self._members.get(row.project_id, row.agent_slug)
+        member = await self._members.get(require_current_user_id(), row.project_id, row.agent_slug)
         if member is None:
             return None
         try:
@@ -483,7 +483,9 @@ class AutomationService:
 
             # 2. Resolve the agent for that project
             if payload.agent_kind == "project_member":
-                member = await self._members.get(project_id, payload.agent_slug)
+                member = await self._members.get(
+            require_current_user_id(), project_id, payload.agent_slug
+        )
                 if member is None:
                     raise AgentNotInProject()
                 return project_id, payload.agent_slug
@@ -496,7 +498,7 @@ class AutomationService:
                     "AutomationService is missing AgentService — required to "
                     "instantiate library agents into chat projects"
                 )
-            source = await self._agents.get_agent(payload.agent_slug)
+            source = await self._agents.get_agent(require_current_user_id(), payload.agent_slug)
             if source is None:
                 raise AgentNotFound()
             # Derive a project-local slug. We hash a short prefix on so the
@@ -506,6 +508,7 @@ class AutomationService:
             # ``dedupe=False``: each automation gets its own member handle even
             # when several reference the same source agent in this project.
             await self._agent_svc.deploy_agent(
+                require_current_user_id(),
                 project_id=project_id,
                 source_agent_slug=payload.agent_slug,
                 agent_slug=instance_slug,
@@ -527,7 +530,9 @@ class AutomationService:
             # it here would duplicate that surface.
             raise AgentNotInProject()
 
-        member = await self._members.get(payload.project_id, payload.agent_slug)
+        member = await self._members.get(
+            require_current_user_id(), payload.project_id, payload.agent_slug
+        )
         if member is None:
             raise AgentNotInProject()
         return payload.project_id, payload.agent_slug
@@ -623,7 +628,7 @@ class AutomationService:
             new_slug = payload.agent_slug.strip()
             if not new_slug:
                 raise AutomationAgentRequired()
-            member = await self._members.get(row.project_id, new_slug)
+            member = await self._members.get(require_current_user_id(), row.project_id, new_slug)
             if member is None:
                 raise AgentNotInProject()
             row.agent_slug = new_slug

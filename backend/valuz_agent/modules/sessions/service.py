@@ -364,13 +364,17 @@ class SessionService:
         )
 
         async with async_unit_of_work() as _db:
-            member = await ProjectMemberDatastore(_db).get(project_id, agent_slug)
+            member = await ProjectMemberDatastore(_db).get(
+                require_current_user_id(), project_id, agent_slug
+            )
             if member is not None:
                 # Live reference: the member points at a library AgentRow via
                 # ``source_agent_slug`` — build the snapshot from the row's
                 # CURRENT fields so every new session picks up library edits.
                 if member.source_agent_slug:
-                    row = await AgentDatastore(_db).get_agent(member.source_agent_slug)
+                    row = await AgentDatastore(_db).get_agent(
+                        require_current_user_id(), member.source_agent_slug
+                    )
                     if row is not None:
                         config = await AgentService(_db).build_agent_config(row)
                         return config.id, config
@@ -383,7 +387,7 @@ class SessionService:
 
         # Not a project member → resolve as a global library agent.
         async with async_unit_of_work() as _db:
-            row = await AgentDatastore(_db).get_agent(agent_slug)
+            row = await AgentDatastore(_db).get_agent(require_current_user_id(), agent_slug)
             if row is None:
                 raise SessionNotRunnable(
                     f"agent '{agent_slug}' not found — pick a configured agent or add one first"

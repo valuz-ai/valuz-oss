@@ -173,7 +173,7 @@ class FakeMemberDatastore:
     def __init__(self) -> None:
         self.members: dict[tuple[str, str], FakeMember] = {}
 
-    async def get(self, project_id: str, agent_slug: str) -> FakeMember | None:
+    async def get(self, user_id: str, project_id: str, agent_slug: str) -> FakeMember | None:
         return self.members.get((project_id, agent_slug))
 
 
@@ -181,7 +181,7 @@ class FakeAgentDatastore:
     def __init__(self, slugs: set[str] | None = None) -> None:
         self.slugs = slugs if slugs is not None else {"qa-engineer"}
 
-    async def get_agent(self, slug: str) -> object | None:
+    async def get_agent(self, user_id: str, slug: str) -> object | None:
         # Return any non-None to signal "present". Service only checks
         # the truthiness on this path.
         return object() if slug in self.slugs else None
@@ -197,6 +197,7 @@ class FakeAgentService:
 
     async def deploy_agent(
         self,
+        user_id: str,
         project_id: str,
         source_agent_slug: str,
         agent_slug: str,

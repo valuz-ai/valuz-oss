@@ -207,7 +207,7 @@ _VALUZ_HELPER_SKILL = "valuz-handbook"
 _VALUZ_HELPER_AVATAR = "bot"
 
 
-async def _ensure_valuz_helper(db) -> str:  # type: ignore[no-untyped-def]
+async def _ensure_valuz_helper(user_id: str, db) -> str:  # type: ignore[no-untyped-def]
     """Idempotently create the Valuz Helper in the user's agent library.
 
     Returns its slug. Reuses the existing one on re-run (no model resolution
@@ -221,13 +221,14 @@ async def _ensure_valuz_helper(db) -> str:  # type: ignore[no-untyped-def]
     )
     agent_svc = AgentService(db=db, connector_service=connector_svc)
 
-    for existing in await agent_svc.list_agents():
+    for existing in await agent_svc.list_agents(user_id):
         if existing.slug == _VALUZ_HELPER_SLUG:
             return _VALUZ_HELPER_SLUG
 
     runtime, provider_id, model = await _resolve_deploy_target(db)
     effort = await get_default_effort(db)
     await agent_svc.create_agent(
+        user_id,
         {
             "slug": _VALUZ_HELPER_SLUG,
             "name": t("onboarding.valuzHelper.name"),
@@ -359,6 +360,7 @@ async def create_example_project(
             for role in _get_team_roster(body.team_id):
                 try:
                     await agent_svc.create_blank_agent(
+                        user_id,
                         project_id=project_id,
                         agent_slug=None,
                         name=role["name"],
@@ -386,7 +388,7 @@ async def create_example_project(
         # Always ensure the Valuz Helper exists in the library so the
         # no-project quick chat has a ready default, even when the user
         # picked a project team.
-        await _ensure_valuz_helper(db)
+        await _ensure_valuz_helper(user_id, db)
 
     return ExampleProjectResponse(
         project_id=project_id,
@@ -395,12 +397,14 @@ async def create_example_project(
 
 
 @router.post("/assistant", response_model=AssistantResponse)
-async def create_assistant() -> AssistantResponse:
+async def create_assistant(
+    user_id: str = Depends(require_current_user_id),
+) -> AssistantResponse:
     """Create (or reuse) only the Valuz Helper in the user's library.
 
     Backs TeamStep's "no team for now" choice — no project, just a ready-to-chat
     general assistant for the quick-chat surface. Idempotent.
     """
     async with async_unit_of_work() as db:
-        slug = await _ensure_valuz_helper(db)
+        slug = await _ensure_valuz_helper(user_id, db)
     return AssistantResponse(agent_slug=slug)

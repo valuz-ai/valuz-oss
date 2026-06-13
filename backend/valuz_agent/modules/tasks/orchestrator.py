@@ -269,7 +269,9 @@ class TaskOrchestrator:
             ws_row = await ws_ds.get_by_id(require_current_user_id(), project_id)
             if ws_row is None:
                 raise ValueError(f"project {project_id!r} not found")
-            lead_member = await member_ds.get(project_id, lead_agent_slug)
+            lead_member = await member_ds.get(
+                require_current_user_id(), project_id, lead_agent_slug
+            )
             if lead_member is None:
                 raise ValueError(
                     f"lead agent {lead_agent_slug!r} is not a member of project {project_id!r}"
@@ -377,7 +379,7 @@ class TaskOrchestrator:
                 return {"error": "commit_task: plan has no work to do (all nodes already done)"}
 
             lead_slug = lead_agent_slug_override or task_row.lead_agent_slug
-            lead_member = await member_ds.get(project_id, lead_slug)
+            lead_member = await member_ds.get(require_current_user_id(), project_id, lead_slug)
             if lead_member is None:
                 return {
                     "error": (f"lead agent {lead_slug!r} is not a member of project {project_id!r}")

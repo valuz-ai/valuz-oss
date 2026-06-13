@@ -70,7 +70,7 @@ async def _resolve(project_id: str, agent_slug: str) -> str:
 
 
 async def test_should_resolve_global_library_agent_when_not_a_project_member(db, patch_uow) -> None:
-    await AgentDatastore(db).create(
+    await AgentDatastore(db).create("local-test-owner", 
         AgentRow(
             slug=DEFAULT_ASSISTANT_SLUG,
             name="默认助手",
@@ -90,7 +90,7 @@ async def test_should_resolve_global_library_agent_when_not_a_project_member(db,
 async def test_should_prefer_project_member_over_library_agent(db, patch_uow) -> None:
     # Same slug exists both as a library agent AND as a project member; the
     # project-scoped member wins for project conversations.
-    await AgentDatastore(db).create(
+    await AgentDatastore(db).create("local-test-owner", 
         AgentRow(
             slug="architect",
             name="架构师",
@@ -99,7 +99,7 @@ async def test_should_prefer_project_member_over_library_agent(db, patch_uow) ->
             model="claude-sonnet-4-6",
         )
     )
-    await ProjectMemberDatastore(db).create(
+    await ProjectMemberDatastore(db).create("local-test-owner", 
         ProjectMemberRow(
             project_id="ws-proj",
             agent_slug="architect",
@@ -120,7 +120,7 @@ async def test_should_raise_when_slug_is_neither_member_nor_library_agent(db, pa
 async def test_member_resolution_builds_snapshot_from_library_row(db, patch_uow) -> None:
     """Live-reference semantics: the member's config snapshot is built from
     the CURRENT library row fields, keyed to the member's kernel id."""
-    await AgentDatastore(db).create(
+    await AgentDatastore(db).create("local-test-owner", 
         AgentRow(
             slug="researcher",
             name="研究员",
@@ -130,7 +130,7 @@ async def test_member_resolution_builds_snapshot_from_library_row(db, patch_uow)
             instructions="dig deep",
         )
     )
-    await ProjectMemberDatastore(db).create(
+    await ProjectMemberDatastore(db).create("local-test-owner", 
         ProjectMemberRow(
             project_id="ws-x",
             agent_slug="researcher",
@@ -170,7 +170,7 @@ async def test_resolution_carries_connector_types_into_mcp_servers(db, patch_uow
         )
     )
     await db.commit()
-    await AgentDatastore(db).create(
+    await AgentDatastore(db).create("local-test-owner", 
         AgentRow(
             slug="analyst",
             name="分析师",

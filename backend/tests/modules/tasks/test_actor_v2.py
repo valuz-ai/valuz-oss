@@ -50,7 +50,7 @@ def _async_member_get(source_agent_slug: str = "lead-agent"):
     """A fake ProjectMemberDatastore.get — async, since the real one is async
     (build_member_session awaits it)."""
 
-    async def _get(ws: str, slug: str) -> SimpleNamespace:
+    async def _get(user_id: str, ws: str, slug: str) -> SimpleNamespace:
         return SimpleNamespace(source_agent_slug=source_agent_slug)
 
     return _get

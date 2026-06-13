@@ -38,6 +38,7 @@ from valuz_agent.adapters.capability_resolver import (
     resolve_skill_slugs_to_paths,
 )
 from valuz_agent.adapters.system_prompt_builder import build_project_system_prompt
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.modules.agents.datastore import ProjectMemberDatastore
 
 logger = logging.getLogger(__name__)
@@ -402,7 +403,7 @@ async def _member_agent_config(member, members: ProjectMemberDatastore):  # noqa
     from valuz_agent.modules.agents.service import AgentService
 
     db = members._db  # noqa: SLF001 — same unit of work as the member lookup
-    row = await AgentDatastore(db).get_agent(member.source_agent_slug)
+    row = await AgentDatastore(db).get_agent(require_current_user_id(), member.source_agent_slug)
     if row is None:
         logger.warning(
             "member %s/%s points at missing library agent %s",
@@ -426,7 +427,7 @@ async def build_member_roster(
     can route sub-tasks to the right agent without first calling
     ``list_members``. Excludes the lead itself.
     """
-    rows = await members.list_by_project(project_id)
+    rows = await members.list_by_project(require_current_user_id(), project_id)
     lines: list[str] = []
     for row in rows:
         if row.agent_slug == exclude_slug:
@@ -465,7 +466,7 @@ async def resolve_member_agent(
 
     Callers should handle None as "agent not found" and surface a 404.
     """
-    member = await members.get(project_id, agent_slug)
+    member = await members.get(require_current_user_id(), project_id, agent_slug)
     if member is None:
         logger.debug("resolve_member_agent: no membership for %s/%s", project_id, agent_slug)
         return None
@@ -608,7 +609,7 @@ async def build_member_session(
         metadata["valuz"] = {project_id, agent_slug, task_id, run_kind}
         runtime_provider, model, skills, mcp_servers, permission_mode from agent
     """
-    member_row = await members.get(project_id, agent_slug)
+    member_row = await members.get(require_current_user_id(), project_id, agent_slug)
     if member_row is None:
         logger.debug("build_member_session: no membership for %s/%s", project_id, agent_slug)
         return None

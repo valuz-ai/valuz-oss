@@ -137,7 +137,9 @@ async def _read_model_defaults(db: AsyncSession) -> ModelDefaultsResponse:
     )
 
 
-async def _mirror_to_default_assistant(db: AsyncSession, defaults: ModelDefaultsResponse) -> None:
+async def _mirror_to_default_assistant(
+    user_id: str, db: AsyncSession, defaults: ModelDefaultsResponse
+) -> None:
     """09-assistant: the 默认助手 base agent's brain mirrors the global model
     default (Settings = source of truth). Keeps the always-present default
     conversation agent on the user's chosen runtime/model/effort. Re-syncs its
@@ -147,6 +149,7 @@ async def _mirror_to_default_assistant(db: AsyncSession, defaults: ModelDefaults
 
     try:
         await AgentService(db).update_agent(  # type: ignore[arg-type]
+            user_id,
             DEFAULT_ASSISTANT_SLUG,
             {
                 "runtime": defaults.default_runtime,
@@ -160,9 +163,9 @@ async def _mirror_to_default_assistant(db: AsyncSession, defaults: ModelDefaults
         pass
 
 
-async def _finish_model_defaults(db: AsyncSession) -> ModelDefaultsResponse:
+async def _finish_model_defaults(user_id: str, db: AsyncSession) -> ModelDefaultsResponse:
     defaults = await _read_model_defaults(db)
-    await _mirror_to_default_assistant(db, defaults)
+    await _mirror_to_default_assistant(user_id, db, defaults)
     return defaults
 
 
@@ -234,7 +237,7 @@ async def patch_model_defaults(
                     )
                     # default_model already synced inside set_default; skip the
                     # standalone write below so we don't double-write.
-                    return await _finish_model_defaults(db)
+                    return await _finish_model_defaults(user_id, db)
             elif payload.default_model is not None:
                 # Provider not being changed — still honour a standalone
                 # default_model update (e.g. user picks a different model
@@ -246,7 +249,7 @@ async def patch_model_defaults(
                 # by ``set_default_effort``; concrete values are
                 # validated against EFFORT_VALUES.
                 await set_default_effort(db, payload.default_effort or None)
-            return await _finish_model_defaults(db)
+            return await _finish_model_defaults(user_id, db)
     except SystemProviderImmutable as exc:
         raise HTTPException(
             status_code=409,

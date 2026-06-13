@@ -28,6 +28,7 @@ from typing import Any, Literal, cast
 from valuz_agent.adapters import kernel_client
 from valuz_agent.modules.sessions import project_index
 from valuz_agent.adapters.agent_resolver import build_member_session
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.fs_registry import fs_registry
@@ -332,7 +333,7 @@ class DispatcherService:
             """Return a deterministic string representing the agent's skills."""
             async with async_unit_of_work(commit=False) as db:
                 member_ds = ProjectMemberDatastore(db)
-                member = await member_ds.get(project_id, agent_slug)
+                member = await member_ds.get(require_current_user_id(), project_id, agent_slug)
                 if member is None:
                     return agent_slug
                 from valuz_agent.adapters.agent_resolver import _member_agent_config
