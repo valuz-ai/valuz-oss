@@ -22,7 +22,13 @@ def sessionmaker_(tmp_path):
 
 async def _create(sm, owner: str, slug: str) -> str:
     async with sm() as db:
-        row = ConnectorRow(slug=slug, display_name=slug, connector_type="custom", enabled=True)
+        row = ConnectorRow(
+            user_id="local-test-owner",
+            slug=slug,
+            display_name=slug,
+            connector_type="custom",
+            enabled=True,
+        )
         await ConnectorDatastore(db).create(owner, row)
         return row.id
 

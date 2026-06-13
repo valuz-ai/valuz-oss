@@ -62,6 +62,7 @@ async def test_tier2_derives_runtime_from_fallback_provider(db) -> None:
     hard-coded claude_agent."""
     db.add(
         ProviderRow(
+            user_id="local-test-owner",
             id="prov-1",
             name="My OpenAI",
             provider_kind="openai",
@@ -85,6 +86,7 @@ async def test_tier2_anthropic_fallback_uses_claude_agent(db) -> None:
     the derivation is provider-driven, not a blanket default."""
     db.add(
         ProviderRow(
+            user_id="local-test-owner",
             id="prov-2",
             name="My Claude",
             provider_kind="anthropic",

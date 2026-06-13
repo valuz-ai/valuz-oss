@@ -20,9 +20,7 @@ def _index_db(tmp_path, monkeypatch):
     import valuz_agent.infra.db as db_mod
 
     db_file = tmp_path / "index.db"
-    sync_engine = create_engine(
-        f"sqlite:///{db_file}", connect_args={"check_same_thread": False}
-    )
+    sync_engine = create_engine(f"sqlite:///{db_file}", connect_args={"check_same_thread": False})
     Base.metadata.create_all(sync_engine, tables=[ProjectSessionRow.__table__])
     async_engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
     monkeypatch.setattr(

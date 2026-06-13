@@ -37,15 +37,17 @@ async def db(tmp_path) -> AsyncIterator:
 
 
 async def test_should_mirror_model_defaults_onto_default_assistant(db) -> None:
-    await AgentDatastore(db).create("local-test-owner", 
+    await AgentDatastore(db).create(
+        "local-test-owner",
         AgentRow(
+            user_id="local-test-owner",
             slug=DEFAULT_ASSISTANT_SLUG,
             name="默认助手",
             source="official",
             deletable=False,
             runtime="claude_agent",
             model="claude-sonnet-4-6",
-        )
+        ),
     )
 
     await _mirror_to_default_assistant(

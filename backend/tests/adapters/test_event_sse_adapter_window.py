@@ -56,9 +56,7 @@ def seeded_engine(tmp_path, monkeypatch):
         items, has_more = await store.get_events_window(
             session_id, before_seq=before_seq, turn_limit=turn_limit
         )
-        return EventWindowData(
-            items=[stored_event_to_data(e) for e in items], has_more=has_more
-        )
+        return EventWindowData(items=[stored_event_to_data(e) for e in items], has_more=has_more)
 
     monkeypatch.setattr(event_sse_adapter.kernel_client, "get_events_window", _window)
     yield engine

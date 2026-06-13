@@ -29,6 +29,7 @@ def sessionmaker_(tmp_path):
 async def _create(sm, owner: str, name: str) -> str:
     async with sm() as db:
         row = ProviderRow(
+            user_id="local-test-owner",
             name=name,
             provider_kind="compatible",
             source="user",

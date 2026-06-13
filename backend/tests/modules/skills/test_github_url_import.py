@@ -97,12 +97,8 @@ def test_single_segment_ref_one_download(tmp_path: Path) -> None:
 
 def test_slash_ref_when_short_prefix_absent(tmp_path: Path) -> None:
     svc = _svc()
-    tried = _wire_resolution(
-        svc, refs_that_exist={"release/v2"}, valid_subdirs={"skills/foo"}
-    )
-    result = svc._fetch_github_tree(
-        "https://github.com/o/r/tree/release/v2/skills/foo", tmp_path
-    )
+    tried = _wire_resolution(svc, refs_that_exist={"release/v2"}, valid_subdirs={"skills/foo"})
+    result = svc._fetch_github_tree("https://github.com/o/r/tree/release/v2/skills/foo", tmp_path)
     assert result == Path("/resolved/skills/foo")
     assert tried == ["release", "release/v2"]  # 'release' 404s, then 'release/v2' wins
 
@@ -117,9 +113,7 @@ def test_slash_ref_when_short_prefix_is_a_real_but_wrong_branch(tmp_path: Path) 
         refs_that_exist={"release", "release/v2"},
         valid_subdirs={"skills/foo"},  # only valid under release/v2
     )
-    result = svc._fetch_github_tree(
-        "https://github.com/o/r/tree/release/v2/skills/foo", tmp_path
-    )
+    result = svc._fetch_github_tree("https://github.com/o/r/tree/release/v2/skills/foo", tmp_path)
     assert result == Path("/resolved/skills/foo")
     assert tried == ["release", "release/v2"]
 
@@ -128,9 +122,7 @@ def test_unresolvable_ref_raises_listing_candidates(tmp_path: Path) -> None:
     svc = _svc()
     _wire_resolution(svc, refs_that_exist=set(), valid_subdirs=set())
     with pytest.raises(ValueError, match="release, release/v2, release/v2/skills"):
-        svc._fetch_github_tree(
-            "https://github.com/o/r/tree/release/v2/skills", tmp_path
-        )
+        svc._fetch_github_tree("https://github.com/o/r/tree/release/v2/skills", tmp_path)
 
 
 # ── _download_repo_zipball (bare repo default-branch fallback) ────────

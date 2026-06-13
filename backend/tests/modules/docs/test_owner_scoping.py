@@ -35,7 +35,7 @@ def sessionmaker_(tmp_path):
 
 async def _create_kb(sm, owner: str, name: str, root: str) -> str:
     async with sm() as db:
-        row = KnowledgeBaseRow(name=name, root_path=root)
+        row = KnowledgeBaseRow(user_id="local-test-owner", name=name, root_path=root)
         await DocumentDatastore(db).create_kb(owner, row)
         return row.id
 

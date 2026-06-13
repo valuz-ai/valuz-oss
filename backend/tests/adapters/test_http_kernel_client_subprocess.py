@@ -172,9 +172,7 @@ async def test_rest_round_trip_against_standalone_kernel(kernel_proc) -> None:
         )
         assert updated.metadata["valuz"]["name"] == "renamed"
 
-        finalized = await client.finalize_session(
-            session_id, FinalizeSessionRequest(status="idle")
-        )
+        finalized = await client.finalize_session(session_id, FinalizeSessionRequest(status="idle"))
         assert finalized.status == "idle"
 
         # No message rows yet → out-of-band append reports not-persisted.

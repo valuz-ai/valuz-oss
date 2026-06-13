@@ -64,6 +64,7 @@ def _make_task(db_factory, tmp_path, *, project_id="w1", task_id="t1") -> str:
     try:
         db.add(
             TaskRow(
+                user_id="local-test-owner",
                 id=task_id,
                 project_id=project_id,
                 file_path=str(tmp_path / f"{task_id}.md"),
@@ -495,6 +496,7 @@ def _make_lead_run(db_factory, *, task_id="t1", session_id="lead-sess") -> None:
     try:
         db.add(
             TaskSessionRow(
+                user_id="local-test-owner",
                 id="run-lead",
                 project_id="w1",
                 task_id=task_id,
@@ -727,6 +729,7 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
         }
         db.add(
             TaskRow(
+                user_id="local-test-owner",
                 id="t1",
                 project_id="w1",
                 file_path=str(tmp_path / "t1.md"),
@@ -741,6 +744,7 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
         )
         db.add(
             TaskSessionRow(
+                user_id="local-test-owner",
                 project_id="w1",
                 task_id="t1",
                 session_id="lead-s",
@@ -755,6 +759,7 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
         ):
             db.add(
                 TaskSessionRow(
+                    user_id="local-test-owner",
                     project_id="w1",
                     task_id="t1",
                     session_id=sid,
@@ -845,6 +850,7 @@ def _seed_lead_and_members(
         }
         db.add(
             TaskRow(
+                user_id="local-test-owner",
                 id="t1",
                 project_id="w1",
                 file_path=str(tmp_path / "t1.md"),
@@ -859,6 +865,7 @@ def _seed_lead_and_members(
         )
         db.add(
             TaskSessionRow(
+                user_id="local-test-owner",
                 project_id="w1",
                 task_id="t1",
                 session_id="lead-s",
@@ -871,6 +878,7 @@ def _seed_lead_and_members(
         for i, (key, agent, sid, _ns) in enumerate(members, start=1):
             db.add(
                 TaskSessionRow(
+                    user_id="local-test-owner",
                     project_id="w1",
                     task_id="t1",
                     session_id=sid,
@@ -1354,8 +1362,12 @@ def test_lead_shutdown_exit_skips_auto_finalize(monkeypatch) -> None:
     monkeypatch.setattr(orch, "_auto_finalize_lead_task", _fake_auto)
 
     common = dict(
-        session_id="L", last_content="", final_status="idle", role="lead",
-        task_id="t1", project_id="w1",
+        session_id="L",
+        last_content="",
+        final_status="idle",
+        role="lead",
+        task_id="t1",
+        project_id="w1",
     )
     # shutdown exit → auto-finalize SKIPPED (no spurious block on resume)
     asyncio.run(orch._finalize_actor(via_shutdown=True, **common))  # type: ignore[arg-type]

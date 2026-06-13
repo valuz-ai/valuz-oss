@@ -24,10 +24,12 @@ class TestAgentOwnerScoping:
     async def test_agent_reads_scoped_by_owner(self, sessionmaker_) -> None:
         async with sessionmaker_() as db:
             await AgentDatastore(db).create(
-                "user-A", AgentRow(slug="a1", name="A1", source="custom")
+                "user-A",
+                AgentRow(user_id="local-test-owner", slug="a1", name="A1", source="custom"),
             )
             await AgentDatastore(db).create(
-                "user-B", AgentRow(slug="b1", name="B1", source="custom")
+                "user-B",
+                AgentRow(user_id="local-test-owner", slug="b1", name="B1", source="custom"),
             )
         async with sessionmaker_() as db:
             ds = AgentDatastore(db)
@@ -38,7 +40,8 @@ class TestAgentOwnerScoping:
     async def test_agent_delete_is_owner_scoped(self, sessionmaker_) -> None:
         async with sessionmaker_() as db:
             await AgentDatastore(db).create(
-                "user-A", AgentRow(slug="a1", name="A1", source="custom")
+                "user-A",
+                AgentRow(user_id="local-test-owner", slug="a1", name="A1", source="custom"),
             )
         async with sessionmaker_() as db:
             assert await AgentDatastore(db).delete("user-B", "a1") is False
@@ -48,7 +51,13 @@ class TestAgentOwnerScoping:
     async def test_member_reads_scoped_by_owner(self, sessionmaker_) -> None:
         async with sessionmaker_() as db:
             await ProjectMemberDatastore(db).create(
-                "user-A", ProjectMemberRow(project_id="p1", agent_slug="m1", source_agent_slug="a1")
+                "user-A",
+                ProjectMemberRow(
+                    user_id="local-test-owner",
+                    project_id="p1",
+                    agent_slug="m1",
+                    source_agent_slug="a1",
+                ),
             )
         async with sessionmaker_() as db:
             ds = ProjectMemberDatastore(db)

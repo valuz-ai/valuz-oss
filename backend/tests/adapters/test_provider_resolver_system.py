@@ -29,7 +29,6 @@ class _NoProviders:
         return None
 
 
-
 class _UnusedSecrets:
     def get(self, _: str):  # type: ignore[no-untyped-def]
         return None

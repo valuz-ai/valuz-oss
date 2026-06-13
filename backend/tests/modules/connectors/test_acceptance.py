@@ -79,7 +79,8 @@ async def test_should_store_and_inject_the_final_value_verbatim_with_prefix(svc_
     # sends the WHOLE string; backend stores/injects it verbatim — no
     # double "Bearer Bearer".
     fields = [CatalogFieldSpec(key="api_key", name="Authorization", target="header", secret=True)]
-    v = await svc.create_connector("local-test-owner", 
+    v = await svc.create_connector(
+        "local-test-owner",
         slug="acme",
         display_name="Acme",
         transport="http",
@@ -163,7 +164,8 @@ async def test_should_support_catalog_nonauth_secret_header_plus_custom_secret(
     # Catalog declares a NON-Authorization secret header; user also adds a
     # custom secret header. Both must round-trip create → injection.
     fields = [CatalogFieldSpec(key="api_key", name="X-API-Key", target="header", secret=True)]
-    v = await svc.create_connector("local-test-owner", 
+    v = await svc.create_connector(
+        "local-test-owner",
         slug="acme",
         display_name="Acme",
         transport="http",

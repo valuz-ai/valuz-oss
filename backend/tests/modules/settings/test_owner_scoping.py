@@ -27,7 +27,8 @@ def sessionmaker_(tmp_path):
 async def _set(sm, owner: str, key: str, value: str) -> None:
     async with sm() as db:
         await SettingsDatastore(db).upsert_setting(
-            owner, AppSettingRow(key=key, value_json=value, updated_at=0)
+            owner,
+            AppSettingRow(user_id="local-test-owner", key=key, value_json=value, updated_at=0),
         )
 
 

@@ -46,9 +46,18 @@ async def _deploy_row(db, *, slug: str, project_id: str, handle: str) -> None:
     provenance — the post-派驻 state, without the full deploy path."""
     agents = AgentDatastore(db)
     members = ProjectMemberDatastore(db)
-    await agents.create("local-test-owner", AgentRow(slug=slug, name=slug.upper(), source="custom"))
-    await members.create("local-test-owner",
-        ProjectMemberRow(project_id=project_id, agent_slug=handle, source_agent_slug=slug)
+    await agents.create(
+        "local-test-owner",
+        AgentRow(user_id="local-test-owner", slug=slug, name=slug.upper(), source="custom"),
+    )
+    await members.create(
+        "local-test-owner",
+        ProjectMemberRow(
+            user_id="local-test-owner",
+            project_id=project_id,
+            agent_slug=handle,
+            source_agent_slug=slug,
+        ),
     )
 
 
@@ -80,8 +89,15 @@ async def test_should_allow_delete_after_undeploy(db) -> None:
 async def test_should_block_delete_when_agent_not_deletable(db) -> None:
     # The 默认助手 base agent is seeded with deletable=False; delete must be
     # rejected and the row must survive.
-    await AgentDatastore(db).create("local-test-owner", 
-        AgentRow(slug="default-assistant", name="默认助手", source="official", deletable=False)
+    await AgentDatastore(db).create(
+        "local-test-owner",
+        AgentRow(
+            user_id="local-test-owner",
+            slug="default-assistant",
+            name="默认助手",
+            source="official",
+            deletable=False,
+        ),
     )
     svc = AgentService(db)  # type: ignore[arg-type]
 
@@ -101,17 +117,28 @@ async def test_should_resolve_member_back_to_library_agent(db) -> None:
 async def test_should_list_all_deployments_of_a_shared_agent(db) -> None:
     # Same library agent派驻'd into two projects.
     await _deploy_row(db, slug="pm", project_id="w1", handle="pm")
-    await ProjectMemberDatastore(db).create("local-test-owner", 
-        ProjectMemberRow(project_id="w2", agent_slug="pm", source_agent_slug="pm")
+    await ProjectMemberDatastore(db).create(
+        "local-test-owner",
+        ProjectMemberRow(
+            user_id="local-test-owner", project_id="w2", agent_slug="pm", source_agent_slug="pm"
+        ),
     )
-    deployments = await ProjectMemberDatastore(db).list_by_source_agent_slug("local-test-owner", "pm")
+    deployments = await ProjectMemberDatastore(db).list_by_source_agent_slug(
+        "local-test-owner", "pm"
+    )
     assert {m.project_id for m in deployments} == {"w1", "w2"}
 
 
 async def test_list_deployments_service_resolves_projects(db) -> None:
     await _deploy_row(db, slug="reviewer", project_id="w1", handle="reviewer")
-    await ProjectMemberDatastore(db).create("local-test-owner", 
-        ProjectMemberRow(project_id="w2", agent_slug="reviewer", source_agent_slug="reviewer")
+    await ProjectMemberDatastore(db).create(
+        "local-test-owner",
+        ProjectMemberRow(
+            user_id="local-test-owner",
+            project_id="w2",
+            agent_slug="reviewer",
+            source_agent_slug="reviewer",
+        ),
     )
     svc = AgentService(db)  # type: ignore[arg-type]
     deployments = await svc.list_deployments("local-test-owner", "reviewer")
@@ -119,6 +146,9 @@ async def test_list_deployments_service_resolves_projects(db) -> None:
 
 
 async def test_list_deployments_empty_for_never_deployed_agent(db) -> None:
-    await AgentDatastore(db).create("local-test-owner", AgentRow(slug="solo", name="Solo", source="custom"))
+    await AgentDatastore(db).create(
+        "local-test-owner",
+        AgentRow(user_id="local-test-owner", slug="solo", name="Solo", source="custom"),
+    )
     svc = AgentService(db)  # type: ignore[arg-type]
     assert await svc.list_deployments("local-test-owner", "solo") == []

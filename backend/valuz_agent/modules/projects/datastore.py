@@ -63,7 +63,9 @@ class ProjectDatastore:
             .first()
         )
 
-    async def create(self, row: ProjectRow) -> ProjectRow:
+    async def create(self, user_id: str, row: ProjectRow) -> ProjectRow:
+        # Owner passed explicitly (no ContextVar write-stamp default).
+        row.user_id = user_id
         self._db.add(row)
         await self._db.commit()
         return row

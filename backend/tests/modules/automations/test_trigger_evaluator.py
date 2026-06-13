@@ -41,7 +41,7 @@ def _row(**overrides: object) -> AutomationRow:
         "last_run_at": None,
     }
     base.update(overrides)
-    return AutomationRow(**base)
+    return AutomationRow(user_id="local-test-owner", **base)
 
 
 class TestCronTrigger:

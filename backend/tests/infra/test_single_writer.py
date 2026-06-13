@@ -13,7 +13,6 @@ from valuz_agent.infra.single_writer import (
 )
 
 
-
 @pytest.fixture(autouse=True)
 def _reset_lock_state() -> None:
     # Make sure each test starts and ends without holding the module-level

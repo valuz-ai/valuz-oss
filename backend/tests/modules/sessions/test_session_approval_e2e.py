@@ -224,11 +224,13 @@ async def test_should_return_idempotent_on_same_decision_retry(_store_and_orches
 
     pid, aid, sid, mid = (uuid.uuid4().hex for _ in range(4))
     pending_id = "pending-idem"
-    await store.save_session(Session(
+    await store.save_session(
+        Session(
             id=sid,
             agent_config=AgentConfig(id=aid, name="a", model="m"),
             cwd=str(tmp_path),
-        ))
+        )
+    )
     await store.save_message(
         Message(
             id=mid,
@@ -280,11 +282,13 @@ async def test_should_reject_conflicting_decision_with_pending_action_conflict(
 
     pid, aid, sid, mid = (uuid.uuid4().hex for _ in range(4))
     pending_id = "pending-conflict"
-    await store.save_session(Session(
+    await store.save_session(
+        Session(
             id=sid,
             agent_config=AgentConfig(id=aid, name="a", model="m"),
             cwd=str(tmp_path),
-        ))
+        )
+    )
     await store.save_message(
         Message(
             id=mid,
@@ -332,12 +336,14 @@ async def test_should_seal_orphan_pendings_on_startup_walk(_store_and_orchestrat
     pending_id = "pending-stale"
     # Status must be ``running`` for the scan to find it (simulates a
     # crash mid-turn).
-    await store.save_session(Session(
+    await store.save_session(
+        Session(
             id=sid,
             agent_config=AgentConfig(id=aid, name="a", model="m"),
             cwd=str(tmp_path),
             status="running",
-        ))
+        )
+    )
     await store.save_message(
         Message(
             id=mid,
@@ -402,11 +408,13 @@ async def test_should_commit_session_rule_and_return_rule_id_on_approve_for_sess
 
     pid, aid, sid, mid = (uuid.uuid4().hex for _ in range(4))
     pending_id = "pending-rule-1"
-    await store.save_session(Session(
+    await store.save_session(
+        Session(
             id=sid,
             agent_config=AgentConfig(id=aid, name="a", model="m"),
             cwd=str(tmp_path),
-        ))
+        )
+    )
     await store.save_message(
         Message(
             id=mid,
@@ -476,11 +484,13 @@ async def test_should_forward_modified_input_to_runtime_on_approve_with_changes(
 
     pid, aid, sid, mid = (uuid.uuid4().hex for _ in range(4))
     pending_id = "pending-edit-1"
-    await store.save_session(Session(
+    await store.save_session(
+        Session(
             id=sid,
             agent_config=AgentConfig(id=aid, name="a", model="m"),
             cwd=str(tmp_path),
-        ))
+        )
+    )
     await store.save_message(
         Message(
             id=mid,

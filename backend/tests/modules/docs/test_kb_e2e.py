@@ -230,6 +230,7 @@ class TestKbLifecycle:
         kb = await _create_kb_and_settle(svc, name="KB1", root_path=str(tmp_kb_root))
         db.add(
             DocumentImportTaskRow(
+                user_id="local-test-owner",
                 id="active-rescan-task",
                 task_type="rescan",
                 kb_id=kb.id,
@@ -752,7 +753,9 @@ class TestFullE2EScenario:
         await _drain(svc)
 
         q3 = [
-            d for d in await ds.list_documents("local-test-owner", kb_id=kb.id) if d.source_filename == "Q3-report.pdf"
+            d
+            for d in await ds.list_documents("local-test-owner", kb_id=kb.id)
+            if d.source_filename == "Q3-report.pdf"
         ]
         assert len(q3) == 1
         assert q3[0].status == "missing"

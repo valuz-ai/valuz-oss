@@ -31,6 +31,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.parser.datastore import PollingTaskDatastore
 from valuz_agent.modules.parser.models import PollingTaskRow
@@ -202,7 +203,7 @@ class PollingScheduler:
         from valuz_agent.infra.db import async_unit_of_work
 
         async with async_unit_of_work() as db:
-            await PollingTaskDatastore(db).insert(row)
+            await PollingTaskDatastore(db).insert(require_current_user_id(), row)
         return task_id
 
     async def await_task(self, task_id: str) -> ParseResult:
@@ -233,7 +234,7 @@ class PollingScheduler:
                 return
             row.status = "cancelled"
             row.error = "cancelled by user"
-            await ds.upsert(row)
+            await ds.upsert(row.user_id, row)
         self._resolve_awaiters(task_id, error="cancelled by user")
 
     # ----- tick loop ------------------------------------------------
@@ -416,7 +417,7 @@ class PollingScheduler:
                 return
             for k, v in fields.items():
                 setattr(row, k, v)
-            await ds.upsert(row)
+            await ds.upsert(row.user_id, row)
 
 
 # ----- helpers --------------------------------------------------------

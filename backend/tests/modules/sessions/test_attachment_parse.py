@@ -97,6 +97,7 @@ async def _make_parsing_row(stored_path: str = "/raw.txt", filename: str = "a.tx
 
     async with async_unit_of_work() as session:
         row = SessionAttachmentRow(
+            user_id="local-test-owner",
             session_id="s1",
             filename=filename,
             stored_path=stored_path,

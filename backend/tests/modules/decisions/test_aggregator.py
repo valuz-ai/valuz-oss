@@ -60,9 +60,14 @@ def _seed(
 ) -> None:
     db = db_factory()
     try:
-        db.add(ProjectRow(id=project_id, name="全栈开发", kind="project", icon="🛠"))
+        db.add(
+            ProjectRow(
+                user_id="local-test-owner", id=project_id, name="全栈开发", kind="project", icon="🛠"
+            )
+        )
         db.add(
             TaskRow(
+                user_id="local-test-owner",
                 id=task_id,
                 project_id=project_id,
                 file_path="/tmp/t.md",
@@ -87,6 +92,7 @@ def _seed(
         )
         db.add(
             TaskSessionRow(
+                user_id="local-test-owner",
                 id="run1",
                 project_id=project_id,
                 task_id=task_id,

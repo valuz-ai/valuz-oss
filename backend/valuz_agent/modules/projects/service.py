@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from valuz_agent.adapters import kernel_client
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.modules.automations.datastore import AutomationDatastore
@@ -155,7 +156,7 @@ class ProjectService:
         if existing:
             return
         row = ProjectRow(name="Chat", kind="chat", sort_order=0)
-        await self._ds.create(row)
+        await self._ds.create(user_id, row)
 
     async def create_chat_project_for_session(self, name: str = "Chat") -> ProjectRow:
         """Materialize a fresh, ephemeral chat project for one chat-kind context.
@@ -179,7 +180,7 @@ class ProjectService:
         sessions, not bound to any single chat project's id.
         """
         row = ProjectRow(name=name, kind="chat", sort_order=100)
-        await self._ds.create(row)
+        await self._ds.create(require_current_user_id(), row)
         return row
 
     async def list_projects(self, user_id: str) -> list[ProjectListItem]:
@@ -215,7 +216,7 @@ class ProjectService:
         if existing:
             raise ValueError(f"Directory already bound to project '{existing.name}'")
         row = ProjectRow(name=name, kind="project", root_path=abs_path, sort_order=10)
-        await self._ds.create(row)
+        await self._ds.create(user_id, row)
         return _row_to_detail(row, cwd=self.resolve_project_cwd(row))
 
     async def rename_project(self, user_id: str, project_id: str, name: str) -> ProjectDetail:

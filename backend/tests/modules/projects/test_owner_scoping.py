@@ -17,7 +17,6 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from valuz_agent.infra import auth_context
 from valuz_agent.infra.database import Base
 from valuz_agent.modules.projects.datastore import ProjectDatastore
 from valuz_agent.modules.projects.models import ProjectRow
@@ -34,15 +33,11 @@ def sessionmaker_(tmp_path):
 
 
 async def _create_project_as(sm, owner: str, name: str) -> str:
-    """Insert a project owned by ``owner`` (stamped via the owner context)."""
-    token = auth_context.set_current_user_id(owner)
-    try:
-        async with sm() as db:
-            row = ProjectRow(name=name, kind="project", root_path=f"/tmp/{name}")
-            await ProjectDatastore(db).create(row)
-            return row.id
-    finally:
-        auth_context.reset_current_user_id(token)
+    """Insert a project owned by ``owner`` (stamped explicitly via create)."""
+    async with sm() as db:
+        row = ProjectRow(name=name, kind="project", root_path=f"/tmp/{name}")
+        await ProjectDatastore(db).create(owner, row)
+        return row.id
 
 
 class TestProjectReadOwnerScoping:

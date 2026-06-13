@@ -22,6 +22,7 @@ def sessionmaker_(tmp_path):
 
 def _row(skill_id: str) -> SkillIndexRow:
     return SkillIndexRow(
+        user_id="local-test-owner",
         id=skill_id,
         slug=skill_id,
         name=skill_id,

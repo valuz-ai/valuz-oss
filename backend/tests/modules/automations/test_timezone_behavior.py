@@ -38,7 +38,7 @@ def _utc(ms: int) -> dt:
 
 class TestCronUtcSemantics:
     def test_same_wall_clock_different_tz_yields_different_utc(self) -> None:
-        """"18:30 daily" in three zones → three DIFFERENT absolute UTC instants,
+        """ "18:30 daily" in three zones → three DIFFERENT absolute UTC instants,
         each the correct conversion."""
         ci = CronInterpreter()
         sh = _utc(ci.next_run("30 18 * * *", "Asia/Shanghai", _AFTER_JUN))

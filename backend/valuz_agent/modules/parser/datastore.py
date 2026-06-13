@@ -70,7 +70,9 @@ class PollingTaskDatastore:
     async def get(self, task_id: str) -> PollingTaskRow | None:
         return await self._db.get(PollingTaskRow, task_id)
 
-    async def insert(self, row: PollingTaskRow) -> PollingTaskRow:
+    async def insert(self, user_id: str, row: PollingTaskRow) -> PollingTaskRow:
+        # Owner passed explicitly (no ContextVar write-stamp default).
+        row.user_id = user_id
         now = now_ms()
         if not getattr(row, "created_at", None):
             row.created_at = now
@@ -78,7 +80,9 @@ class PollingTaskDatastore:
         self._db.add(row)
         return row
 
-    async def upsert(self, row: PollingTaskRow) -> PollingTaskRow:
+    async def upsert(self, user_id: str, row: PollingTaskRow) -> PollingTaskRow:
+        # Owner passed explicitly (no ContextVar write-stamp default).
+        row.user_id = user_id
         row.updated_at = now_ms()
         await self._db.merge(row)
         return row

@@ -50,7 +50,8 @@ async def _row(svc, session, cid):
 async def test_should_route_catalog_secret_header_to_store_not_plaintext(svc_and_secrets):
     svc, secrets, _ = svc_and_secrets
     fields = [CatalogFieldSpec(key="api_key", name="X-API-Key", target="header", secret=True)]
-    v = await svc.create_connector("local-test-owner", 
+    v = await svc.create_connector(
+        "local-test-owner",
         slug="acme",
         display_name="Acme",
         transport="http",
@@ -72,7 +73,8 @@ async def test_should_route_catalog_secret_header_to_store_not_plaintext(svc_and
 # ── Acceptance #3 — custom split: secret→store, plaintext→json ─────────
 async def test_should_split_custom_entries_by_client_secret_flag(svc_and_secrets):
     svc, secrets, _ = svc_and_secrets
-    v = await svc.create_connector("local-test-owner", 
+    v = await svc.create_connector(
+        "local-test-owner",
         slug="cust",
         display_name="Cust",
         transport="http",
@@ -98,7 +100,8 @@ async def test_should_let_catalog_fields_override_client_secret_flag(svc_and_sec
     svc, secrets, _ = svc_and_secrets
     # Catalog says secret=True; malicious client claims secret=False.
     fields = [CatalogFieldSpec(key="api_key", name="Authorization", target="header", secret=True)]
-    v = await svc.create_connector("local-test-owner", 
+    v = await svc.create_connector(
+        "local-test-owner",
         slug="acme",
         display_name="Acme",
         transport="http",
@@ -117,7 +120,8 @@ async def test_should_let_catalog_fields_override_client_secret_flag(svc_and_sec
 async def test_should_route_secret_param_to_store_and_inject_into_query(svc_and_secrets):
     svc, secrets, _ = svc_and_secrets
     fields = [CatalogFieldSpec(key="token", name="token", target="param", secret=True)]
-    v = await svc.create_connector("local-test-owner", 
+    v = await svc.create_connector(
+        "local-test-owner",
         slug="acme",
         display_name="Acme",
         transport="http",
@@ -144,7 +148,8 @@ def test_should_merge_params_overriding_same_key_and_preserving_others():
 # ── Acceptance #7 — desired-state: rotate / preserve(blank) / delete ───
 async def test_should_apply_desired_state_semantics_on_update(svc_and_secrets):
     svc, secrets, _ = svc_and_secrets
-    v = await svc.create_connector("local-test-owner", 
+    v = await svc.create_connector(
+        "local-test-owner",
         slug="d",
         display_name="D",
         transport="http",
@@ -158,7 +163,8 @@ async def test_should_apply_desired_state_semantics_on_update(svc_and_secrets):
     cid = v.id
 
     # Blank value on the secret + resend plaintext → preserved unchanged.
-    await svc.update_connector("local-test-owner", 
+    await svc.update_connector(
+        "local-test-owner",
         cid,
         headers=[
             CredEntry(key="Authorization", secret=True, value=None),
@@ -169,7 +175,8 @@ async def test_should_apply_desired_state_semantics_on_update(svc_and_secrets):
     assert headers == {"X-Trace": "t1", "Authorization": "Bearer one"}
 
     # Rotate the secret, drop X-Trace entirely (absent → deleted).
-    await svc.update_connector("local-test-owner", 
+    await svc.update_connector(
+        "local-test-owner",
         cid,
         headers=[CredEntry(key="Authorization", secret=True, value="Bearer two")],
     )
@@ -187,7 +194,8 @@ async def test_should_apply_desired_state_semantics_on_update(svc_and_secrets):
 # ── Acceptance #8 — probe and resolver share build_overrides ──────────
 async def test_should_inject_identically_via_resolver_and_build_overrides(svc_and_secrets):
     svc, secrets, _ = svc_and_secrets
-    v = await svc.create_connector("local-test-owner", 
+    v = await svc.create_connector(
+        "local-test-owner",
         slug="parity",
         display_name="Parity",
         transport="http",
@@ -209,7 +217,8 @@ async def test_should_inject_identically_via_resolver_and_build_overrides(svc_an
 # ── delete clears manifest-referenced secrets ─────────────────────────
 async def test_should_delete_manifest_secrets_on_connector_delete(svc_and_secrets):
     svc, secrets, _ = svc_and_secrets
-    v = await svc.create_connector("local-test-owner", 
+    v = await svc.create_connector(
+        "local-test-owner",
         slug="del",
         display_name="Del",
         transport="http",

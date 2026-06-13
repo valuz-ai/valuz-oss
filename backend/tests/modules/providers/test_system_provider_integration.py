@@ -121,6 +121,7 @@ def _descriptor(
 
 def _seed_user_row(svc: _SvcHandle) -> ProviderRow:
     row = ProviderRow(
+        user_id="local-test-owner",
         id="user-1",
         name="My OpenAI",
         provider_kind="openai",

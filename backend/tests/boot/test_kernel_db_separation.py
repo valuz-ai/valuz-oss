@@ -86,8 +86,7 @@ async def split_db(tmp_path, monkeypatch):
 def _tables(path: Path) -> set[str]:
     with sqlite3.connect(path) as conn:
         return {
-            row[0]
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
 
 

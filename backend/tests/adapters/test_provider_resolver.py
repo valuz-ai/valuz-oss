@@ -48,7 +48,6 @@ class _FakeProviderDatastore:
         return self._by_id.get(provider_id)
 
 
-
 class _UnusedSecrets:
     def get(self, _ref: str):  # type: ignore[no-untyped-def]
         return None

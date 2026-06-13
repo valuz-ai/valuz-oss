@@ -574,6 +574,7 @@ class TestMarkMissedRuns:
     ) -> None:
         # Manually plant an overdue row (next_run_at in the past).
         row = AutomationRow(
+            user_id="local-test-owner",
             id=uuid4().hex,
             name="legacy",
             agent_kind="project_member",
@@ -606,6 +607,7 @@ class TestMarkMissedRuns:
         # After the skip, next_run_at should be in the FUTURE so the runner
         # doesn't keep replaying the overdue path on every tick.
         row = AutomationRow(
+            user_id="local-test-owner",
             id=uuid4().hex,
             name="legacy",
             agent_kind="project_member",
