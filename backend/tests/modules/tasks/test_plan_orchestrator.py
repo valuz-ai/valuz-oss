@@ -64,6 +64,7 @@ def _make_task(db_factory, tmp_path, *, project_id="w1", task_id="t1") -> str:
     try:
         db.add(
             TaskRow(
+                user_id="local-test-owner",
                 id=task_id,
                 project_id=project_id,
                 file_path=str(tmp_path / f"{task_id}.md"),
@@ -495,6 +496,7 @@ def _make_lead_run(db_factory, *, task_id="t1", session_id="lead-sess") -> None:
     try:
         db.add(
             TaskSessionRow(
+                user_id="local-test-owner",
                 id="run-lead",
                 project_id="w1",
                 task_id=task_id,
@@ -589,7 +591,9 @@ def test_auto_finalize_stays_active_on_stop_reason_error_with_empty_plan(
     fake_sess = SimpleNamespace(
         stop_reason={"type": "error", "category": "execution_error", "message": "boom: skill x"}
     )
-    monkeypatch.setattr(orch_mod.kernel_client, "get_session", _as_async(lambda _sid: fake_sess))
+    monkeypatch.setattr(
+        orch_mod.kernel_client, "get_session", _as_async(lambda _uid, _sid: fake_sess)
+    )
     orch = TaskOrchestrator()
     asyncio.run(
         orch._auto_finalize_lead_task(
@@ -727,6 +731,7 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
         }
         db.add(
             TaskRow(
+                user_id="local-test-owner",
                 id="t1",
                 project_id="w1",
                 file_path=str(tmp_path / "t1.md"),
@@ -741,6 +746,7 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
         )
         db.add(
             TaskSessionRow(
+                user_id="local-test-owner",
                 project_id="w1",
                 task_id="t1",
                 session_id="lead-s",
@@ -755,6 +761,7 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
         ):
             db.add(
                 TaskSessionRow(
+                    user_id="local-test-owner",
                     project_id="w1",
                     task_id="t1",
                     session_id=sid,
@@ -781,7 +788,7 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
         ),
     }
     monkeypatch.setattr(
-        orch_mod.kernel_client, "get_session", _as_async(lambda sid: sessions.get(sid))
+        orch_mod.kernel_client, "get_session", _as_async(lambda _uid, sid: sessions.get(sid))
     )
 
     orch = TaskOrchestrator()
@@ -845,6 +852,7 @@ def _seed_lead_and_members(
         }
         db.add(
             TaskRow(
+                user_id="local-test-owner",
                 id="t1",
                 project_id="w1",
                 file_path=str(tmp_path / "t1.md"),
@@ -859,6 +867,7 @@ def _seed_lead_and_members(
         )
         db.add(
             TaskSessionRow(
+                user_id="local-test-owner",
                 project_id="w1",
                 task_id="t1",
                 session_id="lead-s",
@@ -871,6 +880,7 @@ def _seed_lead_and_members(
         for i, (key, agent, sid, _ns) in enumerate(members, start=1):
             db.add(
                 TaskSessionRow(
+                    user_id="local-test-owner",
                     project_id="w1",
                     task_id="t1",
                     session_id=sid,
@@ -947,7 +957,7 @@ def test_resume_task_only_paused_flips_active_and_redrives(
         orch_mod.kernel_client,
         "get_session",
         _as_async(
-            lambda sid: SimpleNamespace(status="idle", stop_reason={"type": "user_interrupt"})
+            lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "user_interrupt"})
         ),
     )
     orch = TaskOrchestrator()
@@ -1002,7 +1012,7 @@ def test_resume_task_accepts_blocked(db_factory, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         orch_mod.kernel_client,
         "get_session",
-        _as_async(lambda sid: SimpleNamespace(status="idle", stop_reason={"type": "error"})),
+        _as_async(lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "error"})),
     )
     orch = TaskOrchestrator()
     spawned: list[tuple[str, str]] = []
@@ -1033,7 +1043,7 @@ def test_resume_task_accepts_stopped(db_factory, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         orch_mod.kernel_client,
         "get_session",
-        _as_async(lambda sid: SimpleNamespace(status="idle", stop_reason=None)),
+        _as_async(lambda _uid, sid: SimpleNamespace(status="idle", stop_reason=None)),
     )
     orch = TaskOrchestrator()
     spawned: list[tuple[str, str]] = []
@@ -1064,7 +1074,7 @@ def test_resume_task_accepts_completed(db_factory, tmp_path, monkeypatch) -> Non
     monkeypatch.setattr(
         orch_mod.kernel_client,
         "get_session",
-        _as_async(lambda sid: SimpleNamespace(status="idle", stop_reason=None)),
+        _as_async(lambda _uid, sid: SimpleNamespace(status="idle", stop_reason=None)),
     )
     orch = TaskOrchestrator()
     spawned: list[tuple[str, str]] = []
@@ -1137,7 +1147,7 @@ def test_heartbeat_pending_synthesizes_terminal_completed(
         "sC": SimpleNamespace(status="running", stop_reason=None),  # still in flight
     }
     monkeypatch.setattr(
-        orch_mod.kernel_client, "get_session", _as_async(lambda sid: sessions.get(sid))
+        orch_mod.kernel_client, "get_session", _as_async(lambda _uid, sid: sessions.get(sid))
     )
     # ``_heartbeat_pending`` lives in tasks/coordination.py (ADR-023 Step 3b);
     # the orchestrator delegates to it, so stub the coordination module's
@@ -1198,7 +1208,7 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
         orch_mod.kernel_client,
         "get_session",
         _as_async(
-            lambda sid: SimpleNamespace(status="idle", stop_reason={"type": "user_interrupt"})
+            lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "user_interrupt"})
         ),
     )
 
@@ -1207,7 +1217,7 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
         # UI-terminal but still revivable (resume below proves the closed loop).
         async with async_unit_of_work() as db:
             resp = await tasks_route.intervene(
-                "t1", tasks_route.InterveneRequest(action="stop"), db
+                "t1", tasks_route.InterveneRequest(action="stop"), db, "local-test-owner"
             )
         assert resp.status == "stopped"
         assert set(interrupted) == {"sA", "sB", "lead-s"}
@@ -1220,7 +1230,7 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
         # 2) Resume → active (reconcile + respawn + re-drive lead).
         async with async_unit_of_work() as db:
             resp2 = await tasks_route.intervene(
-                "t1", tasks_route.InterveneRequest(action="resume"), db
+                "t1", tasks_route.InterveneRequest(action="resume"), db, "local-test-owner"
             )
         assert resp2.status == "active"
         await asyncio.sleep(0.05)  # let create_task'd loops run
@@ -1256,14 +1266,18 @@ def test_pause_distinct_from_stop_and_parks_nodes(db_factory, tmp_path, monkeypa
     async def _run() -> None:
         # pause → paused; node parked; member run paused.
         async with async_unit_of_work() as db:
-            r1 = await tasks_route.intervene("t1", tasks_route.InterveneRequest(action="pause"), db)
+            r1 = await tasks_route.intervene(
+                "t1", tasks_route.InterveneRequest(action="pause"), db, "local-test-owner"
+            )
         assert r1.status == "paused"
         assert TaskPlan.from_dict(_task_row(db_factory).plan).get("A").status == "paused"
         assert _runs(db_factory)["sA"] == "paused"
 
         # stop on the already-paused task → stopped (no longer a no-op).
         async with async_unit_of_work() as db:
-            r2 = await tasks_route.intervene("t1", tasks_route.InterveneRequest(action="stop"), db)
+            r2 = await tasks_route.intervene(
+                "t1", tasks_route.InterveneRequest(action="stop"), db, "local-test-owner"
+            )
         assert r2.status == "stopped"
 
     try:
@@ -1298,7 +1312,7 @@ def test_resume_evicts_kernel_runtime_before_respawn(db_factory, tmp_path, monke
         orch_mod.kernel_client,
         "get_session",
         _as_async(
-            lambda sid: SimpleNamespace(status="idle", stop_reason={"type": "user_interrupt"})
+            lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "user_interrupt"})
         ),
     )
 
@@ -1354,8 +1368,12 @@ def test_lead_shutdown_exit_skips_auto_finalize(monkeypatch) -> None:
     monkeypatch.setattr(orch, "_auto_finalize_lead_task", _fake_auto)
 
     common = dict(
-        session_id="L", last_content="", final_status="idle", role="lead",
-        task_id="t1", project_id="w1",
+        session_id="L",
+        last_content="",
+        final_status="idle",
+        role="lead",
+        task_id="t1",
+        project_id="w1",
     )
     # shutdown exit → auto-finalize SKIPPED (no spurious block on resume)
     asyncio.run(orch._finalize_actor(via_shutdown=True, **common))  # type: ignore[arg-type]

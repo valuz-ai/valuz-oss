@@ -74,8 +74,6 @@ def test_session_model_round_trip_carries_snapshot() -> None:
     assert back.agent_config.max_turns == 7
 
 
-
-
 def test_dict_to_agent_config_handles_empty() -> None:
     assert dict_to_agent_config(None) is None
     assert dict_to_agent_config({}) is None

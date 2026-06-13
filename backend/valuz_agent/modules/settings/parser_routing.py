@@ -29,6 +29,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.settings.datastore import SettingsDatastore
 from valuz_agent.modules.settings.models import AppSettingRow
@@ -57,7 +58,7 @@ LOCKED_LOCAL_KINDS: frozenset[str] = frozenset({"text"})
 
 
 async def _read_json(db: AsyncSession, key: str) -> Any | None:
-    row = await SettingsDatastore(db).get_setting(key)
+    row = await SettingsDatastore(db).get_setting(require_current_user_id(), key)
     if row is None:
         return None
     try:
@@ -71,6 +72,7 @@ async def _read_json(db: AsyncSession, key: str) -> Any | None:
 
 async def _write_json(db: AsyncSession, key: str, value: Any) -> None:
     await SettingsDatastore(db).upsert_setting(
+        require_current_user_id(),
         AppSettingRow(
             key=key,
             value_json=json.dumps({"value": value}),

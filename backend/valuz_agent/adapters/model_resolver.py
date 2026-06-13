@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import valuz_agent.boot.kernel  # noqa: F401
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.modules.providers.datastore import ProviderDatastore
 
 logger = logging.getLogger(__name__)
@@ -93,7 +94,7 @@ async def resolve_model(
     custom = False
     if request_model_id:
         if request_provider_id:
-            provider = await providers.get_by_id(request_provider_id)
+            provider = await providers.get_by_id(require_current_user_id(), request_provider_id)
             if provider is not None:
                 options = _model_ids_of(provider)
                 if options and request_model_id not in options:
@@ -113,7 +114,7 @@ async def resolve_model(
         )
 
     if request_provider_id:
-        provider = await providers.get_by_id(request_provider_id)
+        provider = await providers.get_by_id(require_current_user_id(), request_provider_id)
         if provider and provider.default_model:
             return ModelResolution(
                 provider.default_model,
@@ -134,7 +135,7 @@ async def resolve_model(
     # don't pass provider_id (skill creator, scheduled worker, programmatic
     # callers) silently bypassed the user's pick and 422'd against the
     # ANTHROPIC_API_KEY-less ch-anthropic seed.
-    default_row = await providers.get_default()
+    default_row = await providers.get_default(require_current_user_id())
     if default_row and default_row.default_model:
         return ModelResolution(
             default_row.default_model,

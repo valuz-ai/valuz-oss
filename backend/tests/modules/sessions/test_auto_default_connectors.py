@@ -26,7 +26,7 @@ class _FakeProjects:
     def __init__(self, project_row) -> None:
         self._row = project_row
 
-    async def get_by_id(self, project_id: str):
+    async def get_by_id(self, user_id: str, project_id: str):
         return self._row
 
 

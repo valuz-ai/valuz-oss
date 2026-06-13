@@ -59,6 +59,12 @@ from collections.abc import AsyncIterator
 
 import valuz_agent.boot.kernel  # noqa: F401 — sys.path side-effect
 
+from valuz_agent.infra.auth_context import (
+    require_current_user_id,
+    reset_current_user_id,
+    set_current_user_id,
+)
+
 from mcp.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import TextContent, Tool
@@ -100,6 +106,25 @@ def _current_session_id() -> str:
     return sid
 
 
+async def _resolve_session_owner(session_id: str) -> str | None:
+    """Owner id of the calling session, or ``None`` if it can't be resolved.
+
+    Looks the session up over the kernel seam and reads ``SessionData.user_id``.
+    ``None`` (kernel GC'd the session, or a legacy row with an empty owner)
+    leaves the owner context untouched — a handler that then needs an owner
+    fails loudly via ``require_current_user_id`` rather than reading across
+    owners.
+    """
+    from valuz_agent.adapters import kernel_client
+
+    try:
+        sess = await kernel_client.get_session(require_current_user_id(), session_id)
+    except Exception:  # noqa: BLE001 — owner resolution is best-effort; never block the tool
+        logger.warning("toolkit: failed to resolve owner for session %s", session_id, exc_info=True)
+        return None
+    return (sess.user_id or None) if sess is not None else None
+
+
 def _build_server(toolset: str) -> Server:
     """Wire the toolset's handlers into a fresh ``mcp.server.Server``.
 
@@ -131,7 +156,20 @@ def _build_server(toolset: str) -> Server:
         if tdef is None or tdef.handler is None:
             raise ValueError(f"unknown tool: {tool_name}")
         ctx = ExecContext(session_id=_current_session_id())
-        result = await tdef.handler(dict(arguments), ctx)
+        # Owner boundary for background work: the kernel runs the agent loop,
+        # so a tool handler has no HTTP request and no owner context. Resolve
+        # the calling session's owner (carried over the seam on
+        # ``SessionData.user_id``) and publish it, so the handler's
+        # owner-scoped reads attribute to whoever owns the session — and any
+        # asyncio actors it spawns inherit the same owner. Mirrors what
+        # ``AuthMiddleware`` does for the request path.
+        owner = await _resolve_session_owner(ctx.session_id)
+        token = set_current_user_id(owner) if owner else None
+        try:
+            result = await tdef.handler(dict(arguments), ctx)
+        finally:
+            if token is not None:
+                reset_current_user_id(token)
         text = result.content if not result.is_error else f"ERROR: {result.content}"
         return [TextContent(type="text", text=text)]
 

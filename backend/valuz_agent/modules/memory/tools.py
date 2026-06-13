@@ -23,6 +23,7 @@ from src.core.tools import ExecContext
 
 import valuz_agent.boot.kernel  # noqa: F401
 from valuz_agent.adapters import kernel_client
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.modules.memory.models import MEM_TYPES, MemoryScope, Scope
 from valuz_agent.modules.memory.service import MemoryError, memory_service
 
@@ -42,7 +43,7 @@ async def _resolve_project_cwd(session_id: str) -> str | None:
     run_dir while memory scopes must anchor at the project root."""
     if not session_id:
         return None
-    sess = await kernel_client.get_session(session_id)
+    sess = await kernel_client.get_session(require_current_user_id(), session_id)
     if sess is None:
         return None
     project_id = ((sess.metadata or {}).get("valuz", {}) or {}).get("project_id") or ""
@@ -50,13 +51,13 @@ async def _resolve_project_cwd(session_id: str) -> str | None:
         return None
     from valuz_agent.modules.projects.service import project_cwd_by_id
 
-    return await project_cwd_by_id(str(project_id))
+    return await project_cwd_by_id(sess.user_id, str(project_id))
 
 
 async def _resolve_task_id(session_id: str) -> str | None:
     if not session_id:
         return None
-    sess = await kernel_client.get_session(session_id)
+    sess = await kernel_client.get_session(require_current_user_id(), session_id)
     if sess is None:
         return None
     valuz = (sess.metadata or {}).get("valuz", {}) or {}

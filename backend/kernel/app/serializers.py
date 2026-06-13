@@ -103,6 +103,7 @@ def session_to_data(session: Session) -> SessionData:
         stop_reason = StopReasonSchema(**sr_dict)
     return SessionData(
         id=session.id,
+        user_id=session.user_id,
         agent_config=agent_config_to_schema(session.agent_config),
         runtime_provider=session.runtime_provider,
         cwd=session.cwd,

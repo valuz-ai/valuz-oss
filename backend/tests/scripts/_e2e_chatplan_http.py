@@ -110,6 +110,7 @@ async def _seed_project_and_agent() -> tuple[str, str]:
         agent_ds = AgentDatastore(db)
         await agent_ds.create(
             AgentRow(
+                user_id="local-test-owner",
                 slug=slug,
                 name=slug,
                 source="custom",
@@ -121,6 +122,7 @@ async def _seed_project_and_agent() -> tuple[str, str]:
 
         ws_ds = ProjectDatastore(db)
         ws_row = ProjectRow(
+            user_id="local-test-owner",
             id=ws_id,
             name="ChatPlan E2E",
             kind="project",
@@ -130,6 +132,7 @@ async def _seed_project_and_agent() -> tuple[str, str]:
 
         member_ds = ProjectMemberDatastore(db)
         member = ProjectMemberRow(
+            user_id="local-test-owner",
             project_id=ws_id,
             agent_slug=slug,
             source_agent_slug=slug,
@@ -386,6 +389,7 @@ async def _make_task_active_with_mailbox(
         run_ds = TaskSessionDatastore(db)
 
         row = TaskRow(
+            user_id="local-test-owner",
             id=task_id,
             project_id=project_id,
             file_path=f"/tmp/{task_id}.md",
@@ -403,6 +407,7 @@ async def _make_task_active_with_mailbox(
         await task_ds.create_task(row)
 
         lead_run = TaskSessionRow(
+            user_id="local-test-owner",
             project_id=project_id,
             task_id=task_id,
             session_id=lead_session_id,

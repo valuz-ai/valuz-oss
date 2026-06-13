@@ -80,6 +80,7 @@ async def test_should_store_and_inject_the_final_value_verbatim_with_prefix(svc_
     # double "Bearer Bearer".
     fields = [CatalogFieldSpec(key="api_key", name="Authorization", target="header", secret=True)]
     v = await svc.create_connector(
+        "local-test-owner",
         slug="acme",
         display_name="Acme",
         transport="http",
@@ -88,7 +89,7 @@ async def test_should_store_and_inject_the_final_value_verbatim_with_prefix(svc_
         headers=[CredEntry(key="Authorization", secret=False, value="Bearer tok123")],
         catalog_fields=fields,
     )
-    row = await ConnectorDatastore(svc._ds._db).get_by_id(v.id)
+    row = await ConnectorDatastore(svc._ds._db).get_by_id("local-test-owner", v.id)
     headers, _ = build_overrides(row, secrets)
     assert headers == {"Authorization": "Bearer tok123"}
 
@@ -164,6 +165,7 @@ async def test_should_support_catalog_nonauth_secret_header_plus_custom_secret(
     # custom secret header. Both must round-trip create → injection.
     fields = [CatalogFieldSpec(key="api_key", name="X-API-Key", target="header", secret=True)]
     v = await svc.create_connector(
+        "local-test-owner",
         slug="acme",
         display_name="Acme",
         transport="http",
@@ -176,14 +178,14 @@ async def test_should_support_catalog_nonauth_secret_header_plus_custom_secret(
         ],
         catalog_fields=fields,
     )
-    view = await svc.get_connector(v.id)
+    view = await svc.get_connector("local-test-owner", v.id)
     assert view is not None
     by_key = {e.key: e for e in view.headers}
     assert by_key["X-API-Key"].secret is True and by_key["X-API-Key"].value is None
     assert by_key["X-Custom"].secret is True and by_key["X-Custom"].value is None
     assert by_key["X-Plain"].secret is False and by_key["X-Plain"].value == "plain"
 
-    row = await ConnectorDatastore(svc._ds._db).get_by_id(v.id)
+    row = await ConnectorDatastore(svc._ds._db).get_by_id("local-test-owner", v.id)
     headers, _ = build_overrides(row, secrets)
     assert headers == {
         "X-Plain": "plain",

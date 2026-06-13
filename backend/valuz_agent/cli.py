@@ -86,10 +86,13 @@ def reset_providers_cmd(
     run_host_migrations()
 
     async def _run() -> list[ProviderListItem]:
+        from valuz_agent.infra.local_identity import resolve_local_user_id
+
         async with async_unit_of_work() as db:
             ds = ProviderDatastore(db)
             return await reset_providers(
                 ds,
+                resolve_local_user_id(),
                 drop_table=drop_table,
                 engine=async_engine if drop_table else None,
             )
@@ -123,6 +126,8 @@ def cleanup_seed_agents_cmd() -> None:
     keep = {"default-assistant"}
 
     async def _run() -> tuple[list[str], list[tuple[str, str]]]:
+        from valuz_agent.infra.local_identity import resolve_local_user_id
+
         deleted: list[str] = []
         skipped: list[tuple[str, str]] = []
         async with async_unit_of_work() as db:
@@ -131,11 +136,11 @@ def cleanup_seed_agents_cmd() -> None:
                 secrets=None,  # type: ignore[arg-type]
             )
             svc = AgentService(db=db, connector_service=connector_svc)  # type: ignore[arg-type]
-            for row in await svc.list_agents(source="official"):
+            for row in await svc.list_agents(resolve_local_user_id(), source="official"):
                 if row.slug in keep:
                     continue
                 try:
-                    await svc.delete_agent(row.slug)
+                    await svc.delete_agent(resolve_local_user_id(), row.slug)
                     deleted.append(row.slug)
                 except Exception as exc:  # noqa: BLE001 — report + keep going
                     skipped.append((row.slug, type(exc).__name__))

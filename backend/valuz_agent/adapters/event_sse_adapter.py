@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from valuz_agent.adapters import kernel_client
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.sse import shielded
 
 POLL_INTERVAL_SECONDS = 0.3
@@ -502,11 +503,12 @@ async def list_events_after(
     kernel's per-call cap returns the full set (not a silently truncated
     first page) over both transports.
     """
+    user_id = require_current_user_id()
     items: list = []
     cursor = after_seq
     while len(items) < limit:
         want = min(_EVENTS_PAGE, limit - len(items))
-        page = await kernel_client.get_events(session_id, after_seq=cursor, limit=want)
+        page = await kernel_client.get_events(user_id, session_id, after_seq=cursor, limit=want)
         if not page:
             break
         items.extend(page)
@@ -546,7 +548,7 @@ async def list_events_window(
         return TurnWindow(items=[], has_more=False)
 
     window = await kernel_client.get_events_window(
-        session_id, before_seq=before_seq, turn_limit=turn_limit
+        require_current_user_id(), session_id, before_seq=before_seq, turn_limit=turn_limit
     )
     return TurnWindow(items=_items_to_frames(window.items), has_more=window.has_more)
 
@@ -585,7 +587,9 @@ async def iter_events_sse(
     queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=4096)
 
     async def _pump() -> None:
-        async for item in kernel_client.subscribe_session_events(session_id):
+        async for item in kernel_client.subscribe_session_events(
+            require_current_user_id(), session_id
+        ):
             await queue.put(item)
 
     pump_task = asyncio.create_task(_pump(), name=f"sse-pump-{session_id}")

@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from valuz_agent.api.deps import require_current_user_id
 from valuz_agent.infra.db import get_async_session
 from valuz_agent.modules.agents.service import (
     AgentNotDeletableError,
@@ -179,12 +180,13 @@ def _member_with_agent(row: dict[str, Any]) -> MemberWithAgentResponse:
 @router.get("/v1/agents")
 async def list_agents(
     source: str | None = None,
+    user_id: str = Depends(require_current_user_id),
     svc: AgentService = Depends(_get_agent_service),
 ) -> dict:
     """List agents, optionally filtered by source (official|custom)."""
     from valuz_agent.ports.extensions import ext
 
-    rows = await svc.list_agents(source=source)
+    rows = await svc.list_agents(user_id, source=source)
     items = [AgentResponse.model_validate(r).model_dump() for r in rows]
     items = await ext.resource_enhancer.enhance("agent", items)
     return {"agents": items}
@@ -193,11 +195,12 @@ async def list_agents(
 @router.get("/v1/agents/{slug}", response_model=AgentResponse)
 async def get_agent(
     slug: str,
+    user_id: str = Depends(require_current_user_id),
     svc: AgentService = Depends(_get_agent_service),
 ) -> AgentResponse:
     """Get a single agent by slug."""
     try:
-        row = await svc.get_agent(slug)
+        row = await svc.get_agent(user_id, slug)
     except AgentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"Agent not found: {slug}") from exc
     return AgentResponse.model_validate(row)
@@ -206,6 +209,7 @@ async def get_agent(
 @router.get("/v1/agents/{slug}/deployments")
 async def list_agent_deployments(
     slug: str,
+    user_id: str = Depends(require_current_user_id),
     svc: AgentService = Depends(_get_agent_service),
 ) -> dict:
     """List the projects (projects) this agent is派驻'd into (live-reference).
@@ -213,7 +217,7 @@ async def list_agent_deployments(
     Powers the agent detail「派驻于 N 个项目」panel + delete-guard UX.
     """
     try:
-        deployments = await svc.list_deployments(slug)
+        deployments = await svc.list_deployments(user_id, slug)
     except AgentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"Agent not found: {slug}") from exc
     return {"deployments": deployments, "count": len(deployments)}
@@ -251,11 +255,12 @@ class UpdateAgentRequest(BaseModel):
 @router.post("/v1/agents", status_code=201, response_model=AgentResponse)
 async def create_agent(
     payload: CreateAgentRequest,
+    user_id: str = Depends(require_current_user_id),
     svc: AgentService = Depends(_get_agent_service),
 ) -> AgentResponse:
     """Create a user-defined agent."""
     try:
-        row = await svc.create_agent(payload.model_dump())
+        row = await svc.create_agent(user_id, payload.model_dump())
     except MemberAlreadyExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return AgentResponse.model_validate(row)
@@ -265,11 +270,12 @@ async def create_agent(
 async def update_agent(
     slug: str,
     payload: UpdateAgentRequest,
+    user_id: str = Depends(require_current_user_id),
     svc: AgentService = Depends(_get_agent_service),
 ) -> AgentResponse:
     """Patch an agent (official or custom)."""
     try:
-        row = await svc.update_agent(slug, payload.model_dump(exclude_none=True))
+        row = await svc.update_agent(user_id, slug, payload.model_dump(exclude_none=True))
     except AgentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"Agent not found: {slug}") from exc
     return AgentResponse.model_validate(row)
@@ -278,11 +284,12 @@ async def update_agent(
 @router.delete("/v1/agents/{slug}", status_code=204)
 async def delete_agent(
     slug: str,
+    user_id: str = Depends(require_current_user_id),
     svc: AgentService = Depends(_get_agent_service),
 ) -> None:
     """Delete an agent."""
     try:
-        await svc.delete_agent(slug)
+        await svc.delete_agent(user_id, slug)
     except AgentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"Agent not found: {slug}") from exc
     except (AgentStillDeployedError, AgentNotDeletableError) as exc:
@@ -300,10 +307,11 @@ async def delete_agent(
 )
 async def list_members(
     project_id: str,
+    user_id: str = Depends(require_current_user_id),
     svc: AgentService = Depends(_get_agent_service),
 ) -> dict[str, list[MemberWithAgentResponse]]:
     """List all agent members in a project."""
-    rows = await svc.list_members(project_id)
+    rows = await svc.list_members(user_id, project_id)
     return {"agents": [_member_with_agent(r) for r in rows]}
 
 
@@ -315,6 +323,7 @@ async def list_members(
 async def create_blank_agent(
     project_id: str,
     payload: CreateBlankAgentRequest,
+    user_id: str = Depends(require_current_user_id),
     svc: AgentService = Depends(_get_agent_service),
 ) -> MemberWithAgentResponse:
     """Create a blank (source-agent-free) agent in a project."""
@@ -323,6 +332,7 @@ async def create_blank_agent(
     )
     try:
         result = await svc.create_blank_agent(
+            user_id,
             project_id=project_id,
             agent_slug=payload.agent_slug,
             name=payload.name,
@@ -347,11 +357,13 @@ async def create_blank_agent(
 async def deploy_agent(
     project_id: str,
     payload: DeployAgentRequest,
+    user_id: str = Depends(require_current_user_id),
     svc: AgentService = Depends(_get_agent_service),
 ) -> MemberWithAgentResponse:
     """派驻: deploy (live-reference) a library agent into a project."""
     try:
         result = await svc.deploy_agent(
+            user_id,
             project_id=project_id,
             source_agent_slug=payload.source_agent_slug,
             agent_slug=payload.agent_slug,
@@ -372,10 +384,11 @@ async def deploy_agent(
 async def delete_member(
     project_id: str,
     agent_slug: str,
+    user_id: str = Depends(require_current_user_id),
     svc: AgentService = Depends(_get_agent_service),
 ) -> None:
     """Delete a project agent and its kernel AgentConfig."""
     try:
-        await svc.delete_member(project_id, agent_slug)
+        await svc.delete_member(user_id, project_id, agent_slug)
     except MemberNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"Agent not found: {agent_slug}") from exc

@@ -204,7 +204,8 @@ class TestPythonSearch:
         rt._rg_path = None
 
         results = rt.search_sync(
-            "foo", ["doc1"],
+            "foo",
+            ["doc1"],
             doc_paths={"doc1": str(custom / "myfile.md")},
         )
         assert len(results) == 1
@@ -295,7 +296,8 @@ class TestRipgrepSearch:
         rt = EmbeddedDocsRuntime(None)
 
         results = rt.search_sync(
-            "九鼎", ["doc1"],
+            "九鼎",
+            ["doc1"],
             doc_paths={"doc1": str(custom / "九鼎_parsed.md")},
         )
         assert len(results) == 1

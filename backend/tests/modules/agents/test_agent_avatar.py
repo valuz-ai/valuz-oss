@@ -32,24 +32,24 @@ async def svc(tmp_path) -> AsyncIterator[AgentService]:
 
 
 async def test_should_persist_avatar_when_creating_agent(svc: AgentService) -> None:
-    row = await svc.create_agent({"name": "Analyst", "avatar": "icon:analyst"})
+    row = await svc.create_agent("local-test-owner", {"name": "Analyst", "avatar": "icon:analyst"})
     assert row.avatar == "icon:analyst"
-    fetched = await svc.get_agent(row.slug)
+    fetched = await svc.get_agent("local-test-owner", row.slug)
     assert fetched.avatar == "icon:analyst"
 
 
 async def test_should_default_avatar_to_none_when_omitted(svc: AgentService) -> None:
-    row = await svc.create_agent({"name": "No Avatar"})
+    row = await svc.create_agent("local-test-owner", {"name": "No Avatar"})
     assert row.avatar is None
 
 
 async def test_should_update_avatar_when_patched(svc: AgentService) -> None:
-    row = await svc.create_agent({"name": "Modeler", "avatar": "icon:old"})
-    updated = await svc.update_agent(row.slug, {"avatar": "icon:new"})
+    row = await svc.create_agent("local-test-owner", {"name": "Modeler", "avatar": "icon:old"})
+    updated = await svc.update_agent("local-test-owner", row.slug, {"avatar": "icon:new"})
     assert updated.avatar == "icon:new"
 
 
 async def test_should_clear_avatar_when_patched_with_empty(svc: AgentService) -> None:
-    row = await svc.create_agent({"name": "Tracker", "avatar": "icon:set"})
-    updated = await svc.update_agent(row.slug, {"avatar": ""})
+    row = await svc.create_agent("local-test-owner", {"name": "Tracker", "avatar": "icon:set"})
+    updated = await svc.update_agent("local-test-owner", row.slug, {"avatar": ""})
     assert updated.avatar is None

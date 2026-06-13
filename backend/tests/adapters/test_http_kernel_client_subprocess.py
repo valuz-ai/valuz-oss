@@ -104,55 +104,64 @@ def kernel_proc(tmp_path_factory):
 @pytest.mark.asyncio
 async def test_rest_round_trip_against_standalone_kernel(kernel_proc) -> None:
     client = HttpKernelClient(kernel_proc, token=TOKEN)
+    owner = "owner-a"
     try:
         session_id = str(uuid.uuid4())
         created = await client.create_session(
+            owner,
             CreateSessionRequest(
                 id=session_id,
                 agent_config=AgentConfigSchema(name="probe-agent"),
                 cwd="/tmp/probe-cwd",
                 runtime_provider="claude_agent",
                 metadata={"valuz": {"name": "subproc-probe"}},
-            )
+            ),
         )
         assert created.id == session_id
 
-        loaded = await client.get_session(session_id)
+        loaded = await client.get_session(owner, session_id)
         assert loaded is not None
         assert loaded.metadata["valuz"]["name"] == "subproc-probe"
-        assert await client.get_session("no-such-session") is None
+        assert await client.get_session(owner, "no-such-session") is None
+        # Owner isolation: a different owner cannot see owner-a's session.
+        assert await client.get_session("owner-b", session_id) is None
+        assert await client.list_sessions("owner-b", ids=[session_id]) == []
 
-        listed = await client.list_sessions(ids=[session_id])
+        listed = await client.list_sessions(owner, ids=[session_id])
         assert [s.id for s in listed] == [session_id]
 
         updated = await client.update_session(
-            session_id, UpdateSessionRequest(metadata={"valuz": {"name": "renamed"}})
+            owner, session_id, UpdateSessionRequest(metadata={"valuz": {"name": "renamed"}})
         )
         assert updated.metadata["valuz"]["name"] == "renamed"
 
         finalized = await client.finalize_session(
-            session_id, FinalizeSessionRequest(status="idle")
+            owner, session_id, FinalizeSessionRequest(status="idle")
         )
         assert finalized.status == "idle"
 
         # No message rows yet → out-of-band append reports not-persisted.
         assert (
-            await client.append_event(session_id, EventPayload(type="session_error", data={}))
+            await client.append_event(
+                owner, session_id, EventPayload(type="session_error", data={})
+            )
             is False
         )
-        await client.emit_live_event(session_id, "session_error", {"category": "Probe"})
+        await client.emit_live_event(owner, session_id, "session_error", {"category": "Probe"})
 
-        assert await client.get_events(session_id, after_seq=0) == []
-        window = await client.get_events_window(session_id, turn_limit=5)
+        assert await client.get_events(owner, session_id, after_seq=0) == []
+        window = await client.get_events_window(owner, session_id, turn_limit=5)
         assert window.items == [] and window.has_more is False
-        assert await client.usage_rollup(0, 4_102_444_800_000) == []
-        assert await client.list_messages(session_id) == []
+        assert await client.usage_rollup(owner, 0, 4_102_444_800_000) == []
+        assert await client.list_messages(owner, session_id) == []
 
         # Interrupt on an idle session is a silent no-op (in-process parity).
-        await client.interrupt(session_id)
+        await client.interrupt(owner, session_id)
 
-        assert await client.delete_session(session_id) is True
-        assert await client.delete_session(session_id) is False
+        # owner-b can't delete owner-a's session.
+        assert await client.delete_session("owner-b", session_id) is False
+        assert await client.delete_session(owner, session_id) is True
+        assert await client.delete_session(owner, session_id) is False
     finally:
         await client.aclose()
 
@@ -160,21 +169,23 @@ async def test_rest_round_trip_against_standalone_kernel(kernel_proc) -> None:
 @pytest.mark.asyncio
 async def test_sse_subscription_delivers_live_events(kernel_proc) -> None:
     client = HttpKernelClient(kernel_proc, token=TOKEN)
+    owner = "owner-a"
     try:
         session_id = str(uuid.uuid4())
         await client.create_session(
+            owner,
             CreateSessionRequest(
                 id=session_id,
                 agent_config=AgentConfigSchema(name="probe-agent"),
                 cwd="/tmp/probe-cwd",
                 runtime_provider="claude_agent",
-            )
+            ),
         )
 
         received: asyncio.Queue = asyncio.Queue()
 
         async def _follow() -> None:
-            async for item in client.subscribe_session_events(session_id):
+            async for item in client.subscribe_session_events(owner, session_id):
                 await received.put(item)
                 return
 
@@ -184,7 +195,9 @@ async def test_sse_subscription_delivers_live_events(kernel_proc) -> None:
             # robust to subscription-attach latency without a fixed sleep.
             async def _emit_until_received() -> None:
                 while received.empty():
-                    await client.emit_live_event(session_id, "session_error", {"category": "Live"})
+                    await client.emit_live_event(
+                        owner, session_id, "session_error", {"category": "Live"}
+                    )
                     await asyncio.sleep(0.1)
 
             await asyncio.wait_for(_emit_until_received(), timeout=10)
@@ -207,7 +220,7 @@ async def test_tokenless_requests_are_rejected(kernel_proc) -> None:
     bare = HttpKernelClient(kernel_proc, token=None)
     try:
         with pytest.raises(KernelClientError) as excinfo:
-            await bare.list_sessions()
+            await bare.list_sessions("owner-a")
         assert excinfo.value.status == 401
     finally:
         await bare.aclose()
@@ -245,18 +258,20 @@ async def test_global_sse_stream_delivers_events_with_session_ids(kernel_proc) -
     """``subscribe_all_events`` carries every session's live events with
     ``session_id`` stamped on each frame (the DecisionAggregator contract)."""
     client = HttpKernelClient(kernel_proc, token=TOKEN)
+    owner = "owner-a"
     try:
         sids = []
         for _ in range(2):
             sid = str(uuid.uuid4())
             sids.append(sid)
             await client.create_session(
+                owner,
                 CreateSessionRequest(
                     id=sid,
                     agent_config=AgentConfigSchema(name="probe-agent"),
                     cwd="/tmp/probe-cwd",
                     runtime_provider="claude_agent",
-                )
+                ),
             )
 
         received: asyncio.Queue = asyncio.Queue()
@@ -280,11 +295,13 @@ async def test_global_sse_stream_delivers_events_with_session_ids(kernel_proc) -
             # robust to subscription-attach latency without a fixed sleep.
             async def _emit_until_received() -> None:
                 while received.empty():
-                    await client.emit_live_event(sids[0], "session_error", {"category": "G1"})
+                    await client.emit_live_event(
+                        owner, sids[0], "session_error", {"category": "G1"}
+                    )
                     await asyncio.sleep(0.1)
 
             await asyncio.wait_for(_emit_until_received(), timeout=10)
-            await client.emit_live_event(sids[1], "requires_action", {"pending_id": "p9"})
+            await client.emit_live_event(owner, sids[1], "requires_action", {"pending_id": "p9"})
 
             frames = [await asyncio.wait_for(received.get(), timeout=10) for _ in range(2)]
         finally:
@@ -423,7 +440,12 @@ def test_unauthenticated_optin_on_loopback_starts_open(tmp_path):
         assert state == "healthy"
         # No token middleware installed — a tokenless request reaches the
         # route and SUCCEEDS (migrated schema: a 500 would fail the test).
-        resp = httpx.get(f"http://127.0.0.1:{port}/api/v1/sessions", timeout=5.0)
+        # The owner header is still required (auth-off ≠ owner-less reads).
+        resp = httpx.get(
+            f"http://127.0.0.1:{port}/api/v1/sessions",
+            headers={"X-Valuz-Owner-Id": "owner-a"},
+            timeout=5.0,
+        )
         assert resp.status_code == 200
     finally:
         proc.terminate()

@@ -72,6 +72,7 @@ from app.schemas import (
 
 # Side-effect import — surfaces ``src.core...`` on sys.path.
 import valuz_agent.boot.kernel  # noqa: F401
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.secret_store import FileSecretStore
 from valuz_agent.modules.providers.datastore import ProviderDatastore
 from valuz_agent.modules.providers.models import ProviderRow
@@ -166,7 +167,7 @@ async def resolve_model_provider(
     if descriptor is not None:
         return _resolve_system_provider(descriptor)
 
-    provider = await providers.get_by_id(provider_id)
+    provider = await providers.get_by_id(require_current_user_id(), provider_id)
     if provider is None:
         raise ProviderNotResolvable(f"provider {provider_id!r} not found")
 
@@ -370,7 +371,7 @@ async def resolve_runtime_provider(
             )
         return descriptor.runtime_provider  # type: ignore[return-value]
 
-    provider = await providers.get_by_id(provider_id)
+    provider = await providers.get_by_id(require_current_user_id(), provider_id)
     if provider is None:
         return "deepagents"
 

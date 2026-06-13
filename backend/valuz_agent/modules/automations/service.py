@@ -27,6 +27,7 @@ from uuid import uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.i18n import t
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.agents.datastore import (
@@ -141,7 +142,7 @@ class AutomationService:
         if self._ws is None:
             raise AutomationProjectNotFound()
         try:
-            ws = await self._ws.get_project(project_id)
+            ws = await self._ws.get_project(require_current_user_id(), project_id)
             return ws.name, ws.kind
         except AutomationProjectNotFound:
             raise
@@ -228,7 +229,7 @@ class AutomationService:
         reference and decide to delete or rebind. The runner converts
         this same lookup failure into a failed run + ADR-012 auto-pause.
         """
-        member = await self._members.get(row.project_id, row.agent_slug)
+        member = await self._members.get(require_current_user_id(), row.project_id, row.agent_slug)
         if member is None:
             return None
         try:
@@ -241,7 +242,7 @@ class AutomationService:
 
     async def _row_to_item(self, row: AutomationRow) -> AutomationItemResponse:
         ws_name, ws_kind = await self._get_project_info(row.project_id)
-        last_run = await self._ds.last_run(row.id)
+        last_run = await self._ds.last_run(require_current_user_id(), row.id)
         return AutomationItemResponse(
             automation_id=row.id,
             project_id=row.project_id,
@@ -265,8 +266,8 @@ class AutomationService:
         return AutomationDetailResponse(
             **item.model_dump(),
             prompt_template=row.prompt_template,
-            total_runs=await self._ds.count_runs(row.id),
-            recent_failures=await self._ds.count_recent_failures(row.id),
+            total_runs=await self._ds.count_runs(require_current_user_id(), row.id),
+            recent_failures=await self._ds.count_recent_failures(require_current_user_id(), row.id),
             created_at=row.created_at or now_ms(),
             updated_at=row.updated_at or now_ms(),
         )
@@ -319,7 +320,7 @@ class AutomationService:
         ]
         if self._ws is None:
             return targets
-        for ws in await self._ws.list_projects():
+        for ws in await self._ws.list_projects(require_current_user_id()):
             if ws.kind == "project":
                 targets.append(
                     AutomationProjectTarget(
@@ -333,14 +334,16 @@ class AutomationService:
 
     # ── Listing ───────────────────────────────────────────────────────
 
-    async def list_automations_in_project(
-        self, project_id: str
-    ) -> list[AutomationItemResponse]:
-        return [await self._row_to_item(r) for r in await self._ds.list_automations(project_id)]
+    async def list_automations_in_project(self, project_id: str) -> list[AutomationItemResponse]:
+        return [
+            await self._row_to_item(r)
+            for r in await self._ds.list_automations(require_current_user_id(), project_id)
+        ]
 
     async def list_all_automations(self) -> list[AutomationItemResponse]:
         return [
-            await self._row_to_item(r) for r in await self._ds.list_automations(project_id=None)
+            await self._row_to_item(r)
+            for r in await self._ds.list_automations(require_current_user_id(), project_id=None)
         ]
 
     async def list_automation_groups(
@@ -358,7 +361,7 @@ class AutomationService:
         project_id (preserves runtime isolation), and the grouping is
         purely a display rule.
         """
-        rows = await self._ds.list_automations(project_id)
+        rows = await self._ds.list_automations(require_current_user_id(), project_id)
         if project_id is not None:
             groups: dict[str, list[AutomationItemResponse]] = {}
             for row in rows:
@@ -417,7 +420,7 @@ class AutomationService:
         return result
 
     async def get_automation_detail(self, automation_id: str) -> AutomationDetailResponse:
-        row = await self._ds.get_automation(automation_id)
+        row = await self._ds.get_automation(require_current_user_id(), automation_id)
         if row is None:
             raise AutomationNotFound()
         return await self._row_to_detail(row)
@@ -484,7 +487,9 @@ class AutomationService:
 
             # 2. Resolve the agent for that project
             if payload.agent_kind == "project_member":
-                member = await self._members.get(project_id, payload.agent_slug)
+                member = await self._members.get(
+                    require_current_user_id(), project_id, payload.agent_slug
+                )
                 if member is None:
                     raise AgentNotInProject()
                 return project_id, payload.agent_slug
@@ -497,7 +502,7 @@ class AutomationService:
                     "AutomationService is missing AgentService — required to "
                     "instantiate library agents into chat projects"
                 )
-            source = await self._agents.get_agent(payload.agent_slug)
+            source = await self._agents.get_agent(require_current_user_id(), payload.agent_slug)
             if source is None:
                 raise AgentNotFound()
             # Derive a project-local slug. We hash a short prefix on so the
@@ -507,6 +512,7 @@ class AutomationService:
             # ``dedupe=False``: each automation gets its own member handle even
             # when several reference the same source agent in this project.
             await self._agent_svc.deploy_agent(
+                require_current_user_id(),
                 project_id=project_id,
                 source_agent_slug=payload.agent_slug,
                 agent_slug=instance_slug,
@@ -528,7 +534,9 @@ class AutomationService:
             # it here would duplicate that surface.
             raise AgentNotInProject()
 
-        member = await self._members.get(payload.project_id, payload.agent_slug)
+        member = await self._members.get(
+            require_current_user_id(), payload.project_id, payload.agent_slug
+        )
         if member is None:
             raise AgentNotInProject()
         return payload.project_id, payload.agent_slug
@@ -590,7 +598,7 @@ class AutomationService:
         self._apply_trigger(row, payload.trigger)
         row.next_run_at = self._triggers.initial_next_fire(row, now=now)
 
-        await self._ds.create_automation(row)
+        await self._ds.create_automation(require_current_user_id(), row)
         self._bus.publish(
             "automation.changed",
             project_id=row.project_id,
@@ -601,7 +609,7 @@ class AutomationService:
     async def update(
         self, automation_id: str, payload: AutomationUpdatePayload
     ) -> AutomationDetailResponse:
-        row = await self._ds.get_automation(automation_id)
+        row = await self._ds.get_automation(require_current_user_id(), automation_id)
         if row is None:
             raise AutomationNotFound()
 
@@ -624,7 +632,7 @@ class AutomationService:
             new_slug = payload.agent_slug.strip()
             if not new_slug:
                 raise AutomationAgentRequired()
-            member = await self._members.get(row.project_id, new_slug)
+            member = await self._members.get(require_current_user_id(), row.project_id, new_slug)
             if member is None:
                 raise AgentNotInProject()
             row.agent_slug = new_slug
@@ -659,7 +667,7 @@ class AutomationService:
         return await self._row_to_detail(row)
 
     async def pause(self, automation_id: str) -> AutomationDetailResponse:
-        row = await self._ds.get_automation(automation_id)
+        row = await self._ds.get_automation(require_current_user_id(), automation_id)
         if row is None:
             raise AutomationNotFound()
         row.status = "paused"
@@ -674,7 +682,7 @@ class AutomationService:
         return await self._row_to_detail(row)
 
     async def resume(self, automation_id: str) -> AutomationDetailResponse:
-        row = await self._ds.get_automation(automation_id)
+        row = await self._ds.get_automation(require_current_user_id(), automation_id)
         if row is None:
             raise AutomationNotFound()
         row.status = "enabled"
@@ -689,11 +697,11 @@ class AutomationService:
         return await self._row_to_detail(row)
 
     async def delete(self, automation_id: str) -> None:
-        row = await self._ds.get_automation(automation_id)
+        row = await self._ds.get_automation(require_current_user_id(), automation_id)
         if row is None:
             raise AutomationNotFound()
         ws_id = row.project_id
-        await self._ds.delete_automation(automation_id)
+        await self._ds.delete_automation(require_current_user_id(), automation_id)
         self._bus.publish(
             "automation.changed",
             project_id=ws_id,
@@ -712,13 +720,13 @@ class AutomationService:
             automation_runner,
         )
 
-        row = await self._ds.get_automation(automation_id)
+        row = await self._ds.get_automation(require_current_user_id(), automation_id)
         if row is None:
             raise AutomationNotFound()
         if row.status != "enabled":
             raise AutomationPaused()
 
-        existing = await self._ds.last_run(automation_id)
+        existing = await self._ds.last_run(require_current_user_id(), automation_id)
         if existing is not None:
             if existing.status == "queued":
                 raise AutomationAlreadyQueued()
@@ -734,14 +742,14 @@ class AutomationService:
             status="queued",
             triggered_at=now,
         )
-        await self._ds.create_run(run)
+        await self._ds.create_run(require_current_user_id(), run)
         self._bus.publish(
             "automation.run.queued",
             automation_id=automation_id,
             run_id=run.id,
         )
 
-        automation_runner.enqueue_threadsafe(automation_id, run.id)
+        automation_runner.enqueue_threadsafe(automation_id, run.id, require_current_user_id())
         return AutomationRunAcceptedResponse(
             run_id=run.id, automation_id=automation_id, status="queued"
         )
@@ -749,10 +757,12 @@ class AutomationService:
     async def list_runs(
         self, automation_id: str, limit: int = 20, cursor: str | None = None
     ) -> list[AutomationRunItemResponse]:
-        row = await self._ds.get_automation(automation_id)
+        row = await self._ds.get_automation(require_current_user_id(), automation_id)
         if row is None:
             raise AutomationNotFound()
-        runs = await self._ds.list_runs(automation_id, limit=limit, cursor=cursor)
+        runs = await self._ds.list_runs(
+            require_current_user_id(), automation_id, limit=limit, cursor=cursor
+        )
         return [self._run_to_item(r) for r in runs]
 
     # ── Validation helpers (used by the frontend's preview UI) ────────
@@ -805,7 +815,7 @@ class AutomationService:
                 error_code="AUTOMATION_MISSED_WHILE_OFFLINE",
                 created_files="[]",
             )
-            await self._ds.create_run(run)
+            await self._ds.create_run(require_current_user_id(), run)
             row.last_run_at = row.next_run_at
             row.next_run_at = self._triggers.next_fire_at(row, now)
             row.updated_at = now

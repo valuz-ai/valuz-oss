@@ -10,7 +10,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from valuz_agent.adapters import kernel_client
 from valuz_agent.adapters.event_sse_adapter import iter_events_sse
-from valuz_agent.api.deps import get_session_service
+from valuz_agent.api.deps import get_session_service, require_current_user_id
 from valuz_agent.infra.db import get_async_session
 from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.modules.sessions.datastore import SessionDatastore
@@ -558,6 +558,7 @@ def _row_to_item(row: SessionAttachmentRow) -> AttachmentItem:
 async def list_attachments(
     session_id: str,
     db: AsyncSession = Depends(get_async_session),
+    user_id: str = Depends(require_current_user_id),
 ) -> AttachmentListResponse:
     """Return every attachment ever uploaded to ``session_id``.
 
@@ -567,9 +568,9 @@ async def list_attachments(
     client-side. The runtime path uses ``_load_pending_attachments``
     instead, which is pending-only.
     """
-    if await kernel_client.get_session(session_id) is None:
+    if await kernel_client.get_session(user_id, session_id) is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
-    rows = await SessionDatastore(db).list_attachments(session_id, include_consumed=True)
+    rows = await SessionDatastore(db).list_attachments(user_id, session_id, include_consumed=True)
     return AttachmentListResponse(items=[_row_to_item(r) for r in rows])
 
 
@@ -578,6 +579,7 @@ async def upload_attachment(
     session_id: str,
     file: UploadFile,
     db: AsyncSession = Depends(get_async_session),
+    user_id: str = Depends(require_current_user_id),
 ) -> AttachmentItem:
     """Stream-write *file* into the session's attachment dir and persist a row.
 
@@ -588,13 +590,13 @@ async def upload_attachment(
     copies bytes — valuz holds the canonical store and the kernel only
     references it.
     """
-    if await kernel_client.get_session(session_id) is None:
+    if await kernel_client.get_session(user_id, session_id) is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
 
     # Session-wide attachment cap (local + KB-sourced counted together).
     from valuz_agent.infra.config import settings as _settings
 
-    current_count = len(await SessionDatastore(db).list_attachments(session_id))
+    current_count = len(await SessionDatastore(db).list_attachments(user_id, session_id))
     if current_count >= _settings.max_session_attachments:
         raise HTTPException(
             status_code=400,
@@ -646,7 +648,7 @@ async def upload_attachment(
         mime_type=file.content_type,
         source_kind="local",
     )
-    await SessionDatastore(db).create_attachment(row)
+    await SessionDatastore(db).create_attachment(user_id, row)
     await db.refresh(row)
     _spawn_attachment_parse(row.id, str(target), target_dir, target.name)
     return _row_to_item(row)
@@ -783,6 +785,7 @@ async def add_kb_attachments(
     session_id: str,
     body: AddKbAttachmentsRequest,
     db: AsyncSession = Depends(get_async_session),
+    user_id: str = Depends(require_current_user_id),
 ) -> AttachmentListResponse:
     """Attach one or more KB documents to the session.
 
@@ -807,17 +810,17 @@ async def add_kb_attachments(
     docs return 400 with the offending id so the picker can surface
     the conflict instead of silently dropping the selection.
     """
-    if await kernel_client.get_session(session_id) is None:
+    if await kernel_client.get_session(user_id, session_id) is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
     if not body.doc_ids:
         # Empty list is a no-op (picker confirmed with nothing
         # selected) — return the current attachment list instead of
         # erroring so the frontend doesn't need to special-case.
-        rows = await SessionDatastore(db).list_attachments(session_id)
+        rows = await SessionDatastore(db).list_attachments(user_id, session_id)
         return AttachmentListResponse(items=[_row_to_item(r) for r in rows])
 
     ds = SessionDatastore(db)
-    existing = await ds.list_attachments(session_id)
+    existing = await ds.list_attachments(user_id, session_id)
     already_attached = {r.source_kb_doc_id for r in existing if r.source_kind == "kb_doc"}
 
     from valuz_agent.infra.config import settings as _settings
@@ -843,7 +846,7 @@ async def add_kb_attachments(
     for doc_id in body.doc_ids:
         if doc_id in already_attached:
             continue
-        doc = await doc_ds.get_by_id(doc_id)
+        doc = await doc_ds.get_by_id(user_id, doc_id)
         if doc is None:
             raise HTTPException(
                 status_code=400,
@@ -872,11 +875,11 @@ async def add_kb_attachments(
             source_kb_id=doc.kb_id,
             source_kb_doc_id=doc.id,
         )
-        await ds.create_attachment(row)
+        await ds.create_attachment(user_id, row)
         await db.refresh(row)
         _spawn_attachment_parse(row.id, doc.source_path, target_dir, safe_name)
 
-    rows = await ds.list_attachments(session_id)
+    rows = await ds.list_attachments(user_id, session_id)
     return AttachmentListResponse(items=[_row_to_item(r) for r in rows])
 
 
@@ -885,6 +888,7 @@ async def delete_attachment(
     session_id: str,
     attachment_id: str,
     db: AsyncSession = Depends(get_async_session),
+    user_id: str = Depends(require_current_user_id),
 ) -> Response:
     """Remove a session attachment.
 
@@ -904,10 +908,10 @@ async def delete_attachment(
     """
     import os
 
-    if await kernel_client.get_session(session_id) is None:
+    if await kernel_client.get_session(user_id, session_id) is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
     ds = SessionDatastore(db)
-    row = await ds.get_attachment(attachment_id)
+    row = await ds.get_attachment(user_id, attachment_id)
     if row is None or row.session_id != session_id:
         raise HTTPException(status_code=404, detail=f"Attachment {attachment_id!r} not found")
     # Local rows own both paths; KB rows own only the parsed
@@ -924,5 +928,5 @@ async def delete_attachment(
             pass
         except OSError:
             logger.exception("Failed to unlink attachment file %s", path)
-    await ds.delete_attachment(attachment_id)
+    await ds.delete_attachment(user_id, attachment_id)
     return Response(status_code=204)

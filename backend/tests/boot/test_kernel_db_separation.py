@@ -86,8 +86,7 @@ async def split_db(tmp_path, monkeypatch):
 def _tables(path: Path) -> set[str]:
     with sqlite3.connect(path) as conn:
         return {
-            row[0]
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
 
 
@@ -124,31 +123,33 @@ async def test_session_round_trip_via_seam_with_split_storage(split_db) -> None:
 
     from valuz_agent.adapters import kernel_client
 
+    owner = "local-test-owner"
     session_id = str(uuid.uuid4())
     created = await kernel_client.create_session(
+        owner,
         CreateSessionRequest(
             id=session_id,
             agent_config=AgentConfigSchema(name="probe-agent"),
             cwd=str(kernel_db.parent),
             runtime_provider="claude_agent",
             metadata={"valuz": {"name": "probe"}},
-        )
+        ),
     )
     assert created.id == session_id
 
-    loaded = await kernel_client.get_session(session_id)
+    loaded = await kernel_client.get_session(owner, session_id)
     assert loaded is not None and loaded.metadata["valuz"]["name"] == "probe"
 
-    listed = await kernel_client.list_sessions(ids=[session_id])
+    listed = await kernel_client.list_sessions(owner, ids=[session_id])
     assert [s.id for s in listed] == [session_id]
 
     updated = await kernel_client.update_session(
-        session_id, UpdateSessionRequest(metadata={"valuz": {"name": "probe-renamed"}})
+        owner, session_id, UpdateSessionRequest(metadata={"valuz": {"name": "probe-renamed"}})
     )
     assert updated.metadata["valuz"]["name"] == "probe-renamed"
 
-    assert await kernel_client.get_events(session_id, after_seq=0) == []
-    assert await kernel_client.usage_rollup(0, 4_102_444_800_000) == []
+    assert await kernel_client.get_events(owner, session_id, after_seq=0) == []
+    assert await kernel_client.usage_rollup(owner, 0, 4_102_444_800_000) == []
 
     # The row physically lives in the kernel file, not the host file.
     with sqlite3.connect(kernel_db) as conn:

@@ -10,39 +10,74 @@ class ProviderDatastore:
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
 
-    async def list_providers(self) -> list[ProviderRow]:
+    async def list_providers(self, user_id: str) -> list[ProviderRow]:
         return list(
-            (await self._db.execute(select(ProviderRow).order_by(ProviderRow.created_at)))
+            (
+                await self._db.execute(
+                    select(ProviderRow)
+                    .where(ProviderRow.user_id == user_id)
+                    .order_by(ProviderRow.created_at)
+                )
+            )
             .scalars()
             .all()
         )
 
-    async def get_by_id(self, provider_id: str) -> ProviderRow | None:
-        return await self._db.get(ProviderRow, provider_id)
-
-    async def get_default(self) -> ProviderRow | None:
+    async def get_by_id(self, user_id: str, provider_id: str) -> ProviderRow | None:
+        # Owner-scoped by id — never ``session.get`` (it bypasses the owner filter).
         return (
-            (await self._db.execute(select(ProviderRow).filter_by(is_default=True, enabled=True)))
+            (
+                await self._db.execute(
+                    select(ProviderRow).where(
+                        ProviderRow.id == provider_id, ProviderRow.user_id == user_id
+                    )
+                )
+            )
             .scalars()
             .first()
         )
 
-    async def create(self, row: ProviderRow) -> ProviderRow:
+    async def get_default(self, user_id: str) -> ProviderRow | None:
+        return (
+            (
+                await self._db.execute(
+                    select(ProviderRow).where(
+                        ProviderRow.user_id == user_id,
+                        ProviderRow.is_default,
+                        ProviderRow.enabled,
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+
+    async def create(self, user_id: str, row: ProviderRow) -> ProviderRow:
+        # Owner is passed explicitly (no ContextVar write-stamp default).
+        row.user_id = user_id
         self._db.add(row)
         await async_commit_with_retry(self._db, where="ProviderDatastore.create")
         return row
 
     async def update(self, row: ProviderRow) -> ProviderRow:
+        # ``row`` came from an owner-scoped read, so its ``user_id`` is already
+        # the caller's; merge preserves it.
         await self._db.merge(row)
         await async_commit_with_retry(self._db, where="ProviderDatastore.update")
         return row
 
-    async def delete(self, provider_id: str) -> None:
-        await self._db.execute(sa_delete(ProviderRow).where(ProviderRow.id == provider_id))
+    async def delete(self, user_id: str, provider_id: str) -> None:
+        await self._db.execute(
+            sa_delete(ProviderRow).where(
+                ProviderRow.id == provider_id, ProviderRow.user_id == user_id
+            )
+        )
         await async_commit_with_retry(self._db, where="ProviderDatastore.delete")
 
-    async def clear_default(self) -> None:
+    async def clear_default(self, user_id: str) -> None:
         await self._db.execute(
-            update(ProviderRow).where(ProviderRow.is_default).values(is_default=False)
+            update(ProviderRow)
+            .where(ProviderRow.user_id == user_id, ProviderRow.is_default)
+            .values(is_default=False)
         )
         await async_commit_with_retry(self._db, where="ProviderDatastore.clear_default")

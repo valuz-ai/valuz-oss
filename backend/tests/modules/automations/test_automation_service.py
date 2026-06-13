@@ -65,16 +65,18 @@ class FakeAutomationDatastore:
         self.rows: dict[str, AutomationRow] = {}
         self.runs: dict[str, AutomationRunRow] = {}
 
-    async def list_automations(self, project_id: str | None = None) -> list[AutomationRow]:
+    async def list_automations(
+        self, user_id: str, project_id: str | None = None
+    ) -> list[AutomationRow]:
         rows = list(self.rows.values())
         if project_id is not None:
             rows = [r for r in rows if r.project_id == project_id]
         return sorted(rows, key=lambda r: r.created_at)
 
-    async def get_automation(self, automation_id: str) -> AutomationRow | None:
+    async def get_automation(self, user_id: str, automation_id: str) -> AutomationRow | None:
         return self.rows.get(automation_id)
 
-    async def create_automation(self, row: AutomationRow) -> AutomationRow:
+    async def create_automation(self, user_id: str, row: AutomationRow) -> AutomationRow:
         self.rows[row.id] = row
         return row
 
@@ -82,12 +84,12 @@ class FakeAutomationDatastore:
         self.rows[row.id] = row
         return row
 
-    async def delete_automation(self, automation_id: str) -> None:
+    async def delete_automation(self, user_id: str, automation_id: str) -> None:
         self.rows.pop(automation_id, None)
         for rid in [r.id for r in self.runs.values() if r.automation_id == automation_id]:
             self.runs.pop(rid, None)
 
-    async def create_run(self, row: AutomationRunRow) -> AutomationRunRow:
+    async def create_run(self, user_id: str, row: AutomationRunRow) -> AutomationRunRow:
         self.runs[row.id] = row
         return row
 
@@ -95,22 +97,22 @@ class FakeAutomationDatastore:
         self.runs[row.id] = row
         return row
 
-    async def last_run(self, automation_id: str) -> AutomationRunRow | None:
+    async def last_run(self, user_id: str, automation_id: str) -> AutomationRunRow | None:
         candidates = [r for r in self.runs.values() if r.automation_id == automation_id]
         if not candidates:
             return None
         return max(candidates, key=lambda r: r.triggered_at)
 
     async def list_runs(
-        self, automation_id: str, limit: int = 20, cursor: str | None = None
+        self, user_id: str, automation_id: str, limit: int = 20, cursor: str | None = None
     ) -> list[AutomationRunRow]:
         rows = [r for r in self.runs.values() if r.automation_id == automation_id]
         return sorted(rows, key=lambda r: r.triggered_at, reverse=True)[:limit]
 
-    async def count_runs(self, automation_id: str) -> int:
+    async def count_runs(self, user_id: str, automation_id: str) -> int:
         return sum(1 for r in self.runs.values() if r.automation_id == automation_id)
 
-    async def count_recent_failures(self, automation_id: str, limit: int = 20) -> int:
+    async def count_recent_failures(self, user_id: str, automation_id: str, limit: int = 20) -> int:
         recent = sorted(
             (r for r in self.runs.values() if r.automation_id == automation_id),
             key=lambda r: r.triggered_at,
@@ -146,12 +148,12 @@ class FakeProjectService:
         self._projects = projects
         self._counter = 0
 
-    async def get_project(self, project_id: str) -> FakeProject:
+    async def get_project(self, user_id: str, project_id: str) -> FakeProject:
         if project_id not in self._projects:
             raise KeyError(project_id)
         return self._projects[project_id]
 
-    async def list_projects(self) -> list[FakeProject]:
+    async def list_projects(self, user_id: str) -> list[FakeProject]:
         return list(self._projects.values())
 
     async def create_chat_project_for_session(self, name: str = "Chat") -> FakeProject:
@@ -173,7 +175,7 @@ class FakeMemberDatastore:
     def __init__(self) -> None:
         self.members: dict[tuple[str, str], FakeMember] = {}
 
-    async def get(self, project_id: str, agent_slug: str) -> FakeMember | None:
+    async def get(self, user_id: str, project_id: str, agent_slug: str) -> FakeMember | None:
         return self.members.get((project_id, agent_slug))
 
 
@@ -181,7 +183,7 @@ class FakeAgentDatastore:
     def __init__(self, slugs: set[str] | None = None) -> None:
         self.slugs = slugs if slugs is not None else {"qa-engineer"}
 
-    async def get_agent(self, slug: str) -> object | None:
+    async def get_agent(self, user_id: str, slug: str) -> object | None:
         # Return any non-None to signal "present". Service only checks
         # the truthiness on this path.
         return object() if slug in self.slugs else None
@@ -197,6 +199,7 @@ class FakeAgentService:
 
     async def deploy_agent(
         self,
+        user_id: str,
         project_id: str,
         source_agent_slug: str,
         agent_slug: str,
@@ -309,15 +312,11 @@ class TestProjectCreateResolution:
         detail = await service.create(_project_payload())
         assert detail.project_id == "ws-proj"
 
-    async def test_should_reject_missing_project(
-        self, service: AutomationService
-    ) -> None:
+    async def test_should_reject_missing_project(self, service: AutomationService) -> None:
         with pytest.raises(AutomationProjectNotFound):
             await service.create(_project_payload(project_id="ghost"))
 
-    async def test_should_reject_when_project_id_omitted(
-        self, service: AutomationService
-    ) -> None:
+    async def test_should_reject_when_project_id_omitted(self, service: AutomationService) -> None:
         with pytest.raises(AutomationProjectNotFound):
             await service.create(_project_payload(project_id=None))
 
@@ -575,6 +574,7 @@ class TestMarkMissedRuns:
     ) -> None:
         # Manually plant an overdue row (next_run_at in the past).
         row = AutomationRow(
+            user_id="local-test-owner",
             id=uuid4().hex,
             name="legacy",
             agent_kind="project_member",
@@ -607,6 +607,7 @@ class TestMarkMissedRuns:
         # After the skip, next_run_at should be in the FUTURE so the runner
         # doesn't keep replaying the overdue path on every tick.
         row = AutomationRow(
+            user_id="local-test-owner",
             id=uuid4().hex,
             name="legacy",
             agent_kind="project_member",

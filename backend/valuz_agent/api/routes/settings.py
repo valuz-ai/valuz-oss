@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from valuz_agent.api.deps import _secret_store, get_settings_service
+from valuz_agent.api.deps import _secret_store, get_settings_service, require_current_user_id
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.eventbus import event_bus
 from valuz_agent.modules.providers.datastore import ProviderDatastore
@@ -137,7 +137,9 @@ async def _read_model_defaults(db: AsyncSession) -> ModelDefaultsResponse:
     )
 
 
-async def _mirror_to_default_assistant(db: AsyncSession, defaults: ModelDefaultsResponse) -> None:
+async def _mirror_to_default_assistant(
+    user_id: str, db: AsyncSession, defaults: ModelDefaultsResponse
+) -> None:
     """09-assistant: the 默认助手 base agent's brain mirrors the global model
     default (Settings = source of truth). Keeps the always-present default
     conversation agent on the user's chosen runtime/model/effort. Re-syncs its
@@ -147,6 +149,7 @@ async def _mirror_to_default_assistant(db: AsyncSession, defaults: ModelDefaults
 
     try:
         await AgentService(db).update_agent(  # type: ignore[arg-type]
+            user_id,
             DEFAULT_ASSISTANT_SLUG,
             {
                 "runtime": defaults.default_runtime,
@@ -160,9 +163,9 @@ async def _mirror_to_default_assistant(db: AsyncSession, defaults: ModelDefaults
         pass
 
 
-async def _finish_model_defaults(db: AsyncSession) -> ModelDefaultsResponse:
+async def _finish_model_defaults(user_id: str, db: AsyncSession) -> ModelDefaultsResponse:
     defaults = await _read_model_defaults(db)
-    await _mirror_to_default_assistant(db, defaults)
+    await _mirror_to_default_assistant(user_id, db, defaults)
     return defaults
 
 
@@ -178,7 +181,10 @@ async def get_model_defaults() -> ModelDefaultsResponse:
 
 
 @router.patch("/model-defaults")
-async def patch_model_defaults(payload: ModelDefaultsPatchPayload) -> ModelDefaultsResponse:
+async def patch_model_defaults(
+    payload: ModelDefaultsPatchPayload,
+    user_id: str = Depends(require_current_user_id),
+) -> ModelDefaultsResponse:
     """Update the global model-default tuple.
 
     ``default_provider_id`` behaviour:
@@ -201,7 +207,7 @@ async def patch_model_defaults(payload: ModelDefaultsPatchPayload) -> ModelDefau
                 if payload.default_provider_id == "":
                     # Clear: wipe is_default on all rows + clear app-setting keys.
                     ds = ProviderDatastore(db)
-                    await ds.clear_default()
+                    await ds.clear_default(user_id)
                     await set_default_provider_id(db, None)
                     await set_default_model(db, None)
                 elif ext.llm_registry.get(payload.default_provider_id) is not None:
@@ -212,7 +218,7 @@ async def patch_model_defaults(payload: ModelDefaultsPatchPayload) -> ModelDefau
                     # correctly blocks editing system providers but over-blocks
                     # selecting one as the default. Clear any builtin row's
                     # ``is_default`` so model_resolver doesn't see two defaults.
-                    await ProviderDatastore(db).clear_default()
+                    await ProviderDatastore(db).clear_default(user_id)
                     await set_default_provider_id(db, payload.default_provider_id)
                     if payload.default_model is not None:
                         await set_default_model(db, payload.default_model or None)
@@ -225,12 +231,13 @@ async def patch_model_defaults(payload: ModelDefaultsPatchPayload) -> ModelDefau
                         event_bus=event_bus,
                     )
                     await svc.set_default(
+                        user_id,
                         payload.default_provider_id,
                         default_model=payload.default_model or None,
                     )
                     # default_model already synced inside set_default; skip the
                     # standalone write below so we don't double-write.
-                    return await _finish_model_defaults(db)
+                    return await _finish_model_defaults(user_id, db)
             elif payload.default_model is not None:
                 # Provider not being changed — still honour a standalone
                 # default_model update (e.g. user picks a different model
@@ -242,7 +249,7 @@ async def patch_model_defaults(payload: ModelDefaultsPatchPayload) -> ModelDefau
                 # by ``set_default_effort``; concrete values are
                 # validated against EFFORT_VALUES.
                 await set_default_effort(db, payload.default_effort or None)
-            return await _finish_model_defaults(db)
+            return await _finish_model_defaults(user_id, db)
     except SystemProviderImmutable as exc:
         raise HTTPException(
             status_code=409,

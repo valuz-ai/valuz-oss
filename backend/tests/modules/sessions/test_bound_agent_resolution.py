@@ -71,14 +71,16 @@ async def _resolve(project_id: str, agent_slug: str) -> str:
 
 async def test_should_resolve_global_library_agent_when_not_a_project_member(db, patch_uow) -> None:
     await AgentDatastore(db).create(
+        "local-test-owner",
         AgentRow(
+            user_id="local-test-owner",
             slug=DEFAULT_ASSISTANT_SLUG,
             name="默认助手",
             source="official",
             deletable=False,
             runtime="claude_agent",
             model="claude-sonnet-4-6",
-        )
+        ),
     )
 
     # chat-default project has no members → falls back to the library agent.
@@ -91,20 +93,24 @@ async def test_should_prefer_project_member_over_library_agent(db, patch_uow) ->
     # Same slug exists both as a library agent AND as a project member; the
     # project-scoped member wins for project conversations.
     await AgentDatastore(db).create(
+        "local-test-owner",
         AgentRow(
+            user_id="local-test-owner",
             slug="architect",
             name="架构师",
             source="custom",
             runtime="claude_agent",
             model="claude-sonnet-4-6",
-        )
+        ),
     )
     await ProjectMemberDatastore(db).create(
+        "local-test-owner",
         ProjectMemberRow(
+            user_id="local-test-owner",
             project_id="ws-proj",
             agent_slug="architect",
             source_agent_slug="architect",
-        )
+        ),
     )
 
     resolved = await _resolve("ws-proj", "architect")
@@ -121,21 +127,25 @@ async def test_member_resolution_builds_snapshot_from_library_row(db, patch_uow)
     """Live-reference semantics: the member's config snapshot is built from
     the CURRENT library row fields, keyed to the member's kernel id."""
     await AgentDatastore(db).create(
+        "local-test-owner",
         AgentRow(
+            user_id="local-test-owner",
             slug="researcher",
             name="研究员",
             source="custom",
             runtime="claude_agent",
             model="claude-opus-4-8",
             instructions="dig deep",
-        )
+        ),
     )
     await ProjectMemberDatastore(db).create(
+        "local-test-owner",
         ProjectMemberRow(
+            user_id="local-test-owner",
             project_id="ws-x",
             agent_slug="researcher",
             source_agent_slug="researcher",
-        )
+        ),
     )
 
     kernel_agent_id, config = await SessionService._resolve_bound_agent(
@@ -160,6 +170,7 @@ async def test_resolution_carries_connector_types_into_mcp_servers(db, patch_uow
     them into live MCP server configs."""
     await db.merge(
         ConnectorRow(
+            user_id="local-test-owner",
             slug="my-search",
             display_name="My Search",
             connector_type="custom",
@@ -171,14 +182,16 @@ async def test_resolution_carries_connector_types_into_mcp_servers(db, patch_uow
     )
     await db.commit()
     await AgentDatastore(db).create(
+        "local-test-owner",
         AgentRow(
+            user_id="local-test-owner",
             slug="analyst",
             name="分析师",
             source="custom",
             runtime="claude_agent",
             model="claude-sonnet-4-6",
             connector_types=["my-search"],
-        )
+        ),
     )
 
     _kernel_agent_id, config = await SessionService._resolve_bound_agent(

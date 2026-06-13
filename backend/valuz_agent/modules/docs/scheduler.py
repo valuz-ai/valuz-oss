@@ -118,7 +118,9 @@ async def _arun_auto_discovery_scan() -> None:
     # listing read separate means a per-KB rescan failure can't taint the
     # listing transaction.
     async with async_unit_of_work(commit=False) as db:
-        kbs = await DocumentDatastore(db).list_kbs()
+        from valuz_agent.infra.auth_context import require_current_user_id
+
+        kbs = await DocumentDatastore(db).list_kbs(require_current_user_id())
         kb_refs = [(kb.id, kb.name) for kb in kbs if kb.auto_discover]
 
     if not kb_refs:

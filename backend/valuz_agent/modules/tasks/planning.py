@@ -22,6 +22,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.tasks.datastore import (
@@ -51,6 +52,7 @@ async def emit_plan_update(
 ) -> None:
     """Append a ``task_plan_update`` snapshot event (frontend Todo panel)."""
     await event_ds.append_event(
+        require_current_user_id(),
         project_id=project_id,
         task_id=task_id,
         type="task_plan_update",
@@ -104,7 +106,7 @@ async def plan_task(
     async with async_unit_of_work() as db:
         task_ds = TaskDatastore(db)
         event_ds = TaskEventDatastore(db)
-        task_row = await task_ds.get_task_by_project(project_id, task_id)
+        task_row = await task_ds.get_task_by_project(require_current_user_id(), project_id, task_id)
         if task_row is None:
             return {"error": f"task {task_id!r} not found"}
         existing = TaskPlan.from_dict(task_row.plan)
@@ -121,6 +123,7 @@ async def plan_task(
         task_row.plan_version = (task_row.plan_version or 0) + 1
         await task_ds.update_task(task_row)
         await event_ds.append_event(
+            require_current_user_id(),
             project_id=project_id,
             task_id=task_id,
             type="task_planned",
@@ -152,7 +155,7 @@ async def get_plan(*, task_id: str, project_id: str) -> dict[str, Any]:
     """
     async with async_unit_of_work(commit=False) as db:
         task_ds = TaskDatastore(db)
-        task_row = await task_ds.get_task_by_project(project_id, task_id)
+        task_row = await task_ds.get_task_by_project(require_current_user_id(), project_id, task_id)
         if task_row is None:
             return {"error": f"task {task_id!r} not found"}
         plan = TaskPlan.from_dict(task_row.plan)
@@ -194,7 +197,7 @@ async def modify_plan(
     async with async_unit_of_work() as db:
         task_ds = TaskDatastore(db)
         event_ds = TaskEventDatastore(db)
-        task_row = await task_ds.get_task_by_project(project_id, task_id)
+        task_row = await task_ds.get_task_by_project(require_current_user_id(), project_id, task_id)
         if task_row is None:
             return {"error": f"task {task_id!r} not found"}
         current_version = task_row.plan_version or 0
@@ -222,6 +225,7 @@ async def modify_plan(
         task_row.plan_version = current_version + 1
         await task_ds.update_task(task_row)
         await event_ds.append_event(
+            require_current_user_id(),
             project_id=project_id,
             task_id=task_id,
             type="plan_revised",
@@ -273,7 +277,7 @@ async def review_subtask(
     async with async_unit_of_work(commit=False) as db:
         task_ds = TaskDatastore(db)
         run_ds = TaskSessionDatastore(db)
-        task_row = await task_ds.get_task_by_project(project_id, task_id)
+        task_row = await task_ds.get_task_by_project(require_current_user_id(), project_id, task_id)
         if task_row is None:
             return {"error": f"task {task_id!r} not found"}
         plan = TaskPlan.from_dict(task_row.plan)
@@ -293,7 +297,9 @@ async def review_subtask(
             task_ds = TaskDatastore(db)
             event_ds = TaskEventDatastore(db)
             run_ds = TaskSessionDatastore(db)
-            task_row = await task_ds.get_task_by_project(project_id, task_id)
+            task_row = await task_ds.get_task_by_project(
+                require_current_user_id(), project_id, task_id
+            )
             plan = TaskPlan.from_dict(task_row.plan)
             node = plan.get(key)
             plan.update_node(key, status="done", review_feedback=None)
@@ -304,6 +310,7 @@ async def review_subtask(
                     ended_at=now_ms(),
                 )
             await event_ds.append_event(
+                require_current_user_id(),
                 project_id=project_id,
                 task_id=task_id,
                 type="subtask_reviewed",
@@ -312,6 +319,7 @@ async def review_subtask(
                 payload={"subtask_key": key, "decision": "approve", "feedback": feedback or ""},
             )
             await event_ds.append_event(
+                require_current_user_id(),
                 project_id=project_id,
                 task_id=task_id,
                 type="subtask_completed",
@@ -355,7 +363,7 @@ async def review_subtask(
     async with async_unit_of_work() as db:
         task_ds = TaskDatastore(db)
         event_ds = TaskEventDatastore(db)
-        task_row = await task_ds.get_task_by_project(project_id, task_id)
+        task_row = await task_ds.get_task_by_project(require_current_user_id(), project_id, task_id)
         plan = TaskPlan.from_dict(task_row.plan)
         plan.update_node(
             key,
@@ -363,6 +371,7 @@ async def review_subtask(
             review_feedback=feedback,
         )
         await event_ds.append_event(
+            require_current_user_id(),
             project_id=project_id,
             task_id=task_id,
             type="subtask_reviewed",
@@ -449,7 +458,7 @@ async def mark_node_dispatched(
     async with async_unit_of_work() as db:
         task_ds = TaskDatastore(db)
         event_ds = TaskEventDatastore(db)
-        task_row = await task_ds.get_task_by_project(project_id, task_id)
+        task_row = await task_ds.get_task_by_project(require_current_user_id(), project_id, task_id)
         if task_row is None:
             return
         plan = TaskPlan.from_dict(task_row.plan)
@@ -491,7 +500,9 @@ async def mark_in_review(*, task_id: str, project_id: str, member_session_id: st
             key = run.subtask_key if run else None
             if not key:
                 return
-            task_row = await task_ds.get_task_by_project(project_id, task_id)
+            task_row = await task_ds.get_task_by_project(
+                require_current_user_id(), project_id, task_id
+            )
             if task_row is None:
                 return
             plan = TaskPlan.from_dict(task_row.plan)

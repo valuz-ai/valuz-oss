@@ -44,9 +44,7 @@ def db(tmp_path, monkeypatch):  # type: ignore[no-untyped-def]
     import valuz_agent.infra.db as db_mod
 
     db_file = tmp_path / "attach.db"
-    sync_engine = create_engine(
-        f"sqlite:///{db_file}", connect_args={"check_same_thread": False}
-    )
+    sync_engine = create_engine(f"sqlite:///{db_file}", connect_args={"check_same_thread": False})
     Base.metadata.create_all(sync_engine, tables=[SessionAttachmentRow.__table__])
     async_engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
     monkeypatch.setattr(
@@ -99,6 +97,7 @@ async def _make_parsing_row(stored_path: str = "/raw.txt", filename: str = "a.tx
 
     async with async_unit_of_work() as session:
         row = SessionAttachmentRow(
+            user_id="local-test-owner",
             session_id="s1",
             filename=filename,
             stored_path=stored_path,
@@ -108,7 +107,7 @@ async def _make_parsing_row(stored_path: str = "/raw.txt", filename: str = "a.tx
             mime_type="text/plain",
             source_kind="local",
         )
-        await SessionDatastore(session).create_attachment(row)
+        await SessionDatastore(session).create_attachment("local-test-owner", row)
         return row.id
 
 
@@ -121,7 +120,7 @@ async def test_update_attachment_parse_flips_to_ready(db) -> None:  # type: igno
             rid, parsed_path="/a.parsed.md", parse_status="ready", parse_mode="light_local"
         )
     async with async_unit_of_work() as session:
-        got = await SessionDatastore(session).get_attachment(rid)
+        got = await SessionDatastore(session).get_attachment("local-test-owner", rid)
     assert got is not None
     assert got.parse_status == "ready"
     assert got.parsed_path == "/a.parsed.md"
@@ -137,7 +136,7 @@ async def test_update_attachment_parse_flips_to_failed(db) -> None:  # type: ign
             rid, parsed_path=None, parse_status="failed", error_message="boom"
         )
     async with async_unit_of_work() as session:
-        got = await SessionDatastore(session).get_attachment(rid)
+        got = await SessionDatastore(session).get_attachment("local-test-owner", rid)
     assert got is not None
     assert got.parse_status == "failed"
     assert got.parsed_path is None
@@ -216,7 +215,7 @@ async def _run_spawn(rid: str, src, dest, base_name: str) -> SessionAttachmentRo
     _spawn_attachment_parse(rid, str(src), dest, base_name)
     await _drain_parse_tasks()
     async with async_unit_of_work() as session:
-        got = await SessionDatastore(session).get_attachment(rid)
+        got = await SessionDatastore(session).get_attachment("local-test-owner", rid)
     assert got is not None
     return got
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.integrations.skills_filesystem import (
     FilesystemSkillSource,
@@ -99,7 +100,7 @@ class SkillLibraryService:
     async def list_catalog(
         self, project_id: str, *, user_id: str = "", org_id: str | None = None
     ) -> SkillsCatalog:
-        project = await self._projects.get_project(project_id)
+        project = await self._projects.get_project(require_current_user_id(), project_id)
         items = self._ds.list_project_skill_manifests(project, self._source)
         # ``creation_origin`` is host bookkeeping kept only in
         # ``valuz_skill_index`` (never SKILL.md), so it isn't on the
@@ -107,7 +108,10 @@ class SkillLibraryService:
         # missing row (skill on disk but not yet indexed) or a NULL value
         # (legacy row seeded before the column landed) coalesces to
         # ``"discovered"`` so the field is always a real enum value.
-        origin_by_id = {row.id: row.creation_origin for row in await self._ds.list_skills()}
+        origin_by_id = {
+            row.id: row.creation_origin
+            for row in await self._ds.list_skills(require_current_user_id())
+        }
 
         def _origin(skill_id: str) -> str:
             return origin_by_id.get(skill_id) or "discovered"
@@ -223,7 +227,7 @@ class SkillLibraryService:
         for source in self._extra_sources:
             all_manifests.extend(source.list_skills(ctx))
 
-        for project in await self._projects.list_projects():
+        for project in await self._projects.list_projects(require_current_user_id()):
             if project.kind == "project" and project.root_path:
                 from valuz_agent.modules.skills.contracts import ProjectRef
 
@@ -242,11 +246,12 @@ class SkillLibraryService:
             if manifest.id in seen_ids:
                 continue
             seen_ids.add(manifest.id)
-            existing = await self._ds.get_by_id(manifest.id)
+            existing = await self._ds.get_by_id(require_current_user_id(), manifest.id)
             from valuz_agent.modules.skills.models import SkillIndexRow
 
             if existing is None:
                 await self._ds.create(
+                    require_current_user_id(),
                     SkillIndexRow(
                         id=manifest.id,
                         slug=manifest.slug or manifest.id,
@@ -270,7 +275,7 @@ class SkillLibraryService:
                         # import flows overwrite this via set_creation_origin
                         # right after they call startup_scan.
                         creation_origin="discovered",
-                    )
+                    ),
                 )
             else:
                 existing.name = manifest.name
@@ -290,7 +295,7 @@ class SkillLibraryService:
                 existing.creation_origin = existing.creation_origin or "discovered"
                 await self._ds.update(existing)
 
-        for row in await self._ds.list_skills():
+        for row in await self._ds.list_skills(require_current_user_id()):
             if row.id not in seen_ids:
                 row.status = "unavailable"
                 await self._ds.update(row)
@@ -301,7 +306,7 @@ class SkillLibraryService:
         skill_path: str,
         enabled: bool,
     ) -> SkillsCatalog:
-        project = await self._projects.get_project(project_id)
+        project = await self._projects.get_project(require_current_user_id(), project_id)
         self._ds.set_skill_enabled(project, skill_path, enabled)
         self._bus.publish(PROJECT_SKILLS_CHANGED, project_id=project_id)
         return await self.list_catalog(project_id)
@@ -360,7 +365,7 @@ class SkillLibraryService:
                 )
             except KeyError:
                 continue
-            await self._ds.set_creation_origin(written.id, "created")
+            await self._ds.set_creation_origin(require_current_user_id(), written.id, "created")
 
         # Notify any subscribers (frontend uses /v1/skills/events/stream).
         self._bus.publish(SKILL_CHANGED, skill_id="*", reason="staging-sync")
@@ -388,7 +393,7 @@ class SkillLibraryService:
 
     async def _resolve_skill_path_by_id(self, skill_id: str):  # type: ignore[no-untyped-def]
         # Try DB first.
-        row = await self._ds.get_by_id(skill_id)
+        row = await self._ds.get_by_id(require_current_user_id(), skill_id)
         if row is not None and row.source_path:
             return Path(row.source_path)
         # Fall back to scanning all sources (covers fresh installs / official).
@@ -419,7 +424,7 @@ class SkillLibraryService:
         if target_scope == "project":
             if not project_id:
                 raise ValueError("project_id required when target_scope='project'")
-            project = await self._projects.get_project(project_id)
+            project = await self._projects.get_project(require_current_user_id(), project_id)
             if project.kind != "project" or not project.root_path:
                 raise ValueError("target project is not a project")
             return Path(project.root_path) / ".claude" / "skills"
@@ -539,7 +544,7 @@ class SkillLibraryService:
         skill_dir = Path(skill.path)
         if skill_dir.exists():
             shutil.rmtree(skill_dir)
-        for project in await self._projects.list_projects():
+        for project in await self._projects.list_projects(require_current_user_id()):
             if project.kind == "project":
                 self._ds.remove_skill_path_from_project(project, skill.path)
         self._bus.publish(SKILL_CHANGED, skill_id=skill_id, reason="deleted")
@@ -557,7 +562,7 @@ class SkillLibraryService:
         from valuz_agent.adapters import kernel_client
 
         assistant_text = self._collect_session_assistant_text(
-            await kernel_client.get_events(payload.session_id)
+            await kernel_client.get_events(require_current_user_id(), payload.session_id)
         )
         description = payload.description or "Imported from session output"
         body = assistant_text or description
@@ -781,7 +786,7 @@ class SkillLibraryService:
 
     async def _load_origin(self, skill_id: str) -> SkillOrigin | None:
         """Read import provenance off the ``valuz_skill_index`` row, if any."""
-        row = await self._ds.get_by_id(skill_id)
+        row = await self._ds.get_by_id(require_current_user_id(), skill_id)
         if row is None or not row.origin_json:
             return None
         try:
@@ -959,7 +964,9 @@ class SkillLibraryService:
         # imports — host bookkeeping in valuz_skill_index, never SKILL.md.
         skill = await self._finalize_origin(target_dir, "imported", payload.project_id)
         if origin is not None:
-            await self._ds.set_origin_metadata(skill.id, origin.model_dump_json())
+            await self._ds.set_origin_metadata(
+                require_current_user_id(), skill.id, origin.model_dump_json()
+            )
         return skill
 
     def _enforce_import_caps(self, skill_root: Path) -> None:
@@ -1215,7 +1222,7 @@ class SkillLibraryService:
         from valuz_agent.adapters import kernel_client
         from valuz_agent.modules.skills import staging
 
-        kernel_session = await kernel_client.get_session(session_id)
+        kernel_session = await kernel_client.get_session(require_current_user_id(), session_id)
         if kernel_session is None:
             raise KeyError(f"session not found: {session_id!r}")
         valuz_meta = (kernel_session.metadata or {}).get("valuz") or {}
@@ -1292,7 +1299,7 @@ class SkillLibraryService:
         # The skill-creator AI flow landing a skill is a "created" act.
         # creation_origin is host bookkeeping in valuz_skill_index — the
         # startup_scan above created the row as "discovered"; overwrite it.
-        await self._ds.set_creation_origin(skill.id, "created")
+        await self._ds.set_creation_origin(require_current_user_id(), skill.id, "created")
         skill.creation_origin = "created"
 
         # Notify subscribers — frontend reloads the catalog & cards.
@@ -1332,7 +1339,7 @@ class SkillLibraryService:
     async def _resolve_project(self, project_id: str | None):  # type: ignore[no-untyped-def]
         if project_id is None:
             return None
-        return await self._projects.get_project(project_id)
+        return await self._projects.get_project(require_current_user_id(), project_id)
 
     async def _check_entitlement(self, entitlement: str) -> bool:
         if self._auth is None:
@@ -1361,7 +1368,11 @@ class SkillLibraryService:
             if str(Path(skill.path).resolve(strict=False)) == resolved:
                 return skill
         fallback_project = next(
-            (item.id for item in await self._projects.list_projects() if item.kind == "chat"),
+            (
+                item.id
+                for item in await self._projects.list_projects(require_current_user_id())
+                if item.kind == "chat"
+            ),
             "chat-default",
         )
         catalog = await self.list_catalog(fallback_project)
@@ -1393,7 +1404,7 @@ class SkillLibraryService:
         except Exception:  # noqa: BLE001
             pass
         skill = await self._resolve_created_skill(skill_dir, project_id=project_id)
-        await self._ds.set_creation_origin(skill.id, origin)
+        await self._ds.set_creation_origin(require_current_user_id(), skill.id, origin)
         skill.creation_origin = origin
         return skill
 
@@ -1418,7 +1429,7 @@ class SkillLibraryService:
             return _default_user_skill_root()
         if project_id is None:
             raise ValueError("project_id is required for project-scoped skills")
-        project = await self._projects.get_project(project_id)
+        project = await self._projects.get_project(require_current_user_id(), project_id)
         if project.kind != "project":
             raise ValueError("project-scoped skills require a project")
         return Path(project.root_path) / ".claude" / "skills"
@@ -1474,7 +1485,7 @@ class SkillLibraryService:
     async def _affected_projects(self, skill_path: str) -> list[SkillDeleteAffectedProject]:
         resolved = str(Path(skill_path).expanduser().resolve(strict=False))
         affected: list[SkillDeleteAffectedProject] = []
-        for project in await self._projects.list_projects():
+        for project in await self._projects.list_projects(require_current_user_id()):
             if project.kind != "project":
                 continue
             if resolved in self._ds.enabled_skill_paths(project):

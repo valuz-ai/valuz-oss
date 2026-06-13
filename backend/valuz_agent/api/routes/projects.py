@@ -1,7 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from valuz_agent.api.deps import get_project_service, get_session_service
+from valuz_agent.api.deps import (
+    get_project_service,
+    get_session_service,
+    require_current_user_id,
+)
 from valuz_agent.modules.projects.models import ProjectCreateRequest
 from valuz_agent.modules.projects.service import (
     ProjectDeletePreview,
@@ -30,18 +34,20 @@ class LastSessionPickResponse(BaseModel):
 
 @router.get("")
 async def list_projects(
+    user_id: str = Depends(require_current_user_id),
     svc: ProjectService = Depends(get_project_service),
 ) -> dict[str, list[ProjectListItem]]:
-    return {"projects": await svc.list_projects()}
+    return {"projects": await svc.list_projects(user_id)}
 
 
 @router.get("/{project_id}")
 async def get_project(
     project_id: str,
+    user_id: str = Depends(require_current_user_id),
     svc: ProjectService = Depends(get_project_service),
 ) -> ProjectDetail:
     try:
-        return await svc.get_project(project_id)
+        return await svc.get_project(user_id, project_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"Unknown project: {project_id}") from exc
 
@@ -49,10 +55,11 @@ async def get_project(
 @router.post("", status_code=201)
 async def create_project(
     payload: ProjectCreateRequest,
+    user_id: str = Depends(require_current_user_id),
     svc: ProjectService = Depends(get_project_service),
 ) -> ProjectDetail:
     try:
-        return await svc.create_project(payload.name, payload.root_path)
+        return await svc.create_project(user_id, payload.name, payload.root_path)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -61,10 +68,11 @@ async def create_project(
 async def rename_project(
     project_id: str,
     name: str,
+    user_id: str = Depends(require_current_user_id),
     svc: ProjectService = Depends(get_project_service),
 ) -> ProjectDetail:
     try:
-        return await svc.rename_project(project_id, name)
+        return await svc.rename_project(user_id, project_id, name)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -75,10 +83,11 @@ async def rename_project(
 async def update_instructions(
     project_id: str,
     instructions_md: str,
+    user_id: str = Depends(require_current_user_id),
     svc: ProjectService = Depends(get_project_service),
 ) -> dict[str, bool]:
     try:
-        await svc.update_instructions(project_id, instructions_md)
+        await svc.update_instructions(user_id, project_id, instructions_md)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"ok": True}
@@ -89,11 +98,14 @@ async def list_files(
     project_id: str,
     depth: int = 2,
     include_hidden: bool = False,
+    user_id: str = Depends(require_current_user_id),
     svc: ProjectService = Depends(get_project_service),
 ) -> dict[str, list[dict[str, object]]]:
     try:
         return {
-            "files": await svc.list_files(project_id, depth=depth, include_hidden=include_hidden)
+            "files": await svc.list_files(
+                user_id, project_id, depth=depth, include_hidden=include_hidden
+            )
         }
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -102,10 +114,11 @@ async def list_files(
 @router.get("/{project_id}/delete-preview")
 async def delete_preview(
     project_id: str,
+    user_id: str = Depends(require_current_user_id),
     svc: ProjectService = Depends(get_project_service),
 ) -> ProjectDeletePreview:
     try:
-        return await svc.preview_delete(project_id)
+        return await svc.preview_delete(user_id, project_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -115,10 +128,11 @@ async def delete_preview(
 @router.delete("/{project_id}", status_code=204)
 async def delete_project(
     project_id: str,
+    user_id: str = Depends(require_current_user_id),
     svc: ProjectService = Depends(get_project_service),
 ) -> None:
     try:
-        await svc.delete_project(project_id)
+        await svc.delete_project(user_id, project_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -158,10 +172,11 @@ async def get_last_session_pick(
 @router.get("/{project_id}/connectors")
 async def get_connectors(
     project_id: str,
+    user_id: str = Depends(require_current_user_id),
     svc: ProjectService = Depends(get_project_service),
 ) -> dict[str, list[str]]:
     try:
-        return {"slugs": await svc.get_connectors(project_id)}
+        return {"slugs": await svc.get_connectors(user_id, project_id)}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -170,10 +185,11 @@ async def get_connectors(
 async def set_connectors(
     project_id: str,
     payload: McpServersPayload,
+    user_id: str = Depends(require_current_user_id),
     svc: ProjectService = Depends(get_project_service),
 ) -> dict[str, bool]:
     try:
-        await svc.set_connectors(project_id, payload.slugs)
+        await svc.set_connectors(user_id, project_id, payload.slugs)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"ok": True}

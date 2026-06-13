@@ -49,6 +49,7 @@ from valuz_agent.adapters.agent_resolver import (
     build_member_session,
     embed_agent_config,
 )
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.fs_registry import fs_registry
@@ -148,7 +149,7 @@ class LifecycleService:
             from valuz_agent.modules.projects.datastore import ProjectDatastore
 
             ws_ds = ProjectDatastore(db)
-            ws_row = await ws_ds.get_by_id(project_id)
+            ws_row = await ws_ds.get_by_id(require_current_user_id(), project_id)
             if ws_row is None:
                 raise ValueError(f"project {project_id!r} not found")
             project_cwd = fs_registry.project_cwd(
@@ -195,12 +196,14 @@ class LifecycleService:
                     ),
                 },
             )
-            await task_ds.create_task(task_row)
+            await task_ds.create_task(require_current_user_id(), task_row)
 
             # Resolve lead agent and materialize a per-task lead clone that
             # carries the dispatch tools (base agent stays clean — see
             # _materialize_lead_agent). The lead session points at the clone.
-            lead_member = await member_ds.get(project_id, lead_agent_slug)
+            lead_member = await member_ds.get(
+                require_current_user_id(), project_id, lead_agent_slug
+            )
             if lead_member is None:
                 raise ValueError(
                     f"lead agent {lead_agent_slug!r} is not a member of project {project_id!r}"
@@ -226,7 +229,7 @@ class LifecycleService:
             from valuz_agent.modules.projects.datastore import ProjectDatastore as WsDs
 
             ws_ds2 = WsDs(db)
-            ws_ctx = await ws_ds2.get_context(project_id)
+            ws_ctx = await ws_ds2.get_context(require_current_user_id(), project_id)
             project_instructions_md = ws_ctx.instructions_md if ws_ctx else None
 
             lead_session = await build_member_session(
@@ -260,8 +263,9 @@ class LifecycleService:
             # it would only fail mid-turn with a cryptic "Not logged in".
             gap = await _credential_gap(lead_session, lead_agent_slug, db=db)
             if gap is not None:
-                await task_ds.update_task_status(task_id, "failed")
+                await task_ds.update_task_status(require_current_user_id(), task_id, "failed")
                 await event_ds.append_event(
+                    require_current_user_id(),
                     project_id=project_id,
                     task_id=task_id,
                     type="kickoff_failed",
@@ -271,10 +275,8 @@ class LifecycleService:
                 )
                 raise ValueError(gap)
 
-            await kernel_client.create_session(lead_session)
-            await project_index.record(
-                project_id, lead_session.id, kind="task_lead", origin="task"
-            )
+            await kernel_client.create_session(require_current_user_id(), lead_session)
+            await project_index.record(project_id, lead_session.id, kind="task_lead", origin="task")
 
             # Record the lead run in valuz_task_session
             lead_run = TaskSessionRow(
@@ -290,10 +292,11 @@ class LifecycleService:
                 project_mode="shared",
                 run_dir=lead_cwd,
             )
-            await run_ds.create_run(lead_run)
+            await run_ds.create_run(require_current_user_id(), lead_run)
 
             # Append kickoff event
             await event_ds.append_event(
+                require_current_user_id(),
                 project_id=project_id,
                 task_id=task_id,
                 type="kickoff",
@@ -393,10 +396,12 @@ class LifecycleService:
             from valuz_agent.modules.projects.datastore import ProjectDatastore
 
             ws_ds = ProjectDatastore(db)
-            ws_row = await ws_ds.get_by_id(project_id)
+            ws_row = await ws_ds.get_by_id(require_current_user_id(), project_id)
             if ws_row is None:
                 raise ValueError(f"project {project_id!r} not found")
-            lead_member = await member_ds.get(project_id, lead_agent_slug)
+            lead_member = await member_ds.get(
+                require_current_user_id(), project_id, lead_agent_slug
+            )
             if lead_member is None:
                 raise ValueError(
                     f"lead agent {lead_agent_slug!r} is not a member of project {project_id!r}"
@@ -441,9 +446,10 @@ class LifecycleService:
                 plan_version=0,
                 committed_at=None,
             )
-            await task_ds.create_task(task_row)
+            await task_ds.create_task(require_current_user_id(), task_row)
 
             await event_ds.append_event(
+                require_current_user_id(),
                 project_id=project_id,
                 task_id=task_id,
                 type="task_drafted",
@@ -487,7 +493,9 @@ class LifecycleService:
             run_ds = TaskSessionDatastore(db)
             member_ds = ProjectMemberDatastore(db)
 
-            task_row = await task_ds.get_task_by_project(project_id, task_id)
+            task_row = await task_ds.get_task_by_project(
+                require_current_user_id(), project_id, task_id
+            )
             if task_row is None:
                 return {"error": f"task {task_id!r} not found"}
             if task_row.status != "draft":
@@ -504,18 +512,16 @@ class LifecycleService:
                 return {"error": "commit_task: plan has no work to do (all nodes already done)"}
 
             lead_slug = lead_agent_slug_override or task_row.lead_agent_slug
-            lead_member = await member_ds.get(project_id, lead_slug)
+            lead_member = await member_ds.get(require_current_user_id(), project_id, lead_slug)
             if lead_member is None:
                 return {
-                    "error": (
-                        f"lead agent {lead_slug!r} is not a member of project {project_id!r}"
-                    )
+                    "error": (f"lead agent {lead_slug!r} is not a member of project {project_id!r}")
                 }
 
             from valuz_agent.modules.projects.datastore import ProjectDatastore
 
             ws_ds = ProjectDatastore(db)
-            ws_row = await ws_ds.get_by_id(project_id)
+            ws_row = await ws_ds.get_by_id(require_current_user_id(), project_id)
             if ws_row is None:
                 return {"error": f"project {project_id!r} not found"}
             project_cwd = fs_registry.project_cwd(
@@ -531,9 +537,7 @@ class LifecycleService:
             lead_agent = await _member_agent_config(lead_member, member_ds)
             lead_clone = None
             if lead_agent is not None:
-                lead_clone = await self._materialize_lead_agent(
-                    lead_agent, dispatch_mode="async"
-                )
+                lead_clone = await self._materialize_lead_agent(lead_agent, dispatch_mode="async")
 
             refs = (task_row.metadata_ or {}).get("refs") or []
             refs_text = "\n".join(f"- {r}" for r in refs) if refs else ""
@@ -550,7 +554,7 @@ class LifecycleService:
             from valuz_agent.modules.projects.datastore import ProjectDatastore as WsDs
 
             ws_ds2 = WsDs(db)
-            ws_ctx = await ws_ds2.get_context(project_id)
+            ws_ctx = await ws_ds2.get_context(require_current_user_id(), project_id)
             project_instructions_md = ws_ctx.instructions_md if ws_ctx else None
 
             lead_session = await build_member_session(
@@ -577,10 +581,8 @@ class LifecycleService:
             if gap is not None:
                 return {"error": f"commit_task: {gap}"}
 
-            await kernel_client.create_session(lead_session)
-            await project_index.record(
-                project_id, lead_session.id, kind="task_lead", origin="task"
-            )
+            await kernel_client.create_session(require_current_user_id(), lead_session)
+            await project_index.record(project_id, lead_session.id, kind="task_lead", origin="task")
 
             # DB writes: create lead run row + flip task status + append event
             lead_run = TaskSessionRow(
@@ -596,7 +598,7 @@ class LifecycleService:
                 project_mode="shared",
                 run_dir=lead_cwd,
             )
-            await run_ds.create_run(lead_run)
+            await run_ds.create_run(require_current_user_id(), lead_run)
 
             committed_at = now_ms()
             task_row.status = "active"
@@ -612,6 +614,7 @@ class LifecycleService:
             await task_ds.update_task(task_row)
 
             await event_ds.append_event(
+                require_current_user_id(),
                 project_id=project_id,
                 task_id=task_id,
                 type="committed",
@@ -664,7 +667,9 @@ class LifecycleService:
             task_ds = TaskDatastore(db)
             event_ds = TaskEventDatastore(db)
 
-            task_row = await task_ds.get_task_by_project(project_id, task_id)
+            task_row = await task_ds.get_task_by_project(
+                require_current_user_id(), project_id, task_id
+            )
             if task_row is None:
                 return {"error": f"task {task_id!r} not found"}
             if task_row.status != "draft":
@@ -678,6 +683,7 @@ class LifecycleService:
             task_row.status = "abandoned"
             await task_ds.update_task(task_row)
             await event_ds.append_event(
+                require_current_user_id(),
                 project_id=project_id,
                 task_id=task_id,
                 type="abandoned",
@@ -695,7 +701,9 @@ class LifecycleService:
     async def _last_assistant_summary(session_id: str) -> str:
         """Best-effort last assistant-message text, for an auto-finalize summary."""
         try:
-            events = await kernel_client.get_events(session_id, limit=200)
+            events = await kernel_client.get_events(
+                require_current_user_id(), session_id, limit=200
+            )
             for event in reversed(events):
                 payload = event.data if hasattr(event, "data") else {}
                 if event.type in ("assistant_message", "text_delta", "content_block"):
@@ -736,7 +744,7 @@ class LifecycleService:
             event_ds = TaskEventDatastore(db)
             run_ds = TaskSessionDatastore(db)
 
-            task = await task_ds.get_task_by_project(project_id, task_id)
+            task = await task_ds.get_task_by_project(require_current_user_id(), project_id, task_id)
             if task is None or task.status != "active":
                 return  # already closed by finish_task / stop / intervene
             if self._members.has_live_members(task_id):
@@ -762,7 +770,9 @@ class LifecycleService:
                 error_msg = f"lead turn ended with status={final_status}"
             else:
                 try:
-                    sess = await kernel_client.get_session(lead_session_id)
+                    sess = await kernel_client.get_session(
+                        require_current_user_id(), lead_session_id
+                    )
                     sr = getattr(sess, "stop_reason", None) if sess is not None else None
                     if sr:
                         typ = sr.get("type") if isinstance(sr, dict) else getattr(sr, "type", None)
@@ -815,8 +825,9 @@ class LifecycleService:
                 # creating a new lead session). The ``reason`` payload tags
                 # this as a lead-turn-error to distinguish from the
                 # unresolved-subtasks-no-error blocked case below.
-                await task_ds.update_task_status(task_id, "blocked")
+                await task_ds.update_task_status(require_current_user_id(), task_id, "blocked")
                 await event_ds.append_event(
+                    require_current_user_id(),
                     project_id=project_id,
                     task_id=task_id,
                     type="task_blocked",
@@ -835,8 +846,9 @@ class LifecycleService:
             if unresolved:
                 # Lead stopped with planned work undispatched — surface as blocked
                 # (not a hard error, but not done either).
-                await task_ds.update_task_status(task_id, "blocked")
+                await task_ds.update_task_status(require_current_user_id(), task_id, "blocked")
                 await event_ds.append_event(
+                    require_current_user_id(),
                     project_id=project_id,
                     task_id=task_id,
                     type="task_blocked",
@@ -856,13 +868,14 @@ class LifecycleService:
                 "(auto-finalized) Lead ended its turn with no pending subtasks; "
                 "task closed automatically."
             )
-            await task_ds.update_task_status(task_id, "completed")
+            await task_ds.update_task_status(require_current_user_id(), task_id, "completed")
             await run_ds.update_run_by_session(
                 session_id=lead_session_id,
                 status="completed",
                 ended_at=now_ms(),
             )
             await event_ds.append_event(
+                require_current_user_id(),
                 project_id=project_id,
                 task_id=task_id,
                 type="task_completed",
@@ -958,7 +971,9 @@ class LifecycleService:
                     key = run.subtask_key if run else None
                     if key:
                         task_ds = TaskDatastore(db)
-                        task_row = await task_ds.get_task_by_project(project_id, task_id)
+                        task_row = await task_ds.get_task_by_project(
+                            require_current_user_id(), project_id, task_id
+                        )
                         if task_row is not None:
                             plan = TaskPlan.from_dict(task_row.plan)
                             if plan.get(key) is not None:
@@ -974,6 +989,7 @@ class LifecycleService:
                                     session_id=session_id,
                                 )
                     await event_ds.append_event(
+                        require_current_user_id(),
                         project_id=project_id,
                         task_id=task_id,
                         type="subtask_failed",
@@ -1039,7 +1055,9 @@ class LifecycleService:
 
             # Guard: don't let a "completed" finish leave planned work behind.
             if final_status == "completed":
-                task_row = await task_ds.get_task_by_project(project_id, task_id)
+                task_row = await task_ds.get_task_by_project(
+                    require_current_user_id(), project_id, task_id
+                )
                 if task_row is not None:
                     plan = TaskPlan.from_dict(task_row.plan)
                     unresolved = [
@@ -1062,7 +1080,7 @@ class LifecycleService:
                         }
 
             if rejected is None:
-                await task_ds.update_task_status(task_id, final_status)
+                await task_ds.update_task_status(require_current_user_id(), task_id, final_status)
 
                 # Mark lead run as completed
                 await run_ds.update_run_by_session(
@@ -1072,6 +1090,7 @@ class LifecycleService:
                 )
 
                 await event_ds.append_event(
+                    require_current_user_id(),
                     project_id=project_id,
                     task_id=task_id,
                     type=event_type,
@@ -1093,9 +1112,9 @@ class LifecycleService:
         # and so a re-opened conversation on this session isn't stuck in
         # goal mode. Best-effort — a missing session is not fatal here.
         try:
-            lead_sess = await kernel_client.get_session(lead_session_id)
+            lead_sess = await kernel_client.get_session(require_current_user_id(), lead_session_id)
             if lead_sess is not None and getattr(lead_sess, "mode", "default") != "default":
-                await kernel_client.set_mode(lead_session_id, "default")
+                await kernel_client.set_mode(require_current_user_id(), lead_session_id, "default")
         except Exception:  # noqa: BLE001 — terminal bookkeeping, never block close
             logger.warning(
                 "finish_task: could not reset lead session %s mode to default",

@@ -296,6 +296,12 @@ class TodoItem(BaseModel):
 
 class SessionData(BaseModel):
     id: str
+    # Owner id of the session (the kernel row's ``user_id``). Surfaced over the
+    # wire so the host can scope its own owner-filtered reads to whoever owns a
+    # session — host background paths (tool handlers, capability refresh) often
+    # hold only a ``SessionData`` and have no other way to recover the owner.
+    # Empty string for sessions created before this field existed.
+    user_id: str = ""
     agent_config: AgentConfigSchema
     runtime_provider: RuntimeProvider
     cwd: str = ""

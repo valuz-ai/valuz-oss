@@ -222,6 +222,9 @@ def dict_to_agent_config(data: dict[str, Any] | None) -> AgentConfig | None:
 def session_to_model(session: Session) -> SessionModel:
     return SessionModel(
         id=session.id,
+        # Owner stamped explicitly (no column default); the create route sets
+        # ``session.user_id`` and it round-trips on every load.
+        user_id=session.user_id,
         agent_config=agent_config_to_dict(session.agent_config),
         cwd=session.cwd,
         runtime_provider=session.runtime_provider,
@@ -245,6 +248,7 @@ def session_to_model(session: Session) -> SessionModel:
 def model_to_session(model: SessionModel) -> Session:
     return Session(
         id=model.id,
+        user_id=model.user_id,
         agent_config=dict_to_agent_config(model.agent_config) or AgentConfig(id="", name=""),
         cwd=model.cwd or "",
         runtime_provider=_validate_runtime_provider(model.runtime_provider),
@@ -417,8 +421,9 @@ def dict_to_user_message(data: dict[str, Any]) -> UserMessage:
 # -- Message --
 
 
-def message_to_model(message: Message) -> MessageModel:
+def message_to_model(user_id: str, message: Message) -> MessageModel:
     return MessageModel(
+        user_id=user_id,  # owner stamped explicitly (no column default)
         id=message.id,
         session_id=message.session_id,
         user_message=user_message_to_dict(message.user_message),
@@ -474,8 +479,9 @@ def model_to_message(model: MessageModel) -> Message:
 # -- Event --
 
 
-def event_to_model(session_id: str, message_id: str, event: Event) -> EventModel:
+def event_to_model(user_id: str, session_id: str, message_id: str, event: Event) -> EventModel:
     return EventModel(
+        user_id=user_id,  # owner stamped explicitly (no column default)
         session_id=session_id,
         message_id=message_id,
         type=event.type,

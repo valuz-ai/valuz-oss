@@ -35,6 +35,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.config import settings
 from valuz_agent.integrations.skills_filesystem import (
     _default_user_skill_root,
@@ -144,7 +145,7 @@ async def _resolve_project_cwd_for_session(session_id: str) -> Path | None:
     from valuz_agent.infra.fs_registry import fs_registry
 
     try:
-        session = await kernel_client.get_session(session_id)
+        session = await kernel_client.get_session(require_current_user_id(), session_id)
     except Exception:  # noqa: BLE001 — kernel store transient failures are non-fatal here
         return None
     if session is None:
@@ -160,7 +161,7 @@ async def _resolve_project_cwd_for_session(session_id: str) -> Path | None:
             from valuz_agent.infra.db import async_unit_of_work
 
             async with async_unit_of_work(commit=False) as db:
-                return await ProjectDatastore(db).get_by_id(str(project_id))
+                return await ProjectDatastore(db).get_by_id(session.user_id, str(project_id))
 
         row = await _read_ws()
         if row is not None:

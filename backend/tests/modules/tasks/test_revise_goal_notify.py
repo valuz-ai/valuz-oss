@@ -45,6 +45,7 @@ def _seed_lead(db_factory, tmp_path, *, lead_session_id="lead-1"):
     try:
         db.add(
             TaskSessionRow(
+                user_id="local-test-owner",
                 project_id="w1",
                 task_id="t1",
                 session_id=lead_session_id,

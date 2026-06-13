@@ -28,9 +28,38 @@ from contextvars import ContextVar, Token
 _current_user_id: ContextVar[str | None] = ContextVar("valuz_current_user_id")
 
 
+class OwnerContextUnsetError(LookupError):
+    """Raised when an owner-scoped read runs with no owner in context.
+
+    Subclasses ``LookupError`` so existing ``except LookupError`` keeps working.
+    On the request path this means the caller is unauthenticated (the auth
+    middleware resolved no identity), so the API layer maps it to **401** rather
+    than a 500 — see ``api.middleware.ErrorHandlerMiddleware``.
+    """
+
+
 def get_current_user_id() -> str | None:
     """Return the owner id stamped on rows created in this context."""
     return _current_user_id.get()
+
+
+def require_current_user_id() -> str:
+    """Return the request-scoped owner id, or raise if it is absent.
+
+    The read-side companion to the ``UserMixin`` write-stamp: every owner-scoped
+    query needs a concrete ``user_id`` to filter on. Like the write path, this
+    has NO implicit fallback — an unset context (or one explicitly set to
+    ``None``) raises ``OwnerContextUnsetError`` so a query that would otherwise read
+    across every owner fails loudly instead of silently. Background paths acting
+    for a specific owner must ``set_current_user_id(owner)`` (or thread the
+    recovered owner explicitly) before calling owner-scoped reads.
+    """
+    uid = _current_user_id.get(None)
+    if uid is None:
+        raise OwnerContextUnsetError(
+            "current_user_id is unset; owner-scoped reads require an owner"
+        )
+    return uid
 
 
 def set_current_user_id(user_id: str | None) -> Token[str | None]:
@@ -42,4 +71,10 @@ def reset_current_user_id(token: Token[str | None]) -> None:
     _current_user_id.reset(token)
 
 
-__all__ = ["get_current_user_id", "set_current_user_id", "reset_current_user_id"]
+__all__ = [
+    "OwnerContextUnsetError",
+    "get_current_user_id",
+    "require_current_user_id",
+    "set_current_user_id",
+    "reset_current_user_id",
+]

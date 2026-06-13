@@ -82,13 +82,16 @@ def test_run_turn_sends_payload_and_returns_message_on_idle() -> None:
         async with _FakeKernelWs(frames) as fake:
             client = HttpKernelClient(f"http://127.0.0.1:{fake.port}", token="tok")
 
-            async def _fake_list_messages(session_id: str, *, limit: int = 50, offset: int = 0):
+            async def _fake_list_messages(
+                user_id, session_id: str, *, limit: int = 50, offset: int = 0
+            ):
                 assert session_id == "sess-1" and limit == 1
                 return [_fake_message(session_id)]
 
             client.list_messages = _fake_list_messages  # type: ignore[method-assign]
             try:
                 message = await client.run_turn(
+                    "owner-a",
                     "sess-1",
                     "research AAPL",
                     attachments=[{"source_path": "/tmp/a.pdf", "parsed_path": "/tmp/a.md"}],
@@ -120,12 +123,14 @@ def test_run_turn_treats_session_error_as_terminal() -> None:
         async with _FakeKernelWs(frames) as fake:
             client = HttpKernelClient(f"http://127.0.0.1:{fake.port}", token="tok")
 
-            async def _fake_list_messages(session_id: str, *, limit: int = 50, offset: int = 0):
+            async def _fake_list_messages(
+                user_id, session_id: str, *, limit: int = 50, offset: int = 0
+            ):
                 return [_fake_message(session_id)]
 
             client.list_messages = _fake_list_messages  # type: ignore[method-assign]
             try:
-                return await client.run_turn("sess-1", "hi")
+                return await client.run_turn("owner-a", "sess-1", "hi")
             finally:
                 await client.aclose()
 
@@ -141,7 +146,7 @@ def test_run_turn_maps_error_frame_to_client_error() -> None:
         async with _FakeKernelWs(frames) as fake:
             client = HttpKernelClient(f"http://127.0.0.1:{fake.port}", token="tok")
             try:
-                await client.run_turn("missing", "hi")
+                await client.run_turn("owner-a", "missing", "hi")
             finally:
                 await client.aclose()
 
@@ -156,7 +161,7 @@ def test_run_turn_maps_dropped_channel_to_unavailable() -> None:
         async with _FakeKernelWs([]) as fake:
             client = HttpKernelClient(f"http://127.0.0.1:{fake.port}", token="tok")
             try:
-                await client.run_turn("sess-1", "hi")
+                await client.run_turn("owner-a", "sess-1", "hi")
             finally:
                 await client.aclose()
 

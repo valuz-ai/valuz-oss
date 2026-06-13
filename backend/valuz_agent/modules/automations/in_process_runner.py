@@ -32,6 +32,11 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from valuz_agent.i18n import t
+from valuz_agent.infra.auth_context import (
+    require_current_user_id,
+    reset_current_user_id,
+    set_current_user_id,
+)
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.automations.models import AutomationRow, AutomationRunRow
 from valuz_agent.modules.automations.triggers import TriggerEvaluator
@@ -114,7 +119,7 @@ class InProcessAutomationRunner:
 
     def __init__(self) -> None:
         self._running = False
-        self._queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+        self._queue: asyncio.Queue[tuple[str, str, str]] = asyncio.Queue()
         self._active_ids: set[str] = set()
         self._tick_task: asyncio.Task[None] | None = None
         self._worker_task: asyncio.Task[None] | None = None
@@ -151,16 +156,18 @@ class InProcessAutomationRunner:
         await self._mark_active_runs_interrupted()
         logger.info("InProcessAutomationRunner stopped")
 
-    async def enqueue(self, automation_id: str, run_id: str) -> None:
-        await self._queue.put((automation_id, run_id))
+    async def enqueue(self, automation_id: str, run_id: str, user_id: str) -> None:
+        await self._queue.put((automation_id, run_id, user_id))
 
-    def enqueue_threadsafe(self, automation_id: str, run_id: str) -> None:
+    def enqueue_threadsafe(self, automation_id: str, run_id: str, user_id: str) -> None:
         """Enqueue from a sync context (e.g. ``run_now`` from a FastAPI
         threadpool handler). Falls through silently when the runner is
         stopped — the route still creates the queued row, the next start
         will reconcile it as stranded."""
         if self._loop is not None and self._running:
-            asyncio.run_coroutine_threadsafe(self.enqueue(automation_id, run_id), self._loop)
+            asyncio.run_coroutine_threadsafe(
+                self.enqueue(automation_id, run_id, user_id), self._loop
+            )
 
     # ── Stranded-run reconciliation ───────────────────────────────────
 
@@ -204,7 +211,7 @@ class InProcessAutomationRunner:
         async with async_unit_of_work() as db:
             ds = AutomationDatastore(db)
             for automation_id in list(self._active_ids):
-                last_run = await ds.last_run(automation_id)
+                last_run = await ds.last_run(require_current_user_id(), automation_id)
                 if last_run and last_run.status == "running":
                     last_run.status = "interrupted_by_shutdown"
                     last_run.error_code = "AUTOMATION_INTERRUPTED_BY_SHUTDOWN"
@@ -242,7 +249,7 @@ class InProcessAutomationRunner:
                     error_code="AUTOMATION_MISSED_WHILE_OFFLINE",
                     created_files="[]",
                 )
-                await ds.create_run(run)
+                await ds.create_run(row.user_id, run)
                 row.last_run_at = row.next_run_at
                 row.next_run_at = self._triggers.next_fire_at(row, now)
                 row.updated_at = now
@@ -297,8 +304,8 @@ class InProcessAutomationRunner:
                     triggered_at=now,
                     created_files="[]",
                 )
-                await ds.create_run(run)
-                asyncio.create_task(self.enqueue(row.id, run.id))
+                await ds.create_run(row.user_id, run)
+                asyncio.create_task(self.enqueue(row.id, run.id, row.user_id))
                 logger.info(
                     "Enqueued %s run for automation %s (%s)",
                     trigger_type,
@@ -309,8 +316,10 @@ class InProcessAutomationRunner:
     async def _worker_loop(self) -> None:
         while self._running:
             try:
-                automation_id, run_id = await asyncio.wait_for(self._queue.get(), timeout=1.0)
-                await self._execute_run(automation_id, run_id)
+                automation_id, run_id, user_id = await asyncio.wait_for(
+                    self._queue.get(), timeout=1.0
+                )
+                await self._execute_run(user_id, automation_id, run_id)
             except TimeoutError:
                 continue
             except asyncio.CancelledError:
@@ -320,19 +329,25 @@ class InProcessAutomationRunner:
 
     # ── Per-run execution ────────────────────────────────────────────
 
-    async def _execute_run(self, automation_id: str, run_id: str) -> None:
+    async def _execute_run(self, user_id: str, automation_id: str, run_id: str) -> None:
         from valuz_agent.infra.db import async_unit_of_work
         from valuz_agent.modules.automations.datastore import AutomationDatastore
 
         assert self._triggers is not None
         async with async_unit_of_work() as db:
             ds = AutomationDatastore(db)
-            row = await ds.get_automation(automation_id)
-            run = await ds.last_run(automation_id)
+            row = await ds.get_automation(user_id, automation_id)
+            run = await ds.last_run(user_id, automation_id)
             if not row or not run or run.id != run_id:
                 logger.warning("Run %s for automation %s not found", run_id, automation_id)
                 return
 
+            # Owner boundary: an automation fires from the background scheduler
+            # with no request context. Publish the automation's owner so the
+            # session it creates and every owner-scoped read below attribute to
+            # the user who owns the automation (mirrors AuthMiddleware on the
+            # request path).
+            owner_token = set_current_user_id(row.user_id) if row.user_id else None
             self._active_ids.add(automation_id)
             try:
                 project_name = await self._resolve_project_name(db, row.project_id)
@@ -456,11 +471,13 @@ class InProcessAutomationRunner:
                     row.next_run_at = None
                 row.updated_at = now_ms()
                 await ds.update_automation(row)
-                await ds.trim_runs(automation_id, keep=100)
+                await ds.trim_runs(row.user_id, automation_id, keep=100)
 
                 logger.info("Run %s completed: %s", run_id, run.status)
             finally:
                 self._active_ids.discard(automation_id)
+                if owner_token is not None:
+                    reset_current_user_id(owner_token)
 
     # ── Task-mode execution ────────────────────────────────────────
 
@@ -510,7 +527,9 @@ class InProcessAutomationRunner:
             lead_session_id: str | None = None
             try:
                 async with async_unit_of_work(commit=False) as ts_db:
-                    runs = await TaskSessionDatastore(ts_db).list_runs(task.id)
+                    runs = await TaskSessionDatastore(ts_db).list_runs(
+                        require_current_user_id(), task.id
+                    )
                     lead_run = next(
                         (r for r in runs if r.kind == "lead"),
                         None,
@@ -565,7 +584,7 @@ class InProcessAutomationRunner:
             row.next_run_at = None
         row.updated_at = now_ms()
         await ds.update_automation(row)
-        await ds.trim_runs(automation_id, keep=100)
+        await ds.trim_runs(row.user_id, automation_id, keep=100)
 
     # ── Helpers ──────────────────────────────────────────────────────
 
@@ -604,7 +623,7 @@ class InProcessAutomationRunner:
         from valuz_agent.modules.projects.datastore import ProjectDatastore
 
         try:
-            row = await ProjectDatastore(db).get_by_id(project_id)
+            row = await ProjectDatastore(db).get_by_id(require_current_user_id(), project_id)
             if row is not None:
                 return row.name
         except Exception:

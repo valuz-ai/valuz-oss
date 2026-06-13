@@ -43,6 +43,7 @@ from valuz_agent.adapters import kernel_client
 from valuz_agent.adapters.capability_resolver import resolve_session_capabilities
 from valuz_agent.adapters.model_resolver import resolve_model
 from valuz_agent.adapters.system_prompt_builder import build_project_system_prompt
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.secret_store import FileSecretStore
@@ -182,7 +183,7 @@ class SessionService:
         if self._connectors is None:
             return []
 
-        project_row = await self._projects.get_by_id(project_id)
+        project_row = await self._projects.get_by_id(require_current_user_id(), project_id)
         is_project = project_row is not None and project_row.kind == "project"
 
         try:
@@ -195,7 +196,7 @@ class SessionService:
             # Chat project: all enabled connectors that are connected or unknown
             return [
                 conn.slug
-                for conn in await self._connectors.list_enabled()
+                for conn in await self._connectors.list_enabled(require_current_user_id())
                 if conn.status in ("connected", "unknown")
             ]
         except Exception:  # noqa: BLE001
@@ -225,7 +226,7 @@ class SessionService:
         those incomplete rows.
         """
         ids = await project_index.list_session_ids(project_id, limit=10)
-        sessions = await kernel_client.list_sessions(ids=ids, limit=10)
+        sessions = await kernel_client.list_sessions(require_current_user_id(), ids=ids, limit=10)
         for s in sessions:
             meta = _valuz_meta(s)
             provider_id = meta.get("locked_provider_id") or None
@@ -250,7 +251,7 @@ class SessionService:
         # get exactly N chats — no over-fetching, no chat/task ratio
         # assumptions.
         ids = await project_index.list_session_ids(project_id, user_only=True, limit=200)
-        sessions = await kernel_client.list_sessions(ids=ids, limit=200)
+        sessions = await kernel_client.list_sessions(require_current_user_id(), ids=ids, limit=200)
         order = {sid: i for i, sid in enumerate(ids)}
         sessions.sort(key=lambda s: order.get(s.id, len(order)))
         items = [_session_to_list_item(s) for s in sessions]
@@ -260,7 +261,7 @@ class SessionService:
         return items
 
     async def get_session(self, session_id: str) -> SessionDetail:
-        session = await kernel_client.get_session(session_id)
+        session = await kernel_client.get_session(require_current_user_id(), session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
         return _session_to_detail(session)
@@ -278,7 +279,7 @@ class SessionService:
         events that have no legacy counterpart are filtered.
         """
         # Verify session exists.
-        session = await kernel_client.get_session(session_id)
+        session = await kernel_client.get_session(require_current_user_id(), session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
 
@@ -308,7 +309,7 @@ class SessionService:
         turns"); the linear ``list_events`` / SSE path stays for
         incremental delivery.
         """
-        session = await kernel_client.get_session(session_id)
+        session = await kernel_client.get_session(require_current_user_id(), session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
 
@@ -367,13 +368,17 @@ class SessionService:
         )
 
         async with async_unit_of_work() as _db:
-            member = await ProjectMemberDatastore(_db).get(project_id, agent_slug)
+            member = await ProjectMemberDatastore(_db).get(
+                require_current_user_id(), project_id, agent_slug
+            )
             if member is not None:
                 # Live reference: the member points at a library AgentRow via
                 # ``source_agent_slug`` — build the snapshot from the row's
                 # CURRENT fields so every new session picks up library edits.
                 if member.source_agent_slug:
-                    row = await AgentDatastore(_db).get_agent(member.source_agent_slug)
+                    row = await AgentDatastore(_db).get_agent(
+                        require_current_user_id(), member.source_agent_slug
+                    )
                     if row is not None:
                         config = await AgentService(_db).build_agent_config(row)
                         return config.id, config
@@ -386,7 +391,7 @@ class SessionService:
 
         # Not a project member → resolve as a global library agent.
         async with async_unit_of_work() as _db:
-            row = await AgentDatastore(_db).get_agent(agent_slug)
+            row = await AgentDatastore(_db).get_agent(require_current_user_id(), agent_slug)
             if row is None:
                 raise SessionNotRunnable(
                     f"agent '{agent_slug}' not found — pick a configured agent or add one first"
@@ -483,7 +488,9 @@ class SessionService:
                 secret_store=FileSecretStore(settings.secrets_dir),
                 event_bus=event_bus,
             )
-            match = await prov_svc.resolve_provider_for_model(effective_model)
+            match = await prov_svc.resolve_provider_for_model(
+                require_current_user_id(), effective_model
+            )
             if match is not None:
                 provider_id = match.id
         if not provider_id:
@@ -511,8 +518,8 @@ class SessionService:
             raise SessionNotRunnable(str(exc)) from exc
 
         # Snapshot the project prompt + the agent's persona instructions.
-        project_row = await self._projects.get_by_id(project_id)
-        project_ctx = await self._projects.get_context(project_id)
+        project_row = await self._projects.get_by_id(require_current_user_id(), project_id)
+        project_ctx = await self._projects.get_context(require_current_user_id(), project_id)
         project_prompt = build_project_system_prompt(
             project_name=project_row.name if project_row else "",
             instructions_md=project_ctx.instructions_md if project_ctx else None,
@@ -595,12 +602,13 @@ class SessionService:
         if creation_context:
             valuz_meta["creation_context"] = {str(k): str(v) for k, v in creation_context.items()}
 
-        project_row = await self._projects.get_by_id(project_id)
+        project_row = await self._projects.get_by_id(require_current_user_id(), project_id)
         if project_row is None:
             raise SessionNotRunnable(f"project '{project_id}' not found")
         from app.serializers import agent_config_to_schema
 
         created = await kernel_client.create_session(
+            require_current_user_id(),
             CreateSessionRequest(
                 id=session_id,
                 agent_config=agent_config_to_schema(agent),
@@ -614,7 +622,7 @@ class SessionService:
                 mcp_servers=list(session_mcp),
                 permission_mode=effective_permission_mode,
                 metadata={"valuz": valuz_meta},
-            )
+            ),
         )
         await project_index.record(
             project_id, session_id, kind="chat", origin=str(origin or "user")
@@ -716,7 +724,7 @@ class SessionService:
                     effort = await _prefs.get_default_effort(_pref_db)
 
         # Resolve model.
-        project_row = await self._projects.get_by_id(project_id)
+        project_row = await self._projects.get_by_id(require_current_user_id(), project_id)
         resolution = await resolve_model(
             providers=self._providers,
             request_model_id=model_id,
@@ -740,7 +748,9 @@ class SessionService:
                 secret_store=FileSecretStore(settings.secrets_dir),
                 event_bus=event_bus,
             )
-            match = await prov_svc.resolve_provider_for_model(resolution.model)
+            match = await prov_svc.resolve_provider_for_model(
+                require_current_user_id(), resolution.model
+            )
             if match is not None:
                 resolved_provider_id = match.id
 
@@ -853,8 +863,8 @@ class SessionService:
         # the session field, not the agent — so this is the moment that
         # locks the system prompt for the session's lifetime. Project
         # edits after this point apply only to *future* sessions.
-        project_row = await self._projects.get_by_id(project_id)
-        project_ctx = await self._projects.get_context(project_id)
+        project_row = await self._projects.get_by_id(require_current_user_id(), project_id)
+        project_ctx = await self._projects.get_context(require_current_user_id(), project_id)
         session_instructions = build_project_system_prompt(
             project_name=project_row.name if project_row else "",
             instructions_md=project_ctx.instructions_md if project_ctx else None,
@@ -914,6 +924,7 @@ class SessionService:
         from app.serializers import agent_config_to_schema
 
         created = await kernel_client.create_session(
+            require_current_user_id(),
             CreateSessionRequest(
                 id=session_id,
                 agent_config=agent_config_to_schema(agent_config),
@@ -927,7 +938,7 @@ class SessionService:
                 mcp_servers=list(caps_mcp),
                 permission_mode=effective_permission_mode,
                 metadata={"valuz": valuz_meta},
-            )
+            ),
         )
         await project_index.record(
             project_id, session_id, kind="chat", origin=str(origin or "user")
@@ -977,7 +988,7 @@ class SessionService:
                 session_id,
             )
 
-        session = await kernel_client.get_session(session_id)
+        session = await kernel_client.get_session(require_current_user_id(), session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
 
@@ -1009,6 +1020,7 @@ class SessionService:
         meta["valuz"] = valuz
 
         updated = await kernel_client.finalize_session(
+            require_current_user_id(),
             session_id,
             FinalizeSessionRequest(status="running", metadata=meta),
         )
@@ -1062,7 +1074,7 @@ class SessionService:
                 session_id,
             )
 
-        session = await kernel_client.get_session(session_id)
+        session = await kernel_client.get_session(require_current_user_id(), session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
 
@@ -1096,6 +1108,7 @@ class SessionService:
             running_valuz["name"] = content[:40].replace("\n", " ").strip()
         running_meta["valuz"] = running_valuz
         await kernel_client.finalize_session(
+            require_current_user_id(),
             session_id,
             FinalizeSessionRequest(status="running", metadata=running_meta),
         )
@@ -1128,6 +1141,7 @@ class SessionService:
 
             try:
                 message = await kernel_client.run_turn(
+                    require_current_user_id(),
                     session_id,
                     content,
                     attachments=[
@@ -1146,7 +1160,7 @@ class SessionService:
                     )
 
             # Update valuz metadata.
-            reloaded = await kernel_client.get_session(session_id)
+            reloaded = await kernel_client.get_session(require_current_user_id(), session_id)
             if reloaded is not None:
                 meta = dict(reloaded.metadata)
                 valuz = dict(meta.get("valuz") or {})
@@ -1156,6 +1170,7 @@ class SessionService:
                 meta["valuz"] = valuz
 
                 final_session = await kernel_client.update_session(
+                    require_current_user_id(),
                     session_id,
                     UpdateSessionRequest(metadata=meta),
                 )
@@ -1194,7 +1209,9 @@ class SessionService:
                     status=_map_kernel_status(reloaded.status),
                 )
 
-                events = await kernel_client.get_events(session_id, limit=500)
+                events = await kernel_client.get_events(
+                    require_current_user_id(), session_id, limit=500
+                )
                 envelopes = [
                     SessionEventEnvelope(
                         seq=i,
@@ -1211,7 +1228,7 @@ class SessionService:
             raise
 
         # Fallback (should not reach here).
-        reloaded2 = await kernel_client.get_session(session_id)
+        reloaded2 = await kernel_client.get_session(require_current_user_id(), session_id)
         detail = _session_to_detail(reloaded2) if reloaded2 else _session_to_detail(session)
         return SessionRunResponse(session=detail, events=[])
 
@@ -1222,7 +1239,7 @@ class SessionService:
         when the kernel-side interrupt can't be delivered (runtime
         already exited, orchestrator never registered the session, etc.):
 
-        1. Best-effort ``kernel_client.interrupt(session_id)`` —
+        1. Best-effort ``kernel_client.interrupt(require_current_user_id(), session_id)`` —
            the *clean* path that asks the runtime to stop emitting tokens.
         2. Whatever happens to step 1, flip the kernel session row to
            ``status=idle`` with ``stop_reason=UserInterrupt`` so future
@@ -1235,14 +1252,14 @@ class SessionService:
         a stranded ``running`` row wedges the session forever (same
         failure mode ``recover_running_sessions`` cleans up at boot).
         """
-        session = await kernel_client.get_session(session_id)
+        session = await kernel_client.get_session(require_current_user_id(), session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
 
         # Step 1 — best-effort kernel interrupt.
         interrupt_failed = False
         try:
-            await kernel_client.interrupt(session_id)
+            await kernel_client.interrupt(require_current_user_id(), session_id)
         except Exception:  # noqa: BLE001 — runtime gone / never registered
             logger.warning(
                 "Could not reach kernel to interrupt session %s",
@@ -1255,6 +1272,7 @@ class SessionService:
         old_status = _map_kernel_status(session.status)
 
         updated = await kernel_client.finalize_session(
+            require_current_user_id(),
             session_id,
             FinalizeSessionRequest(status="idle", stop_reason_type="user_interrupt"),
         )
@@ -1277,7 +1295,9 @@ class SessionService:
                 },
             )
             try:
-                persisted = await kernel_client.append_event(session_id, err_event)
+                persisted = await kernel_client.append_event(
+                    require_current_user_id(), session_id, err_event
+                )
             except Exception:  # noqa: BLE001
                 persisted = False
                 logger.exception(
@@ -1287,7 +1307,7 @@ class SessionService:
             if not persisted:
                 try:
                     await kernel_client.emit_live_event(
-                        session_id, err_event.type, err_event.data
+                        require_current_user_id(), session_id, err_event.type, err_event.data
                     )
                 except Exception:  # noqa: BLE001
                     logger.exception(
@@ -1304,14 +1324,14 @@ class SessionService:
         return _session_to_detail(updated)
 
     async def cancel(self, session_id: str) -> SessionDetail:
-        session = await kernel_client.get_session(session_id)
+        session = await kernel_client.get_session(require_current_user_id(), session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
 
         old_status = _map_kernel_status(session.status)
 
         updated = await kernel_client.finalize_session(
-            session_id, FinalizeSessionRequest(status="terminated")
+            require_current_user_id(), session_id, FinalizeSessionRequest(status="terminated")
         )
 
         self._bus.publish(
@@ -1323,7 +1343,7 @@ class SessionService:
         return _session_to_detail(updated)
 
     async def regenerate(self, session_id: str) -> SessionDetail:
-        session = await kernel_client.get_session(session_id)
+        session = await kernel_client.get_session(require_current_user_id(), session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
         meta = _valuz_meta(session)
@@ -1333,7 +1353,7 @@ class SessionService:
         return await self.send_message(session_id, str(last_msg))
 
     async def rename_session(self, session_id: str, name: str) -> SessionDetail:
-        session = await kernel_client.get_session(session_id)
+        session = await kernel_client.get_session(require_current_user_id(), session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
 
@@ -1343,19 +1363,19 @@ class SessionService:
         meta["valuz"] = valuz
 
         updated = await kernel_client.update_session(
-            session_id, UpdateSessionRequest(metadata=meta)
+            require_current_user_id(), session_id, UpdateSessionRequest(metadata=meta)
         )
         return _session_to_detail(updated)
 
     async def delete_session(self, session_id: str) -> None:
-        session = await kernel_client.get_session(session_id)
+        session = await kernel_client.get_session(require_current_user_id(), session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
-        await kernel_client.delete_session(session_id)
+        await kernel_client.delete_session(require_current_user_id(), session_id)
         await project_index.remove(session_id)
 
     async def get_extra_skills(self, session_id: str) -> list[str]:
-        session = await kernel_client.get_session(session_id)
+        session = await kernel_client.get_session(require_current_user_id(), session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
         meta = _valuz_meta(session)
@@ -1365,7 +1385,7 @@ class SessionService:
         return [str(s) for s in raw if isinstance(s, str)]
 
     async def set_extra_skills(self, session_id: str, skill_ids: list[str]) -> SessionDetail:
-        session = await kernel_client.get_session(session_id)
+        session = await kernel_client.get_session(require_current_user_id(), session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
 
@@ -1376,7 +1396,7 @@ class SessionService:
         meta["valuz"] = valuz
 
         updated = await kernel_client.update_session(
-            session_id, UpdateSessionRequest(metadata=meta)
+            require_current_user_id(), session_id, UpdateSessionRequest(metadata=meta)
         )
         return _session_to_detail(updated)
 
@@ -1397,7 +1417,7 @@ class SessionService:
 
         A turn already in flight keeps the mode it started with.
         """
-        session = await kernel_client.get_session(session_id)
+        session = await kernel_client.get_session(require_current_user_id(), session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
 
@@ -1409,7 +1429,7 @@ class SessionService:
             )
 
         updated = await kernel_client.update_session(
-            session_id, UpdateSessionRequest(permission_mode=target)
+            require_current_user_id(), session_id, UpdateSessionRequest(permission_mode=target)
         )
         return _session_to_detail(updated)
 
@@ -1431,13 +1451,14 @@ class SessionService:
         ``ValueError`` on an unknown effort value so the route layer
         can 400.
         """
-        session = await kernel_client.get_session(session_id)
+        session = await kernel_client.get_session(require_current_user_id(), session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
 
         target_effort = _coerce_session_effort(effort)
         previous = session.model_settings or ModelSettingsSchema()
         updated = await kernel_client.update_session(
+            require_current_user_id(),
             session_id,
             UpdateSessionRequest(
                 model_settings=ModelSettingsSchema(
@@ -1483,11 +1504,12 @@ class SessionService:
         # Verify session exists so we raise our own 404 before reaching
         # the orchestrator (which would also 404 but with a kernel-shaped
         # error message). Keeping host errors host-flavoured.
-        session = await kernel_client.get_session(session_id)
+        session = await kernel_client.get_session(require_current_user_id(), session_id)
         if session is None:
             raise _kernel_session_not_found(session_id)
 
         result = await kernel_client.submit_action(
+            require_current_user_id(),
             session_id,
             SubmitActionRequest(
                 pending_id=pending_id,
@@ -1507,5 +1529,5 @@ class SessionService:
         """Delete all kernel sessions (and their events) for this project."""
         ids = await project_index.remove_for_project(project_id)
         for sid in ids:
-            await kernel_client.delete_session(sid)
+            await kernel_client.delete_session(require_current_user_id(), sid)
         return len(ids)

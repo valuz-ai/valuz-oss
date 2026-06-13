@@ -24,6 +24,7 @@ import valuz_agent.boot.kernel  # noqa: F401
 
 from app.schemas import SessionData as Session
 
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.decisions.schemas import DecisionEntry
@@ -100,7 +101,7 @@ async def enrich_pending(
     session_id = getattr(session, "id", "")
 
     async with async_unit_of_work(commit=False) as db:
-        task = await TaskDatastore(db).get_task(task_id)
+        task = await TaskDatastore(db).get_task(require_current_user_id(), task_id)
         if task is None:
             # Race: event broadcast outpaced the DB delete, or task was
             # just abandoned. Either way, no useful entry to render.
@@ -133,7 +134,7 @@ async def enrich_pending(
         project_emoji: str | None = None
         project_id = task.project_id
         if project_id:
-            ws = await ProjectDatastore(db).get_by_id(project_id)
+            ws = await ProjectDatastore(db).get_by_id(task.user_id, project_id)
             if ws is not None:
                 project_title = ws.name
                 project_emoji = ws.icon

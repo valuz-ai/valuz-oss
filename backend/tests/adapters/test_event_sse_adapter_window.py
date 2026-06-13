@@ -52,13 +52,13 @@ def seeded_engine(tmp_path, monkeypatch):
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
     store = SQLAlchemyStore(async_sessionmaker(engine, expire_on_commit=False))
 
-    async def _window(session_id: str, *, before_seq=None, turn_limit=20) -> EventWindowData:
+    async def _window(
+        user_id: str, session_id: str, *, before_seq=None, turn_limit=20
+    ) -> EventWindowData:
         items, has_more = await store.get_events_window(
-            session_id, before_seq=before_seq, turn_limit=turn_limit
+            user_id, session_id, before_seq=before_seq, turn_limit=turn_limit
         )
-        return EventWindowData(
-            items=[stored_event_to_data(e) for e in items], has_more=has_more
-        )
+        return EventWindowData(items=[stored_event_to_data(e) for e in items], has_more=has_more)
 
     monkeypatch.setattr(event_sse_adapter.kernel_client, "get_events_window", _window)
     yield engine
@@ -87,7 +87,7 @@ async def _seed_events(engine, session_id: str, rows: list[tuple[str, str | None
                 text(
                     "INSERT INTO events "
                     "(user_id, session_id, message_id, type, data, timestamp) "
-                    "VALUES ('test-user', :sid, :mid, :type, :data, 1714600000000)"
+                    "VALUES ('local-test-owner', :sid, :mid, :type, :data, 1714600000000)"
                 ),
                 {
                     "sid": session_id,

@@ -92,15 +92,15 @@ def _row_for(entry: ProviderSeedEntry) -> ProviderRow:
     )
 
 
-async def seed_builtin_providers(ds: ProviderDatastore) -> None:
+async def seed_builtin_providers(user_id: str, ds: ProviderDatastore) -> None:
     """Insert any missing built-in provider rows. Safe to re-run."""
     seed = load_provider_seeds()
-    existing_ids = {r.id for r in await ds.list_providers()}
+    existing_ids = {r.id for r in await ds.list_providers(user_id)}
     inserted = 0
     for entry in seed.providers:
         if entry.id in existing_ids:
             continue
-        await ds.create(_row_for(entry))
+        await ds.create(user_id, _row_for(entry))
         inserted += 1
 
     if inserted:

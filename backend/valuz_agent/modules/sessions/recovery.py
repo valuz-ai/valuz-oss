@@ -49,7 +49,8 @@ async def recover_running_sessions(*, batch_limit: int = 500) -> int:
     raises; the caller (startup hook) treats it as best-effort.
     """
     try:
-        sessions = await kernel_client.list_sessions(limit=batch_limit)
+        # Cross-owner startup sweep — finalise every owner's stranded sessions.
+        sessions = await kernel_client.list_all_sessions(limit=batch_limit)
     except Exception:  # noqa: BLE001 — startup must not block on bookkeeping
         logger.exception("recover_running_sessions: failed to list kernel sessions")
         return 0
@@ -90,8 +91,10 @@ async def _finalise_one(session: object) -> None:
     )
 
     sid = session.id  # type: ignore[attr-defined]
+    owner = session.user_id  # type: ignore[attr-defined]
 
     await kernel_client.finalize_session(
+        owner,
         sid,
         FinalizeSessionRequest(
             status="terminated",

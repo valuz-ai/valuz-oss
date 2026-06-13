@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from valuz_agent.api.deps import get_current_user_id, get_provider_service
+from valuz_agent.api.deps import get_provider_service, require_current_user_id
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.providers.datastore import ProviderDatastore
 from valuz_agent.modules.providers.discover import ModelDiscoveryError
@@ -166,9 +166,11 @@ class SetDefaultRequest(BaseModel):
 @router.post("/validate")
 async def validate_credentials(
     body: ValidateRequest,
+    user_id: str = Depends(require_current_user_id),
     svc: ProviderService = Depends(get_provider_service),
 ) -> ConnectionTestResult:
     return await svc.validate_credentials(
+        user_id,
         provider_kind=body.provider_kind,
         api_key=body.api_key,
         base_url=_normalize_base_url(body.base_url),
@@ -180,6 +182,7 @@ async def validate_credentials(
 @router.post("/ping")
 async def ping_compatible(
     body: PingRequest,
+    user_id: str = Depends(require_current_user_id),
     svc: ProviderService = Depends(get_provider_service),
 ) -> PingResponse:
     """Ping every model in ``body.models`` and return the verified subset.
@@ -204,7 +207,7 @@ async def ping_compatible(
     effective_key = body.api_key
     if not effective_key and body.provider_id:
         try:
-            effective_key = await svc.read_stored_api_key(body.provider_id)
+            effective_key = await svc.read_stored_api_key(user_id, body.provider_id)
         except ProviderNotFound as exc:
             raise HTTPException(status_code=404, detail={"reason": str(exc)}) from exc
     if not effective_key:
@@ -264,24 +267,26 @@ def list_provider_descriptors(
 
 @router.get("")
 async def list_providers(
+    user_id: str = Depends(require_current_user_id),
     svc: ProviderService = Depends(get_provider_service),
 ) -> dict[str, list[ProviderListItem]]:
-    return {"providers": await svc.list_providers()}
+    return {"providers": await svc.list_providers(user_id)}
 
 
 @router.get("/{provider_id}")
 async def get_provider(
     provider_id: str,
+    user_id: str = Depends(require_current_user_id),
     svc: ProviderService = Depends(get_provider_service),
 ) -> ProviderDetail:
-    return await svc.get_provider(provider_id)
+    return await svc.get_provider(user_id, provider_id)
 
 
 @router.post("", status_code=201)
 async def create_provider(
     body: ProviderCreateRequest,
+    user_id: str = Depends(require_current_user_id),
     svc: ProviderService = Depends(get_provider_service),
-    user: str = Depends(get_current_user_id),
 ) -> ProviderDetail:
     """Create a provider channel.
 
@@ -293,9 +298,10 @@ async def create_provider(
     timeout / malformed response) abort the create so the user never
     ends up with a stored channel they can't use.
     """
-    await _enforce_provider_policy(user, "create")
+    await _enforce_provider_policy(user_id, "create")
     try:
         return await svc.create_provider(
+            user_id,
             name=body.name,
             provider_kind=body.provider_kind,
             base_url=_normalize_base_url(body.base_url),
@@ -314,12 +320,13 @@ async def create_provider(
 async def update_provider(
     provider_id: str,
     body: ProviderUpdateRequest,
+    user_id: str = Depends(require_current_user_id),
     svc: ProviderService = Depends(get_provider_service),
-    user: str = Depends(get_current_user_id),
 ) -> ProviderDetail:
-    await _enforce_provider_policy(user, "update")
+    await _enforce_provider_policy(user_id, "update")
     try:
         return await svc.update_provider(
+            user_id,
             provider_id,
             name=body.name,
             base_url=_normalize_base_url(body.base_url),
@@ -339,10 +346,11 @@ async def update_provider(
 @router.delete("/{provider_id}", status_code=204)
 async def delete_provider(
     provider_id: str,
+    user_id: str = Depends(require_current_user_id),
     svc: ProviderService = Depends(get_provider_service),
 ) -> None:
     try:
-        await svc.delete_provider(provider_id)
+        await svc.delete_provider(user_id, provider_id)
     except SystemProviderImmutable as exc:
         raise _system_immutable_409(exc) from exc
 
@@ -350,10 +358,11 @@ async def delete_provider(
 @router.post("/{provider_id}/test")
 async def test_provider(
     provider_id: str,
+    user_id: str = Depends(require_current_user_id),
     svc: ProviderService = Depends(get_provider_service),
 ) -> ConnectionTestResult:
     try:
-        return await svc.test_provider(provider_id)
+        return await svc.test_provider(user_id, provider_id)
     except SystemProviderImmutable as exc:
         raise _system_immutable_409(exc) from exc
 
@@ -367,6 +376,7 @@ class DiscoverModelsResponse(BaseModel):
 @router.post("/{provider_id}/discover-models")
 async def discover_provider_models(
     provider_id: str,
+    user_id: str = Depends(require_current_user_id),
     svc: ProviderService = Depends(get_provider_service),
 ) -> DiscoverModelsResponse:
     """Probe the provider's upstream for the available model list.
@@ -382,7 +392,7 @@ async def discover_provider_models(
     typing model ids manually.
     """
     try:
-        result = await svc.discover_models(provider_id)
+        result = await svc.discover_models(user_id, provider_id)
     except SystemProviderImmutable as exc:
         raise _system_immutable_409(exc) from exc
     except ModelDiscoveryError as exc:
@@ -393,6 +403,7 @@ async def discover_provider_models(
 @router.post("/{provider_id}/enable")
 async def enable_provider(
     provider_id: str,
+    user_id: str = Depends(require_current_user_id),
     svc: ProviderService = Depends(get_provider_service),
 ) -> ProviderDetail:
     """Mark an OAuth/subscription provider channel as enabled.
@@ -408,7 +419,7 @@ async def enable_provider(
     Returns 409 when the provider is system-managed (read-only).
     """
     try:
-        return await svc.enable_provider(provider_id)
+        return await svc.enable_provider(user_id, provider_id)
     except SystemProviderImmutable as exc:
         raise _system_immutable_409(exc) from exc
     except ProviderNotFound as exc:
@@ -418,10 +429,11 @@ async def enable_provider(
 @router.post("/default")
 async def set_default(
     body: SetDefaultRequest,
+    user_id: str = Depends(require_current_user_id),
     svc: ProviderService = Depends(get_provider_service),
 ) -> dict[str, str]:
     try:
-        await svc.set_default(body.provider_id, default_model=body.default_model)
+        await svc.set_default(user_id, body.provider_id, default_model=body.default_model)
     except SystemProviderImmutable as exc:
         raise _system_immutable_409(exc) from exc
     return {"provider_id": body.provider_id, "message": "Default provider updated"}
@@ -440,6 +452,7 @@ class ResetRequest(BaseModel):
 @router.post("/reset")
 async def reset(
     body: ResetRequest | None = None,
+    user_id: str = Depends(require_current_user_id),
 ) -> dict[str, list[ProviderListItem]]:
     """Reset the model provider table.
 
@@ -460,5 +473,5 @@ async def reset(
                 ProviderRow.__table__.create(bind=connection, checkfirst=True)
 
             await db.run_sync(lambda s: _recreate(s.connection()))
-        providers = await reset_providers(ds, drop_table=False)
+        providers = await reset_providers(ds, user_id, drop_table=False)
     return {"providers": providers}

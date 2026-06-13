@@ -18,6 +18,7 @@ from typing import Any
 
 import valuz_agent.boot.kernel  # noqa: F401 — puts kernel on sys.path
 from valuz_agent.adapters.agent_resolver import _member_agent_config, summarize_role
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.agents.datastore import ProjectMemberDatastore
 from valuz_agent.modules.tasks.datastore import (
@@ -32,7 +33,7 @@ async def list_members(project_id: str) -> list[dict[str, Any]]:
     """Return member descriptors for dispatch tool list_members()."""
     async with async_unit_of_work(commit=False) as db:
         member_ds = ProjectMemberDatastore(db)
-        rows = await member_ds.list_by_project(project_id)
+        rows = await member_ds.list_by_project(require_current_user_id(), project_id)
         result: list[dict[str, Any]] = []
         for row in rows:
             agent_cfg = await _member_agent_config(row, member_ds)
@@ -71,7 +72,7 @@ async def list_tasks(
     async with async_unit_of_work(commit=False) as db:
         task_ds = TaskDatastore(db)
         run_ds = TaskSessionDatastore(db)
-        rows = await task_ds.list_tasks(project_id)
+        rows = await task_ds.list_tasks(require_current_user_id(), project_id)
         result: list[dict[str, Any]] = []
         for row in rows:
             if status and row.status != status:
@@ -80,7 +81,7 @@ async def list_tasks(
             originated_by = meta.get("originating_session_id")
             if mine_session_id and originated_by != mine_session_id:
                 continue
-            runs = await run_ds.list_runs(row.id)
+            runs = await run_ds.list_runs(require_current_user_id(), row.id)
             done = sum(1 for r in runs if r.status in ("completed", "failed"))
             result.append(
                 {
@@ -113,12 +114,14 @@ async def get_task(task_id: str, project_id: str) -> dict[str, Any] | None:
         task_ds = TaskDatastore(db)
         run_ds = TaskSessionDatastore(db)
         event_ds = TaskEventDatastore(db)
-        row = await task_ds.get_task_by_project(project_id, task_id)
+        row = await task_ds.get_task_by_project(require_current_user_id(), project_id, task_id)
         if row is None:
             return None
-        runs = await run_ds.list_runs(task_id)
+        runs = await run_ds.list_runs(require_current_user_id(), task_id)
         latest_summary = ""
-        for ev in reversed(await event_ds.list_events(project_id, task_id)):
+        for ev in reversed(
+            await event_ds.list_events(require_current_user_id(), project_id, task_id)
+        ):
             summary = (ev.payload or {}).get("summary")
             if summary:
                 latest_summary = str(summary)

@@ -18,7 +18,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON
-from src.core.owner_context import get_owner_id
 from src.core.time_utils import now_ms
 
 
@@ -29,10 +28,13 @@ class Base(DeclarativeBase):
 def _owner_column() -> Mapped[str]:
     """Owner id column shared by every kernel table.
 
-    Required (``NOT NULL``) and stamped from ``owner_context`` (host-seeded at
-    boot). Indexed because the commercial overlay filters by owner.
+    Required (``NOT NULL``) and stamped **explicitly** by the store's converters
+    from the caller's ``user_id`` — there is no column ``default``: the owner is
+    always threaded in (host → kernel_client → route → store), mirroring the
+    host's ``valuz_*`` tables. Indexed because every owner-scoped query filters
+    on it.
     """
-    return mapped_column(String(64), nullable=False, index=True, default=get_owner_id)
+    return mapped_column(String(64), nullable=False, index=True)
 
 
 class SessionModel(Base):

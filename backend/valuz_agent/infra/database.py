@@ -13,7 +13,6 @@ from sqlalchemy.orm import (
     mapped_column,
 )
 
-from valuz_agent.infra.auth_context import get_current_user_id
 from valuz_agent.infra.config import settings
 from valuz_agent.infra.time_utils import now_ms
 
@@ -38,15 +37,16 @@ class TimestampMixin:
 class UserMixin:
     """Row ownership — every business table carries the owner's ``user_id``.
 
-    Required (``NOT NULL``) and stamped automatically from the request-scoped
-    ``current_user_id`` ContextVar (``infra.auth_context``), which resolves to
-    the local install id in OSS and the logged-in user's id under the commercial
-    overlay. Indexed because the commercial edition filters every query by owner.
+    Required (``NOT NULL``) and stamped **explicitly** by each datastore
+    ``create_*`` / facade write (which takes the caller's ``user_id`` as its
+    first argument). There is deliberately NO column ``default=`` reading the
+    request ContextVar: an insert that forgets to stamp fails loudly with a
+    ``NOT NULL`` violation rather than being silently attributed to whatever
+    owner happens to sit in context. Indexed because every owner-scoped query
+    filters on it.
     """
 
-    user_id: Mapped[str] = mapped_column(
-        String(64), nullable=False, index=True, default=get_current_user_id
-    )
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
 
 
 # The host is fully async: ONE aiosqlite engine for ALL data access. There is no

@@ -28,10 +28,11 @@ class SkillDatastore:
 
     async def list_skills(
         self,
+        user_id: str,
         query: str | None = None,
         scope: str | None = None,
     ) -> list[SkillIndexRow]:
-        stmt = select(SkillIndexRow)
+        stmt = select(SkillIndexRow).where(SkillIndexRow.user_id == user_id)
         if scope:
             stmt = stmt.filter_by(scope=scope)
         if query:
@@ -39,10 +40,20 @@ class SkillDatastore:
         stmt = stmt.order_by(SkillIndexRow.name)
         return list((await self._db.execute(stmt)).scalars().all())
 
-    async def get_by_id(self, skill_id: str) -> SkillIndexRow | None:
-        return await self._db.get(SkillIndexRow, skill_id)
+    async def get_by_id(self, user_id: str, skill_id: str) -> SkillIndexRow | None:
+        return (
+            (
+                await self._db.execute(
+                    select(SkillIndexRow).where(
+                        SkillIndexRow.id == skill_id, SkillIndexRow.user_id == user_id
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
 
-    async def set_creation_origin(self, skill_id: str, origin: str) -> None:
+    async def set_creation_origin(self, user_id: str, skill_id: str, origin: str) -> None:
         """Stamp ``creation_origin`` on an existing ``valuz_skill_index`` row.
 
         ``creation_origin`` is host-only bookkeeping — it never touches
@@ -51,26 +62,27 @@ class SkillDatastore:
         missing row is a no-op rather than an error, since the next
         ``startup_scan`` recreates it as ``"discovered"`` anyway.
         """
-        row = await self._db.get(SkillIndexRow, skill_id)
+        row = await self.get_by_id(user_id, skill_id)
         if row is None:
             return
         row.creation_origin = origin
         await async_commit_with_retry(self._db, where="SkillDatastore.set_creation_origin")
 
-    async def set_origin_metadata(self, skill_id: str, origin_json: str) -> None:
+    async def set_origin_metadata(self, user_id: str, skill_id: str, origin_json: str) -> None:
         """Stamp import provenance (``origin_json``) on an existing row.
 
         Host-only bookkeeping like ``creation_origin`` — never touches SKILL.md
         and survives ``startup_scan`` rescans (the scan never writes this
         column). A missing row is a no-op.
         """
-        row = await self._db.get(SkillIndexRow, skill_id)
+        row = await self.get_by_id(user_id, skill_id)
         if row is None:
             return
         row.origin_json = origin_json
         await async_commit_with_retry(self._db, where="SkillDatastore.set_origin_metadata")
 
-    async def create(self, row: SkillIndexRow) -> SkillIndexRow:
+    async def create(self, user_id: str, row: SkillIndexRow) -> SkillIndexRow:
+        row.user_id = user_id
         self._db.add(row)
         await async_commit_with_retry(self._db, where="SkillDatastore.create")
         return row
@@ -80,15 +92,24 @@ class SkillDatastore:
         await async_commit_with_retry(self._db, where="SkillDatastore.update")
         return row
 
-    async def delete(self, skill_id: str) -> None:
-        await self._db.execute(sa_delete(SkillIndexRow).where(SkillIndexRow.id == skill_id))
+    async def delete(self, user_id: str, skill_id: str) -> None:
+        await self._db.execute(
+            sa_delete(SkillIndexRow).where(
+                SkillIndexRow.id == skill_id, SkillIndexRow.user_id == user_id
+            )
+        )
         await async_commit_with_retry(self._db, where="SkillDatastore.delete")
 
-    async def list_project_skills(self, project_id: str) -> list[ProjectSkillConfigRow]:
+    async def list_project_skills(
+        self, user_id: str, project_id: str
+    ) -> list[ProjectSkillConfigRow]:
         return list(
             (
                 await self._db.execute(
-                    select(ProjectSkillConfigRow).filter_by(project_id=project_id)
+                    select(ProjectSkillConfigRow).where(
+                        ProjectSkillConfigRow.project_id == project_id,
+                        ProjectSkillConfigRow.user_id == user_id,
+                    )
                 )
             )
             .scalars()
@@ -96,13 +117,16 @@ class SkillDatastore:
         )
 
     async def set_project_skills(
-        self, project_id: str, rows: list[ProjectSkillConfigRow]
+        self, user_id: str, project_id: str, rows: list[ProjectSkillConfigRow]
     ) -> None:
         await self._db.execute(
             sa_delete(ProjectSkillConfigRow).where(
-                ProjectSkillConfigRow.project_id == project_id
+                ProjectSkillConfigRow.project_id == project_id,
+                ProjectSkillConfigRow.user_id == user_id,
             )
         )
+        for r in rows:
+            r.user_id = user_id
         self._db.add_all(rows)
         await async_commit_with_retry(self._db, where="SkillDatastore.set_project_skills")
 
@@ -224,9 +248,7 @@ class SkillDatastore:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
-    def _write_enabled_skill_paths(
-        self, project: _ProjectLike, enabled_paths: set[str]
-    ) -> None:
+    def _write_enabled_skill_paths(self, project: _ProjectLike, enabled_paths: set[str]) -> None:
         data = self._read_config(project)
         data["skills_enabled"] = sorted(
             self._normalize_ref(project, path) for path in enabled_paths

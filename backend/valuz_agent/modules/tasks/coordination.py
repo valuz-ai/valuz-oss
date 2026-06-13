@@ -39,6 +39,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.adapters import kernel_client
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.tasks import messaging, planning
@@ -111,7 +112,9 @@ class CoordinationService:
             target: set[str] = {k for k in keys if k}
         else:
             async with async_unit_of_work(commit=False) as db:
-                row = await TaskDatastore(db).get_task_by_project(project_id, task_id)
+                row = await TaskDatastore(db).get_task_by_project(
+                    require_current_user_id(), project_id, task_id
+                )
                 plan = TaskPlan.from_dict(row.plan) if row else TaskPlan()
             target = {n.key for n in plan.nodes if n.status in ("in_progress", "in_review")}
 
@@ -238,19 +241,19 @@ class CoordinationService:
             event_ds = TaskEventDatastore(db)
             runs_by_key = {
                 r.subtask_key: r
-                for r in await run_ds.list_runs(task_id)
+                for r in await run_ds.list_runs(require_current_user_id(), task_id)
                 if r.kind == "subtask" and r.subtask_key and r.status == "active"
             }
             if not any(k in runs_by_key for k in pending_keys):
                 return {}  # nothing in-flight for these keys — don't touch the plan
-            task = await task_ds.get_task_by_project(project_id, task_id)
+            task = await task_ds.get_task_by_project(require_current_user_id(), project_id, task_id)
             plan = TaskPlan.from_dict(task.plan) if task is not None else None
             plan_dirty = False
             for key in pending_keys:
                 run = runs_by_key.get(key)
                 if run is None:
                     continue
-                ks = await kernel_client.get_session(run.session_id)
+                ks = await kernel_client.get_session(require_current_user_id(), run.session_id)
                 if getattr(ks, "status", None) == "running":
                     continue  # genuinely in flight — keep waiting
                 disp = classify_member(
@@ -341,6 +344,7 @@ class CoordinationService:
             manifest = await collect_manifest(session_id, run_dir, status, since_epoch=since)
             manifest["agent"] = run.agent_slug
             await event_ds.append_event(
+                require_current_user_id(),
                 project_id=run.project_id,
                 task_id=run.task_id or "",
                 type="subtask_message",
@@ -376,7 +380,9 @@ class CoordinationService:
         if self._members.has_live_members(task_id):
             return False  # a member is still running — keep waiting for its result
         async with async_unit_of_work(commit=False) as db:
-            task = await TaskDatastore(db).get_task_by_project(project_id, task_id)
+            task = await TaskDatastore(db).get_task_by_project(
+                require_current_user_id(), project_id, task_id
+            )
             if task is None or task.status != "active":
                 return True  # already closed (finish_task/stop) — let the loop end
             try:

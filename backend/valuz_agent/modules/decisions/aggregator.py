@@ -186,7 +186,9 @@ class DecisionAggregator:
         # filter is cheap in-memory since active sessions are small in
         # the typical desktop deployment).
         try:
-            sessions = await kernel_client.list_sessions(limit=500)
+            # Cross-owner: the decision inbox aggregates every owner's
+            # task-driven sessions into one process-wide snapshot.
+            sessions = await kernel_client.list_all_sessions(limit=500)
         except Exception:  # noqa: BLE001
             logger.warning("decisions hydration: list_sessions failed", exc_info=True)
             return
@@ -197,7 +199,7 @@ class DecisionAggregator:
             if not is_task_driven(session):
                 continue
             try:
-                events = await kernel_client.get_events(session.id, limit=200)
+                events = await kernel_client.get_events(session.user_id, session.id, limit=200)
             except Exception:  # noqa: BLE001
                 logger.warning(
                     "decisions hydration: get_events(%s) failed",
@@ -351,7 +353,10 @@ class DecisionAggregator:
         from valuz_agent.adapters import kernel_client
 
         try:
-            return await kernel_client.get_session(session_id)
+            # Cross-owner lookup by id (the live event carries no owner) — the
+            # inbox is a process-wide aggregator across every owner.
+            sessions = await kernel_client.list_all_sessions(ids=[session_id], limit=1)
+            return sessions[0] if sessions else None
         except Exception:  # noqa: BLE001
             logger.warning("decisions: get_session(%s) failed", session_id, exc_info=True)
             return None

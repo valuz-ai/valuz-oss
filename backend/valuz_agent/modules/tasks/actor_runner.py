@@ -35,6 +35,7 @@ import logging
 from pathlib import Path
 from typing import Any, Literal
 
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.adapters import kernel_client
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.fs_registry import fs_registry
@@ -100,7 +101,7 @@ async def run_session_to_idle(
             consumed_attachment_ids = []
             attachment_specs = ()
 
-        loaded_session = await kernel_client.get_session(session_id)
+        loaded_session = await kernel_client.get_session(require_current_user_id(), session_id)
         # Kernel ``run_turn`` persists ``session.status="running"`` to the DB
         # before handing off to the runtime (agent-harness 3e742fc), so the
         # detail fetch returns ``running`` and the frontend live view engages
@@ -120,6 +121,7 @@ async def run_session_to_idle(
 
         try:
             message = await kernel_client.run_turn(
+                require_current_user_id(),
                 session_id,
                 content,
                 attachments=[
@@ -128,7 +130,7 @@ async def run_session_to_idle(
                 ],
                 additional_context=additional_context,
             )
-            after_run = await kernel_client.get_session(session_id)
+            after_run = await kernel_client.get_session(require_current_user_id(), session_id)
             final_status = after_run.status if after_run is not None else "idle"
             if on_message is not None:
                 await on_message(message, after_run)
@@ -142,6 +144,7 @@ async def run_session_to_idle(
             encountered_error = True
             try:
                 await kernel_client.emit_live_event(
+                    require_current_user_id(),
                     session_id,
                     "session_error",
                     {
@@ -216,7 +219,7 @@ async def collect_manifest(
     # Extract summary from the last assistant event
     summary = ""
     try:
-        events = await kernel_client.get_events(session_id, limit=200)
+        events = await kernel_client.get_events(require_current_user_id(), session_id, limit=200)
         # Walk backwards: find last assistant_message text
         for event in reversed(events):
             payload = event.data if hasattr(event, "data") else {}
@@ -332,8 +335,8 @@ class ActorRunner:
         try:
             # Kernel ``run_turn`` persists ``status="running"`` to the DB
             # itself (agent-harness 3e742fc) — no host pre-persist needed.
-            await kernel_client.run_turn(session_id, content)
-            loaded = await kernel_client.get_session(session_id)
+            await kernel_client.run_turn(require_current_user_id(), session_id, content)
+            loaded = await kernel_client.get_session(require_current_user_id(), session_id)
             return loaded.status if loaded is not None else "idle"
         except Exception as exc:  # noqa: BLE001
             logger.warning("actor turn failed for session %s: %s", session_id, exc)

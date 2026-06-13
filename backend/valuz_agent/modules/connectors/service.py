@@ -272,8 +272,10 @@ class ConnectorService:
             secrets=FileSecretStore(settings.secrets_dir),
         )
 
-    async def list_connectors(self, *, org_id: str | None = None) -> list[ConnectorView]:
-        local = [_row_to_view(r) for r in await self._ds.list_all()]
+    async def list_connectors(
+        self, user_id: str, *, org_id: str | None = None
+    ) -> list[ConnectorView]:
+        local = [_row_to_view(r) for r in await self._ds.list_all(user_id)]
         if self._remote_catalog is None:
             return local
         try:
@@ -303,12 +305,13 @@ class ConnectorService:
             connectors=self._ds,
         )
 
-    async def get_connector(self, connector_id: str) -> ConnectorView | None:
-        row = await self._ds.get_by_id(connector_id)
+    async def get_connector(self, user_id: str, connector_id: str) -> ConnectorView | None:
+        row = await self._ds.get_by_id(user_id, connector_id)
         return _row_to_view(row) if row else None
 
     async def create_connector(
         self,
+        user_id: str,
         *,
         slug: str | None = None,
         display_name: str,
@@ -331,7 +334,7 @@ class ConnectorService:
 
         _slug = slug or display_name
         _slug = re.sub(r"[^a-z0-9_-]", "-", _slug.lower().strip())[:64]
-        if await self._ds.get_by_slug(_slug):
+        if await self._ds.get_by_slug(user_id, _slug):
             from uuid import uuid4
 
             _slug = f"{_slug}-{uuid4().hex[:6]}"
@@ -351,7 +354,7 @@ class ConnectorService:
                 enabled=True,
                 status="connecting",
             )
-            return _row_to_view(await self._ds.create(row))
+            return _row_to_view(await self._ds.create(user_id, row))
 
         row = ConnectorRow(
             slug=_slug,
@@ -364,7 +367,7 @@ class ConnectorService:
             enabled=True,
             status="connecting",
         )
-        saved = await self._ds.create(row)
+        saved = await self._ds.create(user_id, row)
 
         storage = _compute_storage(
             connector_id=saved.id,
@@ -383,6 +386,7 @@ class ConnectorService:
 
     async def update_connector(
         self,
+        user_id: str,
         connector_id: str,
         *,
         display_name: str | None = None,
@@ -398,7 +402,7 @@ class ConnectorService:
         catalog_fields: list[CatalogFieldSpec] | None = None,
         enabled: bool | None = None,
     ) -> ConnectorView | None:
-        row = await self._ds.get_by_id(connector_id)
+        row = await self._ds.get_by_id(user_id, connector_id)
         if row is None:
             return None
         if display_name is not None:
@@ -447,8 +451,8 @@ class ConnectorService:
         row.updated_at = now_ms()
         return _row_to_view(await self._ds.update(row))
 
-    async def delete_connector(self, connector_id: str) -> bool:
-        row = await self._ds.get_by_id(connector_id)
+    async def delete_connector(self, user_id: str, connector_id: str) -> bool:
+        row = await self._ds.get_by_id(user_id, connector_id)
         if row is None:
             return False
         if row.connector_type == "builtin":
@@ -465,10 +469,12 @@ class ConnectorService:
             self._secrets.delete(f"connector/{connector_id}/oauth_token")
         except Exception:
             pass
-        return await self._ds.delete(connector_id)
+        return await self._ds.delete(user_id, connector_id)
 
-    async def set_enabled(self, connector_id: str, *, enabled: bool) -> ConnectorView | None:
-        row = await self._ds.get_by_id(connector_id)
+    async def set_enabled(
+        self, user_id: str, connector_id: str, *, enabled: bool
+    ) -> ConnectorView | None:
+        row = await self._ds.get_by_id(user_id, connector_id)
         if row is None:
             return None
         row.enabled = enabled
@@ -478,13 +484,14 @@ class ConnectorService:
 
     async def record_test_result(
         self,
+        user_id: str,
         connector_id: str,
         *,
         ok: bool,
         tool_count: int | None = None,
         error_message: str | None = None,
     ) -> ConnectorView | None:
-        row = await self._ds.get_by_id(connector_id)
+        row = await self._ds.get_by_id(user_id, connector_id)
         if row is None:
             return None
         row.status = "connected" if ok else "error"

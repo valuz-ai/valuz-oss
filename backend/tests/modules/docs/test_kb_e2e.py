@@ -137,8 +137,8 @@ def _run_bg_work_inline(service: DocumentLibraryService) -> None:
 
     def _inline_rescan(kb_id: str, task_id: str) -> None:
         async def _work() -> None:
-            kb = await service._ds.get_kb(kb_id)
-            task = await service._ds.get_import_task(task_id)
+            kb = await service._ds.get_kb("local-test-owner", kb_id)
+            task = await service._ds.get_import_task("local-test-owner", task_id)
             if kb is None or task is None:
                 return
             await service._run_rescan(kb, task)
@@ -147,7 +147,7 @@ def _run_bg_work_inline(service: DocumentLibraryService) -> None:
 
     def _inline_reindex(doc_ids: list[str], task_id: str) -> None:
         async def _work() -> None:
-            task = await service._ds.get_import_task(task_id)
+            task = await service._ds.get_import_task("local-test-owner", task_id)
             if task is None:
                 return
             await service._run_reindex_loop(doc_ids, task)
@@ -230,6 +230,7 @@ class TestKbLifecycle:
         kb = await _create_kb_and_settle(svc, name="KB1", root_path=str(tmp_kb_root))
         db.add(
             DocumentImportTaskRow(
+                user_id="local-test-owner",
                 id="active-rescan-task",
                 task_type="rescan",
                 kb_id=kb.id,
@@ -388,7 +389,7 @@ class TestRescan:
         # Flip one doc to "failed" with a fake error code.
         docs = await svc.list_documents(kb_id=kb.id)
         target_doc = next(d for d in docs if d.filename == "notes.md")
-        row = await svc._ds.get_by_id(target_doc.id)
+        row = await svc._ds.get_by_id("local-test-owner", target_doc.id)
         assert row is not None
         row.status = "failed"
         row.last_error_code = "PARSE_ERROR"
@@ -398,7 +399,7 @@ class TestRescan:
         await svc.rescan_kb(kb.id)
         await _drain(svc)
 
-        row = await svc._ds.get_by_id(target_doc.id)
+        row = await svc._ds.get_by_id("local-test-owner", target_doc.id)
         assert row is not None
         assert row.status == "ready"
 
@@ -444,7 +445,7 @@ class TestRescan:
         # Initial parse settled every PDF to "ready" with parser_mode
         # mapping to light_local (pymupdf4llm).
         for d in await service.list_documents(kb_id=kb.id):
-            row = await service._ds.get_by_id(d.id)
+            row = await service._ds.get_by_id("local-test-owner", d.id)
             assert row is not None and row.status == "ready", d.filename
 
         # Flip the routing to mineru for PDFs and rescan.
@@ -453,7 +454,7 @@ class TestRescan:
         await _drain(service)
 
         pdf_rows = [
-            await service._ds.get_by_id(d.id)
+            await service._ds.get_by_id("local-test-owner", d.id)
             for d in await service.list_documents(kb_id=kb.id)
             if d.filename.endswith(".pdf")
         ]
@@ -537,7 +538,7 @@ class TestScopeResolution:
         kb = await _create_kb_and_settle(svc, name="Scope", root_path=str(tmp_kb_root))
 
         ds = DocumentDatastore(db)
-        for doc in await ds.list_documents(kb_id=kb.id):
+        for doc in await ds.list_documents("local-test-owner", kb_id=kb.id):
             doc.status = "ready"
             await ds.update(doc)
 
@@ -557,7 +558,7 @@ class TestScopeResolution:
         kb = await _create_kb_and_settle(svc, name="ScopeMissing", root_path=str(tmp_kb_root))
 
         ds = DocumentDatastore(db)
-        all_docs = await ds.list_documents(kb_id=kb.id)
+        all_docs = await ds.list_documents("local-test-owner", kb_id=kb.id)
         for i, doc in enumerate(all_docs):
             doc.status = "ready" if i < 3 else "missing"
             await ds.update(doc)
@@ -578,11 +579,11 @@ class TestScopeResolution:
         kb = await _create_kb_and_settle(svc, name="FolderScope", root_path=str(tmp_kb_root))
 
         ds = DocumentDatastore(db)
-        for doc in await ds.list_documents(kb_id=kb.id):
+        for doc in await ds.list_documents("local-test-owner", kb_id=kb.id):
             doc.status = "ready"
             await ds.update(doc)
 
-        nvidia_folder = await ds.get_folder_by_path(kb.id, "nvidia")
+        nvidia_folder = await ds.get_folder_by_path("local-test-owner", kb.id, "nvidia")
         assert nvidia_folder is not None
 
         await svc.update_project_bindings(
@@ -602,7 +603,7 @@ class TestScopeResolution:
         kb = await _create_kb_and_settle(svc, name="DocScope", root_path=str(tmp_kb_root))
 
         ds = DocumentDatastore(db)
-        all_docs = await ds.list_documents(kb_id=kb.id)
+        all_docs = await ds.list_documents("local-test-owner", kb_id=kb.id)
         for doc in all_docs:
             doc.status = "ready"
             await ds.update(doc)
@@ -634,7 +635,7 @@ class TestDocScopeTree:
         kb = await _create_kb_and_settle(svc, name="TreeKB", root_path=str(tmp_kb_root))
 
         ds = DocumentDatastore(db)
-        for doc in await ds.list_documents(kb_id=kb.id):
+        for doc in await ds.list_documents("local-test-owner", kb_id=kb.id):
             doc.status = "ready"
             await ds.update(doc)
 
@@ -710,12 +711,12 @@ class TestFullE2EScenario:
 
         # 2. Mark docs as ready (simulating parse completion)
         ds = DocumentDatastore(db)
-        for doc in await ds.list_documents(kb_id=kb.id):
+        for doc in await ds.list_documents("local-test-owner", kb_id=kb.id):
             doc.status = "ready"
             await ds.update(doc)
 
         # 3. Project binds nvidia/ folder
-        nvidia_folder = await ds.get_folder_by_path(kb.id, "nvidia")
+        nvidia_folder = await ds.get_folder_by_path("local-test-owner", kb.id, "nvidia")
         assert nvidia_folder is not None
         await svc.update_project_bindings(
             "project-alpha",
@@ -740,7 +741,7 @@ class TestFullE2EScenario:
         assert task.status == "completed"
         await _drain(svc)
 
-        new_doc = await ds.get_by_relative_path(kb.id, "nvidia/Q2-report.pdf")
+        new_doc = await ds.get_by_relative_path("local-test-owner", kb.id, "nvidia/Q2-report.pdf")
         assert new_doc is not None and new_doc.status == "ready"
 
         scope_after = await svc.resolve_doc_scope("project-alpha")
@@ -752,7 +753,9 @@ class TestFullE2EScenario:
         await _drain(svc)
 
         q3 = [
-            d for d in await ds.list_documents(kb_id=kb.id) if d.source_filename == "Q3-report.pdf"
+            d
+            for d in await ds.list_documents("local-test-owner", kb_id=kb.id)
+            if d.source_filename == "Q3-report.pdf"
         ]
         assert len(q3) == 1
         assert q3[0].status == "missing"
@@ -762,7 +765,7 @@ class TestFullE2EScenario:
 
         # 8. User manually deletes the missing doc
         await svc.delete_document(q3[0].id)
-        remaining = await ds.list_documents(kb_id=kb.id)
+        remaining = await ds.list_documents("local-test-owner", kb_id=kb.id)
         assert not any(d.source_filename == "Q3-report.pdf" for d in remaining)
 
         # 9. Delete KB → all bindings cleaned
@@ -809,7 +812,7 @@ class TestAutoDiscoveryScheduler:
 
         # Simulate scheduler's run_once — only rescan auto_discover KBs
         ds = DocumentDatastore(db)
-        kbs = await ds.list_kbs()
+        kbs = await ds.list_kbs("local-test-owner")
         auto_kbs = [kb for kb in kbs if kb.auto_discover]
         assert len(auto_kbs) == 1
         assert auto_kbs[0].id == auto_kb.id

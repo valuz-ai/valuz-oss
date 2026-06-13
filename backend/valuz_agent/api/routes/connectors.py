@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from valuz_agent.api.deps import require_current_user_id
 from valuz_agent.infra.db import async_unit_of_work, get_async_session
 from valuz_agent.infra.secret_store import FileSecretStore
 from valuz_agent.infra.time_utils import now_ms
@@ -299,6 +300,7 @@ async def _get_service(
 
 @router.get("")
 async def list_connectors(
+    user_id: str = Depends(require_current_user_id),
     svc: ConnectorService = Depends(_get_service),
     accept_language: str | None = Header(default=None, alias="Accept-Language"),
 ) -> dict:
@@ -313,7 +315,7 @@ async def list_connectors(
     from valuz_agent.ports.extensions import ext
 
     locale = _parse_accept_language(accept_language)
-    items = [_view_to_item(v, locale).model_dump() for v in await svc.list_connectors()]
+    items = [_view_to_item(v, locale).model_dump() for v in await svc.list_connectors(user_id)]
     items = await ext.resource_enhancer.enhance("connector", items)
     return {"connectors": items}
 
@@ -321,6 +323,7 @@ async def list_connectors(
 @router.post("")
 async def create_connector(
     body: CreateConnectorRequest,
+    user_id: str = Depends(require_current_user_id),
     svc: ConnectorService = Depends(_get_service),
 ) -> CreateConnectorResponse:
     """Add a custom or recommended MCP connector.
@@ -431,7 +434,7 @@ async def create_connector(
             registration_endpoint=oauth_meta.registration_endpoint,
         )
 
-        existing = await svc._ds.get_by_slug(slug)
+        existing = await svc._ds.get_by_slug(user_id, slug)
         saved_client_id: str | None = None
         saved_client_secret: str | None = None
         if existing and existing.oauth_client_info_json:
@@ -504,7 +507,7 @@ async def create_connector(
                 enabled=False,
                 status="pending_auth",
             )
-            saved_row = await svc._ds.create(row)
+            saved_row = await svc._ds.create(user_id, row)
         else:
             existing.status = "pending_auth"
             existing.oauth_metadata_json = oauth_meta.model_dump_json()
@@ -518,6 +521,7 @@ async def create_connector(
         pkce_payload = json.dumps(
             {
                 "connector_id": connector_id,
+                "user_id": user_id,
                 "code_verifier": code_verifier,
                 "client_id": client_id,
                 "client_secret": client_secret,
@@ -549,6 +553,7 @@ async def create_connector(
         )
 
     view = await svc.create_connector(
+        user_id,
         slug=body.slug,
         display_name=body.display_name,
         transport=body.transport,
@@ -574,7 +579,7 @@ async def create_connector(
                     datastore=ConnectorDatastore(db),
                     secrets=FileSecretStore(_settings.secrets_dir),
                 )
-                await _probe_connector(connector_id_nonauth, bg_svc)
+                await _probe_connector(connector_id_nonauth, bg_svc, user_id)
         except Exception as exc:
             logger.warning("Background probe failed for %s: %s", connector_id_nonauth, exc)
 
@@ -701,6 +706,7 @@ def _localize(value: object, locale: str) -> str | None:
 
 @router.get("/recommended")
 async def list_recommended(
+    user_id: str = Depends(require_current_user_id),
     svc: ConnectorService = Depends(_get_service),
     accept_language: str | None = Header(default=None, alias="Accept-Language"),
 ) -> CatalogListResponse:
@@ -712,7 +718,7 @@ async def list_recommended(
     the ``Accept-Language`` header set by the desktop client.
     """
     locale = _parse_accept_language(accept_language)
-    installed_slugs = {v.slug for v in await svc.list_connectors()}
+    installed_slugs = {v.slug for v in await svc.list_connectors(user_id)}
     items: list[CatalogGroup | CatalogItem] = []
     for entry in CATALOG_ITEMS:
         if entry["_kind"] == "group":
@@ -820,6 +826,7 @@ async def oauth_callback(
         return _oauth_html_result(ok=False, error="Malformed OAuth state")
 
     connector_id: str = pkce["connector_id"]
+    user_id: str = pkce.get("user_id", "")
     code_verifier: str = pkce["code_verifier"]
     server_url: str = pkce["server_url"]
     redirect_uri: str = pkce["redirect_uri"]
@@ -828,7 +835,7 @@ async def oauth_callback(
 
     async with async_unit_of_work() as db:
         ds = ConnectorDatastore(db)
-        row = await ds.get_by_id(connector_id)
+        row = await ds.get_by_id(user_id, connector_id)
         if row is None:
             return _oauth_html_result(ok=False, error="Connector not found")
 
@@ -1117,11 +1124,12 @@ def _view_to_item(view: ConnectorView, locale: str = "zh-CN") -> ConnectorItem:
 @router.get("/{connector_id}")
 async def get_connector(
     connector_id: str,
+    user_id: str = Depends(require_current_user_id),
     svc: ConnectorService = Depends(_get_service),
     accept_language: str | None = Header(default=None, alias="Accept-Language"),
 ) -> ConnectorItem:
     """Get a single connector by ID."""
-    view = await svc.get_connector(connector_id)
+    view = await svc.get_connector(user_id, connector_id)
     if view is None:
         raise HTTPException(status_code=404, detail="Connector not found")
     return _view_to_item(view, _parse_accept_language(accept_language))
@@ -1131,11 +1139,12 @@ async def get_connector(
 async def update_connector(
     connector_id: str,
     body: UpdateConnectorRequest,
+    user_id: str = Depends(require_current_user_id),
     svc: ConnectorService = Depends(_get_service),
     accept_language: str | None = Header(default=None, alias="Accept-Language"),
 ) -> ConnectorItem:
     """Update a connector's configuration."""
-    _existing = await svc.get_connector(connector_id)
+    _existing = await svc.get_connector(user_id, connector_id)
     if _existing is None:
         raise HTTPException(status_code=404, detail="Connector not found")
     # Recommended stdio connectors are catalog-owned: command/args/working_dir
@@ -1167,6 +1176,7 @@ async def update_connector(
                 ),
             )
     view = await svc.update_connector(
+        user_id,
         connector_id,
         display_name=body.display_name,
         description=body.description,
@@ -1197,7 +1207,7 @@ async def update_connector(
                         datastore=ConnectorDatastore(db),
                         secrets=FileSecretStore(_settings.secrets_dir),
                     )
-                    await _probe_connector(_cid, bg_svc)
+                    await _probe_connector(_cid, bg_svc, user_id)
             except Exception as exc:
                 logger.warning("Background probe failed for %s: %s", _cid, exc)
 
@@ -1209,10 +1219,11 @@ async def update_connector(
 @router.delete("/{connector_id}")
 async def delete_connector(
     connector_id: str,
+    user_id: str = Depends(require_current_user_id),
     svc: ConnectorService = Depends(_get_service),
 ) -> dict[str, bool]:
     """Delete a custom or directory connector."""
-    ok = await svc.delete_connector(connector_id)
+    ok = await svc.delete_connector(user_id, connector_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Connector not found or cannot be deleted")
     return {"ok": True}
@@ -1221,11 +1232,12 @@ async def delete_connector(
 @router.post("/{connector_id}/enable")
 async def enable_connector(
     connector_id: str,
+    user_id: str = Depends(require_current_user_id),
     svc: ConnectorService = Depends(_get_service),
     accept_language: str | None = Header(default=None, alias="Accept-Language"),
 ) -> ConnectorItem:
     """Enable a connector."""
-    view = await svc.set_enabled(connector_id, enabled=True)
+    view = await svc.set_enabled(user_id, connector_id, enabled=True)
     if view is None:
         raise HTTPException(status_code=404, detail="Connector not found")
     return _view_to_item(view, _parse_accept_language(accept_language))
@@ -1234,11 +1246,12 @@ async def enable_connector(
 @router.post("/{connector_id}/disable")
 async def disable_connector(
     connector_id: str,
+    user_id: str = Depends(require_current_user_id),
     svc: ConnectorService = Depends(_get_service),
     accept_language: str | None = Header(default=None, alias="Accept-Language"),
 ) -> ConnectorItem:
     """Disable a connector."""
-    view = await svc.set_enabled(connector_id, enabled=False)
+    view = await svc.set_enabled(user_id, connector_id, enabled=False)
     if view is None:
         raise HTTPException(status_code=404, detail="Connector not found")
     return _view_to_item(view, _parse_accept_language(accept_language))
@@ -1247,13 +1260,14 @@ async def disable_connector(
 @router.post("/{connector_id}/test")
 async def test_connector(
     connector_id: str,
+    user_id: str = Depends(require_current_user_id),
     svc: ConnectorService = Depends(_get_service),
 ) -> TestConnectorResponse:
     """Test an MCP connector (HTTP, SSE, or stdio) using the MCP client library."""
-    view = await svc.get_connector(connector_id)
+    view = await svc.get_connector(user_id, connector_id)
     if view is None:
         raise HTTPException(status_code=404, detail="Connector not found")
-    return await _probe_connector(connector_id, svc)
+    return await _probe_connector(connector_id, svc, user_id)
 
 
 def _tools_to_info(mcp_tools: object) -> list[ToolInfo]:
@@ -1272,7 +1286,9 @@ def _tools_to_info(mcp_tools: object) -> list[ToolInfo]:
     return result
 
 
-async def _probe_connector(connector_id: str, svc: ConnectorService) -> TestConnectorResponse:
+async def _probe_connector(
+    connector_id: str, svc: ConnectorService, user_id: str
+) -> TestConnectorResponse:
     """Run the MCP probe for a connector and persist the result. Never raises."""
     import os
     import shlex
@@ -1284,7 +1300,7 @@ async def _probe_connector(connector_id: str, svc: ConnectorService) -> TestConn
 
     from valuz_agent.infra.config import settings as _settings
 
-    view = await svc.get_connector(connector_id)
+    view = await svc.get_connector(user_id, connector_id)
     if view is None:
         return TestConnectorResponse(ok=False, error="Connector not found")
 
@@ -1301,7 +1317,7 @@ async def _probe_connector(connector_id: str, svc: ConnectorService) -> TestConn
                 ok=False, error="Stdio connector has no command configured"
             )
 
-        row = await svc._ds.get_by_id(connector_id)
+        row = await svc._ds.get_by_id(user_id, connector_id)
         env: dict[str, str] | None = None
         if row and row.env_json:
             try:
@@ -1360,7 +1376,7 @@ async def _probe_connector(connector_id: str, svc: ConnectorService) -> TestConn
                     await session.initialize()
                     result = await session.list_tools()
                     tool_infos = _tools_to_info(result.tools)
-            await svc.record_test_result(connector_id, ok=True, tool_count=len(tool_infos))
+            await svc.record_test_result(user_id, connector_id, ok=True, tool_count=len(tool_infos))
             return TestConnectorResponse(
                 ok=True,
                 tool_count=len(tool_infos),
@@ -1370,7 +1386,7 @@ async def _probe_connector(connector_id: str, svc: ConnectorService) -> TestConn
         except BaseException as exc:
             error_msg = str(_unwrap(exc))
             logger.warning("Stdio connector test failed for %s: %s", connector_id, error_msg)
-            await svc.record_test_result(connector_id, ok=False, error_message=error_msg)
+            await svc.record_test_result(user_id, connector_id, ok=False, error_message=error_msg)
             return TestConnectorResponse(ok=False, error=error_msg)
 
     # ── HTTP / SSE probe ─────────────────────────────────────────────────────
@@ -1378,7 +1394,7 @@ async def _probe_connector(connector_id: str, svc: ConnectorService) -> TestConn
         return TestConnectorResponse(ok=False, error="Connector has no URL configured")
 
     # Same injection truth as the runtime resolver (Acceptance #8).
-    row2 = await svc._ds.get_by_id(connector_id)
+    row2 = await svc._ds.get_by_id(user_id, connector_id)
     if row2 is None:
         ov_headers: dict[str, str] = {}
         ov_params: dict[str, str] = {}
@@ -1434,7 +1450,7 @@ async def _probe_connector(connector_id: str, svc: ConnectorService) -> TestConn
             except BaseException:
                 raise _unwrap(first_exc) from None
 
-        await svc.record_test_result(connector_id, ok=True, tool_count=len(tool_infos))
+        await svc.record_test_result(user_id, connector_id, ok=True, tool_count=len(tool_infos))
         return TestConnectorResponse(
             ok=True,
             tool_count=len(tool_infos),
@@ -1444,7 +1460,7 @@ async def _probe_connector(connector_id: str, svc: ConnectorService) -> TestConn
     except BaseException as exc:
         error_msg = str(_unwrap(exc))
         logger.warning("Connector test failed for %s: %s", connector_id, error_msg)
-        await svc.record_test_result(connector_id, ok=False, error_message=error_msg)
+        await svc.record_test_result(user_id, connector_id, ok=False, error_message=error_msg)
         return TestConnectorResponse(ok=False, error=error_msg)
 
 

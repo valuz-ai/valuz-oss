@@ -57,18 +57,14 @@ def test_successful_get_logs_at_debug(
     assert record.levelno == logging.DEBUG  # invisible at the panel's INFO
 
 
-def test_mutation_logs_at_info(
-    app_client: TestClient, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_mutation_logs_at_info(app_client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.DEBUG, logger="valuz_agent.api.access"):
         app_client.post("/v1/projects")
     [record] = _records(caplog)
     assert record.levelno == logging.INFO
 
 
-def test_failure_logs_at_warning(
-    app_client: TestClient, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_failure_logs_at_warning(app_client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.DEBUG, logger="valuz_agent.api.access"):
         app_client.get("/v1/missing")
     [record] = _records(caplog)

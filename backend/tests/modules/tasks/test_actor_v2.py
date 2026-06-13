@@ -36,9 +36,21 @@ def _fake_agent_config(**kw):
     kw.setdefault("mcp_servers", ())
     kw.pop("metadata", None) if False else None
     allowed = {
-        "id", "name", "model", "runtime_provider", "instructions", "tools",
-        "callable_agents", "skills", "mcp_servers", "permission_mode",
-        "max_turns", "max_cost_usd", "effort", "thinking", "metadata",
+        "id",
+        "name",
+        "model",
+        "runtime_provider",
+        "instructions",
+        "tools",
+        "callable_agents",
+        "skills",
+        "mcp_servers",
+        "permission_mode",
+        "max_turns",
+        "max_cost_usd",
+        "effort",
+        "thinking",
+        "metadata",
     }
     kw = {k: v for k, v in kw.items() if k in allowed}
     if isinstance(kw.get("skills"), list):
@@ -50,7 +62,7 @@ def _async_member_get(source_agent_slug: str = "lead-agent"):
     """A fake ProjectMemberDatastore.get — async, since the real one is async
     (build_member_session awaits it)."""
 
-    async def _get(ws: str, slug: str) -> SimpleNamespace:
+    async def _get(user_id: str, ws: str, slug: str) -> SimpleNamespace:
         return SimpleNamespace(source_agent_slug=source_agent_slug)
 
     return _get
@@ -551,7 +563,7 @@ def test_create_task_gate_rejects_task_sessions(
     monkeypatch.setattr(
         dispatch_mcp.kernel_client,
         "get_session",
-        _as_async(lambda _sid: _sess({"run_kind": "lead", "project_id": "w1"})),
+        _as_async(lambda _uid, _sid: _sess({"run_kind": "lead", "project_id": "w1"})),
     )
     res = asyncio.run(dispatch_mcp._check_orchestration_gate(ctx))  # type: ignore[arg-type]
     assert isinstance(res, ToolResult) and res.is_error
@@ -560,7 +572,7 @@ def test_create_task_gate_rejects_task_sessions(
     monkeypatch.setattr(
         dispatch_mcp.kernel_client,
         "get_session",
-        _as_async(lambda _sid: _sess({"run_kind": "subtask", "project_id": "w1"})),
+        _as_async(lambda _uid, _sid: _sess({"run_kind": "subtask", "project_id": "w1"})),
     )
     res = asyncio.run(dispatch_mcp._check_orchestration_gate(ctx))  # type: ignore[arg-type]
     assert isinstance(res, ToolResult) and res.is_error
@@ -569,7 +581,7 @@ def test_create_task_gate_rejects_task_sessions(
     monkeypatch.setattr(
         dispatch_mcp.kernel_client,
         "get_session",
-        _as_async(lambda _sid: _sess({"agent_slug": "x"})),
+        _as_async(lambda _uid, _sid: _sess({"agent_slug": "x"})),
     )
     res = asyncio.run(dispatch_mcp._check_orchestration_gate(ctx))  # type: ignore[arg-type]
     assert isinstance(res, ToolResult) and res.is_error
@@ -789,7 +801,7 @@ def _patch_await_deps(monkeypatch, key_by_session: dict[str, str]):
             sk = key_by_session.get(sid)
             return SimpleNamespace(subtask_key=sk) if sk else None
 
-        async def list_runs(self, _task_id):
+        async def list_runs(self, _user_id, _task_id):
             # No in-flight runs in these unit tests → heartbeat is a no-op.
             return []
 

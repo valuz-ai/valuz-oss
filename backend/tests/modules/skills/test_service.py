@@ -36,13 +36,13 @@ class FakeProjectService:
     def __init__(self, projects: list | None = None):
         self._projects = projects or [FakeProject(), FakeProject(id="chat-default")]
 
-    async def get_project(self, project_id: str):
+    async def get_project(self, user_id: str, project_id: str):
         for ws in self._projects:
             if ws.id == project_id:
                 return ws
         raise KeyError(project_id)
 
-    async def list_projects(self):
+    async def list_projects(self, user_id: str):
         return self._projects
 
 
@@ -90,15 +90,15 @@ class FakeSkillDatastore:
     def scan(self, project, source):
         return len(self.list_project_skill_manifests(project, source))
 
-    async def get_by_id(self, skill_id):
+    async def get_by_id(self, user_id, skill_id):
         return self._rows.get(skill_id)
 
-    async def set_creation_origin(self, skill_id, origin):
+    async def set_creation_origin(self, user_id, skill_id, origin):
         row = self._rows.get(skill_id)
         if row is not None:
             row.creation_origin = origin
 
-    async def create(self, row):
+    async def create(self, user_id, row):
         self._rows[row.id] = row
         return row
 
@@ -106,7 +106,7 @@ class FakeSkillDatastore:
         self._rows[row.id] = row
         return row
 
-    async def list_skills(self):
+    async def list_skills(self, user_id):
         return list(self._rows.values())
 
     def add_ignore(self, skill_id, content_hash=None):
@@ -115,7 +115,7 @@ class FakeSkillDatastore:
     def is_ignored(self, skill_id, content_hash=None):
         return False
 
-    def set_project_skills(self, project_id, rows):
+    def set_project_skills(self, user_id, project_id, rows):
         self._enabled[project_id] = set()
 
 
@@ -432,16 +432,14 @@ class TestImportFromSessionConfirm:
 
         seen: list[str] = []
 
-        async def fake_get_events(session_id, **kwargs):
+        async def fake_get_events(_user_id, session_id, **kwargs):
             seen.append(session_id)
             return events
 
         monkeypatch.setattr(kernel_client, "get_events", fake_get_events)
         return seen
 
-    async def test_should_build_skill_body_from_persisted_assistant_events(
-        self, svc, monkeypatch
-    ):
+    async def test_should_build_skill_body_from_persisted_assistant_events(self, svc, monkeypatch):
         service, _ = svc
         seen = self._patch_events(
             monkeypatch,
@@ -461,9 +459,7 @@ class TestImportFromSessionConfirm:
         assert "Second answer." in body
         assert "tool noise" not in body
 
-    async def test_should_fall_back_to_description_when_no_assistant_text(
-        self, svc, monkeypatch
-    ):
+    async def test_should_fall_back_to_description_when_no_assistant_text(self, svc, monkeypatch):
         service, _ = svc
         self._patch_events(monkeypatch, [])
         result = await service.import_from_session_confirm(

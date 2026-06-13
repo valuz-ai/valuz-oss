@@ -62,6 +62,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.modules.automations.schemas import (
     AutomationToolPayload,
     AutomationToolResult,
@@ -110,7 +111,7 @@ async def _resolve_session_context(session_id: str) -> tuple[str | None, str, st
     from valuz_agent.infra.db import async_unit_of_work
     from valuz_agent.modules.projects.datastore import ProjectDatastore
 
-    kernel_session = await kernel_client.get_session(session_id)
+    kernel_session = await kernel_client.get_session(require_current_user_id(), session_id)
     if kernel_session is None:
         return None, "chat", None
     project_id = str(kernel_session.project_id)
@@ -124,7 +125,7 @@ async def _resolve_session_context(session_id: str) -> tuple[str | None, str, st
             bound_agent_slug = slug
 
     async with async_unit_of_work(commit=False) as db:
-        ws = await ProjectDatastore(db).get_by_id(project_id)
+        ws = await ProjectDatastore(db).get_by_id(kernel_session.user_id, project_id)
     if ws is None:
         return None, "chat", bound_agent_slug
     return ws.id, ws.kind, bound_agent_slug

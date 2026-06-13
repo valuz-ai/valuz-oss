@@ -237,6 +237,10 @@ class Session:
     # is self-sufficient.
     cwd: str
     runtime_provider: RuntimeProvider = "claude_agent"
+    # Owner id (``user_id``). Set explicitly on the create route from the
+    # resolved owner and round-tripped by ``model_to_session`` on read;
+    # ``session_to_model`` stamps it on every write (no ORM column default).
+    user_id: str = ""
     model: str = ""
     model_provider: ModelProvider | None = None
     model_settings: ModelSettings | None = None

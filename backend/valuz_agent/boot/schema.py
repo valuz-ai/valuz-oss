@@ -36,7 +36,11 @@ VERSION_TABLE = "alembic_version_host"
 # schema shape, bump this id together with the migration's ``revision`` so
 # DBs stamped at the previous baseline fail the equality check below and get
 # rebuilt — the stamp is the single source of truth, no schema inspection.
-BASELINE_REVISION = "0001"
+# Bumped 0001 → 0002 for the per-user composite PKs on the semantic-key tables
+# (valuz_app_setting / valuz_shortcut_binding / valuz_onboarding_state /
+# valuz_setup_job key on ``(<semantic_key>, user_id)``). DBs stamped at the
+# previous baseline are dropped + rebuilt (0-migration policy).
+BASELINE_REVISION = "0002"
 
 
 def drop_stale_host_tables(engine: Engine | None = None) -> None:

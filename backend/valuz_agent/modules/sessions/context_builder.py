@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 
 from valuz_agent.adapters import kernel_client
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.db import async_unit_of_work
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ async def _build_additional_context(
         attachments = (
             attachment_rows
             if attachment_rows is not None
-            else await SessionDatastore(db).list_attachments(session_id)
+            else await SessionDatastore(db).list_attachments(require_current_user_id(), session_id)
         )
         if attachments:
             lines = [f"Uploaded attachments ({len(attachments)} this turn):"]
@@ -105,7 +106,7 @@ async def _build_additional_context(
         #    them at all and biases first searches toward the right KB.
         ds = DocumentDatastore(db)
         try:
-            bindings = await ds.list_bindings(project_id)
+            bindings = await ds.list_bindings(require_current_user_id(), project_id)
         except Exception:  # noqa: BLE001 — never block a turn on docs lookup
             bindings = []
         if bindings:
@@ -128,9 +129,9 @@ async def _build_additional_context(
                 mem_parts.append(g.strip())
             from valuz_agent.modules.projects.service import project_cwd_by_id
 
-            project_cwd = await project_cwd_by_id(project_id) or ""
+            project_cwd = await project_cwd_by_id(require_current_user_id(), project_id) or ""
             task_id = None
-            sess = await kernel_client.get_session(session_id)
+            sess = await kernel_client.get_session(require_current_user_id(), session_id)
             if sess is not None:
                 task_id = ((sess.metadata or {}).get("valuz", {}) or {}).get("task_id")
             idx = injection_assembler.context_index_block(
@@ -179,7 +180,7 @@ async def _format_kb_scope(ds, bindings) -> str:  # type: ignore[no-untyped-def]
             assert isinstance(items, list)
             items.append(f"folder: {folder.relative_path or folder.id}")
         elif b.binding_kind == "document":
-            doc = await ds.get_by_id(b.target_id)
+            doc = await ds.get_by_id(require_current_user_id(), b.target_id)
             if not doc:
                 continue
             kb = await ds.get_kb(doc.kb_id)

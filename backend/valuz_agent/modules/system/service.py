@@ -100,7 +100,8 @@ def _read_kernel_pin() -> str:
 
 async def _count_active_sessions() -> int:
     try:
-        sessions = await kernel_client.list_sessions(limit=500)
+        # System health metric — count running sessions across every owner.
+        sessions = await kernel_client.list_all_sessions(limit=500)
         return sum(1 for s in sessions if s.status == "running")
     except Exception:  # noqa: BLE001 — status must never throw
         return 0

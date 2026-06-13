@@ -67,10 +67,10 @@ def _patch_client(monkeypatch, session):
 
     updates: list = []
 
-    async def _get(_sid):
+    async def _get(_user_id, _sid):
         return session
 
-    async def _update(sid, req):
+    async def _update(_user_id, sid, req):
         updates.append((sid, req))
         return session
 

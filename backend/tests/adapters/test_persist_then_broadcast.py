@@ -27,7 +27,9 @@ class _FakeStore:
         self.appended: list[Event] = []
         self._next_seq = 100
 
-    async def append_event(self, session_id: str, message_id: str, event: Event) -> int:
+    async def append_event(
+        self, user_id: str, session_id: str, message_id: str, event: Event
+    ) -> int:
         if self.fail:
             raise RuntimeError("db down")
         self.appended.append(event)
@@ -49,7 +51,7 @@ class _RecordingSink:
 def _sink_pair(*, store_fail: bool = False, live_fail: bool = False):
     store = _FakeStore(fail=store_fail)
     live = _RecordingSink(fail=live_fail)
-    db = DatabaseEventSink(store, "sess-1", "msg-1")  # type: ignore[arg-type]
+    db = DatabaseEventSink(store, "local-test-owner", "sess-1", "msg-1")  # type: ignore[arg-type]
     return store, live, PersistThenBroadcastSink(db, live)
 
 

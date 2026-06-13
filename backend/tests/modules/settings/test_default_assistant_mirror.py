@@ -38,17 +38,20 @@ async def db(tmp_path) -> AsyncIterator:
 
 async def test_should_mirror_model_defaults_onto_default_assistant(db) -> None:
     await AgentDatastore(db).create(
+        "local-test-owner",
         AgentRow(
+            user_id="local-test-owner",
             slug=DEFAULT_ASSISTANT_SLUG,
             name="默认助手",
             source="official",
             deletable=False,
             runtime="claude_agent",
             model="claude-sonnet-4-6",
-        )
+        ),
     )
 
     await _mirror_to_default_assistant(
+        "local-test-owner",
         db,
         ModelDefaultsResponse(
             default_runtime="codex",
@@ -58,7 +61,7 @@ async def test_should_mirror_model_defaults_onto_default_assistant(db) -> None:
         ),
     )
 
-    agent = await AgentDatastore(db).get_agent(DEFAULT_ASSISTANT_SLUG)
+    agent = await AgentDatastore(db).get_agent("local-test-owner", DEFAULT_ASSISTANT_SLUG)
     assert agent is not None
     assert agent.runtime == "codex"
     assert agent.model == "gpt-5"
@@ -69,6 +72,7 @@ async def test_should_mirror_model_defaults_onto_default_assistant(db) -> None:
 async def test_should_noop_when_default_assistant_not_seeded(db) -> None:
     # Fresh DB before the boot seeder runs — mirror must not raise.
     await _mirror_to_default_assistant(
+        "local-test-owner",
         db,
         ModelDefaultsResponse(
             default_runtime="claude_agent",
@@ -77,4 +81,4 @@ async def test_should_noop_when_default_assistant_not_seeded(db) -> None:
             default_effort="high",
         ),
     )
-    assert await AgentDatastore(db).get_agent(DEFAULT_ASSISTANT_SLUG) is None
+    assert await AgentDatastore(db).get_agent("local-test-owner", DEFAULT_ASSISTANT_SLUG) is None

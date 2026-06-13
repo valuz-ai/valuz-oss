@@ -391,6 +391,7 @@ def get_provider(kind: str) -> ProviderDescriptor:
 
 async def reset_providers(
     ds: ProviderDatastore,
+    user_id: str,
     *,
     drop_table: bool = False,
     engine: Any | None = None,
@@ -433,14 +434,14 @@ async def reset_providers(
             await conn.run_sync(lambda c: table.drop(c, checkfirst=True))
             await conn.run_sync(lambda c: table.create(c, checkfirst=True))
     else:
-        for row in list(await ds.list_providers()):
-            await ds.delete(row.id)
+        for row in list(await ds.list_providers(user_id)):
+            await ds.delete(user_id, row.id)
 
     from valuz_agent.seeds.providers import seed_builtin_providers
 
-    await seed_builtin_providers(ds)
+    await seed_builtin_providers(user_id, ds)
 
-    return [_row_to_list_item(r) for r in await ds.list_providers()]
+    return [_row_to_list_item(r) for r in await ds.list_providers(user_id)]
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -776,8 +777,8 @@ class ProviderService:
 
     # ── Queries ──────────────────────────────────────────────────
 
-    async def list_providers(self) -> list[ProviderListItem]:
-        rows = await self._ds.list_providers()
+    async def list_providers(self, user_id: str) -> list[ProviderListItem]:
+        rows = await self._ds.list_providers(user_id)
         policy = ext.policy
         # When the caller's org locks custom models, hide their own
         # (``source="user"``) providers so they can't be selected — the
@@ -818,7 +819,7 @@ class ProviderService:
             combined = [it for it in combined if it.id not in hidden]
         return combined
 
-    async def get_provider(self, provider_id: str) -> ProviderDetail:
+    async def get_provider(self, user_id: str, provider_id: str) -> ProviderDetail:
         descriptor = ext.llm_registry.get(provider_id)
         if descriptor is not None:
             return _descriptor_to_detail(
@@ -826,7 +827,7 @@ class ProviderService:
                 model_options=await _resolve_descriptor_model_options(descriptor),
                 model_labels=await _resolve_descriptor_model_labels(descriptor),
             )
-        row = await self._ds.get_by_id(provider_id)
+        row = await self._ds.get_by_id(user_id, provider_id)
         if not row:
             raise ProviderNotFound(f"Provider {provider_id!r} not found")
         return _row_to_detail(row)
@@ -900,7 +901,7 @@ class ProviderService:
 
         return {"models": models, "suggested_default": suggested}
 
-    async def read_stored_api_key(self, provider_id: str) -> str | None:
+    async def read_stored_api_key(self, user_id: str, provider_id: str) -> str | None:
         """Pull the persisted api_key out of secret_store for a row.
 
         Used by the ping endpoint to support edit-mode flows where the
@@ -910,7 +911,7 @@ class ProviderService:
         was never saved). Raises ``ProviderNotFound`` if the row itself
         doesn't exist.
         """
-        row = await self._ds.get_by_id(provider_id)
+        row = await self._ds.get_by_id(user_id, provider_id)
         if row is None:
             raise ProviderNotFound(f"Provider {provider_id!r} not found")
         if not row.secret_ref:
@@ -997,6 +998,7 @@ class ProviderService:
 
     async def create_provider(
         self,
+        user_id: str,
         name: str,
         provider_kind: str,
         base_url: str | None = None,
@@ -1136,16 +1138,17 @@ class ProviderService:
             test_status="success" if api_key else "never",
             protocol=protocol,
         )
-        await self._ds.create(row)
+        await self._ds.create(user_id, row)
 
-        if len([c for c in await self._ds.list_providers() if c.enabled]) == 1:
-            await self._set_default_internal(row.id)
+        if len([c for c in await self._ds.list_providers(user_id) if c.enabled]) == 1:
+            await self._set_default_internal(user_id, row.id)
 
         self._bus.publish("provider.created", provider_id=row.id)
         return _row_to_detail(row)
 
     async def update_provider(
         self,
+        user_id: str,
         provider_id: str,
         name: str | None = None,
         base_url: str | None = None,
@@ -1156,7 +1159,7 @@ class ProviderService:
         models: list[str] | None = None,
     ) -> ProviderDetail:
         self._guard_not_system(provider_id)
-        row = await self._ds.get_by_id(provider_id)
+        row = await self._ds.get_by_id(user_id, provider_id)
         if not row:
             raise ProviderNotFound(f"Provider {provider_id!r} not found")
 
@@ -1245,7 +1248,7 @@ class ProviderService:
         self._bus.publish("provider.updated", provider_id=row.id)
         return _row_to_detail(row)
 
-    async def discover_models(self, provider_id: str) -> dict[str, Any]:
+    async def discover_models(self, user_id: str, provider_id: str) -> dict[str, Any]:
         """Probe the provider's upstream for the available model list.
 
         System providers reject this (registry-backed; no upstream to
@@ -1262,7 +1265,7 @@ class ProviderService:
         ``ProviderNotFound`` becomes 404.
         """
         self._guard_not_system(provider_id)
-        row = await self._ds.get_by_id(provider_id)
+        row = await self._ds.get_by_id(user_id, provider_id)
         if not row:
             raise ProviderNotFound(f"Provider {provider_id!r} not found")
 
@@ -1309,9 +1312,9 @@ class ProviderService:
             "merged": merged,
         }
 
-    async def delete_provider(self, provider_id: str) -> None:
+    async def delete_provider(self, user_id: str, provider_id: str) -> None:
         self._guard_not_system(provider_id)
-        row = await self._ds.get_by_id(provider_id)
+        row = await self._ds.get_by_id(user_id, provider_id)
         if not row:
             raise ProviderNotFound(f"Provider {provider_id!r} not found")
         if row.source != "user" or not row.deletable:
@@ -1321,16 +1324,16 @@ class ProviderService:
             self._secrets.delete(row.secret_ref)
 
         was_default = row.is_default
-        await self._ds.delete(provider_id)
+        await self._ds.delete(user_id, provider_id)
 
         if was_default:
-            fallback = await self._ds.get_default() or await self._first_enabled()
+            fallback = await self._ds.get_default(user_id) or await self._first_enabled(user_id)
             if fallback:
-                await self._set_default_internal(fallback.id)
+                await self._set_default_internal(user_id, fallback.id)
 
         self._bus.publish("provider.deleted", provider_id=provider_id)
 
-    async def enable_provider(self, provider_id: str) -> ProviderDetail:
+    async def enable_provider(self, user_id: str, provider_id: str) -> ProviderDetail:
         """Mark an OAuth/subscription provider as enabled.
 
         For ``auth_type="oauth"`` providers (e.g. ``ch-claude-subscription``
@@ -1343,7 +1346,7 @@ class ProviderService:
         System-managed providers are immutable (403 via ``SystemProviderImmutable``).
         """
         self._guard_not_system(provider_id)
-        row = await self._ds.get_by_id(provider_id)
+        row = await self._ds.get_by_id(user_id, provider_id)
         if not row:
             raise ProviderNotFound(f"Provider {provider_id!r} not found")
 
@@ -1359,22 +1362,24 @@ class ProviderService:
         self._bus.publish("provider.updated", provider_id=row.id)
         return _row_to_detail(row)
 
-    async def set_default(self, provider_id: str, *, default_model: str | None = None) -> None:
+    async def set_default(
+        self, user_id: str, provider_id: str, *, default_model: str | None = None
+    ) -> None:
         # System providers can't carry the ``is_default`` flag on the
         # providers table (no row exists). Users pin a system provider
         # as default through the settings-preferences path
         # (``PATCH /v1/settings/model-defaults``) instead.
         self._guard_not_system(provider_id)
-        row = await self._ds.get_by_id(provider_id)
+        row = await self._ds.get_by_id(user_id, provider_id)
         if not row:
             raise ProviderNotFound(f"Provider {provider_id!r} not found")
         if not row.enabled:
             raise NoAvailableProvider(f"Provider {provider_id!r} is disabled")
-        await self._set_default_internal(provider_id)
+        await self._set_default_internal(user_id, provider_id)
 
         # Optionally update the provider row's default_model.
         if default_model is not None:
-            updated_row = await self._ds.get_by_id(provider_id)
+            updated_row = await self._ds.get_by_id(user_id, provider_id)
             if updated_row:
                 updated_row.default_model = default_model
                 updated_row.updated_at = now_ms()
@@ -1400,16 +1405,16 @@ class ProviderService:
 
     # ── Resolution ───────────────────────────────────────────────
 
-    async def resolve_default_provider(self) -> ProviderRow:
-        row = await self._ds.get_default()
+    async def resolve_default_provider(self, user_id: str) -> ProviderRow:
+        row = await self._ds.get_default(user_id)
         if row:
             return row
-        row = await self._first_enabled()
+        row = await self._first_enabled(user_id)
         if row:
             return row
         raise NoAvailableProvider("No available model provider configured")
 
-    async def resolve_provider_for_model(self, model_id: str) -> ProviderRow | None:
+    async def resolve_provider_for_model(self, user_id: str, model_id: str) -> ProviderRow | None:
         """Find the configured provider that should host ``model_id``.
 
         Deterministic resolution — no fallback walk. Picks the first enabled,
@@ -1437,7 +1442,7 @@ class ProviderService:
                 return True
             return row.auth_type == "oauth"
 
-        rows = list(await self._ds.list_providers())
+        rows = list(await self._ds.list_providers(user_id))
         # 1) Exact default_model match wins (the provider's primary model).
         for row in rows:
             if not row.enabled:
@@ -1463,15 +1468,16 @@ class ProviderService:
 
     async def resolve_infer_config(
         self,
+        user_id: str,
         provider_id: str | None = None,
         locked_model_id: str | None = None,
     ) -> InferConfig:
         if provider_id:
-            row = await self._ds.get_by_id(provider_id)
+            row = await self._ds.get_by_id(user_id, provider_id)
             if not row:
                 raise ProviderNotFound(f"Provider {provider_id!r} not found")
         else:
-            row = await self.resolve_default_provider()
+            row = await self.resolve_default_provider(user_id)
 
         api_key: str | None = None
         auth_type = "none"
@@ -1504,9 +1510,9 @@ class ProviderService:
 
     # ── Connection Test ──────────────────────────────────────────
 
-    async def test_provider(self, provider_id: str) -> ConnectionTestResult:
+    async def test_provider(self, user_id: str, provider_id: str) -> ConnectionTestResult:
         self._guard_not_system(provider_id)
-        row = await self._ds.get_by_id(provider_id)
+        row = await self._ds.get_by_id(user_id, provider_id)
         if not row:
             raise ProviderNotFound(f"Provider {provider_id!r} not found")
         if row.auth_type == "oauth":
@@ -1519,7 +1525,7 @@ class ProviderService:
                 "connection test is not applicable"
             )
 
-        infer = await self.resolve_infer_config(provider_id=provider_id)
+        infer = await self.resolve_infer_config(user_id, provider_id=provider_id)
         provider = _PROVIDER_MAP.get(row.provider_kind)
 
         start = time.monotonic()
@@ -1542,6 +1548,7 @@ class ProviderService:
 
     async def validate_credentials(
         self,
+        user_id: str,
         provider_kind: str,
         api_key: str | None = None,
         base_url: str | None = None,
@@ -1584,16 +1591,16 @@ class ProviderService:
 
     # ── Internal ─────────────────────────────────────────────────
 
-    async def _set_default_internal(self, provider_id: str) -> None:
-        await self._ds.clear_default()
-        row = await self._ds.get_by_id(provider_id)
+    async def _set_default_internal(self, user_id: str, provider_id: str) -> None:
+        await self._ds.clear_default(user_id)
+        row = await self._ds.get_by_id(user_id, provider_id)
         if row:
             row.is_default = True
             row.updated_at = now_ms()
             await self._ds.update(row)
 
-    async def _first_enabled(self) -> ProviderRow | None:
-        for row in await self._ds.list_providers():
+    async def _first_enabled(self, user_id: str) -> ProviderRow | None:
+        for row in await self._ds.list_providers(user_id):
             if row.enabled:
                 return row
         return None

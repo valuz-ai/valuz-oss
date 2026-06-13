@@ -59,6 +59,7 @@ def _add_task(
     try:
         db.add(
             TaskRow(
+                user_id="local-test-owner",
                 id=task_id,
                 project_id=project_id,
                 file_path=str(tmp_path / f"{task_id}.md"),
@@ -81,6 +82,7 @@ def _add_run(db_factory, tmp_path, *, task_id, project_id="w1", session_id, stat
     try:
         db.add(
             TaskSessionRow(
+                user_id="local-test-owner",
                 project_id=project_id,
                 task_id=task_id,
                 session_id=session_id,
@@ -185,6 +187,7 @@ async def test_get_task_surfaces_latest_event_summary(db_factory, tmp_path):
         for seq, summary in enumerate(["first", "latest"]):
             db.add(
                 TaskEventRow(
+                    user_id="local-test-owner",
                     project_id="w1",
                     task_id="t1",
                     sequence=seq,
@@ -212,6 +215,7 @@ async def test_list_members_degrades_when_agent_not_loadable(db_factory, tmp_pat
     try:
         db.add(
             ProjectMemberRow(
+                user_id="local-test-owner",
                 project_id="w1",
                 agent_slug="researcher",
                 source_agent_slug="researcher-template",

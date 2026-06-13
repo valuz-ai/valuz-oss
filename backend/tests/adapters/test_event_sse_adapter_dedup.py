@@ -44,7 +44,7 @@ def _drive(
     """
     polls_reached = asyncio.Event()
 
-    async def _fake_get_events(session_id, *, limit=200, offset=0, after_seq=None):
+    async def _fake_get_events(_user_id, session_id, *, limit=200, offset=0, after_seq=None):
         if after_seq == 0 and backfill:
             page, backfill[:] = list(backfill), []
             return page
@@ -53,7 +53,7 @@ def _drive(
             polls_reached.set()
         return []
 
-    async def _fake_subscribe(session_id):
+    async def _fake_subscribe(_user_id, session_id):
         for item in live:
             yield item
         # Then idle forever so the adapter falls into its poll branch.
@@ -144,7 +144,7 @@ def test_list_events_after_pages_under_the_kernel_cap(monkeypatch) -> None:
 
     calls: list[tuple] = []
 
-    async def _fake_get_events(session_id, *, limit=200, offset=0, after_seq=None):
+    async def _fake_get_events(_user_id, session_id, *, limit=200, offset=0, after_seq=None):
         calls.append((after_seq, limit))
         assert limit <= 1000, "host must never ask the kernel for >1000"
         # 2500 total events (seq 1..2500); page from after_seq.

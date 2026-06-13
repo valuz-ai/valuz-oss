@@ -115,7 +115,11 @@ class _Thing(_OwnedBase, PrimaryKeyMixin, UserMixin):
 
 
 class TestUserMixinStamping:
-    def test_stamps_active_owner_on_insert(self) -> None:
+    def test_explicit_owner_persists_on_insert(self) -> None:
+        # There is no column ``default=`` reading the ContextVar anymore — the
+        # owner is stamped EXPLICITLY by the writer. An explicitly-set
+        # ``user_id`` round-trips; an unset one fails loudly
+        # (see ``test_insert_without_owner_fails_loudly``).
         engine = create_engine("sqlite://")
         _OwnedBase.metadata.create_all(engine)
 
@@ -124,19 +128,11 @@ class TestUserMixinStamping:
         assert "user_id" in cols
         assert cols["user_id"]["nullable"] is False
 
-        def insert_with_owner() -> None:
-            with Session(engine) as s:
-                token = auth_context.set_current_user_id("u-7")
-                try:
-                    row = _Thing()
-                    s.add(row)
-                    s.commit()
-                    rid = row.id
-                finally:
-                    auth_context.reset_current_user_id(token)
-                assert s.get(_Thing, rid).user_id == "u-7"
-
-        contextvars.Context().run(insert_with_owner)
+        with Session(engine) as s:
+            row = _Thing(user_id="u-7")
+            s.add(row)
+            s.commit()
+            assert s.get(_Thing, row.id).user_id == "u-7"
 
     def test_insert_without_owner_fails_loudly(self) -> None:
         # No implicit fallback: an insert from a context that never set the

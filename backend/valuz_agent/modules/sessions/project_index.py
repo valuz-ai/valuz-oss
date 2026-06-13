@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from sqlalchemy import delete, func, select
 
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.sessions.models import ProjectSessionRow
 
@@ -40,6 +41,7 @@ async def record(
     Idempotent on ``session_id`` (re-recording an id updates the row) so
     boot-time reconciliation and retries can't violate the unique index.
     """
+    user_id = require_current_user_id()
     async with async_unit_of_work() as db:
         existing = (
             (await db.execute(select(ProjectSessionRow).filter_by(session_id=session_id)))
@@ -53,6 +55,7 @@ async def record(
             return
         db.add(
             ProjectSessionRow(
+                user_id=user_id,
                 project_id=project_id,
                 session_id=session_id,
                 kind=kind,
@@ -71,7 +74,9 @@ async def list_session_ids(
     """Session ids, newest first. ``user_only`` keeps conversation kinds
     (``chat``) and drops task-internal runs (lead / subtask)."""
     async with async_unit_of_work(commit=False) as db:
-        stmt = select(ProjectSessionRow.session_id)
+        stmt = select(ProjectSessionRow.session_id).where(
+            ProjectSessionRow.user_id == require_current_user_id()
+        )
         if project_id is not None:
             stmt = stmt.where(ProjectSessionRow.project_id == project_id)
         if user_only:
@@ -81,6 +86,8 @@ async def list_session_ids(
 
 
 async def project_of(session_id: str) -> str | None:
+    # SYSTEM lookup by the globally-unique kernel ``session_id`` — returns only
+    # the project id; not owner-scoped.
     async with async_unit_of_work(commit=False) as db:
         stmt = select(ProjectSessionRow.project_id).filter_by(session_id=session_id)
         return (await db.execute(stmt)).scalars().first()
@@ -89,7 +96,8 @@ async def project_of(session_id: str) -> str | None:
 async def count_for_project(project_id: str) -> int:
     async with async_unit_of_work(commit=False) as db:
         stmt = select(func.count(ProjectSessionRow.id)).where(
-            ProjectSessionRow.project_id == project_id
+            ProjectSessionRow.project_id == project_id,
+            ProjectSessionRow.user_id == require_current_user_id(),
         )
         return int((await db.execute(stmt)).scalar() or 0)
 
@@ -97,26 +105,40 @@ async def count_for_project(project_id: str) -> int:
 async def remove(session_id: str) -> None:
     async with async_unit_of_work() as db:
         await db.execute(
-            delete(ProjectSessionRow).where(ProjectSessionRow.session_id == session_id)
+            delete(ProjectSessionRow).where(
+                ProjectSessionRow.session_id == session_id,
+                ProjectSessionRow.user_id == require_current_user_id(),
+            )
         )
 
 
 async def remove_for_project(project_id: str) -> list[str]:
     """Drop every index row for ``project_id``; returns the removed session
     ids so the caller can cascade the kernel-side deletes."""
+    user_id = require_current_user_id()
     async with async_unit_of_work() as db:
         stmt = select(ProjectSessionRow.session_id).where(
-            ProjectSessionRow.project_id == project_id
+            ProjectSessionRow.project_id == project_id,
+            ProjectSessionRow.user_id == user_id,
         )
         ids = list((await db.execute(stmt)).scalars().all())
         await db.execute(
-            delete(ProjectSessionRow).where(ProjectSessionRow.project_id == project_id)
+            delete(ProjectSessionRow).where(
+                ProjectSessionRow.project_id == project_id,
+                ProjectSessionRow.user_id == user_id,
+            )
         )
         return ids
 
 
 async def list_recent(limit: int = 200) -> list[ProjectSessionRow]:
-    """Most recent index rows across all projects — the runs-overview feed."""
+    """Most recent index rows for the caller across all their projects — the
+    runs-overview feed."""
     async with async_unit_of_work(commit=False) as db:
-        stmt = select(ProjectSessionRow).order_by(ProjectSessionRow.created_at.desc()).limit(limit)
+        stmt = (
+            select(ProjectSessionRow)
+            .where(ProjectSessionRow.user_id == require_current_user_id())
+            .order_by(ProjectSessionRow.created_at.desc())
+            .limit(limit)
+        )
         return list((await db.execute(stmt)).scalars().all())

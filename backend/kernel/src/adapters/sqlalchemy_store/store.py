@@ -7,7 +7,6 @@ from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
 from src.adapters.sqlalchemy_store.converters import (
     event_to_model,
     message_to_model,
@@ -54,13 +53,20 @@ class SQLAlchemyStore:
             await db.merge(model)
             await db.commit()
 
-    async def load_session(self, session_id: str) -> Session | None:
+    async def load_session(self, user_id: str, session_id: str) -> Session | None:
         async with self._session_factory() as db:
-            model = await db.get(SessionModel, session_id)
+            model = (
+                await db.execute(
+                    select(SessionModel).where(
+                        SessionModel.id == session_id, SessionModel.user_id == user_id
+                    )
+                )
+            ).scalar_one_or_none()
             return model_to_session(model) if model else None
 
     async def list_sessions(
         self,
+        user_id: str | None,
         *,
         status: str | None = None,
         ids: Sequence[str] | None = None,
@@ -69,6 +75,10 @@ class SQLAlchemyStore:
     ) -> list[Session]:
         async with self._session_factory() as db:
             stmt = select(SessionModel).order_by(SessionModel.created_at.desc())
+            # ``user_id=None`` is the cross-owner sweep (startup orphan scans);
+            # every request-serving caller passes a concrete owner.
+            if user_id is not None:
+                stmt = stmt.where(SessionModel.user_id == user_id)
             if ids is not None:
                 if not ids:
                     return []
@@ -79,33 +89,51 @@ class SQLAlchemyStore:
             result = await db.execute(stmt)
             return [model_to_session(m) for m in result.scalars()]
 
-    async def delete_session(self, session_id: str) -> bool:
+    async def delete_session(self, user_id: str, session_id: str) -> bool:
         async with self._session_factory() as db:
-            await db.execute(delete(EventModel).where(EventModel.session_id == session_id))
-            await db.execute(delete(MessageModel).where(MessageModel.session_id == session_id))
-            result = await db.execute(delete(SessionModel).where(SessionModel.id == session_id))
+            await db.execute(
+                delete(EventModel).where(
+                    EventModel.session_id == session_id, EventModel.user_id == user_id
+                )
+            )
+            await db.execute(
+                delete(MessageModel).where(
+                    MessageModel.session_id == session_id, MessageModel.user_id == user_id
+                )
+            )
+            result = await db.execute(
+                delete(SessionModel).where(
+                    SessionModel.id == session_id, SessionModel.user_id == user_id
+                )
+            )
             await db.commit()
             return (result.rowcount or 0) > 0  # type: ignore[attr-defined]
 
     # -- Message CRUD --
 
-    async def save_message(self, message: Message) -> None:
+    async def save_message(self, user_id: str, message: Message) -> None:
         async with self._session_factory() as db:
-            await db.merge(message_to_model(message))
+            await db.merge(message_to_model(user_id, message))
             await db.commit()
 
-    async def load_message(self, message_id: str) -> Message | None:
+    async def load_message(self, user_id: str, message_id: str) -> Message | None:
         async with self._session_factory() as db:
-            model = await db.get(MessageModel, message_id)
+            model = (
+                await db.execute(
+                    select(MessageModel).where(
+                        MessageModel.id == message_id, MessageModel.user_id == user_id
+                    )
+                )
+            ).scalar_one_or_none()
             return model_to_message(model) if model else None
 
     async def list_messages_for_session(
-        self, session_id: str, *, limit: int = 50, offset: int = 0
+        self, user_id: str, session_id: str, *, limit: int = 50, offset: int = 0
     ) -> list[Message]:
         async with self._session_factory() as db:
             stmt = (
                 select(MessageModel)
-                .where(MessageModel.session_id == session_id)
+                .where(MessageModel.session_id == session_id, MessageModel.user_id == user_id)
                 .order_by(MessageModel.started_at.desc())
                 .offset(offset)
                 .limit(limit)
@@ -115,9 +143,11 @@ class SQLAlchemyStore:
 
     # -- Event log --
 
-    async def append_event(self, session_id: str, message_id: str, event: Event) -> int | None:
+    async def append_event(
+        self, user_id: str, session_id: str, message_id: str, event: Event
+    ) -> int | None:
         async with self._session_factory() as db:
-            model = event_to_model(session_id, message_id, event)
+            model = event_to_model(user_id, session_id, message_id, event)
             db.add(model)
             await db.commit()
             # The autoincrement PK is always populated after a successful
@@ -126,12 +156,12 @@ class SQLAlchemyStore:
             return int(model.id)
 
     async def get_events(
-        self, session_id: str, *, limit: int = 200, offset: int = 0
+        self, user_id: str, session_id: str, *, limit: int = 200, offset: int = 0
     ) -> list[Event]:
         async with self._session_factory() as db:
             stmt = (
                 select(EventModel)
-                .where(EventModel.session_id == session_id)
+                .where(EventModel.session_id == session_id, EventModel.user_id == user_id)
                 .order_by(EventModel.timestamp)
                 .offset(offset)
                 .limit(limit)
@@ -140,12 +170,12 @@ class SQLAlchemyStore:
             return [model_to_event(m) for m in result.scalars()]
 
     async def get_events_for_message(
-        self, message_id: str, *, limit: int = 200, offset: int = 0
+        self, user_id: str, message_id: str, *, limit: int = 200, offset: int = 0
     ) -> list[Event]:
         async with self._session_factory() as db:
             stmt = (
                 select(EventModel)
-                .where(EventModel.message_id == message_id)
+                .where(EventModel.message_id == message_id, EventModel.user_id == user_id)
                 .order_by(EventModel.timestamp)
                 .offset(offset)
                 .limit(limit)
@@ -154,12 +184,16 @@ class SQLAlchemyStore:
             return [model_to_event(m) for m in result.scalars()]
 
     async def get_events_after(
-        self, session_id: str, *, after_seq: int = 0, limit: int = 200
+        self, user_id: str, session_id: str, *, after_seq: int = 0, limit: int = 200
     ) -> list[StoredEvent]:
         async with self._session_factory() as db:
             stmt = (
                 select(EventModel)
-                .where(EventModel.session_id == session_id, EventModel.id > after_seq)
+                .where(
+                    EventModel.session_id == session_id,
+                    EventModel.user_id == user_id,
+                    EventModel.id > after_seq,
+                )
                 .order_by(EventModel.id)
                 .limit(limit)
             )
@@ -167,7 +201,7 @@ class SQLAlchemyStore:
             return [_model_to_stored_event(m) for m in result.scalars()]
 
     async def get_events_window(
-        self, session_id: str, *, before_seq: int | None = None, turn_limit: int = 20
+        self, user_id: str, session_id: str, *, before_seq: int | None = None, turn_limit: int = 20
     ) -> tuple[list[StoredEvent], bool]:
         if turn_limit <= 0:
             return [], False
@@ -178,6 +212,7 @@ class SQLAlchemyStore:
                 select(EventModel.id)
                 .where(
                     EventModel.session_id == session_id,
+                    EventModel.user_id == user_id,
                     EventModel.type == "user_message",
                 )
                 .order_by(EventModel.id.desc())
@@ -195,7 +230,11 @@ class SQLAlchemyStore:
             # here would silently drop the tail of tool-heavy turns.
             range_stmt = (
                 select(EventModel)
-                .where(EventModel.session_id == session_id, EventModel.id >= floor_id)
+                .where(
+                    EventModel.session_id == session_id,
+                    EventModel.user_id == user_id,
+                    EventModel.id >= floor_id,
+                )
                 .order_by(EventModel.id)
             )
             if before_seq is not None:
@@ -209,6 +248,7 @@ class SQLAlchemyStore:
                     select(EventModel.id)
                     .where(
                         EventModel.session_id == session_id,
+                        EventModel.user_id == user_id,
                         EventModel.type == "user_message",
                         EventModel.id < int(rows[0].id),
                     )
@@ -219,13 +259,13 @@ class SQLAlchemyStore:
 
     # -- Aggregates --
 
-    async def usage_rollup(self, start_ms: int, end_ms: int) -> list[UsageRollupRow]:
+    async def usage_rollup(self, user_id: str, start_ms: int, end_ms: int) -> list[UsageRollupRow]:
         async with self._session_factory() as db:
             # ``started_at`` is epoch ms (BIGINT): /1000 → seconds for
             # SQLite's 'unixepoch' modifier so the UTC day bucket is correct.
-            day_col = func.strftime(
-                "%Y-%m-%d", MessageModel.started_at / 1000, "unixepoch"
-            ).label("day")
+            day_col = func.strftime("%Y-%m-%d", MessageModel.started_at / 1000, "unixepoch").label(
+                "day"
+            )
             model_col = SessionModel.model.label("model")
             stmt = (
                 select(
@@ -243,6 +283,7 @@ class SQLAlchemyStore:
                 )
                 .join(SessionModel, MessageModel.session_id == SessionModel.id)
                 .where(
+                    MessageModel.user_id == user_id,
                     MessageModel.started_at >= start_ms,
                     MessageModel.started_at < end_ms,
                     MessageModel.status == "completed",

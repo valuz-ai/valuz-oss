@@ -8,6 +8,7 @@ shared by the session run path and the task orchestrator.
 
 from __future__ import annotations
 
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.db import async_unit_of_work
 
 
@@ -31,7 +32,7 @@ async def _load_pending_attachments(session_id: str):  # type: ignore[no-untyped
     from valuz_agent.modules.sessions.datastore import SessionDatastore
 
     async with async_unit_of_work() as db:
-        return await SessionDatastore(db).list_attachments(session_id)
+        return await SessionDatastore(db).list_attachments(require_current_user_id(), session_id)
 
 
 def _attachment_specs(rows) -> tuple[tuple[str, str | None], ...]:  # type: ignore[no-untyped-def]

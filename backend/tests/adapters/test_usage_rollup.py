@@ -96,24 +96,52 @@ def test_rollup_groups_by_day_and_model_with_exact_sums(store) -> None:
         await _seed_session(store, "s-gpt", "gpt-5.5")
         # Two completed messages same day same model — sums add up.
         await _seed_message(
-            store, message_id="m1", session_id="s-claude", status="completed",
-            started_at=DAY1 + 1000, turns=2, inp=100, out=50, cache_read=10, cache_write=5,
+            store,
+            message_id="m1",
+            session_id="s-claude",
+            status="completed",
+            started_at=DAY1 + 1000,
+            turns=2,
+            inp=100,
+            out=50,
+            cache_read=10,
+            cache_write=5,
         )
         await _seed_message(
-            store, message_id="m2", session_id="s-claude", status="completed",
-            started_at=DAY1 + 2000, turns=3, inp=200, out=75, cache_read=20, cache_write=15,
+            store,
+            message_id="m2",
+            session_id="s-claude",
+            status="completed",
+            started_at=DAY1 + 2000,
+            turns=3,
+            inp=200,
+            out=75,
+            cache_read=20,
+            cache_write=15,
         )
         # Different model, same day — separate row.
         await _seed_message(
-            store, message_id="m3", session_id="s-gpt", status="completed",
-            started_at=DAY1 + 3000, turns=1, inp=40, out=20,
+            store,
+            message_id="m3",
+            session_id="s-gpt",
+            status="completed",
+            started_at=DAY1 + 3000,
+            turns=1,
+            inp=40,
+            out=20,
         )
         # Same model, NEXT UTC day — separate row.
         await _seed_message(
-            store, message_id="m4", session_id="s-claude", status="completed",
-            started_at=DAY2 + 1000, turns=1, inp=11, out=7,
+            store,
+            message_id="m4",
+            session_id="s-claude",
+            status="completed",
+            started_at=DAY2 + 1000,
+            turns=1,
+            inp=11,
+            out=7,
         )
-        return await store.usage_rollup(DAY1, DAY2 + 86_400_000)
+        return await store.usage_rollup("u", DAY1, DAY2 + 86_400_000)
 
     rows = asyncio.run(_run())
     by_key = {(r.day, r.model): r for r in rows}
@@ -136,15 +164,27 @@ def test_rollup_counts_only_completed_messages(store) -> None:
     async def _run():
         await _seed_session(store, "s1", "claude-sonnet-4-6")
         await _seed_message(
-            store, message_id="ok", session_id="s1", status="completed",
-            started_at=DAY1 + 1000, turns=1, inp=10, out=5,
+            store,
+            message_id="ok",
+            session_id="s1",
+            status="completed",
+            started_at=DAY1 + 1000,
+            turns=1,
+            inp=10,
+            out=5,
         )
         for status in ("errored", "running", "cancelled"):
             await _seed_message(
-                store, message_id=f"skip-{status}", session_id="s1", status=status,
-                started_at=DAY1 + 2000, turns=9, inp=999, out=999,
+                store,
+                message_id=f"skip-{status}",
+                session_id="s1",
+                status=status,
+                started_at=DAY1 + 2000,
+                turns=9,
+                inp=999,
+                out=999,
             )
-        return await store.usage_rollup(DAY1, DAY2)
+        return await store.usage_rollup("u", DAY1, DAY2)
 
     rows = asyncio.run(_run())
     assert len(rows) == 1
@@ -156,14 +196,26 @@ def test_rollup_window_is_half_open(store) -> None:
         await _seed_session(store, "s1", "m")
         # Exactly at start → included; exactly at end → excluded.
         await _seed_message(
-            store, message_id="at-start", session_id="s1", status="completed",
-            started_at=DAY1, turns=1, inp=1, out=1,
+            store,
+            message_id="at-start",
+            session_id="s1",
+            status="completed",
+            started_at=DAY1,
+            turns=1,
+            inp=1,
+            out=1,
         )
         await _seed_message(
-            store, message_id="at-end", session_id="s1", status="completed",
-            started_at=DAY2, turns=1, inp=100, out=100,
+            store,
+            message_id="at-end",
+            session_id="s1",
+            status="completed",
+            started_at=DAY2,
+            turns=1,
+            inp=100,
+            out=100,
         )
-        return await store.usage_rollup(DAY1, DAY2)
+        return await store.usage_rollup("u", DAY1, DAY2)
 
     rows = asyncio.run(_run())
     assert len(rows) == 1

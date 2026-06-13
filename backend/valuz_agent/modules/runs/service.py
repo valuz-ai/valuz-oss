@@ -24,6 +24,7 @@ from app.schemas import SessionData as KernelSession
 
 import valuz_agent.boot.kernel  # noqa: F401 — puts kernel on sys.path
 from valuz_agent.adapters import kernel_client
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.modules.projects.datastore import ProjectDatastore
 from valuz_agent.modules.projects.models import ProjectRow
 from valuz_agent.modules.sessions import project_index
@@ -150,16 +151,16 @@ class RunsService:
         index_rows = await project_index.list_recent(limit=200)
         proj_by_session = {r.session_id: r.project_id for r in index_rows}
         sessions: list[KernelSession] = await kernel_client.list_sessions(
-            ids=[r.session_id for r in index_rows], limit=200
+            require_current_user_id(), ids=[r.session_id for r in index_rows], limit=200
         )
         ws_map: dict[str, ProjectRow] = {
-            str(r.id): r for r in await self._projects.list_projects()
+            str(r.id): r for r in await self._projects.list_projects(require_current_user_id())
         }
         ts_map: dict[str, TaskSessionRow] = {
-            r.session_id: r for r in await self._task_sessions.list_all()
+            r.session_id: r for r in await self._task_sessions.list_all(require_current_user_id())
         }
         task_map: dict[str, TaskRow] = {
-            str(r.id): r for r in await self._tasks.list_all(limit=None)
+            str(r.id): r for r in await self._tasks.list_all(require_current_user_id(), limit=None)
         }
 
         out: list[RunSummary] = []
@@ -230,9 +231,7 @@ class RunsService:
             last_event = await self._latest_task_event(task_id)
         else:
             source = (
-                "project_chat"
-                if project is not None and project.kind == "project"
-                else "assistant"
+                "project_chat" if project is not None and project.kind == "project" else "assistant"
             )
             last_output = _truncate_output(await self._latest_assistant_text(sess.id))
         return RunSummary(
@@ -258,7 +257,7 @@ class RunsService:
         the last round's content. Scans a few recent messages because the
         in-flight turn's message may not have its ``assistant_message`` set yet.
         """
-        messages = await kernel_client.list_messages(session_id, limit=3)
+        messages = await kernel_client.list_messages(require_current_user_id(), session_id, limit=3)
         for message in messages:  # most-recent first
             if message.assistant_message:
                 return str(message.assistant_message)
@@ -267,7 +266,7 @@ class RunsService:
     async def _latest_task_event(self, task_id: str | None) -> dict[str, Any] | None:
         if not task_id:
             return None
-        row = await self._task_events.latest_event(task_id)
+        row = await self._task_events.latest_event(require_current_user_id(), task_id)
         if row is None:
             return None
         return {"type": row.type, "payload": row.payload or {}}

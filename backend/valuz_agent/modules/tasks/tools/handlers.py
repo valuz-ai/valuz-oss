@@ -24,6 +24,7 @@ import valuz_agent.boot.kernel  # noqa: F401
 from src.core import ToolDef, ToolResult
 from src.core.tools import ExecContext
 
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.adapters import kernel_client
 from valuz_agent.modules.tasks import messaging, planning, queries
 
@@ -100,7 +101,7 @@ async def _check_lead_gate(ctx: ExecContext) -> tuple[str, str] | ToolResult:
 
     Returns a ToolResult(is_error=True) when the check fails.
     """
-    sess = await kernel_client.get_session(ctx.session_id)
+    sess = await kernel_client.get_session(require_current_user_id(), ctx.session_id)
     if sess is None:
         return ToolResult(content="dispatch: caller session not found", is_error=True)
 
@@ -143,7 +144,7 @@ async def _resolve_plan_writer_task(
 
     Read-only callers (get_plan) should use ``_resolve_plan_reader_task`` instead.
     """
-    sess = await kernel_client.get_session(ctx.session_id)
+    sess = await kernel_client.get_session(require_current_user_id(), ctx.session_id)
     if sess is None:
         return ToolResult(content="plan tool: caller session not found", is_error=True)
 
@@ -163,7 +164,7 @@ async def _resolve_plan_writer_task(
 
     async with async_unit_of_work(commit=False) as db:
         task_ds = TaskDatastore(db)
-        task = await task_ds.get_task(task_id)
+        task = await task_ds.get_task(require_current_user_id(), task_id)
     if task is None:
         return ToolResult(content=f"plan tool: task {task_id!r} not found", is_error=True)
 
@@ -181,7 +182,7 @@ async def _resolve_plan_reader_task(
     Permits any caller in the task's project (chat or lead). Useful for
     get_plan: knowing your own draft / a project mate's plan is fine.
     """
-    sess = await kernel_client.get_session(ctx.session_id)
+    sess = await kernel_client.get_session(require_current_user_id(), ctx.session_id)
     if sess is None:
         return ToolResult(content="plan tool: caller session not found", is_error=True)
 
@@ -195,7 +196,7 @@ async def _resolve_plan_reader_task(
 
     async with async_unit_of_work(commit=False) as db:
         task_ds = TaskDatastore(db)
-        task = await task_ds.get_task(task_id)
+        task = await task_ds.get_task(require_current_user_id(), task_id)
     if task is None:
         return ToolResult(content=f"plan tool: task {task_id!r} not found", is_error=True)
 
@@ -272,7 +273,7 @@ async def _check_orchestration_gate(ctx: ExecContext) -> tuple[str, str] | ToolR
     spawning nested tasks (附录 E E-3). The project must be a project (chat
     projects are ephemeral). Returns a ToolResult(is_error=True) on failure.
     """
-    sess = await kernel_client.get_session(ctx.session_id)
+    sess = await kernel_client.get_session(require_current_user_id(), ctx.session_id)
     if sess is None:
         return ToolResult(content="create_task: caller session not found", is_error=True)
 
@@ -302,7 +303,7 @@ async def _check_orchestration_gate(ctx: ExecContext) -> tuple[str, str] | ToolR
     from valuz_agent.modules.projects.datastore import ProjectDatastore
 
     async with async_unit_of_work(commit=False) as db:
-        ws = await ProjectDatastore(db).get_by_id(project_id)
+        ws = await ProjectDatastore(db).get_by_id(sess.user_id, project_id)
     if ws is None or ws.kind != "project":
         return ToolResult(
             content="create_task is only available inside a project",
@@ -545,7 +546,7 @@ def build_task_tool_defs(orchestrator: TaskOrchestrator) -> tuple[ToolDef, ...]:
         if not text.strip():
             return ToolResult(content="inject_into_task: text is required", is_error=True)
 
-        sess = await kernel_client.get_session(ctx.session_id)
+        sess = await kernel_client.get_session(require_current_user_id(), ctx.session_id)
         if sess is None:
             return ToolResult(content="inject_into_task: caller session not found", is_error=True)
 
@@ -553,7 +554,7 @@ def build_task_tool_defs(orchestrator: TaskOrchestrator) -> tuple[ToolDef, ...]:
         from valuz_agent.modules.tasks.datastore import TaskDatastore
 
         async with async_unit_of_work(commit=False) as db:
-            task = await TaskDatastore(db).get_task(task_id)
+            task = await TaskDatastore(db).get_task(require_current_user_id(), task_id)
         if task is None:
             return ToolResult(
                 content=f"inject_into_task: task {task_id!r} not found", is_error=True
@@ -599,7 +600,7 @@ def build_task_tool_defs(orchestrator: TaskOrchestrator) -> tuple[ToolDef, ...]:
         if not task_id:
             return ToolResult(content="resume_task: task_id is required", is_error=True)
 
-        sess = await kernel_client.get_session(ctx.session_id)
+        sess = await kernel_client.get_session(require_current_user_id(), ctx.session_id)
         if sess is None:
             return ToolResult(content="resume_task: caller session not found", is_error=True)
 
@@ -607,7 +608,7 @@ def build_task_tool_defs(orchestrator: TaskOrchestrator) -> tuple[ToolDef, ...]:
         from valuz_agent.modules.tasks.datastore import TaskDatastore
 
         async with async_unit_of_work(commit=False) as db:
-            task = await TaskDatastore(db).get_task(task_id)
+            task = await TaskDatastore(db).get_task(require_current_user_id(), task_id)
         if task is None:
             return ToolResult(content=f"resume_task: task {task_id!r} not found", is_error=True)
 
@@ -727,15 +728,13 @@ def build_task_tool_defs(orchestrator: TaskOrchestrator) -> tuple[ToolDef, ...]:
         # project-conversation launcher (so it can inspect the team before
         # create_task). NOT lead-gated; just needs a project. Resolve from
         # valuz metadata (task runs) or session.project_id (launcher).
-        sess = await kernel_client.get_session(ctx.session_id)
+        sess = await kernel_client.get_session(require_current_user_id(), ctx.session_id)
         if sess is None:
             return ToolResult(content="list_members: caller session not found", is_error=True)
         v: dict[str, Any] = (sess.metadata or {}).get("valuz", {})
         project_id = v.get("project_id", "") or getattr(sess, "project_id", "")
         if not project_id:
-            return ToolResult(
-                content="list_members: caller session has no project", is_error=True
-            )
+            return ToolResult(content="list_members: caller session has no project", is_error=True)
 
         try:
             members = await queries.list_members(project_id)
@@ -921,7 +920,9 @@ def build_task_tool_defs(orchestrator: TaskOrchestrator) -> tuple[ToolDef, ...]:
             from valuz_agent.modules.tasks.plan import TaskPlan
 
             async with async_unit_of_work(commit=False) as db:
-                task = await TaskDatastore(db).get_task_by_project(project_id, task_id)
+                task = await TaskDatastore(db).get_task_by_project(
+                    require_current_user_id(), project_id, task_id
+                )
             if task is None:
                 return ToolResult(
                     content=f"stop_subtask: task {task_id!r} not found", is_error=True

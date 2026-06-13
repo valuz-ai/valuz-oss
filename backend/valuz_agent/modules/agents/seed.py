@@ -49,6 +49,9 @@ _OFFICIAL_AGENTS: list[dict[str, Any]] = _load_agent_definitions()
 
 
 async def seed_official_agents(db: AsyncSession) -> None:
+    from valuz_agent.infra.local_identity import resolve_local_user_id
+
+    _owner = resolve_local_user_id()
     """Insert official Agent rows if absent.
 
     Insert-if-absent (not upsert): agents are now user-editable, so a boot
@@ -63,7 +66,7 @@ async def seed_official_agents(db: AsyncSession) -> None:
     ds = AgentDatastore(db)
     created = 0
     for defn in _OFFICIAL_AGENTS:
-        if await ds.get_agent(defn["slug"]) is not None:
+        if await ds.get_agent(_owner, defn["slug"]) is not None:
             continue
         row = AgentRow(
             slug=defn["slug"],
@@ -85,7 +88,7 @@ async def seed_official_agents(db: AsyncSession) -> None:
             readonly=defn.get("readonly", False),
             deletable=defn.get("deletable", True),
         )
-        await ds.create(row)
+        await ds.create(_owner, row)
         created += 1
 
     logger.info("seed_official_agents: inserted %d new official agent(s)", created)

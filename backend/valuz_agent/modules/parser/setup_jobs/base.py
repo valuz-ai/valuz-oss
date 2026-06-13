@@ -27,6 +27,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.parser.datastore import SetupJobDatastore
 from valuz_agent.modules.parser.models import SetupJobRow
@@ -134,7 +135,7 @@ class SetupJobController:
         from valuz_agent.infra.db import async_unit_of_work
 
         async with async_unit_of_work(commit=False) as db:
-            row = await SetupJobDatastore(db).get(setup_id)
+            row = await SetupJobDatastore(db).get(require_current_user_id(), setup_id)
 
         if row is None:
             # Lazy: a setup_id known to the registry but never started yet.
@@ -286,7 +287,10 @@ class SetupJobController:
 
         async with async_unit_of_work() as db:
             await SetupJobDatastore(db).update_progress(
-                setup_id, downloaded_bytes=downloaded_bytes, total_bytes=total_bytes
+                require_current_user_id(),
+                setup_id,
+                downloaded_bytes=downloaded_bytes,
+                total_bytes=total_bytes,
             )
 
     async def _write_row(
@@ -305,7 +309,7 @@ class SetupJobController:
 
         async with async_unit_of_work() as db:
             ds = SetupJobDatastore(db)
-            current = await ds.get(setup_id)
+            current = await ds.get(require_current_user_id(), setup_id)
             row = current or SetupJobRow(setup_id=setup_id)
             row.status = status
             if downloaded_bytes is not None:
@@ -319,7 +323,7 @@ class SetupJobController:
                 row.started_at = started_at
             if completed_at is not None:
                 row.completed_at = completed_at
-            await ds.upsert(row)
+            await ds.upsert(require_current_user_id(), row)
 
 
 def _short_error(exc: BaseException) -> str:

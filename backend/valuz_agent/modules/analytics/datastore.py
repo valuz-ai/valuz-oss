@@ -9,6 +9,7 @@ longer imports kernel storage models or queries kernel tables directly.
 from __future__ import annotations
 
 from valuz_agent.adapters import kernel_client
+from valuz_agent.infra.auth_context import require_current_user_id
 
 
 class AnalyticsDatastore:
@@ -20,4 +21,4 @@ class AnalyticsDatastore:
         ``input_tokens`` / ``output_tokens`` / ``cache_read_tokens`` /
         ``cache_write_tokens``.
         """
-        return await kernel_client.usage_rollup(start_ms, end_ms)
+        return await kernel_client.usage_rollup(require_current_user_id(), start_ms, end_ms)

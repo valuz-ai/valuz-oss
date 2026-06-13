@@ -5,9 +5,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-
-from app.dependencies import get_store
+from app.dependencies import get_owner_id, get_store
 from app.schemas import (
     AttachmentSchema,
     EventData,
@@ -19,11 +17,13 @@ from app.schemas import (
     TodoItem,
     UserMessageSchema,
 )
+from fastapi import APIRouter, Depends, HTTPException, Query
 from src.core import Event, Message, StorePort
 
 router = APIRouter(tags=["messages"])
 
 StoreDep = Annotated[StorePort, Depends(get_store)]
+OwnerDep = Annotated[str, Depends(get_owner_id)]
 
 
 def _message_to_data(message: Message) -> MessageData:
@@ -68,19 +68,20 @@ def _event_to_data(event: Event) -> EventData:
 async def list_session_messages(
     session_id: str,
     store: StoreDep,
+    owner: OwnerDep,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> dict[str, Any]:
-    session = await store.load_session(session_id)
+    session = await store.load_session(owner, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    messages = await store.list_messages_for_session(session_id, limit=limit, offset=offset)
+    messages = await store.list_messages_for_session(owner, session_id, limit=limit, offset=offset)
     return {"data": [_message_to_data(m) for m in messages]}
 
 
 @router.get("/api/v1/messages/{message_id}", response_model=MessageResponse)
-async def get_message(message_id: str, store: StoreDep) -> dict[str, Any]:
-    message = await store.load_message(message_id)
+async def get_message(message_id: str, store: StoreDep, owner: OwnerDep) -> dict[str, Any]:
+    message = await store.load_message(owner, message_id)
     if message is None:
         raise HTTPException(status_code=404, detail="Message not found")
     return {"data": _message_to_data(message)}
@@ -90,11 +91,12 @@ async def get_message(message_id: str, store: StoreDep) -> dict[str, Any]:
 async def get_message_events(
     message_id: str,
     store: StoreDep,
+    owner: OwnerDep,
     limit: Annotated[int, Query(ge=1, le=1000)] = 200,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> dict[str, Any]:
-    message = await store.load_message(message_id)
+    message = await store.load_message(owner, message_id)
     if message is None:
         raise HTTPException(status_code=404, detail="Message not found")
-    events = await store.get_events_for_message(message_id, limit=limit, offset=offset)
+    events = await store.get_events_for_message(owner, message_id, limit=limit, offset=offset)
     return {"data": [_event_to_data(e) for e in events]}

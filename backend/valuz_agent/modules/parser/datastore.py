@@ -20,16 +20,30 @@ class SetupJobDatastore:
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
 
-    async def get(self, setup_id: str) -> SetupJobRow | None:
-        return await self._db.get(SetupJobRow, setup_id)
+    async def get(self, user_id: str, setup_id: str) -> SetupJobRow | None:
+        return (
+            (
+                await self._db.execute(
+                    select(SetupJobRow).where(
+                        SetupJobRow.setup_id == setup_id, SetupJobRow.user_id == user_id
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
 
-    async def upsert(self, row: SetupJobRow) -> SetupJobRow:
+    async def upsert(self, user_id: str, row: SetupJobRow) -> SetupJobRow:
+        # Owner passed explicitly; composite PK ``(setup_id, user_id)`` keeps the
+        # merge per-owner.
+        row.user_id = user_id
         row.updated_at = now_ms()
         await self._db.merge(row)
         return row
 
     async def update_progress(
         self,
+        user_id: str,
         setup_id: str,
         *,
         downloaded_bytes: int,
@@ -39,7 +53,7 @@ class SetupJobDatastore:
         keep allocation low — single SQL UPDATE."""
         stmt = (
             update(SetupJobRow)
-            .where(SetupJobRow.setup_id == setup_id)
+            .where(SetupJobRow.setup_id == setup_id, SetupJobRow.user_id == user_id)
             .values(
                 downloaded_bytes=downloaded_bytes,
                 total_bytes=total_bytes,
@@ -56,7 +70,9 @@ class PollingTaskDatastore:
     async def get(self, task_id: str) -> PollingTaskRow | None:
         return await self._db.get(PollingTaskRow, task_id)
 
-    async def insert(self, row: PollingTaskRow) -> PollingTaskRow:
+    async def insert(self, user_id: str, row: PollingTaskRow) -> PollingTaskRow:
+        # Owner passed explicitly (no ContextVar write-stamp default).
+        row.user_id = user_id
         now = now_ms()
         if not getattr(row, "created_at", None):
             row.created_at = now
@@ -64,7 +80,9 @@ class PollingTaskDatastore:
         self._db.add(row)
         return row
 
-    async def upsert(self, row: PollingTaskRow) -> PollingTaskRow:
+    async def upsert(self, user_id: str, row: PollingTaskRow) -> PollingTaskRow:
+        # Owner passed explicitly (no ContextVar write-stamp default).
+        row.user_id = user_id
         row.updated_at = now_ms()
         await self._db.merge(row)
         return row

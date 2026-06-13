@@ -224,16 +224,9 @@ async def init_kernel_dependencies() -> None:
 
     await init_dependencies(AppConfig())
 
-    # Seed the kernel-side owner id so every projects/agents/sessions/messages/
-    # events row is stamped with the local install owner (OSS). A ContextVar set
-    # on the host thread would not cross into the kernel's own event loop/thread,
-    # so we seed the module-level default (thread-independent); the commercial
-    # overlay refines per-request. Mirrors the host's auth_context default seed.
-    from src.core.owner_context import set_default_owner
-
-    from valuz_agent.infra.local_identity import resolve_local_user_id
-
-    set_default_owner(resolve_local_user_id())
+    # No kernel-side owner default to seed: every kernel write stamps ``user_id``
+    # explicitly (host → kernel_client → route → store), so there is nothing to
+    # fall back to. Reads/writes that reach the kernel always carry an owner.
 
     # The kernel's engine factory (kernel/src/adapters/sqlalchemy_store/engine.py)
     # sets journal_mode=WAL but NOT busy_timeout, so kernel connections run with

@@ -10,7 +10,7 @@ forwarding). This test pins the deeper chain:
 
     requires_action (runtime sink) → events table
        ↓
-    orchestrator.submit_action(pending_id, decision)
+    orchestrator.submit_action("local-test-owner", pending_id, decision)
        ↓                          ↑ routed from runtime.submit_action
        ↓
     action_resolved (orchestrator emits to bus + DB)
@@ -144,6 +144,7 @@ async def test_should_complete_full_approval_cycle(_store_and_orchestrator, tmp_
 
     await store.save_session(
         Session(
+            user_id="local-test-owner",
             id=session_id,
             agent_config=AgentConfig(id=agent_id, name="a", model="claude-sonnet-4-6"),
             cwd=str(tmp_path),
@@ -151,23 +152,27 @@ async def test_should_complete_full_approval_cycle(_store_and_orchestrator, tmp_
         )
     )
     await store.save_message(
+        "local-test-owner",
         Message(
             id=message_id,
             session_id=session_id,
             user_message=UserMessage(text="list temp"),
             started_at=datetime.now(),
             status="running",
-        )
+        ),
     )
 
     # Wire the fake runtime into the orchestrator's cache and park.
     fake = _FakeRuntime()
     orchestrator._runtimes[session_id] = fake
     orchestrator._active[session_id] = fake
-    orchestrator._active_message[session_id] = await store.load_message(message_id)
+    orchestrator._active_message[session_id] = await store.load_message(
+        "local-test-owner", message_id
+    )
 
     park_event = fake.park(pending_id)
     await store.append_event(
+        "local-test-owner",
         session_id,
         message_id,
         Event(
@@ -185,6 +190,7 @@ async def test_should_complete_full_approval_cycle(_store_and_orchestrator, tmp_
     # Resolve through the orchestrator's public API (same path the host
     # route handler takes after passing input validation).
     result = await orchestrator.submit_action(
+        "local-test-owner",
         session_id,
         pending_id=pending_id,
         decision="approve",
@@ -204,7 +210,7 @@ async def test_should_complete_full_approval_cycle(_store_and_orchestrator, tmp_
     # async engine that's pinned at first import and doesn't follow
     # the per-test fixture's data_dir override (would falsely fail when
     # this test runs alongside other DB-touching tests).
-    events = await store.get_events(session_id, limit=100, offset=0)
+    events = await store.get_events("local-test-owner", session_id, limit=100, offset=0)
     types = [e.type for e in events]
     assert "requires_action" in types
     assert "action_resolved" in types
@@ -224,27 +230,32 @@ async def test_should_return_idempotent_on_same_decision_retry(_store_and_orches
 
     pid, aid, sid, mid = (uuid.uuid4().hex for _ in range(4))
     pending_id = "pending-idem"
-    await store.save_session(Session(
+    await store.save_session(
+        Session(
+            user_id="local-test-owner",
             id=sid,
             agent_config=AgentConfig(id=aid, name="a", model="m"),
             cwd=str(tmp_path),
-        ))
+        )
+    )
     await store.save_message(
+        "local-test-owner",
         Message(
             id=mid,
             session_id=sid,
             user_message=UserMessage(text="hi"),
             started_at=datetime.now(),
             status="running",
-        )
+        ),
     )
 
     fake = _FakeRuntime()
     orchestrator._runtimes[sid] = fake
     orchestrator._active[sid] = fake
-    orchestrator._active_message[sid] = await store.load_message(mid)
+    orchestrator._active_message[sid] = await store.load_message("local-test-owner", mid)
     fake.park(pending_id)
     await store.append_event(
+        "local-test-owner",
         sid,
         mid,
         Event(
@@ -258,8 +269,12 @@ async def test_should_return_idempotent_on_same_decision_retry(_store_and_orches
         ),
     )
 
-    first = await orchestrator.submit_action(sid, pending_id=pending_id, decision="approve")
-    retry = await orchestrator.submit_action(sid, pending_id=pending_id, decision="approve")
+    first = await orchestrator.submit_action(
+        "local-test-owner", sid, pending_id=pending_id, decision="approve"
+    )
+    retry = await orchestrator.submit_action(
+        "local-test-owner", sid, pending_id=pending_id, decision="approve"
+    )
 
     assert first.idempotent is False
     assert retry.idempotent is True
@@ -280,27 +295,32 @@ async def test_should_reject_conflicting_decision_with_pending_action_conflict(
 
     pid, aid, sid, mid = (uuid.uuid4().hex for _ in range(4))
     pending_id = "pending-conflict"
-    await store.save_session(Session(
+    await store.save_session(
+        Session(
+            user_id="local-test-owner",
             id=sid,
             agent_config=AgentConfig(id=aid, name="a", model="m"),
             cwd=str(tmp_path),
-        ))
+        )
+    )
     await store.save_message(
+        "local-test-owner",
         Message(
             id=mid,
             session_id=sid,
             user_message=UserMessage(text="hi"),
             started_at=datetime.now(),
             status="running",
-        )
+        ),
     )
 
     fake = _FakeRuntime()
     orchestrator._runtimes[sid] = fake
     orchestrator._active[sid] = fake
-    orchestrator._active_message[sid] = await store.load_message(mid)
+    orchestrator._active_message[sid] = await store.load_message("local-test-owner", mid)
     fake.park(pending_id)
     await store.append_event(
+        "local-test-owner",
         sid,
         mid,
         Event(
@@ -314,9 +334,13 @@ async def test_should_reject_conflicting_decision_with_pending_action_conflict(
         ),
     )
 
-    await orchestrator.submit_action(sid, pending_id=pending_id, decision="approve")
+    await orchestrator.submit_action(
+        "local-test-owner", sid, pending_id=pending_id, decision="approve"
+    )
     with pytest.raises(PendingActionConflictError):
-        await orchestrator.submit_action(sid, pending_id=pending_id, decision="reject")
+        await orchestrator.submit_action(
+            "local-test-owner", sid, pending_id=pending_id, decision="reject"
+        )
 
 
 @pytest.mark.asyncio
@@ -332,22 +356,27 @@ async def test_should_seal_orphan_pendings_on_startup_walk(_store_and_orchestrat
     pending_id = "pending-stale"
     # Status must be ``running`` for the scan to find it (simulates a
     # crash mid-turn).
-    await store.save_session(Session(
+    await store.save_session(
+        Session(
+            user_id="local-test-owner",
             id=sid,
             agent_config=AgentConfig(id=aid, name="a", model="m"),
             cwd=str(tmp_path),
             status="running",
-        ))
+        )
+    )
     await store.save_message(
+        "local-test-owner",
         Message(
             id=mid,
             session_id=sid,
             user_message=UserMessage(text="hi"),
             started_at=datetime.now(),
             status="running",
-        )
+        ),
     )
     await store.append_event(
+        "local-test-owner",
         sid,
         mid,
         Event(
@@ -365,7 +394,7 @@ async def test_should_seal_orphan_pendings_on_startup_walk(_store_and_orchestrat
     sealed = await orchestrator.scan_orphan_pendings()
     assert sealed >= 1
 
-    events = await store.get_events(sid, limit=100, offset=0)
+    events = await store.get_events("local-test-owner", sid, limit=100, offset=0)
     expired = [
         e for e in events if e.type == "action_resolved" and e.data.get("pending_id") == pending_id
     ]
@@ -402,25 +431,29 @@ async def test_should_commit_session_rule_and_return_rule_id_on_approve_for_sess
 
     pid, aid, sid, mid = (uuid.uuid4().hex for _ in range(4))
     pending_id = "pending-rule-1"
-    await store.save_session(Session(
+    await store.save_session(
+        Session(
+            user_id="local-test-owner",
             id=sid,
             agent_config=AgentConfig(id=aid, name="a", model="m"),
             cwd=str(tmp_path),
-        ))
+        )
+    )
     await store.save_message(
+        "local-test-owner",
         Message(
             id=mid,
             session_id=sid,
             user_message=UserMessage(text="run npm test"),
             started_at=datetime.now(),
             status="running",
-        )
+        ),
     )
 
     fake = _FakeRuntime()
     orchestrator._runtimes[sid] = fake
     orchestrator._active[sid] = fake
-    orchestrator._active_message[sid] = await store.load_message(mid)
+    orchestrator._active_message[sid] = await store.load_message("local-test-owner", mid)
     fake.park(pending_id)
 
     preview = {
@@ -430,6 +463,7 @@ async def test_should_commit_session_rule_and_return_rule_id_on_approve_for_sess
         "rule_data": {"pattern": "Bash(npm test:*)"},
     }
     await store.append_event(
+        "local-test-owner",
         sid,
         mid,
         Event(
@@ -445,6 +479,7 @@ async def test_should_commit_session_rule_and_return_rule_id_on_approve_for_sess
     )
 
     result = await orchestrator.submit_action(
+        "local-test-owner",
         sid,
         pending_id=pending_id,
         decision="approve_for_session",
@@ -455,7 +490,7 @@ async def test_should_commit_session_rule_and_return_rule_id_on_approve_for_sess
     # Runtime saw plain ``approve`` — the session verb is kernel-only.
     assert fake._pendings[pending_id]["decision"] == "approve"
 
-    events = await store.get_events(sid, limit=100, offset=0)
+    events = await store.get_events("local-test-owner", sid, limit=100, offset=0)
     resolved = next(
         e for e in events if e.type == "action_resolved" and e.data.get("pending_id") == pending_id
     )
@@ -476,29 +511,34 @@ async def test_should_forward_modified_input_to_runtime_on_approve_with_changes(
 
     pid, aid, sid, mid = (uuid.uuid4().hex for _ in range(4))
     pending_id = "pending-edit-1"
-    await store.save_session(Session(
+    await store.save_session(
+        Session(
+            user_id="local-test-owner",
             id=sid,
             agent_config=AgentConfig(id=aid, name="a", model="m"),
             cwd=str(tmp_path),
-        ))
+        )
+    )
     await store.save_message(
+        "local-test-owner",
         Message(
             id=mid,
             session_id=sid,
             user_message=UserMessage(text="edit and approve"),
             started_at=datetime.now(),
             status="running",
-        )
+        ),
     )
 
     fake = _FakeRuntime()
     orchestrator._runtimes[sid] = fake
     orchestrator._active[sid] = fake
-    orchestrator._active_message[sid] = await store.load_message(mid)
+    orchestrator._active_message[sid] = await store.load_message("local-test-owner", mid)
     fake.park(pending_id)
 
     original = {"command": "rm -rf /tmp/cache", "cwd": str(tmp_path)}
     await store.append_event(
+        "local-test-owner",
         sid,
         mid,
         Event(
@@ -515,6 +555,7 @@ async def test_should_forward_modified_input_to_runtime_on_approve_with_changes(
 
     edited = {"command": "rm -rf /tmp/cache --dry-run", "cwd": str(tmp_path)}
     result = await orchestrator.submit_action(
+        "local-test-owner",
         sid,
         pending_id=pending_id,
         decision="approve_with_changes",
@@ -530,7 +571,7 @@ async def test_should_forward_modified_input_to_runtime_on_approve_with_changes(
     assert fake._pendings[pending_id]["modified_input"] == edited
     assert fake._pendings[pending_id]["decision"] == "approve_with_changes"
 
-    events = await store.get_events(sid, limit=100, offset=0)
+    events = await store.get_events("local-test-owner", sid, limit=100, offset=0)
     resolved = next(
         e for e in events if e.type == "action_resolved" and e.data.get("pending_id") == pending_id
     )

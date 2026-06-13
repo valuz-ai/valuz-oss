@@ -21,51 +21,82 @@ class ConnectorDatastore:
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
 
-    async def list_all(self) -> list[ConnectorRow]:
-        return list(
-            (await self._db.execute(select(ConnectorRow).order_by(ConnectorRow.display_name)))
-            .scalars()
-            .all()
-        )
-
-    async def list_enabled(self) -> list[ConnectorRow]:
+    async def list_all(self, user_id: str) -> list[ConnectorRow]:
         return list(
             (
                 await self._db.execute(
-                    select(ConnectorRow).filter_by(enabled=True).order_by(ConnectorRow.display_name)
+                    select(ConnectorRow)
+                    .where(ConnectorRow.user_id == user_id)
+                    .order_by(ConnectorRow.display_name)
                 )
             )
             .scalars()
             .all()
         )
 
-    async def get_by_id(self, connector_id: str) -> ConnectorRow | None:
+    async def list_enabled(self, user_id: str) -> list[ConnectorRow]:
+        return list(
+            (
+                await self._db.execute(
+                    select(ConnectorRow)
+                    .where(ConnectorRow.user_id == user_id, ConnectorRow.enabled)
+                    .order_by(ConnectorRow.display_name)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    async def get_by_id(self, user_id: str, connector_id: str) -> ConnectorRow | None:
         return (
-            (await self._db.execute(select(ConnectorRow).filter_by(id=connector_id)))
+            (
+                await self._db.execute(
+                    select(ConnectorRow).where(
+                        ConnectorRow.id == connector_id, ConnectorRow.user_id == user_id
+                    )
+                )
+            )
             .scalars()
             .first()
         )
 
-    async def get_by_slug(self, slug: str) -> ConnectorRow | None:
-        return (await self._db.execute(select(ConnectorRow).filter_by(slug=slug))).scalars().first()
+    async def get_by_slug(self, user_id: str, slug: str) -> ConnectorRow | None:
+        return (
+            (
+                await self._db.execute(
+                    select(ConnectorRow).where(
+                        ConnectorRow.slug == slug, ConnectorRow.user_id == user_id
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
 
-    async def create(self, row: ConnectorRow) -> ConnectorRow:
+    async def create(self, user_id: str, row: ConnectorRow) -> ConnectorRow:
+        # Owner passed explicitly (no ContextVar write-stamp default).
+        row.user_id = user_id
         self._db.add(row)
         await self._db.commit()
         await self._db.refresh(row)
         return row
 
     async def update(self, row: ConnectorRow) -> ConnectorRow:
+        # ``row`` came from an owner-scoped read; merge preserves its user_id.
         merged = await self._db.merge(row)
         await self._db.commit()
         await self._db.refresh(merged)
         return merged
 
-    async def delete(self, connector_id: str) -> bool:
-        row = await self.get_by_id(connector_id)
+    async def delete(self, user_id: str, connector_id: str) -> bool:
+        row = await self.get_by_id(user_id, connector_id)
         if row is None:
             return False
-        await self._db.execute(delete(ConnectorRow).where(ConnectorRow.id == connector_id))
+        await self._db.execute(
+            delete(ConnectorRow).where(
+                ConnectorRow.id == connector_id, ConnectorRow.user_id == user_id
+            )
+        )
         await self._db.commit()
         return True
 

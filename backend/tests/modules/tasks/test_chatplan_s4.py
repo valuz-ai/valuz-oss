@@ -72,6 +72,7 @@ def _seed_task(
     db = db_factory()
     try:
         task = TaskRow(
+            user_id="local-test-owner",
             id=task_id,
             project_id=project_id,
             file_path=str(tmp_path / f"{task_id}.md"),
@@ -86,6 +87,7 @@ def _seed_task(
         db.add(task)
         if lead_session_id is not None:
             run = TaskSessionRow(
+                user_id="local-test-owner",
                 project_id=project_id,
                 task_id=task_id,
                 session_id=lead_session_id,

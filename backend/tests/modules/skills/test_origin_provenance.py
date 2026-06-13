@@ -23,7 +23,7 @@ class _FakeDatastore:
     def __init__(self, row: object | None) -> None:
         self._row = row
 
-    async def get_by_id(self, skill_id: str) -> object | None:
+    async def get_by_id(self, user_id: str, skill_id: str) -> object | None:
         return self._row
 
 

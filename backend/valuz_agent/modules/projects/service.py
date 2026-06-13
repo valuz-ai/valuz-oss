@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from valuz_agent.adapters import kernel_client
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.modules.automations.datastore import AutomationDatastore
@@ -110,7 +111,7 @@ def _row_to_detail(
     )
 
 
-async def project_cwd_by_id(project_id: str) -> str | None:
+async def project_cwd_by_id(user_id: str, project_id: str) -> str | None:
     """Resolve a project's session cwd by id — module-level so sibling
     modules (memory scope, prompt context, skills staging) can call it
     without wiring a ProjectService. Opens its own unit of work."""
@@ -120,7 +121,7 @@ async def project_cwd_by_id(project_id: str) -> str | None:
     from valuz_agent.modules.projects.datastore import ProjectDatastore
 
     async with async_unit_of_work(commit=False) as db:
-        row = await ProjectDatastore(db).get_by_id(project_id)
+        row = await ProjectDatastore(db).get_by_id(user_id, project_id)
     if row is None:
         return None
     kind = row.kind if row.kind in ("chat", "project") else "chat"
@@ -150,12 +151,12 @@ class ProjectService:
         self._skills = skill_datastore
         self._connectors = connector_datastore
 
-    async def ensure_chat_project(self) -> None:
-        existing = await self._ds.get_chat_project()
+    async def ensure_chat_project(self, user_id: str) -> None:
+        existing = await self._ds.get_chat_project(user_id)
         if existing:
             return
         row = ProjectRow(name="Chat", kind="chat", sort_order=0)
-        await self._ds.create(row)
+        await self._ds.create(user_id, row)
 
     async def create_chat_project_for_session(self, name: str = "Chat") -> ProjectRow:
         """Materialize a fresh, ephemeral chat project for one chat-kind context.
@@ -179,19 +180,19 @@ class ProjectService:
         sessions, not bound to any single chat project's id.
         """
         row = ProjectRow(name=name, kind="chat", sort_order=100)
-        await self._ds.create(row)
+        await self._ds.create(require_current_user_id(), row)
         return row
 
-    async def list_projects(self) -> list[ProjectListItem]:
-        rows = await self._ds.list_projects()
+    async def list_projects(self, user_id: str) -> list[ProjectListItem]:
+        rows = await self._ds.list_projects(user_id)
         return [_row_to_list_item(r, cwd=self.resolve_project_cwd(r)) for r in rows]
 
-    async def get_project(self, project_id: str) -> ProjectDetail:
+    async def get_project(self, user_id: str, project_id: str) -> ProjectDetail:
         if project_id == "chat-default":
-            row = await self._ds.get_chat_project()
+            row = await self._ds.get_chat_project(user_id)
             if not row:
-                await self.ensure_chat_project()
-                row = await self._ds.get_chat_project()
+                await self.ensure_chat_project(user_id)
+                row = await self._ds.get_chat_project(user_id)
             if row:
                 return _row_to_detail(
                     row,
@@ -199,7 +200,7 @@ class ProjectService:
                     memory_summary=row.memory_summary,
                     cwd=self.resolve_project_cwd(row),
                 )
-        row = await self._ds.get_by_id(project_id)
+        row = await self._ds.get_by_id(user_id, project_id)
         if not row:
             raise KeyError(project_id)
         return _row_to_detail(
@@ -209,17 +210,17 @@ class ProjectService:
             cwd=self.resolve_project_cwd(row),
         )
 
-    async def create_project(self, name: str, root_path: str) -> ProjectDetail:
+    async def create_project(self, user_id: str, name: str, root_path: str) -> ProjectDetail:
         abs_path = str(Path(root_path).resolve())
-        existing = await self._ds.get_by_root_path(abs_path)
+        existing = await self._ds.get_by_root_path(user_id, abs_path)
         if existing:
             raise ValueError(f"Directory already bound to project '{existing.name}'")
         row = ProjectRow(name=name, kind="project", root_path=abs_path, sort_order=10)
-        await self._ds.create(row)
+        await self._ds.create(user_id, row)
         return _row_to_detail(row, cwd=self.resolve_project_cwd(row))
 
-    async def rename_project(self, project_id: str, name: str) -> ProjectDetail:
-        row = await self._ds.get_by_id(project_id)
+    async def rename_project(self, user_id: str, project_id: str, name: str) -> ProjectDetail:
+        row = await self._ds.get_by_id(user_id, project_id)
         if not row:
             raise KeyError(project_id)
         if row.kind == "chat":
@@ -228,8 +229,10 @@ class ProjectService:
         await self._ds.update(row)
         return _row_to_detail(row, cwd=self.resolve_project_cwd(row))
 
-    async def update_instructions(self, project_id: str, instructions_md: str) -> None:
-        row = await self._ds.get_by_id(project_id)
+    async def update_instructions(
+        self, user_id: str, project_id: str, instructions_md: str
+    ) -> None:
+        row = await self._ds.get_by_id(user_id, project_id)
         if not row:
             raise KeyError(project_id)
         row.instructions_md = (instructions_md or "").strip() or None
@@ -239,8 +242,8 @@ class ProjectService:
         # affect *future new sessions* — already-running sessions keep the
         # prompt they were created with. UI surfaces a hint to that effect.
 
-    async def get_connectors(self, project_id: str) -> list[str]:
-        row = await self._ds.get_by_id(project_id)
+    async def get_connectors(self, user_id: str, project_id: str) -> list[str]:
+        row = await self._ds.get_by_id(user_id, project_id)
         if not row or not row.root_path:
             raise KeyError(project_id)
         if not self._connectors:
@@ -248,8 +251,8 @@ class ProjectService:
         # Pure filesystem read (.claude/project-config.json) — stays sync.
         return self._connectors.get_project_connectors(row)
 
-    async def set_connectors(self, project_id: str, slugs: list[str]) -> None:
-        row = await self._ds.get_by_id(project_id)
+    async def set_connectors(self, user_id: str, project_id: str, slugs: list[str]) -> None:
+        row = await self._ds.get_by_id(user_id, project_id)
         if not row or not row.root_path:
             raise KeyError(project_id)
         if not self._connectors:
@@ -259,11 +262,12 @@ class ProjectService:
 
     async def update_memory(
         self,
+        user_id: str,
         project_id: str,
         summary: str | None,
         expected_version: int,
     ) -> None:
-        row = await self._ds.get_by_id(project_id)
+        row = await self._ds.get_by_id(user_id, project_id)
         if not row:
             raise KeyError(project_id)
         if row.memory_version != expected_version:
@@ -272,8 +276,8 @@ class ProjectService:
         row.memory_version = expected_version + 1
         await self._ds.update(row)
 
-    async def preview_delete(self, project_id: str) -> ProjectDeletePreview:
-        row = await self._ds.get_by_id(project_id)
+    async def preview_delete(self, user_id: str, project_id: str) -> ProjectDeletePreview:
+        row = await self._ds.get_by_id(user_id, project_id)
         if not row:
             raise KeyError(project_id)
         if row.kind == "chat":
@@ -284,12 +288,16 @@ class ProjectService:
             session_count = await project_index.count_for_project(project_id)
         except Exception:  # noqa: BLE001
             session_count = 0
-        doc_binding_count = await self._docs.count_bindings(project_id) if self._docs else 0
+        doc_binding_count = (
+            await self._docs.count_bindings(user_id, project_id) if self._docs else 0
+        )
         schedule_count = (
-            await self._automations.count_by_project(project_id) if self._automations else 0
+            await self._automations.count_by_project(user_id, project_id)
+            if self._automations
+            else 0
         )
         skill_config_count = (
-            len(await self._skills.list_project_skills(project_id)) if self._skills else 0
+            len(await self._skills.list_project_skills(user_id, project_id)) if self._skills else 0
         )
 
         return ProjectDeletePreview(
@@ -299,8 +307,8 @@ class ProjectService:
             skill_config_count=skill_config_count,
         )
 
-    async def delete_project(self, project_id: str) -> None:
-        row = await self._ds.get_by_id(project_id)
+    async def delete_project(self, user_id: str, project_id: str) -> None:
+        row = await self._ds.get_by_id(user_id, project_id)
         if not row:
             raise KeyError(project_id)
         if row.kind == "chat":
@@ -310,16 +318,16 @@ class ProjectService:
         # come from the host index, which is cleared in the same sweep.
         try:
             for sid in await project_index.remove_for_project(project_id):
-                await kernel_client.delete_session(sid)
+                await kernel_client.delete_session(require_current_user_id(), sid)
         except Exception:  # noqa: BLE001
             pass
         if self._docs:
-            await self._docs.remove_all_bindings(project_id)
+            await self._docs.remove_all_bindings(user_id, project_id)
         if self._automations:
-            await self._automations.delete_all_for_project(project_id)
+            await self._automations.delete_all_for_project(user_id, project_id)
         if self._skills:
-            await self._skills.set_project_skills(project_id, [])
-        await self._ds.delete(project_id)
+            await self._skills.set_project_skills(user_id, project_id, [])
+        await self._ds.delete(user_id, project_id)
 
     # ------------------------------------------------------------------
     # Kernel mirror — every valuz project must back a V5 kernel Project +
@@ -344,11 +352,12 @@ class ProjectService:
 
     async def list_files(
         self,
+        user_id: str,
         project_id: str,
         depth: int = 2,
         include_hidden: bool = False,
     ) -> list[dict[str, object]]:
-        row = await self._ds.get_by_id(project_id)
+        row = await self._ds.get_by_id(user_id, project_id)
         if not row:
             raise KeyError(project_id)
         # Projects walk the user-supplied root_path.

@@ -25,9 +25,8 @@ from valuz_agent.ports.llm_provider import (
 
 
 class _NoProviders:
-    async def get_by_id(self, _: str):  # type: ignore[no-untyped-def]
+    async def get_by_id(self, _user_id: str, _: str):  # type: ignore[no-untyped-def]
         return None
-
 
 
 class _UnusedSecrets:

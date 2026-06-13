@@ -284,7 +284,7 @@ class SessionOrchestrator:
         return bus
 
     async def attach_session_tap(
-        self, session_id: str, sink: EventSink, *, replay: bool = False
+        self, user_id: str, session_id: str, sink: EventSink, *, replay: bool = False
     ) -> None:
         """Register a passive multi-subscriber tap on a session's live stream.
 
@@ -295,7 +295,7 @@ class SessionOrchestrator:
         of the in-progress message so a mid-turn tap sees a coherent view.
         """
         bus = self._get_or_create_bus(session_id)
-        replay_events = await self._build_replay(session_id) if replay else []
+        replay_events = await self._build_replay(user_id, session_id) if replay else []
         await bus.add_tap(sink, replay=replay_events)
 
     async def detach_session_tap(self, session_id: str, sink: EventSink) -> None:
@@ -348,7 +348,7 @@ class SessionOrchestrator:
             return
         await bus.emit(event)
 
-    async def attach_session_sink(self, session_id: str, sink: EventSink) -> None:
+    async def attach_session_sink(self, user_id: str, session_id: str, sink: EventSink) -> None:
         """Subscribe ``sink`` to this session's live event stream.
 
         If a turn is currently in flight, replays the events of the
@@ -356,7 +356,7 @@ class SessionOrchestrator:
         view of the run-so-far. Subsequent live emits arrive in order.
         """
         bus = self._get_or_create_bus(session_id)
-        replay = await self._build_replay(session_id)
+        replay = await self._build_replay(user_id, session_id)
         await bus.attach(sink, replay=replay)
 
     async def detach_session_sink(self, session_id: str, sink: EventSink) -> None:
@@ -365,7 +365,7 @@ class SessionOrchestrator:
         if bus is not None:
             await bus.detach(sink)
 
-    async def _build_replay(self, session_id: str) -> list[Event]:
+    async def _build_replay(self, user_id: str, session_id: str) -> list[Event]:
         """Replay = events of any message still in ``running`` status.
 
         We don't replay finalized history — REST handles that via
@@ -380,7 +380,7 @@ class SessionOrchestrator:
         active_message = self._active_message.get(session_id)
         if active_message is None:
             return []
-        raw_events = await self._store.get_events_for_message(active_message.id)
+        raw_events = await self._store.get_events_for_message(user_id, active_message.id)
         message_id = active_message.id
         return [
             Event(
@@ -393,6 +393,7 @@ class SessionOrchestrator:
 
     async def run_turn(
         self,
+        user_id: str,
         session_id: str,
         user_message: UserMessage,
     ) -> Message:
@@ -414,7 +415,7 @@ class SessionOrchestrator:
         from src.adapters.persist_then_broadcast_sink import PersistThenBroadcastSink
         from src.adapters.delta_coalescing_sink import DeltaCoalescingSink
 
-        session, agent = await self._load_session(session_id)
+        session, agent = await self._load_session(user_id, session_id)
 
         # Slice 3 of session-modes (broadened in slice 6 simplification):
         # both Claude and Codex process ``/plan <text>`` / ``/goal <text>``
@@ -438,7 +439,7 @@ class SessionOrchestrator:
             started_at=now_ms(),
             status="running",
         )
-        await self._store.save_message(message)
+        await self._store.save_message(user_id, message)
         self._active_message[session_id] = message
 
         # Persist ``session.status = "running"`` so the DB row reflects
@@ -458,7 +459,7 @@ class SessionOrchestrator:
 
         bus = self._get_or_create_bus(session_id)
         bus_sink: EventSink = _MessageIdStampSink(bus, message.id)
-        db_sink = DatabaseEventSink(self._store, session_id, message.id)
+        db_sink = DatabaseEventSink(self._store, user_id, session_id, message.id)
         # Persist FIRST, then broadcast with the row id stamped into
         # ``data["seq"]`` — live frames of persisted events carry stable
         # storage coordinates so stream consumers can deduplicate the
@@ -521,11 +522,11 @@ class SessionOrchestrator:
             # (``status``, ``stop_reason``, ``runtime_session_id``,
             # ``todos``) keep their in-memory values as before.
             if observer.runtime_mode_change is None:
-                fresh = await self._store.load_session(session_id)
+                fresh = await self._store.load_session(user_id, session_id)
                 if fresh is not None and fresh.mode != session.mode:
                     session.mode = fresh.mode
             await self._store.save_session(session)
-            await self._store.save_message(message)
+            await self._store.save_message(user_id, message)
             await observer.emit(
                 Event(
                     type="session_update",
@@ -612,8 +613,8 @@ class SessionOrchestrator:
             except Exception:
                 logger.debug("Error closing runtime for session %s", session_id, exc_info=True)
 
-    async def _load_session(self, session_id: str) -> tuple[Any, AgentConfig]:
-        session = await self._store.load_session(session_id)
+    async def _load_session(self, user_id: str, session_id: str) -> tuple[Any, AgentConfig]:
+        session = await self._store.load_session(user_id, session_id)
         if session is None:
             raise SessionNotFoundError(session_id)
         # The embedded snapshot IS the agent for this session — the kernel
@@ -675,6 +676,7 @@ class SessionOrchestrator:
 
     async def submit_action(
         self,
+        user_id: str,
         session_id: str,
         pending_id: str,
         decision: Literal[
@@ -727,11 +729,11 @@ class SessionOrchestrator:
              when ``decision == "approve_for_session"`` so reconnects
              can replay the complete decision.
         """
-        session = await self._store.load_session(session_id)
+        session = await self._store.load_session(user_id, session_id)
         if session is None:
             raise SessionNotFoundError(session_id)
 
-        pending_event, resolved_event = await self._derive_pending(session_id, pending_id)
+        pending_event, resolved_event = await self._derive_pending(user_id, session_id, pending_id)
         if pending_event is None:
             raise PendingActionNotFoundError(pending_id)
 
@@ -846,7 +848,7 @@ class SessionOrchestrator:
         if committed_rule is not None:
             resolved_data["rule_id"] = committed_rule.rule_id
         resolved = Event(type="action_resolved", data=resolved_data)
-        await self._store.append_event(session_id, message_id, resolved)
+        await self._store.append_event(user_id, session_id, message_id, resolved)
         bus = self._get_or_create_bus(session_id)
         await bus.emit(
             Event(
@@ -873,7 +875,7 @@ class SessionOrchestrator:
         return self._session_approval_cache
 
     async def _derive_pending(
-        self, session_id: str, pending_id: str
+        self, user_id: str, session_id: str, pending_id: str
     ) -> tuple[Event | None, Event | None]:
         """Return ``(requires_action, action_resolved)`` for ``pending_id``.
 
@@ -884,7 +886,7 @@ class SessionOrchestrator:
         """
         pending: Event | None = None
         resolved: Event | None = None
-        events = await self._store.get_events(session_id, limit=1000, offset=0)
+        events = await self._store.get_events(user_id, session_id, limit=1000, offset=0)
         for ev in events:
             if ev.data.get("pending_id") != pending_id:
                 continue
@@ -904,9 +906,11 @@ class SessionOrchestrator:
         do better. Returns the number of synthetic resolutions emitted.
         """
         sealed = 0
-        sessions = await self._store.list_sessions(status="running", limit=500)
+        # Cross-owner startup sweep: ``user_id=None`` spans every owner; each
+        # session's follow-up reads/writes use its own ``session.user_id``.
+        sessions = await self._store.list_sessions(None, status="running", limit=500)
         for session in sessions:
-            events = await self._store.get_events(session.id, limit=1000, offset=0)
+            events = await self._store.get_events(session.user_id, session.id, limit=1000, offset=0)
             open_pendings: dict[str, str] = {}  # pending_id → message_id
             for ev in events:
                 pid = ev.data.get("pending_id")
@@ -920,6 +924,7 @@ class SessionOrchestrator:
                     open_pendings.pop(pid, None)
             for pid, msg_id in open_pendings.items():
                 await self._store.append_event(
+                    session.user_id,
                     session.id,
                     msg_id,
                     Event(
@@ -962,7 +967,8 @@ class SessionOrchestrator:
         Returns the number of sessions reset.
         """
         reset = 0
-        sessions = await self._store.list_sessions(status="running", limit=500)
+        # Cross-owner startup sweep (see scan_orphan_pendings).
+        sessions = await self._store.list_sessions(None, status="running", limit=500)
         for session in sessions:
             session.status = "idle"
             session.stop_reason = Error(
@@ -971,7 +977,7 @@ class SessionOrchestrator:
                 message="host process restarted while turn was in flight",
             )
             await self._store.save_session(session)
-            messages = await self._store.list_messages_for_session(session.id)
+            messages = await self._store.list_messages_for_session(session.user_id, session.id)
             now = now_ms()
             for m in messages:
                 if m.status != "running":
@@ -982,6 +988,6 @@ class SessionOrchestrator:
                     "message": "host process restarted while message was in flight",
                 }
                 m.ended_at = now
-                await self._store.save_message(m)
+                await self._store.save_message(session.user_id, m)
             reset += 1
         return reset

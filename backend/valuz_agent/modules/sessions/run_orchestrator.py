@@ -19,6 +19,7 @@ from typing import Any
 # resolve at call time.
 import valuz_agent.boot.kernel  # noqa: F401
 from valuz_agent.adapters import kernel_client
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.modules.tasks.actor_runner import run_session_to_idle
 
@@ -99,7 +100,7 @@ async def _finalize_session(session_id: str, content: str, final_status: str) ->
     can share it. Builds a fresh ``Session`` dataclass because the kernel's
     types are frozen.
     """
-    session = await kernel_client.get_session(session_id)
+    session = await kernel_client.get_session(require_current_user_id(), session_id)
     if session is None:
         return
 
@@ -113,6 +114,7 @@ async def _finalize_session(session_id: str, content: str, final_status: str) ->
     from app.schemas import FinalizeSessionRequest
 
     await kernel_client.finalize_session(
+        require_current_user_id(),
         session_id,
         FinalizeSessionRequest(status=final_status, metadata=meta),  # type: ignore[arg-type]
     )

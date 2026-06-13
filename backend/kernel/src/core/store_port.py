@@ -45,85 +45,98 @@ class StorePort(Protocol):
     """Persistence interface — Session, Message, Event storage."""
 
     # -- Session CRUD --
+    #
+    # Owner model (mirrors the host valuz_* tables): owner-scoped reads take the
+    # caller's ``user_id`` FIRST and filter on it; writes stamp the owner
+    # explicitly (``save_session`` from ``session.user_id``; ``save_message`` /
+    # ``append_event`` from their ``user_id`` arg). ``list_sessions`` accepts
+    # ``user_id=None`` for the two cross-owner startup sweeps (orphan scans) —
+    # every other caller passes a concrete owner.
 
     async def save_session(self, session: Session) -> None:
-        """Create or update a Session."""
+        """Create or update a Session (owner stamped from ``session.user_id``)."""
         ...
 
-    async def load_session(self, session_id: str) -> Session | None:
-        """Load a Session by ID, or None if not found."""
+    async def load_session(self, user_id: str, session_id: str) -> Session | None:
+        """Load one of ``user_id``'s Sessions by ID, or None if not found / not owned."""
         ...
 
     async def list_sessions(
         self,
+        user_id: str | None,
         *,
         status: str | None = None,
         ids: Sequence[str] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Session]:
-        """List sessions ordered by created_at descending.
+        """List sessions ordered by created_at descending, scoped to ``user_id``.
 
-        ``ids`` narrows to an explicit id set (bulk fetch for callers that
-        resolve membership elsewhere); combines with the other filters.
+        ``user_id=None`` lists across every owner — reserved for the kernel's
+        own startup sweeps (orphan reconciliation); callers serving a request
+        always pass a concrete owner. ``ids`` narrows to an explicit id set
+        (bulk fetch for callers that resolve membership elsewhere); combines
+        with the other filters.
         """
         ...
 
-    async def delete_session(self, session_id: str) -> bool:
-        """Delete a Session and its events. Returns True if found."""
+    async def delete_session(self, user_id: str, session_id: str) -> bool:
+        """Delete one of ``user_id``'s Sessions and its events. Returns True if found."""
         ...
 
     # -- Message CRUD --
 
-    async def save_message(self, message: Message) -> None:
-        """Create or update a Message (one run inside a Session)."""
+    async def save_message(self, user_id: str, message: Message) -> None:
+        """Create or update a Message (one run inside a Session), owner-stamped."""
         ...
 
-    async def load_message(self, message_id: str) -> Message | None:
-        """Load a Message by ID, or None if not found."""
+    async def load_message(self, user_id: str, message_id: str) -> Message | None:
+        """Load one of ``user_id``'s Messages by ID, or None if not found / not owned."""
         ...
 
     async def list_messages_for_session(
-        self, session_id: str, *, limit: int = 50, offset: int = 0
+        self, user_id: str, session_id: str, *, limit: int = 50, offset: int = 0
     ) -> list[Message]:
-        """List a session's messages ordered by started_at descending."""
+        """List a session's messages (owner-scoped) ordered by started_at descending."""
         ...
 
     # -- Event log --
 
-    async def append_event(self, session_id: str, message_id: str, event: Event) -> int | None:
-        """Append an event scoped to (session, message).
+    async def append_event(
+        self, user_id: str, session_id: str, message_id: str, event: Event
+    ) -> int | None:
+        """Append an owner-stamped event scoped to (session, message).
 
         Returns the persisted row id (the client paging cursor ``seq``)
         when the backend can report it, else ``None``."""
         ...
 
     async def get_events(
-        self, session_id: str, *, limit: int = 200, offset: int = 0
+        self, user_id: str, session_id: str, *, limit: int = 200, offset: int = 0
     ) -> list[Event]:
-        """Get events for a Session, ordered by timestamp."""
+        """Get a session's events (owner-scoped), ordered by timestamp."""
         ...
 
     async def get_events_for_message(
-        self, message_id: str, *, limit: int = 200, offset: int = 0
+        self, user_id: str, message_id: str, *, limit: int = 200, offset: int = 0
     ) -> list[Event]:
-        """Get events for a Message, ordered by timestamp."""
+        """Get a message's events (owner-scoped), ordered by timestamp."""
         ...
 
     async def get_events_after(
-        self, session_id: str, *, after_seq: int = 0, limit: int = 200
+        self, user_id: str, session_id: str, *, after_seq: int = 0, limit: int = 200
     ) -> list[StoredEvent]:
-        """Get a session's events with row id strictly greater than
-        ``after_seq``, ordered by row id ascending.
+        """Get a session's events (owner-scoped) with row id strictly greater
+        than ``after_seq``, ordered by row id ascending.
 
         The row id doubles as the client paging cursor (``seq``)."""
         ...
 
     async def get_events_window(
-        self, session_id: str, *, before_seq: int | None = None, turn_limit: int = 20
+        self, user_id: str, session_id: str, *, before_seq: int | None = None, turn_limit: int = 20
     ) -> tuple[list[StoredEvent], bool]:
-        """Return a turn-aligned window of events ending strictly before
-        ``before_seq`` (or session end when ``None``).
+        """Return a turn-aligned window of one owner's session events ending
+        strictly before ``before_seq`` (or session end when ``None``).
 
         A "turn" starts at a ``user_message`` event. The window covers the
         most recent ``turn_limit`` turns in full, ordered ascending. The
@@ -133,7 +146,8 @@ class StorePort(Protocol):
 
     # -- Aggregates --
 
-    async def usage_rollup(self, start_ms: int, end_ms: int) -> list[UsageRollupRow]:
-        """Token/turn usage per (UTC day, model) for completed messages whose
-        ``started_at`` falls in the half-open ``[start_ms, end_ms)`` window."""
+    async def usage_rollup(self, user_id: str, start_ms: int, end_ms: int) -> list[UsageRollupRow]:
+        """Token/turn usage per (UTC day, model) for ``user_id``'s completed
+        messages whose ``started_at`` falls in the half-open
+        ``[start_ms, end_ms)`` window."""
         ...

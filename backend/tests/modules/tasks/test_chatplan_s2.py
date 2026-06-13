@@ -65,6 +65,7 @@ def _make_draft(db_factory, tmp_path, *, task_id="t1", originator="chat-session-
     db = db_factory()
     try:
         row = TaskRow(
+            user_id="local-test-owner",
             id=task_id,
             project_id="w1",
             file_path=str(tmp_path / f"{task_id}.md"),

@@ -68,13 +68,16 @@ async def _credential_gap(session: Any, agent_slug: str, *, db: Any | None = Non
     # loading the agent and checking the pinned provider's auth_type.
     if db is not None:
         try:
+            from valuz_agent.infra.auth_context import require_current_user_id
             from valuz_agent.modules.providers.datastore import ProviderDatastore
 
             agent = getattr(session, "agent_config", None)
             if agent is not None:
                 provider_id = (getattr(agent, "metadata", None) or {}).get("provider_id")
                 if provider_id:
-                    provider = await ProviderDatastore(db).get_by_id(provider_id)
+                    provider = await ProviderDatastore(db).get_by_id(
+                        require_current_user_id(), provider_id
+                    )
                     if provider is not None and provider.auth_type == "oauth":
                         # CLI-managed credentials — model_provider=None is
                         # the expected resolver output, not a gap.

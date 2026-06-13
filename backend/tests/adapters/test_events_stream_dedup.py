@@ -93,16 +93,19 @@ async def test_stream_delivers_each_event_exactly_once_across_the_boundary(kerne
     from src.core.events import Event  # type: ignore[import-not-found]
     from src.core.types import Session  # type: ignore[import-not-found]
 
+    owner = "local-test-owner"
     session_id = str(uuid.uuid4())
     await store.save_session(
-        Session(id=session_id, agent_config=AgentConfig(id="a", name="a"), cwd="/tmp/x")
+        Session(
+            id=session_id, user_id=owner, agent_config=AgentConfig(id="a", name="a"), cwd="/tmp/x"
+        )
     )
     # Three persisted events (seq 1..3 in a fresh DB). No FK constraints —
     # the anchor message id doesn't need a row.
     persisted_seqs = []
     for i in range(3):
         seq = await store.append_event(
-            session_id, "m-test", Event(type="tool_use", data={"name": f"t{i}"})
+            owner, session_id, "m-test", Event(type="tool_use", data={"name": f"t{i}"})
         )
         persisted_seqs.append(seq)
     last_seq = persisted_seqs[-1]
@@ -116,6 +119,7 @@ async def test_stream_delivers_each_event_exactly_once_across_the_boundary(kerne
         _StubRequest(),  # type: ignore[arg-type]
         store,
         orchestrator,
+        owner,
         after_seq=0,
     )
 

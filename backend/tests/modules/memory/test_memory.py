@@ -13,6 +13,7 @@ from valuz_agent.modules.memory import MemoryScope, MemoryService
 from valuz_agent.modules.memory.injection import InjectionAssembler
 from valuz_agent.modules.memory.service import MemoryError
 
+
 def _async_const(value):  # noqa: ANN001, ANN202 — async stub factory for monkeypatch
     async def _stub(*_a, **_k):  # noqa: ANN002, ANN003, ANN202
         return value
@@ -25,7 +26,6 @@ def _coro(value):  # noqa: ANN001, ANN202 — awaitable wrapper for lambda stubs
         return value
 
     return _inner()
-
 
 
 @pytest.fixture

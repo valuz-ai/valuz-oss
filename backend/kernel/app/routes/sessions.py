@@ -8,12 +8,30 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sse_starlette.sse import EventSourceResponse
-
 from app._validators import validate_mcp_servers, validate_registered_tools, validate_skills
-from app.dependencies import get_orchestrator, get_store
+from app.dependencies import get_orchestrator, get_owner_id, get_store
 from app.event_stream import QueueEventSink
+from app.schemas import (
+    AppendEventData,
+    AppendEventResponse,
+    CreateSessionRequest,
+    DataResponse,
+    EventListResponse,
+    EventPayload,
+    EventWindowData,
+    EventWindowResponse,
+    FinalizeSessionRequest,
+    ModelProviderInputSchema,
+    ModelProviderUpdateSchema,
+    ModelSettingsSchema,
+    SessionListResponse,
+    SessionResponse,
+    SetSessionModeRequest,
+    SubmitActionData,
+    SubmitActionRequest,
+    SubmitActionResponse,
+    UpdateSessionRequest,
+)
 from app.serializers import (
     agent_config_from_schema as _agent_config_from_schema,
 )
@@ -29,27 +47,7 @@ from app.serializers import (
 from app.serializers import (
     stored_event_to_data as _stored_event_to_data,
 )
-from app.schemas import (
-    AppendEventData,
-    AppendEventResponse,
-    CreateSessionRequest,
-    EventPayload,
-    FinalizeSessionRequest,
-    DataResponse,
-    EventListResponse,
-    EventWindowData,
-    EventWindowResponse,
-    ModelProviderInputSchema,
-    ModelProviderUpdateSchema,
-    ModelSettingsSchema,
-    SessionListResponse,
-    SessionResponse,
-    SetSessionModeRequest,
-    SubmitActionData,
-    SubmitActionRequest,
-    SubmitActionResponse,
-    UpdateSessionRequest,
-)
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from src.core import (
     Event,
     ModelProvider,
@@ -68,10 +66,12 @@ from src.core.orchestrator import (
     SessionOrchestrator,
 )
 from src.runtimes.factory import validate_api_protocol
+from sse_starlette.sse import EventSourceResponse
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 
 StoreDep = Annotated[StorePort, Depends(get_store)]
+OwnerDep = Annotated[str, Depends(get_owner_id)]
 
 # Idle keep-alive cadence for the events SSE stream.
 STREAM_HEARTBEAT_SECONDS = 15.0
@@ -82,6 +82,7 @@ OrchestratorDep = Annotated[SessionOrchestrator, Depends(get_orchestrator)]
 async def create_session(
     body: CreateSessionRequest,
     store: StoreDep,
+    owner: OwnerDep,
 ) -> dict[str, Any]:
     if not body.cwd.strip():
         raise HTTPException(status_code=400, detail="cwd is required and must be non-empty.")
@@ -139,6 +140,7 @@ async def create_session(
 
     session = Session(
         id=body.id or str(uuid.uuid4()),
+        user_id=owner,
         agent_config=agent,
         runtime_provider=body.runtime_provider,
         cwd=body.cwd,
@@ -210,6 +212,7 @@ def _model_settings_from_schema(s: ModelSettingsSchema | None) -> ModelSettings 
 @router.get("", response_model=SessionListResponse)
 async def list_sessions(
     store: StoreDep,
+    owner: OwnerDep,
     status: Annotated[str | None, Query()] = None,
     ids: Annotated[str | None, Query(description="comma-separated session id filter")] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
@@ -217,6 +220,7 @@ async def list_sessions(
 ) -> dict[str, Any]:
     id_list = [i for i in (ids.split(",") if ids else []) if i] if ids is not None else None
     sessions = await store.list_sessions(
+        owner,
         status=status,
         ids=id_list,
         limit=limit,
@@ -229,8 +233,9 @@ async def list_sessions(
 async def get_session(
     session_id: str,
     store: StoreDep,
+    owner: OwnerDep,
 ) -> dict[str, Any]:
-    session = await store.load_session(session_id)
+    session = await store.load_session(owner, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"data": _session_to_data(session)}
@@ -241,8 +246,9 @@ async def update_session(
     session_id: str,
     body: UpdateSessionRequest,
     store: StoreDep,
+    owner: OwnerDep,
 ) -> dict[str, Any]:
-    session = await store.load_session(session_id)
+    session = await store.load_session(owner, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     if body.instructions is not None:
@@ -287,6 +293,7 @@ async def set_session_mode(
     body: SetSessionModeRequest,
     store: StoreDep,
     orchestrator: OrchestratorDep,
+    owner: OwnerDep,
 ) -> dict[str, Any]:
     """Set the session's runtime mode (`default` / `plan` / `goal`).
 
@@ -308,7 +315,7 @@ async def set_session_mode(
     restore on Claude plan) runs in the same reconcile pass as entry
     of the new mode. Same-mode re-set is idempotent (no event).
     """
-    session = await store.load_session(session_id)
+    session = await store.load_session(owner, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -336,8 +343,9 @@ async def set_session_mode(
 async def delete_session(
     session_id: str,
     store: StoreDep,
+    owner: OwnerDep,
 ) -> dict[str, Any]:
-    deleted = await store.delete_session(session_id)
+    deleted = await store.delete_session(owner, session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"data": None}
@@ -349,6 +357,7 @@ async def append_session_event(
     body: EventPayload,
     store: StoreDep,
     orchestrator: Annotated[Any, Depends(get_orchestrator)],
+    owner: OwnerDep,
     live_only: Annotated[bool, Query()] = False,
 ) -> dict[str, Any]:
     """Append an out-of-band event onto the session's latest message.
@@ -361,7 +370,7 @@ async def append_session_event(
     onto the session's live bus instead (taps + attached client), for
     synthetic notifications like the interrupt-fallback ``session_error``.
     """
-    session = await store.load_session(session_id)
+    session = await store.load_session(owner, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     if live_only:
@@ -371,10 +380,11 @@ async def append_session_event(
             create_bus=True,
         )
         return {"data": AppendEventData(persisted=False)}
-    messages = await store.list_messages_for_session(session_id, limit=1)
+    messages = await store.list_messages_for_session(owner, session_id, limit=1)
     if not messages:
         return {"data": AppendEventData(persisted=False)}
     await store.append_event(
+        owner,
         session_id,
         messages[0].id,
         Event(type=body.type, data=body.data),  # type: ignore[arg-type]
@@ -387,6 +397,7 @@ async def finalize_session(
     session_id: str,
     body: FinalizeSessionRequest,
     store: StoreDep,
+    owner: OwnerDep,
 ) -> dict[str, Any]:
     """Flip a session to ``idle``/``terminated`` from outside a turn.
 
@@ -395,7 +406,7 @@ async def finalize_session(
     interrupt fallback parks a session as idle. Appends ``error_event``
     after the flip when provided. Idempotent on the status flip.
     """
-    session = await store.load_session(session_id)
+    session = await store.load_session(owner, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -422,9 +433,10 @@ async def finalize_session(
         await store.save_session(session)
 
     if body.error_event is not None:
-        messages = await store.list_messages_for_session(session_id, limit=1)
+        messages = await store.list_messages_for_session(owner, session_id, limit=1)
         if messages:
             await store.append_event(
+                owner,
                 session_id,
                 messages[0].id,
                 Event(type=body.error_event.type, data=body.error_event.data),  # type: ignore[arg-type]
@@ -436,14 +448,15 @@ async def finalize_session(
 async def get_session_events(
     session_id: str,
     store: StoreDep,
+    owner: OwnerDep,
     limit: Annotated[int, Query(ge=1, le=1000)] = 200,
     offset: Annotated[int, Query(ge=0)] = 0,
     after_seq: Annotated[int | None, Query(ge=0)] = None,
 ) -> dict[str, Any]:
     if after_seq is not None:
-        stored = await store.get_events_after(session_id, after_seq=after_seq, limit=limit)
+        stored = await store.get_events_after(owner, session_id, after_seq=after_seq, limit=limit)
         return {"data": [_stored_event_to_data(e) for e in stored]}
-    events = await store.get_events(session_id, limit=limit, offset=offset)
+    events = await store.get_events(owner, session_id, limit=limit, offset=offset)
     return {"data": [_event_to_data(e) for e in events]}
 
 
@@ -451,13 +464,14 @@ async def get_session_events(
 async def get_session_events_window(
     session_id: str,
     store: StoreDep,
+    owner: OwnerDep,
     before_seq: Annotated[int | None, Query(ge=0)] = None,
     turn_limit: Annotated[int, Query(ge=1, le=200)] = 20,
 ) -> dict[str, Any]:
     """Turn-aligned history page: the most recent ``turn_limit`` turns
     strictly before ``before_seq`` (or session end), in full, ascending."""
     items, has_more = await store.get_events_window(
-        session_id, before_seq=before_seq, turn_limit=turn_limit
+        owner, session_id, before_seq=before_seq, turn_limit=turn_limit
     )
     return {
         "data": EventWindowData(
@@ -473,6 +487,7 @@ async def stream_session_events(
     request: Request,
     store: StoreDep,
     orchestrator: Annotated[Any, Depends(get_orchestrator)],
+    owner: OwnerDep,
     after_seq: Annotated[int | None, Query(ge=0)] = None,
 ) -> EventSourceResponse:
     """Live event stream for one session, as Server-Sent Events.
@@ -497,7 +512,7 @@ async def stream_session_events(
         # ``PersistThenBroadcastSink``), so anything at or below the
         # backfill cursor is skipped. Live-only delta frames have no
         # ``seq`` and always flow.
-        await orchestrator.attach_session_tap(session_id, sink)
+        await orchestrator.attach_session_tap(owner, session_id, sink)
         try:
             cursor = after_seq
             if cursor is not None:
@@ -507,7 +522,7 @@ async def stream_session_events(
                 # backfilled seq (not the caller's ``after_seq``).
                 while True:
                     page = await store.get_events_after(
-                        session_id, after_seq=cursor, limit=500
+                        owner, session_id, after_seq=cursor, limit=500
                     )
                     if not page:
                         break
@@ -544,6 +559,7 @@ async def submit_session_action(
     session_id: str,
     body: SubmitActionRequest,
     orchestrator: OrchestratorDep,
+    owner: OwnerDep,
 ) -> dict[str, Any]:
     """Resolve a pending ``requires_action`` event with a decision.
 
@@ -555,6 +571,7 @@ async def submit_session_action(
     """
     try:
         result = await orchestrator.submit_action(
+            owner,
             session_id,
             pending_id=body.pending_id,
             decision=body.decision,

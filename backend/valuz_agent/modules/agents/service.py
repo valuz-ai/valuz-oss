@@ -210,16 +210,16 @@ class AgentService:
     # Agent reads (MVP agents are read-only)
     # ------------------------------------------------------------------
 
-    async def list_agents(self, source: str | None = None) -> list[AgentRow]:
-        return await self._agents.list_agents(source=source)
+    async def list_agents(self, user_id: str, source: str | None = None) -> list[AgentRow]:
+        return await self._agents.list_agents(user_id, source=source)
 
-    async def get_agent(self, slug: str) -> AgentRow:
-        row = await self._agents.get_agent(slug)
+    async def get_agent(self, user_id: str, slug: str) -> AgentRow:
+        row = await self._agents.get_agent(user_id, slug)
         if row is None:
             raise AgentNotFoundError(slug)
         return row
 
-    async def create_agent(self, payload: dict[str, Any]) -> AgentRow:
+    async def create_agent(self, user_id: str, payload: dict[str, Any]) -> AgentRow:
         """Create a user-defined agent (source='custom').
 
         ``slug`` is backend-derived from ``name`` when the caller omits it
@@ -231,9 +231,9 @@ class AgentService:
 
         slug = (payload.get("slug") or "").strip()
         if not slug:
-            existing = {a.slug for a in await self._agents.list_agents()}
+            existing = {a.slug for a in await self._agents.list_agents(user_id)}
             slug = ensure_unique_slug(derive_slug(payload["name"]), existing)
-        if await self._agents.get_agent(slug) is not None:
+        if await self._agents.get_agent(user_id, slug) is not None:
             raise MemberAlreadyExistsError(f"agent '{slug}' already exists")
         row = AgentRow(
             slug=slug,
@@ -251,15 +251,15 @@ class AgentService:
         )
         # Live-reference: sessions snapshot the row at creation time, so a
         # fresh agent needs no extra materialization step.
-        return await self._agents.create(row)
+        return await self._agents.create(user_id, row)
 
-    async def update_agent(self, slug: str, patch: dict[str, Any]) -> AgentRow:
+    async def update_agent(self, user_id: str, slug: str, patch: dict[str, Any]) -> AgentRow:
         """Patch an agent's editable fields. Official agents are editable too —
         the `readonly` flag is preserved on the row for provenance but no longer
         gates updates. Deletion is still restricted by `deletable` in
         `delete_agent` below."""
         # Fetch existing row to surface 404 before mutation.
-        existing = await self._agents.get_agent(slug)
+        existing = await self._agents.get_agent(user_id, slug)
         if existing is None:
             raise AgentNotFoundError(slug)
 
@@ -284,7 +284,7 @@ class AgentService:
         # avatar is nullable and clearable — None / "" unsets the avatar.
         if "avatar" in patch:
             fields["avatar"] = patch["avatar"] or None
-        row = await self._agents.update_fields(slug, fields)
+        row = await self._agents.update_fields(user_id, slug, fields)
         if row is None:
             raise AgentNotFoundError(slug)
         # Live-reference semantics need no kernel cascade anymore: sessions
@@ -292,11 +292,11 @@ class AgentService:
         # project the agent is deployed to) picks the edit up automatically.
         return row
 
-    async def delete_agent(self, slug: str) -> None:
+    async def delete_agent(self, user_id: str, slug: str) -> None:
         # Official and custom agents are equally deletable now — the only block
         # is the live派驻 guard below. seed_official_agents is insert-if-absent,
         # so deleted defaults simply won't come back unless the user wipes DB.
-        existing = await self._agents.get_agent(slug)
+        existing = await self._agents.get_agent(user_id, slug)
         if existing is None:
             raise AgentNotFoundError(slug)
         # Protected base agents (default-assistant) opt out of deletion.
@@ -304,18 +304,18 @@ class AgentService:
             raise AgentNotDeletableError(slug)
         # v2 派驻 guard: block deleting an agent still referenced by any project
         # member (would orphan a task holder). Caller must解除派驻 first.
-        deployments = await self._members.list_by_source_agent_slug(existing.slug)
+        deployments = await self._members.list_by_source_agent_slug(user_id, existing.slug)
         if deployments:
             if deployments:
                 raise AgentStillDeployedError(slug, len(deployments))
-        if not await self._agents.delete(slug):
+        if not await self._agents.delete(user_id, slug):
             raise AgentNotFoundError(slug)
 
     # ------------------------------------------------------------------
     # Member list
     # ------------------------------------------------------------------
 
-    async def list_deployments(self, slug: str) -> list[dict[str, Any]]:
+    async def list_deployments(self, user_id: str, slug: str) -> list[dict[str, Any]]:
         """List every派驻 of an agent — the projects it's deployed into.
 
         Powers the agent detail page's「派驻于 N 个项目」panel + the delete-guard
@@ -323,24 +323,24 @@ class AgentService:
         the frontend resolves project display names from its own store. Empty
         when the agent has never been deployed (no shared kernel config yet).
         """
-        row = await self.get_agent(slug)
-        members = await self._members.list_by_source_agent_slug(row.slug)
+        row = await self.get_agent(user_id, slug)
+        members = await self._members.list_by_source_agent_slug(user_id, row.slug)
         return [{"project_id": m.project_id, "agent_slug": m.agent_slug} for m in members]
 
-    async def list_members(self, project_id: str) -> list[dict[str, Any]]:
+    async def list_members(self, user_id: str, project_id: str) -> list[dict[str, Any]]:
         """Return members with their resolved kernel agent summary.
 
         Each item: {member: ProjectMemberRow, agent: AgentConfig | None}
         Kernel load failures are surfaced as agent=None so the list still
         returns even when a kernel row is missing.
         """
-        members = await self._members.list_by_project(project_id)
+        members = await self._members.list_by_project(user_id, project_id)
         result: list[dict[str, Any]] = []
         for m in members:
             try:
                 agent = None
                 if m.source_agent_slug:
-                    src_row = await self._agents.get_agent(m.source_agent_slug)
+                    src_row = await self._agents.get_agent(user_id, m.source_agent_slug)
                     if src_row is not None:
                         agent = await self.build_agent_config(src_row)
             except Exception:
@@ -359,6 +359,7 @@ class AgentService:
 
     async def deploy_agent(
         self,
+        user_id: str,
         project_id: str,
         source_agent_slug: str,
         agent_slug: str | None = None,
@@ -381,17 +382,17 @@ class AgentService:
         """
         from valuz_agent.modules.agents.slug import derive_slug, ensure_unique_slug
 
-        source_agent = await self.get_agent(source_agent_slug)
+        source_agent = await self.get_agent(user_id, source_agent_slug)
 
         # Project-local handle: derive from the source agent's display name,
         # unique within THIS project (CJK-preserving). The handle is a
         # per-project path component; the underlying agent is shared.
         agent_slug = (agent_slug or "").strip()
         if not agent_slug:
-            taken = {m.agent_slug for m in await self._members.list_by_project(project_id)}
+            taken = {m.agent_slug for m in await self._members.list_by_project(user_id, project_id)}
             agent_slug = ensure_unique_slug(derive_slug(source_agent.name), taken)
 
-        if await self._members.get(project_id, agent_slug) is not None:
+        if await self._members.get(user_id, project_id, agent_slug) is not None:
             raise MemberAlreadyExistsError(
                 f"agent '{agent_slug}' already exists in project '{project_id}'"
             )
@@ -400,7 +401,7 @@ class AgentService:
         # the same agent twice into one project is meaningless). Keyed on the
         # source library slug. Skipped for the automation runner (``dedupe``).
         if dedupe:
-            existing_members = await self._members.list_by_project(project_id)
+            existing_members = await self._members.list_by_project(user_id, project_id)
             if any(m.source_agent_slug == source_agent.slug for m in existing_members):
                 raise MemberAlreadyExistsError(
                     f"agent '{source_agent_slug}' is already deployed to project '{project_id}'"
@@ -413,7 +414,7 @@ class AgentService:
             # the source library row at creation time.
             source_agent_slug=source_agent.slug,
         )
-        await self._members.create(member)
+        await self._members.create(user_id, member)
 
         agent = await self.build_agent_config(source_agent)
         return {"member": member, "agent": agent}
@@ -424,6 +425,7 @@ class AgentService:
 
     async def create_blank_agent(
         self,
+        user_id: str,
         project_id: str,
         agent_slug: str | None,
         name: str,
@@ -446,6 +448,7 @@ class AgentService:
         """
         connector_types = [b["type"] for b in (connector_bindings or []) if b.get("type")]
         row = await self.create_agent(
+            user_id,
             {
                 "name": name,
                 "description": description,
@@ -459,6 +462,7 @@ class AgentService:
             }
         )
         return await self.deploy_agent(
+            user_id,
             project_id=project_id,
             source_agent_slug=row.slug,
             agent_slug=agent_slug or None,
@@ -472,15 +476,15 @@ class AgentService:
     # Delete member
     # ------------------------------------------------------------------
 
-    async def delete_member(self, project_id: str, agent_slug: str) -> None:
+    async def delete_member(self, user_id: str, project_id: str, agent_slug: str) -> None:
         """解除派驻: delete ONLY the membership row.
 
         v2 live-reference: the kernel ``AgentConfig`` is SHARED across projects,
         so undeploying must NOT delete it (other projects may still派驻 it). The
         agent itself lives on in the library;真删 happens via ``delete_agent``.
         """
-        member = await self._members.get(project_id, agent_slug)
+        member = await self._members.get(user_id, project_id, agent_slug)
         if member is None:
             raise MemberNotFoundError(agent_slug)
 
-        await self._members.delete(project_id, agent_slug)
+        await self._members.delete(user_id, project_id, agent_slug)

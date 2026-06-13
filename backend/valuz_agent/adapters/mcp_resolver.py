@@ -65,7 +65,9 @@ async def _resolve_connector_slug(
 ) -> list[McpServerConfig] | None:
     if connectors is None:
         return None
-    row = await connectors.get_by_slug(slug)
+    from valuz_agent.infra.auth_context import require_current_user_id
+
+    row = await connectors.get_by_slug(require_current_user_id(), slug)
     if row is None or not row.enabled:
         return None
 

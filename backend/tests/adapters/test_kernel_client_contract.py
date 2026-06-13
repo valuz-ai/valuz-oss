@@ -19,6 +19,9 @@ EXPECTED_ROUTES: dict[str, tuple[str, str] | None] = {
     "create_session": ("POST", "/api/v1/sessions"),
     "get_session": ("GET", "/api/v1/sessions/{session_id}"),
     "list_sessions": ("GET", "/api/v1/sessions"),
+    # Cross-owner sweep — no 1:1 route (the kernel HTTP API is owner-scoped);
+    # in-process hits the store directly, HTTP transport rejects it.
+    "list_all_sessions": None,
     "update_session": ("PATCH", "/api/v1/sessions/{session_id}"),
     "delete_session": ("DELETE", "/api/v1/sessions/{session_id}"),
     "set_mode": ("POST", "/api/v1/sessions/{session_id}/mode"),

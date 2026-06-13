@@ -20,9 +20,10 @@ from __future__ import annotations
 import logging
 from typing import Literal, TypedDict, cast
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from valuz_agent.api.deps import require_current_user_id
 from valuz_agent.generated.i18n_keys import I18nKey
 from valuz_agent.i18n import t
 from valuz_agent.modules.agents.seed import VALUZ_HELPER_SLUG
@@ -152,7 +153,9 @@ async def _resolve_deploy_target(db) -> tuple[str, str, str]:  # type: ignore[no
     # Fallback to the first enabled provider. Order is by created_at so we
     # pick the user's earliest deliberate choice, not whatever the seeder
     # happened to insert last.
-    rows = await ProviderDatastore(db).list_providers()
+    from valuz_agent.infra.auth_context import require_current_user_id as _require_uid
+
+    rows = await ProviderDatastore(db).list_providers(_require_uid())
     enabled = [r for r in rows if r.enabled]
     if not enabled:
         raise HTTPException(
@@ -204,7 +207,7 @@ _VALUZ_HELPER_SKILL = "valuz-handbook"
 _VALUZ_HELPER_AVATAR = "bot"
 
 
-async def _ensure_valuz_helper(db) -> str:  # type: ignore[no-untyped-def]
+async def _ensure_valuz_helper(user_id: str, db) -> str:  # type: ignore[no-untyped-def]
     """Idempotently create the Valuz Helper in the user's agent library.
 
     Returns its slug. Reuses the existing one on re-run (no model resolution
@@ -218,13 +221,14 @@ async def _ensure_valuz_helper(db) -> str:  # type: ignore[no-untyped-def]
     )
     agent_svc = AgentService(db=db, connector_service=connector_svc)
 
-    for existing in await agent_svc.list_agents():
+    for existing in await agent_svc.list_agents(user_id):
         if existing.slug == _VALUZ_HELPER_SLUG:
             return _VALUZ_HELPER_SLUG
 
     runtime, provider_id, model = await _resolve_deploy_target(db)
     effort = await get_default_effort(db)
     await agent_svc.create_agent(
+        user_id,
         {
             "slug": _VALUZ_HELPER_SLUG,
             "name": t("onboarding.valuzHelper.name"),
@@ -268,6 +272,7 @@ class AssistantResponse(BaseModel):
 @router.post("/example-project", response_model=ExampleProjectResponse)
 async def create_example_project(
     body: ExampleProjectRequest,
+    user_id: str = Depends(require_current_user_id),
 ) -> ExampleProjectResponse:
     """Create (or reuse) the onboarding example project and its team's agents.
 
@@ -300,6 +305,7 @@ async def create_example_project(
         created_new = False
         try:
             project = await project_svc.create_project(
+                user_id,
                 name=project_name,
                 root_path=root_path_str,
             )
@@ -313,7 +319,7 @@ async def create_example_project(
         except ValueError as exc:
             msg = str(exc)
             if "already bound" in msg:
-                existing = await ProjectDatastore(db).get_by_root_path(root_path_str)
+                existing = await ProjectDatastore(db).get_by_root_path(user_id, root_path_str)
                 if existing is None:
                     raise HTTPException(
                         status_code=500,
@@ -321,8 +327,7 @@ async def create_example_project(
                     ) from exc
                 project_id = existing.id
                 logger.info(
-                    "onboarding: reusing existing example project %s "
-                    "(skipping agent creation)",
+                    "onboarding: reusing existing example project %s (skipping agent creation)",
                     project_id,
                 )
             else:
@@ -344,9 +349,7 @@ async def create_example_project(
             #   3. 422 if no provider is configured at all (the frontend
             #      TeamStep guard banner catches this first; this is the
             #      authoritative fallback when the guard is bypassed)
-            default_runtime, default_provider_id, default_model = (
-                await _resolve_deploy_target(db)
-            )
+            default_runtime, default_provider_id, default_model = await _resolve_deploy_target(db)
             logger.info(
                 "onboarding: deploying team %r with runtime=%r model=%r provider=%r",
                 body.team_id,
@@ -357,6 +360,7 @@ async def create_example_project(
             for role in _get_team_roster(body.team_id):
                 try:
                     await agent_svc.create_blank_agent(
+                        user_id,
                         project_id=project_id,
                         agent_slug=None,
                         name=role["name"],
@@ -384,7 +388,7 @@ async def create_example_project(
         # Always ensure the Valuz Helper exists in the library so the
         # no-project quick chat has a ready default, even when the user
         # picked a project team.
-        await _ensure_valuz_helper(db)
+        await _ensure_valuz_helper(user_id, db)
 
     return ExampleProjectResponse(
         project_id=project_id,
@@ -393,12 +397,14 @@ async def create_example_project(
 
 
 @router.post("/assistant", response_model=AssistantResponse)
-async def create_assistant() -> AssistantResponse:
+async def create_assistant(
+    user_id: str = Depends(require_current_user_id),
+) -> AssistantResponse:
     """Create (or reuse) only the Valuz Helper in the user's library.
 
     Backs TeamStep's "no team for now" choice — no project, just a ready-to-chat
     general assistant for the quick-chat surface. Idempotent.
     """
     async with async_unit_of_work() as db:
-        slug = await _ensure_valuz_helper(db)
+        slug = await _ensure_valuz_helper(user_id, db)
     return AssistantResponse(agent_slug=slug)
