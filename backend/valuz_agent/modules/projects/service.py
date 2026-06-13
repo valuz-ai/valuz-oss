@@ -291,7 +291,9 @@ class ProjectService:
             await self._docs.count_bindings(user_id, project_id) if self._docs else 0
         )
         schedule_count = (
-            await self._automations.count_by_project(project_id) if self._automations else 0
+            await self._automations.count_by_project(user_id, project_id)
+            if self._automations
+            else 0
         )
         skill_config_count = (
             len(await self._skills.list_project_skills(user_id, project_id)) if self._skills else 0
@@ -321,7 +323,7 @@ class ProjectService:
         if self._docs:
             await self._docs.remove_all_bindings(user_id, project_id)
         if self._automations:
-            await self._automations.delete_all_for_project(project_id)
+            await self._automations.delete_all_for_project(user_id, project_id)
         if self._skills:
             await self._skills.set_project_skills(user_id, project_id, [])
         await self._ds.delete(user_id, project_id)

@@ -2,9 +2,14 @@
 
 Async SQLAlchemy 2.0 — same pattern as every other host datastore (see
 ``ADR-020``). Method shape mirrors the legacy ``ScheduleDatastore`` so the
-service layer ports across without method-name churn. Names use
-``automation`` / ``run`` instead of ``task`` / ``run`` to match the new
-domain language.
+service layer ports across without method-name churn.
+
+Owner model: user-facing reads + per-automation operations take the caller's
+``user_id`` first and filter on it; writes stamp the owner explicitly. The
+**background-scheduler sweeps** that legitimately process every owner's rows —
+``find_due_automations`` (tick), ``list_enabled`` (failure monitor),
+``list_stranded_runs`` (startup reaper) — deliberately stay cross-owner; their
+callers thread the owner from each returned row's ``user_id``.
 """
 
 from __future__ import annotations
@@ -25,17 +30,30 @@ class AutomationDatastore:
 
     # ── Automation rows ───────────────────────────────────────────────
 
-    async def list_automations(self, project_id: str | None = None) -> list[AutomationRow]:
-        stmt = select(AutomationRow)
+    async def list_automations(
+        self, user_id: str, project_id: str | None = None
+    ) -> list[AutomationRow]:
+        stmt = select(AutomationRow).where(AutomationRow.user_id == user_id)
         if project_id:
-            stmt = stmt.filter_by(project_id=project_id)
+            stmt = stmt.where(AutomationRow.project_id == project_id)
         stmt = stmt.order_by(AutomationRow.created_at)
         return list((await self._db.execute(stmt)).scalars().all())
 
-    async def get_automation(self, automation_id: str) -> AutomationRow | None:
-        return await self._db.get(AutomationRow, automation_id)
+    async def get_automation(self, user_id: str, automation_id: str) -> AutomationRow | None:
+        return (
+            (
+                await self._db.execute(
+                    select(AutomationRow).where(
+                        AutomationRow.id == automation_id, AutomationRow.user_id == user_id
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
 
-    async def create_automation(self, row: AutomationRow) -> AutomationRow:
+    async def create_automation(self, user_id: str, row: AutomationRow) -> AutomationRow:
+        row.user_id = user_id
         self._db.add(row)
         await async_commit_with_retry(self._db, where="AutomationDatastore.create_automation")
         return row
@@ -45,43 +63,59 @@ class AutomationDatastore:
         await async_commit_with_retry(self._db, where="AutomationDatastore.update_automation")
         return row
 
-    async def delete_automation(self, automation_id: str) -> None:
+    async def delete_automation(self, user_id: str, automation_id: str) -> None:
         await self._db.execute(
-            delete(AutomationRunRow).where(AutomationRunRow.automation_id == automation_id)
+            delete(AutomationRunRow).where(
+                AutomationRunRow.automation_id == automation_id,
+                AutomationRunRow.user_id == user_id,
+            )
         )
-        await self._db.execute(delete(AutomationRow).where(AutomationRow.id == automation_id))
+        await self._db.execute(
+            delete(AutomationRow).where(
+                AutomationRow.id == automation_id, AutomationRow.user_id == user_id
+            )
+        )
         await async_commit_with_retry(self._db, where="AutomationDatastore.delete_automation")
 
-    async def delete_all_for_project(self, project_id: str) -> None:
+    async def delete_all_for_project(self, user_id: str, project_id: str) -> None:
         automation_ids = list(
-            (await self._db.execute(select(AutomationRow.id).filter_by(project_id=project_id)))
+            (
+                await self._db.execute(
+                    select(AutomationRow.id).where(
+                        AutomationRow.project_id == project_id, AutomationRow.user_id == user_id
+                    )
+                )
+            )
             .scalars()
             .all()
         )
         if automation_ids:
             await self._db.execute(
-                delete(AutomationRunRow).where(AutomationRunRow.automation_id.in_(automation_ids))
+                delete(AutomationRunRow).where(
+                    AutomationRunRow.automation_id.in_(automation_ids),
+                    AutomationRunRow.user_id == user_id,
+                )
             )
         await self._db.execute(
-            delete(AutomationRow).where(AutomationRow.project_id == project_id)
+            delete(AutomationRow).where(
+                AutomationRow.project_id == project_id, AutomationRow.user_id == user_id
+            )
         )
-        await async_commit_with_retry(
-            self._db, where="AutomationDatastore.delete_all_for_project"
-        )
+        await async_commit_with_retry(self._db, where="AutomationDatastore.delete_all_for_project")
 
-    async def count_by_project(self, project_id: str) -> int:
+    async def count_by_project(self, user_id: str, project_id: str) -> int:
         return (
             await self._db.execute(
-                select(func.count()).select_from(AutomationRow).filter_by(project_id=project_id)
+                select(func.count())
+                .select_from(AutomationRow)
+                .where(AutomationRow.project_id == project_id, AutomationRow.user_id == user_id)
             )
         ).scalar() or 0
 
     async def list_enabled(self) -> list[AutomationRow]:
-        """Every automation whose status is ``enabled``.
-
-        Used by the failure-rate auto-pause monitor (ADR-012) — paused
-        automations are already out of the firing path.
-        """
+        """SYSTEM SWEEP (cross-owner). Every enabled automation, for the
+        failure-rate auto-pause monitor (ADR-012). The monitor threads each
+        row's ``user_id`` into the owner-scoped per-automation queries."""
         return list(
             (await self._db.execute(select(AutomationRow).filter_by(status="enabled")))
             .scalars()
@@ -89,17 +123,9 @@ class AutomationDatastore:
         )
 
     async def find_due_automations(self, now: int) -> list[AutomationRow]:
-        """Rows whose ``next_run_at <= now`` and ``status == enabled``.
-
-        The tick loop calls this once per cycle. Manual rows have
-        ``next_run_at=NULL`` so they never surface here — they only fire
-        via ``run_now`` (and, in future, webhook).
-
-        Cron + interval both write a concrete ``next_run_at`` at fire time,
-        so this single query is correct for both. The polymorphism lives
-        in ``TriggerEvaluator.next_fire_at`` — the runner doesn't need to
-        branch on ``trigger_kind`` to find due rows.
-        """
+        """SYSTEM SWEEP (cross-owner). Rows whose ``next_run_at <= now`` and
+        ``status == enabled`` — the tick loop fires every owner's due rows. The
+        runner threads each fired row's ``user_id`` downstream."""
         return list(
             (
                 await self._db.execute(
@@ -119,17 +145,31 @@ class AutomationDatastore:
     # ── Run rows ──────────────────────────────────────────────────────
 
     async def list_runs(
-        self, automation_id: str, limit: int = 20, cursor: str | None = None
+        self, user_id: str, automation_id: str, limit: int = 20, cursor: str | None = None
     ) -> list[AutomationRunRow]:
-        stmt = select(AutomationRunRow).filter_by(automation_id=automation_id)
+        stmt = select(AutomationRunRow).where(
+            AutomationRunRow.automation_id == automation_id,
+            AutomationRunRow.user_id == user_id,
+        )
         if cursor:
-            cursor_row = await self._db.get(AutomationRunRow, cursor)
+            cursor_row = (
+                (
+                    await self._db.execute(
+                        select(AutomationRunRow).where(
+                            AutomationRunRow.id == cursor, AutomationRunRow.user_id == user_id
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
             if cursor_row:
                 stmt = stmt.filter(AutomationRunRow.triggered_at < cursor_row.triggered_at)
         stmt = stmt.order_by(AutomationRunRow.triggered_at.desc()).limit(limit)
         return list((await self._db.execute(stmt)).scalars().all())
 
-    async def create_run(self, row: AutomationRunRow) -> AutomationRunRow:
+    async def create_run(self, user_id: str, row: AutomationRunRow) -> AutomationRunRow:
+        row.user_id = user_id
         self._db.add(row)
         await async_commit_with_retry(self._db, where="AutomationDatastore.create_run")
         return row
@@ -139,10 +179,13 @@ class AutomationDatastore:
         await async_commit_with_retry(self._db, where="AutomationDatastore.replace_run")
         return row
 
-    async def trim_runs(self, automation_id: str, keep: int = 100) -> None:
+    async def trim_runs(self, user_id: str, automation_id: str, keep: int = 100) -> None:
         subq = (
             select(AutomationRunRow.id)
-            .where(AutomationRunRow.automation_id == automation_id)
+            .where(
+                AutomationRunRow.automation_id == automation_id,
+                AutomationRunRow.user_id == user_id,
+            )
             .order_by(AutomationRunRow.triggered_at.desc())
             .limit(keep)
             .subquery()
@@ -150,14 +193,16 @@ class AutomationDatastore:
         await self._db.execute(
             delete(AutomationRunRow).where(
                 AutomationRunRow.automation_id == automation_id,
+                AutomationRunRow.user_id == user_id,
                 AutomationRunRow.id.notin_(select(subq.c.id)),
             )
         )
         await async_commit_with_retry(self._db, where="AutomationDatastore.trim_runs")
 
     async def list_stranded_runs(self) -> list[AutomationRunRow]:
-        """Runs stuck in ``queued`` or ``running`` — used at runner startup
-        to reap zombies left behind by a hard crash."""
+        """SYSTEM SWEEP (cross-owner). Runs stuck in ``queued`` / ``running`` —
+        the startup reaper reaps zombies across every owner; it threads each
+        run's ``user_id`` into the owner-scoped writes that follow."""
         return list(
             (
                 await self._db.execute(
@@ -170,19 +215,25 @@ class AutomationDatastore:
             .all()
         )
 
-    async def count_runs(self, automation_id: str) -> int:
+    async def count_runs(self, user_id: str, automation_id: str) -> int:
         return (
             await self._db.execute(
                 select(func.count())
                 .select_from(AutomationRunRow)
-                .filter_by(automation_id=automation_id)
+                .where(
+                    AutomationRunRow.automation_id == automation_id,
+                    AutomationRunRow.user_id == user_id,
+                )
             )
         ).scalar() or 0
 
-    async def count_recent_failures(self, automation_id: str, limit: int = 20) -> int:
+    async def count_recent_failures(self, user_id: str, automation_id: str, limit: int = 20) -> int:
         recent_runs = (
             select(AutomationRunRow)
-            .filter_by(automation_id=automation_id)
+            .where(
+                AutomationRunRow.automation_id == automation_id,
+                AutomationRunRow.user_id == user_id,
+            )
             .order_by(AutomationRunRow.triggered_at.desc())
             .limit(limit)
             .subquery()
@@ -195,12 +246,15 @@ class AutomationDatastore:
             )
         ).scalar() or 0
 
-    async def last_run(self, automation_id: str) -> AutomationRunRow | None:
+    async def last_run(self, user_id: str, automation_id: str) -> AutomationRunRow | None:
         return (
             (
                 await self._db.execute(
                     select(AutomationRunRow)
-                    .filter_by(automation_id=automation_id)
+                    .where(
+                        AutomationRunRow.automation_id == automation_id,
+                        AutomationRunRow.user_id == user_id,
+                    )
                     .order_by(AutomationRunRow.triggered_at.desc())
                 )
             )
@@ -208,19 +262,21 @@ class AutomationDatastore:
             .first()
         )
 
-    async def count_terminal_runs_since(self, automation_id: str, since: int) -> tuple[int, int]:
+    async def count_terminal_runs_since(
+        self, user_id: str, automation_id: str, since: int
+    ) -> tuple[int, int]:
         """``(total, failed)`` over a lookback window — ADR-012 input.
 
-        ``skipped`` rows are excluded from both numerator and denominator
-        so that a flood of ``recovered_skip`` rows during an offline
-        window doesn't dilute a real failure rate (mirrors the legacy
-        schedule counter).
+        ``skipped`` rows are excluded from both numerator and denominator so a
+        flood of ``recovered_skip`` rows during an offline window doesn't dilute
+        a real failure rate (mirrors the legacy schedule counter).
         """
         rows = list(
             (
                 await self._db.execute(
                     select(AutomationRunRow.status).filter(
                         AutomationRunRow.automation_id == automation_id,
+                        AutomationRunRow.user_id == user_id,
                         AutomationRunRow.triggered_at >= since,
                         AutomationRunRow.status.in_(("success", "failed")),
                     )

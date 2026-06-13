@@ -65,16 +65,18 @@ class FakeAutomationDatastore:
         self.rows: dict[str, AutomationRow] = {}
         self.runs: dict[str, AutomationRunRow] = {}
 
-    async def list_automations(self, project_id: str | None = None) -> list[AutomationRow]:
+    async def list_automations(
+        self, user_id: str, project_id: str | None = None
+    ) -> list[AutomationRow]:
         rows = list(self.rows.values())
         if project_id is not None:
             rows = [r for r in rows if r.project_id == project_id]
         return sorted(rows, key=lambda r: r.created_at)
 
-    async def get_automation(self, automation_id: str) -> AutomationRow | None:
+    async def get_automation(self, user_id: str, automation_id: str) -> AutomationRow | None:
         return self.rows.get(automation_id)
 
-    async def create_automation(self, row: AutomationRow) -> AutomationRow:
+    async def create_automation(self, user_id: str, row: AutomationRow) -> AutomationRow:
         self.rows[row.id] = row
         return row
 
@@ -82,12 +84,12 @@ class FakeAutomationDatastore:
         self.rows[row.id] = row
         return row
 
-    async def delete_automation(self, automation_id: str) -> None:
+    async def delete_automation(self, user_id: str, automation_id: str) -> None:
         self.rows.pop(automation_id, None)
         for rid in [r.id for r in self.runs.values() if r.automation_id == automation_id]:
             self.runs.pop(rid, None)
 
-    async def create_run(self, row: AutomationRunRow) -> AutomationRunRow:
+    async def create_run(self, user_id: str, row: AutomationRunRow) -> AutomationRunRow:
         self.runs[row.id] = row
         return row
 
@@ -95,22 +97,22 @@ class FakeAutomationDatastore:
         self.runs[row.id] = row
         return row
 
-    async def last_run(self, automation_id: str) -> AutomationRunRow | None:
+    async def last_run(self, user_id: str, automation_id: str) -> AutomationRunRow | None:
         candidates = [r for r in self.runs.values() if r.automation_id == automation_id]
         if not candidates:
             return None
         return max(candidates, key=lambda r: r.triggered_at)
 
     async def list_runs(
-        self, automation_id: str, limit: int = 20, cursor: str | None = None
+        self, user_id: str, automation_id: str, limit: int = 20, cursor: str | None = None
     ) -> list[AutomationRunRow]:
         rows = [r for r in self.runs.values() if r.automation_id == automation_id]
         return sorted(rows, key=lambda r: r.triggered_at, reverse=True)[:limit]
 
-    async def count_runs(self, automation_id: str) -> int:
+    async def count_runs(self, user_id: str, automation_id: str) -> int:
         return sum(1 for r in self.runs.values() if r.automation_id == automation_id)
 
-    async def count_recent_failures(self, automation_id: str, limit: int = 20) -> int:
+    async def count_recent_failures(self, user_id: str, automation_id: str, limit: int = 20) -> int:
         recent = sorted(
             (r for r in self.runs.values() if r.automation_id == automation_id),
             key=lambda r: r.triggered_at,
