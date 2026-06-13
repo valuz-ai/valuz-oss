@@ -28,7 +28,7 @@ export const buildAppMenu = ({
     { role: "about" },
     separator,
     {
-      label: "Check for Updates",
+      label: t("menu.checkForUpdates" as Parameters<typeof t>[0]),
       click: () => {
         void checkForUpdates();
       },
@@ -78,10 +78,10 @@ export const buildAppMenu = ({
 
   template.push(
     {
-      label: "File",
+      label: t("menu.file" as Parameters<typeof t>[0]),
       submenu: [
         {
-          label: "Reload Window",
+          label: t("menu.reloadWindow" as Parameters<typeof t>[0]),
           accelerator: "CmdOrCtrl+R",
           click: () => {
             getMainWindow()?.reload();
@@ -92,11 +92,11 @@ export const buildAppMenu = ({
       ],
     },
     {
-      label: "Edit",
+      label: t("menu.edit" as Parameters<typeof t>[0]),
       submenu: editSubmenu,
     },
     {
-      label: "View",
+      label: t("menu.view" as Parameters<typeof t>[0]),
       submenu: [
         { role: "reload" },
         { role: "forceReload" },
@@ -110,7 +110,7 @@ export const buildAppMenu = ({
       ],
     },
     {
-      label: "Window",
+      label: t("menu.window" as Parameters<typeof t>[0]),
       submenu: isMac
         ? [{ role: "minimize" }, { role: "zoom" }, separator, { role: "front" }]
         : [{ role: "minimize" }, { role: "close" }],
@@ -136,9 +136,9 @@ export const buildAppMenu = ({
       role: "help",
       submenu: [
         {
-          label: "Valuz Website",
+          label: t("menu.website" as Parameters<typeof t>[0]),
           click: () => {
-            void shell.openExternal("https://valuz.ai");
+            void shell.openExternal("https://valuz.io");
           },
         },
       ],
