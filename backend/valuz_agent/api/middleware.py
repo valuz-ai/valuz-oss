@@ -6,6 +6,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from valuz_agent.infra.auth_context import (
+    OwnerContextUnsetError,
     reset_current_user_id,
     set_current_user_id,
 )
@@ -58,6 +59,14 @@ class ErrorHandlerMiddleware(BaseHTTPMiddleware):
         except Exception as exc:
             from fastapi.responses import JSONResponse
 
+            if isinstance(exc, OwnerContextUnsetError):
+                # Owner-scoped read with no resolved identity = unauthenticated.
+                # A client auth failure, not a server error — map to 401 so the
+                # frontend redirects to login instead of treating it as a crash.
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": {"code": 401, "message": "Authentication required"}},
+                )
             if isinstance(exc, ValuzError):
                 return JSONResponse(
                     status_code=exc.status_code,

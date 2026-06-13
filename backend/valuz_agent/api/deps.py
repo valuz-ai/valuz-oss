@@ -52,8 +52,12 @@ async def require_current_user_id() -> str:
 
     Routes that perform owner-scoped work inject this and thread the value down
     as the first argument (``user_id``) of the service/datastore methods they
-    call. ``AuthMiddleware`` sets the owner for every request, so this is always
-    present in practice; an unset context raises (mirrors the write path).
+    call. ``AuthMiddleware`` sets the owner once it resolves an identity; an
+    unauthenticated request (no identity resolved — e.g. the commercial overlay
+    with no/invalid bearer token) leaves it unset and this raises
+    ``OwnerContextUnsetError``, which ``ErrorHandlerMiddleware`` maps to 401 (so
+    both this injected path and routes that source the owner internally surface
+    the same auth failure uniformly).
     """
     return auth_context.require_current_user_id()
 
