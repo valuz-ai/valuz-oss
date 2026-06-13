@@ -5,6 +5,48 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-06-13
+
+### Features
+
+- In-app update notice: a compact bottom-left toast that detects, downloads (with
+  inline progress), and restarts to apply an update — replaces the standalone update
+  window. (#71 @St0neWan9)
+- Live tool streaming: tool input/output deltas stream into the UI as they arrive. (#77 @Ready22Race)
+- Frameless window with custom controls on Windows and Linux. (#81 @hanjixin)
+- Kernel sandbox: a minimal sandbox abstraction with a local macOS Seatbelt driver, plus
+  no-restart dynamic path mounts via sandbox extensions. (#90, #97 @Ready22Race)
+- Sealed host↔kernel seam: event-subscription API, HTTP transport, and boundary
+  enforcement; the harness tool surface is unified as a host MCP server. (#85, #86, #91 @Ready22Race)
+
+### Changed
+
+- Native app menu is now localized (File / Edit / View / Window / …) and the Help → website
+  link points to valuz.io. (#88 @St0neWan9)
+- Centralize port extensions into an Extensions container; single `resolve_user_id` auth
+  seam with explicit-identity context; SSE moved over fetch. (#80, #84, #89 @homeant)
+
+### Fixed
+
+- macOS auto-update now ships a zip so the updater can apply it; the Linux release upload
+  matches the arch-suffixed `latest-linux-arm64.yml`. (#64, #63 @St0neWan9)
+- Onboarding deploys team agents on the user's chosen runtime. (#73 @Ready22Race)
+- Skill-creator chain repairs: staging validation, draft-first creation UX, YAML
+  frontmatter parsing, and Windows absolute paths. (#68, #69, #70, #78 @Ready22Race)
+- SSE: shield per-tick DB reads from client-disconnect cancellation; page
+  `list_events_after` under the kernel's 1000-event cap. (#66, #93 @Ready22Race)
+- Background tasks: fix silent connector loss and a KB-scheduler `LookupError`. (#92 @Ready22Race)
+- `usePlatform()` fails open with a web-capabilities fallback. (#94 @hanjixin)
+- Windows / build hardening: disable UPX for valuz-server, don't strip binaries, expand
+  PyInstaller hidden imports, add codex to PATH, resolve the CLI-login binary path.
+  (#67, #98, #79, #82, #83 @hanjixin)
+- Raise the Claude runtime SDK stdout buffer above 1 MB. (#75 @jiaoqsh)
+- `dev.sh` backend readiness probe uses the renamed projects endpoint. (#65 @Ready22Race)
+
+### Docs & Chore
+
+- Add GitHub issue / PR templates; translate the UI component spec to English. (#72 @jiaoqsh, #99 @hanjixin)
+
 ## [0.1.5] - 2026-06-10
 
 ### Features
@@ -99,5 +141,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rename the single-writer lock file, drop a dead helper, and correct the rationale. (#29 @Ready22Race)
 - CI: Node.js 25 with dependency caching. (#14 @hanjixin)
 
+[0.1.6]: https://github.com/valuz-ai/valuz-oss/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/valuz-ai/valuz-oss/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/valuz-ai/valuz-oss/compare/v0.1.2...v0.1.4
