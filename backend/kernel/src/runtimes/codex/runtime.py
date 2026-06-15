@@ -515,6 +515,11 @@ class CodexRuntime:
                 await self.event_sink.emit(Event(type="session_error", data={"message": str(exc)}))
                 if self.config.hooks:
                     await self.config.hooks.fire("on_error", error=exc, session_id=session.id)
+                # The turn crashed unexpectedly — the long-lived codex process
+                # may be dead (closed stdout / broken pipe). Drop it so the
+                # user's retry respawns a fresh process instead of writing into
+                # a dead pipe forever. Thread history resumes by id.
+                await self._reset_codex_session()
         finally:
             self._active_turn = None
             self._active_task = None
@@ -620,6 +625,38 @@ class CodexRuntime:
                 await self._codex.close()
             except Exception:
                 logger.debug("Error closing AsyncCodex", exc_info=True)
+            self._codex = None
+        if self._registered_session_id is not None:
+            from src.core.mcp_bridge import unregister_session_toolkit
+
+            unregister_session_toolkit(self._registered_session_id)
+            self._registered_session_id = None
+
+    async def _reset_codex_session(self) -> None:
+        """Drop the long-lived codex subprocess + thread so the NEXT turn
+        respawns from scratch.
+
+        The codex process is spawned once per session and reused across turns
+        (``_ensure_codex`` early-returns when ``self._codex`` is set). If that
+        process dies mid-session — it "closed stdout", crashed, or the pipe
+        broke — the cached client becomes a corpse, and every subsequent turn
+        (the user's retry) writes into a dead pipe → ``[Errno 32] Broken pipe``,
+        so the session can never recover without starting a new conversation.
+
+        Tearing the client + thread down here lets ``_ensure_codex`` spawn a
+        fresh process and ``_ensure_thread`` RESUME the server-side thread by
+        ``runtime_session_id`` (conversation history is preserved). Best-effort:
+        closing an already-dead client may itself raise. Called from ``run``'s
+        unexpected-error path — the normal completion / turn-error branches do
+        not raise, so reaching it means the process state is genuinely suspect.
+        """
+        self._thread = None
+        self._active_turn = None
+        if self._codex is not None:
+            try:
+                await self._codex.close()
+            except Exception:
+                logger.debug("codex reset: error closing dead client", exc_info=True)
             self._codex = None
         if self._registered_session_id is not None:
             from src.core.mcp_bridge import unregister_session_toolkit
