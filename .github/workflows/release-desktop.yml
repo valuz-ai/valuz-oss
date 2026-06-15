@@ -258,6 +258,27 @@ jobs:
       - name: List artifacts
         run: ls -lh frontend/apps/desktop/release/
 
+      # Mirror of build-mac's verify step. mac-x64 emits the same latest-mac.yml
+      # and (when this job runs) overwrites the arm64 one, so its output must be
+      # just as correct. Job is scarce (CLAUDE.md) and often skipped — the assert
+      # only fires when the job actually runs.
+      - name: Verify latest-mac.yml generated
+        run: |
+          yml="frontend/apps/desktop/release/latest-mac.yml"
+          if [ ! -s "$yml" ]; then
+            echo "::error::latest-mac.yml missing or empty — auto-update will break for all mac users"
+            exit 1
+          fi
+          echo "--- $yml ---"
+          cat "$yml"
+          expected="${{ needs.set-version.outputs.version }}"
+          actual=$(awk '/^version:/{print $2}' "$yml")
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::latest-mac.yml version '$actual' != tag version '$expected'"
+            exit 1
+          fi
+          echo "OK: latest-mac.yml present, version=$actual"
+
       # electron-builder refuses to upload if the release was published >2h ago.
       # Use gh as a fallback to guarantee the artifact lands in the release.
       - name: Ensure artifacts uploaded to GitHub Release
@@ -348,6 +369,30 @@ jobs:
 
       - name: List artifacts
         run: ls -lh frontend/apps/desktop/release/
+
+      # electron-builder must produce a latest-linux*.yml — it's the manifest
+      # electron-updater fetches to discover linux updates. A release without it
+      # (v0.1.3 shipped like this) silently breaks auto-update for every linux
+      # user. Use a glob so future arch additions don't trip a false negative.
+      - name: Verify latest-linux yml generated
+        run: |
+          shopt -s nullglob
+          ymls=(frontend/apps/desktop/release/latest-linux*.yml)
+          if [ ${#ymls[@]} -eq 0 ]; then
+            echo "::error::no latest-linux*.yml generated — auto-update will break for linux users"
+            exit 1
+          fi
+          expected="${{ needs.set-version.outputs.version }}"
+          for yml in "${ymls[@]}"; do
+            echo "--- $yml ---"
+            cat "$yml"
+            actual=$(awk '/^version:/{print $2}' "$yml")
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::$yml version '$actual' != tag version '$expected'"
+              exit 1
+            fi
+          done
+          echo "OK: ${#ymls[@]} latest-linux yml(s) present, version=$expected"
 
       # electron-builder refuses to upload if the release was published >2h ago.
       # Use gh as a fallback to guarantee the artifact lands in the release.
@@ -445,6 +490,28 @@ jobs:
       - name: List artifacts
         shell: bash
         run: ls -lh frontend/apps/desktop/release/
+
+      # electron-builder must produce latest.yml — it's the manifest
+      # electron-updater fetches to discover windows updates. A release without
+      # it (v0.1.2 / v0.1.3 shipped like this) silently breaks auto-update for
+      # every windows user. shell: bash because the windows runner default is pwsh.
+      - name: Verify latest.yml generated
+        shell: bash
+        run: |
+          yml="frontend/apps/desktop/release/latest.yml"
+          if [ ! -s "$yml" ]; then
+            echo "::error::latest.yml missing or empty — auto-update will break for windows users"
+            exit 1
+          fi
+          echo "--- $yml ---"
+          cat "$yml"
+          expected="${{ needs.set-version.outputs.version }}"
+          actual=$(awk '/^version:/{print $2}' "$yml")
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::latest.yml version '$actual' != tag version '$expected'"
+            exit 1
+          fi
+          echo "OK: latest.yml present, version=$actual"
 
       # electron-builder refuses to upload if the release was published >2h ago.
       # Use gh as a fallback to guarantee the artifact lands in the release.
