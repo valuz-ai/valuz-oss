@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 
 import { runsApi, type RunSummary } from "../api/runs-api";
 
-const POLL_MS = 2500;
+const POLL_MS = 10000;
 
 let _running: RunSummary[] = [];
 const _subscribers = new Set<() => void>();
