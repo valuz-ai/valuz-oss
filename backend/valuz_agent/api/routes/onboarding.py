@@ -350,12 +350,17 @@ async def create_example_project(
             #      TeamStep guard banner catches this first; this is the
             #      authoritative fallback when the guard is bypassed)
             default_runtime, default_provider_id, default_model = await _resolve_deploy_target(db)
+            # Deploy team agents with the user's configured default reasoning
+            # effort (collapses to "high" when unset) — same source the Valuz
+            # Helper uses, so the whole team starts on a consistent effort.
+            default_effort = await get_default_effort(db)
             logger.info(
-                "onboarding: deploying team %r with runtime=%r model=%r provider=%r",
+                "onboarding: deploying team %r with runtime=%r model=%r provider=%r effort=%r",
                 body.team_id,
                 default_runtime,
                 default_model,
                 default_provider_id,
+                default_effort,
             )
             for role in _get_team_roster(body.team_id):
                 try:
@@ -369,6 +374,7 @@ async def create_example_project(
                         runtime=default_runtime,
                         model=default_model,
                         provider_id=default_provider_id,
+                        effort=default_effort,
                     )
                     created += 1
                 except Exception:  # noqa: BLE001 — one bad role shouldn't sink the rest
