@@ -93,6 +93,11 @@ export interface TaskContextPanelProps {
   /** Reveal the project cwd in the OS file manager. Optional; hides
    *  the button when absent. */
   onOpenInFinder?: () => void;
+  /** Open a single project file — wired to the file tree's double-click
+   *  and the right-click "open in system" menu. Receives the node's
+   *  project-relative path. Optional; without it the file rows are inert
+   *  (double-click does nothing). */
+  onOpenFile?: (relPath: string) => void;
 }
 
 /**
@@ -124,6 +129,7 @@ export const TaskContextPanel = ({
   rootPath,
   onRefreshFiles,
   onOpenInFinder,
+  onOpenFile,
 }: TaskContextPanelProps) => {
   const { t } = useTranslation();
   const [planReviewOpen, setPlanReviewOpen] = useState(false);
@@ -448,6 +454,8 @@ export const TaskContextPanel = ({
                 tree={fileTree}
                 defaultOpenDepth={0}
                 hideRootRow
+                onFileDoubleClick={onOpenFile}
+                onOpenInSystem={onOpenFile}
               />
             )}
           </div>

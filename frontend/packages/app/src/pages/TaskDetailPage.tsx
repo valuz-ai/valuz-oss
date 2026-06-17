@@ -417,6 +417,19 @@ export const TaskDetailPage = () => {
     void openArtifact(rootPath, t as Translator);
   }, [rootPath, t]);
 
+  // Open a project file from the right-rail file tree (double-click /
+  // right-click → open). The tree node's ``path`` is project-relative, so
+  // resolve it against the cwd and hand off to the same ``open_in_finder``
+  // IPC (``shell.openPath``) the artifact list uses — opens the file in its
+  // OS-associated app.
+  const handleOpenFile = useCallback(
+    (relPath: string) => {
+      if (!rootPath) return;
+      void openArtifact(resolveArtifactPath(relPath, rootPath), t as Translator);
+    },
+    [rootPath, t],
+  );
+
   // Render the right rail via AppShell's panel slot — same mechanism the
   // ProjectDetailPage uses, so the panel inherits the rounded card shell +
   // collapse toggle instead of being a bespoke inline ``<aside>``.
@@ -445,6 +458,7 @@ export const TaskDetailPage = () => {
         plannedSubtasks={plannedSubtasks}
         onRefreshFiles={refreshFileTree}
         onOpenInFinder={rootPath ? handleOpenProjectInFinder : undefined}
+        onOpenFile={rootPath ? handleOpenFile : undefined}
       />,
     );
     return () => setRightPanel(null);
