@@ -1,3 +1,4 @@
+import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Download, CheckCircle, X, AlertCircle } from "lucide-react";
 import { useTranslation, useUpdaterStore } from "@valuz/core";
 import { Button, Progress } from "@valuz/ui";
@@ -27,6 +28,42 @@ export const UpdateToast = () => {
   const errorMessage = useUpdaterStore((s) => s.errorMessage);
   const dismissed = useUpdaterStore((s) => s.dismissed);
   const dismiss = useUpdaterStore((s) => s.dismiss);
+  const setDownloading = useUpdaterStore((s) => s.setDownloading);
+
+  // Draggable: offset from the default bottom-left anchor. Local to the
+  // mounted toast (resets to the anchor when it's dismissed and re-shown).
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const dragRef = useRef<{
+    px: number;
+    py: number;
+    ox: number;
+    oy: number;
+  } | null>(null);
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    // Let clicks on the action / dismiss buttons through — only the card
+    // chrome initiates a drag.
+    if ((e.target as HTMLElement).closest("button")) return;
+    dragRef.current = { px: e.clientX, py: e.clientY, ox: offset.x, oy: offset.y };
+    setDragging(true);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    setOffset({ x: d.ox + (e.clientX - d.px), y: d.oy + (e.clientY - d.py) });
+  };
+  const endDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    setDragging(false);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* pointer already released */
+    }
+  };
 
   const visible =
     !dismissed &&
@@ -42,6 +79,10 @@ export const UpdateToast = () => {
   const ver = version ? ` v${version}` : "";
 
   const onDownload = () => {
+    // Flip to the progress bar immediately so the click feels instant — the
+    // real ``download-progress`` events (which can lag a beat behind the
+    // download actually starting) refine the percentage from here.
+    setDownloading();
     void getBridge()?.invoke(DESKTOP_CHANNELS.updaterDownload);
   };
   const onRestart = () => {
@@ -49,8 +90,19 @@ export const UpdateToast = () => {
   };
 
   return (
-    <div className="animate-page-enter fixed bottom-3 left-3 z-[60] w-[270px]">
-      <div className="relative rounded-xl border border-surface-border bg-surface p-3 shadow-lg">
+    <div
+      className="animate-page-enter fixed bottom-3 left-3 z-[60] w-[270px]"
+      style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}
+    >
+      <div
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        className={`relative touch-none select-none rounded-xl border border-surface-border bg-surface p-3 shadow-lg ${
+          dragging ? "cursor-grabbing" : "cursor-grab"
+        }`}
+      >
         {/* Dismiss — right edge, vertically centered */}
         <button
           type="button"

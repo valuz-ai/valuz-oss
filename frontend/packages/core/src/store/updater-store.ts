@@ -21,6 +21,10 @@ export interface UpdaterState {
   setChecking: () => void;
   setAvailable: (version: string) => void;
   setNotAvailable: () => void;
+  /** Optimistically flip to "downloading" at 0% the instant the user clicks
+   *  download, so the progress bar appears immediately instead of waiting for
+   *  the first ``download-progress`` event (which can lag a beat). */
+  setDownloading: () => void;
   setProgress: (progress: number, bytesPerSecond: number) => void;
   setDownloaded: () => void;
   setError: (message: string) => void;
@@ -45,6 +49,8 @@ export const useUpdaterStore = create<UpdaterState>((set) => ({
   setAvailable: (version: string) =>
     set({ status: "available", version, errorMessage: null, dismissed: false }),
   setNotAvailable: () => set({ status: "idle" }),
+  setDownloading: () =>
+    set({ status: "downloading", progress: 0, errorMessage: null }),
   setProgress: (progress: number, bytesPerSecond: number) =>
     set({ status: "downloading", progress, bytesPerSecond }),
   setDownloaded: () =>
