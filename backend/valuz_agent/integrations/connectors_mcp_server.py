@@ -20,6 +20,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.modules.connectors.models import AuthType, TransportType
 
 logger = logging.getLogger(__name__)
@@ -128,7 +129,7 @@ async def list_connected_mcp() -> str:
             svc = _make_connector_service(db)
             connectors = [
                 {"id": v.id, "slug": v.slug, "display_name": v.display_name, "status": v.status}
-                for v in await svc.list_connectors()
+                for v in await svc.list_connectors(require_current_user_id())
                 if v.status == "connected"
             ]
         return json.dumps({"ok": True, "connectors": connectors}, ensure_ascii=False)
@@ -173,7 +174,7 @@ async def list_recommended_mcp() -> str:
 
         async with async_unit_of_work(commit=False) as db:
             svc = _make_connector_service(db)
-            installed_slugs = {v.slug for v in await svc.list_connectors()}
+            installed_slugs = {v.slug for v in await svc.list_connectors(require_current_user_id())}
 
         items = [
             {
@@ -303,6 +304,12 @@ async def _invoke(
 
     async with async_unit_of_work() as db:
         svc = _make_connector_service(db)
+        # The owner-scoped service / route calls below need an explicit
+        # user_id. ``create_connector`` is a FastAPI route whose ``user_id``
+        # arrives via ``Depends`` — calling it directly here skips DI, so we
+        # resolve the owner (published by AuthMiddleware for this internal
+        # request) and pass it through ourselves.
+        user_id = require_current_user_id()
         entry = next((e for e in CONNECTOR_DIRECTORY if e["slug"] == slug), None) if slug else None
 
         if entry:
@@ -314,7 +321,7 @@ async def _invoke(
             # route layer's _parse_accept_language default).
             entry_display = _localize(entry.get("display_name"), "zh-CN") or slug
             entry_desc = _localize(entry.get("description"), "zh-CN")
-            existing = await svc._ds.get_by_slug(slug)
+            existing = await svc._ds.get_by_slug(user_id, slug)
             if existing and existing.status == "connected":
                 return json.dumps(
                     {
@@ -498,7 +505,7 @@ async def _invoke(
                 env=parsed_env,
             )
 
-        result = await create_connector(body=body, svc=svc)
+        result = await create_connector(body=body, svc=svc, user_id=user_id)
         if result.authorization_url:
             return json.dumps(
                 {
