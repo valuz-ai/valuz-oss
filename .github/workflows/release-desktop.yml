@@ -721,10 +721,14 @@ jobs:
           VALUZ_EDITION: oss
           VALUZ_VERSION: ${{ needs.set-version.outputs.version }}
         run: |
-          # coscli reads bucket/credential config from ~/.coscli/config.yaml.
-          # The TENCENT_COS_BUCKET secret must be in <name>-<appid> form.
-          mkdir -p "$HOME/.coscli"
-          cat > "$HOME/.coscli/config.yaml" <<YAML
+          # coscli reads its config from $HOME/.cos.yaml (NOT .coscli/config.yaml).
+          # We write it there AND pass -c explicitly so we're robust to a
+          # future coscli release changing the default path. The bucket alias
+          # is "valuz" — every COS path uses cos://valuz/<key>. The
+          # TENCENT_COS_BUCKET secret must be in <name>-<appid> form.
+          COS_ENDPOINT="cos.${TENCENT_COS_REGION}.myqcloud.com"
+          COS_CONFIG="$HOME/.cos.yaml"
+          cat > "$COS_CONFIG" <<YAML
           cos:
             base:
               secretid: ${TENCENT_SECRET_ID}
@@ -733,7 +737,7 @@ jobs:
             buckets:
               - name: ${TENCENT_COS_BUCKET}
                 alias: valuz
-                region: ${TENCENT_COS_REGION}
+                endpoint: ${COS_ENDPOINT}
           YAML
           # Rewrite url:/path: to carry the v${VERSION}/ prefix — the live
           # manifest sits at ${EDITION}/ but its artifacts live one level
@@ -742,5 +746,5 @@ jobs:
           sed -e 's|url: |url: v'"$VALUZ_VERSION"'/|g' \
               -e 's|^path: |path: v'"$VALUZ_VERSION"'/|' \
               latest-mac.yml > latest-mac.yml.live
-          coscli cp latest-mac.yml.live "cos://valuz/${VALUZ_EDITION}/latest-mac.yml" --force
+          coscli -c "$COS_CONFIG" cp latest-mac.yml.live "cos://valuz/${VALUZ_EDITION}/latest-mac.yml"
           echo "Live mac manifest: https://files.valuz.cn/${VALUZ_EDITION}/latest-mac.yml"

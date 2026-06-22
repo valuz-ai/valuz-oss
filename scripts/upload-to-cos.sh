@@ -68,13 +68,14 @@ for v in TENCENT_SECRET_ID TENCENT_SECRET_KEY TENCENT_COS_BUCKET TENCENT_COS_REG
 done
 command -v coscli >/dev/null 2>&1 || { echo "ERROR: coscli not installed (run scripts/install-coscli.sh)" >&2; exit 1; }
 
-# coscli reads its bucket / credential config from ~/.coscli/config.yaml. The
-# bucket alias is "valuz" — every COS path below uses cos://valuz/<key>. The
-# TENCENT_COS_BUCKET secret must already be in <name>-<appid> form (standard
-# Tencent COS naming — coscli rejects a bare bucket name).
-COS_CONFIG_DIR="$HOME/.coscli"
-mkdir -p "$COS_CONFIG_DIR"
-cat > "$COS_CONFIG_DIR/config.yaml" <<YAML
+# coscli reads its config from $HOME/.cos.yaml by default (NOT
+# $HOME/.coscli/config.yaml — easy to misremember). We write it there AND pass
+# -c explicitly so the script is robust to coscli changing the default path in
+# a future release. The TENCENT_COS_BUCKET secret must be in <name>-<appid>
+# form; the endpoint is derived from the region as cos.<region>.myqcloud.com.
+COS_CONFIG="$HOME/.cos.yaml"
+COS_ENDPOINT="cos.${TENCENT_COS_REGION}.myqcloud.com"
+cat > "$COS_CONFIG" <<YAML
 cos:
   base:
     secretid: ${TENCENT_SECRET_ID}
@@ -83,26 +84,45 @@ cos:
   buckets:
     - name: ${TENCENT_COS_BUCKET}
       alias: valuz
-      region: ${TENCENT_COS_REGION}
+      endpoint: ${COS_ENDPOINT}
 YAML
 
 # Upload all distributable artifacts to the versioned (immutable) prefix.
-# coscli's --include filters are glob patterns matched against the full local
-# path; multiple --include flags OR together. Ship only the artifacts that
-# electron-builder produces for distribution + the latest*.yml manifests. The
-# release dir also contains builder-internal files (*.yaml, unpacked/ dirs)
-# we don't want on the CDN.
+# We walk the release dir with shell globs and upload each file individually
+# rather than relying on coscli's --include filter — on v1.0.8 the filter is
+# matched against the source-relative path with `*` not crossing `/`, so a
+# pattern like "*.dmg" surprisingly matches zero files at the release-dir
+# root. The explicit list also documents exactly what we ship: the installer
+# formats electron-builder emits + the latest*.yml manifests. Anything else
+# in the release dir (builder-debug.yml, *-unpacked/ dirs, intermediate
+# *.code-blockmap) is left out.
+#
+# coscli exits non-zero if any single file fails (e.g. transient 5xx). We
+# don't let that abort the whole batch — `|| failed=…` keeps the loop going,
+# then we exit non-zero at the end so CI still surfaces the failure.
 echo "[cos] Uploading artifacts → /${VERSIONED_PREFIX}/"
-coscli cp "$RELEASE_DIR" "cos://valuz/${VERSIONED_PREFIX}/" \
-  --recursive \
-  --include "*.dmg" \
-  --include "*.zip" \
-  --include "*.exe" \
-  --include "*.AppImage" \
-  --include "*.deb" \
-  --include "*.blockmap" \
-  --include "latest*.yml" \
-  --force
+shopt -s nullglob
+uploaded=0
+failed=0
+for f in \
+  "$RELEASE_DIR"/*.dmg \
+  "$RELEASE_DIR"/*.zip \
+  "$RELEASE_DIR"/*.exe \
+  "$RELEASE_DIR"/*.AppImage \
+  "$RELEASE_DIR"/*.deb \
+  "$RELEASE_DIR"/*.blockmap \
+  "$RELEASE_DIR"/latest*.yml; do
+  if coscli -c "$COS_CONFIG" cp "$f" "cos://valuz/${VERSIONED_PREFIX}/"; then
+    uploaded=$((uploaded + 1))
+  else
+    failed=$((failed + 1))
+    echo "WARN: upload failed for $f (continuing)" >&2
+  fi
+done
+shopt -u nullglob
+if [ "$uploaded" -eq 0 ] && [ "$failed" -eq 0 ]; then
+  echo "WARN: no distributable artifacts found in $RELEASE_DIR" >&2
+fi
 
 # Overwrite each named manifest at the live prefix, with url:/path: fields
 # rewritten to carry the v${VERSION}/ prefix. The live manifest sits at
@@ -123,8 +143,14 @@ for m in $MANIFESTS; do
       "$RELEASE_DIR/$m" > "$tmp"
 
   echo "[cos] $m → /${LIVE_PREFIX}/${m} (artifacts prefixed with v${VERSION}/)"
-  coscli cp "$tmp" "cos://valuz/${LIVE_PREFIX}/${m}" --force
+  if coscli -c "$COS_CONFIG" cp "$tmp" "cos://valuz/${LIVE_PREFIX}/${m}"; then
+    :
+  else
+    failed=$((failed + 1))
+    echo "WARN: upload failed for live manifest $m (continuing)" >&2
+  fi
   rm -f "$tmp"
 done
 
-echo "[cos] Done."
+echo "[cos] Done. uploaded=$uploaded failed=$failed"
+[ "$failed" -eq 0 ] || exit 1
