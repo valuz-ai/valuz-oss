@@ -7,8 +7,18 @@ const getRendererUrl = () =>
   `file://${path.join(app.getAppPath(), "dist", "index.html")}`;
 const getPreloadPath = () =>
   path.join(app.getAppPath(), "dist-electron", "preload.js");
+// Windows draws the BrowserWindow ``icon`` straight into the taskbar + title
+// bar with no padding of its own, so the macOS-style ``iconRounded.png`` (a
+// squircle with built-in margin + drop shadow) renders tiny there. Feed
+// Windows the multi-size ``icon.ico`` (the mark fills the canvas) instead;
+// macOS ignores this (it uses the bundle/.icns + ``app.dock.setIcon``) and
+// Linux keeps the rounded PNG.
 const getIconPath = () =>
-  path.join(app.getAppPath(), "build", "iconRounded.png");
+  path.join(
+    app.getAppPath(),
+    "build",
+    process.platform === "win32" ? "icon.ico" : "iconRounded.png",
+  );
 
 const IDEAL_WIDTH = 1440;
 const IDEAL_HEIGHT = 900;
