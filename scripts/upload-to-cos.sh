@@ -68,22 +68,26 @@ for v in TENCENT_SECRET_ID TENCENT_SECRET_KEY TENCENT_COS_BUCKET TENCENT_COS_REG
 done
 command -v coscli >/dev/null 2>&1 || { echo "ERROR: coscli not installed (run scripts/install-coscli.sh)" >&2; exit 1; }
 
-# coscli reads its bucket / credential config from ~/.coscli/config.yaml. The
-# bucket alias is "valuz" — every COS path below uses cos://valuz/<key>. The
-# TENCENT_COS_BUCKET secret must already be in <name>-<appid> form (standard
-# Tencent COS naming — coscli rejects a bare bucket name).
-COS_CONFIG_DIR="$HOME/.coscli"
-mkdir -p "$COS_CONFIG_DIR"
-cat > "$COS_CONFIG_DIR/config.yaml" <<YAML
+# coscli v1.0.8 reads its config from ~/.cos.yaml (NOT ~/.coscli/config.yaml —
+# that older path is silently ignored, after which coscli drops into an
+# interactive first-run init that, with no stdin in CI, writes an empty config
+# and the upload then fails with "secretID is missing"). The bucket alias is
+# "valuz" — every COS path below uses cos://valuz/<key>. The bucket needs both a
+# region and the derived endpoint; TENCENT_COS_BUCKET must already be in
+# <name>-<appid> form (coscli rejects a bare bucket name).
+cat > "$HOME/.cos.yaml" <<YAML
 cos:
   base:
     secretid: ${TENCENT_SECRET_ID}
     secretkey: ${TENCENT_SECRET_KEY}
     sessiontoken: ""
+    protocol: https
   buckets:
-    - name: ${TENCENT_COS_BUCKET}
-      alias: valuz
-      region: ${TENCENT_COS_REGION}
+  - name: ${TENCENT_COS_BUCKET}
+    alias: valuz
+    region: ${TENCENT_COS_REGION}
+    endpoint: cos.${TENCENT_COS_REGION}.myqcloud.com
+    ofs: false
 YAML
 
 # Upload all distributable artifacts to the versioned (immutable) prefix.
