@@ -50,12 +50,11 @@ async def _get_agent_service(
     The ConnectorService is injected so AgentService delegates connector→MCP
     resolution instead of touching the secret store directly.
     """
-    from valuz_agent.infra.config import settings
-    from valuz_agent.infra.secret_store import FileSecretStore
     from valuz_agent.modules.connectors.datastore import ConnectorDatastore
     from valuz_agent.modules.connectors.service import ConnectorService
+    from valuz_agent.ports.extensions import ext
 
-    connector_svc = ConnectorService(ConnectorDatastore(db), FileSecretStore(settings.secrets_dir))
+    connector_svc = ConnectorService(ConnectorDatastore(db), ext.secret_store)
     return AgentService(db, connector_service=connector_svc)
 
 

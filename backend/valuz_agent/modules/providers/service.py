@@ -1002,7 +1002,7 @@ class ProviderService:
             raise ProviderNotFound(f"Provider {provider_id!r} not found")
         if not row.secret_ref:
             return None
-        return self._secrets.get(row.secret_ref)
+        return self._secrets.get(user_id, row.secret_ref)
 
     async def ping_compatible_batch(
         self,
@@ -1205,7 +1205,7 @@ class ProviderService:
         secret_ref: str | None = None
         if api_key:
             secret_ref = f"channel/{uuid4().hex[:12]}"
-            self._secrets.put(secret_ref, api_key.strip())
+            self._secrets.put(user_id, secret_ref, api_key.strip())
 
         row = ProviderRow(
             name=name.strip(),
@@ -1295,7 +1295,7 @@ class ProviderService:
             # currently-stored key out of secret_store.
             stripped_new_key = (api_key or "").strip() if api_key else None
             effective_key = stripped_new_key or (
-                self._secrets.get(row.secret_ref) if row.secret_ref else None
+                self._secrets.get(user_id, row.secret_ref) if row.secret_ref else None
             )
             effective_url = (base_url or row.base_url or "").strip()
             effective_proto = protocol or row.protocol
@@ -1319,10 +1319,10 @@ class ProviderService:
                 row.default_model = cleaned[0]
         if api_key:
             if row.secret_ref:
-                self._secrets.put(row.secret_ref, api_key.strip())
+                self._secrets.put(user_id, row.secret_ref, api_key.strip())
             else:
                 row.secret_ref = f"channel/{uuid4().hex[:12]}"
-                self._secrets.put(row.secret_ref, api_key.strip())
+                self._secrets.put(user_id, row.secret_ref, api_key.strip())
                 row.credential_source = "secret_ref"
             row.test_status = "never"
             # Setting an api_key explicitly opts the provider into the api_key
@@ -1374,7 +1374,7 @@ class ProviderService:
                 "add models manually instead"
             )
 
-        api_key = self._secrets.get(row.secret_ref)
+        api_key = self._secrets.get(user_id, row.secret_ref)
         if not api_key:
             raise ModelDiscoveryError("provider's API key is missing from secret store")
 
@@ -1420,7 +1420,7 @@ class ProviderService:
             raise ProviderNotDeletable(f"Provider {provider_id!r} cannot be deleted")
 
         if row.secret_ref:
-            self._secrets.delete(row.secret_ref)
+            self._secrets.delete(user_id, row.secret_ref)
 
         was_default = row.is_default
         await self._ds.delete(user_id, provider_id)
@@ -1659,7 +1659,7 @@ class ProviderService:
         api_key: str | None = None
         auth_type = "none"
         if row.credential_source == "secret_ref" and row.secret_ref:
-            api_key = self._secrets.get(row.secret_ref)
+            api_key = self._secrets.get(user_id, row.secret_ref)
             auth_type = "api_key"
 
         # Protocol override drives the wire shape used during connection

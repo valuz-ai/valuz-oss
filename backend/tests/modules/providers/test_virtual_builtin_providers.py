@@ -31,16 +31,16 @@ OWNER = "owner-A"
 
 class _InMemorySecretStore(SecretStorePort):
     def __init__(self) -> None:
-        self._values: dict[str, str] = {}
+        self._values: dict[tuple[str, str], str] = {}
 
-    def get(self, key: str) -> str | None:
-        return self._values.get(key)
+    def get(self, user_id: str, key: str) -> str | None:
+        return self._values.get((user_id, key))
 
-    def put(self, key: str, value: str) -> None:
-        self._values[key] = value
+    def put(self, user_id: str, key: str, value: str) -> None:
+        self._values[(user_id, key)] = value
 
-    def delete(self, key: str) -> None:
-        self._values.pop(key, None)
+    def delete(self, user_id: str, key: str) -> None:
+        self._values.pop((user_id, key), None)
 
 
 class _SvcHandle:

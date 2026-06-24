@@ -661,7 +661,7 @@ async def upload_attachment(
     )
     await SessionDatastore(db).create_attachment(user_id, row)
     await db.refresh(row)
-    _spawn_attachment_parse(row.id, str(target), target_dir, target.name)
+    _spawn_attachment_parse(row.id, str(target), target_dir, target.name, user_id)
     return _row_to_item(row)
 
 
@@ -707,7 +707,7 @@ def _write_parse_result(
     return str(target), "ready", engine, None
 
 
-async def _build_attachment_parser(db: Any) -> Any:
+async def _build_attachment_parser(db: Any, user_id: str) -> Any:
     """Build the configured ``ParserRouter`` for an attachment parse.
 
     Thin indirection over ``deps.build_parser_router`` so tests can monkeypatch
@@ -715,7 +715,7 @@ async def _build_attachment_parser(db: Any) -> Any:
     """
     from valuz_agent.api.deps import build_parser_router
 
-    return await build_parser_router(db)
+    return await build_parser_router(db, user_id)
 
 
 # Strong refs to in-flight parse tasks. ``asyncio`` only holds weak refs to
@@ -752,7 +752,7 @@ def _is_runtime_native(path: str) -> bool:
 
 
 def _spawn_attachment_parse(
-    attachment_id: str, source_path: str, dest_dir: Path, base_name: str
+    attachment_id: str, source_path: str, dest_dir: Path, base_name: str, user_id: str
 ) -> None:
     """Parse ``source_path`` through the CONFIGURED parser and persist it.
 
@@ -790,7 +790,7 @@ def _spawn_attachment_parse(
             # Build the router in its OWN fresh session — the request's session
             # is closed by the time this background task runs.
             async with async_unit_of_work() as db:
-                router = await _build_attachment_parser(db)
+                router = await _build_attachment_parser(db, user_id)
             if router.plugin_mode_for(source_path) == ParserPluginMode.ASYNC_POLL:
                 result = await router.parse(source_path)
             else:
@@ -925,7 +925,7 @@ async def add_kb_attachments(
         )
         await ds.create_attachment(user_id, row)
         await db.refresh(row)
-        _spawn_attachment_parse(row.id, doc.source_path, target_dir, safe_name)
+        _spawn_attachment_parse(row.id, doc.source_path, target_dir, safe_name, user_id)
 
     rows = await ds.list_attachments(user_id, session_id)
     return AttachmentListResponse(items=[_row_to_item(r) for r in rows])

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from valuz_agent.infra import auth_context
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.eventbus import event_bus
-from valuz_agent.infra.secret_store import FileSecretStore
+from valuz_agent.infra.secret_store import SecretStorePort
 from valuz_agent.integrations.docs_embedded import EmbeddedDocsRuntime
 from valuz_agent.integrations.skills_filesystem import FilesystemSkillSource
 from valuz_agent.integrations.skills_official import OfficialSkillSource
@@ -62,11 +62,13 @@ async def require_current_user_id() -> str:
     return auth_context.require_current_user_id()
 
 
-@lru_cache
-def _secret_store() -> FileSecretStore:
-    from valuz_agent.infra.config import settings
+def _secret_store() -> SecretStorePort:
+    # Convenience accessor for the configured secret store. OSS default is the
+    # local file store; the commercial overlay binds a shared store on ``ext``.
+    # Resolved per call (not cached) so a late overlay binding is honoured.
+    from valuz_agent.ports.extensions import ext
 
-    return FileSecretStore(settings.secrets_dir)
+    return ext.secret_store
 
 
 async def get_provider_service() -> AsyncGenerator[ProviderService, None]:
@@ -149,20 +151,21 @@ def get_polling_scheduler():  # type: ignore[no-untyped-def]
 
 
 class _SecretStoreResolver:
-    """Bridges ``ParserPlugin.SecretResolver`` to ``FileSecretStore``.
+    """Bridges ``ParserPlugin.SecretResolver`` to ``SecretStorePort``.
     Plugins call ``resolve(secret_ref)`` to fetch the API key at build
     time; we never plumb the plaintext through routing layers."""
 
-    def __init__(self, store: FileSecretStore) -> None:
+    def __init__(self, store: SecretStorePort, user_id: str) -> None:
         self._store = store
+        self._user_id = user_id
 
     def resolve(self, secret_ref: str | None) -> str | None:
         if not secret_ref:
             return None
-        return self._store.get(secret_ref)
+        return self._store.get(self._user_id, secret_ref)
 
 
-async def build_parser_router(db: AsyncSession) -> ParserRouter:
+async def build_parser_router(db: AsyncSession, user_id: str) -> ParserRouter:
     """Build the config-aware ``ParserRouter`` — the SAME engine KB/Docs
     ingestion uses — from the process-wide plugin registry (+ polling
     scheduler), the secret resolver, and the user's routing snapshot loaded
@@ -180,7 +183,7 @@ async def build_parser_router(db: AsyncSession) -> ParserRouter:
     routing_config = await load_routing_config(db)
     return ParserRouter(
         registry=_parser_registry(),
-        secret_resolver=_SecretStoreResolver(_secret_store()),
+        secret_resolver=_SecretStoreResolver(_secret_store(), user_id),
         routing_config=routing_config,
         setup_complete_probe=_setup_controller().is_complete,
     )
@@ -189,6 +192,7 @@ async def build_parser_router(db: AsyncSession) -> ParserRouter:
 async def get_document_service() -> AsyncGenerator[DocumentLibraryService, None]:
     from valuz_agent.infra.config import settings
 
+    user_id = auth_context.require_current_user_id()
     async with async_unit_of_work() as db:
         preview_dir = settings.docs_dir / "preview"
         preview_dir.mkdir(parents=True, exist_ok=True)
@@ -196,7 +200,7 @@ async def get_document_service() -> AsyncGenerator[DocumentLibraryService, None]
         # ``ParserRouter`` reads its routing config from an immutable snapshot
         # resolved here (one async read per request) instead of opening a sync
         # session per parse.
-        parser = await build_parser_router(db)
+        parser = await build_parser_router(db, user_id)
         yield DocumentLibraryService(
             datastore=DocumentDatastore(db),
             parser=parser,

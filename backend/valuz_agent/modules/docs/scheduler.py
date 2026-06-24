@@ -144,7 +144,9 @@ async def _arun_auto_discovery_scan() -> None:
                 routing_config = await load_routing_config(db)
                 parser = ParserRouter(
                     registry=_parser_registry(),
-                    secret_resolver=_SecretStoreResolver(_secret_store()),
+                    secret_resolver=_SecretStoreResolver(
+                        _secret_store(), require_current_user_id()
+                    ),
                     routing_config=routing_config,
                     setup_complete_probe=_setup_controller().is_complete,
                 )

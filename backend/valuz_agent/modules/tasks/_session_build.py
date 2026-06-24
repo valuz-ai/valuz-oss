@@ -24,13 +24,12 @@ logger = logging.getLogger(__name__)
 def _provider_resolver_deps(db: Any) -> dict[str, Any]:
     """Build the (providers, secrets) deps so build_member_session
     can resolve a per-agent pinned provider into the run's model_provider."""
-    from valuz_agent.infra.config import settings
-    from valuz_agent.infra.secret_store import FileSecretStore
     from valuz_agent.modules.providers.datastore import ProviderDatastore
+    from valuz_agent.ports.extensions import ext
 
     return {
         "providers": ProviderDatastore(db),
-        "secrets": FileSecretStore(settings.secrets_dir),
+        "secrets": ext.secret_store,
     }
 
 

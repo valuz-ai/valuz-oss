@@ -202,7 +202,7 @@ async def _drain_parse_tasks() -> None:
 def _inject_router(monkeypatch, router) -> None:  # type: ignore[no-untyped-def]
     from valuz_agent.api.routes import sessions as sessions_routes
 
-    async def _provider(_db):  # type: ignore[no-untyped-def]
+    async def _provider(_db, _user_id):  # type: ignore[no-untyped-def]
         return router
 
     monkeypatch.setattr(sessions_routes, "_build_attachment_parser", _provider)
@@ -212,7 +212,7 @@ async def _run_spawn(rid: str, src, dest, base_name: str) -> SessionAttachmentRo
     from valuz_agent.api.routes.sessions import _spawn_attachment_parse
     from valuz_agent.infra.db import async_unit_of_work
 
-    _spawn_attachment_parse(rid, str(src), dest, base_name)
+    _spawn_attachment_parse(rid, str(src), dest, base_name, "local-test-owner")
     await _drain_parse_tasks()
     async with async_unit_of_work() as session:
         got = await SessionDatastore(session).get_attachment("local-test-owner", rid)

@@ -47,7 +47,7 @@ def patched(tmp_path, monkeypatch):  # noqa: ANN001, ANN201
     monkeypatch.setattr(fsmod.FsRegistry, "data_dir", lambda self: tmp_path / "app")
     monkeypatch.setattr(r, "async_unit_of_work", lambda *_a, **_k: _UOW())
     monkeypatch.setattr(r, "ProviderDatastore", lambda _db: object())
-    monkeypatch.setattr(r, "FileSecretStore", lambda _d: object())
+    monkeypatch.setattr(r.ext, "secret_store", object())
 
     async def _resolve(**_kw):  # noqa: ANN003, ANN202
         return SimpleNamespace(base_url=None, api_key="k", api_protocol="anthropic")

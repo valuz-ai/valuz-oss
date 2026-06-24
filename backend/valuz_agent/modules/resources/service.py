@@ -25,14 +25,13 @@ class ResourceFacade:
             agent_svc = AgentService(self._db)  # type: ignore[arg-type]
             await agent_svc.delete_agent(require_current_user_id(), resource_id)
         elif resource_type == "connector":
-            from valuz_agent.infra.config import settings
-            from valuz_agent.infra.secret_store import FileSecretStore
             from valuz_agent.modules.connectors.datastore import ConnectorDatastore
             from valuz_agent.modules.connectors.service import ConnectorService
+            from valuz_agent.ports.extensions import ext
 
             conn_svc = ConnectorService(
                 ConnectorDatastore(self._db),
-                FileSecretStore(settings.secrets_dir),
+                ext.secret_store,
             )
             from valuz_agent.infra.auth_context import require_current_user_id
 

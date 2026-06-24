@@ -42,12 +42,11 @@ EffortLevel = Literal["low", "medium", "high", "xhigh", "max"]
 async def _get_pack_service(
     db: AsyncSession = Depends(get_async_session),
 ) -> AgentPackService:
-    from valuz_agent.infra.config import settings
-    from valuz_agent.infra.secret_store import FileSecretStore
     from valuz_agent.modules.connectors.datastore import ConnectorDatastore
     from valuz_agent.modules.connectors.service import ConnectorService
+    from valuz_agent.ports.extensions import ext
 
-    connector_svc = ConnectorService(ConnectorDatastore(db), FileSecretStore(settings.secrets_dir))
+    connector_svc = ConnectorService(ConnectorDatastore(db), ext.secret_store)
     agent_svc = AgentService(db, connector_service=connector_svc)  # type: ignore[arg-type]
     return AgentPackService(agent_svc)
 
@@ -131,9 +130,7 @@ async def add_agent_template(
             effort=effort,
         )
     except PackNotFound as exc:
-        raise HTTPException(
-            status_code=404, detail=f"Agent pack not found: {template_id}"
-        ) from exc
+        raise HTTPException(status_code=404, detail=f"Agent pack not found: {template_id}") from exc
 
     return AddAgentTemplateResponse(
         template_id=result["template_id"],

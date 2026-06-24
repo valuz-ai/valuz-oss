@@ -73,7 +73,7 @@ from app.schemas import (
 # Side-effect import — surfaces ``src.core...`` on sys.path.
 import valuz_agent.boot.kernel  # noqa: F401
 from valuz_agent.infra.auth_context import require_current_user_id
-from valuz_agent.infra.secret_store import FileSecretStore
+from valuz_agent.infra.secret_store import SecretStorePort
 from valuz_agent.modules.providers.datastore import ProviderDatastore
 from valuz_agent.modules.providers.models import ProviderRow
 from valuz_agent.ports.extensions import ext
@@ -133,7 +133,7 @@ async def resolve_model_provider(
     provider_id: str,
     model_id: str,
     providers: ProviderDatastore,
-    secrets: FileSecretStore,
+    secrets: SecretStorePort,
     runtime_provider: RuntimeProvider | None = None,
 ) -> ModelProvider | None:
     """Translate a chosen provider + model id into a kernel ``ModelProvider``.
@@ -211,11 +211,11 @@ async def resolve_model_provider(
 
 def _resolve_api_key(
     provider: ProviderRow,
-    secrets: FileSecretStore,
+    secrets: SecretStorePort,
 ) -> str | None:
     """Pull the api_key from the provider's ``secret_ref`` credential source."""
     if provider.credential_source == "secret_ref" and provider.secret_ref:
-        return secrets.get(provider.secret_ref)
+        return secrets.get(provider.user_id, provider.secret_ref)
 
     return None
 

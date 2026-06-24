@@ -46,7 +46,7 @@ from valuz_agent.adapters.system_prompt_builder import build_project_system_prom
 from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.eventbus import EventBus
-from valuz_agent.infra.secret_store import FileSecretStore
+from valuz_agent.infra.secret_store import SecretStorePort
 from valuz_agent.integrations.skills_filesystem import FilesystemSkillSource
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.docs.datastore import DocumentDatastore
@@ -157,7 +157,7 @@ class SessionService:
         # need data sources) can omit them. When provided the capability
         # resolver injects ``McpServerConfig`` rows into the kernel session
         # at creation time.
-        secrets: FileSecretStore | None = None,
+        secrets: SecretStorePort | None = None,
         connectors: ConnectorDatastore | None = None,
         # User-library skill source — when supplied, chat (non-project)
         # projects auto-include every discovered user-scoped skill in
@@ -533,14 +533,13 @@ class SessionService:
         if not provider_id and not model_overridden:
             provider_id = (agent.metadata or {}).get("provider_id")
         if not provider_id:
-            from valuz_agent.infra.config import settings
             from valuz_agent.infra.eventbus import event_bus
-            from valuz_agent.infra.secret_store import FileSecretStore
             from valuz_agent.modules.providers.service import ProviderService
+            from valuz_agent.ports.extensions import ext
 
             prov_svc = ProviderService(
                 datastore=self._providers,
-                secret_store=FileSecretStore(settings.secrets_dir),
+                secret_store=ext.secret_store,
                 event_bus=event_bus,
             )
             match = await prov_svc.resolve_provider_for_model(
@@ -798,14 +797,13 @@ class SessionService:
         # which configured provider hosts the resolved model.
         resolved_provider_id: str | None = provider_id
         if not resolved_provider_id and resolution.model:
-            from valuz_agent.infra.config import settings
             from valuz_agent.infra.eventbus import event_bus
-            from valuz_agent.infra.secret_store import FileSecretStore
             from valuz_agent.modules.providers.service import ProviderService
+            from valuz_agent.ports.extensions import ext
 
             prov_svc = ProviderService(
                 datastore=self._providers,
-                secret_store=FileSecretStore(settings.secrets_dir),
+                secret_store=ext.secret_store,
                 event_bus=event_bus,
             )
             match = await prov_svc.resolve_provider_for_model(

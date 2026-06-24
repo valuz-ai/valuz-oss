@@ -27,10 +27,11 @@ from valuz_agent.api.deps import (
     _parser_registry,
     _secret_store,
     get_setup_controller,
+    require_current_user_id,
 )
 from valuz_agent.i18n import t
 from valuz_agent.infra.db import async_unit_of_work
-from valuz_agent.infra.secret_store import FileSecretStore
+from valuz_agent.infra.secret_store import SecretStorePort
 from valuz_agent.modules.parser.registry import (
     LIGHT_LOCAL_PLUGIN_ID,
     ParserPluginRegistry,
@@ -425,19 +426,21 @@ async def get_plugin_config_route(plugin_id: str) -> PluginConfigResponse:
 
 @settings_router.patch("/plugins/{plugin_id}/config", response_model=PluginConfigResponse)
 async def patch_plugin_config_route(
-    plugin_id: str, payload: PluginConfigPatchRequest
+    plugin_id: str,
+    payload: PluginConfigPatchRequest,
+    user_id: str = Depends(require_current_user_id),
 ) -> PluginConfigResponse:
     if _parser_registry().try_get(plugin_id) is None:
         raise HTTPException(status_code=404, detail=f"unknown plugin id: {plugin_id}")
 
     secret_ref_change: tuple[str | None] | None = None
     if payload.secret is not None:
-        secret_store: FileSecretStore = _secret_store()
+        secret_store: SecretStorePort = _secret_store()
         if payload.secret == "":
             secret_ref_change = (None,)
         else:
             ref = f"parser/{plugin_id}/{uuid.uuid4().hex[:12]}"
-            secret_store.put(ref, payload.secret.strip())
+            secret_store.put(user_id, ref, payload.secret.strip())
             secret_ref_change = (ref,)
 
     async with async_unit_of_work() as db:
@@ -452,7 +455,10 @@ async def patch_plugin_config_route(
 
 
 @settings_router.post("/plugins/{plugin_id}/test", response_model=PluginTestResponse)
-async def test_plugin(plugin_id: str) -> PluginTestResponse:
+async def test_plugin(
+    plugin_id: str,
+    user_id: str = Depends(require_current_user_id),
+) -> PluginTestResponse:
     """Build the plugin's backend with the current stored config and
     run its ``health_check``. Used by the settings UI to validate API
     keys + endpoints without uploading a real document."""
@@ -472,7 +478,7 @@ async def test_plugin(plugin_id: str) -> PluginTestResponse:
         def resolve(self, secret_ref: str | None) -> str | None:
             if not secret_ref:
                 return None
-            return secret_store.get(secret_ref)
+            return secret_store.get(user_id, secret_ref)
 
     started = _time.perf_counter()
     try:

@@ -21,12 +21,11 @@ import valuz_agent.boot.kernel  # noqa: F401  (sets kernel import path)
 from valuz_agent.adapters import kernel_client
 from valuz_agent.adapters.provider_resolver import resolve_model_provider
 from valuz_agent.infra.auth_context import reset_current_user_id, set_current_user_id
-from valuz_agent.infra.config import settings
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.fs_registry import fs_registry
-from valuz_agent.infra.secret_store import FileSecretStore
 from valuz_agent.modules.memory.extraction import Completer, MemoryExtractor
 from valuz_agent.modules.providers.datastore import ProviderDatastore
+from valuz_agent.ports.extensions import ext
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +193,7 @@ async def run_extraction_for_session(session_id: str, user_id: str | None) -> No
                 provider_id=str(provider_id),
                 model_id=source.model,
                 providers=ProviderDatastore(db),
-                secrets=FileSecretStore(settings.secrets_dir),
+                secrets=ext.secret_store,
                 runtime_provider=source.runtime_provider,
             )
         # ``mp is None`` is EXPECTED for OAuth/subscription channels (Codex/Claude
@@ -336,7 +335,7 @@ async def run_task_finish_extraction(task_id: str, user_id: str | None) -> None:
                 provider_id=provider_id,
                 model_id=source.model,
                 providers=ProviderDatastore(db),
-                secrets=FileSecretStore(settings.secrets_dir),
+                secrets=ext.secret_store,
                 runtime_provider=source.runtime_provider,
             )
         logger.info("task memory: reviewing finished task %s (project=%s)", task_id, project_id)
