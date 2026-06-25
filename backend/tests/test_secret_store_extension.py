@@ -15,7 +15,12 @@ from pathlib import Path
 
 import pytest
 
-from valuz_agent.infra.secret_store import FileSecretStore, InMemorySecretStore
+from valuz_agent.infra.asset_store import LocalAssetStore
+from valuz_agent.infra.secret_store import (
+    AssetBackedSecretStore,
+    FileSecretStore,
+    InMemorySecretStore,
+)
 
 
 class _StubStore:
@@ -35,11 +40,12 @@ class _StubStore:
 
 
 class TestSecretStoreSwapPoint:
-    def test_oss_default_is_file_secret_store(self) -> None:
-        """The OSS build leaves the local filesystem store in place."""
+    def test_oss_default_is_asset_backed_local(self) -> None:
+        """OSS default: a local asset store, with secrets built on top of it."""
         from valuz_agent.ports.extensions import ext
 
-        assert isinstance(ext.secret_store, FileSecretStore)
+        assert isinstance(ext.asset_store, LocalAssetStore)
+        assert isinstance(ext.secret_store, AssetBackedSecretStore)
 
     def test_accessor_returns_bound_extension(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``_secret_store()`` reflects a late overlay binding on ``ext`` — the

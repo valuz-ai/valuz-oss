@@ -20,8 +20,9 @@ from __future__ import annotations
 from typing import Any
 
 from valuz_agent.api.middleware import AuthMiddleware
+from valuz_agent.infra.asset_store import AssetStore, LocalAssetStore
 from valuz_agent.infra.config import settings
-from valuz_agent.infra.secret_store import FileSecretStore, SecretStorePort
+from valuz_agent.infra.secret_store import AssetBackedSecretStore, SecretStorePort
 from valuz_agent.ports.billing import BillingPort, NoopBillingProvider
 from valuz_agent.ports.cache import CachePort, FileCache
 from valuz_agent.ports.llm_provider import LLMProvider, NoopLLMProvider
@@ -51,13 +52,18 @@ class Extensions:
         # boundary). The app factory mounts ``cls`` — instantiated by Starlette
         # as ``cls(app, **kwargs)`` — so ``kwargs`` carries any constructor deps.
         self.auth_middleware: tuple[type, dict[str, Any]] = (AuthMiddleware, {})
-        # API keys / OAuth tokens (BYOK provider creds, parser secrets, …). OSS
-        # default is a local filesystem store (single desktop process). The
-        # commercial overlay swaps in a shared store (e.g. Postgres-backed) so a
-        # multi-process backend keeps every replica's view of a user's secrets
-        # consistent — a local file store would strand BYOK keys on whichever
-        # replica wrote them. Read access is uniform: ``ext.secret_store.get(ref)``.
-        self.secret_store: SecretStorePort = FileSecretStore(settings.secrets_dir)
+        # Unified storage substrate for all host-domain "store it / read it"
+        # data (credentials, uploaded files, derived blobs). OSS default is a
+        # local filesystem store; an overlay swaps in an S3-backed one (keyed by
+        # user_id + encryption) for a shared multi-process backend. It is an
+        # object store with a file view — NOT a filesystem (no rename/seek);
+        # POSIX workspaces are a separate concern (mounted into the sandbox).
+        self.asset_store: AssetStore = LocalAssetStore(settings.data_dir)
+        # API keys / OAuth tokens (BYOK creds, parser secrets, …) — the first
+        # business built on the asset store, under the ``secrets/`` namespace.
+        # A shared backend's asset store adds encryption at rest. Read access is
+        # uniform: ``ext.secret_store.get(user_id, ref)``.
+        self.secret_store: SecretStorePort = AssetBackedSecretStore(self.asset_store)
 
 
 ext = Extensions()

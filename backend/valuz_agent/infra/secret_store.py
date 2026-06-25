@@ -1,6 +1,8 @@
 from pathlib import Path
 from typing import Protocol
 
+from valuz_agent.infra.asset_store import AssetStore
+
 
 class SecretStorePort(Protocol):
     """Owner-scoped secret store.
@@ -64,3 +66,32 @@ class FileSecretStore:
         p = self._path(ref)
         if p.is_file():
             p.unlink()
+
+
+class AssetBackedSecretStore:
+    """``SecretStorePort`` built on an ``AssetStore`` — secrets live under the
+    ``secrets/`` namespace, so credentials ride the same owner-scoped store as
+    every other host-domain asset (one storage substrate, one owner model).
+
+    Plaintext at this layer; a shared backend's ``AssetStore`` (S3) adds
+    encryption at rest. ``ref`` is flattened the same way ``FileSecretStore``
+    did (``/`` → ``__``) so the on-disk key under ``secrets/`` is unchanged —
+    a desktop upgrade keeps reading its existing keys (no migration).
+    """
+
+    def __init__(self, asset_store: AssetStore) -> None:
+        self._assets = asset_store
+
+    def _key(self, ref: str) -> str:
+        safe = ref.replace("/", "__").replace("\\", "__")
+        return f"secrets/{safe}"
+
+    def get(self, user_id: str, ref: str) -> str | None:
+        data = self._assets.get(user_id, self._key(ref))
+        return data.decode("utf-8").strip() if data is not None else None
+
+    def put(self, user_id: str, ref: str, value: str) -> None:
+        self._assets.put(user_id, self._key(ref), value.encode("utf-8"))
+
+    def delete(self, user_id: str, ref: str) -> None:
+        self._assets.delete(user_id, self._key(ref))
