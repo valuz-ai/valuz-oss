@@ -94,9 +94,9 @@ async def _build_additional_context(
             for row in attachments:
                 source_tag = " [from knowledge base]" if row.source_kind == "kb_doc" else ""
                 if row.parse_status == "ready" and row.parsed_path:
-                    lines.append(f"- {row.filename}{source_tag} → parsed text at {row.parsed_path}")
+                    lines.append(f"- {row.filename}{source_tag} (parsed text available)")
                 else:
-                    lines.append(f"- {row.filename}{source_tag} (raw at {row.stored_path})")
+                    lines.append(f"- {row.filename}{source_tag} (raw file)")
             sections.append("\n".join(lines))
 
         # 2) Bound knowledge-base scope. Doc tools (search / list) are

@@ -1168,7 +1168,7 @@ class SessionService:
             # the full rationale).
             pending_attachments = await _load_pending_attachments(session_id)
             consumed_attachment_ids = [row.id for row in pending_attachments]
-            attachment_specs = _attachment_specs(pending_attachments)
+            attachment_specs = _attachment_specs(pending_attachments, require_current_user_id())
             project_id = str(
                 ((session.metadata or {}).get("valuz", {}) or {}).get("project_id") or ""
             )

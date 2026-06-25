@@ -70,9 +70,7 @@ async def _restamp_always_on_mcp(session_id: str) -> None:
 
         await refresh_always_on_mcp_for_session(session_id)
     except Exception:  # noqa: BLE001 — never block a turn on a re-stamp failure
-        logger.warning(
-            "always-on MCP re-stamp failed for session %s", session_id, exc_info=True
-        )
+        logger.warning("always-on MCP re-stamp failed for session %s", session_id, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +153,7 @@ async def run_session_to_idle(
 
             pending_attachments = await _load_pending_attachments(session_id)
             consumed_attachment_ids = [row.id for row in pending_attachments]
-            attachment_specs = _attachment_specs(pending_attachments)
+            attachment_specs = _attachment_specs(pending_attachments, require_current_user_id())
         except Exception:  # noqa: BLE001
             pending_attachments = []
             consumed_attachment_ids = []
@@ -250,8 +248,7 @@ async def run_session_to_idle(
                 # is pointless; boot recovery reconciles this session. Skip quietly
                 # rather than logging a shutdown-race traceback.
                 logger.debug(
-                    "run_session_to_idle: kernel unavailable (shutdown), skipping "
-                    "finalize for %s",
+                    "run_session_to_idle: kernel unavailable (shutdown), skipping finalize for %s",
                     session_id,
                 )
         except Exception:  # noqa: BLE001

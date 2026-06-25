@@ -8,8 +8,29 @@ shared by the session run path and the task orchestrator.
 
 from __future__ import annotations
 
+import os
+
 from valuz_agent.infra.auth_context import require_current_user_id
 from valuz_agent.infra.db import async_unit_of_work
+
+
+def _resolve_asset_path(user_id: str, ref: str | None) -> str | None:
+    """Resolve a stored attachment reference to a local filesystem path.
+
+    New ``local`` attachments store an asset-store *key* (relative): resolve it
+    to a local ``Path`` via ``ext.asset_store.fetch`` (zero-copy on desktop, a
+    cache download on the shared backend). Legacy rows and ``kb_doc`` references
+    hold an absolute path (the KB-owned source / a pre-migration file) — used
+    as-is so the migration needs no backfill.
+    """
+    if not ref:
+        return None
+    if os.path.isabs(ref):
+        return ref
+    from valuz_agent.ports.extensions import ext
+
+    p = ext.asset_store.fetch(user_id, ref)
+    return str(p) if p is not None else None
 
 
 async def _load_pending_attachments(session_id: str):  # type: ignore[no-untyped-def]
@@ -35,7 +56,7 @@ async def _load_pending_attachments(session_id: str):  # type: ignore[no-untyped
         return await SessionDatastore(db).list_attachments(require_current_user_id(), session_id)
 
 
-def _attachment_specs(rows) -> tuple[tuple[str, str | None], ...]:  # type: ignore[no-untyped-def]
+def _attachment_specs(rows, user_id: str) -> tuple[tuple[str | None, str | None], ...]:  # type: ignore[no-untyped-def]
     """Map each attachment row to a ``(source_path, parsed_path)`` pair.
 
     ``source_path`` is always the original file the user attached
@@ -51,8 +72,10 @@ def _attachment_specs(rows) -> tuple[tuple[str, str | None], ...]:  # type: igno
     """
     return tuple(
         (
-            row.stored_path,
-            row.parsed_path if row.parse_status == "ready" and row.parsed_path else None,
+            _resolve_asset_path(user_id, row.stored_path),
+            _resolve_asset_path(user_id, row.parsed_path)
+            if row.parse_status == "ready" and row.parsed_path
+            else None,
         )
         for row in rows
     )

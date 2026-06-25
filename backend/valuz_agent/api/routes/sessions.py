@@ -12,7 +12,6 @@ from valuz_agent.adapters import kernel_client
 from valuz_agent.adapters.event_sse_adapter import iter_events_sse
 from valuz_agent.api.deps import get_session_service, require_current_user_id
 from valuz_agent.infra.db import get_async_session
-from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.modules.sessions.datastore import SessionDatastore
 from valuz_agent.modules.sessions.dto import (
     SessionDetail,
@@ -618,27 +617,25 @@ async def upload_attachment(
             ),
         )
 
-    target_dir = fs_registry.attachment_dir(session_id)
+    from valuz_agent.ports.extensions import ext
+
     safe_name = (file.filename or "upload").replace("/", "_").replace("\\", "_")
     # Disambiguate if the same filename is uploaded twice. Don't try to be
     # clever about content hashing — the user can always rename later.
-    target = target_dir / safe_name
-    if target.exists():
-        stem = target.stem
-        suffix = target.suffix
+    name = safe_name
+    key = f"attachments/{session_id}/{name}"
+    if ext.asset_store.exists(user_id, key):
+        stem = Path(safe_name).stem
+        suffix = Path(safe_name).suffix
         i = 1
-        while target.exists():
-            target = target_dir / f"{stem}-{i}{suffix}"
+        while ext.asset_store.exists(user_id, key):
+            name = f"{stem}-{i}{suffix}"
+            key = f"attachments/{session_id}/{name}"
             i += 1
 
-    size = 0
-    with target.open("wb") as fh:
-        while True:
-            chunk = await file.read(64 * 1024)
-            if not chunk:
-                break
-            fh.write(chunk)
-            size += len(chunk)
+    data = await file.read()
+    size = len(data)
+    ext.asset_store.put(user_id, key, data)
 
     # Persist the row as ``parsing`` and kick the heavy parse off the event
     # loop in a background task. The parser (PyMuPDF / MarkItDown / RapidOCR)
@@ -651,8 +648,8 @@ async def upload_attachment(
     # additional-context builder).
     row = SessionAttachmentRow(
         session_id=session_id,
-        filename=file.filename or target.name,
-        stored_path=str(target),
+        filename=file.filename or name,
+        stored_path=key,
         parsed_path=None,
         parse_status="parsing",
         size_bytes=size,
@@ -661,12 +658,12 @@ async def upload_attachment(
     )
     await SessionDatastore(db).create_attachment(user_id, row)
     await db.refresh(row)
-    _spawn_attachment_parse(row.id, str(target), target_dir, target.name, user_id)
+    _spawn_attachment_parse(row.id, key, session_id, name, user_id)
     return _row_to_item(row)
 
 
 def _write_parse_result(
-    result: Any, dest_dir: Path, base_name: str
+    result: Any, session_id: str, base_name: str, user_id: str
 ) -> tuple[str | None, str, str | None, str | None]:
     """Write a ``ParseResult``'s markdown into ``dest_dir`` as
     ``{base_name}.parsed.md`` and classify the outcome.
@@ -698,13 +695,15 @@ def _write_parse_result(
     if not markdown or error:
         reason = str(error) if error else "parser produced no content"
         return None, "failed", engine, reason[:2000]
-    target = dest_dir / f"{base_name}.parsed.md"
+    from valuz_agent.ports.extensions import ext
+
+    parsed_key = f"attachments/{session_id}/{base_name}.parsed.md"
     i = 1
-    while target.exists():
-        target = dest_dir / f"{base_name}-{i}.parsed.md"
+    while ext.asset_store.exists(user_id, parsed_key):
+        parsed_key = f"attachments/{session_id}/{base_name}-{i}.parsed.md"
         i += 1
-    target.write_text(markdown, encoding="utf-8")
-    return str(target), "ready", engine, None
+    ext.asset_store.put(user_id, parsed_key, markdown.encode("utf-8"))
+    return parsed_key, "ready", engine, None
 
 
 async def _build_attachment_parser(db: Any, user_id: str) -> Any:
@@ -752,7 +751,7 @@ def _is_runtime_native(path: str) -> bool:
 
 
 def _spawn_attachment_parse(
-    attachment_id: str, source_path: str, dest_dir: Path, base_name: str, user_id: str
+    attachment_id: str, source: str, session_id: str, base_name: str, user_id: str
 ) -> None:
     """Parse ``source_path`` through the CONFIGURED parser and persist it.
 
@@ -791,14 +790,19 @@ def _spawn_attachment_parse(
             # is closed by the time this background task runs.
             async with async_unit_of_work() as db:
                 router = await _build_attachment_parser(db, user_id)
-            if router.plugin_mode_for(source_path) == ParserPluginMode.ASYNC_POLL:
-                result = await router.parse(source_path)
+            from valuz_agent.modules.sessions.attachments import _resolve_asset_path
+
+            src_path = _resolve_asset_path(user_id, source)
+            if src_path is None:
+                raise FileNotFoundError(f"attachment source not found: {source}")
+            if router.plugin_mode_for(src_path) == ParserPluginMode.ASYNC_POLL:
+                result = await router.parse(src_path)
             else:
                 # Bound concurrent CPU-bound local parses (see semaphore note).
                 async with _LOCAL_PARSE_SEMAPHORE:
-                    result = await asyncio.to_thread(router.parse_sync, source_path)
+                    result = await asyncio.to_thread(router.parse_sync, src_path)
             parsed_path, parse_status, engine, error_message = _write_parse_result(
-                result, dest_dir, base_name
+                result, session_id, base_name, user_id
             )
         except Exception as exc:  # noqa: BLE001 — contain; never crash the loop
             logger.exception("Background parse failed for attachment %s", attachment_id)
@@ -808,7 +812,7 @@ def _spawn_attachment_parse(
         # natively — not a failure. ``parsed_path`` stays None (no text
         # extract); only the original ships, which is exactly what the runtime
         # needs.
-        if parse_status == "failed" and _is_runtime_native(source_path):
+        if parse_status == "failed" and _is_runtime_native(base_name):
             parse_status = "native"
             error_message = None
         try:
@@ -890,7 +894,6 @@ async def add_kb_attachments(
         )
 
     doc_ds = DocumentDatastore(db)
-    target_dir = fs_registry.attachment_dir(session_id)
     for doc_id in body.doc_ids:
         if doc_id in already_attached:
             continue
@@ -925,7 +928,7 @@ async def add_kb_attachments(
         )
         await ds.create_attachment(user_id, row)
         await db.refresh(row)
-        _spawn_attachment_parse(row.id, doc.source_path, target_dir, safe_name, user_id)
+        _spawn_attachment_parse(row.id, doc.source_path, session_id, safe_name, user_id)
 
     rows = await ds.list_attachments(user_id, session_id)
     return AttachmentListResponse(items=[_row_to_item(r) for r in rows])
@@ -964,18 +967,25 @@ async def delete_attachment(
         raise HTTPException(status_code=404, detail=f"Attachment {attachment_id!r} not found")
     # Local rows own both paths; KB rows own only the parsed
     # derivative — their ``stored_path`` is a KB-owned source file.
+    from valuz_agent.ports.extensions import ext
+
     owned_paths = (
         (row.stored_path, row.parsed_path) if row.source_kind == "local" else (row.parsed_path,)
     )
-    for path in owned_paths:
-        if not path:
+    for ref in owned_paths:
+        if not ref:
             continue
-        try:
-            os.unlink(path)
-        except FileNotFoundError:
-            pass
-        except OSError:
-            logger.exception("Failed to unlink attachment file %s", path)
+        if os.path.isabs(ref):
+            # Legacy absolute path (or a kb_doc's KB-owned source, which never
+            # reaches here) — delete from the local filesystem as before.
+            try:
+                os.unlink(ref)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                logger.exception("Failed to unlink attachment file %s", ref)
+        else:
+            ext.asset_store.delete(user_id, ref)
     await ds.delete_attachment(user_id, attachment_id)
     return Response(status_code=204)
 
