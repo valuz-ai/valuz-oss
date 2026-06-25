@@ -89,6 +89,16 @@ export interface AutomationItem {
   next_run_at: number | null;
   last_run_at: number | null;
   last_run_status: string | null;
+  /**
+   * Server-side projection of `isAutomationRunning(latest run)`. True when the
+   * latest run is queued/running, or — for task automations — the kicked-off
+   * task is still active. Lets the menu/Activity decide run state for the whole
+   * set in one list call (no N×listRuns) and fixes the task-type
+   * under-detection (task runs freeze to `success` at kickoff).
+   */
+  is_running: boolean;
+  /** Creation time (ms) — final fallback key for the activity sort comparator. */
+  created_at: number;
 }
 
 export interface AutomationGroup {
@@ -125,7 +135,10 @@ export interface AutomationRunItem {
   result_summary: string | null;
   error_code: string | null;
   error_message_key: string | null;
-  error_message: string | null;
+  // NOTE: the backend `AutomationRunItemResponse` returns `error_code` +
+  // `error_message_key` only — there is NO `error_message` field (it was a
+  // hand-written type drift; see plan §7). Failure rows localize via
+  // `error_message_key`, falling back to `error_code`.
   session_id: string | null;
   created_files: string[];
   // Live status of the task this run kicked off (task automations only).

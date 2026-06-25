@@ -213,7 +213,9 @@ export const CreateAutomationDialog = ({
   const [prompt, setPrompt] = useState("");
 
   // Trigger state — discriminated union driven by the tab.
-  const [triggerKind, setTriggerKind] = useState<"cron" | "interval">("cron");
+  const [triggerKind, setTriggerKind] = useState<"cron" | "interval" | "manual">(
+    "cron",
+  );
   const [cron, setCron] = useState("0 9 * * *");
   // Scheduling timezone — the IANA zone the cron rule is read in. Defaults to
   // the live BROWSER timezone (the user's real local zone, correct for desktop
@@ -341,9 +343,14 @@ export const CreateAutomationDialog = ({
           setIntervalUnit("seconds");
         }
       } else {
-        // ``manual`` triggers aren't exposed in the UI yet — fall through
-        // to the default cron view so editing still works.
-        setTriggerKind("cron");
+        // ``manual`` triggers: preserve as a read-only state so editing other
+        // fields (name / prompt / agent) round-trips the trigger UNCHANGED.
+        // The old code fell through to a default cron seed, and ``buildTrigger``
+        // could only emit cron/interval — so one edit silently rewrote a manual
+        // automation to a daily cron (data loss). Now ``buildTrigger`` returns
+        // ``{ kind: "manual" }`` for this state. Cron/interval defaults are kept
+        // only so a deliberate tab switch lands on a sane value.
+        setTriggerKind("manual");
         setCron("0 9 * * *");
         setIntervalValue(5);
         setIntervalUnit("minutes");
@@ -396,6 +403,10 @@ export const CreateAutomationDialog = ({
   }, [triggerKind, cron, timezone]);
 
   const buildTrigger = (): Trigger => {
+    if (triggerKind === "manual") {
+      // Round-trip the manual trigger unchanged (see seeding note above).
+      return { kind: "manual" };
+    }
     if (triggerKind === "cron") {
       return {
         kind: "cron",
@@ -657,8 +668,15 @@ export const CreateAutomationDialog = ({
             />
           </FormField>
 
-          {/* Trigger — Cron / Interval tabs. */}
+          {/* Trigger — Cron / Interval tabs. Manual automations (created via
+              MCP / proposal, not this form) render a read-only notice instead,
+              so editing other fields preserves the manual trigger. */}
           <FormField label={t("cron.period" as Parameters<typeof t>[0])}>
+            {triggerKind === "manual" ? (
+              <div className="rounded-md border border-surface-border bg-surface-soft px-3 py-2.5 text-xs text-ink-body">
+                {t("automation.triggerManualNotice" as Parameters<typeof t>[0])}
+              </div>
+            ) : (
             <Tabs
               value={triggerKind}
               onValueChange={(v) => setTriggerKind(v as "cron" | "interval")}
@@ -785,6 +803,7 @@ export const CreateAutomationDialog = ({
                 </p>
               </TabsContent>
             </Tabs>
+            )}
           </FormField>
         </div>
 

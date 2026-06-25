@@ -260,16 +260,40 @@ class AutomationService:
             next_run_at=row.next_run_at,
             last_run_at=row.last_run_at,
             last_run_status=last_run.status if last_run else None,
+            is_running=await self._compute_is_running(last_run),
+            created_at=row.created_at or now_ms(),
         )
+
+    async def _compute_is_running(self, last_run: AutomationRunRow | None) -> bool:
+        """Server-side projection of the frontend ``isAutomationRunning`` rule.
+
+        Single source of truth shared with the client (the unit test pins both to
+        the same PRD run-state table):
+          1. latest run ``status ∈ {queued, running}`` → running (run.status wins).
+          2. else, for a task automation whose run carries a lead ``session_id``,
+             the live ``task_status == active`` → running (the run row froze to
+             ``success`` at kickoff, so the live task is the real signal).
+          3. else not running.
+
+        Reuses ``_resolve_task_statuses`` on the single ``last_run`` — same source
+        as the batched ``list_runs`` resolution, no N+1.
+        """
+        if last_run is None:
+            return False
+        if last_run.status in {"queued", "running"}:
+            return True
+        if not last_run.session_id:
+            return False
+        statuses = await self._resolve_task_statuses([last_run])
+        return statuses.get(last_run.session_id) == "active"
 
     async def _row_to_detail(self, row: AutomationRow) -> AutomationDetailResponse:
         item = await self._row_to_item(row)
         return AutomationDetailResponse(
-            **item.model_dump(),
+            **item.model_dump(),  # carries created_at + is_running
             prompt_template=row.prompt_template,
             total_runs=await self._ds.count_runs(require_current_user_id(), row.id),
             recent_failures=await self._ds.count_recent_failures(require_current_user_id(), row.id),
-            created_at=row.created_at or now_ms(),
             updated_at=row.updated_at or now_ms(),
         )
 

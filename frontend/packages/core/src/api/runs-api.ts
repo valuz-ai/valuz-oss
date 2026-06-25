@@ -8,7 +8,11 @@ export const setRunsApiBase = (url: string): void => {
   _apiBase = url;
 };
 
-export type RunSourceKind = "assistant" | "project_chat" | "task";
+export type RunSourceKind =
+  | "assistant"
+  | "project_chat"
+  | "task"
+  | "automation";
 
 export interface RunTodoSnapshot {
   content: string;
@@ -21,6 +25,13 @@ export interface RunTodoSnapshot {
 export interface RunSummary {
   session_id: string;
   source_kind: RunSourceKind;
+  /**
+   * Set only when `source_kind === "automation"` — the automation whose run
+   * this session is executing. Click target is `/automations/{automation_id}`.
+   * A running automation always has a backing session, so `session_id` stays
+   * required; this pipeline never carries a session-less automation.
+   */
+  automation_id: string | null;
   project_id: string;
   project_name: string | null;
   task_id: string | null;

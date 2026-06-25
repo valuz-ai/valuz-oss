@@ -72,6 +72,8 @@ class StubService:
             next_run_at=None,
             last_run_at=None,
             last_run_status=None,
+            is_running=False,
+            created_at=0,
         )
         self._rows[automation_id] = item
         # service.create returns a detail object — only attribute the
@@ -188,6 +190,8 @@ def _row(automation_id: str = "auto-x", project_id: str = "ws-1") -> AutomationI
         next_run_at=None,
         last_run_at=None,
         last_run_status=None,
+        is_running=False,
+        created_at=0,
     )
 
 

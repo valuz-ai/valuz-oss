@@ -171,6 +171,16 @@ class AutomationItemResponse(BaseModel):
     next_run_at: int | None
     last_run_at: int | None
     last_run_status: str | None
+    # Server-side projection of ``isAutomationRunning(latest run)`` (PRD run-state
+    # table). True when the latest run is queued/running, or — for task
+    # automations — the kicked-off task is still ``active``. Lets menu/Activity
+    # decide run state for the whole set in one list call (no N×listRuns) and
+    # fixes the task-type under-detection: a task run freezes to ``success`` the
+    # moment kickoff returns, so ``last_run_status`` alone would miss it.
+    is_running: bool
+    # Down from detail to the list item: the final fallback key for the activity
+    # sort comparator (``last_run_at ?? next_run_at ?? created_at``).
+    created_at: int
 
 
 class AutomationGroupResponse(BaseModel):
@@ -184,7 +194,7 @@ class AutomationDetailResponse(AutomationItemResponse):
     prompt_template: str
     total_runs: int
     recent_failures: int
-    created_at: int
+    # ``created_at`` is inherited from ``AutomationItemResponse``.
     updated_at: int
 
 

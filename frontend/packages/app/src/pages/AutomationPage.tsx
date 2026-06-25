@@ -590,11 +590,13 @@ export const AutomationPage = () => {
     status: runToLogStatus(run),
     duration: formatDuration(run.duration_ms),
     output:
+      // Localized fallback chain (plan §7 / PRD failure state): the backend
+      // returns `error_message_key` + `error_code` only — there is no
+      // `error_message`. Localize the key, else the summary, else the code.
       (run.error_message_key
         ? t(run.error_message_key as I18nKey)
         : null) ??
       run.result_summary ??
-      run.error_message ??
       (run.error_code ? `${run.error_code}` : ""),
     triggerType:
       // ExecutionLog now recognises all four trigger kinds the runner
@@ -660,11 +662,12 @@ export const AutomationPage = () => {
                       onToggleCollapse={() =>
                         toggleGroupCollapsed(group.project_id)
                       }
+                      onOpenDetail={(id) => navigate(`/automations/${id}`)}
                       onRowClick={(id) => {
-                        // Edit affordance: clicking a row opens the
-                        // dialog in edit mode pre-filled with the row's
-                        // values. Same code path as the create flow
-                        // (PATCH vs POST decided by handleDialogSubmit).
+                        // Dropdown "Edit": opens the dialog in edit mode
+                        // pre-filled with the row's values. Row-title click
+                        // now goes to the detail page (onOpenDetail); the
+                        // dropdown keeps the inline edit affordance.
                         void openEditDialog(id);
                       }}
                       onToggle={(id) => toggleAutomation(id)}

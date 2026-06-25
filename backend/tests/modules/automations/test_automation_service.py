@@ -742,3 +742,117 @@ class TestBuildCreatePayload:
                 project_id="ws-proj",
                 session_agent_slug=None,
             )
+
+
+# ── is_running projection (PRD run-state table) ──────────────────────
+
+
+def _run(status: str, *, session_id: str | None = None, triggered_at: int = 1000) -> AutomationRunRow:
+    return AutomationRunRow(
+        id=uuid4().hex,
+        automation_id="a1",
+        project_id="ws-proj",
+        trigger_type="manual",
+        status=status,
+        triggered_at=triggered_at,
+        session_id=session_id,
+    )
+
+
+class TestComputeIsRunning:
+    """``_compute_is_running`` is the server-side projection of the frontend
+    ``isAutomationRunning`` rule — both pinned to the same PRD run-state table."""
+
+    async def test_none_last_run_is_not_running(self, service: AutomationService) -> None:
+        assert await service._compute_is_running(None) is False
+
+    @pytest.mark.parametrize("status", ["queued", "running"])
+    async def test_queued_or_running_is_running(
+        self, service: AutomationService, status: str
+    ) -> None:
+        assert await service._compute_is_running(_run(status)) is True
+
+    @pytest.mark.parametrize("status", ["success", "failed", "skipped", "interrupted_by_shutdown"])
+    async def test_settled_chat_run_without_session_is_not_running(
+        self, service: AutomationService, status: str
+    ) -> None:
+        assert await service._compute_is_running(_run(status)) is False
+
+    async def test_task_active_after_success_is_running(
+        self, service: AutomationService, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Task run froze to ``success`` at kickoff but the task is still active —
+        # run.status alone would miss it; task_status is the real signal.
+        async def fake_resolve(runs: list[AutomationRunRow]) -> dict[str, str]:
+            return {"sess-1": "active"}
+
+        monkeypatch.setattr(service, "_resolve_task_statuses", fake_resolve)
+        assert await service._compute_is_running(_run("success", session_id="sess-1")) is True
+
+    async def test_task_paused_after_success_is_not_running(
+        self, service: AutomationService, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_resolve(runs: list[AutomationRunRow]) -> dict[str, str]:
+            return {"sess-1": "paused"}
+
+        monkeypatch.setattr(service, "_resolve_task_statuses", fake_resolve)
+        assert await service._compute_is_running(_run("success", session_id="sess-1")) is False
+
+    async def test_queued_wins_over_task_status(
+        self, service: AutomationService, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # run.status has priority — a queued run never reaches task resolution.
+        async def boom(runs: list[AutomationRunRow]) -> dict[str, str]:
+            raise AssertionError("must not resolve task status when run is queued/running")
+
+        monkeypatch.setattr(service, "_resolve_task_statuses", boom)
+        assert await service._compute_is_running(_run("queued", session_id="sess-1")) is True
+
+
+class TestItemAndDetailProjection:
+    async def test_item_carries_is_running_and_created_at(
+        self, service: AutomationService
+    ) -> None:
+        row = AutomationRow(
+            id="a1",
+            project_id="ws-proj",
+            name="Daily",
+            agent_kind="project_member",
+            agent_slug="qa-engineer",
+            action_kind="chat",
+            trigger_kind="cron",
+            cron_expr="0 9 * * *",
+            prompt_template="x",
+            status="enabled",
+            created_at=4242,
+        )
+        service._ds.rows[row.id] = row  # type: ignore[attr-defined]
+        run = _run("running")
+        service._ds.runs[run.id] = run  # type: ignore[attr-defined]
+        item = await service._row_to_item(row)
+        assert item.is_running is True
+        assert item.created_at == 4242
+
+    async def test_detail_inherits_created_at_without_duplicate(
+        self, service: AutomationService
+    ) -> None:
+        row = AutomationRow(
+            id="a2",
+            project_id="ws-proj",
+            name="Daily",
+            agent_kind="project_member",
+            agent_slug="qa-engineer",
+            action_kind="chat",
+            trigger_kind="cron",
+            cron_expr="0 9 * * *",
+            prompt_template="hello",
+            status="enabled",
+            created_at=777,
+            updated_at=888,
+        )
+        service._ds.rows[row.id] = row  # type: ignore[attr-defined]
+        detail = await service._row_to_detail(row)
+        assert detail.created_at == 777
+        assert detail.updated_at == 888
+        assert detail.prompt_template == "hello"
+        assert detail.is_running is False

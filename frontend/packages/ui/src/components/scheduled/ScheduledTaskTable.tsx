@@ -36,6 +36,12 @@ export interface ScheduledTaskTableProps {
   onToggle?: (id: string) => void;
   onDelete?: (id: string) => void;
   onRowClick?: (id: string) => void;
+  /**
+   * Open the per-automation detail page. When set, clicking a row's title
+   * navigates here; the dropdown "Edit" item still uses ``onRowClick``. Falls
+   * back to ``onRowClick`` when unset, so existing consumers are unchanged.
+   */
+  onOpenDetail?: (id: string) => void;
   onRunNow?: (id: string) => void;
   title?: string;
   taskCountLabel?: string;
@@ -111,12 +117,16 @@ export const ScheduledTaskTable = ({
   onToggle,
   onDelete,
   onRowClick,
+  onOpenDetail,
   onRunNow,
   title,
   taskCountLabel,
   collapsed = false,
   onToggleCollapse,
 }: ScheduledTaskTableProps) => {
+  // Title click opens the detail page when wired; otherwise it falls back to
+  // the legacy row-click (edit dialog).
+  const openDetail = onOpenDetail ?? onRowClick;
   const { t } = useI18n();
   const Chevron = collapsed ? ChevronRight : ChevronDown;
 
@@ -174,7 +184,7 @@ export const ScheduledTaskTable = ({
                     <div className="min-w-0">
                       <button
                         type="button"
-                        onClick={() => onRowClick?.(task.id)}
+                        onClick={() => openDetail?.(task.id)}
                         className={cn(
                           "block truncate text-left text-sm font-medium text-ink-heading transition-colors hover:text-brand",
                           task.status === "off" && "opacity-50",
@@ -239,7 +249,7 @@ export const ScheduledTaskTable = ({
                       />
                       <button
                         type="button"
-                        onClick={() => onRowClick?.(task.id)}
+                        onClick={() => openDetail?.(task.id)}
                         className={cn(
                           "block truncate text-left text-sm font-medium text-ink-heading transition-colors hover:text-brand",
                           task.status === "off" && "opacity-50",

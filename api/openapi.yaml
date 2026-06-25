@@ -36,6 +36,31 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/RunSummary"
+  /v1/automations:
+    get:
+      summary: List the caller's automations grouped by project (read-only)
+      operationId: listAutomations
+      tags: [automations]
+      description: >-
+        Owner-scoped automation list, grouped by project. Each item carries a
+        precomputed `is_running` so menu/Activity can render run state for the
+        full set without N per-automation listRuns calls. This contract fragment
+        is the minimal read-only surface the detail-page feature needs; the rest
+        of the /v1/automations CRUD surface is still consumed via hand-written
+        frontend types (tracked contract debt).
+      responses:
+        "200":
+          description: Automations grouped by project
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [groups]
+                properties:
+                  groups:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AutomationGroup"
   /v1/agents:
     get:
       summary: List official Agents (read-only)
@@ -2670,7 +2695,15 @@ components:
         session_id: {type: string}
         source_kind:
           type: string
-          enum: [assistant, project_chat, task]
+          enum: [assistant, project_chat, task, automation]
+        automation_id:
+          type: string
+          nullable: true
+          description: >-
+            Set only when source_kind == automation — the automation whose run
+            this session is executing. Click target is /automations/{automation_id}.
+            A running automation always has a backing session, so session_id stays
+            required (this pipeline never carries a session-less automation).
         project_id: {type: string}
         project_name: {type: string, nullable: true}
         task_id: {type: string, nullable: true}
@@ -2697,6 +2730,106 @@ components:
         model: {type: string, nullable: true}
         runtime: {type: string, nullable: true}
         updated_at: {type: integer, format: int64, description: "Unix epoch milliseconds (UTC). Format via new Date(ms)."}
+    Trigger:
+      description: Discriminated trigger union — cron / interval / manual.
+      oneOf:
+        - type: object
+          required: [kind, cron_expr]
+          properties:
+            kind: {type: string, enum: [cron]}
+            cron_expr: {type: string, description: "Standard 5-field POSIX cron."}
+            timezone: {type: string, nullable: true, description: "IANA name; null follows the user default."}
+        - type: object
+          required: [kind, seconds]
+          properties:
+            kind: {type: string, enum: [interval]}
+            seconds: {type: integer, description: "Seconds; minimum 30 (tick interval)."}
+        - type: object
+          required: [kind]
+          properties:
+            kind: {type: string, enum: [manual]}
+    AutomationItem:
+      type: object
+      required:
+        [automation_id, project_id, project_name, project_kind, name, agent_kind,
+         agent_slug, agent_name, action_kind, trigger, trigger_human_readable,
+         status, next_run_at, last_run_at, last_run_status, is_running, created_at]
+      properties:
+        automation_id: {type: string}
+        project_id: {type: string}
+        project_name: {type: string}
+        project_kind: {type: string, enum: [chat, project]}
+        name: {type: string}
+        agent_kind: {type: string, enum: [project_member, library_agent]}
+        agent_slug: {type: string}
+        agent_name: {type: string, nullable: true, description: "Null when the upstream agent was deleted."}
+        action_kind: {type: string, enum: [chat, task]}
+        trigger: {$ref: "#/components/schemas/Trigger"}
+        trigger_human_readable: {type: string}
+        status: {type: string, enum: [enabled, paused]}
+        next_run_at: {type: integer, format: int64, nullable: true}
+        last_run_at: {type: integer, format: int64, nullable: true}
+        last_run_status: {type: string, nullable: true}
+        is_running:
+          type: boolean
+          description: >-
+            Server-side projection of isAutomationRunning(latest run): true when
+            the latest run is queued/running, or (task automations) the kicked-off
+            task is still active. Lets menu/Activity render run state for the whole
+            set without N per-automation listRuns calls, and fixes the task-type
+            under-detection (task runs freeze to success at kickoff).
+        created_at:
+          type: integer
+          format: int64
+          description: "Creation time (ms). Final fallback key for the activity sort comparator."
+    AutomationGroup:
+      type: object
+      required: [project_id, project_name, project_kind, automations]
+      properties:
+        project_id: {type: string}
+        project_name: {type: string}
+        project_kind: {type: string, enum: [chat, project]}
+        automations:
+          type: array
+          items: {$ref: "#/components/schemas/AutomationItem"}
+    AutomationDetail:
+      allOf:
+        - $ref: "#/components/schemas/AutomationItem"
+        - type: object
+          required: [prompt_template, total_runs, recent_failures, updated_at]
+          properties:
+            prompt_template: {type: string}
+            total_runs: {type: integer}
+            recent_failures: {type: integer}
+            updated_at: {type: integer, format: int64}
+    AutomationRunItem:
+      type: object
+      required:
+        [run_id, automation_id, project_id, trigger_type, status, triggered_at,
+         started_at, completed_at, duration_ms, result_summary, error_code,
+         error_message_key, session_id, created_files]
+      properties:
+        run_id: {type: string}
+        automation_id: {type: string}
+        project_id: {type: string}
+        trigger_type: {type: string, enum: [cron, interval, manual, recovered_skip]}
+        status: {type: string, enum: [queued, running, success, failed, skipped, interrupted_by_shutdown]}
+        triggered_at: {type: integer, format: int64}
+        started_at: {type: integer, format: int64, nullable: true}
+        completed_at: {type: integer, format: int64, nullable: true}
+        duration_ms: {type: integer, nullable: true}
+        result_summary: {type: string, nullable: true}
+        error_code: {type: string, nullable: true}
+        error_message_key: {type: string, nullable: true}
+        session_id: {type: string, nullable: true}
+        created_files:
+          type: array
+          items: {type: string}
+        task_status:
+          type: string
+          nullable: true
+          enum: [active, completed, failed, paused]
+          description: "Live task status for task automations; run.status freezes to success at kickoff."
     AgentTemplateRole:
       type: object
       required: [slug, name, description, instructions, avatar, skills, connector_types, runtime, in_library]

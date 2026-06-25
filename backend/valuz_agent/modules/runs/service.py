@@ -18,6 +18,7 @@ kernel sessions/messages via the kernel's async ``StorePort``.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -39,7 +40,13 @@ from valuz_agent.modules.tasks.models import TaskRow, TaskSessionRow
 
 logger = logging.getLogger(__name__)
 
-SourceKind = Literal["assistant", "project_chat", "task"]
+SourceKind = Literal["assistant", "project_chat", "task", "automation"]
+
+# Given the activity overview's candidate session ids, return ``{session_id:
+# automation_id}`` for those that back an automation run (owner-scoped). Injected
+# from the api layer so the runs module never imports the automations datastore
+# (module-boundary contract). ``None`` (tests / unwired) = no automation source.
+AutomationIndexFn = Callable[[list[str]], Awaitable[dict[str, str]]]
 
 # A task's own status is the stable "is it executing" signal — the lead
 # session flickers to idle between turns (and while a member subtask is the one
@@ -96,6 +103,9 @@ class RunSummary:
     updated_at: int  # Unix epoch milliseconds (UTC)
     project_name: str | None = None
     task_id: str | None = None
+    # Set only when ``source_kind == "automation"`` — the automation whose run
+    # this session is executing. Click target is ``/automations/{automation_id}``.
+    automation_id: str | None = None
     current_todo: TodoSnapshot | None = None
     last_message: str | None = None
     # Chats: last round's assistant output (truncated). Tasks use ``last_event``.
@@ -141,11 +151,13 @@ class RunsService:
         task_sessions: TaskSessionDatastore,
         tasks: TaskDatastore,
         task_events: TaskEventDatastore,
+        automation_index: AutomationIndexFn | None = None,
     ) -> None:
         self._projects = projects
         self._task_sessions = task_sessions
         self._tasks = tasks
         self._task_events = task_events
+        self._automation_index = automation_index
 
     async def list_runs(self, status: str = "running") -> list[RunSummary]:
         # Recent sessions come from the host project↔session index; the
@@ -165,6 +177,16 @@ class RunsService:
         task_map: dict[str, TaskRow] = {
             str(r.id): r for r in await self._tasks.list_all(require_current_user_id(), limit=None)
         }
+        # Sessions that back an automation run are reclassified to the
+        # ``automation`` source below — stripping them out of the chat/task
+        # buckets (otherwise an automation-triggered chat masquerades as a plain
+        # chat run, and a task automation as a bare task) and giving them the
+        # ``/automations/:id`` click target. Single batched lookup, owner-scoped.
+        auto_by_session: dict[str, str] = (
+            await self._automation_index([r.session_id for r in index_rows])
+            if self._automation_index is not None
+            else {}
+        )
 
         out: list[RunSummary] = []
         for sess in sessions:
@@ -195,6 +217,12 @@ class RunsService:
                     sess.id,
                 )
                 continue
+            # Relabel automation-backed sessions after enrichment, so the card
+            # keeps its last_output / last_event but routes to the automation.
+            automation_id = auto_by_session.get(sess.id)
+            if automation_id is not None:
+                summary.source_kind = "automation"
+                summary.automation_id = automation_id
             out.append(summary)
 
         out.sort(key=lambda r: r.updated_at, reverse=True)

@@ -276,6 +276,29 @@ class AutomationDatastore:
             .first()
         )
 
+    async def session_automation_index(
+        self, user_id: str, session_ids: list[str]
+    ) -> dict[str, str]:
+        """Map each backing ``session_id`` → the automation whose run owns it.
+
+        Owner-scoped and restricted to the caller-supplied candidate sessions
+        (the activity overview's recent-session window), so the runs service can
+        reclassify automation-triggered sessions out of the chat/task buckets
+        without scanning the full run history. A kernel session backs exactly one
+        automation run, so the mapping is 1:1; ``ON CONFLICT`` never arises.
+        """
+        if not session_ids:
+            return {}
+        rows = (
+            await self._db.execute(
+                select(AutomationRunRow.session_id, AutomationRunRow.automation_id).where(
+                    AutomationRunRow.user_id == user_id,
+                    AutomationRunRow.session_id.in_(session_ids),
+                )
+            )
+        ).all()
+        return {sid: aid for sid, aid in rows if sid}
+
     async def count_terminal_runs_since(
         self, user_id: str, automation_id: str, since: int
     ) -> tuple[int, int]:

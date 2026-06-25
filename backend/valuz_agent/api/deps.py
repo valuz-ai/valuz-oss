@@ -281,11 +281,21 @@ async def get_settings_service() -> AsyncGenerator[SettingsService, None]:
 
 async def get_runs_service() -> AsyncGenerator[RunsService, None]:
     async with async_unit_of_work() as db:
+        automations = AutomationDatastore(db)
+
+        async def automation_index(session_ids: list[str]) -> dict[str, str]:
+            # Bind the owner at call time (per-request auth context); keeps the
+            # runs module free of any automations-datastore import.
+            return await automations.session_automation_index(
+                auth_context.require_current_user_id(), session_ids
+            )
+
         yield RunsService(
             projects=ProjectDatastore(db),
             task_sessions=TaskSessionDatastore(db),
             tasks=TaskDatastore(db),
             task_events=TaskEventDatastore(db),
+            automation_index=automation_index,
         )
 
 

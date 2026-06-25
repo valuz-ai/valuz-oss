@@ -16,6 +16,8 @@ export * from "./api/parser-api";
 export * from "./api/runs-api";
 export * from "./api/runtimes-api";
 export * from "./api/automations-api";
+export * from "./api/automation-run-status";
+export * from "./api/activity-sort";
 export * from "./api/sessions-api";
 export * from "./api/settings-api";
 export * from "./api/skills-api";
