@@ -18,7 +18,7 @@ skips onboarding has an empty library. All operations are idempotent.
 from __future__ import annotations
 
 import logging
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -239,25 +239,37 @@ async def _ensure_valuz_helper(user_id: str, db) -> str:  # type: ignore[no-unty
         if existing.slug == _VALUZ_HELPER_SLUG:
             return _VALUZ_HELPER_SLUG
 
-    runtime, provider_id, model = await _resolve_deploy_target(db)
+    # The Helper should always exist after onboarding — including the skip
+    # path, where the user may not have configured a model channel yet. Unlike
+    # the multi-agent team deploy (which hard-requires a channel up front), fall
+    # back to creating it *unpinned* when none is configured: no provider/model
+    # is snapshotted, so the model resolver fills in the user's default (or the
+    # global default) at session time and the user can set the model later.
+    try:
+        runtime, provider_id, model = await _resolve_deploy_target(db)
+    except HTTPException:
+        runtime, provider_id, model = "claude_agent", None, None
     effort = await get_default_effort(db)
-    await agent_svc.create_agent(
-        user_id,
-        {
-            "slug": _VALUZ_HELPER_SLUG,
-            "name": t("onboarding.valuzHelper.name"),
-            "description": t("onboarding.valuzHelper.description"),
-            "instructions": t("onboarding.valuzHelper.instructions"),
-            "runtime": runtime,
-            "model": model,
-            "provider_id": provider_id,
-            "effort": effort,
-            "skills": [_VALUZ_HELPER_SKILL],
-            "connector_types": _VALUZ_HELPER_CONNECTORS,
-            "avatar": _VALUZ_HELPER_AVATAR,
-        }
+    payload: dict[str, Any] = {
+        "slug": _VALUZ_HELPER_SLUG,
+        "name": t("onboarding.valuzHelper.name"),
+        "description": t("onboarding.valuzHelper.description"),
+        "instructions": t("onboarding.valuzHelper.instructions"),
+        "runtime": runtime,
+        "provider_id": provider_id,
+        "effort": effort,
+        "skills": [_VALUZ_HELPER_SKILL],
+        "connector_types": _VALUZ_HELPER_CONNECTORS,
+        "avatar": _VALUZ_HELPER_AVATAR,
+    }
+    # Omit ``model`` when unpinned so ``create_agent`` keeps its default and the
+    # row isn't locked to a channel the user hasn't chosen yet.
+    if model is not None:
+        payload["model"] = model
+    await agent_svc.create_agent(user_id, payload)
+    logger.info(
+        "onboarding: created Valuz Helper (%s, model=%s)", _VALUZ_HELPER_SLUG, model
     )
-    logger.info("onboarding: created Valuz Helper (%s)", _VALUZ_HELPER_SLUG)
     return _VALUZ_HELPER_SLUG
 
 
