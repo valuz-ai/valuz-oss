@@ -67,3 +67,27 @@ class TestLocalAssetStore:
         s = LocalAssetStore(tmp_path)
         with pytest.raises(ValueError):
             s.put("u", "../escape", b"x")
+
+
+class TestResolveAssetPath:
+    def test_relative_key_is_fetched(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from valuz_agent.infra.asset_store import resolve_asset_path
+        from valuz_agent.ports.extensions import ext
+
+        store = LocalAssetStore(tmp_path)
+        store.put("u", "docs/preview/d1.md", b"# preview")
+        monkeypatch.setattr(ext, "asset_store", store)
+        assert resolve_asset_path("u", "docs/preview/d1.md") == str(
+            tmp_path / "docs" / "preview" / "d1.md"
+        )
+
+    def test_absolute_path_used_as_is(self) -> None:
+        from valuz_agent.infra.asset_store import resolve_asset_path
+
+        # Legacy / external (kb_doc source) absolute paths pass through unchanged.
+        assert resolve_asset_path("u", "/abs/legacy.md") == "/abs/legacy.md"
+
+    def test_none_is_none(self) -> None:
+        from valuz_agent.infra.asset_store import resolve_asset_path
+
+        assert resolve_asset_path("u", None) is None

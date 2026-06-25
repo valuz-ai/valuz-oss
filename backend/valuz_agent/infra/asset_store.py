@@ -91,3 +91,20 @@ class LocalAssetStore:
         p = self._path(prefix)
         p.mkdir(parents=True, exist_ok=True)
         return p
+
+
+def resolve_asset_path(user_id: str, ref: str | None) -> str | None:
+    """Resolve a stored asset reference to a local filesystem path.
+
+    A relative ``ref`` is an asset-store key → fetched to a local ``Path``; an
+    absolute ``ref`` is a legacy / external path (a pre-migration row, or a
+    user-owned KB file) → used as-is, so no backfill migration is needed.
+    """
+    if not ref:
+        return None
+    if os.path.isabs(ref):
+        return ref
+    from valuz_agent.ports.extensions import ext
+
+    p = ext.asset_store.fetch(user_id, ref)
+    return str(p) if p is not None else None

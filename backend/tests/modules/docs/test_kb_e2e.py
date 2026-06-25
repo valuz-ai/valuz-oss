@@ -170,6 +170,16 @@ def _make_service(db, session_factory, parser=None) -> DocumentLibraryService:
     return service
 
 
+@pytest.fixture(autouse=True)
+def _isolate_asset_store(tmp_path, monkeypatch):  # type: ignore[no-untyped-def]
+    """Bind ``ext.asset_store`` to a tmp local store so preview writes (now on
+    the asset store via ``_save_preview``) don't touch the real data_dir."""
+    from valuz_agent.infra.asset_store import LocalAssetStore
+    from valuz_agent.ports.extensions import ext
+
+    monkeypatch.setattr(ext, "asset_store", LocalAssetStore(tmp_path / "_assets"))
+
+
 @pytest.fixture()
 def svc(db, session_factory):
     return _make_service(db, session_factory)

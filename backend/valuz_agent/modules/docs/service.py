@@ -968,13 +968,18 @@ class DocumentLibraryService:
         self._bus.publish("doc.deleted", document_id=doc_id)
 
     async def get_document_preview(self, doc_id: str) -> str:
-        row = await self._ds.get_by_id(require_current_user_id(), doc_id)
+        user_id = require_current_user_id()
+        row = await self._ds.get_by_id(user_id, doc_id)
         if not row:
             raise DocumentNotFound()
         if row.preview_text_path:
-            p = Path(row.preview_text_path)
-            if p.exists():
-                return p.read_text(encoding="utf-8")
+            from valuz_agent.infra.asset_store import resolve_asset_path
+
+            local = resolve_asset_path(user_id, row.preview_text_path)
+            if local:
+                p = Path(local)
+                if p.exists():
+                    return p.read_text(encoding="utf-8")
         return ""
 
     async def reindex_documents(self, document_ids: list[str]) -> ImportTaskResult:
@@ -1091,8 +1096,8 @@ class DocumentLibraryService:
                 attempts.append(success_record)
                 preview_path = self._save_preview(
                     row.id,
-                    row.source_filename,
                     result.markdown,
+                    require_current_user_id(),
                 )
                 row.status = "ready"
                 row.parser_mode = result.metadata.get("engine", "unknown")
@@ -1147,14 +1152,19 @@ class DocumentLibraryService:
         if not scope_ids:
             return []
 
+        from valuz_agent.infra.asset_store import resolve_asset_path
+
         doc_paths: dict[str, str] = {}
         doc_names: dict[str, str] = {}
+        uid = require_current_user_id()
         for did in scope_ids:
-            row = await self._ds.get_by_id(require_current_user_id(), did)
+            row = await self._ds.get_by_id(uid, did)
             if row:
                 doc_names[did] = row.source_filename
                 if row.preview_text_path:
-                    doc_paths[did] = row.preview_text_path
+                    local = resolve_asset_path(uid, row.preview_text_path)
+                    if local:
+                        doc_paths[did] = local
 
         from valuz_agent.integrations.docs_embedded import EmbeddedDocsRuntime
 
@@ -1501,19 +1511,15 @@ class DocumentLibraryService:
             last_full_scan_at=row.last_full_scan_at,
         )
 
-    def _save_preview(self, doc_id: str, source_filename: str, markdown: str) -> str:
-        from valuz_agent.integrations.docs_embedded import sanitize_preview_filename
+    def _save_preview(self, doc_id: str, markdown: str, user_id: str) -> str:
+        from valuz_agent.ports.extensions import ext
 
-        preview_dir = getattr(self._docs_rt, "preview_dir", None)
-        if preview_dir is None:
-            preview_dir = Path.home() / ".valuz" / "app" / "docs" / "preview"
-        preview_dir.mkdir(parents=True, exist_ok=True)
-        safe_name = sanitize_preview_filename(source_filename)
-        preview_path = preview_dir / safe_name
-        if preview_path.exists():
-            preview_path = preview_dir / f"{doc_id}_{safe_name}"
-        preview_path.write_text(markdown, encoding="utf-8")
-        return str(preview_path)
+        # Preview markdown is valuz-owned (the original KB file is not). Store it
+        # on the asset store under a deterministic per-doc key; the row keeps the
+        # key (relative), resolved back to a local path on read.
+        key = f"docs/preview/{doc_id}.md"
+        ext.asset_store.put(user_id, key, markdown.encode("utf-8"))
+        return key
 
     def _parser_parse_sync(self, file_path: str) -> ParseResult:
         # Fast path: any backend that exposes ``parse_sync`` is invoked
