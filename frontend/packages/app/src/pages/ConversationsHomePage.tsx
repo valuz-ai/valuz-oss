@@ -11,6 +11,9 @@ import {
   type SkillSearchItem,
 } from "@valuz/ui";
 import {
+  automationItemSortKey,
+  automationsApi,
+  compareActivityEntries,
   providersApi,
   mcpProvidersApi,
   sessionsApi,
@@ -21,6 +24,8 @@ import {
   usePanelStore,
   useSessionAttachments,
   projectsApi,
+  type ActivitySortKey,
+  type AutomationItem,
   type LLMChannelDetail,
   type RuntimeId,
   type SessionListItem,
@@ -36,6 +41,9 @@ export const ConversationsHomePage = () => {
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
   const [input, setInput] = useState("");
   const [recentSessions, setRecentSessions] = useState<SessionListItem[]>([]);
+  // Second recents source (plan §4.2): automations merged into the recent list,
+  // running pinned to the top and clicking through to the detail page.
+  const [automations, setAutomations] = useState<AutomationItem[]>([]);
   const [dataSources, setDataSources] = useState<DataSourceOption[]>([]);
   const [enabledSlugs, setEnabledSlugs] = useState<string[]>([]);
   const [providers, setProviders] = useState<LLMChannelDetail[]>([]);
@@ -187,9 +195,17 @@ export const ConversationsHomePage = () => {
       const chatSessions = sessResponse.sessions.filter((s) =>
         chatWsIds.has(s.project_id),
       );
-      setRecentSessions(chatSessions.slice(0, 5));
+      // Keep a generous candidate pool — the final top-5 is decided after
+      // merging in automations and re-sorting with the shared comparator.
+      setRecentSessions(chatSessions.slice(0, 20));
     } catch {
       // Silently fail — home page still works with empty state
+    }
+    try {
+      const autoRes = await automationsApi.listGroups();
+      setAutomations(autoRes.groups.flatMap((group) => group.automations));
+    } catch {
+      // Silently fail — recents just omit automations.
     }
     try {
       const mcp = await mcpProvidersApi.list();
@@ -223,6 +239,50 @@ export const ConversationsHomePage = () => {
   useEffect(() => {
     void bootstrap();
   }, [bootstrap]);
+
+  // Merge recent chat sessions + automations into one list, ordered by the
+  // shared activity comparator (running first → recency → id) and capped at 5
+  // (plan §4.2 / §4.3). Sessions click through to the conversation; automations
+  // to the detail page.
+  const recentRows = useMemo(() => {
+    const rows: {
+      key: string;
+      title: string;
+      subtitle: string | null;
+      statusLabel: string;
+      href: string;
+      sortKey: ActivitySortKey;
+    }[] = [
+      ...recentSessions.map((session) => ({
+        key: `session-${session.id}`,
+        title:
+          session.name || t("cron.untitled" as Parameters<typeof t>[0]),
+        subtitle: session.last_user_message_text,
+        statusLabel: session.status,
+        href: `/conversation/${session.id}`,
+        sortKey: {
+          isRunning: session.status === "running",
+          activeTs: session.updated_at,
+          id: session.id,
+        } satisfies ActivitySortKey,
+      })),
+      ...automations.map((item) => ({
+        key: `automation-${item.automation_id}`,
+        title: item.name,
+        subtitle: item.trigger_human_readable,
+        statusLabel: item.is_running
+          ? t("activity.statusRunning" as Parameters<typeof t>[0])
+          : item.status === "paused"
+            ? t("activity.statusPaused" as Parameters<typeof t>[0])
+            : "",
+        href: `/automations/${item.automation_id}`,
+        sortKey: automationItemSortKey(item),
+      })),
+    ];
+    return rows
+      .sort((a, b) => compareActivityEntries(a.sortKey, b.sortKey))
+      .slice(0, 5);
+  }, [recentSessions, automations, t]);
 
   const handleConnectDataSource = (slug: string) => {
     // Hand off to settings; the OAuth completion flips `connected` and a re-bootstrap
@@ -375,32 +435,31 @@ export const ConversationsHomePage = () => {
               />
             </div>
 
-            {recentSessions.length > 0 ? (
+            {recentRows.length > 0 ? (
               <div className="mb-10">
                 <div className="label-mono mb-3">
                   {t("nav.chat" as Parameters<typeof t>[0])}
                 </div>
                 <div className="space-y-1.5">
-                  {recentSessions.map((session) => (
+                  {recentRows.map((row) => (
                     <button
-                      key={session.id}
+                      key={row.key}
                       type="button"
                       className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-surface-muted"
-                      onClick={() => navigate(`/conversation/${session.id}`)}
+                      onClick={() => navigate(row.href)}
                     >
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-sm text-ink-heading">
-                          {session.name ||
-                            t("cron.untitled" as Parameters<typeof t>[0])}
+                          {row.title}
                         </div>
-                        {session.last_user_message_text ? (
+                        {row.subtitle ? (
                           <div className="mt-0.5 truncate text-xs text-ink-meta">
-                            {session.last_user_message_text}
+                            {row.subtitle}
                           </div>
                         ) : null}
                       </div>
                       <span className="shrink-0 text-xs text-ink-meta">
-                        {session.status}
+                        {row.statusLabel}
                       </span>
                     </button>
                   ))}

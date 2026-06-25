@@ -11,7 +11,11 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { initI18n } from "@valuz/shared/i18n";
 import {
   applyBrandColors,
+  automationItemSortKey,
+  automationsApi,
+  compareActivityEntries,
   hydrateTheme,
+  runSummarySortKey,
   runsApi,
   sessionsApi,
   useBranding,
@@ -28,6 +32,7 @@ import {
   useProjectStore,
   useUpdaterStore,
   projectsApi,
+  type AutomationItem,
   type RunSummary,
 } from "@valuz/core";
 import {
@@ -339,10 +344,24 @@ export function ProjectLayoutBase({
   // visibly blocked the conversation page's ``bootstrap`` chain.
   const { runs: liveRuns } = useRunningRuns();
   const [finishedRuns, setFinishedRuns] = useState<RunSummary[]>([]);
+  // Second recents data source (plan §4.2): the full automation set. Running
+  // automations already arrive as ``source_kind:"automation"`` RunSummaries via
+  // ``/v1/runs`` (liveRuns); this source supplies the never-run / idle ones as
+  // always-visible rows. The merge below dedupes so a running automation never
+  // appears twice.
+  const [automations, setAutomations] = useState<AutomationItem[]>([]);
   const refreshFinishedRuns = useCallback(() => {
     void runsApi
       .list({ status: "finished" })
       .then((res) => setFinishedRuns(res.runs))
+      .catch(() => undefined);
+  }, []);
+  const refreshAutomations = useCallback(() => {
+    void automationsApi
+      .listGroups()
+      .then((res) =>
+        setAutomations(res.groups.flatMap((group) => group.automations)),
+      )
       .catch(() => undefined);
   }, []);
 
@@ -362,9 +381,10 @@ export function ProjectLayoutBase({
   // (liveRunIds == ""); subsequent runs fire only on real transitions.
   useEffect(() => {
     refreshFinishedRuns();
+    refreshAutomations();
     const retry = window.setTimeout(refreshFinishedRuns, 1500);
     return () => window.clearTimeout(retry);
-  }, [liveRunIds, refreshFinishedRuns]);
+  }, [liveRunIds, refreshFinishedRuns, refreshAutomations]);
 
   // Safety net for transitions both the change-detect missed (sub-2.5s
   // turns that never appeared in the running pool). Paused while the
@@ -373,7 +393,10 @@ export function ProjectLayoutBase({
   useEffect(() => {
     let handle: number | undefined;
     const start = () => {
-      handle = window.setInterval(refreshFinishedRuns, 60000);
+      handle = window.setInterval(() => {
+        refreshFinishedRuns();
+        refreshAutomations();
+      }, 60000);
     };
     const stop = () => {
       if (handle !== undefined) {
@@ -394,11 +417,14 @@ export function ProjectLayoutBase({
       document.removeEventListener("visibilitychange", onVisibility);
       stop();
     };
-  }, [refreshFinishedRuns]);
+  }, [refreshFinishedRuns, refreshAutomations]);
 
-  // Merge live + finished runs (dedupe by session), newest first, then split
-  // into per-project buckets and a loose "Chats" list. Each project's chats +
-  // tasks nest under it in the sidebar; everything project-less goes to Chats.
+  // Merge live + finished runs (dedupe by session) plus the automation second
+  // source into one list, ordered by the SHARED activity comparator (running
+  // first → recency → id; plan §4.3 — same rule as the menu / Activity), then
+  // split into per-project buckets and a loose "Chats" list. Each project's
+  // chats + tasks + automations nest under it; everything project-less goes to
+  // Chats.
   const { projectRunItems, chatItems } = useMemo(() => {
     const byId = new Map<string, RunSummary>();
     for (const r of liveRuns) byId.set(r.session_id, r);
@@ -409,33 +435,80 @@ export function ProjectLayoutBase({
     const toItem = (r: RunSummary): DesktopSidebarRecentItem => ({
       id: r.session_id,
       title: r.title,
-      // Tasks have their own page; chats route to the conversation view. Fall
-      // back to the conversation if a task somehow lacks a ``task_id`` so the
-      // row is always clickable.
+      // Automations link to the detail page; tasks to their own page; chats to
+      // the conversation view. Fall back to the conversation when an id is
+      // missing so the row is always clickable.
       href:
-        r.source_kind === "task" && r.task_id
-          ? `/tasks/${encodeURIComponent(r.task_id)}`
-          : `/conversation/${encodeURIComponent(r.session_id)}`,
-      kind: r.source_kind === "task" ? "task" : "chat",
+        r.source_kind === "automation" && r.automation_id
+          ? `/automations/${encodeURIComponent(r.automation_id)}`
+          : r.source_kind === "task" && r.task_id
+            ? `/tasks/${encodeURIComponent(r.task_id)}`
+            : `/conversation/${encodeURIComponent(r.session_id)}`,
+      kind:
+        r.source_kind === "task"
+          ? "task"
+          : r.source_kind === "automation"
+            ? "automation"
+            : "chat",
       isRunning: liveSet.has(r.session_id),
     });
-    const sorted = [...byId.values()].sort(
-      (a, b) => b.updated_at - a.updated_at,
-    );
+
+    // Automations already surfaced as running RunSummaries — don't duplicate
+    // them from the listGroups source.
+    const runningAutomationIds = new Set<string>();
+    for (const r of byId.values()) {
+      if (r.source_kind === "automation" && r.automation_id) {
+        runningAutomationIds.add(r.automation_id);
+      }
+    }
+
+    type Entry = {
+      item: DesktopSidebarRecentItem;
+      key: ReturnType<typeof runSummarySortKey>;
+      projectId: string;
+    };
+    const entries: Entry[] = [];
+    for (const r of byId.values()) {
+      entries.push({
+        item: toItem(r),
+        key: runSummarySortKey(r, liveSet.has(r.session_id)),
+        projectId: r.project_id,
+      });
+    }
+    const seenAuto = new Set<string>();
+    for (const a of automations) {
+      if (runningAutomationIds.has(a.automation_id)) continue;
+      if (seenAuto.has(a.automation_id)) continue;
+      seenAuto.add(a.automation_id);
+      entries.push({
+        item: {
+          // Namespaced id so a never-run automation row can never collide with
+          // a session row's React key.
+          id: `auto-${a.automation_id}`,
+          title: a.name,
+          href: `/automations/${encodeURIComponent(a.automation_id)}`,
+          kind: "automation",
+          isRunning: a.is_running,
+        },
+        key: automationItemSortKey(a),
+        projectId: a.project_id,
+      });
+    }
+    entries.sort((x, y) => compareActivityEntries(x.key, y.key));
+
     const byProject = new Map<string, DesktopSidebarRecentItem[]>();
     const loose: DesktopSidebarRecentItem[] = [];
-    for (const r of sorted) {
-      const item = toItem(r);
-      if (r.project_id && projectIdSet.has(r.project_id)) {
-        const arr = byProject.get(r.project_id);
-        if (arr) arr.push(item);
-        else byProject.set(r.project_id, [item]);
+    for (const entry of entries) {
+      if (entry.projectId && projectIdSet.has(entry.projectId)) {
+        const arr = byProject.get(entry.projectId);
+        if (arr) arr.push(entry.item);
+        else byProject.set(entry.projectId, [entry.item]);
       } else {
-        loose.push(item);
+        loose.push(entry.item);
       }
     }
     return { projectRunItems: byProject, chatItems: loose };
-  }, [liveRuns, finishedRuns, projectIdSet]);
+  }, [liveRuns, finishedRuns, automations, projectIdSet]);
 
   const projectGroups: DesktopSidebarProjectGroup[] = useMemo(
     () =>

@@ -536,7 +536,9 @@ export interface DesktopSidebarRecentItem {
   id: string;
   title: string;
   href: string;
-  kind: "chat" | "task";
+  /** ``automation`` rows link to the automation detail page and — like tasks —
+   * carry no inline rename/delete menu (those live on the detail page). */
+  kind: "chat" | "task" | "automation";
   /** ``true`` when the run is currently in the live ``running`` pool;
    * decorates the row with a brand-tinted pulsing dot. */
   isRunning?: boolean;

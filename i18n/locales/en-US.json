@@ -698,6 +698,7 @@
     "earlier": "Earlier",
     "chatTag": "Chat",
     "taskTag": "Task",
+    "automationTag": "Automation",
     "filterAll": "All",
     "live": "Live",
     "waitingForEvents": "Waiting for events…",

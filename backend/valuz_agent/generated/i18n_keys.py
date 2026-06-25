@@ -9,6 +9,7 @@ from typing import Literal
 
 # fmt: off
 I18nKey = Literal[
+    "activity.automationTag",
     "activity.cardView",
     "activity.chatTag",
     "activity.deleteChat",

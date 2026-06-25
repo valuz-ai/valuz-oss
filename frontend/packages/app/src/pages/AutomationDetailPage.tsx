@@ -35,6 +35,7 @@ import {
   StatusPill,
   Tooltip,
   TooltipContent,
+  TooltipProvider,
   TooltipTrigger,
 } from "@valuz/ui";
 import type { ExecutionLogRow } from "@valuz/ui";
@@ -355,31 +356,33 @@ export const AutomationDetailPage = () => {
               <Pencil className="h-3.5 w-3.5" />
               {t(k("automation.actionEdit"))}
             </Button>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                {/* span wrapper so the tooltip still fires on a disabled button */}
-                <span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!canRunNow || runningNow}
-                    onClick={() => void handleRunNow()}
-                  >
-                    {runningNow ? (
-                      <Spinner className="h-3.5 w-3.5" />
-                    ) : (
-                      <Play className="h-3.5 w-3.5" />
-                    )}
-                    {t(k("automation.actionRunNow"))}
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              {running && (
-                <TooltipContent>
-                  {t(k("automation.runningTooltip"))}
-                </TooltipContent>
-              )}
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {/* span wrapper so the tooltip still fires on a disabled button */}
+                  <span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={!canRunNow || runningNow}
+                      onClick={() => void handleRunNow()}
+                    >
+                      {runningNow ? (
+                        <Spinner className="h-3.5 w-3.5" />
+                      ) : (
+                        <Play className="h-3.5 w-3.5" />
+                      )}
+                      {t(k("automation.actionRunNow"))}
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                {running && (
+                  <TooltipContent>
+                    {t(k("automation.runningTooltip"))}
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            </TooltipProvider>
             <Button variant="outline" size="sm" onClick={() => void handleToggle()}>
               {detail.status === "enabled" ? (
                 <>

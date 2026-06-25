@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { useNavigate } from "react-router-dom";
-import { ListChecks, MessageSquare } from "lucide-react";
+import { Clock3, ListChecks, MessageSquare } from "lucide-react";
 import {
   DeleteConfirmDialog,
   PageHeader,
@@ -17,7 +17,11 @@ import {
   TabsTrigger,
 } from "@valuz/ui";
 import {
+  automationItemSortKey,
+  automationsApi,
   buildTurns,
+  compareActivityEntries,
+  runSummarySortKey,
   runsApi,
   sessionsApi,
   useRunningRuns,
@@ -25,6 +29,7 @@ import {
   useSessionStore,
   useTranslation,
   useProjectStore,
+  type AutomationItem,
   type RunSummary,
 } from "@valuz/core";
 import {
@@ -40,7 +45,7 @@ import {
 } from "@valuz/app/components";
 import { useProjectOutlet } from "@valuz/app/layout";
 
-type SourceFilter = "all" | "chat" | "task";
+type SourceFilter = "all" | "chat" | "task" | "automation";
 type TimeBucket = "today" | "yesterday" | "thisWeek" | "earlier";
 
 const tk = (key: string) =>
@@ -174,8 +179,6 @@ const aggregateEvents = (events: SessionEventDTO[]): DashboardLine[] => {
 interface RunningCardProps {
   run: RunSummary;
   sourceLabel: string;
-  /** ``true`` when the run is a task; drives the leading icon. */
-  isTask: boolean;
   statusChip: ReactNode;
   onOpen: () => void;
   t: Translator;
@@ -186,12 +189,19 @@ const RUNNING_VISIBLE_LINES = 5;
 const RunningCard = ({
   run,
   sourceLabel,
-  isTask,
   statusChip,
   onOpen,
   t,
 }: RunningCardProps) => {
-  const ScopeIcon = isTask ? ListChecks : MessageSquare;
+  // Leading icon by source: task → checklist, automation → clock,
+  // chat (assistant / project_chat) → message bubble. A running automation
+  // reaches this card via the cross-type Running group (plan §4.1 path B).
+  const ScopeIcon =
+    run.source_kind === "task"
+      ? ListChecks
+      : run.source_kind === "automation"
+        ? Clock3
+        : MessageSquare;
   // No ``max`` override — rely on the hook default. The visible-line cap
   // below handles display trimming; the buffer needs to be large enough that
   // batch counts (``Called harness 10 times``, ``Ran 6 commands``) survive
@@ -279,6 +289,12 @@ export const ActivityPage = () => {
 
   const [filter, setFilter] = useState<SourceFilter>("all");
   const [finished, setFinished] = useState<RunSummary[]>([]);
+  // Second data source for the "automation" tab (plan §4.1 path A): every
+  // automation gets exactly one row — including never-run / idle ones — read
+  // straight off ``listGroups``' ``AutomationItem.is_running``. These rows do
+  // NOT flow through the ``RunSummary`` pipeline (no session, no SSE, no
+  // rename/delete); they only navigate to the detail page.
+  const [automations, setAutomations] = useState<AutomationItem[]>([]);
   // The row currently up for delete-confirmation. ``null`` when no dialog
   // is open. Only chat rows can populate this — tasks have no DELETE
   // endpoint (see openapi.yaml) so we don't expose a trash affordance on
@@ -320,6 +336,21 @@ export const ActivityPage = () => {
   useEffect(() => {
     refreshFinished();
   }, [refreshFinished]);
+
+  // Pull the full automation set for the "automation" tab. ``is_running`` is the
+  // server-side projection (plan §3.2), so one call gives correct run state for
+  // every automation — no N×listRuns, no task-type under-detection.
+  const refreshAutomations = useCallback(() => {
+    void automationsApi
+      .listGroups()
+      .then((res) =>
+        setAutomations(res.groups.flatMap((group) => group.automations)),
+      )
+      .catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    refreshAutomations();
+  }, [refreshAutomations]);
   const prevRunningIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const currentIds = new Set(running.map((r) => r.session_id));
@@ -357,9 +388,12 @@ export const ActivityPage = () => {
   // miss a transition. Cheap (one HTTP request, response is just session
   // metadata) and means a stale history can never persist past one tick.
   useEffect(() => {
-    const handle = window.setInterval(refreshFinished, 5000);
+    const handle = window.setInterval(() => {
+      refreshFinished();
+      refreshAutomations();
+    }, 5000);
     return () => window.clearInterval(handle);
-  }, [refreshFinished]);
+  }, [refreshFinished, refreshAutomations]);
 
   // Label: ``<project> · <kind>`` for project-scoped runs, bare ``<kind>``
   // for the default project. Prefixing the default chats with the
@@ -373,6 +407,10 @@ export const ActivityPage = () => {
   );
 
   const sourceLabel = (r: RunSummary): string => {
+    if (r.source_kind === "automation") {
+      const tag = t(tk("activity.automationTag"));
+      return r.project_name ? `${r.project_name} · ${tag}` : tag;
+    }
     const isProject =
       r.source_kind === "project_chat" ||
       (r.source_kind === "task" &&
@@ -389,7 +427,9 @@ export const ActivityPage = () => {
   const matchesFilter = (r: RunSummary): boolean => {
     if (filter === "all") return true;
     if (filter === "task") return r.source_kind === "task";
-    return r.source_kind !== "task"; // chat
+    // chat — assistant / project_chat only; excludes automation (and task) so a
+    // running automation RunSummary never leaks into the chat tab (plan §4.1).
+    return r.source_kind === "assistant" || r.source_kind === "project_chat";
   };
 
   const filteredRunning = useMemo(
@@ -403,14 +443,46 @@ export const ActivityPage = () => {
     [finished, filter],
   );
 
-  const displayRunning = filteredRunning;
+  // Cross-type Running group ordering (plan §4.3): everything here is running,
+  // so the shared comparator collapses to ``activeTs`` desc → ``id`` asc — the
+  // same rule the menu/sidebar use, keeping all surfaces in one order.
+  const displayRunning = useMemo(
+    () =>
+      [...filteredRunning].sort((a, b) =>
+        compareActivityEntries(
+          runSummarySortKey(a, true),
+          runSummarySortKey(b, true),
+        ),
+      ),
+    [filteredRunning],
+  );
+
+  // Automation tab rows (plan §4.1 path A), pinned + ordered by the same
+  // comparator: ``is_running`` desc → ``last_run_at ?? next_run_at ?? created_at``
+  // desc → ``automation_id`` asc.
+  const sortedAutomations = useMemo(
+    () =>
+      [...automations].sort((a, b) =>
+        compareActivityEntries(
+          automationItemSortKey(a),
+          automationItemSortKey(b),
+        ),
+      ),
+    [automations],
+  );
 
   const openRun = (r: RunSummary): void => {
-    if (r.source_kind === "task" && r.task_id) {
+    if (r.source_kind === "automation" && r.automation_id) {
+      navigate(`/automations/${encodeURIComponent(r.automation_id)}`);
+    } else if (r.source_kind === "task" && r.task_id) {
       navigate(`/tasks/${encodeURIComponent(r.task_id)}`);
     } else {
       navigate(`/conversation/${encodeURIComponent(r.session_id)}`);
     }
+  };
+
+  const openAutomation = (item: AutomationItem): void => {
+    navigate(`/automations/${encodeURIComponent(item.automation_id)}`);
   };
 
   const renderStatusChip = (run: RunSummary) => {
@@ -427,8 +499,17 @@ export const ActivityPage = () => {
   // ``button``, and nested buttons are invalid HTML. Keyboard accessibility:
   // ``role="button"`` + ``tabIndex`` + Enter / Space.
   const historyRow = (run: RunSummary) => {
-    const ScopeIcon = run.source_kind === "task" ? ListChecks : MessageSquare;
-    const canDelete = run.source_kind !== "task";
+    const ScopeIcon =
+      run.source_kind === "task"
+        ? ListChecks
+        : run.source_kind === "automation"
+          ? Clock3
+          : MessageSquare;
+    // Only plain chats expose inline rename/delete. Tasks have no DELETE
+    // endpoint; automations are renamed/deleted from their detail page
+    // (plan §4.1 path B) — so both are read-only rows here.
+    const canDelete =
+      run.source_kind === "assistant" || run.source_kind === "project_chat";
     if (canDelete && renamingId === run.session_id) {
       return (
         <div
@@ -527,6 +608,48 @@ export const ActivityPage = () => {
     <div className="flex flex-col">{runs.map(historyRow)}</div>
   );
 
+  // Automation tab row (plan §4.1 path A) — list-shaped like ``historyRow`` but
+  // sourced from ``AutomationItem`` (not ``RunSummary``): no session, so no SSE,
+  // no rename/delete. The whole row navigates to the detail page. A running
+  // automation pulses; a paused one shows a paused pill; an idle/enabled one
+  // leans on its trigger subtitle and shows no pill.
+  const automationRow = (item: AutomationItem) => {
+    const statusPill = item.is_running ? (
+      <StatusPill status="running" label={t(tk("activity.statusRunning"))} />
+    ) : item.status === "paused" ? (
+      <StatusPill status="paused" label={t(tk("activity.statusPaused"))} />
+    ) : null;
+    return (
+      <div
+        key={item.automation_id}
+        role="button"
+        tabIndex={0}
+        onClick={() => openAutomation(item)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            openAutomation(item);
+          }
+        }}
+        className="group flex w-full cursor-default items-center gap-2 rounded-xl px-3 py-3 text-left transition-colors hover:bg-surface-soft"
+      >
+        <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-ink-muted">
+          <Clock3 className="h-3 w-3" strokeWidth={2} />
+          {t(tk("activity.automationTag"))}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-heading">
+          {item.name}
+        </span>
+        <span className="shrink-0 whitespace-nowrap text-[11px] text-ink-meta">
+          {item.trigger_human_readable}
+        </span>
+        <span className="relative inline-flex min-w-6 shrink-0 items-center justify-center">
+          {statusPill}
+        </span>
+      </div>
+    );
+  };
+
   // Running: always card-shaped (regardless of view toggle); each card
   // subscribes to its own session's SSE stream so the dashboard auto-updates.
   // Wider cards (max 2 columns) so the streaming event log has room to breathe.
@@ -537,7 +660,6 @@ export const ActivityPage = () => {
           key={r.session_id}
           run={r}
           sourceLabel={sourceLabel(r)}
-          isTask={r.source_kind === "task"}
           statusChip={renderStatusChip(r)}
           onOpen={() => openRun(r)}
           t={t}
@@ -566,6 +688,7 @@ export const ActivityPage = () => {
     { value: "all", labelKey: "activity.filterAll" },
     { value: "chat", labelKey: "activity.chatTag" },
     { value: "task", labelKey: "activity.taskTag" },
+    { value: "automation", labelKey: "activity.automationTag" },
   ];
 
   // ──────────────────────────────────────────────────────────────
@@ -593,55 +716,74 @@ export const ActivityPage = () => {
         </div>
       </Tabs>
 
-      {/* Running section — visible whenever the display list has anything
-          (real running from polling + the two demo style-case runs pinned
-          from today). Sits at the top so the user lands on the live
-          dashboard. Followed by a divider before the always-visible
-          history. */}
-      {displayRunning.length > 0 && (
+      {/* "Automation" tab (plan §4.1 path A): an independent list view rendered
+          straight from ``AutomationItem`` — one row per automation including the
+          never-run ones — NOT the ``RunSummary`` running/history pipeline. */}
+      {filter === "automation" ? (
         <section className="mt-5">
-          <div className="mb-2 flex items-center gap-2 px-3">
-            <span className="text-[11.5px] font-normal uppercase tracking-[0.06em] text-ink-body">
-              {t(tk("activity.running"))}
-            </span>
-            <span className="text-[11.5px] font-medium text-ink-meta">
-              · {displayRunning.length}
-            </span>
-          </div>
-          {renderRunning(displayRunning)}
-          <div className="my-6 border-t border-surface-border" />
-        </section>
-      )}
-
-      {/* History — grouped by time bucket; always rendered (no tab gate). */}
-      <section className={displayRunning.length > 0 ? "" : "mt-5"}>
-        {filteredFinished.length === 0 ? (
-          hasAny ? null : (
+          {sortedAutomations.length === 0 ? (
             <div className="px-3 py-12 text-center text-sm text-ink-meta">
               {t(tk("activity.noHistory"))}
             </div>
-          )
-        ) : (
-          <div className="flex flex-col gap-5">
-            {BUCKET_ORDER.filter((b) => groupedHistory.has(b)).map((b) => (
-              <div key={b}>
-                <div className="mb-1.5 px-3 text-[11.5px] font-normal uppercase tracking-[0.06em] text-ink-body">
-                  {t(tk(BUCKET_KEY[b]))}
-                </div>
-                {renderHistory(groupedHistory.get(b) ?? [])}
+          ) : (
+            <div className="flex flex-col">
+              {sortedAutomations.map(automationRow)}
+            </div>
+          )}
+        </section>
+      ) : (
+        <>
+          {/* Running section — visible whenever the display list has anything
+              (real running from polling + the two demo style-case runs pinned
+              from today). Sits at the top so the user lands on the live
+              dashboard. Followed by a divider before the always-visible
+              history. */}
+          {displayRunning.length > 0 && (
+            <section className="mt-5">
+              <div className="mb-2 flex items-center gap-2 px-3">
+                <span className="text-[11.5px] font-normal uppercase tracking-[0.06em] text-ink-body">
+                  {t(tk("activity.running"))}
+                </span>
+                <span className="text-[11.5px] font-medium text-ink-meta">
+                  · {displayRunning.length}
+                </span>
               </div>
-            ))}
-          </div>
-        )}
-      </section>
+              {renderRunning(displayRunning)}
+              <div className="my-6 border-t border-surface-border" />
+            </section>
+          )}
 
-      {/* Truly empty (nothing matches the filter, nothing running). Falls
-          through to here only when there's neither a running nor a history
-          entry matching the current filter. */}
-      {!hasAny && filter !== "all" && (
-        <div className="px-3 py-12 text-center text-sm text-ink-meta">
-          {t(tk("activity.noHistory"))}
-        </div>
+          {/* History — grouped by time bucket; always rendered (no tab gate). */}
+          <section className={displayRunning.length > 0 ? "" : "mt-5"}>
+            {filteredFinished.length === 0 ? (
+              hasAny ? null : (
+                <div className="px-3 py-12 text-center text-sm text-ink-meta">
+                  {t(tk("activity.noHistory"))}
+                </div>
+              )
+            ) : (
+              <div className="flex flex-col gap-5">
+                {BUCKET_ORDER.filter((b) => groupedHistory.has(b)).map((b) => (
+                  <div key={b}>
+                    <div className="mb-1.5 px-3 text-[11.5px] font-normal uppercase tracking-[0.06em] text-ink-body">
+                      {t(tk(BUCKET_KEY[b]))}
+                    </div>
+                    {renderHistory(groupedHistory.get(b) ?? [])}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Truly empty (nothing matches the filter, nothing running). Falls
+              through to here only when there's neither a running nor a history
+              entry matching the current filter. */}
+          {!hasAny && filter !== "all" && (
+            <div className="px-3 py-12 text-center text-sm text-ink-meta">
+              {t(tk("activity.noHistory"))}
+            </div>
+          )}
+        </>
       )}
       <DeleteConfirmDialog
         open={deletingChat !== null}

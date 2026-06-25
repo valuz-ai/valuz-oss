@@ -3,6 +3,7 @@
 
 /** Dot-path translation keys from i18n/locales/en-US.json. */
 export type KnownI18nKey =
+  | "activity.automationTag"
   | "activity.cardView"
   | "activity.chatTag"
   | "activity.deleteChat"

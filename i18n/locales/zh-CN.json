@@ -698,6 +698,7 @@
     "earlier": "更早",
     "chatTag": "对话",
     "taskTag": "任务",
+    "automationTag": "自动化",
     "filterAll": "全部",
     "live": "实时",
     "waitingForEvents": "等待事件…",
