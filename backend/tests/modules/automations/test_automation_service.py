@@ -31,6 +31,8 @@ from valuz_agent.modules.automations.errors import (
     AgentNotFound,
     AgentNotInProject,
     AutomationAgentRequired,
+    AutomationAlreadyQueued,
+    AutomationAlreadyRunning,
     AutomationNameEmpty,
     AutomationNotFound,
     AutomationProjectNotFound,
@@ -807,6 +809,88 @@ class TestComputeIsRunning:
 
         monkeypatch.setattr(service, "_resolve_task_statuses", boom)
         assert await service._compute_is_running(_run("queued", session_id="sess-1")) is True
+
+
+def _task_automation_row() -> AutomationRow:
+    return AutomationRow(
+        id="a1",
+        project_id="ws-proj",
+        name="Daily",
+        agent_kind="project_member",
+        agent_slug="qa-engineer",
+        action_kind="task",
+        trigger_kind="manual",
+        prompt_template="x",
+        status="enabled",
+        created_at=1,
+    )
+
+
+class TestRunNowSingleFlight:
+    """``run_now`` reuses ``_compute_is_running`` so its single-flight 409 stays
+    in lock-step with the ``is_running`` the list/detail surfaces show — a task
+    kickoff that froze its run to ``success`` while the task is still ``active``
+    must not slip a second run past the guard."""
+
+    async def test_rejects_when_queued(
+        self,
+        service: AutomationService,
+        datastore: FakeAutomationDatastore,
+    ) -> None:
+        datastore.rows["a1"] = _task_automation_row()
+        run = _run("queued")
+        datastore.runs[run.id] = run
+        with pytest.raises(AutomationAlreadyQueued):
+            await service.run_now("a1")
+
+    async def test_rejects_when_task_active_after_success(
+        self,
+        service: AutomationService,
+        datastore: FakeAutomationDatastore,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The run row froze to ``success`` at kickoff but the task is still
+        # ``active`` — the old ``status == "running"`` check missed this and let
+        # a duplicate run enqueue, bypassing the 409.
+        datastore.rows["a1"] = _task_automation_row()
+        run = _run("success", session_id="sess-1")
+        datastore.runs[run.id] = run
+
+        async def fake_resolve(runs: list[AutomationRunRow]) -> dict[str, str]:
+            return {"sess-1": "active"}
+
+        monkeypatch.setattr(service, "_resolve_task_statuses", fake_resolve)
+
+        with pytest.raises(AutomationAlreadyRunning):
+            await service.run_now("a1")
+
+    async def test_allows_when_task_settled_after_success(
+        self,
+        service: AutomationService,
+        datastore: FakeAutomationDatastore,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Settled task (e.g. paused/completed) → not running → re-run allowed.
+        datastore.rows["a1"] = _task_automation_row()
+        run = _run("success", session_id="sess-1")
+        datastore.runs[run.id] = run
+
+        async def fake_resolve(runs: list[AutomationRunRow]) -> dict[str, str]:
+            return {"sess-1": "paused"}
+
+        monkeypatch.setattr(service, "_resolve_task_statuses", fake_resolve)
+
+        import valuz_agent.modules.automations.in_process_runner as runner_mod
+
+        class _NoopRunner:
+            def enqueue_threadsafe(self, *_a: Any, **_k: Any) -> None:
+                pass
+
+        monkeypatch.setattr(runner_mod, "automation_runner", _NoopRunner())
+
+        accepted = await service.run_now("a1")
+        assert accepted.status == "queued"
+        assert accepted.automation_id == "a1"
 
 
 class TestItemAndDetailProjection:

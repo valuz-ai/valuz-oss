@@ -27,6 +27,20 @@ class _FakeStore:
         return []
 
 
+class _ListAllStore:
+    """Datastore double whose ``list_all`` returns a fixed set of rows — used to
+    plant task-lead sessions / task rows for the effective-status mapping."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def list_projects(self, *_a, **_k):
+        return []
+
+    async def list_all(self, *_a, **_k):
+        return self._rows
+
+
 def _async_return(value):
     async def _inner(*_a, **_k):
         return value
@@ -86,6 +100,61 @@ async def test_automation_session_is_relabelled(monkeypatch):
     # The non-automation session is untouched.
     assert out["chat-sess"].source_kind == "assistant"
     assert out["chat-sess"].automation_id is None
+
+
+@pytest.mark.asyncio
+async def test_paused_task_automation_excluded_from_running(monkeypatch):
+    """A paused-task automation is NOT running (PRD: success + task_status=paused)
+    so it must not enter the cross-type Running group via the automation
+    projection — it lives only in the standalone automations list. An
+    active-task automation still surfaces, and a plain (non-automation) paused
+    task is left untouched (its existing in-flight behaviour is by design)."""
+    sessions = [
+        SimpleNamespace(id="auto-paused", status="idle", created_at=3),
+        SimpleNamespace(id="auto-active", status="idle", created_at=2),
+        SimpleNamespace(id="task-paused", status="idle", created_at=1),
+    ]
+    _wire(monkeypatch, sessions)
+
+    async def index(session_ids):
+        # ``task-paused`` is intentionally NOT automation-backed.
+        return {"auto-paused": "automation-paused", "auto-active": "automation-active"}
+
+    task_sessions = _ListAllStore(
+        [
+            SimpleNamespace(session_id="auto-paused", kind="lead", task_id="t-paused"),
+            SimpleNamespace(session_id="auto-active", kind="lead", task_id="t-active"),
+            SimpleNamespace(session_id="task-paused", kind="lead", task_id="t-plain"),
+        ]
+    )
+    tasks = _ListAllStore(
+        [
+            SimpleNamespace(id="t-paused", status="paused"),
+            SimpleNamespace(id="t-active", status="active"),
+            SimpleNamespace(id="t-plain", status="paused"),
+        ]
+    )
+    service = RunsService(
+        _FakeStore(), task_sessions, tasks, _FakeStore(), automation_index=index
+    )
+
+    async def _build(sess, *_a, **_k):
+        return _summary(sess.id, "task")
+
+    service._build = _build  # type: ignore[method-assign]
+
+    out = {r.session_id: r for r in await service.list_runs(status="running")}
+
+    # Paused-task automation dropped from the running projection entirely.
+    assert "auto-paused" not in out
+    # Active-task automation still surfaces, relabelled to the automation source.
+    assert "auto-active" in out
+    assert out["auto-active"].source_kind == "automation"
+    assert out["auto-active"].automation_id == "automation-active"
+    # Plain (non-automation) paused task is unaffected — still in-flight.
+    assert "task-paused" in out
+    assert out["task-paused"].source_kind == "task"
+    assert out["task-paused"].automation_id is None
 
 
 @pytest.mark.asyncio

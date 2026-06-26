@@ -9,15 +9,18 @@
 按 PRD v2「范围与 API 决策」，本版**允许最小只读契约新增，且契约先行**——这是为了根治
 「菜单/动态运行态正确性」这条 **P0**。**两处契约新增（均只读、不碰调度/执行/create/update 核心）**：
 
-1. **`AutomationItemResponse` 回填 3 个只读字段 `is_running` / `latest_run` / `created_at`**
+1. **`AutomationItemResponse` 回填 2 个只读字段 `is_running` / `created_at`**
    （list + detail 共享，因 `AutomationDetailResponse` extends item）：
    - `is_running: bool` —— **运行态权威布尔**（服务端对 `isAutomationRunning()` 的投影），让菜单/动态对**全量自动化**
      一次拿到正确运行态，避免 N×`listRuns` 轮询，并修掉 **task 型漏判**（见 §3）。
-   - `latest_run: AutomationLatestRun | null` —— 最新一条 run 的摘要（`run_id/status/task_status/session_id/triggered_at`）。
-     给：前端 `isAutomationRunning(latest_run)` 输入、展示态映射、**自动化运行卡 deep-link + SSE 订阅**（`latest_run.session_id`）、
-     排序活跃时间戳。`null` = 从未运行。
    - `created_at: int` —— 从 detail 下放到 list item，给排序比较器的**最终回退键** `last_run_at ?? next_run_at ?? created_at`
      （**对齐 prd.md 比较器**，见 §4.3）。该值已在 ORM row 上（`service.py:_row_to_detail:272`）。
+   - ⚠️ **`latest_run` 未落地（契约债，本版不补）**：原设计曾拟回填 `latest_run: AutomationLatestRun | null`
+     （`run_id/status/task_status/session_id/triggered_at`）。**实际收口为只补 `is_running`**——它已是
+     `isAutomationRunning()` 的服务端投影，足以覆盖菜单/动态的运行态判定；详情页本就有全量 `listRuns`、用
+     `listRuns[0]` 客户端直接算。故 **`AutomationItem` 不含 `latest_run`、不引入 `AutomationLatestRun` schema**
+     （openapi / `schemas.py` / `automations-api.ts` 三处均无）。`latest_run` 作为**未还的契约债**记入 §8，
+     待「自动化运行卡需服务端直供 deep-link / SSE 订阅元数据」时再补。
 2. **`/v1/runs` 新增 `automation` 来源类型 + `automation_id`**：让**运行中**自动化以 `source_kind="automation"` +
    `automation_id` 的 `RunSummary` 进入跨类型 Running 组（§4.1 路径 B）——其 `session_id` 即承载该 run 的会话，**必非空**。
    这同时把自动化触发的 session 从 chat/task 桶里**正确剥离**（否则会伪装成普通 chat run 重复出现、错跳）。
@@ -26,12 +29,13 @@
 
 **运行态唯一语义 `isAutomationRunning(latestRun)` 三处复用（`@valuz/core`，与后端 `is_running` 同口径，单测钉死一致）**：
 - **详情页** = `listRuns(id)[0]`（最新 run，客户端跑完整语义）——已正确，不变；
-- **菜单**（最近列表 / 侧边 Recents）= `AutomationItem.is_running`（服务端预计算）/ `isAutomationRunning(latest_run)`；
+- **菜单**（最近列表 / 侧边 Recents）= `AutomationItem.is_running`（服务端预计算）；
 - **动态**（Activity）：「自动化」Tab 读 `AutomationItem.is_running`（路径 A，含未运行行）；跨类型 Running 组由 `/v1/runs`
   运行中 automation 的 `source_kind="automation"` `RunSummary` 进 running 池（路径 B，仅「有 `session_id` 的运行中自动化」，见 §4.1）。
 
-语义同一（`run.status ∈ {queued,running}` 或 run 结算后 `task_status == active`）：`is_running` 就是服务端对该函数的投影，
-`latest_run` 是其输入数据，客户端不再逐条 `listRuns`。
+语义同一（`run.status ∈ {queued,running}` 或 run 结算后 `task_status == active`）：`is_running` 就是服务端对该函数的投影。
+**服务端只暴露这枚布尔，不回 `latest_run`**——列表/菜单/动态直接消费 `is_running`，详情页用客户端 `listRuns[0]` 自算，
+两侧由单测钉死同口径。`latest_run` 字段不在契约内（见 §8 契约债）。
 
 > ⚠️ **契约债前置**：`/v1/automations/*` 当前**完全不在** `api/openapi.yaml`（grep 命中 0），前端类型为
 > **手写**且已有漂移（如 `AutomationRunItem.error_message` 后端不返回，详见 §7）。本版要动 `is_running`
@@ -141,9 +145,13 @@ cron**——manual 触发器被永久覆盖。后端与前端类型**都支持**
   自动化触发的 session 当前被归类为通用 `assistant`/`project_chat`/`task`，且 `RunSummary` **不含 `automation_id`**
   → 无法据此反推「哪条自动化在跑」。本版**新增 `automation` 来源类型 + `automation_id`** 解掉这一限制（§4）。
 - per-automation 运行态的**唯一语义** `isAutomationRunning(latestRun)`（PRD「运行态判定」映射表）：
-  1. `latest_run.status ∈ {queued, running}` → **运行中**（`run.status` 优先，`task_status` 不参与）；
-  2. 否则若 task 型且 `latest_run.task_status == active` → **运行中**（run 行已结算但 task 仍活跃）；
+  1. `latestRun.status ∈ {queued, running}` → **运行中**（`run.status` 优先，`task_status` 不参与）；
+  2. 否则若 task 型且 `latestRun.task_status == active` → **运行中**（run 行已结算但 task 仍活跃）；
   3. 否则非运行中（`success+paused`=已暂停、`failed`/`skipped`/`interrupted_by_shutdown` 各自展示）。
+
+> 此处 `latestRun` 是**客户端**入参 = `listRuns(id)[0]`（一条 `AutomationRunItem`，自带 `status`/`task_status`/
+> `session_id`），**不是**服务端契约字段——契约里没有 `latest_run`（见 §1 / §8）。服务端把同一规则投影为
+> `AutomationItem.is_running` 直供列表/菜单/动态。
 
 > `runToLogStatus`/`runStatusToLogStatus` 当前是 `AutomationPage.tsx` 模块内私有函数。详情页要用它把 run →
 > 行状态。**提取为共享纯函数**（建议放 `@valuz/core`，如 `automation-run-status.ts`，导出 `runToLogStatus` +
@@ -399,8 +407,11 @@ PRD 的「菜单」含两个面：
 4. **排序梯度缺 created_at**：列表数据源 `AutomationItem` 无 `created_at`，比较器用 `last_run_at ?? next_run_at ?? 0`，
    省 created_at 段（§4.3）；规模化/严格排序前可在 list 补字段。
 5. **契约债**：automations 全家桶原不在 OpenAPI、类型手写有漂移（`error_message`）。本版**已把** `is_running` 与
-   `/v1/runs` automation 来源所需片段纳入「先补 OpenAPI」，并顺带登记/修正 `error_message` 漂移；list 的 `created_at`
-   兜底字段仍记为未还的契约债。
+   `/v1/runs` automation 来源所需片段纳入「先补 OpenAPI」，并顺带登记/修正 `error_message` 漂移。
+   **`latest_run` 收口为未还契约债**：原设计拟在 `AutomationItem` 回填 `latest_run: AutomationLatestRun | null`
+   （`run_id/status/task_status/session_id/triggered_at`），**本版未实现**——`is_running` 已是同一规则的服务端投影、
+   足以驱动菜单/动态运行态，详情页用客户端 `listRuns[0]` 自算，故 openapi / `schemas.py` / `automations-api.ts`
+   三处**均不含** `latest_run` / `AutomationLatestRun`。待「自动化运行卡需服务端直供 deep-link / SSE 元数据」时再补。
 6. **项目已删降级**（P2 known edge，§5.2）：依赖后端是否容错返回详情；本版纯前端降级，不改后端 DTO 形状。
 
 ---

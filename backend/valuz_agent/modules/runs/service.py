@@ -195,8 +195,19 @@ class RunsService:
             if task_session is not None and task_session.kind == "subtask":
                 continue
             effective = self._effective_status(_map_status(sess.status), task_session, task_map)
+            automation_id = auto_by_session.get(sess.id)
             if status == "running":
                 if effective not in _RUNNING_RUN_STATUS:
+                    continue
+                # Automation-source runs only belong in the cross-type Running
+                # group with genuine "running" semantics (run active, or a task
+                # automation whose lead is still ``active``). A ``paused``
+                # automation is NOT running per the PRD run-state table
+                # (success + task_status=paused) — it surfaces only in the
+                # standalone automations list (``listGroups``), never pinned
+                # here. Leaves chat/task paused behaviour untouched: that
+                # exclusion applies solely to automation-backed sessions.
+                if automation_id is not None and effective != "running":
                     continue
             elif effective not in _FINISHED_RUN_STATUS:
                 continue
@@ -219,7 +230,6 @@ class RunsService:
                 continue
             # Relabel automation-backed sessions after enrichment, so the card
             # keeps its last_output / last_event but routes to the automation.
-            automation_id = auto_by_session.get(sess.id)
             if automation_id is not None:
                 summary.source_kind = "automation"
                 summary.automation_id = automation_id

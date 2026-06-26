@@ -896,10 +896,16 @@ class AutomationService:
     async def run_now(self, automation_id: str) -> AutomationRunAcceptedResponse:
         """Enqueue a manual run for this automation.
 
-        Single-flight: refuses to enqueue while the most recent run is
-        still queued or running. The runner's in-memory ``_active_ids``
-        guards against the cron-triggered path; this DB-side check guards
-        against two rapid "run now" clicks racing each other.
+        Single-flight: refuses to enqueue while the most recent run is still
+        in-flight. ``queued`` is reported distinctly; anything else that
+        ``_compute_is_running`` deems running (``running``, or a task
+        automation whose run froze to ``success`` while ``task_status`` is
+        still ``active``) raises ``AutomationAlreadyRunning``. Sharing that
+        projection with the list item keeps the 409 in lock-step with the
+        ``is_running`` the UI shows — a task kickoff can't slip a second run
+        past the guard. The runner's in-memory ``_active_ids`` guards the
+        cron-triggered path; this DB-side check guards two rapid "run now"
+        clicks racing each other.
         """
         from valuz_agent.modules.automations.in_process_runner import (
             automation_runner,
@@ -915,7 +921,7 @@ class AutomationService:
         if existing is not None:
             if existing.status == "queued":
                 raise AutomationAlreadyQueued()
-            if existing.status == "running":
+            if await self._compute_is_running(existing):
                 raise AutomationAlreadyRunning()
 
         now = now_ms()
