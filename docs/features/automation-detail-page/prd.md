@@ -15,7 +15,7 @@
 ## 范围与 API 决策（P0｜先拍板，下面全部据此）
 
 - **不改调度/执行核心逻辑**；但**允许最小只读契约新增（契约先行，先改 `api/openapi.yaml`，再后端，再前端）**：
-  - 自动化 list/detail 响应回填 **`is_running`**（或 `latest_run` 摘要）只读字段，供菜单/动态判定，避免前端 N×`listRuns` 轮询。
+  - 自动化 list/detail 响应回填 **`is_running`** 只读字段，供菜单/动态判定，避免前端 N×`listRuns` 轮询。（原拟一并回填的 `latest_run` 摘要本版未落地，收口为契约债，见 plan §8；下文 `isAutomationRunning(latestRun)` 的 `latest_run` 指客户端 `listRuns[0]` 的逻辑输入，非服务端字段。）
   - Activity 数据源 `/v1/runs` 新增 **`automation`** 来源类型（与现有 `assistant`/`project_chat`/`task` 并列）。
 - **直接后果**：菜单/动态可低成本拿到每条自动化的运行态与排序时间，三处复用同一判定与同一比较器，无需逐条 `listRuns`。
 - **不做**：跨设备通知/推送；历史筛选/搜索/分页加载更多/导出；产物（`created_files`）在线预览；重做 `AutomationPage` 版式；新建自动化新表单；**`queued` 超时/进程重启残留的超时重判**（见运行态映射表 known limitation）。
@@ -121,5 +121,5 @@
 ## 复用与依赖
 
 **复用（勿重造）**：`automationsApi` 的 `get`/`listRuns`/`runNow`/`pause`/`resume`/`delete`/`update`（`frontend/packages/core/src/api/automations-api.ts`）——`listRuns` 默认 `limit=20`（后端 `automations.py` 已核实）；`ExecutionLog`（`onSessionClick`）、`StatusPill`、`EmptyState`、`PageLoader`、`DeleteConfirmDialog`、`CreateAutomationDialog`（编辑模式 `initial`）；运行态映射沿用 `AutomationPage` 的 `runToLogStatus`（按上表对齐 `paused` 语义）。
-**需新增**：路由 `/automations/:automationId`（走 `desktop-routes` registry + `route-registry`，不硬编码 router）；**只读契约新增（契约先行）** `is_running`/`latest_run` 字段与 `/v1/runs` 的 `automation` 来源类型；统一 `isAutomationRunning()` 判定与统一置顶比较器（菜单/动态/详情共用）；动态/菜单「自动化」来源类型与置顶排序逻辑。
+**需新增**：路由 `/automations/:automationId`（走 `desktop-routes` registry + `route-registry`，不硬编码 router）；**只读契约新增（契约先行）** `is_running`（及 `created_at`）字段与 `/v1/runs` 的 `automation` 来源类型（`latest_run` 未落地，契约债见 plan §8）；统一 `isAutomationRunning()` 判定与统一置顶比较器（菜单/动态/详情共用）；动态/菜单「自动化」来源类型与置顶排序逻辑。
 **不做（本版砍掉）**：改后端调度/执行核心；重做 `AutomationPage` 版式；新建自动化新表单；历史筛选/搜索/分页/导出；产物 `created_files` 在线预览；`queued`/进程重启 stale run 的前端超时重判；"项目其他成员可见/可操作"。
