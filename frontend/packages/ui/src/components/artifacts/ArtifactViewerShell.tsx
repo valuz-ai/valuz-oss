@@ -1428,6 +1428,7 @@ export function ArtifactViewerShell({
       formatModified(artifact.modifiedAt),
     ].filter(Boolean);
   }, [artifact]);
+  const canShowCurrentPreview = Boolean(artifact);
 
   if (!artifact && !loading && !error) {
     return <EmptyArtifactState />;
@@ -1531,8 +1532,8 @@ export function ArtifactViewerShell({
           </div>
         </div>
       </header>
-      <div className="min-h-0 flex-1">
-        {loading ? (
+      <div className="relative min-h-0 flex-1">
+        {loading && !canShowCurrentPreview ? (
           <div className="flex h-full items-center justify-center text-sm text-ink-meta">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             正在读取文件
@@ -1545,11 +1546,22 @@ export function ArtifactViewerShell({
             </div>
           </div>
         ) : artifact ? (
-              <ArtifactRenderer
-                artifact={artifact}
-                content={content}
-                onOpenExternal={onOpenExternal}
-              />
+          <ArtifactRenderer
+            artifact={artifact}
+            content={content}
+            onOpenExternal={onOpenExternal}
+          />
+        ) : null}
+        {loading && canShowCurrentPreview ? (
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-20">
+            <div className="h-px w-full bg-brand/70 animate-pulse">
+              <div className="h-full w-full bg-brand/70" />
+            </div>
+            <div className="absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-md border border-surface-border bg-surface/95 px-2.5 py-1 text-2xs text-ink-body shadow-sm backdrop-blur">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              正在读取
+            </div>
+          </div>
         ) : null}
       </div>
     </article>
