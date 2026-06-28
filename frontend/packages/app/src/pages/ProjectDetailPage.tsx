@@ -1131,7 +1131,11 @@ export const ProjectDetailPage = () => {
     useState<ArtifactContent | null>(null);
   const [artifactLoading, setArtifactLoading] = useState(false);
   const [artifactError, setArtifactError] = useState<string | null>(null);
+  const [artifactOpening, setArtifactOpening] = useState(false);
+  const [artifactClosing, setArtifactClosing] = useState(false);
   const artifactRequestSeqRef = useRef(0);
+  const artifactOpenFrameRef = useRef<number | null>(null);
+  const artifactCloseTimerRef = useRef<number | null>(null);
   const selectedFileParam = searchParams.get("file");
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   // When set, the automation dialog opens in edit mode (PATCH the row) instead
@@ -1407,21 +1411,42 @@ export const ProjectDetailPage = () => {
   const openArtifactFile = useCallback(
     async (relPath: string, options?: { syncUrl?: boolean }) => {
       if (!id) return;
+      if (artifactCloseTimerRef.current != null) {
+        window.clearTimeout(artifactCloseTimerRef.current);
+        artifactCloseTimerRef.current = null;
+      }
+      if (artifactOpenFrameRef.current != null) {
+        window.cancelAnimationFrame(artifactOpenFrameRef.current);
+      }
+      const shouldAnimateOpen =
+        !selectedArtifactPath && !artifact && !artifactLoading && !artifactError;
+      if (shouldAnimateOpen) {
+        setArtifactOpening(true);
+        artifactOpenFrameRef.current = window.requestAnimationFrame(() => {
+          artifactOpenFrameRef.current = window.requestAnimationFrame(() => {
+            setArtifactOpening(false);
+            artifactOpenFrameRef.current = null;
+          });
+        });
+      }
+      setArtifactClosing(false);
       const requestSeq = artifactRequestSeqRef.current + 1;
       artifactRequestSeqRef.current = requestSeq;
-      if (options?.syncUrl !== false && searchParams.get("file") !== relPath) {
-        setSearchParams(
-          (current) => {
-            const next = new URLSearchParams(current);
-            next.set("file", relPath);
-            return next;
-          },
-          { replace: false },
-        );
-      }
       setSelectedArtifactPath(relPath);
       setArtifactLoading(true);
       setArtifactError(null);
+      if (options?.syncUrl !== false && searchParams.get("file") !== relPath) {
+        window.setTimeout(() => {
+          setSearchParams(
+            (current) => {
+              const next = new URLSearchParams(current);
+              next.set("file", relPath);
+              return next;
+            },
+            { replace: false },
+          );
+        }, 0);
+      }
       try {
         const result = await projectsApi.readFile(id, relPath);
         if (artifactRequestSeqRef.current !== requestSeq) return;
@@ -1438,12 +1463,20 @@ export const ProjectDetailPage = () => {
         }
       }
     },
-    [id, searchParams, setSearchParams],
+    [
+      artifact,
+      artifactError,
+      artifactLoading,
+      id,
+      searchParams,
+      selectedArtifactPath,
+      setSearchParams,
+    ],
   );
 
   useEffect(() => {
     if (!selectedFileParam) {
-      if (selectedArtifactPath) {
+      if (selectedArtifactPath && !artifactClosing) {
         const timer = window.setTimeout(() => {
           setSelectedArtifactPath(null);
           setArtifact(null);
@@ -1470,6 +1503,7 @@ export const ProjectDetailPage = () => {
     artifact,
     artifactError,
     artifactLoading,
+    artifactClosing,
     openArtifactFile,
     selectedArtifactPath,
     selectedFileParam,
@@ -1482,6 +1516,10 @@ export const ProjectDetailPage = () => {
   }, [openArtifactFile, selectedArtifactPath]);
 
   const handleArtifactClose = useCallback(() => {
+    artifactRequestSeqRef.current += 1;
+    setArtifactLoading(false);
+    setArtifactError(null);
+    setArtifactClosing(true);
     setSearchParams(
       (current) => {
         const next = new URLSearchParams(current);
@@ -1490,12 +1528,16 @@ export const ProjectDetailPage = () => {
       },
       { replace: true },
     );
-    setSelectedArtifactPath(null);
-    setArtifact(null);
-    setArtifactContent(null);
-    artifactRequestSeqRef.current += 1;
-    setArtifactLoading(false);
-    setArtifactError(null);
+    if (artifactCloseTimerRef.current != null) {
+      window.clearTimeout(artifactCloseTimerRef.current);
+    }
+    artifactCloseTimerRef.current = window.setTimeout(() => {
+      setSelectedArtifactPath(null);
+      setArtifact(null);
+      setArtifactContent(null);
+      setArtifactClosing(false);
+      artifactCloseTimerRef.current = null;
+    }, 150);
   }, [setSearchParams]);
 
   const handleArtifactCopy = useCallback(() => {
@@ -1984,18 +2026,34 @@ export const ProjectDetailPage = () => {
         </div>
       </div>
 
-      {selectedArtifactPath || artifactLoading || artifactError ? (
-        <div className="absolute inset-0 z-20 bg-black/10 p-4 backdrop-blur-[1px]">
-          <ArtifactViewerShell
-            artifact={artifact}
-            content={artifactContent}
-            loading={artifactLoading}
-            error={artifactError}
-            onReload={handleArtifactReload}
-            onClose={handleArtifactClose}
-            onCopyContent={handleArtifactCopy}
-            onOpenExternal={handleArtifactOpenExternal}
-          />
+      {selectedArtifactPath ||
+      artifactLoading ||
+      artifactError ||
+      artifactOpening ||
+      artifactClosing ? (
+        <div
+          className={`absolute inset-0 z-20 flex items-center justify-center bg-surface/70 p-4 backdrop-blur-sm transition-opacity duration-150 ${
+            artifactClosing ? "pointer-events-none opacity-0" : "opacity-100"
+          }`}
+        >
+          <div
+            className={`h-[calc(100%-2rem)] w-[calc(100%-2rem)] max-w-[1120px] rounded-[14px] shadow-2xl transition duration-150 ${
+              artifactOpening
+                ? "pointer-events-none scale-[0.98] opacity-0"
+                : "scale-100 opacity-100"
+            }`}
+          >
+            <ArtifactViewerShell
+              artifact={artifact}
+              content={artifactContent}
+              loading={artifactLoading}
+              error={artifactError}
+              onReload={handleArtifactReload}
+              onClose={handleArtifactClose}
+              onCopyContent={handleArtifactCopy}
+              onOpenExternal={handleArtifactOpenExternal}
+            />
+          </div>
         </div>
       ) : null}
 
