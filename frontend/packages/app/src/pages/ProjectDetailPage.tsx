@@ -1985,7 +1985,7 @@ export const ProjectDetailPage = () => {
       </div>
 
       {selectedArtifactPath || artifactLoading || artifactError ? (
-        <div className="absolute inset-0 z-20 bg-surface p-3">
+        <div className="absolute inset-0 z-20 bg-black/10 p-4 backdrop-blur-[1px]">
           <ArtifactViewerShell
             artifact={artifact}
             content={artifactContent}
