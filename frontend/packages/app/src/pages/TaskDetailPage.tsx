@@ -996,23 +996,6 @@ export const TaskDetailPage = () => {
   // distinct from the title, or staged attachments.
   const goalDiffersFromTitle = task.goal.trim() !== task.title.trim();
 
-  if (selectedArtifactPath || artifactLoading || artifactError) {
-    return (
-      <div className="flex h-full min-h-0 flex-col p-3">
-        <ArtifactViewerShell
-          artifact={artifact}
-          content={artifactContent}
-          loading={artifactLoading}
-          error={artifactError}
-          onReload={handleArtifactReload}
-          onClose={handleArtifactClose}
-          onCopyContent={handleArtifactCopy}
-          onOpenExternal={handleArtifactOpenExternal}
-        />
-      </div>
-    );
-  }
-
   // ``leadSessionId`` / ``subtaskRuns`` / ``activeSubtask`` used to live here
   // for the inline right-rail aside. The aside now lives in the AppShell's
   // panel slot via ``setRightPanel(<TaskContextPanel … />)`` (see the effect
@@ -1181,7 +1164,7 @@ export const TaskDetailPage = () => {
     // page becomes a chat surface, not a scrolling document.
     <div
       className={cn(
-        "flex w-full flex-col px-5 pb-5 pt-5",
+        "relative flex w-full flex-col px-5 pb-5 pt-5",
         isCompleted ? "h-full" : "min-h-full",
       )}
     >
@@ -1661,6 +1644,21 @@ export const TaskDetailPage = () => {
           MVP, users open the lead conversation to inspect artifacts. */}
 
       {/* Revise-goal dialog */}
+      {selectedArtifactPath || artifactLoading || artifactError ? (
+        <div className="absolute inset-0 z-20 bg-surface p-3">
+          <ArtifactViewerShell
+            artifact={artifact}
+            content={artifactContent}
+            loading={artifactLoading}
+            error={artifactError}
+            onReload={handleArtifactReload}
+            onClose={handleArtifactClose}
+            onCopyContent={handleArtifactCopy}
+            onOpenExternal={handleArtifactOpenExternal}
+          />
+        </div>
+      ) : null}
+
       <Dialog open={reviseOpen} onOpenChange={setReviseOpen}>
         <DialogContent>
           <DialogHeader>

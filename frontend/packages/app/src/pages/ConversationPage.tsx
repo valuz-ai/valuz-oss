@@ -4937,19 +4937,6 @@ export const ConversationPage = () => {
               </button>
             </div>
           </div>
-        ) : selectedArtifactPath || artifactLoading || artifactError ? (
-          <div className="min-h-0 flex-1 p-3">
-            <ArtifactViewerShell
-              artifact={artifact}
-              content={artifactContent}
-              loading={artifactLoading}
-              error={artifactError}
-              onReload={handleArtifactReload}
-              onClose={handleArtifactClose}
-              onCopyContent={handleArtifactCopy}
-              onOpenExternal={handleArtifactOpenExternal}
-            />
-          </div>
         ) : (
           <>
             <div
@@ -5035,6 +5022,21 @@ export const ConversationPage = () => {
             </div>
           </>
         )}
+
+        {selectedArtifactPath || artifactLoading || artifactError ? (
+          <div className="absolute inset-0 z-20 bg-surface p-3">
+            <ArtifactViewerShell
+              artifact={artifact}
+              content={artifactContent}
+              loading={artifactLoading}
+              error={artifactError}
+              onReload={handleArtifactReload}
+              onClose={handleArtifactClose}
+              onCopyContent={handleArtifactCopy}
+              onOpenExternal={handleArtifactOpenExternal}
+            />
+          </div>
+        ) : null}
 
         {/* ADR-013 v2 (kernel d008b53) approval tray — renders any
             unresolved session.requires_action pending whose subject

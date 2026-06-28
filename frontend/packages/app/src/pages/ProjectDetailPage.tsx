@@ -1823,25 +1823,10 @@ export const ProjectDetailPage = () => {
   }
 
   return (
-    <div className="flex h-full flex-col">
-      {selectedArtifactPath || artifactLoading || artifactError ? (
-        <div className="min-h-0 flex-1 p-3">
-          <ArtifactViewerShell
-            artifact={artifact}
-            content={artifactContent}
-            loading={artifactLoading}
-            error={artifactError}
-            onReload={handleArtifactReload}
-            onClose={handleArtifactClose}
-            onCopyContent={handleArtifactCopy}
-            onOpenExternal={handleArtifactOpenExternal}
-          />
-        </div>
-      ) : (
-        <>
-          {/* Anchor the content stack at a stable top offset so the project title
+    <div className="relative flex h-full min-h-0 flex-col">
+      {/* Anchor the content stack at a stable top offset so the project title
           keeps a predictable visual position across desktop window sizes. */}
-          <div className="flex flex-1 flex-col items-center px-6 pt-20">
+      <div className="flex flex-1 flex-col items-center px-6 pt-20">
         <div className="flex w-full min-w-[400px] max-w-[760px] flex-col items-center gap-5">
           <div className="text-center">
             <h2 className="text-2xl font-medium leading-tight text-ink-heading">
@@ -1998,8 +1983,21 @@ export const ProjectDetailPage = () => {
           </div>
         </div>
       </div>
-        </>
-      )}
+
+      {selectedArtifactPath || artifactLoading || artifactError ? (
+        <div className="absolute inset-0 z-20 bg-surface p-3">
+          <ArtifactViewerShell
+            artifact={artifact}
+            content={artifactContent}
+            loading={artifactLoading}
+            error={artifactError}
+            onReload={handleArtifactReload}
+            onClose={handleArtifactClose}
+            onCopyContent={handleArtifactCopy}
+            onOpenExternal={handleArtifactOpenExternal}
+          />
+        </div>
+      ) : null}
 
       {/* Project automation create — uses the same agent-driven dialog
           as the global Automation page, with task mode enabled (this is
