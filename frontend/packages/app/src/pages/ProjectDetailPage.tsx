@@ -2032,11 +2032,7 @@ export const ProjectDetailPage = () => {
       artifactOpening ||
       artifactClosing ? (
         <div
-          className={`absolute inset-0 z-20 flex items-center justify-center transition-[opacity,background-color,backdrop-filter] duration-150 ${
-            artifactOpening
-              ? "bg-surface/0 backdrop-blur-0"
-              : "bg-surface backdrop-blur-sm"
-          } ${
+          className={`absolute inset-0 z-20 flex items-center justify-center overflow-hidden overscroll-contain bg-surface transition-opacity duration-150 ${
             artifactClosing ? "pointer-events-none opacity-0" : "opacity-100"
           }`}
         >
