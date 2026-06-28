@@ -2032,12 +2032,12 @@ export const ProjectDetailPage = () => {
       artifactOpening ||
       artifactClosing ? (
         <div
-          className={`absolute inset-0 z-20 flex items-center justify-center bg-surface/70 p-4 backdrop-blur-sm transition-opacity duration-150 ${
+          className={`absolute inset-0 z-20 flex items-center justify-center bg-surface/70 backdrop-blur-sm transition-opacity duration-150 ${
             artifactClosing ? "pointer-events-none opacity-0" : "opacity-100"
           }`}
         >
           <div
-            className={`h-[calc(100%-2rem)] w-[calc(100%-2rem)] max-w-[1120px] rounded-[14px] shadow-2xl transition duration-150 ${
+            className={`h-full w-full rounded-[14px] shadow-2xl transition duration-150 ${
               artifactOpening
                 ? "pointer-events-none scale-[0.98] opacity-0"
                 : "scale-100 opacity-100"
