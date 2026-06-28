@@ -1131,6 +1131,7 @@ export const ProjectDetailPage = () => {
     useState<ArtifactContent | null>(null);
   const [artifactLoading, setArtifactLoading] = useState(false);
   const [artifactError, setArtifactError] = useState<string | null>(null);
+  const artifactRequestSeqRef = useRef(0);
   const selectedFileParam = searchParams.get("file");
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   // When set, the automation dialog opens in edit mode (PATCH the row) instead
@@ -1406,6 +1407,8 @@ export const ProjectDetailPage = () => {
   const openArtifactFile = useCallback(
     async (relPath: string, options?: { syncUrl?: boolean }) => {
       if (!id) return;
+      const requestSeq = artifactRequestSeqRef.current + 1;
+      artifactRequestSeqRef.current = requestSeq;
       if (options?.syncUrl !== false && searchParams.get("file") !== relPath) {
         setSearchParams(
           (current) => {
@@ -1421,14 +1424,18 @@ export const ProjectDetailPage = () => {
       setArtifactError(null);
       try {
         const result = await projectsApi.readFile(id, relPath);
+        if (artifactRequestSeqRef.current !== requestSeq) return;
         setArtifact(result.artifact);
         setArtifactContent(result.content);
       } catch (error) {
+        if (artifactRequestSeqRef.current !== requestSeq) return;
         setArtifact(null);
         setArtifactContent(null);
         setArtifactError(error instanceof Error ? error.message : String(error));
       } finally {
-        setArtifactLoading(false);
+        if (artifactRequestSeqRef.current === requestSeq) {
+          setArtifactLoading(false);
+        }
       }
     },
     [id, searchParams, setSearchParams],
@@ -1441,6 +1448,8 @@ export const ProjectDetailPage = () => {
           setSelectedArtifactPath(null);
           setArtifact(null);
           setArtifactContent(null);
+          artifactRequestSeqRef.current += 1;
+          setArtifactLoading(false);
           setArtifactError(null);
         }, 0);
         return () => window.clearTimeout(timer);
@@ -1484,6 +1493,8 @@ export const ProjectDetailPage = () => {
     setSelectedArtifactPath(null);
     setArtifact(null);
     setArtifactContent(null);
+    artifactRequestSeqRef.current += 1;
+    setArtifactLoading(false);
     setArtifactError(null);
   }, [setSearchParams]);
 

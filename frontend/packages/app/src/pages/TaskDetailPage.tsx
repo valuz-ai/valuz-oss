@@ -354,6 +354,7 @@ export const TaskDetailPage = () => {
     useState<ArtifactContent | null>(null);
   const [artifactLoading, setArtifactLoading] = useState(false);
   const [artifactError, setArtifactError] = useState<string | null>(null);
+  const artifactRequestSeqRef = useRef(0);
   const selectedFileParam = searchParams.get("file");
 
   // revise-goal dialog (note dialog removed — backend wasn't reading
@@ -471,11 +472,14 @@ export const TaskDetailPage = () => {
   const openArtifactFile = useCallback(
     async (relPath: string, options?: { syncUrl?: boolean }) => {
       if (!projectId) return;
+      const requestSeq = artifactRequestSeqRef.current + 1;
+      artifactRequestSeqRef.current = requestSeq;
       const normalized = toProjectRelativeArtifactPath(relPath, rootPath);
       if (!normalized) {
         setSelectedArtifactPath(relPath);
         setArtifact(null);
         setArtifactContent(null);
+        setArtifactLoading(false);
         setArtifactError(t("task.artifactOpenInFinder" as Parameters<typeof t>[0]));
         return;
       }
@@ -494,14 +498,18 @@ export const TaskDetailPage = () => {
       setArtifactError(null);
       try {
         const result = await projectsApi.readFile(projectId, normalized);
+        if (artifactRequestSeqRef.current !== requestSeq) return;
         setArtifact(result.artifact);
         setArtifactContent(result.content);
       } catch (error) {
+        if (artifactRequestSeqRef.current !== requestSeq) return;
         setArtifact(null);
         setArtifactContent(null);
         setArtifactError(error instanceof Error ? error.message : String(error));
       } finally {
-        setArtifactLoading(false);
+        if (artifactRequestSeqRef.current === requestSeq) {
+          setArtifactLoading(false);
+        }
       }
     },
     [projectId, rootPath, searchParams, setSearchParams, t],
@@ -514,6 +522,8 @@ export const TaskDetailPage = () => {
           setSelectedArtifactPath(null);
           setArtifact(null);
           setArtifactContent(null);
+          artifactRequestSeqRef.current += 1;
+          setArtifactLoading(false);
           setArtifactError(null);
         }, 0);
         return () => window.clearTimeout(timer);
@@ -557,6 +567,8 @@ export const TaskDetailPage = () => {
     setSelectedArtifactPath(null);
     setArtifact(null);
     setArtifactContent(null);
+    artifactRequestSeqRef.current += 1;
+    setArtifactLoading(false);
     setArtifactError(null);
   }, [setSearchParams]);
 
