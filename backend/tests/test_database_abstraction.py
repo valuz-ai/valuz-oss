@@ -33,6 +33,26 @@ class TestDatabaseUrlConfig:
     def test_to_async_url_passthrough(self) -> None:
         assert Settings._to_async_url("mysql://x") == "mysql://x"
 
+    def test_skill_local_index_defaults_on(self) -> None:
+        assert Settings(data_dir="/tmp/valuz-test-db").skill_local_index_enabled is True
+        assert (
+            Settings(
+                data_dir="/tmp/valuz-test-db",
+                database_url="postgresql://valuz:valuz@localhost:5432/valuz",
+            ).skill_local_index_enabled
+            is True
+        )
+
+    def test_skill_local_index_can_be_disabled(self) -> None:
+        assert (
+            Settings(
+                data_dir="/tmp/valuz-test-db",
+                database_url="postgresql://valuz:valuz@localhost:5432/valuz",
+                skill_local_index_enabled=False,
+            ).skill_local_index_enabled
+            is False
+        )
+
 
 class TestKernelDbUrlConfig:
     def test_default_kernel_db_is_separate_file(self) -> None:

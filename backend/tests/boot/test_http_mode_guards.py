@@ -11,6 +11,8 @@ the standalone kernel owns all of that.
 # ruff: noqa: I001 — kernel bootstrap side-effect import must precede app.*
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 import valuz_agent.boot.kernel  # noqa: F401 — sys.path side-effect
@@ -70,3 +72,17 @@ def test_kernel_routers_mounted_in_inprocess_mode(monkeypatch) -> None:
     app = create_app()
     kernel_paths = [r.path for r in app.routes if r.path.startswith("/api/v1/")]
     assert any("/sessions" in p for p in kernel_paths)
+
+
+@pytest.mark.asyncio
+async def test_local_skill_indexing_skipped_when_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "skill_local_index_enabled", False)
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("skill boot scan should not resolve the skill service")
+
+    monkeypatch.setattr("valuz_agent.api.deps.get_skill_service", _boom)
+
+    app = SimpleNamespace(state=SimpleNamespace())
+    await steps.start_skills(app)
+    assert not hasattr(app.state, "skill_watcher")

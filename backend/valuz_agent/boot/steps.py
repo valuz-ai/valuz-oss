@@ -523,6 +523,14 @@ def shutdown_parse_pool() -> None:
 
 
 async def start_skills(app: FastAPI) -> None:
+    from valuz_agent.infra.config import settings
+
+    if not settings.skill_local_index_enabled:
+        logger.info(
+            "local skill indexing disabled (VALUZ_SKILL_LOCAL_INDEX_ENABLED=false)"
+        )
+        return
+
     # Sync bundled official skills (e.g. skill-creator, valuz-handbook) into
     # the user's official-skills directory before scanning, so they appear
     # on first run. (Previously mis-placed in stop_polling_scheduler's

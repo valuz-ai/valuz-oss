@@ -136,6 +136,13 @@ class Settings(BaseSettings):
     # Override with ``VALUZ_SUBSCRIPTION_LOGIN_ENABLED``.
     subscription_login_enabled: bool = True
 
+    # One switch for local filesystem skill indexing: bundled-official sync,
+    # boot scan, file watcher, and the periodic auto-scan. Default stays ON for
+    # desktop/local deployments; shared server deployments can set
+    # ``VALUZ_SKILL_LOCAL_INDEX_ENABLED=false`` to avoid writing local-install
+    # skill rows into the shared DB at startup.
+    skill_local_index_enabled: bool = True
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / self.db_filename

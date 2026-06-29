@@ -116,8 +116,15 @@ _scheduler: SkillAutoScanScheduler | None = None
 
 
 def start_skill_auto_scan() -> None:
+    from valuz_agent.infra.config import settings
+
     global _scheduler
     if _scheduler:
+        return
+    if not settings.skill_local_index_enabled:
+        logger.info(
+            "skill auto-scan disabled (VALUZ_SKILL_LOCAL_INDEX_ENABLED=false)"
+        )
         return
     interval = _interval_sec()
     if interval <= 0:
