@@ -1118,10 +1118,8 @@ export const ConversationPage = () => {
     useState<ArtifactContent | null>(null);
   const [artifactLoading, setArtifactLoading] = useState(false);
   const [artifactError, setArtifactError] = useState<string | null>(null);
-  const [artifactOpening, setArtifactOpening] = useState(false);
   const [artifactClosing, setArtifactClosing] = useState(false);
   const artifactRequestSeqRef = useRef(0);
-  const artifactOpenFrameRef = useRef<number | null>(null);
   const artifactCloseTimerRef = useRef<number | null>(null);
 
   const activeProject = useMemo(
@@ -1142,20 +1140,6 @@ export const ConversationPage = () => {
       if (artifactCloseTimerRef.current != null) {
         window.clearTimeout(artifactCloseTimerRef.current);
         artifactCloseTimerRef.current = null;
-      }
-      if (artifactOpenFrameRef.current != null) {
-        window.cancelAnimationFrame(artifactOpenFrameRef.current);
-      }
-      const shouldAnimateOpen =
-        !selectedArtifactPath && !artifact && !artifactLoading && !artifactError;
-      if (shouldAnimateOpen) {
-        setArtifactOpening(true);
-        artifactOpenFrameRef.current = window.requestAnimationFrame(() => {
-          artifactOpenFrameRef.current = window.requestAnimationFrame(() => {
-            setArtifactOpening(false);
-            artifactOpenFrameRef.current = null;
-          });
-        });
       }
       setArtifactClosing(false);
       const requestSeq = artifactRequestSeqRef.current + 1;
@@ -5073,20 +5057,13 @@ export const ConversationPage = () => {
         {selectedArtifactPath ||
         artifactLoading ||
         artifactError ||
-        artifactOpening ||
         artifactClosing ? (
           <div
             className={`absolute inset-0 z-20 flex items-center justify-center overflow-hidden overscroll-contain bg-surface transition-opacity duration-150 ${
               artifactClosing ? "pointer-events-none opacity-0" : "opacity-100"
             }`}
           >
-            <div
-              className={`h-full w-full rounded-[14px] shadow-2xl transition duration-150 ${
-                artifactOpening
-                  ? "pointer-events-none scale-[0.98] opacity-0"
-                  : "scale-100 opacity-100"
-              }`}
-            >
+            <div className="h-full w-full rounded-[14px] shadow-2xl">
               <ArtifactViewerShell
                 artifact={artifact}
                 content={artifactContent}
