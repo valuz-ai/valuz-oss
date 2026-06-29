@@ -514,17 +514,6 @@ export const TaskDetailPage = () => {
 
   useEffect(() => {
     if (!selectedFileParam) {
-      if (selectedArtifactPath && !artifactClosing) {
-        const timer = window.setTimeout(() => {
-          setSelectedArtifactPath(null);
-          setArtifact(null);
-          setArtifactContent(null);
-          artifactRequestSeqRef.current += 1;
-          setArtifactLoading(false);
-          setArtifactError(null);
-        }, 0);
-        return () => window.clearTimeout(timer);
-      }
       return;
     }
     if (
