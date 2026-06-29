@@ -472,7 +472,7 @@ export const TaskDetailPage = () => {
   }, [rootPath, t]);
 
   const openArtifactFile = useCallback(
-    async (relPath: string, options?: { syncUrl?: boolean }) => {
+    async (relPath: string) => {
       if (!projectId) return;
       if (artifactCloseTimerRef.current != null) {
         window.clearTimeout(artifactCloseTimerRef.current);
@@ -493,18 +493,6 @@ export const TaskDetailPage = () => {
       setSelectedArtifactPath(normalized);
       setArtifactLoading(true);
       setArtifactError(null);
-      if (options?.syncUrl !== false && searchParams.get("file") !== normalized) {
-        window.setTimeout(() => {
-          setSearchParams(
-            (current) => {
-              const next = new URLSearchParams(current);
-              next.set("file", normalized);
-              return next;
-            },
-            { replace: false },
-          );
-        }, 0);
-      }
       try {
         const result = await projectsApi.readFile(projectId, normalized);
         if (artifactRequestSeqRef.current !== requestSeq) return;
@@ -521,17 +509,7 @@ export const TaskDetailPage = () => {
         }
       }
     },
-    [
-      artifact,
-      artifactError,
-      artifactLoading,
-      projectId,
-      rootPath,
-      searchParams,
-      selectedArtifactPath,
-      setSearchParams,
-      t,
-    ],
+    [projectId, rootPath, t],
   );
 
   useEffect(() => {
@@ -556,7 +534,7 @@ export const TaskDetailPage = () => {
       return;
     }
     const timer = window.setTimeout(() => {
-      void openArtifactFile(selectedFileParam, { syncUrl: false });
+      void openArtifactFile(selectedFileParam);
     }, 0);
     return () => window.clearTimeout(timer);
   }, [
@@ -580,14 +558,16 @@ export const TaskDetailPage = () => {
     setArtifactLoading(false);
     setArtifactError(null);
     setArtifactClosing(true);
-    setSearchParams(
-      (current) => {
-        const next = new URLSearchParams(current);
-        next.delete("file");
-        return next;
-      },
-      { replace: true },
-    );
+    if (selectedFileParam) {
+      setSearchParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          next.delete("file");
+          return next;
+        },
+        { replace: true },
+      );
+    }
     if (artifactCloseTimerRef.current != null) {
       window.clearTimeout(artifactCloseTimerRef.current);
     }
@@ -598,7 +578,7 @@ export const TaskDetailPage = () => {
       setArtifactClosing(false);
       artifactCloseTimerRef.current = null;
     }, 150);
-  }, [setSearchParams]);
+  }, [selectedFileParam, setSearchParams]);
 
   const handleArtifactCopy = useCallback(() => {
     if (artifactContent?.kind !== "text") return;
