@@ -425,7 +425,7 @@ class TaskOrchestrator:
             )
             lead_cwd = str(project_cwd)
 
-            lead_agent = await _member_agent_config(lead_member, member_ds)
+            lead_agent = await _member_agent_config(lead_member, member_ds, user_id=user_id)
             lead_clone = None
             if lead_agent is not None:
                 lead_clone = await self._materialize_lead_agent(lead_agent, dispatch_mode="async")

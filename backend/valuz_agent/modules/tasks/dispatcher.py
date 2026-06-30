@@ -381,7 +381,7 @@ class DispatcherService:
                     return agent_slug
                 from valuz_agent.adapters.agent_resolver import _member_agent_config
 
-                agent_cfg = await _member_agent_config(member, member_ds)
+                agent_cfg = await _member_agent_config(member, member_ds, user_id=user_id)
                 if agent_cfg is None:
                     return agent_slug
                 skill_names = sorted(

@@ -38,7 +38,7 @@ async def list_members(project_id: str, user_id: str | None = None) -> list[dict
         rows = await member_ds.list_by_project(user_id, project_id)
         result: list[dict[str, Any]] = []
         for row in rows:
-            agent_cfg = await _member_agent_config(row, member_ds)
+            agent_cfg = await _member_agent_config(row, member_ds, user_id=user_id)
             runtime = agent_cfg.runtime_provider if agent_cfg else "unknown"
             name = agent_cfg.name if agent_cfg else row.agent_slug
             role_summary = summarize_role(agent_cfg.instructions) if agent_cfg else ""

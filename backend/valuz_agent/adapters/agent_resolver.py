@@ -847,7 +847,7 @@ async def build_member_session(
         logger.debug("build_member_session: no membership for %s/%s", project_id, agent_slug)
         return None
 
-    agent = await _member_agent_config(member_row, members)
+    agent = await _member_agent_config(member_row, members, user_id=user_id)
     if agent is None:
         logger.warning(
             "build_member_session: member %s/%s has no resolvable library agent",
