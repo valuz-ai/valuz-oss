@@ -26,7 +26,7 @@ export const ErrorMessageCard = ({
     <div className="rounded-xl border border-error-border bg-error-light px-4 py-3">
       <div className="flex items-start gap-2">
         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-error-text" />
-        <div className="flex-1">
+        <div className="min-w-0 flex-1" data-slot="error-card-content">
           <div className="text-sm font-medium text-error-text">
             {t("conversation.generatedFailed")}
           </div>
@@ -41,7 +41,7 @@ export const ErrorMessageCard = ({
             />
           </button>
           {expanded && (
-            <div className="mt-2 rounded-lg bg-surface px-3 py-2 font-mono text-xs text-error-text">
+            <div className="mt-2 max-w-full whitespace-pre-wrap break-words rounded-lg bg-surface px-3 py-2 font-mono text-xs text-error-text">
               {message}
             </div>
           )}
@@ -55,7 +55,7 @@ export const ErrorMessageCard = ({
           })}
         </div>
       )}
-      <div className="mt-3 flex gap-2">
+      <div className="mt-3 flex flex-wrap gap-2">
         {onRetry && retryCount < maxRetries && (
           <Button
             variant="outline"
