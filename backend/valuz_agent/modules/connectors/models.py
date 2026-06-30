@@ -40,7 +40,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin, UserMixin
@@ -93,9 +93,10 @@ class ConnectorRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
             "transport IN ('http', 'sse', 'stdio')",
             name="ck_valuz_connector_transport",
         ),
+        UniqueConstraint("user_id", "slug", name="uq_valuz_connector_user_slug"),
     )
 
-    slug: Mapped[str] = mapped_column(String(128), unique=True)
+    slug: Mapped[str] = mapped_column(String(128))
     display_name: Mapped[str] = mapped_column(String(128))
     description: Mapped[str | None] = mapped_column(Text)
 

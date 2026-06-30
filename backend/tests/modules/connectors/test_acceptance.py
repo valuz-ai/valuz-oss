@@ -91,6 +91,39 @@ async def test_should_store_and_inject_the_final_value_verbatim_with_prefix(svc)
     assert headers == {"Authorization": "Bearer tok123"}
 
 
+async def test_should_reuse_existing_connector_when_explicit_slug_is_created_twice(svc):
+    """Catalog/pack/onboarding connector installs are keyed by explicit slug.
+
+    Re-posting the same catalog slug must be idempotent; otherwise repeated
+    onboarding/import calls create firecrawl, firecrawl-xxxxxx, ... clones in
+    the Connectors page.
+    """
+
+    first = await svc.create_connector(
+        "local-test-owner",
+        slug="firecrawl",
+        display_name="Firecrawl",
+        transport="http",
+        url="https://mcp.firecrawl.dev/v2/mcp",
+        auth_type="none",
+        connector_type="recommended",
+    )
+    second = await svc.create_connector(
+        "local-test-owner",
+        slug="firecrawl",
+        display_name="Firecrawl",
+        transport="http",
+        url="https://mcp.firecrawl.dev/v2/mcp",
+        auth_type="none",
+        connector_type="recommended",
+    )
+
+    assert second.id == first.id
+    assert second.slug == "firecrawl"
+    rows = await svc.list_connectors("local-test-owner")
+    assert [r.slug for r in rows] == ["firecrawl"]
+
+
 # ── Acceptance #9 — migrated bearer connector still injects ────────────
 def test_should_keep_migrated_bearer_working_via_raw_token():
     # A secret Authorization holding a RAW token (as migration 0004 leaves a
