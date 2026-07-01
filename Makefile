@@ -1,4 +1,4 @@
-.PHONY: dev dev-sandbox pg pg-down test typecheck lint seed help
+.PHONY: dev dev-sandbox pg pg-down test typecheck lint seed help design-check design-check-all install-hooks
 
 PNPM_SHIM = $(CURDIR)/scripts
 PNPM_FRONTEND = cd frontend && PATH="$(PNPM_SHIM):$$PATH" corepack pnpm
@@ -77,6 +77,15 @@ check-boundaries: ## Enforce the module boundary contract (no cross-module datas
 lint: check-boundaries ## Run linters on both frontend and backend
 	$(PNPM_FRONTEND) lint
 	cd backend && uv run ruff check valuz_agent/ kernel/ alembic/
+
+design-check: ## Check staged frontend UI changes for design-token/style drift
+	bash scripts/design-check.sh --staged
+
+design-check-all: ## Check all frontend app/package files for design-token/style drift
+	bash scripts/design-check.sh --all
+
+install-hooks: ## Install local git hooks, including pre-commit design checks
+	bash scripts/install-git-hooks.sh
 
 format: ## Format all code
 	$(PNPM_FRONTEND) exec prettier --write "src/**/*.{ts,tsx}"

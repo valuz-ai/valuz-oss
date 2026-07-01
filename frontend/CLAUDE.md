@@ -205,6 +205,40 @@ The canonical design doc is `docs/desktop/FRONTEND-ARCH.md` in the sibling `repo
 - Tailwind v4 CSS-based config instead of v3 JS preset — `tailwind.preset.ts` keeps the token surface but is not consumed by Tailwind itself.
 - Enterprise modules (PG / RustFS / Redis / rapiline / LibreOffice / ParadeDB) are declared as seams only; none are implemented.
 
+## AI UI Generation Protocol
+
+Use this protocol before creating, visually upgrading, or reviewing any frontend page or shared UI component.
+
+Authoritative design sources:
+
+- `frontend/docs/design/DESIGN.md` — visual rules, component decisions, and governance.
+- `frontend/docs/design/tokens.css` — reviewed design token source. Treat this file as read-only unless the human explicitly asks to change the design source.
+- `frontend/docs/design/components.html` — high-frequency component visual masters.
+- `frontend/packages/ui/src/styles/project.css` — runtime token implementation consumed by `@valuz/ui`.
+
+Required workflow:
+
+1. Read the authoritative design sources above before making UI changes.
+2. Reuse `@valuz/ui` and `packages/ui/src/components/ui/*` before writing custom UI.
+3. Keep page files focused on layout, data wiring, and composition. Do not invent new button, badge, input, dialog, card, list, or table styling in page code.
+4. If a visual pattern appears twice, promote it to `packages/ui` instead of duplicating Tailwind class strings.
+5. Use semantic tokens and token-backed Tailwind classes only. Do not add hardcoded hex/rgb colors, arbitrary text sizes, arbitrary radii, or one-off shadows.
+6. Do not modify `frontend/docs/design/tokens.css` during page implementation. If runtime tokens drift, update `project.css` to match the reviewed design source.
+7. Match component variants and states to `DESIGN.md` section 7. Button semantics are `default`, `outline`, `ghost`, `destructive`, and `link`; `secondary` is deprecated and should be treated as an `outline` migration target.
+8. Every interactive UI must cover default, hover, active where applicable, focus-visible, disabled, and loading states.
+9. Validate light mode, dark mode, responsive layout, keyboard focus, and text overflow.
+10. All user-visible strings must use the i18n rules in this file.
+
+Before handoff, run the repo quality gates from the root unless the human explicitly narrows verification:
+
+```bash
+make test-all
+make typecheck
+make lint
+```
+
+For the repeatable page-upgrade workflow and task prompt template, see `frontend/docs/design/AI-UI-WORKFLOW.md`.
+
 ## UI Component Spec
 
 > Mandatory conventions for the `@valuz/ui` component library. All tokens are defined in `packages/ui/src/styles/project.css`.
