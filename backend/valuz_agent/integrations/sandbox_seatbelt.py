@@ -201,8 +201,8 @@ def host_sandbox_rw_mounts() -> tuple[MountSpec, ...]:
     be writable or the runtime fails with "Operation not permitted" the
     moment it tries to set a skill up (the reported bug).
 
-    "Dynamic" coverage by construction: we write-allow the ROOTS (the user
-    project root, the chat-cwd root, every skill root), so any project or
+    "Dynamic" coverage by construction: we write-allow the ROOTS (the resolved
+    user project root, the chat-cwd root, every skill root), so any project or
     skill created UNDER them after provision works without re-provisioning.
     A project bound OUTSIDE these roots (an arbitrary folder) is the one
     case a single host-wide sandbox can't reach — that needs a per-project
@@ -211,7 +211,6 @@ def host_sandbox_rw_mounts() -> tuple[MountSpec, ...]:
     Read access to skill *sources* is already granted by the profile's
     broad ``(allow file-read*)``; this list is strictly the write set.
     """
-    from valuz_agent.infra.config import settings
     from valuz_agent.infra.fs_registry import fs_registry as fr
     from valuz_agent.infra.local_identity import resolve_local_user_id
 
@@ -220,8 +219,8 @@ def host_sandbox_rw_mounts() -> tuple[MountSpec, ...]:
 
     dirs: list[Path] = [
         data_dir / "sandbox",  # the kernel's private DB
-        data_dir / "projects",  # managed chat/project cwds
-        settings.user_project_root,  # real projects + their .agents|.claude/skills
+        data_dir / "projects",  # legacy managed chat/project cwds
+        fr.project_root(user_id),  # real/managed projects + .agents|.claude/skills
         fr.official_skill_root(),  # official skill bootstrap
         fr.user_skill_root("claude"),  # user skill creation / submit
         *fr.legacy_user_skill_roots(),  # ~/.claude/skills, ~/.codex/skills

@@ -110,9 +110,11 @@ class ProjectListItem:
     root_path: str | None
     icon: str | None
     # Resolved working directory the kernel runs sessions in. For project
-    # projects this equals ``root_path``; for chat projects it's the
-    # managed dir under ``data_dir/projects/{id}/``. Surfaced so the
-    # UI can offer "Open in Finder" without a second detail fetch.
+    # projects this equals ``root_path`` resolved through the project root
+    # boundary; for chat projects it's the managed workspace under
+    # ``fs_registry.project_root(user_id)`` (local: user_project_root, cloud:
+    # user_project_root/{user_id}). Surfaced so the UI can offer "Open in
+    # Finder" without a second detail fetch.
     cwd: str | None = None
 
 
@@ -331,7 +333,7 @@ class ProjectService:
 
         Each call creates a NEW ``ProjectRow(kind="chat")`` and mirrors it
         into a dedicated kernel project + agent (1:1 by id). The kernel
-        project gets its own cwd at ``data_dir/projects/{ws_id}/`` via
+        project gets its own cwd under ``fs_registry.project_root(user_id)`` via
         ``fs_registry.project_cwd``, so every chat session runs in an
         isolated directory and can't trip over files written by sibling
         chats.
@@ -392,7 +394,7 @@ class ProjectService:
         caller-supplied local directory).
 
         An empty/None ``root_path`` allocates a managed cwd under
-        ``data_dir/projects/{id}/`` instead, mirroring
+        ``fs_registry.project_root(user_id)`` instead, mirroring
         ``create_project_from_pack``. This is the cloud/managed path: the
         project works without a caller-supplied local directory, which a
         remote backend could not reach anyway.
@@ -450,7 +452,7 @@ class ProjectService:
         folder in the import dialog), it is resolved + uniqueness-checked
         against existing projects and used verbatim — same rule as
         ``create_project``. Otherwise a managed cwd under
-        ``data_dir/projects/{id}/`` is created (cross-machine portability:
+        ``fs_registry.project_root(user_id)`` is created (cross-machine portability:
         the source machine's ``root_path`` is never reused). Only
         ``project`` kind is supported — chat projects are not exportable.
         """
@@ -465,7 +467,7 @@ class ProjectService:
                 raise ValueError(f"directory already bound to a project: {resolved_root}")
         else:
             # Imported projects without a user-picked folder get a managed
-            # cwd under data_dir/projects/{id}/ (mirrors chat projects) so
+            # cwd under fs_registry.project_root(user_id) (mirrors chat projects) so
             # they're still cross-machine portable.
             resolved_root = _managed_project_root(new_id)
         _write_relative_file(_root_path(user_id, resolved_root), PROJECT_ROOT_MARKER, b"")
@@ -630,7 +632,7 @@ class ProjectService:
         if not row:
             raise KeyError(project_id)
         # Projects delegate to the system file system. Chat projects walk their managed cwd under
-        # ``data_dir/projects/{id}/`` so any files the agent generates
+        # ``fs_registry.project_root(user_id)`` so any files the agent generates
         # during the chat (excel exports, reports, scratch outputs, …)
         # show up in the right-rail "generated files" panel.
         if row.kind == "project":
@@ -826,7 +828,7 @@ def _artifact_response_from_file(project_id: str, file: FileBytes) -> ArtifactFi
 
 
 def _managed_project_root(project_id: str) -> str:
-    return f"projects/{project_id}/workspace"
+    return project_id
 
 
 def _normalize_explicit_root(root_path: str) -> str:
@@ -848,7 +850,7 @@ def _root_path(user_id: str, root_path: str) -> Path:
     path = Path(root_path).expanduser()
     if path.is_absolute():
         return path.resolve()
-    return (fs_registry.data_dir(user_id) / root_path).resolve()
+    return (fs_registry.project_root(user_id) / root_path).resolve()
 
 
 def _write_relative_file(root: Path, file_path: str, data: bytes) -> str:

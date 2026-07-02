@@ -218,6 +218,7 @@ class Settings(BaseSettings):
     # ── User-facing project root ───────────────────────────────────
     # Base directory for user-visible projects (not hidden).
     # Defaults to ~/Valuz; override with VALUZ_USER_PROJECT_ROOT.
+    # May contain {user_id} when the deployment mounts per-user workspaces.
     user_project_root: Path = Path.home() / "Valuz"
 
     # ── Browser feature (chrome-devtools-mcp) ──────────────────────

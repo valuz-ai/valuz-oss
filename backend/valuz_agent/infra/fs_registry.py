@@ -146,9 +146,10 @@ class FsRegistry:
 
         - ``kind="project"``: caller-supplied ``root_path`` is used as-is. The
           path must already be absolute; it is not created.
-        - ``kind="chat"``: a managed cwd is allocated under
-          ``data_dir/projects/{project_id}/`` and created on demand. This
-          satisfies V5's invariant that ``project.cwd`` is always present.
+        - ``kind="chat"``: a managed cwd is allocated under the configured
+          user-visible project root and created on demand. Deployments that
+          need user scoping can set ``VALUZ_USER_PROJECT_ROOT`` to a template
+          such as ``~/Valuz/{user_id}``.
         """
         if kind == "project":
             if not root_path:
@@ -158,7 +159,25 @@ class FsRegistry:
                 raise ValueError(f"project root_path must be absolute: {root_path}")
             return path
 
-        path = self.data_dir(user_id) / "projects" / project_id
+        path = self.project_root(user_id) / project_id
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def project_root(self, user_id: str) -> Path:
+        """Return the app-visible root for managed project workspaces.
+
+        ``VALUZ_USER_PROJECT_ROOT`` may contain a ``{user_id}`` placeholder
+        when deployments need per-user workspace roots. The placeholder expands
+        to the filesystem-safe ``user_dir_name(user_id)`` value.
+
+        This lets cloud deployments express the external mount contract without
+        hard-coding deployment-type branches in OSS code:
+
+        - ``valuz-conf/{user_id}/*`` -> ``$HOME/.valuz-dev/{user_id}/*``
+        - ``user-project/{user_id}/workspace/*`` -> ``$HOME/Valuz/{user_id}/*``
+        """
+        raw = str(settings.user_project_root)
+        path = Path(raw.replace("{user_id}", self.user_dir_name(user_id))).expanduser()
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -512,19 +531,19 @@ class FsRegistry:
     # ---- FS-13 — onboarding example project directory ----
     #
     # User-visible directory for the onboarding "示例项目".  Lives under the
-    # user-scoped ``user_project_root`` (default ``~/Valuz/<user_id>``) so it
-    # appears in the user's home folder rather than in the hidden ``~/.valuz``
-    # data dir while still isolating a shared deployment by owner.
+    # configured ``project_root(user_id)``. The default root yields
+    # ``~/Valuz/示例项目``; a cloud template such as ``~/Valuz/{user_id}`` yields
+    # ``~/Valuz/<user_id>/示例项目``.
 
     def example_project_dir(self, user_id: str) -> Path:
         """Return (and create) the example-project directory.
 
-        ``<user_project_root>/<user_id>/示例项目`` — created on demand.
+        ``<project_root(user_id)>/示例项目`` — created on demand.
         Used exclusively by the onboarding ``POST /v1/onboarding/example-project``
         endpoint; the path is then handed to ``ProjectService.create_project``
         as ``root_path``.
         """
-        path = settings.user_project_root / self.user_dir_name(user_id) / "示例项目"
+        path = self.project_root(user_id) / "示例项目"
         path.mkdir(parents=True, exist_ok=True)
         return path
 

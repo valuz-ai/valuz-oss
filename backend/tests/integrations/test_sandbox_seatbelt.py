@@ -254,6 +254,21 @@ def test_host_rw_mounts_cover_project_and_skill_roots(monkeypatch, tmp_path) -> 
     assert str(data_root / "sandbox") in sources
 
 
+def test_host_rw_mounts_expand_user_project_root_placeholder(monkeypatch, tmp_path) -> None:
+    from valuz_agent.infra.config import settings
+    from valuz_agent.infra.fs_registry import fs_registry
+    from valuz_agent.infra.local_identity import resolve_local_user_id
+    from valuz_agent.integrations.sandbox_seatbelt import host_sandbox_rw_mounts
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "app")
+    monkeypatch.setattr(settings, "user_project_root", tmp_path / "Valuz" / "{user_id}")
+
+    user_dir = fs_registry.user_dir_name(resolve_local_user_id())
+    sources = {m.source for m in host_sandbox_rw_mounts()}
+    assert str(tmp_path / "Valuz" / user_dir) in sources
+    assert str(tmp_path / "Valuz" / "{user_id}") not in sources
+
+
 @darwin_only
 def test_skill_materialization_path_is_writable_under_profile(tmp_path, monkeypatch) -> None:
     """Live proof of the fix: a process under the profile can create the

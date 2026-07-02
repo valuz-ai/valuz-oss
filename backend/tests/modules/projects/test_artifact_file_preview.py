@@ -279,6 +279,9 @@ async def test_create_project_without_root_allocates_managed_cwd(
     from valuz_agent.modules.projects.datastore import ProjectDatastore
 
     monkeypatch.setattr(project_service.fs_registry, "data_dir", lambda user_id: tmp_path)
+    monkeypatch.setattr(
+        project_service.fs_registry, "project_root", lambda user_id: tmp_path / "Valuz"
+    )
 
     db_file = tmp_path / "proj.db"
     sync_engine = create_engine(
@@ -292,6 +295,6 @@ async def test_create_project_without_root_allocates_managed_cwd(
         svc = ProjectService(datastore=ProjectDatastore(db), event_bus=EventBus())
         detail = await svc.create_project("user-1", name="Managed")
         assert detail.root_path is not None
-        assert detail.cwd == str(tmp_path / detail.root_path)
-        assert detail.root_path.startswith("projects/")
-        assert (tmp_path / detail.root_path / ".valuz" / "root").is_file()
+        assert detail.cwd == str(tmp_path / "Valuz" / detail.root_path)
+        assert "/" not in detail.root_path
+        assert (tmp_path / "Valuz" / detail.root_path / ".valuz" / "root").is_file()
