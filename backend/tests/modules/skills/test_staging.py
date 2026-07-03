@@ -26,7 +26,7 @@ def staging_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     staging_dir.mkdir(parents=True)
     user_skills.mkdir(parents=True)
 
-    # ``FsRegistry.legacy_skill_staging_root`` consults ``skill_staging_dir``
+    # ``FsRegistry.legacy_skill_staging_root`` consults ``user_skill_staging_dir``
     # on every read, so patching that field redirects the legacy staging root.
     #
     # IMPORTANT — patch the *exact* settings object ``staging`` holds, not a
@@ -39,7 +39,7 @@ def staging_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # by the legacy staging fallback.
     monkeypatch.setattr(
         fs_registry_mod.settings,
-        "skill_staging_dir",
+        "user_skill_staging_dir",
         staging_dir / "{user_id}",
     )
     monkeypatch.setattr(fs_registry_mod.settings, "user_skills_dir", user_skills)

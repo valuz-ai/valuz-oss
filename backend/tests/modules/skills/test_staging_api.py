@@ -51,7 +51,7 @@ def isolated_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # type: igno
     # Startup Alembic resolves the DB URL through ``db_urls`` / ``FsRegistry``.
     # Pin the filename so this test's fresh engine and migrations keep agreeing.
     monkeypatch.setattr(live_settings, "db_filename", "valuz.db")
-    monkeypatch.setattr(live_settings, "skill_staging_dir", staging_dir / "{user_id}")
+    monkeypatch.setattr(live_settings, "user_skill_staging_dir", staging_dir / "{user_id}")
     monkeypatch.setattr(live_settings, "user_skills_dir", user_skills)
 
     # ``run_host_migrations`` resolves the DB URL via a fresh

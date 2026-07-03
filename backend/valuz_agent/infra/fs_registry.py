@@ -281,7 +281,7 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def skill_staging_dir_for_project(self, project_cwd: str | Path, slug: str) -> Path:
+    def project_skill_staging_dir(self, project_cwd: str | Path, slug: str) -> Path:
         path = self.skill_staging_root_for_project(project_cwd) / slug
         path.mkdir(parents=True, exist_ok=True)
         return path
@@ -290,8 +290,8 @@ class FsRegistry:
     #    staged before the cwd-keyed convention landed. --
 
     def legacy_skill_staging_root(self, user_id: str) -> Path:
-        if settings.skill_staging_dir:
-            path = self._expand_optional_user_template(settings.skill_staging_dir, user_id)
+        if settings.user_skill_staging_dir:
+            path = self._expand_optional_user_template(settings.user_skill_staging_dir, user_id)
         else:
             path = self.data_dir(user_id) / "skill-creator" / "staging"
         path.mkdir(parents=True, exist_ok=True)

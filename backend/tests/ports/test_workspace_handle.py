@@ -130,7 +130,7 @@ def test_fs_registry_legacy_skill_staging_root_uses_data_dir_by_default(
 ) -> None:
     from valuz_agent.infra import fs_registry as fsr
 
-    monkeypatch.setattr(fsr.settings, "skill_staging_dir", None)
+    monkeypatch.setattr(fsr.settings, "user_skill_staging_dir", None)
     monkeypatch.setattr(fsr.settings, "data_dir", tmp_path / "data" / "{user_id}")
 
     assert fsr.fs_registry.legacy_skill_staging_root("org/user-A") == (
@@ -145,7 +145,7 @@ def test_fs_registry_legacy_skill_staging_root_uses_configured_template(
 
     monkeypatch.setattr(
         fsr.settings,
-        "skill_staging_dir",
+        "user_skill_staging_dir",
         tmp_path / ".valuz-dev" / "{user_id}" / "skill-staging",
     )
 

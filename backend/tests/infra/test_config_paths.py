@@ -19,4 +19,4 @@ def test_user_skill_staging_dir_env_alias(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setenv("VALUZ_USER_SKILL_STAGING_DIR", str(staging_dir))
 
-    assert Settings().skill_staging_dir == staging_dir
+    assert Settings().user_skill_staging_dir == staging_dir
