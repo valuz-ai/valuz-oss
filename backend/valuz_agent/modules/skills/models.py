@@ -1,7 +1,7 @@
 from typing import Literal
 
 from pydantic import BaseModel, Field
-from sqlalchemy import BigInteger, Boolean, String, Text, true
+from sqlalchemy import BigInteger, Boolean, Index, String, Text, true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin, UserMixin
@@ -14,6 +14,7 @@ from valuz_agent.infra.time_utils import now_ms
 
 class SkillIndexRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     __tablename__ = "valuz_skill_index"
+    __table_args__ = (Index("ux_valuz_skill_index_user_slug", "user_id", "slug", unique=True),)
 
     slug: Mapped[str] = mapped_column(String(256))
     name: Mapped[str] = mapped_column(String(256))

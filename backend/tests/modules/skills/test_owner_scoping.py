@@ -1,9 +1,10 @@
-"""Owner-scoping + composite-PK regression for ``SkillDatastore``."""
+"""Owner-scoping regression tests for ``SkillDatastore``."""
 
 from __future__ import annotations
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from valuz_agent.infra.database import Base
@@ -20,11 +21,11 @@ def sessionmaker_(tmp_path):
     return async_sessionmaker(bind=async_engine, expire_on_commit=False)
 
 
-def _row(skill_id: str) -> SkillIndexRow:
+def _row(skill_id: str, *, slug: str | None = None) -> SkillIndexRow:
     return SkillIndexRow(
         user_id="local-test-owner",
         id=skill_id,
-        slug=skill_id,
+        slug=slug or skill_id,
         name=skill_id,
         scope="user",
         source="valuz",
@@ -49,6 +50,27 @@ class TestSkillOwnerScoping:
             assert await ds.get_by_id("user-B", "s1") is None
             assert {r.id for r in await ds.list_skills("user-A")} == {"s1"}
             assert await ds.list_skills("user-B") == []
+
+    async def test_same_slug_can_exist_for_different_owners(self, sessionmaker_) -> None:
+        async with sessionmaker_() as db:
+            ds = SkillDatastore(db)
+            await ds.create("user-A", _row("official:user-a-skill-creator", slug="skill-creator"))
+            await ds.create("user-B", _row("official:user-b-skill-creator", slug="skill-creator"))
+
+        async with sessionmaker_() as db:
+            ds = SkillDatastore(db)
+            row_a = await ds.get_by_id("user-A", "official:user-a-skill-creator")
+            row_b = await ds.get_by_id("user-B", "official:user-b-skill-creator")
+            assert row_a is not None and row_a.user_id == "user-A"
+            assert row_b is not None and row_b.user_id == "user-B"
+            assert row_a.slug == row_b.slug == "skill-creator"
+
+    async def test_same_slug_is_unique_per_owner(self, sessionmaker_) -> None:
+        async with sessionmaker_() as db:
+            ds = SkillDatastore(db)
+            await ds.create("user-A", _row("skill-a", slug="shared"))
+            with pytest.raises(IntegrityError):
+                await ds.create("user-A", _row("skill-b", slug="shared"))
 
     async def test_delete_is_owner_scoped(self, sessionmaker_) -> None:
         async with sessionmaker_() as db:
