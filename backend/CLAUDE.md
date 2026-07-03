@@ -250,6 +250,18 @@ code. Add a capability by defining a port, then a default integration.
   `project.cwd`; get the cwd from `project_cwd(...)` and let the kernel take
   it from there.
 
+Example backend env for shared/server deployments:
+
+```bash
+# Per-user persistent host data.
+VALUZ_DATA_DIR=/data/valuz/{user_id}
+
+# Per-user temporary import-preview content. OSS defaults to the platform temp
+# dir via tempfile.gettempdir(); multi-server deployments should point this at
+# a shared volume so preview and confirm can land on different servers.
+VALUZ_USER_TEMP_DIR=/data/valuz-tmp/{user_id}
+```
+
 ## Adding an endpoint (contract-first recipe)
 
 1. Edit `api/openapi.yaml` (the contract leads).
