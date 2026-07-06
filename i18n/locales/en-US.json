@@ -534,13 +534,21 @@
     "yesterdayTime": "Yesterday {time}"
   },
   "decisionInbox": {
-    "title": "Pending Questions",
+    "title": "Needs your attention",
     "emptyTitle": "No pending questions",
-    "emptyHint": "Questions from subtask agents will appear here",
+    "emptyHint": "Questions from agents will appear here",
     "toastNew": "{agent} is waiting for your answer",
+    "toastAction": "Answer",
     "openInSession": "Open in session",
     "badgeTooltip": "{count} pending question(s)",
-    "headerSubtask": "Subtask"
+    "badgeLabel": "Needs confirm",
+    "statusAttention": "Needs confirm",
+    "attentionGroupTitle": "Needs your attention",
+    "viewAllActivity": "View all activity",
+    "headerSubtask": "Subtask",
+    "headerChat": "Quick chat",
+    "headerProjectChat": "Project chat",
+    "headerChatFallback": "Conversation"
   },
   "directoryPicker": {
     "placeholder": "Click to select directory",

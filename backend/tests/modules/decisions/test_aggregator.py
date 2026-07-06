@@ -206,11 +206,41 @@ def test_enrich_pending_builds_full_entry(db_factory) -> None:
     assert entry.agent_slug == "architect"
 
 
-def test_enrich_pending_returns_none_for_non_task_session(db_factory) -> None:
+def test_enrich_pending_builds_chat_entry_for_non_task_session(db_factory) -> None:
+    # question-attention: plain conversations are eligible too — enriched
+    # from session metadata alone (no task join, never None).
     _seed(db_factory)
-    chat_session = SimpleNamespace(id="chat-sess", status="running", metadata={"valuz": {}})
+    chat_session = SimpleNamespace(
+        id="chat-sess",
+        user_id="local-test-owner",
+        status="running",
+        metadata={"valuz": {"name": "新能源行业季度综述"}},
+        agent_config=SimpleNamespace(name="研究助理"),
+    )
     entry = asyncio.run(enrich_pending(chat_session, pending_id="p1", question_payload={}))
-    assert entry is None
+    assert entry is not None
+    assert entry.source_kind == "chat"
+    assert entry.task_id is None and entry.task_title is None
+    assert entry.session_title == "新能源行业季度综述"
+    assert entry.agent_slug == "研究助理"  # falls back to agent_config.name
+    assert entry.owner_user_id == "local-test-owner"
+
+
+def test_enrich_pending_project_chat_joins_project(db_factory) -> None:
+    _seed(db_factory)  # seeds ProjectRow id="w1" (全栈开发 🛠)
+    session = SimpleNamespace(
+        id="pchat-sess",
+        user_id="local-test-owner",
+        status="running",
+        metadata={"valuz": {"project_id": "w1", "agent_slug": "analyst"}},
+    )
+    entry = asyncio.run(enrich_pending(session, pending_id="p1", question_payload={}))
+    assert entry is not None
+    assert entry.source_kind == "project_chat"
+    assert entry.project_id == "w1"
+    assert entry.project_title == "全栈开发"
+    assert entry.project_emoji == "🛠"
+    assert entry.session_title is None  # untitled → frontend falls back to question text
 
 
 def test_enrich_pending_returns_none_when_task_missing(db_factory) -> None:
@@ -240,12 +270,26 @@ def test_add_entry_on_requires_action(db_factory) -> None:
     assert snap[0].task_title == "打豆豆小游戏"
 
 
-def test_ignore_non_task_driven_session(db_factory) -> None:
+def test_chat_session_question_enters_inbox(db_factory) -> None:
+    # Behavior change (question-attention): a plain conversation's clarifying
+    # question is admitted — it used to be filtered out by run_kind.
     _seed(db_factory)
     agg = DecisionAggregator()
-    _prep(agg, SimpleNamespace(id="sub-sess", status="running", metadata={"valuz": {}}))
+    _prep(
+        agg,
+        SimpleNamespace(
+            id="sub-sess",
+            user_id="local-test-owner",
+            status="running",
+            metadata={"valuz": {"name": "快捷对话"}},
+            agent_config=SimpleNamespace(name="assistant"),
+        ),
+    )
     _handle(agg, "local-test-owner", "sub-sess", _requires_action_event())
-    assert _snap(agg, "local-test-owner") == []
+    snap = _snap(agg, "local-test-owner")
+    assert len(snap) == 1
+    assert snap[0].source_kind == "chat"
+    assert snap[0].session_title == "快捷对话"
 
 
 def test_ignore_non_clarifying_subject(db_factory) -> None:
@@ -433,6 +477,23 @@ def test_requires_action_retries_a_transient_session_miss(db_factory, monkeypatc
     _handle(agg, "local-test-owner", "sub-sess", _requires_action_event())
     assert calls["n"] == 2
     assert [e.pending_id for e in _snap(agg, "local-test-owner")] == ["p1"]
+
+
+def test_hydrate_recovers_chat_pending_from_durable(db_factory, monkeypatch) -> None:
+    """The reconcile path admits conversation sessions too — a chat question
+    missed by the live tap is recovered on a plain snapshot() read."""
+    chat = SimpleNamespace(
+        id="chat-sess",
+        user_id="local-test-owner",
+        status="running",
+        metadata={"valuz": {"name": "快捷对话"}},
+        agent_config=SimpleNamespace(name="assistant"),
+    )
+    _stub_durable(monkeypatch, [chat], {"chat-sess": [_requires_action_event()]})
+    agg = DecisionAggregator()
+    snap = _snap(agg, "local-test-owner")
+    assert [e.pending_id for e in snap] == ["p1"]
+    assert snap[0].source_kind == "chat"
 
 
 def test_read_path_hydrate_is_debounced(db_factory) -> None:

@@ -36,3 +36,4 @@ export * from "./parser/types";
 export * from "./session";
 export * from "./store";
 export type { PlatformCapabilities } from "./platform/types";
+export * from "./platform/attention-notify";

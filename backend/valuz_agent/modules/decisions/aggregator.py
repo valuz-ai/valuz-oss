@@ -11,8 +11,9 @@ that maintains the global Decision Inbox snapshot. It:
    nothing.
 2. **Subscribes to the global broadcast bus** — every kernel event the
    host emits is fanned into the aggregator. The aggregator filters in-
-   process for ``requires_action`` / ``action_resolved`` belonging to
-   task-driven sessions, enriches each entry via
+   process for ``requires_action`` / ``action_resolved`` with subject
+   ``clarifying_questions`` — from ANY session kind (question-attention:
+   task runs and plain conversations alike) — enriches each entry via
    :func:`enrich_pending`, and pushes the result into per-subscriber
    SSE queues.
 3. **Sweeps on session terminal** — when a session reaches the
@@ -55,10 +56,7 @@ from valuz_agent.modules.decisions.schemas import (
     DecisionEntry,
     DecisionStreamEvent,
 )
-from valuz_agent.modules.decisions.service import (
-    enrich_pending,
-    is_task_driven,
-)
+from valuz_agent.modules.decisions.service import enrich_pending
 
 logger = logging.getLogger(__name__)
 
@@ -303,7 +301,7 @@ class DecisionAggregator:
             logger.warning("decisions hydration: list_all_sessions failed", exc_info=True)
             return
         for session in sessions:
-            if getattr(session, "status", None) != "running" or not is_task_driven(session):
+            if getattr(session, "status", None) != "running":
                 continue
             try:
                 events = await kernel_client.get_events(session.user_id, session.id, limit=200)
@@ -408,7 +406,7 @@ class DecisionAggregator:
         fresh: dict[str, DecisionEntry] = {}
         fresh_by_session: dict[str, set[str]] = {}
         for session in sessions:
-            if getattr(session, "status", None) != "running" or not is_task_driven(session):
+            if getattr(session, "status", None) != "running":
                 continue
             try:
                 events = await kernel_client.get_events(session.user_id, session.id, limit=200)
@@ -573,14 +571,12 @@ class DecisionAggregator:
         for attempt in range(2):
             if attempt:
                 await asyncio.sleep(_ENRICH_RETRY_DELAY_SECONDS)
-            # Resolve the session (per-owner durable read) for run_kind + join keys.
+            # Resolve the session (per-owner durable read) for enrich keys.
+            # Every session kind is eligible (question-attention) — enrich
+            # picks the task-chain or conversation branch itself.
             session = await self._load_session(owner_user_id, session_id)
             if session is None:
                 continue
-            if not is_task_driven(session):
-                # By design: plain conversations render their question inline
-                # on the page the user is already viewing — never a retry case.
-                return
             entry = await enrich_pending(
                 session,
                 pending_id=pending_id,

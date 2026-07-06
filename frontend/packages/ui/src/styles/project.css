@@ -506,6 +506,26 @@ html[data-size="comfortable"] body {
 }
 
 /* --------------------------------------------------------------------------
+ * Attention pulse — the topbar 等你确认 chip while it carries unread
+ * pendings (question-attention). Pulses an outward warning-tinted ring;
+ * the chip body stays steady (no opacity flicker, same principle as
+ * border-breathe).
+ * -------------------------------------------------------------------------- */
+@keyframes attention-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--warning) 40%, transparent);
+  }
+  55% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+
+.animate-attention-pulse {
+  animation: attention-pulse 1.8s ease-in-out infinite;
+}
+
+/* --------------------------------------------------------------------------
  * Border-only breathe — used by the conversation page's scroll-to-bottom
  * affordance while a turn is still streaming. Keeps the button body steady
  * (no opacity flicker) and pulses an outward brand-tinted ring instead.

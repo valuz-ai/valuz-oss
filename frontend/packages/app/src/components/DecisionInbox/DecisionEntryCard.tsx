@@ -25,11 +25,17 @@ export interface DecisionEntryCardProps {
   entry: DecisionEntry;
   /** Called after the user clicks "前往会话" so the drawer can close. */
   onNavigateAway?: () => void;
+  /** Chrome-less variant for surfaces that already provide the context
+   *  (e.g. the task-detail timeline — the page IS the task): renders just
+   *  the question card with the submit wiring, no outer border, no
+   *  context header, no footer. Avoids the card-in-card-in-card stack. */
+  embedded?: boolean;
 }
 
 export function DecisionEntryCard({
   entry,
   onNavigateAway,
+  embedded = false,
 }: DecisionEntryCardProps): ReactElement {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -73,6 +79,20 @@ export function DecisionEntryCard({
     navigate(`/conversation/${encodeURIComponent(entry.session_id)}`);
   }, [entry.session_id, navigate, onNavigateAway]);
 
+  if (embedded) {
+    return questions.length > 0 ? (
+      <AskUserQuestionCard
+        questions={questions}
+        onSubmit={handleSubmit}
+        submitting={submitting}
+      />
+    ) : (
+      <div className="px-3 py-4 text-sm text-ink-muted">
+        {t("decisionInbox.emptyTitle" as I18nKey)}
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-xl border border-surface-border bg-surface shadow-sm">
       {/* Context header */}
@@ -93,17 +113,35 @@ export function DecisionEntryCard({
           )}
         </div>
         <div className="flex min-w-0 items-center gap-1.5 text-sm">
-          <span className="truncate font-medium text-ink-heading">
-            {entry.task_title}
-          </span>
-          {entry.subtask_label && (
+          {entry.source_kind === "task" ? (
             <>
-              <span className="text-ink-faint">·</span>
-              <span className="shrink-0 rounded bg-surface-soft px-1.5 py-0.5 text-2xs text-ink-muted">
-                {t("decisionInbox.headerSubtask" as I18nKey)}
+              <span className="truncate font-medium text-ink-heading">
+                {entry.task_title}
               </span>
-              <span className="truncate text-xs text-ink-body">
-                {entry.subtask_label}
+              {entry.subtask_label && (
+                <>
+                  <span className="text-ink-faint">·</span>
+                  <span className="shrink-0 rounded bg-surface-soft px-1.5 py-0.5 text-2xs text-ink-muted">
+                    {t("decisionInbox.headerSubtask" as I18nKey)}
+                  </span>
+                  <span className="truncate text-xs text-ink-body">
+                    {entry.subtask_label}
+                  </span>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <span className="truncate font-medium text-ink-heading">
+                {entry.session_title ??
+                  t("decisionInbox.headerChatFallback" as I18nKey)}
+              </span>
+              <span className="shrink-0 rounded bg-surface-soft px-1.5 py-0.5 text-2xs text-ink-muted">
+                {t(
+                  (entry.source_kind === "project_chat"
+                    ? "decisionInbox.headerProjectChat"
+                    : "decisionInbox.headerChat") as I18nKey,
+                )}
               </span>
             </>
           )}

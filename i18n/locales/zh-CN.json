@@ -534,13 +534,21 @@
     "yesterdayTime": "昨天 {time}"
   },
   "decisionInbox": {
-    "title": "待回答问题",
+    "title": "等你处理",
     "emptyTitle": "暂无待回答问题",
-    "emptyHint": "子任务 agent 需要你确认时会出现在这里",
-    "toastNew": "{agent} 有问题待回答",
+    "emptyHint": "Agent 需要你确认时会出现在这里",
+    "toastNew": "{agent} 有问题等你确认",
+    "toastAction": "去处理",
     "openInSession": "前往会话",
-    "badgeTooltip": "{count} 个问题待回答",
-    "headerSubtask": "子任务"
+    "badgeTooltip": "{count} 个问题等你确认",
+    "badgeLabel": "等你确认",
+    "statusAttention": "等你确认",
+    "attentionGroupTitle": "等你处理",
+    "viewAllActivity": "查看全部动态",
+    "headerSubtask": "子任务",
+    "headerChat": "快捷对话",
+    "headerProjectChat": "项目对话",
+    "headerChatFallback": "会话"
   },
   "directoryPicker": {
     "placeholder": "点击选择目录",
