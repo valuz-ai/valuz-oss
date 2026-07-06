@@ -4,9 +4,9 @@
  * entities interleaved by time bucket, with a keyset "load more". The caller
  * owns the feed (``useActivityFeed``); this component only renders it.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { useTranslation } from "@valuz/core";
+import { useDecisionPending, useTranslation } from "@valuz/core";
 import type { ActivityFeed, ActivityItem } from "@valuz/core";
 import { Badge } from "@valuz/ui";
 import { Clock3, ListChecks, Loader2, MessageSquare } from "lucide-react";
@@ -82,6 +82,21 @@ export const ActivityFeedList = ({
   const { t } = useTranslation();
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const { items, loading, loadingMore, hasMore, loadMore } = feed;
+
+  // 等你确认 override (question-attention): rows whose session (chat) or
+  // task (any member session) carries a pending question show the amber
+  // state instead of the raw status. Reading the decision store here keeps
+  // every feed consumer (global 动态 + project tabs) consistent for free.
+  const decisionPending = useDecisionPending();
+  const attention = useMemo(() => {
+    const sessions = new Set<string>();
+    const tasks = new Set<string>();
+    for (const e of decisionPending) {
+      sessions.add(e.session_id);
+      if (e.task_id) tasks.add(e.task_id);
+    }
+    return { sessions, tasks };
+  }, [decisionPending]);
 
   // Infinite scroll: auto-load the next page when the bottom sentinel scrolls
   // into view (pre-fetched via ``rootMargin``). ``loadMore`` no-ops while a page
@@ -187,17 +202,25 @@ export const ActivityFeedList = ({
             {formatCreatedAt(item.sort_at, t)}
           </span>
           <span className="relative inline-flex min-w-6 shrink-0 items-center justify-center">
-            {statusKey && (
-              <Badge
-                variant={activityStatusVariant(item.status)}
-                className={
-                  item.kind === "chat"
-                    ? "transition-opacity group-hover:opacity-0 group-has-[[data-state=open]]:opacity-0"
-                    : undefined
-                }
-              >
-                {t(statusKey as Parameters<typeof t>[0])}
+            {(item.kind === "task"
+              ? attention.tasks.has(item.id)
+              : attention.sessions.has(item.id)) ? (
+              <Badge variant="warning" className="shrink-0">
+                {t("decisionInbox.statusAttention" as Parameters<typeof t>[0])}
               </Badge>
+            ) : (
+              statusKey && (
+                <Badge
+                  variant={activityStatusVariant(item.status)}
+                  className={
+                    item.kind === "chat"
+                      ? "transition-opacity group-hover:opacity-0 group-has-[[data-state=open]]:opacity-0"
+                      : undefined
+                  }
+                >
+                  {t(statusKey as Parameters<typeof t>[0])}
+                </Badge>
+              )
             )}
             {item.kind === "chat" && (
               <RowActionsMenu

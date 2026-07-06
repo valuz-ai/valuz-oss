@@ -35,18 +35,28 @@ class DecisionEntry(BaseModel):
     Set from the session's ``user_id`` (never a client-supplied value)."""
 
     session_id: str
-    """The session asking the question — usually a subtask run session,
-    occasionally a lead session that delegated to AskUserQuestion before
-    dispatching."""
+    """The session asking the question — a task run session (lead /
+    subtask) or any plain conversation session."""
 
-    task_id: str
+    source_kind: Literal["task", "chat", "project_chat"] = "task"
+    """Where the question came from: a task run (lead/subtask), a plain
+    quick chat, or a project-scoped conversation. Drives which context
+    line the card renders (task chain vs session title)."""
+
+    task_id: str | None = None
     """The valuz task this session belongs to (lead and all its
-    subtasks share the same ``task_id``)."""
+    subtasks share the same ``task_id``). ``None`` for non-task
+    sessions (``source_kind != "task"``)."""
 
     # ---- Context (UI metadata) ------------------------------------
     project_id: str | None = None
-    """The project the task belongs to. Plain chat sessions don't have
-    this — but the aggregator filters them out anyway."""
+    """The project the task/conversation belongs to. Plain quick chats
+    don't have one."""
+
+    session_title: str | None = None
+    """Kernel session title — the primary context line for non-task
+    entries. ``None`` for task entries (they render the task chain) or
+    untitled sessions (frontend falls back to the question text)."""
 
     subtask_key: str | None = None
     """Plan node key (e.g. ``arch-design``). ``None`` when the lead
@@ -58,7 +68,8 @@ class DecisionEntry(BaseModel):
 
     project_title: str | None = None
     project_emoji: str | None = None
-    task_title: str
+    task_title: str | None = None
+    """``None`` for non-task entries."""
 
     subtask_label: str | None = None
     """Human label for the subtask plan node (e.g. ``游戏架构设计``).

@@ -9,6 +9,7 @@
  */
 
 import { type ReactElement } from "react";
+import { useNavigate } from "react-router-dom";
 
 import {
   useDecisionIsOpen,
@@ -23,6 +24,7 @@ import { DecisionEntryCard } from "./DecisionEntryCard";
 
 export function DecisionDrawer(): ReactElement {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const isOpen = useDecisionIsOpen();
   const pending = useDecisionPending();
   const setOpen = useDecisionStore((s) => s.setOpen);
@@ -62,6 +64,19 @@ export function DecisionDrawer(): ReactElement {
             ))}
           </div>
         )}
+
+        <div className="border-t border-surface-border">
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              navigate("/activity");
+            }}
+            className="w-full px-4 py-2.5 text-center text-xs text-brand hover:bg-surface-soft"
+          >
+            {t("decisionInbox.viewAllActivity" as I18nKey)}
+          </button>
+        </div>
       </SheetContent>
     </Sheet>
   );

@@ -3,6 +3,7 @@ import {
   Outlet,
   RouterProvider,
   createHashRouter,
+  useNavigate,
   type RouteObject,
 } from "react-router-dom";
 import { useRegistryStore } from "@valuz/core";
@@ -25,6 +26,7 @@ import {
  */
 const DeepLinkRoot = () => {
   const setupReady = useAppSetupReady();
+  const navigate = useNavigate();
 
   // Deep-link listener
   useEffect(() => {
@@ -54,8 +56,22 @@ const DeepLinkRoot = () => {
     const onDeepLink = (payload: unknown) => {
       // Generic deep-link dispatch. Branch on the parsed ``host``.
       console.log("[DeepLink] received:", payload);
-      const parsed = payload as { host?: string; search?: string } | null;
+      const parsed = payload as {
+        host?: string;
+        pathname?: string;
+        search?: string;
+      } | null;
       if (!parsed || typeof parsed !== "object") return;
+
+      // In-app navigation forwarded from the main process — e.g. clicking
+      // an attention (question) OS notification. Synthetic payload, same
+      // channel as external deep links (see main/ipc/attention.ts).
+      if (parsed.host === "navigate") {
+        if (typeof parsed.pathname === "string" && parsed.pathname) {
+          navigate(parsed.pathname);
+        }
+        return;
+      }
 
       // Connector / MCP OAuth callback
       // (``valuz-oss://connector-oauth?ok=1&connector_id=…&slug=…`` or
@@ -84,7 +100,7 @@ const DeepLinkRoot = () => {
     return () => {
       desktopApi.off("deep-link-received", onDeepLink);
     };
-  }, []);
+  }, [navigate]);
 
   // Keep showing the splash visual while the setup check (providers.list) is
   // in flight. Returning ``null`` here used to leave the screen blank for the

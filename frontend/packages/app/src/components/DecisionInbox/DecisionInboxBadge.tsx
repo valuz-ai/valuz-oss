@@ -49,21 +49,15 @@ export function DecisionInboxBadge(): ReactElement | null {
             type="button"
             onClick={handleClick}
             aria-label={t("decisionInbox.title" as I18nKey)}
-            className="relative flex h-[22px] items-center gap-1 rounded-[5px] px-1.5 text-ink-body transition-colors hover:bg-surface-muted"
+            className={`flex h-6 items-center gap-1.5 rounded-md bg-warning-light px-2 text-xs font-medium text-warning-text transition-[filter] hover:brightness-95 ${
+              unread > 0 ? "animate-attention-pulse" : ""
+            }`}
           >
             <span className="text-sm leading-none">📥</span>
-            <span
-              className={`min-w-[16px] rounded-full px-1 text-center text-2xs font-semibold leading-[16px] ${
-                unread > 0
-                  ? "bg-brand text-white"
-                  : "bg-surface-soft text-ink-muted"
-              }`}
-            >
+            <span>{t("decisionInbox.badgeLabel" as I18nKey)}</span>
+            <span className="min-w-[15px] text-center font-semibold">
               {total}
             </span>
-            {unread > 0 && (
-              <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-brand" />
-            )}
           </button>
         </TooltipTrigger>
         <TooltipContent side="bottom">

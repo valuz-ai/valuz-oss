@@ -5,6 +5,7 @@ import { readFile, copyFile, mkdir, unlink } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { getMainWindow } from "../windows";
 import { openExternalIfSafe } from "../security";
+import { attentionHandlers } from "./attention";
 import { desktopRuntime } from "./desktop";
 import { serviceHandlers } from "./services";
 import {
@@ -22,6 +23,10 @@ export const registerIpcHandlers = () => {
   const handlers = serviceHandlers(desktopRuntime);
 
   for (const [channel, handler] of Object.entries(handlers)) {
+    ipcMain.handle(channel, handler);
+  }
+
+  for (const [channel, handler] of Object.entries(attentionHandlers)) {
     ipcMain.handle(channel, handler);
   }
 

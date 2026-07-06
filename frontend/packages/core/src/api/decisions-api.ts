@@ -27,14 +27,21 @@ export const setDecisionsApiBase = (url: string): void => {
 export interface DecisionEntry {
   pending_id: string;
   session_id: string;
-  task_id: string;
+  /** Where the question came from — drives the card's context line.
+   *  ``task`` renders the task chain; ``chat`` / ``project_chat`` render
+   *  the session title. */
+  source_kind: "task" | "chat" | "project_chat";
+  task_id: string | null;
   project_id: string | null;
   subtask_key: string | null;
   agent_slug: string;
   project_title: string | null;
   project_emoji: string | null;
-  task_title: string;
+  task_title: string | null;
   subtask_label: string | null;
+  /** Kernel session title — context for non-task entries; falls back to
+   *  the question text when null. */
+  session_title: string | null;
   /** Raw AskUserQuestion payload — ``{questions: [{question, options[]}, ...]}``.
    *  Drawer renders this through the same ``AskUserQuestionCard`` used inline. */
   question_payload: Record<string, unknown>;

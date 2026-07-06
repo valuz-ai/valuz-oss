@@ -15,6 +15,7 @@ function entry(pendingId: string): DecisionEntry {
   return {
     pending_id: pendingId,
     session_id: "s1",
+    source_kind: "task",
     task_id: "t1",
     project_id: null,
     project_title: null,
@@ -22,6 +23,7 @@ function entry(pendingId: string): DecisionEntry {
     task_title: "T",
     subtask_key: null,
     subtask_label: null,
+    session_title: null,
     agent_slug: "a",
     question_payload: { questions: [] },
     raised_at: 1,

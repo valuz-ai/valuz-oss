@@ -115,7 +115,11 @@ import { useProjectOutlet } from "@valuz/app/layout";
 import { buildTurns, useStableTurns, type PlanSubtask } from "@valuz/core";
 import { ConversationTurnList } from "@valuz/ui";
 import { usePlatform } from "@valuz/app/platform";
-import { useHasUsableChannel, useTranslation } from "@valuz/core";
+import {
+  useHasUsableChannel,
+  useTranslation,
+  useWatchSessions,
+} from "@valuz/core";
 import { useProjectKbBindings, useKbDocTree } from "@valuz/app/hooks";
 import {
   computePlanAnchors,
@@ -729,6 +733,13 @@ export const ConversationPage = () => {
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId;
   }, [selectedSessionId]);
+  // Register the open session as "watched" (question-attention): its
+  // question renders inline right here, so the global provider must not
+  // also toast / system-notify for it.
+  useWatchSessions(
+    "conversation",
+    selectedSessionId ? [selectedSessionId] : [],
+  );
   const [events, setEvents] = useState<SessionEventDTO[]>([]);
   // Live TODO list for the active session. Hydrated from
   // ``session.todos`` on session switch and from ``session.todos.update``

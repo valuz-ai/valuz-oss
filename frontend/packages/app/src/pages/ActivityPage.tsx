@@ -12,6 +12,7 @@ import {
 import {
   buildTurns,
   sessionsApi,
+  useDecisionPending,
   useRunningRuns,
   useSessionEvents,
   useSessionStore,
@@ -26,6 +27,7 @@ import {
   type SessionEventDTO,
 } from "@valuz/shared";
 import { ActivityFeedList } from "@valuz/app/components";
+import { AttentionGroup } from "../components/DecisionInbox";
 import { useProjectOutlet } from "@valuz/app/layout";
 
 type SourceFilter = "all" | "chat" | "task" | "automation";
@@ -248,6 +250,13 @@ export const ActivityPage = () => {
   const { runs: running } = useRunningRuns();
   const projects = useProjectStore((s) => s.projects);
   const renameSession = useSessionStore((s) => s.renameSession);
+  // Sessions with a pending question — drives the 等你确认 status override
+  // on both running cards and history rows (question-attention).
+  const decisionPending = useDecisionPending();
+  const attentionSessionIds = useMemo(
+    () => new Set(decisionPending.map((e) => e.session_id)),
+    [decisionPending],
+  );
 
   const [filter, setFilter] = useState<SourceFilter>("all");
   // The chat row up for delete-confirmation ({id,title}); null when closed.
@@ -346,6 +355,17 @@ export const ActivityPage = () => {
   };
 
   const renderStatusChip = (run: RunSummary) => {
+    // 等你确认 overrides the raw kernel status (question-attention): a run
+    // blocked on the user is the one state that must never read as a plain
+    // 运行中. Joined from the decision store — same source as the badge and
+    // the attention group, so the three can never disagree.
+    if (attentionSessionIds.has(run.session_id)) {
+      return (
+        <Badge variant="warning" className="shrink-0">
+          {t(tk("decisionInbox.statusAttention"))}
+        </Badge>
+      );
+    }
     const key = STATUS_LABEL_KEY[run.status];
     if (!key) return null;
     return (
@@ -434,6 +454,10 @@ export const ActivityPage = () => {
           </TabsList>
         </div>
       </Tabs>
+
+      {/* 等你处理 — pending questions pinned above everything else
+          (question-attention). Self-hides when empty. */}
+      <AttentionGroup />
 
       {/* Running section — visible whenever the display list has anything
           (real running from polling + the two demo style-case runs pinned

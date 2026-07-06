@@ -603,6 +603,35 @@ paths:
                 $ref: "#/components/schemas/Task"
         "404":
           description: Task not found
+  /v1/decisions/pending:
+    get:
+      summary: Pending decisions (Decision Inbox snapshot, oldest first)
+      operationId: listPendingDecisions
+      tags: [decisions]
+      responses:
+        "200":
+          description: Unresolved clarifying questions across every session kind
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisionPendingResponse"
+  /v1/decisions/stream:
+    get:
+      summary: SSE stream of Decision Inbox deltas
+      operationId: decisionsStream
+      tags: [decisions]
+      responses:
+        "200":
+          description: >
+            SSE stream. First frame is `event: snapshot` with
+            `{entries: DecisionEntry[]}`; then `event: added` with
+            `{entry: DecisionEntry}` and `event: resolved` with
+            `{pending_id: string}`. `event: heartbeat` keeps the
+            connection alive.
+          content:
+            text/event-stream:
+              schema:
+                type: string
   /v1/runs/{session_id}:stop:
     post:
       summary: User-initiated single-member stop (interrupt subtask, node→rework)
@@ -3621,6 +3650,45 @@ components:
           type: object
           nullable: true
           additionalProperties: true
+    DecisionEntry:
+      type: object
+      description: >
+        One unresolved requires_action(clarifying_questions) pending, enriched
+        for self-contained rendering. Task entries (source_kind=task) carry the
+        task chain; conversation entries (chat/project_chat) carry the session
+        title instead. Same shape over REST snapshot and SSE added frames.
+      required: [pending_id, session_id, source_kind, agent_slug, question_payload, raised_at]
+      properties:
+        pending_id: {type: string}
+        session_id: {type: string}
+        source_kind:
+          type: string
+          enum: [task, chat, project_chat]
+        task_id: {type: string, nullable: true}
+        task_title: {type: string, nullable: true}
+        subtask_key: {type: string, nullable: true}
+        subtask_label: {type: string, nullable: true}
+        project_id: {type: string, nullable: true}
+        project_title: {type: string, nullable: true}
+        project_emoji: {type: string, nullable: true}
+        session_title:
+          type: string
+          nullable: true
+          description: Kernel session title — context line for non-task entries.
+        agent_slug: {type: string}
+        question_payload:
+          type: object
+          additionalProperties: true
+          description: "Raw AskUserQuestion shape: {questions: [{question, options[]}, ...]}"
+        raised_at: {type: integer, format: int64, description: "Unix epoch milliseconds (UTC)."}
+    DecisionPendingResponse:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/DecisionEntry"
     TaskEvent:
       type: object
       required: [id, sequence, type, actor, payload, created_at]

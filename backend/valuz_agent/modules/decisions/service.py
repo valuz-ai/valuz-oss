@@ -1,17 +1,19 @@
-"""Enrichment helpers for the Decision Inbox (ADR-022).
+"""Enrichment helpers for the Decision Inbox (ADR-022 + question-attention).
 
 Pure functions that take a kernel ``Session`` + a raw kernel
 ``requires_action`` event payload and produce a fully-enriched
-``DecisionEntry``. Returns ``None`` when the session isn't task-driven
-or the metadata join fails — the aggregator silently drops these.
+``DecisionEntry``. Every session kind is eligible — ``is_task_driven``
+selects the enrichment branch, it is no longer an admission gate:
 
-Joins:
-
-- ``session.metadata["valuz"]`` → run_kind / task_id / agent_slug
-- ``valuz_task_session`` (``TaskSessionDatastore.get_run``) → subtask_key
-- ``valuz_task`` (``TaskDatastore.get_task``) → task_title + project_id + plan
-- ``valuz_project`` (``ProjectDatastore.get_by_id``) → project_title + emoji
-- ``TaskPlan.get(subtask_key)`` → subtask_label
+- **Task sessions** (run_kind ∈ {lead, subtask}) join the task chain:
+  ``session.metadata["valuz"]`` → run_kind / task_id / agent_slug;
+  ``valuz_task_session`` → subtask_key; ``valuz_task`` → task_title +
+  project_id + plan; ``valuz_project`` → project_title + emoji;
+  ``TaskPlan.get(subtask_key)`` → subtask_label. Returns ``None`` only
+  when the task row is unreadable (broadcast/DB race — the aggregator
+  retries, then the reconcile sweep recovers).
+- **Conversation sessions** (everything else) need no DB join: context is
+  the session title (``metadata["valuz"]["name"]``) + optional project.
 """
 
 # ruff: noqa: I001 — kernel_bootstrap MUST import before src.core (sys.path setup)
@@ -58,9 +60,9 @@ def _valuz_metadata(session: Session) -> dict[str, Any]:
 def is_task_driven(session: Session) -> bool:
     """True iff this session is a ``lead`` or ``subtask`` run.
 
-    The aggregator filters every incoming ``requires_action`` against
-    this before doing any enrichment — non-task-driven sessions are
-    never surfaced in the inbox.
+    Selects the enrichment branch in :func:`enrich_pending` (task chain
+    vs conversation context). No longer an inbox admission gate —
+    question-attention surfaces every session kind.
     """
     return _valuz_metadata(session).get("run_kind") in TASK_RUN_KINDS
 
@@ -73,25 +75,95 @@ async def enrich_pending(
     raised_at: int | None = None,
     user_id: str | None = None,
 ) -> DecisionEntry | None:
-    if user_id is None:
-        raise ValueError("user_id is required")
-
     """Build a ``DecisionEntry`` from a kernel session + raw question payload.
 
-    Returns ``None`` when:
-    - The session isn't task-driven (``run_kind`` ∉ {lead, subtask})
-    - The ``valuz.task_id`` is missing (defensive — every lead/subtask
-      session should carry it; logged at warning level if absent)
-    - The task row was deleted (race between event broadcast and our
-      lookup — silently drop)
+    Dispatcher — every session kind is eligible (question-attention). Task
+    sessions join the task chain and may return ``None`` on a broadcast/DB
+    race (task row unreadable — the aggregator retries, the reconcile sweep
+    recovers). Conversation sessions enrich from session metadata alone and
+    never return ``None``.
+    """
+    if user_id is None:
+        raise ValueError("user_id is required")
+    if is_task_driven(session):
+        return await _enrich_task_pending(
+            session,
+            pending_id=pending_id,
+            question_payload=question_payload,
+            raised_at=raised_at,
+            user_id=user_id,
+        )
+    return await _enrich_session_pending(
+        session,
+        pending_id=pending_id,
+        question_payload=question_payload,
+        raised_at=raised_at,
+    )
 
-    Joins are best-effort: a deleted project or missing plan node
-    degrades to ``None`` on the enriched field, NOT a failed entry.
+
+async def _enrich_session_pending(
+    session: Session,
+    *,
+    pending_id: str,
+    question_payload: dict[str, Any],
+    raised_at: int | None,
+) -> DecisionEntry:
+    """Conversation-session branch: no task chain to join.
+
+    Context = session title (``metadata["valuz"]["name"]``) + optional
+    project. ``source_kind`` is ``project_chat`` when the session carries a
+    ``valuz.project_id``, else ``chat``. Project join is best-effort — a
+    deleted project degrades the label, never the entry.
     """
     v = _valuz_metadata(session)
-    if v.get("run_kind") not in TASK_RUN_KINDS:
-        return None
+    raw_project_id = v.get("project_id")
+    project_id = str(raw_project_id) if raw_project_id else None
+    raw_title = v.get("name")
+    session_title = raw_title.strip() if isinstance(raw_title, str) and raw_title.strip() else None
+    agent_slug = (
+        v.get("agent_slug")
+        or getattr(getattr(session, "agent_config", None), "name", None)
+        or "assistant"
+    )
+    owner = getattr(session, "user_id", "") or ""
 
+    project_title: str | None = None
+    project_emoji: str | None = None
+    if project_id:
+        async with async_unit_of_work(commit=False) as db:
+            ws = await ProjectDatastore(db).get_by_id(owner, project_id)
+            if ws is not None:
+                project_title = ws.name
+                project_emoji = ws.icon
+
+    return DecisionEntry(
+        pending_id=pending_id,
+        owner_user_id=owner,
+        session_id=getattr(session, "id", ""),
+        source_kind="project_chat" if project_id else "chat",
+        task_id=None,
+        project_id=project_id,
+        session_title=session_title,
+        agent_slug=str(agent_slug),
+        project_title=project_title,
+        project_emoji=project_emoji,
+        question_payload=question_payload,
+        raised_at=raised_at or now_ms(),
+    )
+
+
+async def _enrich_task_pending(
+    session: Session,
+    *,
+    pending_id: str,
+    question_payload: dict[str, Any],
+    raised_at: int | None,
+    user_id: str,
+) -> DecisionEntry | None:
+    """Task-session branch (run_kind ∈ {lead, subtask}) — the original
+    ADR-022 enrichment. Returns ``None`` when ``valuz.task_id`` is absent
+    (defensive; warned) or the task row is unreadable (race)."""
+    v = _valuz_metadata(session)
     task_id = v.get("task_id")
     if not isinstance(task_id, str) or not task_id:
         logger.warning(
