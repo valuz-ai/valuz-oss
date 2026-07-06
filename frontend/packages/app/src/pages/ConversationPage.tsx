@@ -458,6 +458,22 @@ const SessionStatusPill = ({
 const NEW_SESSION_ID = "new";
 
 /**
+ * True when a tool title refers to *tool* regardless of how the runtime
+ * namespaces MCP tools: bare ("automation"), Claude-style
+ * ("mcp__valuz_automations__automation"), or slash-style
+ * ("valuz_automations/automation" — the codex runtime; verified live).
+ * The old `__`-suffix-only checks silently dropped every special card
+ * (automation proposal, create_task, AskUserQuestion, …) back to the
+ * generic tool renderer on slash-namespacing runtimes.
+ */
+function isToolNamed(title: unknown, tool: string): boolean {
+  if (typeof title !== "string" || !title) return false;
+  return (
+    title === tool || title.endsWith(`__${tool}`) || title.endsWith(`/${tool}`)
+  );
+}
+
+/**
  * Parse an ``automation`` tool call's INPUT into a create spec, or null if it
  * isn't a ``create`` action. ``create`` is the only action that renders a
  * propose→confirm card (others render ``AutomationToolCard``).
@@ -1000,9 +1016,7 @@ export const ConversationPage = () => {
       const payload = ev.event.payload ?? {};
       if (type === "tool.call.started") {
         const name = payload.name;
-        const isAsk =
-          name === "AskUserQuestion" ||
-          (typeof name === "string" && name.endsWith("__AskUserQuestion"));
+        const isAsk = isToolNamed(name, "AskUserQuestion");
         if (isAsk) {
           const toolUseId = payload.tool_use_id || payload.id;
           if (toolUseId) lastAskToolId = toolUseId;
@@ -1617,7 +1631,7 @@ export const ConversationPage = () => {
       for (const block of turn.blocks) {
         if (block.kind !== "tool") continue;
         const tname = block.tool.title || "";
-        if (tname === "propose_agent" || tname.endsWith("__propose_agent")) {
+        if (isToolNamed(tname, "propose_agent")) {
           ids.push(block.tool.id);
         }
       }
@@ -1639,7 +1653,7 @@ export const ConversationPage = () => {
       for (const block of turn.blocks) {
         if (block.kind !== "tool") continue;
         const tname = block.tool.title || "";
-        if (tname !== "propose_agent" && !tname.endsWith("__propose_agent")) {
+        if (!isToolNamed(tname, "propose_agent")) {
           continue;
         }
         let nm = "";
@@ -1698,7 +1712,7 @@ export const ConversationPage = () => {
       for (const block of turn.blocks) {
         if (block.kind !== "tool") continue;
         const tname = block.tool.title || "";
-        if (tname !== "automation" && !tname.endsWith("__automation")) continue;
+        if (!isToolNamed(tname, "automation")) continue;
         if (parseAutomationCreateInput(block.tool.input)) ids.push(block.tool.id);
       }
     }
@@ -1759,7 +1773,7 @@ export const ConversationPage = () => {
         if (block.kind !== "tool") continue;
         const t = block.tool;
         const name = t.title || "";
-        if (name !== "submit_skill" && !name.endsWith("__submit_skill")) {
+        if (!isToolNamed(name, "submit_skill")) {
           continue;
         }
         let slug = "";
@@ -1862,8 +1876,7 @@ export const ConversationPage = () => {
   const isToolCardFoldable = useCallback(
     (tool: { id: string; title?: string }): boolean => {
       const name = tool.title ?? "";
-      const isAsk =
-        name === "AskUserQuestion" || name.endsWith("__AskUserQuestion");
+      const isAsk = isToolNamed(name, "AskUserQuestion");
       if (!isAsk) return false;
       return Boolean(
         askUserQuestionAnswersByToolId[tool.id] ??
@@ -1901,11 +1914,10 @@ export const ConversationPage = () => {
       // server returns a structured JSON blob as ``tool.output``; we
       // parse it and hand off to the card. If the output is missing
       // (still running) or unparseable, we fall through to the generic
-      // tool renderer. The ``__automation`` suffix match catches the
-      // wrapped form FastMCP emits when the tool comes through a
-      // namespaced provider.
-      const isAutomation =
-        name === "automation" || name.endsWith("__automation");
+      // tool renderer. ``isToolNamed`` covers every runtime's MCP
+      // namespacing (bare / Claude ``mcp__server__tool`` / codex
+      // ``server/tool``).
+      const isAutomation = isToolNamed(name, "automation");
       if (isAutomation) {
         const result = parseAutomationToolOutput(tool.output);
         const openInAutomation = (automationId: string) => {
@@ -2008,7 +2020,7 @@ export const ConversationPage = () => {
       // as a content-block repr (``[{'type': 'text', 'text': '{...}'}]``), so
       // extract the fields by regex rather than JSON.parse-ing the whole blob.
       const isCreateTask =
-        name === "create_task" || name.endsWith("__create_task");
+        isToolNamed(name, "create_task");
       if (isCreateTask && tool.output) {
         const idMatch = tool.output.match(/"task_id"\s*:\s*"([^"]+)"/);
         const taskId = idMatch?.[1];
@@ -2065,7 +2077,7 @@ export const ConversationPage = () => {
       // at zero — the user never sees the read-only fill-content card
       // between submit and the kernel ack.
       const isAskUserQuestion =
-        name === "AskUserQuestion" || name.endsWith("__AskUserQuestion");
+        isToolNamed(name, "AskUserQuestion");
       if (isAskUserQuestion) {
         const parsed = parseAskUserQuestionInput(tool.input);
         if (parsed && parsed.questions.length > 0) {
@@ -2096,7 +2108,7 @@ export const ConversationPage = () => {
       // letting the user create + deploy the proposed agent. Tool name comes
       // through plain or MCP-bridged (``mcp__harness__propose_agent``).
       const isProposeAgent =
-        name === "propose_agent" || name.endsWith("__propose_agent");
+        isToolNamed(name, "propose_agent");
       if (isProposeAgent) {
         let spec: {
           name?: string;
@@ -2148,7 +2160,7 @@ export const ConversationPage = () => {
       }
 
       const isSubmit =
-        name === "submit_skill" || name.endsWith("__submit_skill");
+        isToolNamed(name, "submit_skill");
       if (!isSubmit) return null;
       let parsed: {
         slug?: string;

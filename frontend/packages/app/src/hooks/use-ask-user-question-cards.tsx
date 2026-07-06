@@ -37,9 +37,13 @@ const REQUIRES_ACTION = "session.requires_action";
 const CLARIFYING = "clarifying_questions";
 
 function isAskName(name: string | undefined): boolean {
+  // Match every MCP namespacing the runtimes produce: bare
+  // ("AskUserQuestion"), Claude-style ("mcp__harness__AskUserQuestion"),
+  // or slash-style ("harness/AskUserQuestion" — the codex runtime).
   return (
     name === "AskUserQuestion" ||
-    (typeof name === "string" && name.endsWith("__AskUserQuestion"))
+    (typeof name === "string" &&
+      (name.endsWith("__AskUserQuestion") || name.endsWith("/AskUserQuestion")))
   );
 }
 

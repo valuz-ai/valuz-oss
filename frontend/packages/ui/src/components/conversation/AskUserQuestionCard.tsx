@@ -85,10 +85,10 @@ function QuestionBlock({
               type="button"
               onClick={() => onToggle(opt.label)}
               className={cn(
-                "flex w-full items-start gap-2.5 rounded-md border px-3 py-2 text-left text-[13px] transition-colors",
+                "flex w-full items-start gap-2.5 rounded-md border px-3 py-2 text-left text-[13px] transition-colors focus:outline-none",
                 isSelected
                   ? "border-brand/40 bg-brand/5"
-                  : "border-surface-border bg-surface hover:border-surface-border/80 hover:bg-surface-2",
+                  : "border-transparent bg-surface hover:bg-surface-2",
                 answered && "cursor-default",
               )}
             >
@@ -142,10 +142,10 @@ function QuestionBlock({
             }
           }}
           className={cn(
-            "flex w-full items-start gap-2.5 rounded-md border px-3 py-2 text-left text-[13px] transition-colors",
+            "flex w-full items-start gap-2.5 rounded-md border px-3 py-2 text-left text-[13px] transition-colors focus:outline-none",
             otherSelected
               ? "border-brand/40 bg-brand/5"
-              : "border-surface-border bg-surface hover:border-surface-border/80 hover:bg-surface-2",
+              : "border-transparent bg-surface hover:bg-surface-2",
             answered ? "cursor-default" : "cursor-pointer",
           )}
         >
@@ -320,7 +320,7 @@ export const AskUserQuestionCard = memo(function AskUserQuestionCard({
       </div>
 
       {!answered ? (
-        <div className="flex items-center justify-end border-t border-surface-border px-4 py-2">
+        <div className="flex items-center justify-end px-4 py-2">
           <button
             type="button"
             disabled={!canSubmit || submitting}

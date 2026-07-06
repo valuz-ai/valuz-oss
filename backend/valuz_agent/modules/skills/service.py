@@ -64,6 +64,67 @@ _IMPORT_PREVIEW_ID_RE = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 # violation → flush rollback. Module-level because the service is built
 # per-request, so an instance lock wouldn't be shared.
 _scan_lock = asyncio.Lock()
+CreationOrigin = Literal["created", "imported", "discovered"]
+
+
+def _tags_from_index_row(row: Any) -> list[str]:
+    raw = getattr(row, "tags_json", None)
+    if not raw:
+        return []
+    return [tag for tag in (part.strip() for part in raw.split(",")) if tag]
+
+
+def _creation_origin_from_index_row(row: Any) -> CreationOrigin:
+    value = getattr(row, "creation_origin", None) or "discovered"
+    if value == "created":
+        return "created"
+    if value == "imported":
+        return "imported"
+    return "discovered"
+
+
+def _official_skill_view_from_index_row(
+    row: Any,
+    *,
+    enabled: bool,
+    has_official_entitlement: bool,
+) -> SkillView:
+    """Build the catalog view from ``valuz_skill_index`` without rescanning files.
+
+    The startup / rescan paths already compute the expensive manifest and content
+    hashes. Listing the catalog should reuse that indexed row and only perform a
+    cheap marker-file check to preserve the Built-in vs Official entitlement UI.
+    """
+    from valuz_agent.integrations.skills_official_bootstrap import is_bundled_skill
+
+    path = getattr(row, "source_path", "") or ""
+    is_bundled = is_bundled_skill(Path(path))
+    unlocked = is_bundled or has_official_entitlement
+    library_enabled = getattr(row, "library_enabled", True)
+    return SkillView(
+        id=f"official:{row.slug}",
+        name=row.name,
+        description=row.description or "",
+        scope=row.scope,
+        source=row.source,
+        path=path,
+        enabled=enabled,
+        library_enabled=True if library_enabled is None else bool(library_enabled),
+        tags=_tags_from_index_row(row),
+        slug=row.slug,
+        icon=getattr(row, "icon", None),
+        status=getattr(row, "status", "available") or "available",
+        readonly=bool(getattr(row, "readonly", True)),
+        deletable=bool(getattr(row, "deletable", False)),
+        is_locked=not unlocked,
+        lock_reason=None if unlocked else "Connect Reportify to unlock official skills",
+        project_root=getattr(row, "project_root", None),
+        origin_label="Built-in" if is_bundled else "Official",
+        content_hash=getattr(row, "content_hash", None),
+        manifest_hash=getattr(row, "manifest_hash", None),
+        folder_created_at=getattr(row, "folder_created_at", None),
+        creation_origin=_creation_origin_from_index_row(row),
+    )
 
 
 async def _upsert_skill_row(user_id: str, ds: SkillDatastore, manifest) -> None:  # type: ignore[no-untyped-def]
@@ -260,7 +321,8 @@ class SkillLibraryService:
         # missing row (skill on disk but not yet indexed) or a NULL value
         # (legacy row seeded before the column landed) coalesces to
         # ``"discovered"`` so the field is always a real enum value.
-        rows_by_slug = {row.slug: row for row in await self._ds.list_skills(user_id)}
+        index_rows = await self._ds.list_skills(user_id)
+        rows_by_slug = {row.slug: row for row in index_rows}
 
         def _origin(slug: str) -> str:
             row = rows_by_slug.get(slug)
@@ -294,6 +356,23 @@ class SkillLibraryService:
         enabled_paths = self._ds.enabled_skill_paths(project)
         has_official_entitlement = await self._check_entitlement("skills:official")
         for source in self._extra_sources:
+            if getattr(source, "name", None) == "official":
+                official_rows = [
+                    row
+                    for row in index_rows
+                    if row.scope == "official" and row.status == "available"
+                ]
+                if official_rows:
+                    for row in official_rows:
+                        view = _official_skill_view_from_index_row(
+                            row,
+                            enabled=project.kind == "chat"
+                            or getattr(row, "source_path", "") in enabled_paths,
+                            has_official_entitlement=has_official_entitlement,
+                        )
+                        skills.append(view)
+                    continue
+
             for manifest in source.list_skills(ctx):
                 view = SkillView(**manifest.model_dump(), creation_origin=_origin(manifest.slug))
                 # Bundled skills (origin_label="Built-in") ship with the

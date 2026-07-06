@@ -268,6 +268,65 @@ class TestListCatalog:
         catalog = await service.list_catalog("u", "ws-1")
         assert catalog.skills == []
 
+    async def test_should_read_official_skills_from_index_without_rescanning_source(
+        self, svc, tmp_path
+    ):
+        from valuz_agent.modules.skills.models import SkillIndexRow
+
+        service, _ = svc
+        official_dir = tmp_path / "official" / "skill-creator"
+        official_dir.mkdir(parents=True)
+        (official_dir / ".bundled-version").write_text("v1", encoding="utf-8")
+
+        class _ExplodingOfficialSource:
+            name = "official"
+
+            def list_skills(self, ctx):
+                raise AssertionError("official source should not be scanned when index is warm")
+
+        service._extra_sources = [_ExplodingOfficialSource()]
+        await service._ds.create(
+            "u",
+            SkillIndexRow(
+                slug="skill-creator",
+                name="skill-creator",
+                description="Create skills",
+                scope="official",
+                source="official",
+                source_path=str(official_dir),
+                user_id="u",
+                readonly=True,
+                deletable=False,
+                status="available",
+                content_hash="c" * 64,
+                manifest_hash="m" * 64,
+                tags_json="official,test",
+                creation_origin="discovered",
+                library_enabled=True,
+            ),
+        )
+
+        catalog = await service.list_catalog("u", "ws-1")
+
+        skill = next(s for s in catalog.skills if s.slug == "skill-creator")
+        assert skill.id == "official:skill-creator"
+        assert skill.origin_label == "Built-in"
+        assert skill.content_hash == "c" * 64
+        assert skill.manifest_hash == "m" * 64
+        assert skill.tags == ["official", "test"]
+
+    async def test_should_fallback_to_official_source_when_index_is_empty(self, svc, tmp_path):
+        service, _ = svc
+        from valuz_agent.integrations.skills_official import OfficialSkillSource
+
+        official_dir = tmp_path / "official"
+        _make_skill_dir(official_dir, "browser")
+        service._extra_sources = [OfficialSkillSource(official_dir=official_dir)]
+
+        catalog = await service.list_catalog("u", "ws-1")
+
+        assert any(skill.slug == "browser" for skill in catalog.skills)
+
     async def test_should_sort_by_folder_birthtime_desc(self, svc, skill_root):
         """The skill management page renders the catalog in DESC
         birthtime order. We stage two folders with deliberately staggered
