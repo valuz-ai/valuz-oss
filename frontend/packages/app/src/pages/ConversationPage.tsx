@@ -475,6 +475,7 @@ function parseAutomationCreateInput(input: unknown): {
   trigger: import("@valuz/core").Trigger | null;
   agent_slug?: string;
   action_kind?: "chat" | "task";
+  task_worktree?: boolean;
 } | null {
   if (!input) return null;
   let parsed: unknown;
@@ -514,6 +515,12 @@ function parseAutomationCreateInput(input: unknown): {
         : null,
     agent_slug: typeof p.agent_slug === "string" ? p.agent_slug : undefined,
     action_kind: actionKind,
+    // The input is the reliable carrier on runtimes whose tool OUTPUT is
+    // wrapped in a content envelope (codex, DeepAgents) — without this the
+    // confirm replay silently downgraded a worktree automation to
+    // task_worktree=false (verified live on codex/gpt-5.5).
+    task_worktree:
+      typeof p.task_worktree === "boolean" ? p.task_worktree : undefined,
   };
 }
 
@@ -1931,7 +1938,8 @@ export const ConversationPage = () => {
             automationTriggerSummary(confirmTrigger, t);
           const cardActionKind =
             proposal?.action_kind ?? inputSpec?.action_kind ?? "chat";
-          const cardTaskWorktree = proposal?.task_worktree ?? false;
+          const cardTaskWorktree =
+            proposal?.task_worktree ?? inputSpec?.task_worktree ?? false;
           const cardAgentName = proposal?.agent_name ?? inputSpec?.agent_slug ?? null;
           const entry = automationProposalStates[tool.id] || {
             state: "pending" as const,
