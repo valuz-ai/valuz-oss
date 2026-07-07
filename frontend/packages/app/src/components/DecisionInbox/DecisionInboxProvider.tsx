@@ -18,7 +18,7 @@
  * the subscription persists across route changes. Renders ``null``.
  */
 
-import { useEffect, type ReactElement } from "react";
+import { useEffect, useRef, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
@@ -39,12 +39,24 @@ export function DecisionInboxProvider(): ReactElement | null {
   // Singleton subscription (idempotent — safe to also mount elsewhere).
   useDecisionInbox();
   const navigate = useNavigate();
+  // navigate is not referentially stable across navigations — ref it so the
+  // store subscription below registers once for the app's lifetime instead
+  // of churning per route change.
+  const navigateRef = useRef(navigate);
+  useEffect(() => {
+    navigateRef.current = navigate;
+  }, [navigate]);
+  const lastBadgeCount = useRef(-1);
 
   useEffect(() => {
     const unsub = useDecisionStore.subscribe((state) => {
-      // Dock badge mirrors the total pending count on every store change
-      // (idempotent — Electron ignores repeat set calls with same value).
-      setAttentionBadge(state.pending.size);
+      // Dock badge mirrors the pending count — only when it actually
+      // changes (the store also mutates on drawer toggles / read marks,
+      // which must not round-trip IPC).
+      if (state.pending.size !== lastBadgeCount.current) {
+        lastBadgeCount.current = state.pending.size;
+        setAttentionBadge(state.pending.size);
+      }
 
       if (state.unreadIds.size === 0) return;
       for (const pendingId of state.unreadIds) {
@@ -72,7 +84,7 @@ export function DecisionInboxProvider(): ReactElement | null {
             description: context || undefined,
             action: {
               label: _t("decisionInbox.toastAction" as I18nKey),
-              onClick: () => navigate(route),
+              onClick: () => navigateRef.current(route),
             },
           });
         } else {
@@ -81,7 +93,7 @@ export function DecisionInboxProvider(): ReactElement | null {
       }
     });
     return unsub;
-  }, [navigate]);
+  }, []);
 
   return null;
 }

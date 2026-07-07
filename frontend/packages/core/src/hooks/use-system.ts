@@ -21,13 +21,15 @@ import { useSystemStore } from "../store/system-store";
 
 const STATUS_POLL_MS = 5_000;
 
-interface DesktopBridge {
+export interface DesktopBridge {
   invoke: <T>(channel: string, payload?: Record<string, unknown>) => Promise<T>;
   on: (event: string, handler: (payload: unknown) => void) => void;
   off: (event: string, handler: (payload: unknown) => void) => void;
 }
 
-const getDesktopBridge = (): DesktopBridge | null => {
+/** Shared accessor for the preload bridge — the one place that knows the
+ *  ``window.valuzDesktop`` exposure key. Import this instead of redetecting. */
+export const getDesktopBridge = (): DesktopBridge | null => {
   if (typeof window === "undefined") return null;
   const w = window as unknown as { valuzDesktop?: DesktopBridge };
   return w.valuzDesktop ?? null;

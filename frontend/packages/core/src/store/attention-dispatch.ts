@@ -3,11 +3,15 @@
  * matrix as a pure function, so the rule set is unit-testable without
  * mounting the Provider.
  *
- * | user location            | channel  |
- * |--------------------------|----------|
- * | watching the session     | silent   | (inline card is already on screen)
- * | app focused, elsewhere   | toast    |
- * | window in background     | system   | (OS notification + dock badge)
+ * | user location                     | channel  |
+ * |-----------------------------------|----------|
+ * | window focused, watching session  | silent   | (inline card is on screen)
+ * | window focused, elsewhere         | toast    |
+ * | window in background              | system   | (OS notification + badge)
+ *
+ * "Watched" only silences while the window is FOCUSED — a conversation
+ * left open behind a hidden/minimized window has nobody looking at its
+ * inline card, so background always escalates to the system channel.
  *
  * Badge counts and the Activity attention group are driven directly by the
  * store and ignore this policy — it only gates the interruptive channels.
@@ -21,8 +25,8 @@ export function decideAttentionChannel(
   isWatched: boolean,
   hasFocus: boolean,
 ): AttentionChannel {
-  if (isWatched) return "silent";
-  return hasFocus ? "toast" : "system";
+  if (!hasFocus) return "system";
+  return isWatched ? "silent" : "toast";
 }
 
 /** In-app route that answers ``entry`` — task entries land on the task

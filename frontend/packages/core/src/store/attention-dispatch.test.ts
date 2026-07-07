@@ -14,8 +14,8 @@ import {
 describe("decideAttentionChannel", () => {
   it.each([
     // [watched, focused, expected]
-    [true, true, "silent"], // inline card already on screen
-    [true, false, "silent"], // watched wins even in background
+    [true, true, "silent"], // inline card on screen, user looking at it
+    [true, false, "system"], // watched but window hidden → nobody sees the card
     [false, true, "toast"], // in-app, elsewhere
     [false, false, "system"], // window in background
   ] as const)(

@@ -205,7 +205,17 @@ export const ActivityFeedList = ({
             {(item.kind === "task"
               ? attention.tasks.has(item.id)
               : attention.sessions.has(item.id)) ? (
-              <Badge variant="warning" className="shrink-0">
+              <Badge
+                variant="warning"
+                className={
+                  // Chat rows overlay the hover-revealed RowActionsMenu on
+                  // this slot — the badge must yield exactly like the
+                  // normal status badge does, or the two stack illegibly.
+                  item.kind === "chat"
+                    ? "shrink-0 transition-opacity group-hover:opacity-0 group-has-[[data-state=open]]:opacity-0"
+                    : "shrink-0"
+                }
+              >
                 {t("decisionInbox.statusAttention" as Parameters<typeof t>[0])}
               </Badge>
             ) : (

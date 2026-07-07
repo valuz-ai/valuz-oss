@@ -250,13 +250,20 @@ export const ActivityPage = () => {
   const { runs: running } = useRunningRuns();
   const projects = useProjectStore((s) => s.projects);
   const renameSession = useSessionStore((s) => s.renameSession);
-  // Sessions with a pending question — drives the 等你确认 status override
-  // on both running cards and history rows (question-attention).
+  // Sessions/tasks with a pending question — drives the 等你确认 status
+  // override on running cards (question-attention). Both keys are needed:
+  // a task's RunSummary carries the LEAD session_id, while the pending's
+  // session_id is usually a MEMBER session — those only meet via task_id.
   const decisionPending = useDecisionPending();
-  const attentionSessionIds = useMemo(
-    () => new Set(decisionPending.map((e) => e.session_id)),
-    [decisionPending],
-  );
+  const attention = useMemo(() => {
+    const sessions = new Set<string>();
+    const tasks = new Set<string>();
+    for (const e of decisionPending) {
+      sessions.add(e.session_id);
+      if (e.task_id) tasks.add(e.task_id);
+    }
+    return { sessions, tasks };
+  }, [decisionPending]);
 
   const [filter, setFilter] = useState<SourceFilter>("all");
   // The chat row up for delete-confirmation ({id,title}); null when closed.
@@ -359,7 +366,10 @@ export const ActivityPage = () => {
     // blocked on the user is the one state that must never read as a plain
     // 运行中. Joined from the decision store — same source as the badge and
     // the attention group, so the three can never disagree.
-    if (attentionSessionIds.has(run.session_id)) {
+    if (
+      attention.sessions.has(run.session_id) ||
+      (run.task_id != null && attention.tasks.has(run.task_id))
+    ) {
       return (
         <Badge variant="warning" className="shrink-0">
           {t(tk("decisionInbox.statusAttention"))}

@@ -175,35 +175,6 @@ export const useDecisionPending = (): DecisionEntry[] => {
 export const useDecisionUnreadCount = (): number =>
   useDecisionStore((s) => s.unreadIds.size);
 
-/** Pendings raised by one session, oldest first. Rows in the Activity
- *  feed call this per-render to overlay the ``等你确认`` state — the
- *  selector keys off the stable ``pending`` Map ref, so a feed of N rows
- *  costs one filter per store mutation, not per render. */
-export const useDecisionsBySession = (
-  sessionId: string | undefined,
-): DecisionEntry[] => {
-  const pending = useDecisionStore((s) => s.pending);
-  return useMemo(() => {
-    if (!sessionId) return [];
-    return Array.from(pending.values())
-      .filter((e) => e.session_id === sessionId)
-      .sort((a, b) => a.raised_at - b.raised_at);
-  }, [pending, sessionId]);
-};
-
-/** True when ``sessionId`` has at least one pending decision — the cheap
- *  boolean the Activity row status join needs. */
-export const useSessionNeedsAttention = (
-  sessionId: string | undefined,
-): boolean =>
-  useDecisionStore((s) => {
-    if (!sessionId) return false;
-    for (const e of s.pending.values()) {
-      if (e.session_id === sessionId) return true;
-    }
-    return false;
-  });
-
 export const useDecisionTotalCount = (): number =>
   useDecisionStore((s) => s.pending.size);
 

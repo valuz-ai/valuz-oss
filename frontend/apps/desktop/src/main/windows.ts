@@ -119,9 +119,27 @@ export const createMainWindow = async () => {
   const rendererUrl = getRendererUrl();
   await mainWindow.loadURL(rendererUrl);
 
+  // macOS: closing the window hides it instead of destroying it — the
+  // documented product behavior ("closing minimizes to the tray; ⌘Q truly
+  // quits") and a hard requirement for question-attention: the renderer
+  // owns the decision-stream subscription that dispatches OS notifications,
+  // so it must survive in the background. ⌘Q / tray-quit set isQuitting via
+  // before-quit and close for real.
+  mainWindow.on("close", (event) => {
+    if (process.platform === "darwin" && !isQuitting) {
+      event.preventDefault();
+      mainWindow?.hide();
+    }
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
 
   return mainWindow;
 };
+
+let isQuitting = false;
+app.on("before-quit", () => {
+  isQuitting = true;
+});

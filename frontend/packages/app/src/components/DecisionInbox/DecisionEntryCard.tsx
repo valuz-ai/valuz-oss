@@ -80,15 +80,36 @@ export function DecisionEntryCard({
   }, [entry.session_id, navigate, onNavigateAway]);
 
   if (embedded) {
-    return questions.length > 0 ? (
-      <AskUserQuestionCard
-        questions={questions}
-        onSubmit={handleSubmit}
-        submitting={submitting}
-      />
-    ) : (
-      <div className="px-3 py-4 text-sm text-ink-muted">
-        {t("decisionInbox.emptyTitle" as I18nKey)}
+    return (
+      <div className="flex min-w-0 flex-col gap-1.5">
+        {/* Slim attribution — enough to tell simultaneous questions from
+            different members apart, without the full context-card chrome. */}
+        <div className="flex min-w-0 items-center gap-1.5 text-xs text-ink-muted">
+          <span className="font-medium text-ink-body">{entry.agent_slug}</span>
+          {entry.subtask_label && (
+            <>
+              <span>·</span>
+              <span className="truncate">{entry.subtask_label}</span>
+            </>
+          )}
+        </div>
+        {questions.length > 0 ? (
+          <AskUserQuestionCard
+            questions={questions}
+            onSubmit={handleSubmit}
+            submitting={submitting}
+          />
+        ) : (
+          // Unparsable/empty payload: never a dead end — keep the guaranteed
+          // path into the blocking session.
+          <button
+            type="button"
+            onClick={handleOpenInSession}
+            className="self-start text-sm text-brand-600 hover:underline"
+          >
+            {t("decisionInbox.openInSession" as I18nKey)} →
+          </button>
+        )}
       </div>
     );
   }

@@ -17,14 +17,7 @@
  * stream's silent-error posture).
  */
 
-interface DesktopBridge {
-  invoke: <T>(channel: string, payload?: Record<string, unknown>) => Promise<T>;
-}
-
-function desktopBridge(): DesktopBridge | null {
-  const w = globalThis as { valuzDesktop?: DesktopBridge };
-  return typeof w.valuzDesktop?.invoke === "function" ? w.valuzDesktop : null;
-}
+import { getDesktopBridge } from "../hooks/use-system";
 
 export interface AttentionNotification {
   title: string;
@@ -34,7 +27,7 @@ export interface AttentionNotification {
 }
 
 export function sendAttentionNotification(n: AttentionNotification): void {
-  const bridge = desktopBridge();
+  const bridge = getDesktopBridge();
   if (bridge) {
     void bridge.invoke("attention_notify", { ...n }).catch(() => {});
     return;
@@ -56,7 +49,7 @@ export function sendAttentionNotification(n: AttentionNotification): void {
 }
 
 export function setAttentionBadge(count: number): void {
-  const bridge = desktopBridge();
+  const bridge = getDesktopBridge();
   if (!bridge) return; // no dock/tray outside the desktop shell
   void bridge.invoke("attention_set_badge", { count }).catch(() => {});
 }

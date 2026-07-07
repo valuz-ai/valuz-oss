@@ -98,6 +98,7 @@ async def enrich_pending(
         pending_id=pending_id,
         question_payload=question_payload,
         raised_at=raised_at,
+        user_id=user_id,
     )
 
 
@@ -107,6 +108,7 @@ async def _enrich_session_pending(
     pending_id: str,
     question_payload: dict[str, Any],
     raised_at: int | None,
+    user_id: str,
 ) -> DecisionEntry:
     """Conversation-session branch: no task chain to join.
 
@@ -125,7 +127,11 @@ async def _enrich_session_pending(
         or getattr(getattr(session, "agent_config", None), "name", None)
         or "assistant"
     )
-    owner = getattr(session, "user_id", "") or ""
+    # Owner from the session, falling back to the caller-validated user_id —
+    # pre-user_id-era session rows carry an empty string, and an ownerless
+    # entry would be admitted but match no per-owner snapshot filter
+    # (silently invisible forever).
+    owner = getattr(session, "user_id", "") or user_id
 
     project_title: str | None = None
     project_emoji: str | None = None

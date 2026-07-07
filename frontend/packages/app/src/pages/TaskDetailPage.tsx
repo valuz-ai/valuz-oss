@@ -339,16 +339,20 @@ export const TaskDetailPage = () => {
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   // Register every session this page renders (lead + members) as "watched"
   // (question-attention): their questions show in the timeline right here,
-  // so the Provider must not also toast / system-notify for them.
+  // so the Provider must not also toast / system-notify for them. Union of
+  // the detail.runs snapshot AND the live pendings for this task — a freshly
+  // dispatched member can raise a question before the polled snapshot
+  // includes its session.
   useWatchSessions(
     "task-detail",
-    useMemo(
-      () =>
-        detail?.runs
-          .map((r) => r.session_id)
-          .filter((id): id is string => !!id) ?? [],
-      [detail],
-    ),
+    useMemo(() => {
+      const ids = new Set<string>();
+      for (const r of detail?.runs ?? []) {
+        if (r.session_id) ids.add(r.session_id);
+      }
+      for (const e of taskPending) ids.add(e.session_id);
+      return Array.from(ids);
+    }, [detail, taskPending]),
   );
   const [members, setMembers] = useState<MemberWithAgent[]>([]);
   const [fileTree, setFileTree] = useState<FileTreeNode[]>([]);
