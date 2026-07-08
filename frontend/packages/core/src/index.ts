@@ -26,6 +26,7 @@ export * from "./api/system-api";
 export * from "./api/tasks-api";
 export * from "./api/projects-api";
 export * from "./api/queue-api";
+export * from "./api/request";
 export * from "./api/worktrees-api";
 export * from "./config/features";
 export * from "./conversation";

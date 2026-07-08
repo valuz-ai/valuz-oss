@@ -17,34 +17,44 @@
  * Set `VALUZ_E2E_SKIP_SEED=1` to bypass the seed entirely.
  */
 
+import { requestJson } from "@valuz/core";
+
 const apiBase = process.env.VALUZ_E2E_API_BASE ?? "http://127.0.0.1:8000";
 
 async function ensureProviderExists(): Promise<void> {
-  const listRes = await fetch(`${apiBase}/v1/providers`);
-  if (!listRes.ok) return;
-  const { providers } = (await listRes.json()) as {
-    providers: Array<{
-      id: string;
-      enabled: boolean;
-      credential_source: string;
-    }>;
-  };
+  let providers: Array<{
+    id: string;
+    enabled: boolean;
+    credential_source: string;
+  }>;
+  try {
+    const list = await requestJson<{
+      providers: Array<{
+        id: string;
+        enabled: boolean;
+        credential_source: string;
+      }>;
+    }>("/v1/providers", { baseUrl: apiBase });
+    providers = list.providers;
+  } catch {
+    return;
+  }
   const ready = providers.some(
     (c) => c.enabled && c.credential_source !== "none",
   );
   if (ready) return;
 
-  await fetch(`${apiBase}/v1/providers`, {
+  await requestJson("/v1/providers", {
+    baseUrl: apiBase,
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+    json: {
       name: "E2E Test Provider",
       provider_kind: "anthropic",
       base_url: "https://api.anthropic.com",
       api_key: "sk-ant-e2e-placeholder",
       default_model: "claude-sonnet-4-6",
       protocol: "anthropic",
-    }),
+    },
   }).catch(() => {
     // Tolerated — if backend rejects the duplicate, the gate may already pass.
   });

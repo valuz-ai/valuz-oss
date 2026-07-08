@@ -44,9 +44,10 @@ export interface ListRuntimesResponse {
 }
 
 const fetchJson = createFetchJson(() => _apiBase);
+const RUNTIMES_CACHE = { ttlMs: 5 * 60_000, tags: ["runtimes"] };
 
 export const runtimesApi = {
   list(): Promise<ListRuntimesResponse> {
-    return fetchJson("/v1/runtimes");
+    return fetchJson("/v1/runtimes", { cache: RUNTIMES_CACHE });
   },
 };

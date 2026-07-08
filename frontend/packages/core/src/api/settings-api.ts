@@ -12,6 +12,7 @@
 
 import type { EffortLevel } from "@valuz/shared";
 import { createFetchJson } from "./fetch-json";
+import { invalidateRequestCache } from "./request";
 import type { RuntimeId } from "./sessions-api";
 
 let _apiBase =
@@ -127,6 +128,10 @@ export interface ModelOptionsResponse {
 }
 
 const fetchJson = createFetchJson(() => _apiBase);
+const MODEL_DEFAULTS_CACHE = {
+  ttlMs: 30_000,
+  tags: ["settings:model-defaults"],
+};
 
 export const settingsApi = {
   getPreferences(): Promise<PreferencesResponse> {
@@ -144,14 +149,16 @@ export const settingsApi = {
   },
 
   getModelDefaults(): Promise<ModelDefaults> {
-    return fetchJson<ModelDefaults>("/v1/settings/model-defaults");
+    return fetchJson<ModelDefaults>("/v1/settings/model-defaults", {
+      cache: MODEL_DEFAULTS_CACHE,
+    });
   },
 
   getModelOptions(): Promise<ModelOptionsResponse> {
     return fetchJson<ModelOptionsResponse>("/v1/settings/model-options");
   },
 
-  patchModelDefaults(payload: {
+  async patchModelDefaults(payload: {
     default_runtime?: RuntimeId;
     /** Pass ``""`` to clear, omit to leave unchanged. */
     default_provider_id?: string;
@@ -159,10 +166,12 @@ export const settingsApi = {
     /** One of the 5 EffortLevel values. Omit to leave unchanged. */
     default_effort?: EffortLevel;
   }): Promise<ModelDefaults> {
-    return fetchJson<ModelDefaults>("/v1/settings/model-defaults", {
+    const result = await fetchJson<ModelDefaults>("/v1/settings/model-defaults", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    invalidateRequestCache({ tags: ["settings:model-defaults"] });
+    return result;
   },
 };

@@ -1,5 +1,6 @@
 import type { EffortLevel } from "@valuz/shared";
 import { createFetchJson } from "./fetch-json";
+import { invalidateRequestCache } from "./request";
 
 let _apiBase =
   (import.meta as unknown as Record<string, Record<string, string> | undefined>)
@@ -145,11 +146,31 @@ export interface ProposeAgentConfirmResult {
 }
 
 const fetchJson = createFetchJson(() => _apiBase);
+const AGENTS_TAG = "agents";
+const AGENTS_CACHE_TTL_MS = 30_000;
+const AGENTS_LIST_CACHE = { ttlMs: AGENTS_CACHE_TTL_MS, tags: [AGENTS_TAG] };
+
+function projectAgentsTag(projectId: string): string {
+  return `project-agents:${projectId}`;
+}
+
+function projectAgentsCache(projectId: string) {
+  return {
+    ttlMs: AGENTS_CACHE_TTL_MS,
+    tags: [AGENTS_TAG, projectAgentsTag(projectId)],
+  };
+}
+
+function invalidateAgents(projectId?: string | null): void {
+  invalidateRequestCache({
+    tags: projectId ? [AGENTS_TAG, projectAgentsTag(projectId)] : [AGENTS_TAG],
+  });
+}
 
 export const agentsApi = {
   listAgents(source?: string): Promise<{ agents: Agent[] }> {
     const params = source ? `?source=${encodeURIComponent(source)}` : "";
-    return fetchJson(`/v1/agents${params}`);
+    return fetchJson(`/v1/agents${params}`, { cache: AGENTS_LIST_CACHE });
   },
 
   getAgent(slug: string): Promise<Agent> {
@@ -164,44 +185,53 @@ export const agentsApi = {
     return fetchJson(`/v1/agents/${encodeURIComponent(slug)}/deployments`);
   },
 
-  createAgent(payload: CreateAgentPayload): Promise<Agent> {
-    return fetchJson("/v1/agents", {
+  async createAgent(payload: CreateAgentPayload): Promise<Agent> {
+    const result = await fetchJson<Agent>("/v1/agents", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    invalidateAgents();
+    return result;
   },
 
-  updateAgent(slug: string, payload: UpdateAgentPayload): Promise<Agent> {
-    return fetchJson(`/v1/agents/${encodeURIComponent(slug)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+  async updateAgent(slug: string, payload: UpdateAgentPayload): Promise<Agent> {
+    const result = await fetchJson<Agent>(
+      `/v1/agents/${encodeURIComponent(slug)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
+    invalidateAgents();
+    return result;
   },
 
   /** Delete an agent. ``cascade`` first 解除 every 派驻 the agent has, then
    *  deletes it — the confirmed-delete path. Without it, an agent still
    *  deployed to a project returns 409. */
-  deleteAgent(slug: string, opts?: { cascade?: boolean }): Promise<void> {
+  async deleteAgent(slug: string, opts?: { cascade?: boolean }): Promise<void> {
     const query = opts?.cascade ? "?cascade=true" : "";
-    return fetchJson(`/v1/agents/${encodeURIComponent(slug)}${query}`, {
+    await fetchJson(`/v1/agents/${encodeURIComponent(slug)}${query}`, {
       method: "DELETE",
     });
+    invalidateAgents();
   },
 
   listMembers(projectId: string): Promise<{ agents: MemberWithAgent[] }> {
     return fetchJson(
       `/v1/projects/${encodeURIComponent(projectId)}/agents`,
+      { cache: projectAgentsCache(projectId) },
     );
   },
 
   /** v2 派驻: deploy (live-reference) a library agent into a project. */
-  deploy(
+  async deploy(
     projectId: string,
     payload: DeployAgentPayload,
   ): Promise<MemberWithAgent> {
-    return fetchJson(
+    const result = await fetchJson<MemberWithAgent>(
       `/v1/projects/${encodeURIComponent(projectId)}/agents:deploy`,
       {
         method: "POST",
@@ -209,13 +239,15 @@ export const agentsApi = {
         body: JSON.stringify(payload),
       },
     );
+    invalidateAgents(projectId);
+    return result;
   },
 
-  createBlank(
+  async createBlank(
     projectId: string,
     payload: CreateBlankAgentPayload,
   ): Promise<MemberWithAgent> {
-    return fetchJson(
+    const result = await fetchJson<MemberWithAgent>(
       `/v1/projects/${encodeURIComponent(projectId)}/agents`,
       {
         method: "POST",
@@ -223,15 +255,17 @@ export const agentsApi = {
         body: JSON.stringify(payload),
       },
     );
+    invalidateAgents(projectId);
+    return result;
   },
 
   /** Confirm an agent the assistant proposed via ``propose_agent``. Creates
    *  the library agent and, when the session has a project, deploys it there. */
-  confirmProposal(
+  async confirmProposal(
     sessionId: string,
     payload: ProposeAgentConfirmPayload,
   ): Promise<ProposeAgentConfirmResult> {
-    return fetchJson(
+    const result = await fetchJson<ProposeAgentConfirmResult>(
       `/v1/agents/proposals/${encodeURIComponent(sessionId)}/confirm`,
       {
         method: "POST",
@@ -239,12 +273,15 @@ export const agentsApi = {
         body: JSON.stringify(payload),
       },
     );
+    invalidateAgents(result.project_id);
+    return result;
   },
 
-  deleteMember(projectId: string, agentSlug: string): Promise<void> {
-    return fetchJson(
+  async deleteMember(projectId: string, agentSlug: string): Promise<void> {
+    await fetchJson(
       `/v1/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentSlug)}`,
       { method: "DELETE" },
     );
+    invalidateAgents(projectId);
   },
 };

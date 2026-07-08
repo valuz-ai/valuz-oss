@@ -11,6 +11,7 @@ import type {
 } from "@valuz/shared";
 import { registerDynamicModelLabels } from "@valuz/shared";
 import { createFetchJson } from "./fetch-json";
+import { invalidateRequestCache } from "./request";
 
 /** Project every provider's per-model labels into the global ``modelLabel``
  * resolver overlay so downstream UIs (Composer, AgentDetailView,
@@ -84,15 +85,33 @@ export interface ProviderValidateRequest {
 }
 
 const fetchJson = createFetchJson(() => _apiBase);
+const PROVIDERS_TAG = "providers";
+const PROVIDERS_CACHE_TTL_MS = 30_000;
+const PROVIDERS_LIST_CACHE = {
+  ttlMs: PROVIDERS_CACHE_TTL_MS,
+  tags: [PROVIDERS_TAG],
+};
+
+function providerDetailCache(providerId: string) {
+  return {
+    ttlMs: PROVIDERS_CACHE_TTL_MS,
+    tags: [PROVIDERS_TAG, `providers:${providerId}`],
+  };
+}
+
+function invalidateProviders(): void {
+  invalidateRequestCache({ tags: [PROVIDERS_TAG] });
+}
 
 export const providersApi = {
   listProviders(): Promise<{ providers: ProviderDescriptor[] }> {
-    return fetchJson("/v1/providers/config");
+    return fetchJson("/v1/providers/config", { cache: PROVIDERS_LIST_CACHE });
   },
 
   async list(): Promise<{ providers: LLMChannel[] }> {
     const res = await fetchJson<{ providers: LLMChannel[] }>(
       "/v1/providers",
+      { cache: PROVIDERS_LIST_CACHE },
     );
     _hydrateModelLabels(res.providers);
     return res;
@@ -101,34 +120,43 @@ export const providersApi = {
   async get(providerId: string): Promise<LLMChannelDetail> {
     const res = await fetchJson<LLMChannelDetail>(
       `/v1/providers/${encodeURIComponent(providerId)}`,
+      { cache: providerDetailCache(providerId) },
     );
     _hydrateModelLabels([res]);
     return res;
   },
 
-  create(payload: ProviderCreateRequest): Promise<LLMChannelDetail> {
-    return fetchJson("/v1/providers", {
+  async create(payload: ProviderCreateRequest): Promise<LLMChannelDetail> {
+    const result = await fetchJson<LLMChannelDetail>("/v1/providers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    invalidateProviders();
+    return result;
   },
 
-  update(
+  async update(
     providerId: string,
     payload: ProviderUpdateRequest,
   ): Promise<LLMChannelDetail> {
-    return fetchJson(`/v1/providers/${encodeURIComponent(providerId)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const result = await fetchJson<LLMChannelDetail>(
+      `/v1/providers/${encodeURIComponent(providerId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
+    invalidateProviders();
+    return result;
   },
 
-  delete(providerId: string): Promise<void> {
-    return fetchJson(`/v1/providers/${encodeURIComponent(providerId)}`, {
+  async delete(providerId: string): Promise<void> {
+    await fetchJson(`/v1/providers/${encodeURIComponent(providerId)}`, {
       method: "DELETE",
     });
+    invalidateProviders();
   },
 
   test(providerId: string): Promise<ConnectionTestResult> {
@@ -152,18 +180,23 @@ export const providersApi = {
    * ``default_model``) and the composer/settings UI (read the app-setting
    * keys) agree on the user's pick.
    */
-  setDefault(
+  async setDefault(
     providerId: string,
     defaultModel?: string,
   ): Promise<{ provider_id: string; message: string }> {
-    return fetchJson("/v1/providers/default", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        provider_id: providerId,
-        ...(defaultModel !== undefined ? { default_model: defaultModel } : {}),
-      }),
-    });
+    const result = await fetchJson<{ provider_id: string; message: string }>(
+      "/v1/providers/default",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider_id: providerId,
+          ...(defaultModel !== undefined ? { default_model: defaultModel } : {}),
+        }),
+      },
+    );
+    invalidateProviders();
+    return result;
   },
 
   /**
@@ -172,10 +205,15 @@ export const providersApi = {
    * keychain, so the frontend tells it the login succeeded; the backend flips
    * ``enabled`` + ``credential_source="cli_keychain"``.
    */
-  enable(providerId: string): Promise<LLMChannelDetail> {
-    return fetchJson(`/v1/providers/${encodeURIComponent(providerId)}/enable`, {
-      method: "POST",
-    });
+  async enable(providerId: string): Promise<LLMChannelDetail> {
+    const result = await fetchJson<LLMChannelDetail>(
+      `/v1/providers/${encodeURIComponent(providerId)}/enable`,
+      {
+        method: "POST",
+      },
+    );
+    invalidateProviders();
+    return result;
   },
 
   /**
@@ -187,11 +225,13 @@ export const providersApi = {
    * edit dialog should surface the reason and let the user fall back
    * to typing model ids by hand.
    */
-  discoverModels(providerId: string): Promise<DiscoverModelsResponse> {
-    return fetchJson(
+  async discoverModels(providerId: string): Promise<DiscoverModelsResponse> {
+    const result = await fetchJson<DiscoverModelsResponse>(
       `/v1/providers/${encodeURIComponent(providerId)}/discover-models`,
       { method: "POST" },
     );
+    invalidateProviders();
+    return result;
   },
 
   /**

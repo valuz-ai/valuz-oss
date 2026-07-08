@@ -246,6 +246,7 @@ export function parseWorkflowProgress(
 }
 
 import { createFetchJson, ApiError } from "./fetch-json";
+import { requestRaw } from "./request";
 
 let _apiBase =
   (import.meta as unknown as Record<string, Record<string, string> | undefined>)
@@ -539,14 +540,15 @@ export const sessionsApi = {
       if (afterSeq !== undefined && afterSeq > 0)
         qs.set("after_seq", String(afterSeq));
       const suffix = qs.toString() ? `?${qs}` : "";
-      const url = `${_apiBase}/v1/sessions/${encodeURIComponent(sessionId)}/events/stream${suffix}`;
-      fetch(url, { signal })
+      requestRaw(
+        `/v1/sessions/${encodeURIComponent(sessionId)}/events/stream${suffix}`,
+        {
+          baseUrl: _apiBase,
+          headers: { Accept: "text/event-stream" },
+          signal,
+        },
+      )
         .then((res) => {
-          if (!res.ok) {
-            return res.text().then((text) => {
-              reject(new Error(`API ${res.status}: ${text}`));
-            });
-          }
           const reader = res.body?.getReader();
           if (!reader) {
             reject(new Error("No response body"));

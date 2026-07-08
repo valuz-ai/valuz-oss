@@ -1,4 +1,5 @@
 import { createFetchJson } from "./fetch-json";
+import { invalidateRequestCache, requestBlob } from "./request";
 
 let _apiBase =
   (import.meta as unknown as Record<string, Record<string, string> | undefined>)
@@ -206,6 +207,23 @@ export interface ProjectCreateRequest {
 }
 
 const fetchJson = createFetchJson(() => _apiBase);
+const PROJECTS_TAG = "projects";
+const PROJECTS_CACHE_TTL_MS = 30_000;
+const PROJECTS_LIST_CACHE = {
+  ttlMs: PROJECTS_CACHE_TTL_MS,
+  tags: [PROJECTS_TAG],
+};
+
+function projectDetailCache(projectId: string) {
+  return {
+    ttlMs: PROJECTS_CACHE_TTL_MS,
+    tags: [PROJECTS_TAG, `projects:${projectId}`],
+  };
+}
+
+function invalidateProjects(): void {
+  invalidateRequestCache({ tags: [PROJECTS_TAG] });
+}
 
 function filenameFromDisposition(header: string | null): string {
   const m = header ? /filename="?([^";]+)"?/.exec(header) : null;
@@ -214,11 +232,13 @@ function filenameFromDisposition(header: string | null): string {
 
 export const projectsApi = {
   list(): Promise<{ projects: ProjectListItem[] }> {
-    return fetchJson("/v1/projects");
+    return fetchJson("/v1/projects", { cache: PROJECTS_LIST_CACHE });
   },
 
   get(projectId: string): Promise<ProjectDetail> {
-    return fetchJson(`/v1/projects/${encodeURIComponent(projectId)}`);
+    return fetchJson(`/v1/projects/${encodeURIComponent(projectId)}`, {
+      cache: projectDetailCache(projectId),
+    });
   },
 
   /**
@@ -233,32 +253,41 @@ export const projectsApi = {
     );
   },
 
-  create(payload: ProjectCreateRequest): Promise<ProjectDetail> {
-    return fetchJson("/v1/projects", {
+  async create(payload: ProjectCreateRequest): Promise<ProjectDetail> {
+    const result = await fetchJson<ProjectDetail>("/v1/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    invalidateProjects();
+    return result;
   },
 
-  rename(projectId: string, name: string): Promise<ProjectDetail> {
+  async rename(projectId: string, name: string): Promise<ProjectDetail> {
     const qs = new URLSearchParams({ name });
-    return fetchJson(`/v1/projects/${encodeURIComponent(projectId)}?${qs}`, {
-      method: "PATCH",
-    });
+    const result = await fetchJson<ProjectDetail>(
+      `/v1/projects/${encodeURIComponent(projectId)}?${qs}`,
+      {
+        method: "PATCH",
+      },
+    );
+    invalidateProjects();
+    return result;
   },
 
-  updateInstructions(
+  async updateInstructions(
     projectId: string,
     instructionsMd: string,
   ): Promise<{ ok: boolean }> {
     const qs = new URLSearchParams({ instructions_md: instructionsMd });
-    return fetchJson(
+    const result = await fetchJson<{ ok: boolean }>(
       `/v1/projects/${encodeURIComponent(projectId)}/instructions?${qs}`,
       {
         method: "PUT",
       },
     );
+    invalidateProjects();
+    return result;
   },
 
   listFiles(
@@ -302,10 +331,11 @@ export const projectsApi = {
     );
   },
 
-  delete(projectId: string): Promise<void> {
-    return fetchJson(`/v1/projects/${encodeURIComponent(projectId)}`, {
+  async delete(projectId: string): Promise<void> {
+    await fetchJson(`/v1/projects/${encodeURIComponent(projectId)}`, {
       method: "DELETE",
     });
+    invalidateProjects();
   },
 
   getMcpServers(projectId: string): Promise<{ slugs: string[] }> {
@@ -326,20 +356,15 @@ export const projectsApi = {
   },
 
   /** Export a project as a ``.valuzpack`` — returns the blob + filename for
-   *  the caller to trigger a browser download (core stays DOM-free). Uses raw
-   *  ``fetch()`` because ``fetchJson`` only handles JSON, not binary blobs. */
+   *  the caller to trigger a browser download (core stays DOM-free). */
   async exportProject(projectId: string): Promise<ExportedProject> {
-    const res = await fetch(
-      `${_apiBase}/v1/projects/${encodeURIComponent(projectId)}/export`,
+    const { blob, headers } = await requestBlob(
+      `/v1/projects/${encodeURIComponent(projectId)}/export`,
+      { baseUrl: _apiBase },
     );
-    if (!res.ok) {
-      const text = await res.text().catch(() => res.statusText);
-      throw new Error(text || "Export failed");
-    }
-    const blob = await res.blob();
     return {
       blob,
-      filename: filenameFromDisposition(res.headers.get("Content-Disposition")),
+      filename: filenameFromDisposition(headers.get("Content-Disposition")),
     };
   },
 
@@ -358,17 +383,22 @@ export const projectsApi = {
    * user-picked project folder (optional); when omitted the backend creates
    * the project under a managed cwd.
    */
-  importProjectConfirm(
+  async importProjectConfirm(
     previewId: string,
     rootPath?: string,
   ): Promise<ImportProjectConfirmResult> {
-    return fetchJson("/v1/projects/import/confirm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        preview_id: previewId,
-        root_path: rootPath || null,
-      }),
-    });
+    const result = await fetchJson<ImportProjectConfirmResult>(
+      "/v1/projects/import/confirm",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          preview_id: previewId,
+          root_path: rootPath || null,
+        }),
+      },
+    );
+    invalidateProjects();
+    return result;
   },
 };

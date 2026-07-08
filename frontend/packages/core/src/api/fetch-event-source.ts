@@ -13,6 +13,8 @@
  * caller can thread a cursor (e.g. ``?after_seq=N``) to resume without loss.
  */
 
+import { requestRaw } from "./request";
+
 export interface SSEFrame {
   /** Event name (``event:`` field). Defaults to ``"message"``. */
   event: string;
@@ -69,7 +71,7 @@ export function fetchEventSource(
     if (closed) return;
     controller = new AbortController();
     try {
-      const res = await fetch(getUrl(), {
+      const res = await requestRaw(getUrl(), {
         headers: { Accept: "text/event-stream" },
         signal: controller.signal,
       });

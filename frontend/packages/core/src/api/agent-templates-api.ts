@@ -1,5 +1,6 @@
 import type { Agent } from "./agents-api";
 import { createFetchJson } from "./fetch-json";
+import { requestBlob } from "./request";
 
 let _apiBase =
   (import.meta as unknown as Record<string, Record<string, string> | undefined>)
@@ -147,19 +148,14 @@ export const agentTemplatesApi = {
     agentSlugs: string[],
     collection?: ExportCollection,
   ): Promise<ExportedPack> {
-    const res = await fetch(`${_apiBase}/v1/agent-packs/export`, {
+    const { blob, headers } = await requestBlob("/v1/agent-packs/export", {
+      baseUrl: _apiBase,
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent_slugs: agentSlugs, collection }),
+      json: { agent_slugs: agentSlugs, collection },
     });
-    if (!res.ok) {
-      const text = await res.text().catch(() => res.statusText);
-      throw new Error(text || "导出失败");
-    }
-    const blob = await res.blob();
     return {
       blob,
-      filename: filenameFromDisposition(res.headers.get("Content-Disposition")),
+      filename: filenameFromDisposition(headers.get("Content-Disposition")),
     };
   },
 

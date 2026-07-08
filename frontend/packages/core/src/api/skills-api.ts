@@ -1,4 +1,5 @@
 import { createFetchJson } from "./fetch-json";
+import { invalidateRequestCache } from "./request";
 
 let _apiBase =
   (import.meta as unknown as Record<string, Record<string, string> | undefined>)
@@ -185,13 +186,28 @@ export interface SkillImportDirectoryPreviewRequest {
 }
 
 const fetchJson = createFetchJson(() => _apiBase);
+const SKILLS_TAG = "skills";
+const SKILLS_CACHE_TTL_MS = 30_000;
+
+function skillsCatalogCache(projectId?: string) {
+  return {
+    ttlMs: SKILLS_CACHE_TTL_MS,
+    tags: [SKILLS_TAG, `skills:${projectId ?? "global"}`],
+  };
+}
+
+function invalidateSkills(): void {
+  invalidateRequestCache({ tags: [SKILLS_TAG] });
+}
 
 export const skillsApi = {
   list(projectId?: string): Promise<SkillsCatalog> {
     const qs = projectId
       ? `?project_id=${encodeURIComponent(projectId)}`
       : "";
-    return fetchJson(`/v1/skills${qs}`);
+    return fetchJson(`/v1/skills${qs}`, {
+      cache: skillsCatalogCache(projectId),
+    });
   },
 
   get(skillId: string, projectId?: string): Promise<SkillDetail> {
@@ -201,22 +217,28 @@ export const skillsApi = {
     return fetchJson(`/v1/skills/${encodeURIComponent(skillId)}${qs}`);
   },
 
-  create(payload: SkillCreateRequest): Promise<SkillView> {
-    return fetchJson("/v1/skills", {
+  async create(payload: SkillCreateRequest): Promise<SkillView> {
+    const result = await fetchJson<SkillView>("/v1/skills", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    invalidateSkills();
+    return result;
   },
 
   /** Re-scan the skill library on disk and refresh the index. Resolves with the
    *  number of skills indexed. Emits SKILL_CHANGED server-side so open catalogs
    *  refresh over SSE. */
-  rescan(): Promise<SkillRescanResponse> {
-    return fetchJson("/v1/skills/scan", { method: "POST" });
+  async rescan(): Promise<SkillRescanResponse> {
+    const result = await fetchJson<SkillRescanResponse>("/v1/skills/scan", {
+      method: "POST",
+    });
+    invalidateSkills();
+    return result;
   },
 
-  update(
+  async update(
     skillId: string,
     payload: SkillUpdateRequest,
     projectId?: string,
@@ -224,25 +246,35 @@ export const skillsApi = {
     const qs = projectId
       ? `?project_id=${encodeURIComponent(projectId)}`
       : "";
-    return fetchJson(`/v1/skills/${encodeURIComponent(skillId)}${qs}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const result = await fetchJson<SkillView>(
+      `/v1/skills/${encodeURIComponent(skillId)}${qs}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
+    invalidateSkills();
+    return result;
   },
 
-  copy(skillId: string, payload: SkillCopyRequest): Promise<SkillView> {
-    return fetchJson(`/v1/skills/${encodeURIComponent(skillId)}/copy`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+  async copy(skillId: string, payload: SkillCopyRequest): Promise<SkillView> {
+    const result = await fetchJson<SkillView>(
+      `/v1/skills/${encodeURIComponent(skillId)}/copy`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
+    invalidateSkills();
+    return result;
   },
 
   /** Flip a skill's global library on/off switch (slug-keyed, user-scoped).
    *  Off hides it from a new (non-project) conversation's inline `/` picker. */
-  setLibraryState(skillId: string, enabled: boolean): Promise<SkillView> {
-    return fetchJson(
+  async setLibraryState(skillId: string, enabled: boolean): Promise<SkillView> {
+    const result = await fetchJson<SkillView>(
       `/v1/skills/${encodeURIComponent(skillId)}/library-state`,
       {
         method: "PUT",
@@ -250,6 +282,8 @@ export const skillsApi = {
         body: JSON.stringify({ enabled }),
       },
     );
+    invalidateSkills();
+    return result;
   },
 
   deleteDryRun(
@@ -263,12 +297,13 @@ export const skillsApi = {
     });
   },
 
-  deleteConfirm(skillId: string, projectId?: string): Promise<void> {
+  async deleteConfirm(skillId: string, projectId?: string): Promise<void> {
     const qs = new URLSearchParams({ mode: "confirm" });
     if (projectId) qs.set("project_id", projectId);
-    return fetchJson(`/v1/skills/${encodeURIComponent(skillId)}?${qs}`, {
+    await fetchJson(`/v1/skills/${encodeURIComponent(skillId)}?${qs}`, {
       method: "DELETE",
     });
+    invalidateSkills();
   },
 
   importArchivePreview(
@@ -286,14 +321,16 @@ export const skillsApi = {
     });
   },
 
-  importArchiveConfirm(
+  async importArchiveConfirm(
     payload: SkillImportArchiveConfirmRequest,
   ): Promise<SkillView> {
-    return fetchJson("/v1/skills/import/archive/confirm", {
+    const result = await fetchJson<SkillView>("/v1/skills/import/archive/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    invalidateSkills();
+    return result;
   },
 
   importDirectoryPreview(
@@ -306,14 +343,16 @@ export const skillsApi = {
     });
   },
 
-  importDirectoryConfirm(
+  async importDirectoryConfirm(
     payload: SkillImportArchiveConfirmRequest,
   ): Promise<SkillView> {
-    return fetchJson("/v1/skills/import/archive/confirm", {
+    const result = await fetchJson<SkillView>("/v1/skills/import/archive/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    invalidateSkills();
+    return result;
   },
 
   importUrlPreview(
@@ -332,14 +371,16 @@ export const skillsApi = {
     });
   },
 
-  importUrlConfirm(
+  async importUrlConfirm(
     payload: SkillImportArchiveConfirmRequest,
   ): Promise<SkillView> {
-    return fetchJson("/v1/skills/import/url/confirm", {
+    const result = await fetchJson<SkillView>("/v1/skills/import/url/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    invalidateSkills();
+    return result;
   },
 
   listTags(projectId?: string): Promise<{ tags: string[] }> {
@@ -372,7 +413,7 @@ export const skillsApi = {
     );
   },
 
-  updateFile(
+  async updateFile(
     skillId: string,
     action: {
       action: "create" | "rename" | "delete";
@@ -385,16 +426,22 @@ export const skillsApi = {
     const qs = projectId
       ? `?project_id=${encodeURIComponent(projectId)}`
       : "";
-    return fetchJson(`/v1/skills/${encodeURIComponent(skillId)}/files${qs}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(action),
-    });
+    const result = await fetchJson<{ path: string; content: string }>(
+      `/v1/skills/${encodeURIComponent(skillId)}/files${qs}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action),
+      },
+    );
+    invalidateSkills();
+    return result;
   },
 
   projectCatalog(projectId: string): Promise<SkillsCatalog> {
     return fetchJson(
       `/v1/projects/${encodeURIComponent(projectId)}/skills`,
+      { cache: skillsCatalogCache(projectId) },
     );
   },
 
@@ -442,13 +489,13 @@ export const skillsApi = {
   /** User accepts the skill the agent submitted via ``submit_skill``.
    * Promotes the staged slug to ``~/.agents/skills/{slug}/`` and applies
    * per-context side-effects (project entries also bind to the project). */
-  confirmSubmission(
+  async confirmSubmission(
     sessionId: string,
     slug: string,
     payload?: SkillSubmissionConfirmRequest,
   ): Promise<SkillSubmissionConfirmResponse> {
     const body = payload ?? {};
-    return fetchJson(
+    const result = await fetchJson<SkillSubmissionConfirmResponse>(
       `/v1/skills/submissions/${encodeURIComponent(sessionId)}/${encodeURIComponent(slug)}/confirm`,
       {
         method: "POST",
@@ -456,6 +503,8 @@ export const skillsApi = {
         body: JSON.stringify(body),
       },
     );
+    invalidateSkills();
+    return result;
   },
 
   /** User discards the agent's submission. Cleans up the staged slug;
@@ -490,11 +539,11 @@ export const skillsApi = {
     );
   },
 
-  syncStaging(
+  async syncStaging(
     sessionId: string,
     payload: StagingSyncRequest,
   ): Promise<StagingSyncResponse> {
-    return fetchJson(
+    const result = await fetchJson<StagingSyncResponse>(
       `/v1/skills/staging/${encodeURIComponent(sessionId)}/sync`,
       {
         method: "POST",
@@ -502,6 +551,8 @@ export const skillsApi = {
         body: JSON.stringify(payload),
       },
     );
+    invalidateSkills();
+    return result;
   },
 
   optimizeFromSkill(
