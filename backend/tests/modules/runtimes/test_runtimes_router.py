@@ -129,3 +129,17 @@ def test_codex_should_be_available_when_binary_on_path(client: TestClient) -> No
     by_id = {r["id"]: r for r in resp.json()["runtimes"]}
     assert by_id["codex"]["available"] is True
     assert by_id["codex"]["unavailable_reason"] is None
+
+
+def test_codex_should_advertise_on_demand_install(client: TestClient) -> None:
+    """codex is downloadable on demand → the picker gets a CTA target
+    (setup_id keys the generic setup-job endpoints); pure-Python runtimes
+    are never installable."""
+    resp = client.get("/v1/runtimes")
+    by_id = {r["id"]: r for r in resp.json()["runtimes"]}
+
+    assert by_id["codex"]["installable"] is True
+    assert by_id["codex"]["setup_id"] == "codex_runtime"
+    for runtime_id in ("claude_agent", "deepagents"):
+        assert by_id[runtime_id]["installable"] is False
+        assert by_id[runtime_id]["setup_id"] is None

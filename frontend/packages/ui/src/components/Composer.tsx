@@ -236,6 +236,12 @@ export interface RuntimeSelectorItem {
   available: boolean;
   /** Tooltip text when ``available`` is false. */
   unavailableReason?: string | null;
+  /**
+   * The host can download this runtime's binary on demand. An
+   * unavailable-but-installable runtime stays clickable and fires
+   * ``onRuntimeInstall`` instead of selecting (see the runtime menu).
+   */
+  installable?: boolean;
 }
 
 export interface ComposerAgentItem {
@@ -357,6 +363,12 @@ export interface ComposerProps {
   selectedRuntimeId?: string | null;
   /** Called when user picks a different runtime. */
   onRuntimeChange?: (runtimeId: string | null) => void;
+  /**
+   * Called when the user clicks an unavailable-but-``installable``
+   * runtime — the host opens its download flow. Without this callback
+   * such runtimes render as plain disabled options (back-compat).
+   */
+  onRuntimeInstall?: (runtimeId: string) => void;
   /**
    * Cross-runtime approval mode (kernel V5+d008b53). Live-reconcile
    * since V5+bba3014 — changing this mid-session applies on the next
@@ -550,6 +562,7 @@ export const Composer = ({
   runtimes = [],
   selectedRuntimeId,
   onRuntimeChange,
+  onRuntimeInstall,
   permissionMode,
   onPermissionModeChange,
   permissionModeLocked = false,
@@ -2718,7 +2731,13 @@ export const Composer = ({
                     </div>
                     {runtimes.map((rt) => {
                       const selected = selectedRuntimeId === rt.id;
-                      const disabled = !rt.available;
+                      // An unavailable-but-installable runtime stays
+                      // clickable: the click opens the host's download
+                      // flow instead of selecting the runtime.
+                      const installCta = Boolean(
+                        !rt.available && rt.installable && onRuntimeInstall,
+                      );
+                      const disabled = !rt.available && !installCta;
                       const button = (
                         <button
                           key={rt.id}
@@ -2732,6 +2751,11 @@ export const Composer = ({
                           )}
                           onClick={() => {
                             if (disabled) return;
+                            if (installCta) {
+                              onRuntimeInstall?.(rt.id);
+                              setRuntimeOpen(false);
+                              return;
+                            }
                             // Switching runtime invalidates the previous
                             // model choice (different provider pool); clear
                             // it so the host can re-pick a default.
@@ -2740,10 +2764,19 @@ export const Composer = ({
                             setRuntimeOpen(false);
                           }}
                         >
-                          <span className="flex min-w-0 flex-1 items-center">
+                          <span className="flex min-w-0 flex-1 flex-col">
                             <span className="truncate">{rt.displayName}</span>
+                            {installCta && (
+                              <span className="truncate text-2xs text-ink-meta">
+                                {t(
+                                  "conversation.runtimeInstallHint" as Parameters<
+                                    typeof t
+                                  >[0],
+                                )}
+                              </span>
+                            )}
                           </span>
-                          {selected && !disabled && (
+                          {selected && !disabled && !installCta && (
                             <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
                           )}
                         </button>

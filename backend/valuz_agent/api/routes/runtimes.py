@@ -22,6 +22,7 @@ from valuz_agent.adapters.runtime_registry import (
     is_runtime_available,
     list_runtimes,
 )
+from valuz_agent.modules.runtimes.setup_job import INSTALLABLE_RUNTIME_SETUP_IDS
 
 router = APIRouter(prefix="/v1/runtimes", tags=["runtimes"])
 
@@ -33,6 +34,12 @@ class RuntimeListItem(BaseModel):
     requires_binary: str | None
     available: bool
     unavailable_reason: str | None
+    # An unavailable runtime the host can install on demand: ``setup_id``
+    # keys the download job on the ``/v1/system/parser/setup/*`` endpoints
+    # (the generic setup-job surface). The picker renders a download CTA
+    # instead of a dead-end tooltip.
+    installable: bool
+    setup_id: str | None
 
 
 @router.get("")
@@ -41,6 +48,7 @@ def list_runtime_endpoints() -> dict[str, list[RuntimeListItem]]:
     items: list[RuntimeListItem] = []
     for spec in list_runtimes():
         available, reason = is_runtime_available(spec.id)
+        setup_id = INSTALLABLE_RUNTIME_SETUP_IDS.get(spec.id)
         items.append(
             RuntimeListItem(
                 id=spec.id,
@@ -49,6 +57,8 @@ def list_runtime_endpoints() -> dict[str, list[RuntimeListItem]]:
                 requires_binary=spec.requires_binary,
                 available=available,
                 unavailable_reason=reason,
+                installable=setup_id is not None,
+                setup_id=setup_id,
             )
         )
     return {"runtimes": items}

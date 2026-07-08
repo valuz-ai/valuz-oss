@@ -40,9 +40,10 @@ class CapabilityStatus(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
-SetupKind = Literal["credential", "model_download"]
+SetupKind = Literal["credential", "model_download", "binary_download"]
 """Distinguishes "needs user input" (API key) from "needs network +
-authorization" (model file download). Drives UI widget selection."""
+authorization" (model file download / runtime binary download). Drives UI
+widget selection."""
 
 
 @dataclass(frozen=True)

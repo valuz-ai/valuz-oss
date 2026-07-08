@@ -107,11 +107,21 @@ def _find_requirement_for_setup_id(registry: ParserPluginRegistry, setup_id: str
     """Locate the ``SetupRequirement`` declared by any plugin's
     capability for the given ``setup_id``. The setup-job framework
     itself is plugin-agnostic, but UI cards want the declared metadata
-    (size, license, source) which lives on the plugin descriptor."""
+    (size, license, source) which lives on the plugin descriptor.
+    Non-parser jobs (runtime binary downloads) declare their requirement
+    statically instead of via a plugin descriptor — checked last."""
     for plugin in registry:
         for cap in plugin.descriptor.capabilities:
             if cap.setup is not None and cap.setup.id == setup_id:
                 return cap.setup
+
+    from valuz_agent.modules.runtimes.setup_job import (
+        CODEX_RUNTIME_SETUP_ID,
+        codex_setup_requirement,
+    )
+
+    if setup_id == CODEX_RUNTIME_SETUP_ID:
+        return codex_setup_requirement()
     return None
 
 

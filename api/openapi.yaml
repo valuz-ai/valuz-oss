@@ -4737,6 +4737,7 @@ components:
         - display_name
         - supported_protocols
         - available
+        - installable
       properties:
         id:
           type: string
@@ -4780,6 +4781,21 @@ components:
             Short, user-actionable explanation when ``available`` is
             ``false`` (e.g. ``"'codex' binary not found on PATH; install
             it first"``). ``null`` when available.
+        installable:
+          type: boolean
+          description: |
+            ``true`` when the host can download this runtime's binary on
+            demand through the setup-job endpoints. The picker renders a
+            download CTA (instead of a dead-end tooltip) for an
+            unavailable-but-installable runtime. Today only ``codex``.
+        setup_id:
+          type: string
+          nullable: true
+          description: |
+            Setup-job id keying the download on the generic setup-job
+            surface (``/v1/system/parser/setup/{setup_id}``). ``null``
+            when the runtime is not installable. Today:
+            ``codex_runtime``.
 
     SystemStatusResponse:
       type: object
@@ -5365,7 +5381,7 @@ components:
           type: string
         kind:
           type: string
-          enum: [credential, model_download]
+          enum: [credential, model_download, binary_download]
         network_required:
           type: boolean
           default: true

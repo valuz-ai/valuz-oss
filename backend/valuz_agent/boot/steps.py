@@ -637,6 +637,31 @@ def warm_parse_pool() -> None:
         pass
 
 
+def activate_downloaded_runtimes() -> None:
+    """Point ``CODEX_BIN_OVERRIDE`` at an on-demand-downloaded codex binary.
+
+    Must run BEFORE the kernel serves sessions (the codex runtime reads the
+    env at construction) and before boot recovery resumes codex sessions. A
+    user-set override is respected; no completed download → no-op.
+    Best-effort, never fatal."""
+    import os
+
+    from valuz_agent.modules.runtimes.setup_job import (
+        CODEX_BIN_OVERRIDE_ENV,
+        activate_codex_override,
+    )
+
+    try:
+        if activate_codex_override():
+            logger.info(
+                "codex runtime: activated downloaded binary (%s=%s)",
+                CODEX_BIN_OVERRIDE_ENV,
+                os.environ.get(CODEX_BIN_OVERRIDE_ENV),
+            )
+    except Exception:  # noqa: BLE001
+        logger.warning("codex runtime activation failed", exc_info=True)
+
+
 def warm_token_estimator() -> None:
     """Pre-load the tiktoken vocab used by the goal-mode length fence in a
     background thread. The first ``get_encoding`` can fetch + parse the vocab

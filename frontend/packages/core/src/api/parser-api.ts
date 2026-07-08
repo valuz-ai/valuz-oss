@@ -33,7 +33,7 @@ export type SetupJobStatus =
 export interface SetupRequirement {
   id: string;
   label_zh: string;
-  kind: "credential" | "model_download";
+  kind: "credential" | "model_download" | "binary_download";
   network_required: boolean;
   size_bytes: number | null;
   source: string | null;

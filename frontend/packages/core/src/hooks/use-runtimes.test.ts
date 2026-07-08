@@ -13,6 +13,8 @@ const sample = [
     requires_binary: null,
     available: true,
     unavailable_reason: null,
+    installable: false,
+    setup_id: null,
   },
 ];
 

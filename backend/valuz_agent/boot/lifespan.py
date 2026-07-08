@@ -27,6 +27,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await steps.bootstrap_schema()
     await steps.configure_i18n()
     await steps.colocate_kernel_history()  # seed valuz.db durable from kernel.db (one-time)
+    steps.activate_downloaded_runtimes()  # env override BEFORE kernel serves/recovers sessions
     await steps.init_kernel(app)
     await steps.bind_data_service(app)
     steps.install_binding_change_listener()

@@ -363,6 +363,7 @@
     "runFailed": "运行失败",
     "userCancelled": "用户取消了当前对话",
     "runtimeLocked": "Runtime 在会话创建时已锁定。需要切换请新建对话。",
+    "runtimeInstallHint": "未安装 · 点击下载",
     "saveSkillSuccess": "已保存 {name} 到技能库",
     "searchSkill": "搜索 Skill...",
     "searchedText": "搜索了 {count} 次文本",
@@ -1566,7 +1567,12 @@
       }
     },
     "timezone": "时区",
-    "title": "设置"
+    "title": "设置",
+    "runtimes": {
+      "installTitle": "下载运行时",
+      "installDesc": "该运行时的二进制未随安装包分发，需要一次性下载后才能使用。下载来源与许可信息如下。",
+      "codexSetupLabel": "OpenAI Codex 运行时"
+    }
   },
   "sidebar": {
     "automation": "自动化",

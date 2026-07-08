@@ -360,7 +360,14 @@ def _short_error(exc: BaseException) -> str:
 
 
 def build_default_setup_controller() -> SetupJobController:
-    """Production setup-job set. Today: RapidOCR only."""
-    from valuz_agent.modules.parser.setup_jobs.rapidocr import RapidOcrSetupJob
+    """Production setup-job set.
 
-    return SetupJobController(jobs=[RapidOcrSetupJob()])
+    The controller/framework is generic (the ``valuz_setup_job`` table and
+    the ``/v1/system/parser/setup/*`` endpoints are keyed by ``setup_id``,
+    not by module); it lives under ``modules/parser`` for historical
+    reasons. Non-parser one-time downloads register here too.
+    """
+    from valuz_agent.modules.parser.setup_jobs.rapidocr import RapidOcrSetupJob
+    from valuz_agent.modules.runtimes.setup_job import CodexRuntimeSetupJob
+
+    return SetupJobController(jobs=[RapidOcrSetupJob(), CodexRuntimeSetupJob()])

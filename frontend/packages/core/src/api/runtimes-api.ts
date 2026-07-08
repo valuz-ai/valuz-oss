@@ -37,6 +37,14 @@ export interface RuntimeListItem {
    *  ``false`` (e.g. "'codex' binary not found on PATH"). ``null``
    *  when available. */
   unavailable_reason: string | null;
+  /** The host can download this runtime's binary on demand through the
+   *  setup-job endpoints — the picker renders a download CTA instead of
+   *  a dead-end tooltip. Today only ``codex``. */
+  installable: boolean;
+  /** Setup-job id keying the download on the generic setup-job surface
+   *  (``/v1/system/parser/setup/{setup_id}``); ``null`` when not
+   *  installable. */
+  setup_id: string | null;
 }
 
 export interface ListRuntimesResponse {

@@ -124,6 +124,7 @@ import {
 import { LiveTaskCard } from "../components/LiveTaskCard";
 import { QueuedInputsBar } from "../components/QueuedInputsBar";
 import { AttachmentParsingDialog } from "../components/AttachmentParsingDialog";
+import { RuntimeInstallDialog } from "../components/RuntimeInstallDialog";
 import { CreateAgentDialog } from "../components/CreateAgentDialog";
 import {
   resolveAgentSkillItems,
@@ -848,7 +849,9 @@ export const ConversationPage = () => {
     // means Max, not the prompt-cache-friendly fallback "high".
     setSelectedEffort(modelDefaults.default_effort);
   }, [modelDefaults, composerTouched, selectedSessionId]);
-  const { runtimes: runtimeList } = useRuntimes();
+  const { runtimes: runtimeList, refresh: refreshRuntimes } = useRuntimes();
+  // On-demand runtime install (codex): setup_id of the download in flight.
+  const [installSetupId, setInstallSetupId] = useState<string | null>(null);
   // Repair the default if claude_agent ever reports unavailable.
   // Waits for ``useModelDefaults`` so we don't race-overwrite the
   // user's configured default before it lands.
@@ -2281,6 +2284,7 @@ export const ConversationPage = () => {
         displayName: rt.display_name,
         available: rt.available,
         unavailableReason: rt.unavailable_reason,
+        installable: rt.installable,
       })),
     [runtimeList],
   );
@@ -5621,6 +5625,10 @@ export const ConversationPage = () => {
               setSelectedRuntimeId((rt as RuntimeId | null) ?? null);
               setComposerTouched(true);
             }}
+            onRuntimeInstall={(id) => {
+              const rt = runtimeList.find((r) => r.id === id);
+              if (rt?.setup_id) setInstallSetupId(rt.setup_id);
+            }}
             permissionMode={selectedPermissionMode}
             // Kernel V5+bba3014 live-reconciles ``permission_mode`` on
             // the next Send (Claude live ``set_permission_mode`` mutator
@@ -5696,6 +5704,11 @@ export const ConversationPage = () => {
               void performSend();
             }}
             onCancel={() => setParsingConfirmOpen(false)}
+          />
+          <RuntimeInstallDialog
+            setupId={installSetupId}
+            onClose={() => setInstallSetupId(null)}
+            onSucceeded={() => void refreshRuntimes()}
           />
         </div>
         {artifactViewerOpen ? (

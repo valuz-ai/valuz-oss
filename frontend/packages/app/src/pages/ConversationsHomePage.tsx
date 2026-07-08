@@ -29,6 +29,7 @@ import {
 import { homeSuggestions } from "@valuz/app/lib/prototype-data";
 import { useTranslation } from "@valuz/core";
 import { AttachmentParsingDialog } from "../components/AttachmentParsingDialog";
+import { RuntimeInstallDialog } from "../components/RuntimeInstallDialog";
 
 export const ConversationsHomePage = () => {
   const { t } = useTranslation();
@@ -100,7 +101,9 @@ export const ConversationsHomePage = () => {
   } = useSessionAttachments(sessionId);
   const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
 
-  const { runtimes: runtimeList } = useRuntimes();
+  const { runtimes: runtimeList, refresh: refreshRuntimes } = useRuntimes();
+  // On-demand runtime install (codex): setup_id of the download in flight.
+  const [installSetupId, setInstallSetupId] = useState<string | null>(null);
   useEffect(() => {
     // Wait for the Settings-default fetch to land before falling back.
     // Without this guard the runtime picker would snap to
@@ -129,6 +132,7 @@ export const ConversationsHomePage = () => {
         displayName: rt.display_name,
         available: rt.available,
         unavailableReason: rt.unavailable_reason,
+        installable: rt.installable,
       })),
     [runtimeList],
   );
@@ -470,6 +474,10 @@ export const ConversationsHomePage = () => {
                 setSelectedRuntimeId((rt as RuntimeId | null) ?? null);
                 setComposerTouched(true);
               }}
+              onRuntimeInstall={(id) => {
+                const rt = runtimeList.find((r) => r.id === id);
+                if (rt?.setup_id) setInstallSetupId(rt.setup_id);
+              }}
               permissionMode={selectedPermissionMode}
               onPermissionModeChange={(mode) => {
                 setSelectedPermissionMode(mode);
@@ -508,6 +516,11 @@ export const ConversationsHomePage = () => {
                 void performSend();
               }}
               onCancel={() => setParsingConfirmOpen(false)}
+            />
+            <RuntimeInstallDialog
+              setupId={installSetupId}
+              onClose={() => setInstallSetupId(null)}
+              onSucceeded={() => void refreshRuntimes()}
             />
           </div>
         </div>

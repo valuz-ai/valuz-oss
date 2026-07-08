@@ -138,7 +138,14 @@ for _pkg in _third_party_pkgs:
 # must be collected explicitly.
 _data_pkgs = [
     "claude_agent_sdk",   # _bundled/claude CLI binary (~213MB)
-    "codex_cli_bin",      # bin/codex CLI binary (~75MB)
+    # ``codex_cli_bin`` is deliberately NOT here: its bin/codex binary grew to
+    # ~217MB (~88MB of every DMG) and most users never pick the Codex runtime.
+    # The Python module still ships (hiddenimports below); the binary is
+    # downloaded on demand by ``modules/runtimes/setup_job.py`` and activated
+    # via CODEX_BIN_OVERRIDE. In the frozen app ``bundled_codex_path()`` raises
+    # FileNotFoundError, which both resolvers (host runtime_registry, kernel
+    # codex runtime) catch and fall through — the runtime probes as
+    # "unavailable + installable" until the user downloads it.
     "pymupdf",            # libmupdf.dylib + ONNX layout models (~51MB)
     "cron_descriptor",    # locale/*.mo translation catalogs
     # magika is MarkItDown's filetype detector — constructed eagerly in
@@ -180,7 +187,9 @@ if getattr(sys, 'frozen', False):
     if os.path.isfile(os.path.join(_claude_dir, 'claude' + _exe_suffix)):
         os.environ['PATH'] = _claude_dir + os.pathsep + os.environ.get('PATH', '')
 
-    # Bundled Codex CLI (codex_cli_bin/bin/codex[.exe])
+    # Bundled Codex CLI (codex_cli_bin/bin/codex[.exe]). Normally ABSENT since
+    # the binary moved to on-demand download (see _data_pkgs note); this
+    # self-guards and becomes a no-op, but keeps working if it's re-bundled.
     _codex_dir = os.path.join(_internal, 'codex_cli_bin', 'bin')
     if os.path.isfile(os.path.join(_codex_dir, 'codex' + _exe_suffix)):
         os.environ['PATH'] = _codex_dir + os.pathsep + os.environ.get('PATH', '')

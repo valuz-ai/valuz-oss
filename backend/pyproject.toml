@@ -117,8 +117,8 @@ dependencies = [
     # protect against a future transitive-dep drop.
     "pyyaml>=6.0",
     # Required by the kernel's ``CodexRuntime`` (``from openai_codex import
-    # CodexConfig``). Codex is dormant in valuz today (provider_resolver only
-    # produces ``claude_agent`` / ``deepagents``), but the kernel's
+    # CodexConfig``). Codex is a user-selectable runtime (runtime_registry /
+    # provider_resolver accept ``codex``), and the kernel's
     # ``runtimes/codex/__init__.py`` re-exports CodexRuntime eagerly, so any
     # import of ``src.runtimes.codex`` would explode with ``ModuleNotFoundError:
     # No module named 'openai_codex'``. Kernel pin eec331f moved codex off the
@@ -130,8 +130,10 @@ dependencies = [
     # (``==0.137.0a4``) ships ``manylinux`` glibc wheels, so the binary installs
     # natively on the glibc Linux cloud image with NO per-platform override (see
     # the ``[tool.uv]`` note below). The binary is pulled transitively and KEPT on
-    # every platform so ``_resolve_codex_bin`` prefers it over a stray PATH
-    # ``codex``.
+    # every platform in DEV so ``_resolve_codex_bin`` prefers it over a stray
+    # PATH ``codex``. The PACKAGED desktop app excludes the ~217MB binary
+    # (see backend/scripts/valuz_agent.spec) — it is downloaded on demand by
+    # ``modules/runtimes/setup_job.py`` and activated via CODEX_BIN_OVERRIDE.
     "openai-codex>=0.1.0b3",
     # Declared directly (though ``openai-codex`` pins it transitively at
     # ``==0.137.0a4``) for two reasons: (1) that pin is a PRERELEASE, and uv

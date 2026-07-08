@@ -21,7 +21,7 @@ class SetupRequirementSchema(BaseModel):
 
     id: str
     label_zh: str
-    kind: Literal["credential", "model_download"]
+    kind: Literal["credential", "model_download", "binary_download"]
     network_required: bool = True
     size_bytes: int | None = None
     source: str | None = None

@@ -363,6 +363,7 @@
     "runFailed": "Run failed",
     "userCancelled": "You cancelled this conversation",
     "runtimeLocked": "Runtime locked at session creation. Start a new chat to switch.",
+    "runtimeInstallHint": "Not installed · click to download",
     "saveSkillSuccess": "Saved {name} to skill library",
     "searchSkill": "Search skills...",
     "searchedText": "Searched text {count} times",
@@ -1566,7 +1567,12 @@
       }
     },
     "timezone": "Timezone",
-    "title": "Settings"
+    "title": "Settings",
+    "runtimes": {
+      "installTitle": "Download runtime",
+      "installDesc": "This runtime's binary isn't shipped with the installer and needs a one-time download before use. Source and license details below.",
+      "codexSetupLabel": "OpenAI Codex runtime"
+    }
   },
   "sidebar": {
     "automation": "Automation",

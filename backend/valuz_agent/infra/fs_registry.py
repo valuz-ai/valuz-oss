@@ -160,6 +160,22 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def runtime_bin_dir(self, runtime_id: str, version: str) -> Path:
+        """Return the install directory for an on-demand runtime binary.
+
+        ``runtime_bin_dir("codex", "0.137.0a4")`` →
+        ``~/.valuz-oss/runtimes/codex/0.137.0a4/``. Version-namespaced so an
+        SDK pin bump installs cleanly alongside (and then prunes) the old
+        binary. Created on demand. See ``modules/runtimes/setup_job.py``.
+        """
+        if not runtime_id or "/" in runtime_id or ".." in runtime_id:
+            raise ValueError(f"invalid runtime_id: {runtime_id!r}")
+        if not version or "/" in version or ".." in version:
+            raise ValueError(f"invalid version: {version!r}")
+        path = self._shared_root() / "runtimes" / runtime_id / version
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     # ---- FS-3 — project cwd (project.cwd in V5 kernel terms) ----
 
     def project_cwd(

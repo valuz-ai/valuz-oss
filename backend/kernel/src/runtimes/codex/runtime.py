@@ -1207,12 +1207,20 @@ def _bundled_codex_bin() -> str | None:
     harness prefers the exact binary the installed SDK is pinned against.
     Returns ``None`` if the runtime package is absent (e.g. an editable SDK
     checkout) or the resolved path doesn't exist, letting the caller fall back.
+    ``bundled_codex_path()`` RAISES FileNotFoundError when the package is
+    importable but its data files are missing — the packaged desktop app ships
+    the module without the ~217MB binary (downloaded on demand instead), so
+    that case must fall through to the override/PATH lookup, not crash the
+    session.
     """
     try:
         from codex_cli_bin import bundled_codex_path
     except ImportError:
         return None
-    path = bundled_codex_path()
+    try:
+        path = bundled_codex_path()
+    except FileNotFoundError:
+        return None
     return str(path) if path.exists() else None
 
 
