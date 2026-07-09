@@ -232,8 +232,16 @@ PERMISSION_MAP: dict[
     "full_access": "bypassPermissions",
 }
 
+# Full model id → claude-agent-sdk family alias, used when stamping callable
+# subagent definitions (``AgentDefinition.model``). Ids not listed here pass
+# through verbatim — the SDK accepts full model names too (that is also the
+# right behaviour for ids with no family alias, e.g. ``claude-fable-5``).
+# Keep in sync with ``valuz_agent/resources/subscription_models.json``.
 MODEL_MAP: dict[str, str] = {
+    "claude-opus-4-8": "opus",
+    "claude-opus-4-7": "opus",
     "claude-opus-4-6": "opus",
+    "claude-sonnet-5": "sonnet",
     "claude-sonnet-4-6": "sonnet",
     "claude-haiku-4-5": "haiku",
 }
