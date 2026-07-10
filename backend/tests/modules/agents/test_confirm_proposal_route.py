@@ -111,6 +111,16 @@ async def test_chat_kind_project_resolves_to_none(db_session, monkeypatch) -> No
     import valuz_agent.adapters.kernel_client as kc
 
     monkeypatch.setattr(kc, "get_session", _get_session)
+    # ``project_of`` reads ``valuz_project_session`` on the GLOBAL engine, not
+    # the test's in-memory session — patch it to "no host mapping" so the test
+    # exercises the kernel-metadata fallback hermetically (this used to lean on
+    # whatever database the ambient ``data_dir`` pointed at).
+    import valuz_agent.modules.sessions.project_index as pidx
+
+    async def _no_mapping(_sid):
+        return None
+
+    monkeypatch.setattr(pidx, "project_of", _no_mapping)
     resolved = await agents_route._resolve_session_project_id(
         USER_ID, "sess-1", db_session
     )

@@ -1,5 +1,7 @@
 import os
+import tempfile
 from functools import wraps
+from pathlib import Path
 
 # The document parser offloads to a ``ProcessPoolExecutor`` in production
 # (see ``valuz_agent.infra.parse_pool``). For the unit suite we force the
@@ -7,6 +9,33 @@ from functools import wraps
 # subprocesses (which re-import modules and slow CI). The dedicated offload
 # regression test (``test_parse_pool_offload``) re-enables the pool explicitly.
 os.environ.setdefault("VALUZ_PARSE_POOL_DISABLED", "1")
+
+# ---------------------------------------------------------------------------
+# Hermetic filesystem roots — the suite must NEVER touch real user data.
+#
+# ``Settings`` reads ``VALUZ_*`` env vars on every instantiation, and its
+# defaults point at the developer's real home (``~/.valuz-oss`` for
+# ``data_dir`` — the production DB! — and ``~/.agent/skills`` for
+# ``user_skills_dir``). Most tests monkeypatch the ``settings`` singleton to a
+# tmp path, but that is NOT reliable: ``test_session_approval_e2e.py`` pops
+# ``valuz_agent.infra.config`` from ``sys.modules`` to rebind kernel env, so a
+# later import builds a NEW ``Settings`` instance and every patch applied to
+# the old object silently stops covering the code under test. That exact race
+# leaked ~95 fixture skills (``empty-session-N`` / ``from-session-N`` /
+# ``weekly-report-vN`` …) into the real ``~/.agent/skills`` — one batch per
+# full-suite run — and wrote ``local-test-owner`` / ``user-1`` rows into the
+# real ``~/.valuz-oss/valuz.db``.
+#
+# Env vars survive the module pop: a re-instantiated ``Settings`` reads them
+# again, so pinning the roots here (BEFORE any ``valuz_agent`` import) seals
+# the leak for every instance. Deliberate assignment (not ``setdefault``):
+# no test-suite run should ever operate on real user data, whatever the
+# ambient shell exports. Per-test ``monkeypatch`` of ``settings.*`` /
+# ``setenv`` still refine these freely.
+# ---------------------------------------------------------------------------
+_hermetic_root = Path(tempfile.mkdtemp(prefix="valuz-test-home-"))
+os.environ["VALUZ_DATA_DIR"] = str(_hermetic_root / "valuz-data")
+os.environ["VALUZ_USER_SKILLS_DIR"] = str(_hermetic_root / "agent-skills")
 
 
 # ---------------------------------------------------------------------------
@@ -19,7 +48,7 @@ os.environ.setdefault("VALUZ_PARSE_POOL_DISABLED", "1")
 # by ``tests/infra/test_ownership.py``, which opts out via fresh Contexts).
 # ---------------------------------------------------------------------------
 import pytest  # noqa: E402
-import inspect
+import inspect  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
