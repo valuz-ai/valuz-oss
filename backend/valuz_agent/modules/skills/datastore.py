@@ -75,11 +75,18 @@ class SkillDatastore:
         it just before this is called from a create / import flow); a
         missing row is a no-op rather than an error, since the next
         ``startup_scan`` recreates it as ``"discovered"`` anyway.
+
+        Creating / importing a skill through Valuz is an explicit opt-in, so
+        stamping those origins also turns the library switch ON — the scan
+        inserted the row moments earlier with the scanned-in default (OFF for
+        user-scope rows).
         """
         row = await self.get_by_id(user_id, skill_id)
         if row is None:
             return
         row.creation_origin = origin
+        if origin in ("created", "imported"):
+            row.library_enabled = True
         await async_commit_with_retry(self._db, where="SkillDatastore.set_creation_origin")
 
     async def set_creation_origin_by_slug(self, user_id: str, slug: str, origin: str) -> None:
@@ -87,6 +94,8 @@ class SkillDatastore:
         if row is None:
             return
         row.creation_origin = origin
+        if origin in ("created", "imported"):
+            row.library_enabled = True
         await async_commit_with_retry(self._db, where="SkillDatastore.set_creation_origin_by_slug")
 
     async def set_origin_metadata(self, user_id: str, skill_id: str, origin_json: str) -> None:

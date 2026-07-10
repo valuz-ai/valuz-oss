@@ -194,6 +194,16 @@ async def _upsert_skill_row(user_id: str, ds: SkillDatastore, manifest) -> None:
                 # New rows default to "discovered"; the create / import flows
                 # overwrite this via set_creation_origin right after.
                 creation_origin="discovered",
+                # A user-scope row inserted by the scan was merely FOUND on
+                # disk (~/.claude/skills, ~/.codex/skills, or a folder dropped
+                # into the shared library root) — never opted into Valuz.
+                # Default its library switch OFF so it doesn't ride along into
+                # every chat session's prompt. Create / import flows flip it
+                # back ON via ``set_creation_origin`` right after; official /
+                # built-in / project-scope rows keep the default ON. The
+                # upsert branch below never rewrites the flag, so a user's
+                # explicit toggle always survives rescans.
+                library_enabled=manifest.scope != "user",
             ),
         )
     else:
@@ -486,15 +496,25 @@ class SkillLibraryService:
         skills.sort(key=_sort_key)
 
         # Overlay the global library switch (per index row, user-scoped). Default
-        # is on, so we only flip the rows explicitly turned off. This is the field
-        # the new-conversation ``/`` picker filters on. Built-in skills (bundled
-        # with the client) are always-on and can't be disabled — guard here too so
-        # a forced row value can never hide one, mirroring the disabled UI toggle.
+        # is on (off for system-scanned rows), so we only flip the rows stored as
+        # off. This is the field the new-conversation ``/`` picker filters on.
+        # Built-in skills (bundled with the client) are always-on and can't be
+        # disabled — guard here too so a forced row value can never hide one,
+        # mirroring the disabled UI toggle.
         disabled_slugs = await self._ds.list_library_disabled_slugs(user_id)
         if disabled_slugs:
             for s in skills:
                 if s.slug in disabled_slugs and s.origin_label != "Built-in":
                     s.library_enabled = False
+
+        # For a chat-kind project ``enabled`` mirrors what the runtime actually
+        # loads (capability_resolver §1b filters user skills by the library
+        # switch), so the catalog can't advertise a skill as enabled that a chat
+        # session won't carry. ``project``-kind stays per-project config.
+        if getattr(project, "kind", None) == "chat":
+            for s in skills:
+                if s.scope == "user" and s.origin_label != "Built-in":
+                    s.enabled = s.library_enabled
 
         return SkillsCatalog(project_id=project_id, skills=skills)
 

@@ -55,11 +55,17 @@ class SkillIndexRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     origin_json: Mapped[str | None] = mapped_column(Text, default=None)
     deletable: Mapped[bool] = mapped_column(Boolean, default=True)
     # Global library on/off switch for THIS skill row (the row the Skills page
-    # shows — i.e. the dedup-winning representative for the slug). Default on;
-    # ``startup_scan`` preserves it across rescans (the upsert never rewrites
-    # it, like ``creation_origin``). Off hides the skill from a new (non-project)
-    # conversation's inline ``/`` picker; never affects runtime loading or an
-    # agent's own ``/`` (which read source paths, not this flag).
+    # shows — i.e. the dedup-winning representative for the slug). Default on,
+    # EXCEPT user-scope rows inserted by the filesystem scan (merely found on
+    # disk — ~/.claude/skills, ~/.codex/skills, or the shared library root),
+    # which default off so they don't auto-ride into every chat prompt; the
+    # create / import flows flip it on when they stamp ``creation_origin``.
+    # ``startup_scan`` preserves the flag across rescans (the upsert never
+    # rewrites it, like ``creation_origin``). Off hides the skill from a new
+    # (non-project) conversation's inline ``/`` picker AND excludes it from
+    # the skills a chat session auto-carries (capability_resolver §1b). It
+    # never affects a ``project``-kind project's per-project skill config, an
+    # agent's own equipment, or an explicit session attachment.
     library_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=true()
     )
@@ -100,8 +106,9 @@ class SkillView(BaseModel):
     path: str
     enabled: bool = False
     # Global library switch (user-scoped, slug-keyed) — distinct from ``enabled``
-    # (per-project). Defaults on; turning it off in the Skills page hides the
-    # skill from a new (non-project) conversation's inline ``/`` picker.
+    # (per-project). Defaults on (off for system-scanned rows); turning it off
+    # hides the skill from a new (non-project) conversation's inline ``/``
+    # picker and excludes it from the skills a chat session auto-carries.
     library_enabled: bool = True
     tags: list[str] = Field(default_factory=list)
     slug: str = ""

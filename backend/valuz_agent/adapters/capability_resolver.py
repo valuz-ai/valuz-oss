@@ -162,11 +162,15 @@ async def resolve_session_capabilities(
         seen.add(absolute)
         skill_paths.append(absolute)
 
-    # 1b) For non-project (chat) projects, every user-library skill is
-    #     implicitly enabled. The skills panel UI advertises them as enabled
-    #     for chat (datastore.list_project_skills sets ``enabled=True`` for
-    #     project.kind == "chat") and there is no per-project toggle to
-    #     opt out, so the resolver must mirror that for the runtime.
+    # 1b) For non-project (chat) projects, user-library skills whose global
+    #     library switch is ON are implicitly enabled. The switch
+    #     (``valuz_skill_index.library_enabled``) is what the Skills page
+    #     toggles and what the new-conversation ``/`` picker filters on;
+    #     the resolver mirrors it so a chat session only carries the skills
+    #     the user actually opted in — skills merely discovered by the
+    #     system scan (legacy ``~/.claude/skills`` / ``~/.codex/skills``)
+    #     default OFF, so they no longer flood every chat prompt. Explicit
+    #     attachment via ``extra_skill_ids`` (section 2) bypasses the switch.
     if project.kind != "project" and (skill_source is not None or extra_skill_sources):
         ctx = RuntimeContext(
             user_id=user_id,
@@ -178,8 +182,17 @@ async def resolve_session_capabilities(
             ),
         )
         if skill_source is not None:
+            # Slugs the user turned OFF on the Skills page (or that defaulted
+            # OFF because they were scanned in from a legacy system dir).
+            # ``hasattr`` guard mirrors the ``get_by_slug`` fallback below so
+            # minimal datastore stand-ins keep working.
+            library_disabled: set[str] = set()
+            if hasattr(skills, "list_library_disabled_slugs"):
+                library_disabled = await skills.list_library_disabled_slugs(user_id)
             for manifest in skill_source.list_skills(ctx):
                 if manifest.scope != "user":
+                    continue
+                if (manifest.slug or manifest.id) in library_disabled:
                     continue
                 absolute = _resolve_to_absolute(manifest.path, project.root_path)
                 if absolute is None or absolute in seen:

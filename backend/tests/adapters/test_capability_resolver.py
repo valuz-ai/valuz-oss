@@ -82,17 +82,20 @@ class _FakeProjectDatastore:
 
 
 class _FakeSkillDatastore:
-    """Honors only what the resolver consumes: enabled_skill_paths + get_by_id."""
+    """Honors only what the resolver consumes: enabled_skill_paths + get_by_id
+    (+ the global library switch read)."""
 
     def __init__(
         self,
         enabled_paths: set[str] | None = None,
         rows_by_id: dict[str, object] | None = None,
         rows_by_slug: dict[str, object] | None = None,
+        library_disabled: set[str] | None = None,
     ) -> None:
         self._enabled_paths = enabled_paths or set()
         self._rows_by_id = rows_by_id or {}
         self._rows_by_slug = rows_by_slug or {}
+        self._library_disabled = library_disabled or set()
 
     def enabled_skill_paths(self, project: _FakeProject) -> set[str]:
         if project.kind != "project":
@@ -104,6 +107,9 @@ class _FakeSkillDatastore:
 
     async def get_by_slug(self, user_id: str, slug: str):  # noqa: ANN201 — matches real signature
         return self._rows_by_slug.get(slug)
+
+    async def list_library_disabled_slugs(self, user_id: str) -> set[str]:
+        return set(self._library_disabled)
 
 
 class _FakeSkillSource:
@@ -250,6 +256,53 @@ def test_chat_project_skips_non_user_scoped_manifests(tmp_path: Path) -> None:
     )
 
     assert _user_skills(caps.skills) == (str(user_dir.resolve(strict=False)),)
+
+
+def test_chat_project_excludes_library_disabled_user_skills(tmp_path: Path) -> None:
+    """A user-library skill whose global library switch is OFF (turned off on
+    the Skills page, or defaulted off because it was scanned in from a legacy
+    system dir) must NOT auto-ride into a chat session."""
+    on_dir = _make_skill_dir(tmp_path, "kept")
+    off_dir = _make_skill_dir(tmp_path, "scanned-off")
+    project = _FakeProject(id="ws-chat", kind="chat", root_path=None)
+
+    caps = asyncio.run(
+        resolve_session_capabilities(
+            projects=_FakeProjectDatastore(project),
+            skills=_FakeSkillDatastore(library_disabled={"scanned-off"}),
+            project_id="ws-chat",
+            user_id=USER,
+            skill_source=_FakeSkillSource(
+                [_manifest_for(on_dir), _manifest_for(off_dir)]
+            ),
+        )
+    )
+
+    assert _user_skills(caps.skills) == (str(on_dir.resolve(strict=False)),)
+
+
+def test_extra_skill_id_bypasses_library_switch(tmp_path: Path) -> None:
+    """Explicitly attaching a skill to the session (``extra_skill_ids``) is a
+    direct opt-in — it loads even when its library switch is OFF."""
+    skill_dir = _make_skill_dir(tmp_path, "scanned-off")
+    project = _FakeProject(id="ws-chat", kind="chat", root_path=None)
+    row = SimpleNamespace(source_path=str(skill_dir.resolve(strict=False)))
+
+    caps = asyncio.run(
+        resolve_session_capabilities(
+            projects=_FakeProjectDatastore(project),
+            skills=_FakeSkillDatastore(
+                library_disabled={"scanned-off"},
+                rows_by_id={"user:scanned-off": row},
+            ),
+            project_id="ws-chat",
+            user_id=USER,
+            skill_source=_FakeSkillSource([_manifest_for(skill_dir)]),
+            extra_skill_ids=["user:scanned-off"],
+        )
+    )
+
+    assert _user_skills(caps.skills) == (str(skill_dir.resolve(strict=False)),)
 
 
 def test_chat_project_dedupes_against_extras(tmp_path: Path) -> None:
