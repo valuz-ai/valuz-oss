@@ -131,7 +131,11 @@ import {
 } from "@valuz/core";
 import { BackgroundTaskStrip, ConversationTurnList } from "@valuz/ui";
 import { usePlatform } from "@valuz/app/platform";
-import { useHasUsableChannel, useTranslation } from "@valuz/core";
+import {
+  RUNTIME_DISPLAY_NAME,
+  useHasUsableChannel,
+  useTranslation,
+} from "@valuz/core";
 import {
   useConversationLocalFileLinks,
   useProjectKbBindings,
@@ -2535,9 +2539,78 @@ export const ConversationPage = () => {
   // showing the bound context on existing ones. All editions render it; the
   // location chip inside it only appears on multi-target builds.
   const execBarLocked = !(selectedSession == null && isNewSession);
+  // Draft-with-project: the right panel shows the PROJECT panel (config /
+  // files) instead of the session context panel — the user just picked a
+  // project in the footer bar and hasn't started the conversation yet.
+  const isDraftProjectPanel =
+    !execBarLocked && activeProject?.kind === "project";
   // Observed origin of the open session — drives the locked bar's location
   // chip (multi-target editions; undefined on single-target/unknown).
   const sessionExecOrigin = useEntityOrigin(selectedSessionId, "session");
+
+  // Draft project panel data: full detail (instructions/root_path) for the
+  // picked project. ``projectsApi.get`` routes through the project's origin,
+  // so cloud projects load from their owning backend.
+  const [draftProjectDetail, setDraftProjectDetail] =
+    useState<ProjectDetail | null>(null);
+  useEffect(() => {
+    if (
+      !isDraftProjectPanel ||
+      !selectedProjectId ||
+      selectedProjectId === "chat-default"
+    ) {
+      setDraftProjectDetail(null);
+      return;
+    }
+    let alive = true;
+    projectsApi
+      .get(selectedProjectId)
+      .then((detail) => {
+        if (alive) setDraftProjectDetail(detail);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [isDraftProjectPanel, selectedProjectId]);
+
+  // Same row shape the project home panel uses (ProjectDetailPage).
+  const draftPanelMembers = useMemo(
+    () =>
+      projectAgents.map((m) => {
+        const runtimeId = m.agent?.runtime_provider ?? null;
+        return {
+          id: m.member.id,
+          name: m.agent?.name ?? m.member.agent_slug,
+          slug: m.member.agent_slug,
+          sourceAgentSlug: m.member.source_agent_slug,
+          model: m.agent?.model ?? null,
+          runtime: runtimeId,
+          runtimeLabel: runtimeId
+            ? (RUNTIME_DISPLAY_NAME[
+                runtimeId as keyof typeof RUNTIME_DISPLAY_NAME
+              ] ?? runtimeId)
+            : undefined,
+          orphan: m.agent == null,
+        };
+      }),
+    [projectAgents],
+  );
+
+  const handleDraftInstructionsChange = useCallback(
+    async (md: string) => {
+      if (!selectedProjectId || selectedProjectId === "chat-default") return;
+      setDraftProjectDetail((prev) =>
+        prev ? { ...prev, instructions_md: md } : prev,
+      );
+      try {
+        await projectsApi.updateInstructions(selectedProjectId, md);
+      } catch {
+        toast.error(_t("project.saveFailed" as I18nKey));
+      }
+    },
+    [selectedProjectId],
+  );
   const execBarProjects = useMemo(
     () =>
       projects
@@ -5391,6 +5464,53 @@ export const ConversationPage = () => {
 
   // Context panel
   const contextPanelNode = useMemo(() => {
+    if (isDraftProjectPanel) {
+      // Draft with a picked project: show the PROJECT panel (same component
+      // as the project home) — 项目说明/团队成员/知识库 + 项目文件 tab — so
+      // choosing a project surfaces its context before the first message.
+      return (
+        <ProjectDetailContextPanel
+          title={t("project.contextTab" as Parameters<typeof t>[0])}
+          instructionsTitle={t("project.instruction" as Parameters<typeof t>[0])}
+          showTodos={false}
+          multiOpen
+          initialOpenSection={null}
+          instructions={draftProjectDetail?.instructions_md ?? ""}
+          onInstructionsChange={(v) => void handleDraftInstructionsChange(v)}
+          members={draftPanelMembers}
+          onOpenMember={(slug) =>
+            navigate(`/agents/${encodeURIComponent(slug)}`)
+          }
+          kbTree={projectKbTree}
+          bindings={projectKbBindings}
+          onExpandKbFolder={handleExpandProjectKbFolder}
+          fileTree={fileTree}
+          fileTreeInTab
+          rootPath={
+            draftProjectDetail?.root_path ?? activeProjectRootPath ?? ""
+          }
+          onRefreshFiles={refreshFileTree}
+          onFileClick={(relPath) => void openArtifactFile(relPath)}
+          onFileDoubleClick={(relPath) => void openArtifactFile(relPath)}
+          onOpenInFinder={() => {
+            const path =
+              draftProjectDetail?.cwd ?? draftProjectDetail?.root_path;
+            if (!path) {
+              toast.info(t("conversation.noWorkDir" as Parameters<typeof t>[0]));
+              return;
+            }
+            void revealInFinder(path);
+          }}
+          onOpenInSystem={(relPath) =>
+            void revealInFinder(
+              resolveConversationArtifactPath(relPath, activeProjectRootPath),
+            )
+          }
+          collapsed={panelCollapsed}
+          onCollapsedChange={(c) => panelSetCollapsed(c)}
+        />
+      );
+    }
     if (isSkillCreatorMode) {
       return (
         <SkillStagingPanel
@@ -5564,6 +5684,14 @@ export const ConversationPage = () => {
     );
   }, [
     activeProject,
+    isDraftProjectPanel,
+    draftProjectDetail,
+    draftPanelMembers,
+    handleDraftInstructionsChange,
+    projectKbTree,
+    projectKbBindings,
+    handleExpandProjectKbFolder,
+    refreshFileTree,
     fileTree,
     activeProjectRootPath,
     openArtifactFile,
