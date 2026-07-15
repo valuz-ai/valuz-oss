@@ -3833,7 +3833,7 @@ components:
         name: {type: string}
         description: {type: string, default: ""}
         instructions: {type: string, default: ""}
-        runtime: {type: string, default: claude_agent}
+        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents]}
         model: {type: string, default: claude-sonnet-4-6}
         skills:
           type: array
@@ -3850,7 +3850,7 @@ components:
         name: {type: string, nullable: true}
         description: {type: string, nullable: true}
         instructions: {type: string, nullable: true}
-        runtime: {type: string, nullable: true}
+        runtime: {type: string, nullable: true, enum: [claude_agent, codex, deepagents]}
         model: {type: string, nullable: true}
         skills:
           type: array
@@ -3878,7 +3878,7 @@ components:
         agent_slug: {type: string, nullable: true}
         name: {type: string}
         instructions: {type: string, default: ""}
-        runtime: {type: string, default: claude_agent}
+        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents]}
         model: {type: string, default: claude-sonnet-4-6}
         provider_id: {type: string, nullable: true}
         effort: {type: string, nullable: true, enum: [low, medium, high, xhigh, max]}
@@ -3948,7 +3948,7 @@ components:
         name: {type: string}
         instructions: {type: string}
         description: {type: string, default: ""}
-        runtime: {type: string, default: claude_agent}
+        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents]}
         model: {type: string, default: claude-sonnet-4-6}
         effort: {type: string, nullable: true, enum: [low, medium, high, xhigh, max]}
         skills:

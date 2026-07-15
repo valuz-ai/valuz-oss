@@ -36,6 +36,10 @@ router = APIRouter(tags=["agents"])
 # Defined locally so the API layer doesn't import kernel internals directly.
 EffortLevel = Literal["low", "medium", "high", "xhigh", "max"]
 
+# Mirrors kernel ``RuntimeProvider`` (``kernel.src.core.types``). Validated at
+# the API boundary so a bad value is rejected at write time, not at dispatch.
+RuntimeProvider = Literal["claude_agent", "codex", "deepagents"]
+
 
 # ---------------------------------------------------------------------------
 # Dependency
@@ -96,7 +100,7 @@ class CreateBlankAgentRequest(BaseModel):
     agent_slug: str | None = None
     name: str
     instructions: str = ""
-    runtime: str = "claude_agent"
+    runtime: RuntimeProvider = "claude_agent"
     model: str = "claude-sonnet-4-6"
     provider_id: str | None = None
     effort: EffortLevel | None = None
@@ -228,7 +232,7 @@ class CreateAgentRequest(BaseModel):
     name: str
     description: str = ""
     instructions: str = ""
-    runtime: str = "claude_agent"
+    runtime: RuntimeProvider = "claude_agent"
     model: str = "claude-sonnet-4-6"
     skills: list[str] = []
     connector_types: list[str] = []
@@ -241,7 +245,7 @@ class UpdateAgentRequest(BaseModel):
     name: str | None = None
     description: str | None = None
     instructions: str | None = None
-    runtime: str | None = None
+    runtime: RuntimeProvider | None = None
     model: str | None = None
     skills: list[str] | None = None
     connector_types: list[str] | None = None
@@ -393,7 +397,7 @@ class ProposeAgentConfirmRequest(BaseModel):
     name: str
     instructions: str
     description: str = ""
-    runtime: str = "claude_agent"
+    runtime: RuntimeProvider = "claude_agent"
     model: str = "claude-sonnet-4-6"
     effort: EffortLevel | None = None
     skills: list[str] = []
