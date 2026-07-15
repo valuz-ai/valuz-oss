@@ -289,7 +289,12 @@ class FilesystemSkillSource:
         for scope, root, source_label in _discover_roots(ctx):
             if not root.exists():
                 continue
-            for skill_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+            try:
+                children = sorted(path for path in root.iterdir() if path.is_dir())
+            except PermissionError:
+                logger.warning("skill scan: permission denied reading %s — skipped", root)
+                continue
+            for skill_dir in children:
                 manifest_path = _detect_manifest(skill_dir)
                 if manifest_path is None:
                     continue
