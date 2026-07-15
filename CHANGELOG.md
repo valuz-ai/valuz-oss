@@ -7,6 +7,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-07-15
+
+### Added
+
+- **Generative UI** — inline OpenUI via the `generate_ui` MCP tool
+  (#517 @hanjixin), token-by-token streaming (#531 @hanjixin), Valuz brand
+  theming (#533 @yy83000812), and a shared fixed scratch cwd
+  (#518 @hanjixin).
+- **Connector group OAuth sharing** — authenticating one connector in a
+  catalog group (e.g. Valuz search) automatically installs and authorizes all
+  siblings in the same group; refresh-token rotation is serialized per group
+  (#551 @St0neWan9).
+- **Background tasks** — kernel wake-up turns between and during user turns,
+  background-task running strip + idle watcher, runtime eviction yields to live
+  background tasks, and bg_task kernel events translated onto the session SSE
+  stream (#527 @jiaoqsh).
+- **User-level control-plane SSE** — a single `GET /v1/stream` replaces five
+  client-side polls; running/finished lists and the created→running bridge are
+  stream-driven (#536, #540 @Ready22Race).
+- **Notifications** — AskUserQuestion and run failures from non-task
+  conversations surface in the notification ledger (#529 @Ready22Race);
+  DB-poll SSE replaces the in-memory fan-out for multi-pod safety
+  (#552 @Ready22Race).
+- **Execution-location bar** — per-entity API base routing seam, origin
+  badges, remote project creation, and a composer footer bar
+  (#502 @St0neWan9).
+- **Sandbox** — scope-aware allocation seam (session/task) + peek-only SSE
+  live taps (#554 @Ready22Race); allocator `new_turn` hint
+  (#554 @Ready22Race).
+- **Marketplace** — sourced from the cloud market index (#494 @St0neWan9)
+  with index-endpoint racing + OSS-only direct-source fallback
+  (#497 @St0neWan9).
+- **DeepAgents** — externalize checkpoint to COS-safe files in-sandbox
+  (#524 @Ready22Race).
+- **ADR-013** — kernel `/kernel/v1` default, `/_internal` loopback plane,
+  market client `/cloud` paths (#519 @St0neWan9).
+- **Runtime resource lifecycle hooks** — skill discovery and sync extension
+  points (#513 @homeant).
+- **Task attention & reliability** — unified notification ledger, task
+  attention signals (#512 @Ready22Race).
+- **Project composer** — locked location/project chips shown under the
+  composer (#522 @St0neWan9).
+
+### Changed
+
+- **Marketplace performance** — failure memo on index client, ModelScope list
+  cache, pooled connections (#499 @St0neWan9); endpoint resolved once at boot
+  (#498 @St0neWan9); zh copy fixes (#496 @St0neWan9); card/filter/logging
+  cleanups (#495 @St0neWan9).
+- **Frontend design audit** — design spec violations gated in lint
+  (#507 @yy83000812); design spec tags and asset store aligned
+  (#510 @yy83000812).
+- **Kernel SSE** — server-side `types=` filter on the global event stream
+  (#548 @Ready22Race); SSE routes no longer poll `request.is_disconnected()`
+  in-loop (#547 @Ready22Race).
+- **Conversation polling** — P3 poll-removal + SSE disconnect hardening
+  reverted due to runtime regressions; re-landed stream-driven in later PRs
+  (#538 @Ready22Race).
+
+### Fixed
+
+- **Conversation reliability** — resume blank-transcript race healed with a
+  bounded reconcile (#542 @Ready22Race); deterministic resume via ordered
+  merge + hydration gate (#543 @Ready22Race); reconcile burst not re-fired on
+  stream reconnects (#544 @Ready22Race); stream continuation segments after a
+  mid-turn canonical seal (#546 @Ready22Race); send response must not clobber
+  the optimistic running status (#549, #550 @Ready22Race); never fake turn
+  completion when reconnects run out (#525 @St0neWan9); incremental transcript
+  build + un-stick loading on stale status (#552 @Ready22Race).
+- **SSE / streaming** — zombie SSE connections closed so the renderer no
+  longer starves on pending requests (#508 @jiaoqsh); terminal task streams
+  close instead of living forever (#508 @jiaoqsh); caller abort stays wired
+  for streaming responses (#508 @jiaoqsh); control-plane cursor advances only
+  on lifecycle events (#537 @Ready22Race).
+- **Tasks** — lead attribution corrected on blocked/stopped events;
+  skill-creator card surfaces in follow-up chat (#514 @Ready22Race); lead
+  `await_members` pull-gap closed (#539 @Ready22Race); await window aligned
+  to 600 s with the codex ceiling at 720 s (#541 @Ready22Race).
+- **Activity** — backstop-reconcile running-runs list so a stuck "running"
+  dot self-heals (#555 @Ready22Race).
+- **Codex** — webSearch thread items surfaced as tool_use/tool_result events
+  (#545 @jiaoqsh); 120 s MCP tool-call cap lifted for the harness toolkit
+  (#541 @Ready22Race).
+- **Skills** — same-slug official + user copies coexist in the index
+  (#530 @St0neWan9); list refreshed after resource sync (#535 @homeant);
+  PermissionError during directory scan caught and skipped
+  (#557 @St0neWan9); skills materialized under their frontmatter name
+  (#523 @St0neWan9).
+- **Kernel** — every kernel SQLite engine hardened with `busy_timeout`
+  (#505 @Ready22Race); background wake-up turns survive between and during
+  user turns (#527 @jiaoqsh).
+- **Sessions** — external connector credentials re-resolved on every turn
+  (#522 @St0neWan9).
+- **Memory** — review sessions share one fixed scratch cwd
+  (#511 @jiaoqsh).
+- **App** — stale event deliveries guarded from crossing a session switch
+  (#506 @Ready22Race); entry scroll burst no longer yanks an early scroll-up
+  (#509 @Ready22Race); footer-bar chip icons follow their text colour
+  (#504 @St0neWan9); right panel revealed on footer-bar project pick
+  (#503 @St0neWan9); new sessions surfaced in sidebar immediately
+  (#505 @Ready22Race); Chromium 6-connections-per-host cap lifted for
+  loopback (#505 @Ready22Race).
+- **Dev** — dev data dir isolated from the packaged app; dev.sh teardown
+  kills scoped (#500 @St0neWan9).
+- **Build** — Vite `optimizeDeps.include` guarded against pnpm strict
+  hoisting for xlsx (#558 @St0neWan9).
+- **Alembic** — duplicate host revision 0020 linearized (#516 @Ready22Race);
+  notification host migration linearized (#515 @homeant).
+- **Artifacts** — renderers improved and PDF navigation added
+  (#556 @zhourongyu).
+- **GenUI** — foreground color commented out for readability
+  (#520 @hanjixin); unused textAccentPrimary removed from OpenUI theme
+  (#532 @hanjixin); all generated chart rows shown (#553 @yy83000812);
+  desktop layout fixed (#533 @yy83000812).
+
+### Docs & Chore
+
+- Design docs: Task → Kernel migration design (#534 @Ready22Race);
+  event-delivery unification design (#528 @Ready22Race).
+- Test infra: env-level home sandbox + real-home leak tripwire
+  (#526 @St0neWan9); desktop test isolation (#521 @yy83000812).
+
 ## [0.3.2] - 2026-07-11
 
 ### Added
