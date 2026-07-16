@@ -14,8 +14,12 @@ end-of-turn still carry the full text, so chat history reload is
 unaffected.
 
 Coalescing key:
-- ``text_delta`` / ``thinking_delta``: a single buffer per type (these
-  carry no per-stream id).
+- ``text_delta`` / ``thinking_delta``: one buffer per
+  ``parent_tool_use_id`` flow (``None`` = the lead's own stream). A
+  background subagent streams CONCURRENTLY with the lead, so a single
+  per-type buffer would concatenate chunks from different flows into one
+  merged event stamped with whichever flow opened the buffer — scrambling
+  both the text and the flow attribution downstream.
 - ``tool_output_delta``: one buffer per ``(id, stream)`` pair so that
   parallel tool executions and stdout/stderr stay separate.
 - ``tool_input_delta``: one buffer per ``id`` (tool_use_id) — partial JSON
@@ -123,7 +127,13 @@ class DeltaCoalescingSink:
                 str(id_) if id_ is not None else None,
                 str(stream) if stream is not None else None,
             )
-        return (event.type, None, None)
+        # text_delta / thinking_delta: key by flow. Runtimes stamp
+        # ``parent_tool_use_id`` on deltas produced inside a subagent
+        # (Task/Agent tool run); the lead's own stream carries none. One
+        # shared buffer would merge concurrent flows into a single event
+        # carrying the first-arriving flow's attribution.
+        parent = event.data.get("parent_tool_use_id")
+        return (event.type, str(parent) if parent is not None else None, None)
 
     async def _buffer_delta(self, event: Event) -> None:
         async with self._lock:
