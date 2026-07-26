@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import type { Agent } from '../api/agents-api'
 import { getComposerCatalogAdapter } from '../edition/composer-catalog'
@@ -17,10 +17,12 @@ export interface ComposerAgentLibrary {
    * about to tell the user nothing is configured should wait for this to clear.
    */
   settling: boolean
+  /** Re-ask now — for a retry the user asked for. */
+  refresh: () => void
 }
 
 interface ComposerAgentLibraryState
-  extends Omit<ComposerAgentLibrary, 'settling'> {
+  extends Omit<ComposerAgentLibrary, 'settling' | 'refresh'> {
   requestKey: string
   attempt: number
 }
@@ -56,9 +58,10 @@ export function useComposerAgentLibrary(
     failed: false,
     attempt: 0,
   })
-  // Bumped by the retry timer and the focus listener. Both mean "ask again for
-  // the same scope", which requestKey alone cannot express.
+  // Bumped by the retry timer, the focus listener and refresh(). All mean "ask
+  // again for the same scope", which requestKey alone cannot express.
   const [reload, setReload] = useState(0)
+  const refresh = useCallback(() => setReload((n) => n + 1), [])
 
   useEffect(() => {
     let active = true
@@ -106,12 +109,19 @@ export function useComposerAgentLibrary(
   }, [])
 
   if (state.requestKey !== requestKey) {
-    return { agents: [], loaded: false, failed: false, settling: false }
+    return {
+      agents: [],
+      loaded: false,
+      failed: false,
+      settling: false,
+      refresh,
+    }
   }
   return {
     agents: state.agents,
     loaded: state.loaded,
     failed: state.failed,
     settling: retrying,
+    refresh,
   }
 }

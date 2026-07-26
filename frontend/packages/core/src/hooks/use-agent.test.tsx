@@ -54,7 +54,7 @@ describe("useComposerAgentLibrary", () => {
     );
 
     await waitFor(() =>
-      expect(result.current).toEqual({
+      expect(result.current).toMatchObject({
         agents: [agent("local-agent")],
         loaded: true,
         failed: false,
@@ -63,14 +63,14 @@ describe("useComposerAgentLibrary", () => {
     );
 
     rerender({ targetId: "cloud" });
-    expect(result.current).toEqual({
+    expect(result.current).toMatchObject({
       agents: [],
       loaded: false,
       failed: false,
       settling: false,
     });
     await waitFor(() =>
-      expect(result.current).toEqual({
+      expect(result.current).toMatchObject({
         agents: [agent("cloud-agent")],
         loaded: true,
         failed: false,
@@ -112,7 +112,7 @@ describe("useComposerAgentLibrary", () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
 
-    expect(result.current).toEqual({
+    expect(result.current).toMatchObject({
       agents: [agent("valuz-helper")],
       loaded: true,
       failed: false,
@@ -141,7 +141,7 @@ describe("useComposerAgentLibrary", () => {
 
     // ``failed`` is what lets a caller distinguish "no agents" from "could not
     // ask", and the retries are bounded rather than looping forever.
-    expect(result.current).toEqual({
+    expect(result.current).toMatchObject({
       agents: [],
       loaded: true,
       failed: true,
@@ -196,7 +196,7 @@ describe("useComposerAgentLibrary", () => {
     );
 
     rerender({ targetId: "cloud" });
-    expect(result.current).toEqual({
+    expect(result.current).toMatchObject({
       agents: [],
       loaded: false,
       failed: false,
@@ -212,7 +212,7 @@ describe("useComposerAgentLibrary", () => {
       );
       await localRequest;
     });
-    expect(result.current).toEqual({
+    expect(result.current).toMatchObject({
       agents: [],
       loaded: false,
       failed: false,
@@ -228,7 +228,7 @@ describe("useComposerAgentLibrary", () => {
       );
       await cloudRequest;
     });
-    expect(result.current).toEqual({
+    expect(result.current).toMatchObject({
       agents: [agent("cloud-agent")],
       loaded: true,
       failed: false,
@@ -252,7 +252,7 @@ describe("useComposerAgentLibrary", () => {
 
     await waitFor(() => expect(result.current.loaded).toBe(true));
     rerender({ refreshKey: "second" });
-    expect(result.current).toEqual({
+    expect(result.current).toMatchObject({
       agents: [],
       loaded: false,
       failed: false,
