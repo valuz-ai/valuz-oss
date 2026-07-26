@@ -2524,7 +2524,12 @@ export const ConversationPage = () => {
   const providerChannelState =
     useComposerProviderChannelState(providerTargetId);
   const providers = providerChannelState.providers;
-  const { agents: myAgents, loaded: myAgentsLoaded } = useComposerAgentLibrary(
+  const {
+    agents: myAgents,
+    loaded: myAgentsLoaded,
+    failed: myAgentsFailed,
+    settling: myAgentsSettling,
+  } = useComposerAgentLibrary(
     providerTargetId,
     `${agentParam ?? ""}:${agentLibraryRevision}`,
   );
@@ -6072,12 +6077,16 @@ export const ConversationPage = () => {
             ((channelLoaded && !hasChannel) ||
               (isTempConversation &&
                 myAgentsLoaded &&
+                !myAgentsFailed &&
+                !myAgentsSettling &&
                 myAgents.length === 0)) && (
               <div className="mx-auto mb-2 flex w-full max-w-[760px] items-center justify-between gap-3 rounded-lg border border-info-border bg-info-light px-3 py-2 text-xs text-info-text">
                 <span>
                   {channelLoaded && !hasChannel
                     ? isTempConversation &&
                       myAgentsLoaded &&
+                      !myAgentsFailed &&
+                      !myAgentsSettling &&
                       myAgents.length === 0
                       ? t("conversation.noChannelAndAgentBanner" as I18nKey)
                       : t("conversation.noChannelBanner" as I18nKey)
