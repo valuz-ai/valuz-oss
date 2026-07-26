@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { providersApi } from "../api/providers-api";
 import { providerHasUsableCredentials } from "./use-composer-providers";
 
@@ -20,15 +20,23 @@ import { providerHasUsableCredentials } from "./use-composer-providers";
  * was briefly degraded, which is wrong advice (the user may have a perfectly
  * configured channel). On failure the hook keeps the banner gated and retries
  * until an actual answer arrives.
+ *
+ * ``refresh`` re-asks on demand. A managed install (capability
+ * ``managedModelChannels``) gets its channels from a catalog it does not
+ * control, so "none yet" there is usually "not delivered yet" — the banner
+ * offers a retry rather than sending the user to a setup screen.
  */
 export const USABLE_CHANNEL_RETRY_MS = 5_000;
 
 export function useHasUsableChannel(): {
   hasChannel: boolean;
   loaded: boolean;
+  refresh: () => void;
 } {
   const [hasChannel, setHasChannel] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [reload, setReload] = useState(0);
+  const refresh = useCallback(() => setReload((n) => n + 1), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,7 +61,7 @@ export function useHasUsableChannel(): {
       cancelled = true;
       if (timer !== null) clearTimeout(timer);
     };
-  }, []);
+  }, [reload]);
 
-  return { hasChannel, loaded };
+  return { hasChannel, loaded, refresh };
 }

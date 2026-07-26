@@ -65,6 +65,7 @@ import {
   SESSION_ACTION_RESOLVED_EVENT,
   SESSION_WORKFLOW_PROGRESS_EVENT,
   type WorkflowState,
+  useCapabilities,
   useComposerProviderChannelState,
   useComposerAgentLibrary,
   useComposerProviders,
@@ -676,7 +677,16 @@ export const ConversationPage = () => {
   const [agentLibraryRevision, setAgentLibraryRevision] = useState(0);
   // 10-new-conversation-guidance (slice 2): is there any usable model channel?
   // Drives the setup banner's "no channel" state.
-  const { hasChannel, loaded: channelLoaded } = useHasUsableChannel();
+  const {
+    hasChannel,
+    loaded: channelLoaded,
+    refresh: refreshChannels,
+  } = useHasUsableChannel();
+  const { managedModelChannels } = useCapabilities();
+  // A managed install does not enter its own channels, so an empty list is the
+  // catalog not having arrived — not something the user forgot to do. Offer a
+  // retry instead of sending them to a setup screen they cannot act on.
+  const channelsPending = managedModelChannels && channelLoaded && !hasChannel;
   const [selectedAgentSlug, setSelectedAgentSlug] = useState<string | null>(
     null,
   );
@@ -6082,22 +6092,28 @@ export const ConversationPage = () => {
                 myAgents.length === 0)) && (
               <div className="mx-auto mb-2 flex w-full max-w-[760px] items-center justify-between gap-3 rounded-lg border border-info-border bg-info-light px-3 py-2 text-xs text-info-text">
                 <span>
-                  {channelLoaded && !hasChannel
-                    ? isTempConversation &&
-                      myAgentsLoaded &&
-                      !myAgentsFailed &&
-                      !myAgentsSettling &&
-                      myAgents.length === 0
-                      ? t("conversation.noChannelAndAgentBanner" as I18nKey)
-                      : t("conversation.noChannelBanner" as I18nKey)
-                    : t("conversation.noAgentBanner" as I18nKey)}
+                  {channelsPending
+                    ? t("conversation.channelsPendingBanner" as I18nKey)
+                    : channelLoaded && !hasChannel
+                      ? isTempConversation &&
+                        myAgentsLoaded &&
+                        !myAgentsFailed &&
+                        !myAgentsSettling &&
+                        myAgents.length === 0
+                        ? t("conversation.noChannelAndAgentBanner" as I18nKey)
+                        : t("conversation.noChannelBanner" as I18nKey)
+                      : t("conversation.noAgentBanner" as I18nKey)}
                 </span>
                 <button
                   type="button"
-                  onClick={() => navigate("/welcome")}
+                  onClick={() =>
+                    channelsPending ? refreshChannels() : navigate("/welcome")
+                  }
                   className="shrink-0 rounded-md bg-brand px-2.5 py-1 font-medium text-white transition-colors hover:bg-brand-hover"
                 >
-                  {t("conversation.noAgentBannerCta" as I18nKey)}
+                  {channelsPending
+                    ? t("conversation.channelsPendingBannerCta" as I18nKey)
+                    : t("conversation.noAgentBannerCta" as I18nKey)}
                 </button>
               </div>
             )}

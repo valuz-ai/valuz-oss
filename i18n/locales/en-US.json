@@ -304,6 +304,8 @@
     "noAgentBannerCta": "Set up",
     "noChannelBanner": "No model channel available yet — connect one",
     "noChannelAndAgentBanner": "No model channel or agent yet — finish setup",
+    "channelsPendingBanner": "The model list hasn't arrived yet — try again",
+    "channelsPendingBannerCta": "Retry",
     "tempChat": "Temporary chat",
     "tempChatHint": "Quick chat, not tied to any project",
     "projectMemberCount": "{count} members",

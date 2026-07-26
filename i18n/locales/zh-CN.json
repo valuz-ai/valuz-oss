@@ -304,6 +304,8 @@
     "noAgentBannerCta": "去配置",
     "noChannelBanner": "当前没有可用的模型通道，先连接一个",
     "noChannelAndAgentBanner": "你还没有可用的模型通道和 Agent，先完成配置",
+    "channelsPendingBanner": "还没有获取到模型列表，稍后重试",
+    "channelsPendingBannerCta": "重新获取",
     "tempChat": "临时对话",
     "tempChatHint": "随手聊，不归入任何项目",
     "projectMemberCount": "{count} 个成员",

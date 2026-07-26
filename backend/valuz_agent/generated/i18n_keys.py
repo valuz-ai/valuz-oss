@@ -524,6 +524,8 @@ I18nKey = Literal[
     "conversation.calledTools",
     "conversation.cancelFailed",
     "conversation.cannotLoadKb",
+    "conversation.channelsPendingBanner",
+    "conversation.channelsPendingBannerCta",
     "conversation.clickEditTitle",
     "conversation.collapsePanel",
     "conversation.composerConnectors",

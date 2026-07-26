@@ -23,8 +23,19 @@ export interface Capabilities {
    * System / managed providers are always read-only and unaffected.
    */
   configureModelChannel: boolean;
+  /**
+   * Whether this install's model channels arrive from a managed catalog rather
+   * than being entered by the user. It changes what an empty channel list
+   * *means*: BYOK has nothing configured yet, while a managed install simply
+   * has not received the catalog — and telling that user to "go configure a
+   * model" points them at a screen where they cannot fix it.
+   *
+   * Off in OSS: a personal install owns its own channels by definition.
+   */
+  managedModelChannels: boolean;
 }
 
 export const DEFAULT_CAPABILITIES: Capabilities = {
   configureModelChannel: true,
+  managedModelChannels: false,
 };

@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -29,14 +29,14 @@ describe("useHasUsableChannel", () => {
     const { result } = renderHook(() => useHasUsableChannel());
     expect(result.current.loaded).toBe(false);
     await act(async () => {});
-    expect(result.current).toEqual({ hasChannel: true, loaded: true });
+    expect(result.current).toMatchObject({ hasChannel: true, loaded: true });
   });
 
   it("loads with no channel when the list is genuinely empty", async () => {
     listMock.mockResolvedValue({ providers: [] } as never);
     const { result } = renderHook(() => useHasUsableChannel());
     await act(async () => {});
-    expect(result.current).toEqual({ hasChannel: false, loaded: true });
+    expect(result.current).toMatchObject({ hasChannel: false, loaded: true });
   });
 
   it("keeps the banner gated on fetch failure and retries until an answer", async () => {
@@ -57,6 +57,31 @@ describe("useHasUsableChannel", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(USABLE_CHANNEL_RETRY_MS + 1);
     });
-    expect(result.current).toEqual({ hasChannel: true, loaded: true });
+    expect(result.current).toMatchObject({ hasChannel: true, loaded: true });
+  });
+
+  it("re-asks when refresh is called, so a managed install can retry a catalog that has not arrived", async () => {
+    listMock
+      .mockResolvedValueOnce({ providers: [] } as never)
+      .mockResolvedValue({
+        providers: [{ enabled: true, usable: true }],
+      } as never);
+
+    const { result } = renderHook(() => useHasUsableChannel());
+    await waitFor(() =>
+      expect(result.current).toMatchObject({
+        hasChannel: false,
+        loaded: true,
+      }),
+    );
+
+    // Settled with nothing: the retry loop only covers failures, so without
+    // refresh a managed install would sit on "no channel" until reload.
+    await act(async () => {
+      result.current.refresh();
+    });
+
+    await waitFor(() => expect(result.current.hasChannel).toBe(true));
+    expect(listMock).toHaveBeenCalledTimes(2);
   });
 });
