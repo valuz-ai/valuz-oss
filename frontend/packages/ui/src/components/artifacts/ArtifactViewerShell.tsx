@@ -626,7 +626,10 @@ const ARTIFACT_RENDERERS: Partial<
   spreadsheet: SpreadsheetRenderer,
 };
 
-function ArtifactRenderer({
+/** Body-only dispatch, without the shell's own header/toolbar. Exported so
+ *  other viewers (the document reader) can reuse the registered renderers
+ *  instead of re-implementing PDF / media / HTML embedding. */
+export function ArtifactRenderer({
   artifact,
   content,
   target,

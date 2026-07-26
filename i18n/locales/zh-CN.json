@@ -2030,6 +2030,11 @@
       "output": "输出",
       "title": "每月用量",
       "totalTokens": "总 Tokens"
+    },
+    "reader": {
+      "download": "下载",
+      "empty": "未选择文档",
+      "openOriginal": "打开原文"
     }
   },
   "agent": {

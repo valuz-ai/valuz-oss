@@ -2030,6 +2030,11 @@
       "output": "Output",
       "title": "Monthly Usage",
       "totalTokens": "Total Tokens"
+    },
+    "reader": {
+      "download": "Download",
+      "empty": "No document selected",
+      "openOriginal": "Open original"
     }
   },
   "agent": {

@@ -11,6 +11,8 @@ export * from "./components/ContextPanel";
 export * from "./components/SectionCard";
 export * from "./components/ToolCallCard";
 export * from "./components/artifacts/ArtifactViewerShell";
+export * from "./components/reader/DocumentReaderView";
+export type * from "./components/reader/document-reader.types";
 // Domain components
 export * from "./components/common/ErrorBoundary";
 export * from "./components/common/ActionCardGrid";
