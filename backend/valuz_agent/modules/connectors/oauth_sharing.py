@@ -27,10 +27,10 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from pathlib import Path
 from urllib.parse import urlsplit
 
 from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.modules.connectors.catalog import load_catalog
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.connectors.models import ConnectorRow
 
@@ -42,8 +42,6 @@ logger = logging.getLogger(__name__)
 # waiting for the user to press Test. Refresh-time propagation passes no probe:
 # renewing a token doesn't change a server's tool list.
 ToolProbe = Callable[[ConnectorRow], Awaitable[int | None]]
-
-_CATALOG_FILE = Path(__file__).parent.parent.parent / "resources" / "connector_catalog.json"
 
 # What constitutes a shareable OAuth identity. The endpoint metadata and the
 # registered client ride along with the token deliberately: a refresh reads all
@@ -102,7 +100,7 @@ def _build_members() -> dict[str, _Member]:
     """slug → member definition, for qualifying catalog groups only."""
     members: dict[str, _Member] = {}
     try:
-        catalog = json.loads(_CATALOG_FILE.read_text(encoding="utf-8"))
+        catalog = load_catalog()
     except (OSError, json.JSONDecodeError):
         logger.warning("connector catalog unreadable — OAuth credential sharing disabled")
         return members

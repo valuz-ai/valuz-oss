@@ -5,7 +5,6 @@ import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -18,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from valuz_agent.api.deps import get_current_user_id
 from valuz_agent.infra.db import async_unit_of_work, get_async_session
 from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.modules.connectors.catalog import load_catalog
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.connectors.models import AuthType, ConnectorRow, TransportType
 from valuz_agent.modules.connectors.service import (
@@ -1641,8 +1641,7 @@ async def _probe_connector(
 # Directory endpoints (catalog v2 — groups + standalone connectors)
 # ---------------------------------------------------------------------------
 
-_CATALOG_FILE = Path(__file__).parent.parent.parent / "resources" / "connector_catalog.json"
-_CATALOG: list[dict] = json.loads(_CATALOG_FILE.read_text(encoding="utf-8"))
+_CATALOG: list[dict] = load_catalog()
 
 # CONNECTOR_DIRECTORY: flat list of all connectors for OAuth slug lookup.
 # CATALOG_ITEMS: raw catalog entries preserving order (groups + standalone connectors).

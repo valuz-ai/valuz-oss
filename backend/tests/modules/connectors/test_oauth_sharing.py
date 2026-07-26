@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from valuz_agent.modules.connectors import catalog as catalog_mod
 from valuz_agent.modules.connectors import oauth_sharing as sharing
 from valuz_agent.modules.connectors.oauth_sharing import (
     credential_group_of,
@@ -129,7 +130,7 @@ def test_group_that_is_not_one_service_shares_nothing(
     """
     catalog = tmp_path / "catalog.json"
     catalog.write_text(json.dumps([{"slug": "g", "connectors": members}]), encoding="utf-8")
-    monkeypatch.setattr(sharing, "_CATALOG_FILE", catalog)
+    monkeypatch.setattr(catalog_mod, "CATALOG_FILE", catalog)
 
     assert sharing._build_members() == {}, label
 
@@ -157,7 +158,7 @@ def test_qualifying_group_shares(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(sharing, "_CATALOG_FILE", catalog)
+    monkeypatch.setattr(catalog_mod, "CATALOG_FILE", catalog)
     members = sharing._build_members()
 
     assert set(members) == {"a", "b"}
