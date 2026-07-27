@@ -1,4 +1,8 @@
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { Download, CheckCircle, X, AlertCircle } from "lucide-react";
 import { useTranslation, useUpdaterStore } from "@valuz/core";
 import { Button, Progress } from "@valuz/ui";
@@ -26,6 +30,7 @@ export const UpdateToast = () => {
   const version = useUpdaterStore((s) => s.version);
   const progress = useUpdaterStore((s) => s.progress);
   const errorMessage = useUpdaterStore((s) => s.errorMessage);
+  const errorPhase = useUpdaterStore((s) => s.errorPhase);
   const errorInToast = useUpdaterStore((s) => s.errorInToast);
   const dismissed = useUpdaterStore((s) => s.dismissed);
   const dismiss = useUpdaterStore((s) => s.dismiss);
@@ -50,7 +55,12 @@ export const UpdateToast = () => {
     // Let clicks on the action / dismiss buttons through — only the card
     // chrome initiates a drag.
     if ((e.target as HTMLElement).closest("button")) return;
-    dragRef.current = { px: e.clientX, py: e.clientY, ox: offset.x, oy: offset.y };
+    dragRef.current = {
+      px: e.clientX,
+      py: e.clientY,
+      ox: offset.x,
+      oy: offset.y,
+    };
     setDragging(true);
     e.currentTarget.setPointerCapture(e.pointerId);
   };
@@ -96,6 +106,13 @@ export const UpdateToast = () => {
   const onRestart = () => {
     setRestarting(true);
     void getBridge()?.invoke(DESKTOP_CHANNELS.updaterQuitAndInstall);
+  };
+  // Retry after a failed check re-runs the check with toast semantics, so a
+  // second failure lands back here instead of vanishing into the About page.
+  const onRetryCheck = () => {
+    void getBridge()?.invoke(DESKTOP_CHANNELS.updaterCheck, {
+      trigger: "menu",
+    });
   };
 
   return (
@@ -155,6 +172,14 @@ export const UpdateToast = () => {
                     : "updater.restartNow") as Parameters<typeof t>[0],
                 )}
               </Button>
+            ) : isError ? (
+              <Button
+                size="sm"
+                className="h-7 min-w-[68px] shrink-0"
+                onClick={errorPhase === "check" ? onRetryCheck : onDownload}
+              >
+                {t("updater.retry" as Parameters<typeof t>[0])}
+              </Button>
             ) : isDownloading || isPreparing ? null : (
               <Button
                 size="sm"
@@ -196,9 +221,21 @@ export const UpdateToast = () => {
                   <span className="shrink-0 text-ink-muted">·</span>
                 </>
               ) : null}
-              <span className="min-w-0 flex-1 truncate text-ink-meta">
+              {/* Raw error strings (``net::ERR_...``) are useless to users —
+                  show a human description of what failed and keep the raw
+                  message reachable as a hover tooltip for bug reports. */}
+              <span
+                className="min-w-0 flex-1 truncate text-ink-meta"
+                title={isError ? (errorMessage ?? undefined) : undefined}
+              >
                 {isError
-                  ? (errorMessage ?? "")
+                  ? t(
+                      (errorPhase === "check"
+                        ? "updater.errorCheckDesc"
+                        : "updater.errorDownloadDesc") as Parameters<
+                        typeof t
+                      >[0],
+                    )
                   : isDownloaded
                     ? t("updater.downloadedDesc" as Parameters<typeof t>[0])
                     : t("updater.availableDesc" as Parameters<typeof t>[0])}

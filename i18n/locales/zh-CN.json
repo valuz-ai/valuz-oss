@@ -1956,11 +1956,14 @@
     "downloading": "下载中...",
     "downloadingDesc": "正在下载更新，请稍候...",
     "errorTitle": "更新失败",
+    "errorDownloadDesc": "下载失败，请重试",
+    "errorCheckDesc": "检查更新失败，请重试",
     "errorUnknown": "未知错误",
     "preparing": "正在准备安装…",
     "restartNow": "立即重启",
     "restarting": "正在重启…",
-    "updateAvailable": "发现新版本"
+    "updateAvailable": "发现新版本",
+    "retry": "重试"
   },
   "ui": {
     "deleteConfirm": {

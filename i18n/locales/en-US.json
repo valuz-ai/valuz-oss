@@ -1956,11 +1956,14 @@
     "downloading": "Downloading...",
     "downloadingDesc": "Downloading update, please wait...",
     "errorTitle": "Update failed",
+    "errorDownloadDesc": "Download failed — please try again.",
+    "errorCheckDesc": "Could not check for updates — please try again.",
     "errorUnknown": "Unknown error",
     "preparing": "Preparing to install…",
     "restartNow": "Restart now",
     "restarting": "Restarting…",
-    "updateAvailable": "Update available"
+    "updateAvailable": "Update available",
+    "retry": "Retry"
   },
   "ui": {
     "deleteConfirm": {

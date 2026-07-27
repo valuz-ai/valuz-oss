@@ -2316,11 +2316,14 @@ export type KnownI18nKey =
   | "updater.downloadedTitle"
   | "updater.downloading"
   | "updater.downloadingDesc"
+  | "updater.errorCheckDesc"
+  | "updater.errorDownloadDesc"
   | "updater.errorTitle"
   | "updater.errorUnknown"
   | "updater.preparing"
   | "updater.restartNow"
   | "updater.restarting"
+  | "updater.retry"
   | "updater.updateAvailable";
 
 /** Either a known main-app key or a plugin-contributed key.

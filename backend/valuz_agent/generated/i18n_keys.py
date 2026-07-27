@@ -2322,11 +2322,14 @@ I18nKey = Literal[
     "updater.downloadedTitle",
     "updater.downloading",
     "updater.downloadingDesc",
+    "updater.errorCheckDesc",
+    "updater.errorDownloadDesc",
     "updater.errorTitle",
     "updater.errorUnknown",
     "updater.preparing",
     "updater.restartNow",
     "updater.restarting",
+    "updater.retry",
     "updater.updateAvailable",
 ]
 # fmt: on

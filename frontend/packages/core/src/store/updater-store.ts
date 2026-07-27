@@ -13,12 +13,20 @@ export type UpdaterStatus =
   | "downloaded"
   | "error";
 
+/** Which operation an error interrupted. The wire payload carries no phase, so
+ *  it is derived in ``setError`` from the status the error arrived in — the UI
+ *  uses it to say "download failed" vs "check failed" instead of echoing raw
+ *  ``net::ERR_*`` strings. */
+export type UpdaterErrorPhase = "download" | "check";
+
 export interface UpdaterState {
   status: UpdaterStatus;
   version: string | null;
   progress: number;
   bytesPerSecond: number;
   errorMessage: string | null;
+  /** Only meaningful while ``status === "error"``. */
+  errorPhase: UpdaterErrorPhase | null;
   /** Whether the current error should appear in the floating toast. False for
    *  the About-page check (it shows its own inline error); true for menu/tray
    *  checks and downloads, where the toast is the only feedback surface. Only
@@ -50,6 +58,7 @@ const initial = {
   progress: 0,
   bytesPerSecond: 0,
   errorMessage: null as string | null,
+  errorPhase: null as UpdaterErrorPhase | null,
   errorInToast: false,
   dismissed: false,
 };
@@ -76,7 +85,11 @@ export const useUpdaterStore = create<UpdaterState>((set) => ({
       // instead of a second download bar. The >=90 / -10 guards keep mid-
       // download jitter from tripping it; platforms without the hand-off never
       // reset, so they never enter "preparing".
-      if (s.status === "downloading" && s.progress >= 90 && progress < s.progress - 10) {
+      if (
+        s.status === "downloading" &&
+        s.progress >= 90 &&
+        progress < s.progress - 10
+      ) {
         return { status: "preparing", progress: 100, bytesPerSecond: 0 };
       }
       return { status: "downloading", progress, bytesPerSecond };
@@ -84,16 +97,26 @@ export const useUpdaterStore = create<UpdaterState>((set) => ({
   setDownloaded: () =>
     set({ status: "downloaded", progress: 100, dismissed: false }),
   setError: (message: string, toast = false) =>
-    set(
-      toast
+    set((s) => {
+      const errorPhase: UpdaterErrorPhase =
+        s.status === "downloading" || s.status === "preparing"
+          ? "download"
+          : "check";
+      return toast
         ? {
-            status: "error",
+            status: "error" as const,
             errorMessage: message,
+            errorPhase,
             errorInToast: true,
             dismissed: false,
           }
-        : { status: "error", errorMessage: message, errorInToast: false },
-    ),
+        : {
+            status: "error" as const,
+            errorMessage: message,
+            errorPhase,
+            errorInToast: false,
+          };
+    }),
   dismiss: () => set({ dismissed: true }),
   show: () => set({ dismissed: false }),
   reset: () => set(initial),

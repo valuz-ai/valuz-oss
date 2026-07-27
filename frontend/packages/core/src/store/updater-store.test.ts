@@ -52,3 +52,34 @@ describe("updater-store: macOS install hand-off detection", () => {
     expect(s().status).toBe("downloaded");
   });
 });
+
+describe("updater-store: error phase", () => {
+  beforeEach(() => s().reset());
+
+  it("marks the phase 'download' when the error interrupts a download", () => {
+    s().setDownloading();
+    s().setError("net::ERR_CONTENT_LENGTH_MISMATCH", true);
+    expect(s().errorPhase).toBe("download");
+  });
+
+  it("marks the phase 'download' when the error interrupts the install hand-off", () => {
+    s().setDownloading();
+    for (const p of [95, 3]) s().setProgress(p, 1_000); // enters "preparing"
+    expect(s().status).toBe("preparing");
+    s().setError("boom", true);
+    expect(s().errorPhase).toBe("download");
+  });
+
+  it("marks the phase 'check' when the error interrupts a check", () => {
+    s().setChecking();
+    s().setError("net::ERR_NAME_NOT_RESOLVED", true);
+    expect(s().errorPhase).toBe("check");
+  });
+
+  it("clears the phase on reset", () => {
+    s().setDownloading();
+    s().setError("boom", true);
+    s().reset();
+    expect(s().errorPhase).toBeNull();
+  });
+});
