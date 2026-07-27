@@ -55,7 +55,7 @@ def _installed_slugs(mock: AsyncMock) -> set[str]:
 
 
 async def test_installs_missing_defaults_from_catalog(db) -> None:
-    """All three defaults are installed via create_connector when none exist,
+    """All defaults are installed via create_connector when none exist,
     with the catalog's transport/auth/url carried through."""
     created = AsyncMock()
     with patch("valuz_agent.api.routes.connectors.create_connector", created):
@@ -63,13 +63,19 @@ async def test_installs_missing_defaults_from_catalog(db) -> None:
 
     assert _installed_slugs(created) == set(_VALUZ_HELPER_CONNECTORS)
 
-    firecrawl = next(
-        c.kwargs["body"] for c in created.call_args_list if c.kwargs["body"].slug == "firecrawl"
+    stock = next(
+        c.kwargs["body"] for c in created.call_args_list if c.kwargs["body"].slug == "valuz-stock"
     )
-    assert firecrawl.transport == "http"
-    assert firecrawl.auth_type == "none"
-    assert firecrawl.url == "https://mcp.firecrawl.dev/v2/mcp"
-    assert firecrawl.connector_type == "recommended"
+    assert stock.transport == "http"
+    assert stock.auth_type == "oauth"
+    assert stock.url == "https://mcp.reportify.cn/stock/mcp"
+    assert stock.connector_type == "recommended"
+
+
+async def test_firecrawl_is_not_a_default() -> None:
+    """Firecrawl stays in the catalog for manual install but must never come
+    back as an onboarding default — valuz-search covers search/scraping."""
+    assert "firecrawl" not in _VALUZ_HELPER_CONNECTORS
 
 
 async def test_skips_already_installed(db) -> None:
@@ -94,7 +100,7 @@ async def test_skips_already_installed(db) -> None:
     with patch("valuz_agent.api.routes.connectors.create_connector", created):
         await _ensure_default_connectors(USER, db)
 
-    assert _installed_slugs(created) == {"valuz-stock", "firecrawl"}
+    assert _installed_slugs(created) == {"valuz-stock"}
 
 
 async def test_one_failure_does_not_sink_the_rest(db) -> None:
@@ -109,5 +115,5 @@ async def test_one_failure_does_not_sink_the_rest(db) -> None:
     with patch("valuz_agent.api.routes.connectors.create_connector", created):
         await _ensure_default_connectors(USER, db)
 
-    # All three were attempted even though one raised.
+    # Every default was attempted even though one raised.
     assert _installed_slugs(created) == set(_VALUZ_HELPER_CONNECTORS)

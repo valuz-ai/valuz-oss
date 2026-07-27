@@ -158,12 +158,14 @@ _VALUZ_HELPER_SLUG = VALUZ_HELPER_SLUG
 _VALUZ_HELPER_SKILL = "valuz-handbook"
 _VALUZ_HELPER_AVATAR = "bot"
 # Connectors the default assistant ships bound to (slugs from the connector
-# catalog): the two Valuz research connectors plus Firecrawl for web scraping.
+# catalog): the two Valuz research connectors. Firecrawl is deliberately not a
+# default — valuz-search already covers search/scraping needs, and it remains
+# in the catalog for users to add manually.
 # A bound slug only resolves to a live MCP server once that connector is
 # installed + enabled, so {@link _ensure_default_connectors} installs these from
 # the catalog alongside the helper — they show up under「已添加」, not just bound
 # on the agent.
-_VALUZ_HELPER_CONNECTORS = ["valuz-search", "valuz-stock", "firecrawl"]
+_VALUZ_HELPER_CONNECTORS = ["valuz-search", "valuz-stock"]
 
 
 async def _ensure_default_connectors(user_id: str, db) -> None:  # type: ignore[no-untyped-def]
