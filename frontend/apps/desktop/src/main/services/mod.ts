@@ -7,7 +7,11 @@ import {
 } from "@valuz/shared";
 import type { ServiceDescriptor } from "@valuz/core";
 import { DescriptorRegistry, personalDescriptors } from "./descriptors";
-import { startSidecar, type DesktopSidecarResult } from "./sidecar";
+import {
+  reclaimStaleSidecar,
+  startSidecar,
+  type DesktopSidecarResult,
+} from "./sidecar";
 import { recordSidecarLine } from "./system-logs";
 
 const AGENT_SERVER_DETAIL = "Primary local agent runtime";
@@ -175,6 +179,16 @@ export const createServiceManager = (
         }
 
         try {
+          // Heal leftovers first: a previous shell that crashed / was
+          // force-quit leaves an orphaned valuz-server holding the
+          // single-writer lock and the port — our own spawn would then die
+          // on the lock while the UI talks to a server it can't manage.
+          await reclaimStaleSidecar(
+            appDataDir,
+            descriptor.defaultPort,
+            (line) => addLog(descriptor.name, line),
+          );
+
           // Track the child's exit so the health wait can fail fast when the
           // backend process dies before it ever serves (vs. just being slow).
           let exited = false;

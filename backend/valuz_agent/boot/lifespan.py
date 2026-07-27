@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from valuz_agent.boot import steps
+from valuz_agent.boot import parent_watchdog, steps
 
 
 @asynccontextmanager
@@ -22,6 +22,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     steps.guard_source_run_data_dir()  # FIRST
     steps.configure_structured_logging()
     steps.acquire_single_writer_lock()
+    # Arm the parent-death watchdog as early as possible: a shell that dies
+    # mid-boot must not leave an orphan holding the lock either. No-op unless
+    # the spawner passed VALUZ_PARENT_PID (packaged desktop only).
+    parent_watchdog.start_parent_watchdog()
     # Data-dir cutover runs BEFORE identity: the owner id is read from the
     # migrated ``installation.json``, so it must be in place before
     # ``ensure_local_identity`` caches the id (else the cached id mismatches the
@@ -77,3 +81,4 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await steps.stop_mcp_session_managers(app)
     await steps.dispose_data_service(app)
     await steps.shutdown_kernel()
+    parent_watchdog.stop_parent_watchdog()

@@ -32,6 +32,168 @@ export interface DesktopSidecarResult {
 /** Grace period after SIGTERM before escalating to SIGKILL on POSIX. */
 const GRACEFUL_SHUTDOWN_MS = 5000;
 
+// ── Stale-sidecar reclaim ────────────────────────────────────────────────
+//
+// A crashed / force-quit / deleted-while-running shell leaves its backend
+// orphaned: the process keeps ``<data_dir>/.single-writer.lock`` and the
+// port, so every later launch boots a backend that dies on the lock
+// ("Application startup failed. Exiting.") while the UI ends up talking to
+// a stale server it cannot manage (seen twice in the wild on 0.0.8 — the
+// symptom is ``/v1/user/sync-context`` pending forever). Before spawning,
+// we identify such leftovers — via the pid hint the backend writes into the
+// lock file, plus whoever listens on our port — verify they really are a
+// ``valuz-server`` (never kill an innocent squatter), and take them down.
+// The backend-side ``VALUZ_PARENT_PID`` watchdog closes the hole going
+// forward; this reclaim heals installs that already have an orphan.
+
+/** Pid hint from ``<data_dir>/.single-writer.lock`` (backend writes its own
+ *  pid on acquire). ``null`` when absent/unreadable/non-numeric. */
+export const readStaleLockPid = (appDataDir: string): number | null => {
+  try {
+    const raw = fs
+      .readFileSync(path.join(appDataDir, ".single-writer.lock"), "utf8")
+      .trim();
+    const pid = Number.parseInt(raw, 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Command line of *pid*, or null when the process is gone / unreadable. */
+export const processCommand = (pid: number): string | null => {
+  if (process.platform === "win32") {
+    const result = spawnSync(
+      "tasklist",
+      ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
+      { windowsHide: true, encoding: "utf8" },
+    );
+    const line = (result.stdout ?? "").trim();
+    return line && !/no tasks/i.test(line) ? line : null;
+  }
+  const result = spawnSync("ps", ["-p", String(pid), "-o", "command="], {
+    encoding: "utf8",
+  });
+  const line = (result.stdout ?? "").trim();
+  return line || null;
+};
+
+/** Whether a command line looks like OUR backend. Deliberately narrow: only
+ *  the packaged binary name — an innocent squatter is never reclaimed. */
+export const isValuzServerCommand = (command: string | null): boolean =>
+  !!command && /valuz-server(\.exe)?(\s|"|$)/.test(command);
+
+/** Pids listening on *port* (POSIX via lsof; Windows via netstat). */
+export const listPortListeners = (port: number): number[] => {
+  if (process.platform === "win32") {
+    const result = spawnSync("netstat", ["-ano", "-p", "TCP"], {
+      windowsHide: true,
+      encoding: "utf8",
+    });
+    const pids = new Set<number>();
+    for (const line of (result.stdout ?? "").split("\n")) {
+      if (line.includes(`:${port} `) && /LISTENING/i.test(line)) {
+        const pid = Number.parseInt(line.trim().split(/\s+/).pop() ?? "", 10);
+        if (Number.isInteger(pid) && pid > 0) pids.add(pid);
+      }
+    }
+    return [...pids];
+  }
+  const result = spawnSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+    encoding: "utf8",
+  });
+  return (result.stdout ?? "")
+    .split("\n")
+    .map((line) => Number.parseInt(line.trim(), 10))
+    .filter((pid) => Number.isInteger(pid) && pid > 0);
+};
+
+const pidAlive = (pid: number): boolean => {
+  if (process.platform === "win32") {
+    return processCommand(pid) !== null;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+const killStale = async (pid: number, onLog?: (line: string) => void) => {
+  if (process.platform === "win32") {
+    killWindowsProcessTree(pid, onLog);
+  } else {
+    // The orphan was spawned detached (its own group) — signal the group,
+    // fall back to the bare pid for hand-started strays.
+    const signalStale = (sig: NodeJS.Signals) => {
+      try {
+        process.kill(-pid, sig);
+      } catch {
+        try {
+          process.kill(pid, sig);
+        } catch {
+          // already gone
+        }
+      }
+    };
+    signalStale("SIGTERM");
+    for (
+      let waited = 0;
+      waited < GRACEFUL_SHUTDOWN_MS && pidAlive(pid);
+      waited += 250
+    ) {
+      await sleep(250);
+    }
+    if (pidAlive(pid)) {
+      signalStale("SIGKILL");
+    }
+  }
+  for (let waited = 0; waited < 2000 && pidAlive(pid); waited += 250) {
+    await sleep(250);
+  }
+};
+
+/**
+ * Find and terminate leftover ``valuz-server`` processes that would block
+ * this launch (single-writer lock holder / port squatter). Anything on the
+ * port that is NOT a valuz-server is left alone and reported — the spawn
+ * then fails with the normal, diagnosable error instead of us shooting an
+ * unrelated process.
+ */
+export const reclaimStaleSidecar = async (
+  appDataDir: string,
+  port: number,
+  onLog?: (line: string) => void,
+): Promise<void> => {
+  const candidates = new Set<number>();
+  const lockPid = readStaleLockPid(appDataDir);
+  if (lockPid) candidates.add(lockPid);
+  for (const pid of listPortListeners(port)) candidates.add(pid);
+  candidates.delete(process.pid);
+
+  for (const pid of candidates) {
+    if (!pidAlive(pid)) continue;
+    const command = processCommand(pid);
+    if (!isValuzServerCommand(command)) {
+      onLog?.(
+        `[warn] pid ${pid} holds our lock/port but is not a valuz-server ` +
+          `(${command ?? "unknown"}) — leaving it alone`,
+      );
+      continue;
+    }
+    onLog?.(`Reclaiming stale sidecar (pid=${pid}) left by a previous run...`);
+    await killStale(pid, onLog);
+    onLog?.(
+      pidAlive(pid)
+        ? `[warn] stale sidecar pid ${pid} survived reclaim — startup may fail on the writer lock`
+        : `Stale sidecar pid ${pid} terminated`,
+    );
+  }
+};
+
 /**
  * Kill a process AND its whole descendant tree on Windows.
  *
@@ -237,6 +399,12 @@ export const startSidecar = async (
   // redirect points at a dead :8000 and the browser callback is refused. Pin
   // the base URL to the actual port the sidecar is bound to.
   env.VALUZ_BACKEND_BASE_URL = `http://127.0.0.1:${port}`;
+
+  // Arm the backend's parent-death watchdog: if this Electron process dies
+  // without running the cooperative teardown (crash, force-quit, app deleted
+  // while running), the backend notices and exits instead of living on as an
+  // orphan that holds the writer lock + port (boot/parent_watchdog.py).
+  env.VALUZ_PARENT_PID = String(process.pid);
 
   // Point the backend's docs_embedded._detect_rg() at the bundled binary.
   // It already honours VALUZ_RG_PATH ahead of bundled / PATH lookup.
