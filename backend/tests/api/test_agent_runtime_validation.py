@@ -48,6 +48,10 @@ def test_update_agent_accepts_none_runtime() -> None:
     assert req.runtime is None
 
 
-def test_create_agent_defaults_to_claude_agent() -> None:
+def test_create_agent_leaves_runtime_and_model_unset_for_factory_default() -> None:
+    """Omitted runtime/model stay ``None`` on the wire: the service resolves
+    them through ``ext.model_defaults`` (factory defaults), not a Pydantic
+    literal — see modules/agents/service.create_agent."""
     req = CreateAgentRequest(name="t")
-    assert req.runtime == "claude_agent"
+    assert req.runtime is None
+    assert req.model is None

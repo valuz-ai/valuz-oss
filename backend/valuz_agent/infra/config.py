@@ -323,6 +323,19 @@ class Settings(BaseSettings):
     # ``VALUZ_MARKETPLACE_DIRECT_FALLBACK=0``).
     marketplace_direct_fallback: bool = True
 
+    # ── Factory model defaults ────────────────────────────────────────
+    # The out-of-the-box runtime / model / effort used when the user has never
+    # explicitly chosen (new-agent pre-selection, quick chat, model_resolver's
+    # last fallback). Consumed through ``ext.model_defaults``
+    # (ports/model_defaults.py) — never read these fields directly at call
+    # sites. A distribution build overrides via env (``VALUZ_DEFAULT_RUNTIME``
+    # etc.) or its startup path; the commercial overlay may additionally layer
+    # cloud-delivered per-distribution values by rebinding the port.
+    default_runtime: str = "claude_agent"
+    default_model: str = "claude-sonnet-4-6"
+    default_provider_id: str | None = None
+    default_effort: str = "high"
+
     model_config = {"env_prefix": "VALUZ_"}
 
 

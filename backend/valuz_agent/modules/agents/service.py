@@ -35,8 +35,17 @@ from valuz_agent.modules.agents.datastore import (
 )
 from valuz_agent.modules.agents.models import AgentRow, ProjectMemberRow
 from valuz_agent.modules.connectors.service import ConnectorService
+from valuz_agent.ports.model_defaults import ModelDefaults
 
 logger = logging.getLogger(__name__)
+
+
+async def _factory_model_defaults(user_id: str | None) -> "ModelDefaults":
+    """Factory runtime/model defaults for creates that omitted them
+    (``ext.model_defaults``: Settings env / distribution / cloud-delivered)."""
+    from valuz_agent.ports.extensions import ext
+
+    return await ext.model_defaults.get(user_id)
 
 
 def _prepare_conversation_tools(agent: AgentConfig) -> AgentConfig:
@@ -257,13 +266,14 @@ class AgentService:
             slug = ensure_unique_slug(derive_slug(payload["name"]), existing)
         if await self._agents.get_agent(user_id, slug) is not None:
             raise MemberAlreadyExistsError(f"agent '{slug}' already exists")
+        factory = await _factory_model_defaults(user_id)
         row = AgentRow(
             slug=slug,
             name=payload["name"],
             description=payload.get("description", ""),
             instructions=payload.get("instructions", ""),
-            runtime=payload.get("runtime", "claude_agent"),
-            model=payload.get("model", "claude-sonnet-4-6"),
+            runtime=payload.get("runtime") or factory.default_runtime,
+            model=payload.get("model") or factory.default_model,
             skills=payload.get("skills", []),
             connector_types=payload.get("connector_types", []),
             provider_id=payload.get("provider_id") or None,
@@ -477,8 +487,8 @@ class AgentService:
         name: str,
         instructions: str,
         description: str = "",
-        runtime: str = "claude_agent",
-        model: str = "claude-sonnet-4-6",
+        runtime: str | None = None,
+        model: str | None = None,
         connector_bindings: list[dict[str, str]] | None = None,
         skills: list[str] | None = None,
         provider_id: str | None = None,

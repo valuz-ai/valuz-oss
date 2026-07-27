@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.settings.datastore import SettingsDatastore
 from valuz_agent.modules.settings.models import AppSettingRow
+from valuz_agent.ports.model_defaults import ModelDefaults
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,38 @@ FALLBACK_FONT_SIZE = "default"
 # 4-value enum is normalized to ``None`` on read for back-compat.
 EFFORT_VALUES = ("low", "medium", "high", "xhigh", "max")
 RUNTIME_VALUES = ("claude_agent", "codex", "deepagents")
+
+
+# ── factory defaults (ext.model_defaults) ────────────────────────────
+#
+# When the user never explicitly chose, the fallback comes from the
+# ``ext.model_defaults`` port instead of the module constants above: OSS
+# binds a Settings-backed implementation (env-overridable per build), the
+# commercial overlay layers cloud-delivered per-distribution values on top.
+# The constants remain as the defensive last line when a port returns a
+# value outside the known enums.
+
+
+async def _factory_defaults(user_id: str | None) -> "ModelDefaults":
+    from valuz_agent.ports.extensions import ext
+
+    return await ext.model_defaults.get(user_id)
+
+
+async def _factory_runtime(user_id: str | None) -> str:
+    value = (await _factory_defaults(user_id)).default_runtime
+    if value in RUNTIME_VALUES:
+        return value
+    logger.warning("ignoring unknown factory default_runtime: %r", value)
+    return FALLBACK_RUNTIME
+
+
+async def _factory_effort(user_id: str | None) -> str:
+    value = (await _factory_defaults(user_id)).default_effort
+    if value in EFFORT_VALUES:
+        return value
+    logger.warning("ignoring unknown factory default_effort: %r", value)
+    return FALLBACK_EFFORT
 ALLOWED_THEMES = {"light", "dark", "auto"}
 ALLOWED_FONT_SIZES = {"compact", "default", "comfortable"}
 
@@ -218,18 +251,18 @@ async def get_default_effort(db: AsyncSession, user_id: str | None = None) -> st
     if raw is None:
         # Legacy key fallback for one-time graceful upgrade. ``"off"``
         # was the old "no override" sentinel and now resolves to the
-        # explicit fallback (matches what every other unset / corrupt
+        # factory default (matches what every other unset / corrupt
         # path returns below).
         legacy = await _read(db, KEY_DEFAULT_THINKING_LEGACY, user_id=user_id)
         if legacy in (None, "", "off"):
-            return FALLBACK_EFFORT
+            return await _factory_effort(user_id)
         raw = legacy
     if raw in EFFORT_VALUES:
         return raw
     # Unknown stored value (e.g. legacy ``xmax`` typo) — defensive
     # fallback so a single corrupt row doesn't 500 the settings page.
     logger.warning("ignoring unknown default_effort value: %r", raw)
-    return FALLBACK_EFFORT
+    return await _factory_effort(user_id)
 
 
 async def set_default_effort(
@@ -254,8 +287,14 @@ async def set_default_effort(
 
 
 async def get_default_runtime(db: AsyncSession, user_id: str | None = None) -> str:
-    """Return the user's configured default runtime id."""
-    return await _read(db, KEY_DEFAULT_RUNTIME, user_id=user_id) or FALLBACK_RUNTIME
+    """Return the user's configured default runtime id.
+
+    Unset → the factory default from ``ext.model_defaults`` (Settings env /
+    distribution override / cloud-delivered, depending on the bound port)."""
+    stored = await _read(db, KEY_DEFAULT_RUNTIME, user_id=user_id)
+    if stored:
+        return stored
+    return await _factory_runtime(user_id)
 
 
 async def set_default_runtime(db: AsyncSession, value: str, user_id: str | None = None) -> None:
@@ -284,7 +323,10 @@ async def set_default_runtime(db: AsyncSession, value: str, user_id: str | None 
 
 
 async def get_default_provider_id(db: AsyncSession, user_id: str | None = None) -> str | None:
-    return await _read(db, KEY_DEFAULT_PROVIDER_ID, user_id=user_id) or None
+    stored = await _read(db, KEY_DEFAULT_PROVIDER_ID, user_id=user_id)
+    if stored:
+        return stored
+    return (await _factory_defaults(user_id)).default_provider_id
 
 
 async def set_default_provider_id(
@@ -294,7 +336,10 @@ async def set_default_provider_id(
 
 
 async def get_default_model(db: AsyncSession, user_id: str | None = None) -> str | None:
-    return await _read(db, KEY_DEFAULT_MODEL, user_id=user_id) or None
+    stored = await _read(db, KEY_DEFAULT_MODEL, user_id=user_id)
+    if stored:
+        return stored
+    return (await _factory_defaults(user_id)).default_model or None
 
 
 async def set_default_model(

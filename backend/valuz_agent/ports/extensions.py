@@ -43,6 +43,7 @@ from valuz_agent.ports.connector_oauth_refresh import (
 from valuz_agent.ports.file_address import FileAddressResolverPort, LocalFileAddressResolver
 from valuz_agent.ports.instructions import InstructionsPort
 from valuz_agent.ports.llm_provider import LLMProvider, NoopLLMProvider
+from valuz_agent.ports.model_defaults import ModelDefaultsPort, SettingsModelDefaults
 from valuz_agent.ports.provider_policy import AllowAllProviderPolicy, ProviderPolicyPort
 from valuz_agent.ports.resource_list_hook import NoopResourceListHook, ResourceListHook
 from valuz_agent.ports.runtime_availability import RuntimeAvailabilityPort
@@ -65,6 +66,11 @@ class Extensions:
         # rows (list) and resolves their credentials (resolve). OSS default
         # contributes nothing.
         self.llm_provider: LLMProvider = NoopLLMProvider()
+        # Factory model defaults (runtime / model / provider / effort) for
+        # users who never explicitly chose. OSS reads the Settings factory
+        # fields (env-overridable); the commercial overlay layers
+        # cloud-delivered per-distribution defaults on top.
+        self.model_defaults: ModelDefaultsPort = SettingsModelDefaults()
         self.policy: ProviderPolicyPort = AllowAllProviderPolicy()
         # Gate for kernel-sandbox provisioning (plan entitlement + org
         # concurrency caps on the shared cloud host). OSS default allows every

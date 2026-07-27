@@ -100,8 +100,8 @@ class CreateBlankAgentRequest(BaseModel):
     agent_slug: str | None = None
     name: str
     instructions: str = ""
-    runtime: RuntimeProvider = "claude_agent"
-    model: str = "claude-sonnet-4-6"
+    runtime: RuntimeProvider | None = None  # None → factory default (ext.model_defaults)
+    model: str | None = None  # None → factory default (ext.model_defaults)
     provider_id: str | None = None
     effort: EffortLevel | None = None
     skills: list[str] | None = None
@@ -232,8 +232,8 @@ class CreateAgentRequest(BaseModel):
     name: str
     description: str = ""
     instructions: str = ""
-    runtime: RuntimeProvider = "claude_agent"
-    model: str = "claude-sonnet-4-6"
+    runtime: RuntimeProvider | None = None  # None → factory default (ext.model_defaults)
+    model: str | None = None  # None → factory default (ext.model_defaults)
     skills: list[str] = []
     connector_types: list[str] = []
     provider_id: str | None = None
@@ -397,8 +397,8 @@ class ProposeAgentConfirmRequest(BaseModel):
     name: str
     instructions: str
     description: str = ""
-    runtime: RuntimeProvider = "claude_agent"
-    model: str = "claude-sonnet-4-6"
+    runtime: RuntimeProvider | None = None  # None → factory default (ext.model_defaults)
+    model: str | None = None  # None → factory default (ext.model_defaults)
     effort: EffortLevel | None = None
     skills: list[str] = []
     connectors: list[str] = []
