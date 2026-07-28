@@ -7,10 +7,8 @@ import { IconBox } from "./IconBox";
 const emptyStateVariants = cva("", {
   variants: {
     variant: {
-      dashed:
-        "w-[300px] rounded-xl px-5 py-8 text-center",
-      plain:
-        "flex flex-col items-center text-center",
+      dashed: "mx-auto w-[300px] rounded-xl px-5 py-8 text-center",
+      plain: "flex flex-col items-center text-center",
     },
   },
   defaultVariants: {
@@ -18,7 +16,9 @@ const emptyStateVariants = cva("", {
   },
 });
 
-export interface EmptyStateProps extends VariantProps<typeof emptyStateVariants> {
+export interface EmptyStateProps extends VariantProps<
+  typeof emptyStateVariants
+> {
   /** Optional icon or illustration above the message */
   icon?: ReactNode;
   /**
@@ -82,9 +82,7 @@ export const EmptyState = ({
           {icon}
         </IconBox>
       )}
-      <b className="block text-[13px] font-semibold text-ink-heading">
-        {text}
-      </b>
+      <b className="block text-[13px] font-semibold text-ink-heading">{text}</b>
       {description && (
         <p className="mt-1 mb-3 text-xs leading-[1.6] text-ink-body">
           {description}

@@ -6,7 +6,6 @@ import {
   Card,
   CardContent,
   DeleteConfirmDialog,
-  EmptyState,
   SettingsRow,
   SettingsSection,
   Switch,
@@ -47,7 +46,9 @@ export const MemorySection = () => {
     try {
       const next = await memoryApi.patchSettings({ [key]: value });
       setView((v) =>
-        v ? { ...v, enabled: next.enabled, auto_extract: next.auto_extract } : v,
+        v
+          ? { ...v, enabled: next.enabled, auto_extract: next.auto_extract }
+          : v,
       );
     } catch {
       toast.error(t("settings.memory.saveFailed"));
@@ -152,7 +153,9 @@ export const MemorySection = () => {
         return (
           <div key={target} className="mb-5">
             <div className="mb-2 flex items-center justify-between">
-              <span className="text-sm font-medium text-ink-heading">{label}</span>
+              <span className="text-sm font-medium text-ink-heading">
+                {label}
+              </span>
               {entries.length > 0 && (
                 <Button
                   variant="ghost"
@@ -170,7 +173,9 @@ export const MemorySection = () => {
                     {t("settings.memory.loading")}
                   </div>
                 ) : entries.length === 0 ? (
-                  <EmptyState message={t("settings.memory.empty")} />
+                  <div className="py-8 text-center text-sm text-ink-meta">
+                    {t("settings.memory.empty")}
+                  </div>
                 ) : (
                   entries.map((text, idx) => (
                     <div
