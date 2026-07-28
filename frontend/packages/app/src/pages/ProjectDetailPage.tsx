@@ -1459,6 +1459,7 @@ export const ProjectDetailPage = () => {
     panelSetCollapsed,
     instructions,
     members,
+    chatBindings,
     addedKbTree,
     bindings,
     fileTree,

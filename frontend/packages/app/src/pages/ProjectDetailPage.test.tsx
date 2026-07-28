@@ -1,10 +1,10 @@
 /** @vitest-environment jsdom */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "@valuz/shared/i18n";
-import type { Task } from "@valuz/core";
-import { useSessionStore } from "@valuz/core";
+import type { ChatProjectBinding, Task } from "@valuz/core";
+import { channelsApi, useSessionStore } from "@valuz/core";
 import type { SessionListItem } from "@valuz/shared";
 
 // ── Shared, hoisted test state the module mocks read from ────────────────────
@@ -14,6 +14,29 @@ const h = vi.hoisted(() => ({
   tasksByProject: new Map<string, unknown[]>(),
   sessions: [] as unknown[],
   members: [] as unknown[],
+  chatBindings: [] as ChatProjectBinding[],
+  rightPanel: null as unknown,
+  setRightPanel: vi.fn(),
+  setHeader: vi.fn(),
+  setMainClassName: vi.fn(),
+  setContentInnerClassName: vi.fn(),
+  kbTree: [] as never[],
+  kbBindings: [] as never[],
+  handleToggleBinding: vi.fn(),
+  handleExpandKbFolder: vi.fn(),
+  handleSetAddedKbs: vi.fn(),
+  handleRemoveKb: vi.fn(),
+  handleSelectAllInKb: vi.fn(),
+  stagedAttachments: [] as never[],
+  attachLocalFiles: vi.fn(),
+  removeAttachment: vi.fn(),
+  markPendingConsumed: vi.fn(),
+  platform: {
+    deleteFile: vi.fn(),
+    revealInFinder: vi.fn(),
+    isElectron: false,
+    isMac: false,
+  },
 }));
 
 const navigate = vi.fn();
@@ -38,29 +61,24 @@ vi.mock("react-router-dom", async (orig) => {
 // is never actually rendered, which keeps the test light).
 vi.mock("@valuz/app/layout", () => ({
   useProjectOutlet: () => ({
-    setRightPanel: vi.fn(),
-    setHeader: vi.fn(),
-    setMainClassName: vi.fn(),
-    setContentInnerClassName: vi.fn(),
+    setRightPanel: h.setRightPanel,
+    setHeader: h.setHeader,
+    setMainClassName: h.setMainClassName,
+    setContentInnerClassName: h.setContentInnerClassName,
   }),
 }));
 vi.mock("@valuz/app/platform", () => ({
-  usePlatform: () => ({
-    deleteFile: vi.fn(),
-    revealInFinder: vi.fn(),
-    isElectron: false,
-    isMac: false,
-  }),
+  usePlatform: () => h.platform,
 }));
 vi.mock("@valuz/app/hooks", () => ({
   useProjectKbBindings: () => ({
-    kbTree: [],
-    bindings: [],
-    handleToggleBinding: vi.fn(),
-    handleExpandKbFolder: vi.fn(),
-    handleSetAddedKbs: vi.fn(),
-    handleRemoveKb: vi.fn(),
-    handleSelectAllInKb: vi.fn(),
+    kbTree: h.kbTree,
+    bindings: h.kbBindings,
+    handleToggleBinding: h.handleToggleBinding,
+    handleExpandKbFolder: h.handleExpandKbFolder,
+    handleSetAddedKbs: h.handleSetAddedKbs,
+    handleRemoveKb: h.handleRemoveKb,
+    handleSelectAllInKb: h.handleSelectAllInKb,
   }),
   useKbDocTree: () => ({ kbTree: [], loading: false, expandFolder: vi.fn() }),
 }));
@@ -103,6 +121,13 @@ vi.mock("@valuz/app/components", () => ({
       </div>
     );
   },
+  BindChatDialog: (props: { onBound: () => void | Promise<void> }) => (
+    <button
+      type="button"
+      data-testid="refresh-chat-bindings"
+      onClick={() => void props.onBound()}
+    />
+  ),
   CreateAutomationDialog: () => null,
   DeployAgentsDialog: () => null,
   RenameInput: () => null,
@@ -210,6 +235,23 @@ vi.mock("../../../core/src/api/agents-api", async (orig) => {
     },
   };
 });
+vi.mock("../../../core/src/api/channels-api", async (orig) => {
+  const actual = await orig<typeof import("@valuz/core")>();
+  return {
+    ...actual,
+    channelsApi: {
+      ...(actual as { channelsApi: object }).channelsApi,
+      listChatBindings: vi.fn(async () => h.chatBindings),
+      deleteFeishuChat: vi.fn(async (externalChatId: string) => {
+        h.chatBindings = h.chatBindings.filter(
+          (chat) => chat.external_chat_id !== externalChatId,
+        );
+      }),
+      unbindChat: vi.fn(async () => undefined),
+      feishuChatLink: vi.fn(async () => null),
+    },
+  };
+});
 vi.mock("../../../core/src/api/skills-api", async (orig) => {
   const actual = await orig<typeof import("@valuz/core")>();
   return {
@@ -235,6 +277,15 @@ vi.mock("../../../core/src/hooks/use-model-defaults", () => ({
 }));
 vi.mock("../../../core/src/hooks/use-project-last-used", () => ({
   useProjectLastUsed: () => ({ pick: null, loading: false }),
+}));
+vi.mock("../../../core/src/hooks/use-session-attachments", () => ({
+  useSessionAttachments: () => ({
+    attachments: h.stagedAttachments,
+    hasParsing: false,
+    attachLocalFiles: h.attachLocalFiles,
+    remove: h.removeAttachment,
+    markPendingConsumed: h.markPendingConsumed,
+  }),
 }));
 vi.mock("../../../core/src/hooks/use-activity-feed", () => ({
   useActivityFeed: () => ({
@@ -302,6 +353,18 @@ const anchorKeys = (root: HTMLElement, prefix: string): string[] =>
     .map((el) => el.getAttribute("data-anchor-key") ?? "")
     .filter((k) => k.startsWith(prefix));
 
+type RightPanelProps = {
+  chatBindings: Array<{ id: string; name: string }>;
+  onDeleteChat: (chatId: string) => void;
+};
+
+const rightPanelProps = (): RightPanelProps | null =>
+  h.rightPanel &&
+  typeof h.rightPanel === "object" &&
+  "props" in h.rightPanel
+    ? (h.rightPanel as { props: RightPanelProps }).props
+    : null;
+
 describe("ProjectDetailPage auto-refresh wiring", () => {
   beforeEach(() => {
     initI18n({ locale: "en-US", fallbackLocale: "en-US" });
@@ -310,6 +373,22 @@ describe("ProjectDetailPage auto-refresh wiring", () => {
     h.tasksByProject = new Map([["A", [task({ id: "t1", title: "Alpha" })]]]);
     h.sessions = [session({ id: "s1", project_id: "A" })];
     h.members = [];
+    h.chatBindings = [
+      {
+        channel_instance_id: "channel-1",
+        external_chat_id: "chat-1",
+        external_chat_name: "Alpha group",
+        platform: "feishu_bot",
+        project_id: "A",
+        created_by_valuz: false,
+        needs_join: false,
+      },
+    ];
+    h.rightPanel = null;
+    h.setRightPanel.mockReset();
+    h.setRightPanel.mockImplementation((panel: unknown) => {
+      h.rightPanel = panel;
+    });
     useSessionStore.setState({
       sessions: [session({ id: "s1", project_id: "A" })],
     });
@@ -338,6 +417,71 @@ describe("ProjectDetailPage auto-refresh wiring", () => {
     fireEvent.click(getByRole("tab", { name: /task|任务/i }));
     await waitFor(() =>
       expect(container.querySelector('[data-anchor-key="task-t1"]')).toBeTruthy(),
+    );
+  });
+
+  it("refreshes the right panel when the add-group dialog changes bindings", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(rightPanelProps()?.chatBindings.map((chat) => chat.id)).toEqual([
+        "chat-1",
+      ]),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    h.chatBindings = [
+      ...h.chatBindings,
+      {
+        channel_instance_id: "channel-2",
+        external_chat_id: "chat-2",
+        external_chat_name: "Beta group",
+        platform: "feishu_bot",
+        project_id: "A",
+        created_by_valuz: true,
+        needs_join: true,
+      },
+    ];
+    h.setRightPanel.mockClear();
+    vi.mocked(channelsApi.listChatBindings).mockClear();
+
+    fireEvent.click(screen.getByTestId("refresh-chat-bindings"));
+
+    await waitFor(() =>
+      expect(channelsApi.listChatBindings).toHaveBeenCalledWith("A"),
+    );
+    await waitFor(() =>
+      expect(rightPanelProps()?.chatBindings.map((chat) => chat.id)).toEqual([
+        "chat-1",
+        "chat-2",
+      ]),
+    );
+  });
+
+  it("removes a deleted group from the right panel", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(rightPanelProps()?.chatBindings.map((chat) => chat.id)).toEqual([
+        "chat-1",
+      ]),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    h.setRightPanel.mockClear();
+
+    await act(async () => {
+      rightPanelProps()?.onDeleteChat("chat-1");
+    });
+    fireEvent.click(screen.getByRole("button", { name: /delete|删除/i }));
+
+    await waitFor(() =>
+      expect(channelsApi.deleteFeishuChat).toHaveBeenCalledWith("chat-1"),
+    );
+    await waitFor(() => expect(h.setRightPanel).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(rightPanelProps()?.chatBindings).toEqual([]),
     );
   });
 
