@@ -6,7 +6,9 @@ import { openuiLibrary } from "@openuidev/react-ui/genui-lib";
 import { useI18n } from "../../hooks/use-i18n";
 import { Spinner } from "../ui/spinner";
 
-type OpenUiTheme = NonNullable<ComponentProps<typeof ThemeProvider>["lightTheme"]>;
+type OpenUiTheme = NonNullable<
+  ComponentProps<typeof ThemeProvider>["lightTheme"]
+>;
 
 const chartPalette = [
   "var(--accent-sky)",
@@ -120,10 +122,14 @@ const VALUZ_OPENUUI_THEME: OpenUiTheme = {
   radius9xl: "12px",
   radiusFull: "9999px",
 
-  fontBody: '"PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  fontHeading: '"PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  fontLabel: '"PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  fontNumbers: '"PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  fontBody:
+    '"PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  fontHeading:
+    '"PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  fontLabel:
+    '"PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  fontNumbers:
+    '"PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   fontCode: 'ui-monospace, "SF Mono", Menlo, monospace',
   fontSize2xs: "10px",
   fontSizeXs: "11px",
@@ -199,7 +205,11 @@ function readTextBlocks(parsed: unknown): string | null {
   const entries = Array.isArray(parsed) ? parsed : [parsed];
   const texts: string[] = [];
   for (const e of entries) {
-    if (e && typeof e === "object" && typeof (e as Record<string, unknown>).text === "string") {
+    if (
+      e &&
+      typeof e === "object" &&
+      typeof (e as Record<string, unknown>).text === "string"
+    ) {
       texts.push((e as Record<string, string>).text);
     }
   }
@@ -261,7 +271,6 @@ export function GenerativeUICard({ openui, status }: GenerativeUICardProps) {
         <span className="text-sm font-medium text-ink-heading">
           {t("genui.cardTitle" as Parameters<typeof t>[0])}
         </span>
-        {status === "running" && <Spinner className="size-3.5" />}
       </div>
       <div className="min-w-0 overflow-x-auto p-3 [&>*]:min-w-0 [&>*]:max-w-full">
         {body ? (
