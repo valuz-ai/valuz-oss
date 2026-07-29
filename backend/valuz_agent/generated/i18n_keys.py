@@ -882,6 +882,7 @@ I18nKey = Literal[
     "knowledge.docDetail",
     "knowledge.dropHere",
     "knowledge.fileSize",
+    "knowledge.groupPersonal",
     "knowledge.hasMissing",
     "knowledge.importFailed",
     "knowledge.importFiles",

@@ -876,6 +876,7 @@ export type KnownI18nKey =
   | "knowledge.docDetail"
   | "knowledge.dropHere"
   | "knowledge.fileSize"
+  | "knowledge.groupPersonal"
   | "knowledge.hasMissing"
   | "knowledge.importFailed"
   | "knowledge.importFiles"

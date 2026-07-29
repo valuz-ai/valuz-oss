@@ -68,7 +68,8 @@ import type {
 import { useProjectOutlet } from "@valuz/app/layout";
 import type { DirectoryFieldMode } from "@valuz/app/layout";
 import { usePlatform } from "@valuz/app/platform";
-import { useTranslation } from "@valuz/core";
+import { useTranslation, useResourceCategories } from "@valuz/core";
+import type { ResourceCategory } from "@valuz/shared";
 import { CreateKbDialog } from "../components";
 import { OriginIcon } from "../components/ExecutionLocationPicker";
 
@@ -182,6 +183,49 @@ function getKbIconCandidates(name: string): LucideIcon[] {
   return [...matched, ...KB_ICON_FALLBACKS];
 }
 
+/**
+ * Built-in KB list categories. A single catch-all bucket by default (the
+ * grid renders headerless when it is the only one, so the OSS view is
+ * unchanged); overlays inject additional categories at runtime via
+ * ``useResourceCategories`` — same seam as skills/agents/connectors.
+ */
+function buildKbCategories(
+  t: ReturnType<typeof useTranslation>["t"],
+): ResourceCategory<KbListItem>[] {
+  return [
+    {
+      id: "personal",
+      label: t("knowledge.groupPersonal" as Parameters<typeof t>[0]),
+      order: 0,
+      filter: () => true,
+    },
+  ];
+}
+
+/**
+ * Mirror of ``CategorizedList``'s bucketing: categories claim items in
+ * order; non-multiAssign categories consume what they match.
+ */
+function bucketizeKbs(
+  kbs: KbListItem[],
+  categories: ResourceCategory<KbListItem>[],
+): { category: ResourceCategory<KbListItem>; items: KbListItem[] }[] {
+  const assigned = new Set<string>();
+  const buckets: {
+    category: ResourceCategory<KbListItem>;
+    items: KbListItem[];
+  }[] = [];
+  for (const cat of categories) {
+    const items = kbs.filter((kb) => !assigned.has(kb.id) && cat.filter(kb));
+    if (cat.sort) items.sort(cat.sort);
+    if (items.length > 0) {
+      buckets.push({ category: cat, items });
+      if (!cat.multiAssign) for (const kb of items) assigned.add(kb.id);
+    }
+  }
+  return buckets;
+}
+
 function getUniqueKbIcons(kbs: KbListItem[]): Record<string, LucideIcon> {
   const used = new Set<LucideIcon>();
   const icons: Record<string, LucideIcon> = {};
@@ -244,6 +288,14 @@ export const KnowledgePage = ({
   const [health, setHealth] = useState<DocsHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const kbIcons = useMemo(() => getUniqueKbIcons(kbs), [kbs]);
+  const kbCategories = useResourceCategories<KbListItem>(
+    "kb",
+    useMemo(() => buildKbCategories(t), [t]),
+  );
+  const kbBuckets = useMemo(
+    () => bucketizeKbs(kbs, kbCategories),
+    [kbs, kbCategories],
+  );
 
   const [activeKb, setActiveKb] = useState<KbDetail | null>(null);
   const [rootNodes, setRootNodes] = useState<KbTreeNode[]>([]);
@@ -822,70 +874,95 @@ export const KnowledgePage = ({
             </div>
           ) : (
             <>
-              <div
-                ref={kbGridRef}
-                className="grid gap-3"
-                style={{
-                  gridTemplateColumns: kbGridColumns,
-                }}
-              >
-                {kbs.map((kb) => {
-                  const st = kbStatusLabel(kb.status, t);
-                  const isProcessing = kb.status === "has_processing";
-                  const KbIcon = kbIcons[kb.id] ?? BookOpen;
-                  return (
-                    <button
-                      key={kb.id}
-                      type="button"
-                      // Always enterable — even while 解析中, so the user can
-                      // open the KB and watch per-doc parse status. The
-                      // "解析中" badge below keeps the in-flight state visible.
-                      onClick={() => enterKb(kb.id)}
-                      className={cn(
-                        "group",
-                        "flex min-h-[148px] w-full flex-col rounded-[12px] border border-surface-border",
-                        "bg-[#ffffff] p-4 text-left shadow-xs transition-all",
-                        "hover:-translate-y-1 hover:bg-[#ffffff] hover:shadow-md",
-                        isProcessing && "bg-brand-light/25",
-                      )}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-[#f3f2ff] text-brand">
-                          <KbIcon className="h-4 w-4" />
-                        </div>
-                        {isProcessing ? (
-                          <Badge variant={st.variant} className="border-0">
-                            {st.text}
-                          </Badge>
-                        ) : null}
-                      </div>
-                      <div className="mt-4 min-w-0">
-                        <div className="flex items-center gap-1">
-                          <span className="truncate text-sm font-medium text-ink-heading">
-                            {kb.name}
-                          </span>
-                          <OriginIcon origin={kb.exec_origin} />
-                        </div>
-                        <div className="mt-1 line-clamp-2 break-all text-xs leading-5 text-ink-meta">
-                          {kb.root_path}
-                        </div>
-                      </div>
-                      <div className="mt-auto flex items-center justify-between pt-4">
-                        <span className="text-xs text-ink-meta">
-                          {kb.document_count}{" "}
-                          {t("knowledge.docColumn" as Parameters<typeof t>[0])}
+              <div ref={kbGridRef} className="flex flex-col gap-6">
+                {kbBuckets.map(({ category, items }) => (
+                  <div key={category.id}>
+                    {/* Headerless when a single bucket — the OSS default view
+                        stays exactly as before; headers appear only once an
+                        overlay injects additional categories. */}
+                    {kbBuckets.length > 1 && (
+                      <div className="label-mono mb-3 flex items-center gap-1.5">
+                        <span>{category.label}</span>
+                        <span className="ml-1 text-ink-meta">
+                          {items.length}
                         </span>
-                        <div className="flex items-center gap-1">
-                          <ResourceActionSlot
-                            resourceType="kb"
-                            resource={kb as unknown as Record<string, unknown>}
-                          />
-                          <ChevronRight className="h-4 w-4 shrink-0 text-ink-muted opacity-0 transition-opacity group-hover:opacity-100" />
-                        </div>
                       </div>
-                    </button>
-                  );
-                })}
+                    )}
+                    <div
+                      className="grid gap-3"
+                      style={{
+                        gridTemplateColumns: kbGridColumns,
+                      }}
+                    >
+                      {items.map((kb) => {
+                        const st = kbStatusLabel(kb.status, t);
+                        const isProcessing = kb.status === "has_processing";
+                        const KbIcon = kbIcons[kb.id] ?? BookOpen;
+                        return (
+                          <button
+                            key={kb.id}
+                            type="button"
+                            // Always enterable — even while 解析中, so the user can
+                            // open the KB and watch per-doc parse status. The
+                            // "解析中" badge below keeps the in-flight state visible.
+                            onClick={() => enterKb(kb.id)}
+                            className={cn(
+                              "group",
+                              "flex min-h-[148px] w-full flex-col rounded-[12px] border border-surface-border",
+                              "bg-[#ffffff] p-4 text-left shadow-xs transition-all",
+                              "hover:-translate-y-1 hover:bg-[#ffffff] hover:shadow-md",
+                              isProcessing && "bg-brand-light/25",
+                            )}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-[#f3f2ff] text-brand">
+                                <KbIcon className="h-4 w-4" />
+                              </div>
+                              {isProcessing ? (
+                                <Badge
+                                  variant={st.variant}
+                                  className="border-0"
+                                >
+                                  {st.text}
+                                </Badge>
+                              ) : null}
+                            </div>
+                            <div className="mt-4 min-w-0">
+                              <div className="flex items-center gap-1">
+                                <span className="truncate text-sm font-medium text-ink-heading">
+                                  {kb.name}
+                                </span>
+                                <OriginIcon origin={kb.exec_origin} />
+                              </div>
+                              <div className="mt-1 line-clamp-2 break-all text-xs leading-5 text-ink-meta">
+                                {kb.root_path}
+                              </div>
+                            </div>
+                            <div className="mt-auto flex items-center justify-between pt-4">
+                              <span className="text-xs text-ink-meta">
+                                {kb.document_count}{" "}
+                                {t(
+                                  "knowledge.docColumn" as Parameters<
+                                    typeof t
+                                  >[0],
+                                )}
+                              </span>
+                              <div className="flex items-center gap-1">
+                                <ResourceActionSlot
+                                  resourceType="kb"
+                                  resource={
+                                    kb as unknown as Record<string, unknown>
+                                  }
+                                />
+                                <ChevronRight className="h-4 w-4 shrink-0 text-ink-muted opacity-0 transition-opacity group-hover:opacity-100" />
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             </>
           )}

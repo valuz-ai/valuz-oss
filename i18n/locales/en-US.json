@@ -665,7 +665,8 @@
     "statusWaiting": "Waiting",
     "supportedFormats": "Supports PDF, DOCX, Markdown, CSV and scanned images, with complex layouts routed to advanced parsing",
     "uploadFiles": "Upload files",
-    "uploaded": "Uploaded"
+    "uploaded": "Uploaded",
+    "groupPersonal": "Personal"
   },
   "connector": {
     "title": "Connectors",

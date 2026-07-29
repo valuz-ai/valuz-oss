@@ -665,7 +665,8 @@
     "statusWaiting": "等待中",
     "supportedFormats": "支持 PDF、DOCX、Markdown、CSV、扫描图片，复杂版面自动进入高级解析流程",
     "uploadFiles": "上传文件",
-    "uploaded": "已上传"
+    "uploaded": "已上传",
+    "groupPersonal": "个人"
   },
   "connector": {
     "title": "连接器",
