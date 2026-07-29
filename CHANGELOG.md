@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-07-29
+
+### Added
+
+- **IM channels** — agents can be bound to chat channels and answer in them:
+  agent ↔ channel bindings, a WeCom AI-bot runtime, Feishu long-connection
+  replies, and channel session routing (#629, #631 @hanjixin).
+- **Channel ↔ project binding and project default lead** — a chat binds to one
+  project, a project names the agent that leads its tasks, and a guided card
+  plus in-chat commands set the binding when the bot joins a group
+  (#636 @St0neWan9).
+- **Factory model defaults** — the out-of-the-box runtime / model / provider /
+  effort defaults moved behind a replaceable `ModelDefaultsPort`, overridable
+  per build via `VALUZ_DEFAULT_*` (#627 @St0neWan9).
+
+### Changed
+
+- **Tasks** — a deep two-pass hardening of the lead/member subsystem: plan
+  writes go through a single authorized door, every plan and task-status write
+  is a `plan_version` compare-and-set, plan nodes gained a real transition
+  table, actor-lifecycle races were closed, and the seven live task endpoints
+  are now in `api/openapi.yaml` (#639, #643 @Ready22Race).
+- **Generative UI** — better model handling, corrected DeepSeek thinking state,
+  and stronger prompt instructions (#635, #637 @hanjixin).
+- **Generative UI performance** — ephemeral helper sessions are stripped to
+  bare completions and their reasoning streams to the tool card, cutting tens
+  of seconds of scaffolding off every `generate_ui` call (#638 @jiaoqsh).
+
+### Fixed
+
+- **Channels** — bindings load by row owner instead of the ambient local
+  identity (#634 @St0neWan9); channel reads are no longer cached
+  (#640 @St0neWan9).
+- **Projects** — group rows update from the mutation rather than a refetch
+  (#641 @St0neWan9); the project chat panel refreshes after binding changes
+  (#642 @St0neWan9).
+- **Desktop** — orphaned backend sidecars are reclaimed and a parent-process
+  watchdog stops them outliving the app (#628 @St0neWan9); update-toast errors
+  are humanized and offer a retry (#625 @St0neWan9).
+- **Knowledge base** — the document detail panel renders Markdown previews and
+  keeps its rebuild/delete actions visible in a narrow panel
+  (#624 @yy83000812).
+- **Onboarding** — Firecrawl dropped from the default assistant connectors
+  (#626 @St0neWan9).
+- **Settings** — the memory empty placeholder is centered (#630 @St0neWan9).
+- **Generative UI** — the redundant title spinner is gone from the card
+  (#632 @St0neWan9).
+
+### Docs & Chore
+
+- **Tests** — the backend suite's 40-failure order dependency is fixed
+  (#621 @Ready22Race).
+- **Docs** — the COS auto-update feed path is corrected to the `<edition>/`
+  prefix (#622 @St0neWan9); the OpenUI generative-UI design and plan are
+  consolidated into English (#633 @hanjixin).
+
 ## [0.3.5] - 2026-07-27
 
 ### Added
