@@ -121,6 +121,37 @@ logger = logging.getLogger(__name__)
 _STDERR_TAIL_LINES: int = 40
 
 
+def _opaque_exit_hint(exc: BaseException, stderr_tail: list[str]) -> str | None:
+    """Actionable hint for the CLI's silent startup death, else ``None``.
+
+    When the Claude CLI fails authentication at startup it does NOT write the
+    reason to stderr — it emits ``authentication_failed`` / "Not logged in ·
+    Please run /login" as *stdout* JSON messages and exits 1. The SDK is still
+    inside ``initialize()`` at that point, so those messages are parsed but
+    never consumed, and the surviving artifact is a ``ProcessError`` whose
+    ``stderr`` is the hardcoded placeholder — the user's whole error becomes
+    "Command failed with exit code 1 … Check stderr output for details".
+
+    Verified against the bundled CLI: missing credentials, an empty
+    ``ANTHROPIC_AUTH_TOKEN``, and an invalid token all produce exactly this
+    shape (exit 1, nothing on stderr) — while non-credential startup failures
+    (bad flag, missing cwd) write to stderr or raise a different error type.
+    So: ``ProcessError`` + exit 1 + no real stderr ⇒ point at credentials.
+    Heuristic, deliberately hedged in its wording.
+    """
+    if not isinstance(exc, ProcessError) or exc.exit_code != 1:
+        return None
+    if any(ln.strip() and not ln.lstrip().startswith("Warning:") for ln in stderr_tail):
+        return None  # real stderr exists — the generic path already surfaces it
+    return (
+        "The Claude CLI exited during startup without writing an error to "
+        "stderr — in practice this is a credential failure (not logged in, or "
+        "an invalid/expired/undelivered API key on the session's model "
+        "channel). Check the model channel configuration in Settings, or "
+        "re-login the Claude subscription."
+    )
+
+
 # The Claude Agent SDK buffers the CLI's stdout into a single JSON message whose
 # ceiling is ``ClaudeAgentOptions.max_buffer_size`` (SDK default: 1 MB). One
 # message over that cap raises ``SDKJSONDecodeError``, which kills the SDK's
@@ -678,21 +709,27 @@ class ClaudeAgentRuntime:
                     # traceback too: this branch had no logging, so historic
                     # failures left nothing to diagnose.
                     cause = describe_exception(exc)
+                    # Silent CLI startup death (the auth-failure shape): the
+                    # real reason went to stdout and was dropped inside the
+                    # SDK's ``initialize()`` — say so instead of only echoing
+                    # the placeholder. See ``_opaque_exit_hint``.
+                    hint = _opaque_exit_hint(exc, stderr_tail)
+                    message = f"{cause}\n{hint}" if hint else cause
                     logger.exception(
                         "claude_agent: turn failed for session %s: %s",
                         session.id,
-                        cause,
+                        message,
                     )
                     session.stop_reason = Error(
                         category="execution_error",
                         retry_status="exhausted",
-                        message=cause,
+                        message=message,
                     )
                     await self.event_sink.emit(
                         Event(
                             type="session_error",
                             data={
-                                "message": cause,
+                                "message": message,
                                 "stderr_tail": stderr_tail,
                             },
                         )
