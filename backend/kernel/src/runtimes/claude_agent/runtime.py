@@ -8,10 +8,12 @@ and SDK Messages → Harness Events.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import re
+import time
 import uuid
 from collections import deque
 from collections.abc import Callable
@@ -81,6 +83,7 @@ from src.core.hooks import Hooks
 from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
 from src.core.tools import ExecContext, ToolDef, ToolKit, ToolResult
+from src.core.turn_timing import current_timer as _current_timer
 from src.core.types import (
     BudgetExhausted,
     EndTurn,
@@ -316,6 +319,16 @@ _TERMINAL_BG_TASK_STATUSES = frozenset({"completed", "failed", "stopped"})
 # product decision asks for explicit thinking control again.
 
 
+def _phase(name: str):
+    """Time a step onto the turn's timer, or do nothing when nothing is timing.
+
+    The runtime is also driven from tests and from paths that never opened a
+    timer, so a missing one is normal rather than an error.
+    """
+    timer = _current_timer()
+    return timer.phase(name) if timer else contextlib.nullcontext()
+
+
 class ClaudeAgentRuntime:
     """Wraps Claude Agent SDK (ClaudeSDKClient) as a RuntimePort implementation."""
 
@@ -544,18 +557,29 @@ class ClaudeAgentRuntime:
         try:
             # Take back the SDK stream from the between-turns drainer before
             # anything else touches the client (reconcile may destroy it).
-            await self._stop_idle_drainer()
+            with _phase("stop_idle_drainer"):
+                await self._stop_idle_drainer()
             # Reconcile live session-driven levers BEFORE the client-
             # spawn check so an effort change can trigger a cold reload
             # (destroy + rebuild) cleanly. Reads ``session`` live each
             # turn — see the cross-runtime "PATCH on next turn" contract.
-            await self._reconcile_session_levers(session)
+            with _phase("reconcile_levers"):
+                await self._reconcile_session_levers(session)
 
             if self._client is None:
-                self._materialize_skills(session)
-                opts = self._build_options(session)
+                # Cold spawn. Each step is timed separately because they fail
+                # differently: skills materialise onto the (network) workspace,
+                # options assemble in memory, and ``__aenter__`` launches the
+                # bundled CLI — a subprocess whose cost is invisible to every
+                # Python-level measurement, which is why it went unattributed
+                # for so long.
+                with _phase("skills_materialize"):
+                    self._materialize_skills(session)
+                with _phase("build_options"):
+                    opts = self._build_options(session)
                 self._client = ClaudeSDKClient(options=opts)
-                await self._client.__aenter__()
+                with _phase("cli_spawn"):
+                    await self._client.__aenter__()
                 # Initial spawn: ``_build_options`` already baked the
                 # current session values in, so seed the trackers.
                 self._applied_permission_mode = session.permission_mode
@@ -571,8 +595,10 @@ class ClaudeAgentRuntime:
             )
             self._active_client = self._client
             self._active_task = asyncio.current_task()
-            await self._client.query(prompt)
-            await self._consume_turn_stream(session)
+            with _phase("query_submit"):
+                await self._client.query(prompt)
+            with _phase("consume_stream"):
+                await self._consume_turn_stream(session)
             # Slice 5 of session-modes: after the goal-mode turn's
             # ResultMessage lands, Claude doesn't surface a "goal
             # cleared" notification (spike-confirmed). Probe bare
@@ -778,6 +804,11 @@ class ClaudeAgentRuntime:
         assert self._client is not None
         stream = aiter(self._client.receive_messages())
         skipped_result: ResultMessage | None = None
+        # Split the stream's wall-clock at the FIRST message. The wait before
+        # it is the model's own latency plus whatever the CLI does at startup;
+        # everything after is generation. Lumping them together hides which one
+        # a slow turn is actually made of.
+        first_wait_from: float | None = time.monotonic()
         while True:
             try:
                 if skipped_result is not None and not self._bracket_open:
@@ -789,6 +820,10 @@ class ClaudeAgentRuntime:
             except TimeoutError:
                 await self._handle_message(session, skipped_result)
                 break
+            if first_wait_from is not None:
+                if (timer := _current_timer()) is not None:
+                    timer.mark("stream_first_msg", (time.monotonic() - first_wait_from) * 1000)
+                first_wait_from = None
             if self._cancelled:
                 # interrupt() was called — the SDK's internal queue
                 # may still hold many buffered StreamEvents (especially

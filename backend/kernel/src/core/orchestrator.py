@@ -13,6 +13,7 @@ this orchestrator does not create or own the directory beyond seeding the
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import logging
 import time
@@ -30,6 +31,7 @@ from src.core.session_approval_cache import SessionApprovalCache, SessionRule
 from src.core.session_bus import SessionEventBus
 from src.core.store_port import StorePort
 from src.core.time_utils import now_ms
+from src.core.turn_timing import current_timer, timing_turn
 from src.core.types import Error, Message, Session, UserMessage
 from src.core.workspace import bootstrap_session_workspace
 
@@ -497,6 +499,23 @@ class SessionOrchestrator:
         session_id: str,
         user_message: UserMessage,
     ) -> Message:
+        """Execute one conversation turn, emitting a per-phase timing line.
+
+        The timing exists because a turn's wall-clock has repeatedly failed to
+        add up: the runtime's own transcript accounts for a fraction of what the
+        host observes, and every attempt to attribute the rest from outside the
+        path (probes reconstructing the sandbox) reached a different and wrong
+        answer. See ``src.core.turn_timing``.
+        """
+        with timing_turn(f"session={session_id}"):
+            return await self._run_turn(user_id, session_id, user_message)
+
+    async def _run_turn(
+        self,
+        user_id: str,
+        session_id: str,
+        user_message: UserMessage,
+    ) -> Message:
         """Execute one conversation turn.
 
         Loads project and agent config from the session's bindings, creates
@@ -515,7 +534,9 @@ class SessionOrchestrator:
         from src.adapters.delta_coalescing_sink import DeltaCoalescingSink
         from src.adapters.persist_then_broadcast_sink import PersistThenBroadcastSink
 
-        session, agent = await self._load_session(user_id, session_id)
+        _t = current_timer()
+        with _t.phase("load_session") if _t else contextlib.nullcontext():
+            session, agent = await self._load_session(user_id, session_id)
 
         # Slice 3 of session-modes (broadened in slice 6 simplification):
         # both Claude and Codex process ``/plan <text>`` / ``/goal <text>``
@@ -578,13 +599,17 @@ class SessionOrchestrator:
         # creation. Seed the workspace stub lazily (idempotent, one stat on
         # the hot path) — there is no project-creation moment to hook.
         bootstrap_session_workspace(session.cwd, agent.name or None)
-        runtime = await self._ensure_runtime(
-            session_id,
-            agent,
-            session,
-            observer,
-            session.cwd,
-        )
+        # Cached per session, so ~free on a warm kernel and the entire cost of a
+        # cold one: building a runtime assembles its graph/middleware/tools/MCP
+        # clients and, for the Claude runtime, spawns the bundled CLI.
+        with _t.phase("ensure_runtime") if _t else contextlib.nullcontext():
+            runtime = await self._ensure_runtime(
+                session_id,
+                agent,
+                session,
+                observer,
+                session.cwd,
+            )
         self._active[session_id] = runtime
 
         try:
@@ -613,7 +638,8 @@ class SessionOrchestrator:
                     data={"status": "running", "message_id": message.id},
                 )
             )
-            await runtime.run(session, user_message)
+            with _t.phase("runtime_run") if _t else contextlib.nullcontext():
+                await runtime.run(session, user_message)
             await observer.ensure_partial_assistant_message()
             # finalize must run BEFORE save_session — it writes session.todos
             # (and message.todos) from the observer's last todo_update payload;
