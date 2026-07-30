@@ -30,6 +30,7 @@ from src.core.session_approval_cache import SessionApprovalCache, SessionRule
 from src.core.session_bus import SessionEventBus
 from src.core.store_port import StorePort
 from src.core.time_utils import now_ms
+from src.core.tracing import turn_span
 from src.core.types import Error, Message, Session, UserMessage
 from src.core.workspace import bootstrap_session_workspace
 
@@ -497,6 +498,23 @@ class SessionOrchestrator:
         session_id: str,
         user_message: UserMessage,
     ) -> Message:
+        """Execute one conversation turn, wrapped in a turn-level trace span.
+
+        The span exists so the stretch BEFORE the runtime starts is attributable:
+        LangGraph traces itself from the moment the graph is invoked, leaving
+        everything the kernel does first (loading the session, building the
+        runtime) outside every trace. See ``src.core.tracing``. No-op unless
+        LangSmith tracing is configured.
+        """
+        with turn_span("kernel.turn", session_id=session_id):
+            return await self._run_turn(user_id, session_id, user_message)
+
+    async def _run_turn(
+        self,
+        user_id: str,
+        session_id: str,
+        user_message: UserMessage,
+    ) -> Message:
         """Execute one conversation turn.
 
         Loads project and agent config from the session's bindings, creates
@@ -515,7 +533,8 @@ class SessionOrchestrator:
         from src.adapters.delta_coalescing_sink import DeltaCoalescingSink
         from src.adapters.persist_then_broadcast_sink import PersistThenBroadcastSink
 
-        session, agent = await self._load_session(user_id, session_id)
+        with turn_span("kernel.load_session", session_id=session_id):
+            session, agent = await self._load_session(user_id, session_id)
 
         # Slice 3 of session-modes (broadened in slice 6 simplification):
         # both Claude and Codex process ``/plan <text>`` / ``/goal <text>``
@@ -578,13 +597,19 @@ class SessionOrchestrator:
         # creation. Seed the workspace stub lazily (idempotent, one stat on
         # the hot path) — there is no project-creation moment to hook.
         bootstrap_session_workspace(session.cwd, agent.name or None)
-        runtime = await self._ensure_runtime(
-            session_id,
-            agent,
-            session,
-            observer,
-            session.cwd,
-        )
+        # Cached per session, so this is ~free on a warm kernel and the whole
+        # cost of a cold one: building a runtime means assembling its graph,
+        # middleware, tools and MCP clients. Under per-turn sandbox allocation
+        # every turn lands on a fresh kernel, so every turn pays it — which is
+        # exactly the span worth being able to read.
+        with turn_span("kernel.ensure_runtime", session_id=session_id):
+            runtime = await self._ensure_runtime(
+                session_id,
+                agent,
+                session,
+                observer,
+                session.cwd,
+            )
         self._active[session_id] = runtime
 
         try:
@@ -613,7 +638,8 @@ class SessionOrchestrator:
                     data={"status": "running", "message_id": message.id},
                 )
             )
-            await runtime.run(session, user_message)
+            with turn_span("kernel.runtime_run", session_id=session_id):
+                await runtime.run(session, user_message)
             await observer.ensure_partial_assistant_message()
             # finalize must run BEFORE save_session — it writes session.todos
             # (and message.todos) from the observer's last todo_update payload;
