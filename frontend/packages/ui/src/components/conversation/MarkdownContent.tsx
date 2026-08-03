@@ -493,6 +493,18 @@ const RICH_TEXT_OVERRIDES = [
   "[&_[data-streamdown='table-wrapper']>div:not(:has([data-streamdown='table']))]:border-0",
   "[&_[data-streamdown='table-wrapper']>div:not(:has([data-streamdown='table']))]:p-0",
   "[&_[data-streamdown='table-wrapper']>div:not(:has([data-streamdown='table']))]:items-center",
+  // The toolbar sits on top of the last header cell, so the two cannot both
+  // be visible. Resting state belongs to the header: the last column keeps
+  // its title like every other column, and the buttons only fade in while
+  // the reader is on the table (hover, or keyboard focus inside it — without
+  // the focus case a tabbed-to button would stay invisible).
+  "[&_[data-streamdown='table-wrapper']>div:not(:has([data-streamdown='table']))]:opacity-0",
+  "[&_[data-streamdown='table-wrapper']>div:not(:has([data-streamdown='table']))]:pointer-events-none",
+  "[&_[data-streamdown='table-wrapper']>div:not(:has([data-streamdown='table']))]:transition-opacity",
+  "[&_[data-streamdown='table-wrapper']:hover>div:not(:has([data-streamdown='table']))]:opacity-100",
+  "[&_[data-streamdown='table-wrapper']:hover>div:not(:has([data-streamdown='table']))]:pointer-events-auto",
+  "[&_[data-streamdown='table-wrapper']:focus-within>div:not(:has([data-streamdown='table']))]:opacity-100",
+  "[&_[data-streamdown='table-wrapper']:focus-within>div:not(:has([data-streamdown='table']))]:pointer-events-auto",
   // Table region — flat white, no inner border, bottom rounded.
   "[&_[data-streamdown='table-wrapper']>div:has([data-streamdown='table'])]:border-0",
   "[&_[data-streamdown='table-wrapper']>div:has([data-streamdown='table'])]:rounded-none",
@@ -511,8 +523,15 @@ const RICH_TEXT_OVERRIDES = [
   "[&_[data-streamdown='table-header-cell']]:text-[color:var(--fg-60)]",
   "[&_[data-streamdown='table-header-cell']]:text-right",
   "[&_[data-streamdown='table-header-cell']:first-child]:text-left",
-  "[&_[data-streamdown='table-header-cell']:last-child]:text-transparent",
-  "[&_[data-streamdown='table-header-cell']:last-child]:select-none",
+  // Counterpart to the toolbar fade above: the last column reads as a normal
+  // header until the toolbar takes that spot, then yields to it. Fading the
+  // colour (rather than hiding the cell) keeps the column widths fixed, so
+  // the swap does not reflow the table under the cursor.
+  "[&_[data-streamdown='table-header-cell']:last-child]:transition-colors",
+  "[&_[data-streamdown='table-wrapper']:hover_[data-streamdown='table-header-cell']:last-child]:text-transparent",
+  "[&_[data-streamdown='table-wrapper']:hover_[data-streamdown='table-header-cell']:last-child]:select-none",
+  "[&_[data-streamdown='table-wrapper']:focus-within_[data-streamdown='table-header-cell']:last-child]:text-transparent",
+  "[&_[data-streamdown='table-wrapper']:focus-within_[data-streamdown='table-header-cell']:last-child]:select-none",
   "[&_[data-streamdown='table-row']]:border-b",
   "[&_[data-streamdown='table-row']]:border-[color:var(--fg-3)]",
   "[&_[data-streamdown='table-row']:last-child]:border-b-0",
