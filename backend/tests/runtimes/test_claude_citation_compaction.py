@@ -11,6 +11,7 @@ from claude_agent_sdk import ToolResultBlock
 from claude_agent_sdk import UserMessage as SdkUserMessage
 
 from src.core.agent_config import AgentConfig
+from src.core.citation import EvidenceRegistry
 from src.core.types import Session
 from src.runtimes.claude_agent.runtime import ClaudeAgentRuntime
 
@@ -159,9 +160,7 @@ async def test_post_tool_hook_standardizes_indexed_chunks_into_evidence() -> Non
 
     compacted = output["hookSpecificOutput"]["updatedMCPToolOutput"]
     assert compacted["chunks"][0]["evidenceHandle"].startswith("ev_chunk_")
-    assert compacted["chunks"][0]["content"] == (
-        "Demand continues to exceed available supply."
-    )
+    assert compacted["chunks"][0]["content"] == ("Demand continues to exceed available supply.")
     sidecar = json.loads(runtime._citation_tool_result_sidecars["kb-chunk"])
     assert sidecar["_valuz_evidence"][0]["locator"]["page"] == 9
 
@@ -250,6 +249,90 @@ async def test_post_tool_hook_builds_document_evidence_from_mcp_result_meta() ->
     assert sidecar["_valuz_evidence"][0]["locator"]["page"] == 9
 
 
+async def test_post_tool_hook_rebases_filtered_discovery_collection() -> None:
+    runtime = ClaudeAgentRuntime(AgentConfig(id="a", name="a"), "", _RecordingSink())
+    hook = runtime._map_hooks()["PostToolUse"][0].hooks[0]
+    payload = {
+        "docs": [
+            {
+                "doc_id": f"report-{index}",
+                "title": f"Kioxia report {index}",
+                "summary": f"Research summary {index}",
+            }
+            for index in range(12)
+        ]
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    raw_result = {
+        "content": [{"type": "text", "text": json.dumps(payload)}],
+        "structuredContent": payload,
+        "_meta": {
+            "cn.valuz/citation-source": {
+                "version": 1,
+                "provider": {"id": "reportify", "name": "Reportify"},
+                "operation": {"toolName": "reports_search"},
+                "result": {
+                    "target": "structuredContent",
+                    "hash": {"algorithm": "sha256", "value": digest},
+                    "capturedAt": "2026-08-03T00:00:00Z",
+                },
+                "resources": [
+                    {
+                        "resourceId": "reports-search",
+                        "kind": "document-discovery",
+                        "authority": "discovery-only",
+                        "rootPointer": "",
+                        "itemsPointer": "/docs",
+                        "mapping": {
+                            "sourceId": "/doc_id",
+                            "title": "/title",
+                            "summary": "/summary",
+                        },
+                    }
+                ],
+            }
+        },
+    }
+
+    output = await hook(
+        {
+            "tool_name": "mcp__reportify__reports_search",
+            "tool_input": {"query": "Kioxia"},
+            "tool_response": raw_result,
+        },
+        "mcp-meta-discovery",
+        None,  # type: ignore[arg-type]
+    )
+
+    compacted = output["hookSpecificOutput"]["updatedMCPToolOutput"]
+    assert len(compacted["docs"]) == 4
+    assert "_valuz_evidence" not in compacted
+    hint = compacted["_valuz_evidence_hint"]
+    private = runtime._citation_tool_result_sidecars["mcp-meta-discovery"]
+    descriptor = json.loads(private)["_valuz_evidence"][0]
+    assert descriptor["collectionHandle"] == hint["collectionHandle"]
+    registry = EvidenceRegistry()
+    assert (
+        registry.register_tool_projection(
+            compacted,
+            private,
+            tool_name="reports_search",
+            trusted_private=True,
+        )
+        == 1
+    )
+    assert registry.rejected_count == 0
+    assert (
+        registry.materialize_reference(
+            hint["collectionHandle"],
+            "#/docs/3/title",
+        )
+        is not None
+    )
+
+
 async def test_post_tool_hook_keeps_larger_transcript_window_visible() -> None:
     runtime = ClaudeAgentRuntime(AgentConfig(id="a", name="a"), "", _RecordingSink())
     hook = runtime._map_hooks()["PostToolUse"][0].hooks[0]
@@ -257,9 +340,7 @@ async def test_post_tool_hook_keeps_larger_transcript_window_visible() -> None:
         {
             "tool_name": "mcp__valuz-search__conferences_search",
             "tool_input": {"symbols": ["US:MSFT"]},
-            "tool_response": {
-                "docs": [{"doc_id": "msft-q1", "category": "transcripts"}]
-            },
+            "tool_response": {"docs": [{"doc_id": "msft-q1", "category": "transcripts"}]},
         },
         "discovery",
         None,  # type: ignore[arg-type]
@@ -286,7 +367,8 @@ async def test_post_tool_hook_keeps_late_prose_visible_within_long_chunk() -> No
     raw = _raw_document_result()
     envelope = raw["chunks"][0]["_valuz_evidence"]
     envelope["evidence"]["snippet"] = (
-        "Dynamics segment context " * 30
+        "Dynamics segment context "
+        * 30
         + "In Azure and other cloud services, revenue grew 40% and 39% "
         "in constant currency."
     )
@@ -301,9 +383,9 @@ async def test_post_tool_hook_keeps_late_prose_visible_within_long_chunk() -> No
         None,  # type: ignore[arg-type]
     )
 
-    excerpt = output["hookSpecificOutput"]["updatedMCPToolOutput"]["chunks"][0][
-        "_valuz_evidence"
-    ][0]["excerpt"]
+    excerpt = output["hookSpecificOutput"]["updatedMCPToolOutput"]["chunks"][0]["_valuz_evidence"][
+        0
+    ]["excerpt"]
     assert "\n…\n" in excerpt
     assert "omitted" not in excerpt
     assert "revenue grew 40% and 39%" in excerpt
@@ -319,9 +401,7 @@ async def test_transcript_uses_one_indexed_search_and_blocks_original_reads() ->
         {
             "tool_name": "mcp__valuz-search__conferences_search",
             "tool_input": {"symbols": ["US:MSFT"]},
-            "tool_response": {
-                "docs": [{"doc_id": "msft-q1", "category": "transcripts"}]
-            },
+            "tool_response": {"docs": [{"doc_id": "msft-q1", "category": "transcripts"}]},
         },
         "discovery",
         None,  # type: ignore[arg-type]
@@ -380,22 +460,23 @@ async def test_transcript_uses_one_indexed_search_and_blocks_original_reads() ->
     )
 
     assert raw_before_search["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "exactly one kb_search" in raw_before_search["hookSpecificOutput"][
-        "permissionDecisionReason"
-    ]
+    assert (
+        "exactly one kb_search"
+        in raw_before_search["hookSpecificOutput"]["permissionDecisionReason"]
+    )
     assert "continue_" not in first_search
     assert first_search["hookSpecificOutput"]["updatedInput"]["num"] == 10
-    assert "one targeted indexed search" in search_result["hookSpecificOutput"][
-        "additionalContext"
-    ]
+    assert "one targeted indexed search" in search_result["hookSpecificOutput"]["additionalContext"]
     assert repeated_search["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "already had its one targeted indexed search" in repeated_search[
-        "hookSpecificOutput"
-    ]["permissionDecisionReason"]
+    assert (
+        "already had its one targeted indexed search"
+        in repeated_search["hookSpecificOutput"]["permissionDecisionReason"]
+    )
     assert fetch_after_search["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "Use the returned chunks" in fetch_after_search["hookSpecificOutput"][
-        "permissionDecisionReason"
-    ]
+    assert (
+        "Use the returned chunks"
+        in fetch_after_search["hookSpecificOutput"]["permissionDecisionReason"]
+    )
     assert "continue_" not in unrelated_raw
 
 
@@ -436,9 +517,7 @@ async def test_transcript_discovery_prioritizes_one_original_per_period() -> Non
                 # Discovery adapters can already attach summary handles. The
                 # period-aware projection must still run before generic
                 # evidence compaction or slide decks consume the four rows.
-                "_valuz_evidence": [
-                    {"evidenceHandle": "ev_discovery_12345678"}
-                ],
+                "_valuz_evidence": [{"evidenceHandle": "ev_discovery_12345678"}],
             },
         },
         "discover-periods",
@@ -548,9 +627,7 @@ async def test_document_discovery_budget_hard_denies_seventh_call() -> None:
     )
 
     assert blocked["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "discovery budget" in blocked["hookSpecificOutput"][
-        "permissionDecisionReason"
-    ]
+    assert "discovery budget" in blocked["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 async def test_filing_fetch_blocks_distant_and_adjacent_windows() -> None:
@@ -602,13 +679,9 @@ async def test_filing_fetch_blocks_distant_and_adjacent_windows() -> None:
     )
 
     assert distant["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "distant chunk offset" in distant["hookSpecificOutput"][
-        "permissionDecisionReason"
-    ]
+    assert "distant chunk offset" in distant["hookSpecificOutput"]["permissionDecisionReason"]
     assert adjacent["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "Do not page sequentially" in adjacent["hookSpecificOutput"][
-        "permissionDecisionReason"
-    ]
+    assert "Do not page sequentially" in adjacent["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 async def test_post_tool_hook_filters_secondary_and_duplicate_transcripts() -> None:
@@ -617,9 +690,7 @@ async def test_post_tool_hook_filters_secondary_and_duplicate_transcripts() -> N
     msft = {
         "title": "Microsoft(MSFT) - 2026 Q1 - Earnings Call Transcript",
         "summary": "Azure details " * 100,
-        "companies": [
-            {"name": "Microsoft", "stocks": [{"symbol": "US:MSFT"}]}
-        ],
+        "companies": [{"name": "Microsoft", "stocks": [{"symbol": "US:MSFT"}]}],
         "metadata": {"fiscal_year": "2026", "fiscal_quarter": "Q1"},
     }
     iren = {
@@ -653,9 +724,7 @@ async def test_post_tool_hook_filters_secondary_and_duplicate_transcripts() -> N
     assert "summary" not in compacted["docs"][0]
     assert compacted["_valuz_discovery"]["filteredOut"] == 1
     assert compacted["_valuz_discovery"]["duplicatesRemoved"] == 1
-    assert compacted["_valuz_discovery"]["citationEvidence"] == (
-        "original-indexed-chunk-required"
-    )
+    assert compacted["_valuz_discovery"]["citationEvidence"] == ("original-indexed-chunk-required")
 
 
 async def test_raw_document_grep_returns_traceable_focused_evidence() -> None:
@@ -801,9 +870,7 @@ async def test_filing_fetch_rejects_small_window_before_spending_budget() -> Non
     )
 
     assert rejected["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "chunk_limit=60" in rejected["hookSpecificOutput"][
-        "permissionDecisionReason"
-    ]
+    assert "chunk_limit=60" in rejected["hookSpecificOutput"]["permissionDecisionReason"]
     assert "continue_" not in allowed
 
 

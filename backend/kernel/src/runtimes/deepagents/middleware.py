@@ -24,6 +24,7 @@ from src.core.citation import (
     EvidenceRegistry,
     compact_citation_tool_content,
     private_citation_tool_content,
+    rebase_collection_projections,
 )
 from src.core.citation_document_search import (
     augment_indexed_document_evidence,
@@ -633,22 +634,24 @@ class CitationEvidenceCompactionMiddleware(AgentMiddleware):
                             "artifact": artifact or None,
                         }
                     )
-                compacted = compact_citation_tool_content(
-                    adaptation.model_content,
-                    max_text_evidence_items=80,
-                )
-                if compacted is None:
-                    compacted = adaptation.model_content
+                model_projection = adaptation.model_content
                 if "document-discovery" in adaptation.resource_kinds:
                     discovery = _compact_discovery_tool_content(
-                        compacted,
+                        model_projection,
                         tool_name,
                         tool_args=tool_args,
                         allow_summary_evidence=False,
                     )
                     if discovery is not None:
-                        compacted = discovery[0]
-                private_content = private_citation_tool_content(adaptation.model_content)
+                        model_projection = discovery[0]
+                model_projection = rebase_collection_projections(model_projection)
+                compacted = compact_citation_tool_content(
+                    model_projection,
+                    max_text_evidence_items=80,
+                )
+                if compacted is None:
+                    compacted = model_projection
+                private_content = private_citation_tool_content(model_projection)
                 if private_content is not None:
                     artifact[_CITATION_ARTIFACT_KEY] = private_content
                     self._evidence_registry.register_tool_projection(

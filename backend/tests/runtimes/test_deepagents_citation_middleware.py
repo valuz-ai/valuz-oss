@@ -678,7 +678,16 @@ async def test_reportify_mcp_metadata_builds_lazy_collection_without_per_field_e
 
 
 async def test_reportify_discovery_metadata_exposes_only_citable_metadata_collection() -> None:
-    payload = {"docs": [{"doc_id": "d1", "title": "One", "summary": "Revenue 100"}]}
+    payload = {
+        "docs": [
+            {
+                "doc_id": f"d{index}",
+                "title": f"Report {index}",
+                "summary": f"Revenue {index}00",
+            }
+            for index in range(12)
+        ]
+    }
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -735,7 +744,7 @@ async def test_reportify_discovery_metadata_exposes_only_citable_metadata_collec
     visible_payload = json.loads(result.content)
     assert "evidenceHandle" not in visible_payload["docs"][0]
     hint = visible_payload["_valuz_evidence_hint"]
-    assert hint["collectionHandle"].startswith("evc_mcp_")
+    assert hint["collectionHandle"].startswith("evc_projection_")
     assert hint["allowedItemPaths"] == ["/doc_id", "/title"]
     assert visible_payload["_valuz_discovery"]["citationEvidence"] == (
         "original-indexed-chunk-required"
@@ -745,6 +754,25 @@ async def test_reportify_discovery_metadata_exposes_only_citable_metadata_collec
     assert private is not None
     descriptor = json.loads(private)["_valuz_evidence"][0]
     assert descriptor["addressing"]["allowedItemPaths"] == ["/doc_id", "/title"]
+    assert descriptor["collectionHandle"] == hint["collectionHandle"]
+    registry = EvidenceRegistry()
+    assert (
+        registry.register_tool_projection(
+            result.content,
+            private,
+            tool_name="reports_search",
+            trusted_private=True,
+        )
+        == 1
+    )
+    assert registry.rejected_count == 0
+    assert (
+        registry.materialize_reference(
+            hint["collectionHandle"],
+            "#/docs/3/title",
+        )
+        is not None
+    )
 
 
 async def test_discovery_search_summaries_are_bounded_for_model_history() -> None:

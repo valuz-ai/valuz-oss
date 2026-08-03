@@ -1465,6 +1465,54 @@ def compact_citation_tool_content(
     return compacted if changed else None
 
 
+def rebase_collection_projections(content: Any) -> Any:
+    """Freeze Collection descriptors against a trusted model projection.
+
+    MCP source metadata is first verified against the provider's exact result.
+    A runtime may then deterministically filter, deduplicate, or bound that
+    result before it enters model history.  Those transformations change the
+    Collection snapshot, so its internal hash and handle must be derived again
+    before the descriptor is split into model-visible hint and private sidecar.
+
+    Call this only on Valuz-owned projections produced after MCP validation;
+    arbitrary tool payloads must never gain trust by passing through here.
+    """
+
+    output = copy.deepcopy(content)
+    stack: list[Any] = [output]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            raw = node.get(EVIDENCE_ENVELOPE_KEY)
+            candidates = raw if isinstance(raw, list) else [raw]
+            for candidate in candidates:
+                if (
+                    not isinstance(candidate, dict)
+                    or candidate.get("kind") != "structured-evidence-collection"
+                ):
+                    continue
+                addressing = candidate.get("addressing")
+                handle = candidate.get("collectionHandle")
+                if not isinstance(addressing, dict) or not isinstance(handle, str):
+                    continue
+                content_root = addressing.get("contentRoot")
+                if not isinstance(content_root, str):
+                    continue
+                found, snapshot = _resolve_json_pointer(node, content_root)
+                if not found or not isinstance(snapshot, (dict, list)):
+                    continue
+                projection_hash = _content_hash(snapshot)
+                if candidate.get("contentHash") == projection_hash:
+                    continue
+                digest = hashlib.sha256(f"{handle}\0{projection_hash}".encode()).hexdigest()[:24]
+                candidate["collectionHandle"] = f"evc_projection_{digest}"
+                candidate["contentHash"] = projection_hash
+            stack.extend(item for key, item in node.items() if key != EVIDENCE_ENVELOPE_KEY)
+        elif isinstance(node, list):
+            stack.extend(node)
+    return output
+
+
 def private_citation_tool_content(content: Any) -> str | None:
     """Return only trusted direct Evidence and Collection descriptors.
 
@@ -3478,4 +3526,5 @@ __all__ = [
     "EvidenceRegistry",
     "GuardResult",
     "POLICY_REVISION",
+    "rebase_collection_projections",
 ]
