@@ -129,26 +129,14 @@ def _finance_like_policy() -> dict:
                                     "capacity constraint",
                                 ]
                             },
-                            "price_trend": {
-                                "aliases": ["价格趋势", "价格走势", "走势"]
-                            },
-                            "industry_fundamentals": {
-                                "aliases": ["行业基本面", "基本面"]
-                            },
-                            "technical_directions": {
-                                "aliases": ["技术方向", "相关方向"]
-                            },
-                            "candidate_companies": {
-                                "aliases": ["候选公司", "相关公司"]
-                            },
-                            "trend_analysis": {
-                                "aliases": ["趋势", "变化趋势"]
-                            },
-                            "drivers": {
-                                "aliases": ["驱动", "主要驱动", "驱动因素"]
-                            },
+                            "price_trend": {"aliases": ["价格趋势", "价格走势", "走势"]},
+                            "industry_fundamentals": {"aliases": ["行业基本面", "基本面"]},
+                            "technical_directions": {"aliases": ["技术方向", "相关方向"]},
+                            "candidate_companies": {"aliases": ["候选公司", "相关公司"]},
+                            "trend_analysis": {"aliases": ["趋势", "变化趋势"]},
+                            "drivers": {"aliases": ["驱动", "主要驱动", "驱动因素"]},
                         }
-                    }
+                    },
                 },
                 "retrieval": {
                     "content_mappings": [
@@ -185,7 +173,7 @@ def _finance_like_policy() -> dict:
                         "inspect-beyond-first-partial-candidate",
                     ],
                     "source_constraints": ["same-entity", "same-period"],
-                }
+                },
             },
         },
     }
@@ -299,6 +287,113 @@ def test_unscoped_metric_explanation_does_not_create_retrieval_or_repair_contrac
     assert task_contract_prompt(contract) == ""
 
 
+def test_general_industry_metric_comparison_is_not_parsed_as_company_entities() -> None:
+    contract = parse_task_contract(
+        "银行和制造业为什么不能直接用同一个 ROE 阈值比较？用通俗语言回答。",
+        policy_snapshot=_finance_like_policy(),
+    )
+
+    assert contract.task_type == "open-research"
+    assert contract.declared_scope.get("entities") is None
+    assert contract.requirements == ()
+    assert contract.enforceable is False
+
+
+def test_leading_subjects_are_kept_without_absorbing_output_instructions() -> None:
+    prompts = {
+        "贵州茅台2024年度归属于上市公司股东的净利润是多少？同比增长多少？请引用年度报告原文。": [
+            "贵州茅台"
+        ],
+        "特斯拉最新一季财报或电话会中，Optimus 人形机器人相关交流要点是什么？"
+        "只总结文件中明确说过的内容，每条标注出处，不要推测。": ["特斯拉"],
+        "青岛啤酒2026年一季报营业收入是多少？相对2025年一季报同比变化多少？"
+        "请列出原始数字和计算过程。": ["青岛啤酒"],
+        "检查 MRVL 最新收盘价、TTM PS 和均线状态，分别判断固定止损线、"
+        "相对成本涨幅线和多头排列是否触发；逐条报告当前值、阈值、差距和状态。": ["MRVL"],
+    }
+
+    for prompt, expected in prompts.items():
+        contract = parse_task_contract(prompt, policy_snapshot=_finance_like_policy())
+        assert contract.declared_scope.get("entities") == expected
+
+
+def test_context_subject_is_kept_without_treating_quality_dimensions_as_entities() -> None:
+    contract = parse_task_contract(
+        "根据微软过去四个季度的财务数据，分别检查收入质量（应收账款增速与收入增速）、"
+        "盈利质量（经营现金流/净利润）、负债风险和存货风险。逐季列出输入、公式、"
+        "结果和判定。",
+        policy_snapshot=_finance_like_policy(),
+    )
+
+    assert contract.declared_scope.get("entities") == ["微软"]
+
+
+def test_index_numbers_are_not_misread_as_year_boundaries() -> None:
+    contract = parse_task_contract(
+        "根据 8 月 1 日的数据，计算中证500、中证1000、中证2000、沪深300四大指数的"
+        "估值情况和行业覆盖情况。",
+        policy_snapshot=_finance_like_policy(),
+    )
+
+    assert contract.declared_scope.get("entities") == [
+        "中证500",
+        "中证1000",
+        "中证2000",
+        "沪深300",
+    ]
+
+
+def test_entity_lists_drop_classifier_suffixes_and_keep_all_named_companies() -> None:
+    contract = parse_task_contract(
+        "请列出美光科技、三星电子、SK海力士三家存储龙头公司的核心产品，以及过去半年的涨价幅度。",
+        policy_snapshot=_finance_like_policy(),
+    )
+
+    assert contract.declared_scope.get("entities") == [
+        "美光科技",
+        "三星电子",
+        "SK海力士",
+    ]
+
+
+def test_for_company_context_is_a_subject_but_screening_outputs_are_not() -> None:
+    shareholder_contract = parse_task_contract(
+        "为同飞股份股东交流会拟定 10 个问题，覆盖近期股价表现、经营情况、定增进度、"
+        "海外客户拓展和未来业绩展望，并提供详尽数据支持。",
+        policy_snapshot=_finance_like_policy(),
+    )
+    screening_contract = parse_task_contract(
+        "对 A 股全量股票执行筛选，只输出同时满足全部条件的股票，并列出每个条件的输入和是否通过。",
+        policy_snapshot=_finance_like_policy(),
+    )
+
+    assert shareholder_contract.declared_scope.get("entities") == ["同飞股份"]
+    assert screening_contract.declared_scope.get("entities", []) == []
+
+
+def test_tool_names_document_periods_and_classification_labels_are_not_entities() -> None:
+    prompts = {
+        "请使用 valuz-stock 的 income_statement 查询贵州茅台 2024 年和 2023 年"
+        "营业收入，并用程序化计算 2024 年同比增速。": ["贵州茅台"],
+        "总结 2026 年已经发布的中报业绩及业绩预告，提炼对投资有用的信息。": [],
+        "判断微软更接近周期型、脉冲型、资产困境型、成长型、稳态现金牛还是收费站型，"
+        "给出证据；先判断简化 PE/PS 方法是否适用。无法判断 AI 资本开支持续性时"
+        "明确保留不确定性。": ["微软"],
+        "拆解北方稀土各业务板块的收入，并计算公司过去四个季度营业收入的单季同比增速。": [
+            "北方稀土"
+        ],
+        "研究海外大厂资本开支落地后 Token 产量会增加多少，从供需关系分析未来"
+        "是否会供过于求以及何时平衡。": [],
+    }
+
+    for prompt, expected in prompts.items():
+        contract = parse_task_contract(prompt, policy_snapshot=_finance_like_policy())
+        assert contract.declared_scope.get("entities", []) == expected
+
+    calculated = parse_task_contract(next(iter(prompts)), policy_snapshot=_finance_like_policy())
+    assert [item for item in calculated.requirements if item.kind == "calculation"]
+
+
 def test_direct_recommendation_count_is_enforceable_and_requires_visible_items() -> None:
     policy = _finance_like_policy()
     contract = parse_task_contract(
@@ -320,8 +415,7 @@ def test_direct_recommendation_count_is_enforceable_and_requires_visible_items()
     assert short_output["reasonCodes"] == ["exact-item-count-mismatch"]
 
     complete = "\n\n".join(
-        f"### {index}. 公司 {index}\n\n核心产品：AI 应用 {index}。"
-        for index in range(1, 11)
+        f"### {index}. 公司 {index}\n\n核心产品：AI 应用 {index}。" for index in range(1, 11)
     )
     complete_result = TaskCoverageTracker(contract, policy_snapshot=policy).evaluate(complete)
     complete_output = next(
@@ -389,9 +483,7 @@ def test_policy_dimension_members_expand_breakdown_slots_and_preserve_requested_
     assert patched == requested_order
     assert requirement_ids == (output.requirement_id,)
     patched_output = next(
-        row
-        for row in tracker.evaluate(patched)["requirements"]
-        if row["kind"] == "output-shape"
+        row for row in tracker.evaluate(patched)["requirements"] if row["kind"] == "output-shape"
     )
     assert patched_output["answerStatus"] == "fulfilled"
 
@@ -407,9 +499,7 @@ def test_metric_clause_and_output_modifiers_are_not_parsed_as_entities() -> None
     assert contract.declared_scope["entities"] == ["海吉亚医疗"]
     assert not [item for item in contract.requirements if item.kind == "comparison"]
     assert {
-        item.slots["metric"]
-        for item in contract.requirements
-        if item.kind == "structured-slot"
+        item.slots["metric"] for item in contract.requirements if item.kind == "structured-slot"
     } == {"扣非净利润", "商誉金额"}
 
 
@@ -424,9 +514,7 @@ def test_single_company_breakdown_fields_are_not_misparsed_as_entities() -> None
     assert contract.declared_scope["entities"] == ["贵州茅台"]
     assert not [item for item in contract.requirements if item.kind == "comparison"]
     assert [
-        item.slots["metric"]
-        for item in contract.requirements
-        if item.kind == "structured-slot"
+        item.slots["metric"] for item in contract.requirements if item.kind == "structured-slot"
     ] == [
         "total_operating_revenue",
         "茅台酒收入",
@@ -434,13 +522,9 @@ def test_single_company_breakdown_fields_are_not_misparsed_as_entities() -> None
         "直销收入",
         "批发代理收入",
     ]
-    calculation = next(
-        item for item in contract.requirements if item.kind == "calculation"
-    )
+    calculation = next(item for item in contract.requirements if item.kind == "calculation")
     assert calculation.slots["formulaRequired"] is True
-    assert calculation.description == (
-        "show the requested calculation result and explicit formula"
-    )
+    assert calculation.description == ("show the requested calculation result and explicit formula")
     output = next(item for item in contract.requirements if item.kind == "output-shape")
     assert "requiredColumns" not in output.slots
     assert output.slots["requiredMetadata"] == ["period", "unit"]
@@ -469,9 +553,7 @@ def test_requested_calculation_formula_is_checked_separately_from_result() -> No
     with_table_formula = next(
         row
         for row in tracker.evaluate(
-            "| 项目 | 占比 | 计算公式 |\n"
-            "|---|---:|---|\n"
-            "| 营业收入 | 83.80% | 1459.28 ÷ 1741.44 |"
+            "| 项目 | 占比 | 计算公式 |\n|---|---:|---|\n| 营业收入 | 83.80% | 1459.28 ÷ 1741.44 |"
         )["requirements"]
         if row["kind"] == "calculation"
     )
@@ -520,9 +602,7 @@ def test_tracker_restores_requested_formula_column_from_calculation_attempts() -
     assert "| 系列酒收入 | 246.84 | 14.17% | — |" in patched
     assert len(requirement_ids) == 1
     calculation = next(
-        row
-        for row in tracker.evaluate(patched)["requirements"]
-        if row["kind"] == "calculation"
+        row for row in tracker.evaluate(patched)["requirements"] if row["kind"] == "calculation"
     )
     assert calculation["answerStatus"] == "fulfilled"
 
@@ -536,9 +616,7 @@ def test_exact_requested_fields_exclude_negated_substitutes_and_output_modifiers
 
     contract = parse_task_contract(prompt, policy_snapshot=_finance_like_policy())
     metrics = [
-        item.slots["metric"]
-        for item in contract.requirements
-        if item.kind == "structured-slot"
+        item.slots["metric"] for item in contract.requirements if item.kind == "structured-slot"
     ]
 
     assert metrics == ["deducted_parent_net_profit", "goodwill"]
@@ -548,16 +626,12 @@ def test_exact_requested_fields_exclude_negated_substitutes_and_output_modifiers
 
 def test_tracker_restores_one_explicit_reporting_period_without_inventing_unit() -> None:
     prompt = (
-        "请查阅海吉亚医疗 2025 年度财报，只列出扣非净利润和商誉金额两个数字，"
-        "并注明报告期和单位。"
+        "请查阅海吉亚医疗 2025 年度财报，只列出扣非净利润和商誉金额两个数字，并注明报告期和单位。"
     )
     policy = _finance_like_policy()
     contract = parse_task_contract(prompt, policy_snapshot=policy)
     tracker = TaskCoverageTracker(contract, policy_snapshot=policy)
-    answer = (
-        "- **扣非净利润**：当前资料未披露\n"
-        "- **商誉账面值**：3,441,128千元"
-    )
+    answer = "- **扣非净利润**：当前资料未披露\n- **商誉账面值**：3,441,128千元"
     audit = tracker.evaluate(answer)
 
     patched, requirement_ids = tracker.patch_required_metadata(answer, audit)
@@ -566,9 +640,7 @@ def test_tracker_restores_one_explicit_reporting_period_without_inventing_unit()
     assert "单位：" not in patched
     assert len(requirement_ids) == 1
     patched_output = next(
-        row
-        for row in tracker.evaluate(patched)["requirements"]
-        if row["kind"] == "output-shape"
+        row for row in tracker.evaluate(patched)["requirements"] if row["kind"] == "output-shape"
     )
     assert patched_output["answerStatus"] == "fulfilled"
 
@@ -578,9 +650,7 @@ def test_negated_metric_substitutes_do_not_expand_an_unstructured_request() -> N
 
     contract = parse_task_contract(prompt, policy_snapshot=_finance_like_policy())
     metrics = [
-        item.slots["metric"]
-        for item in contract.requirements
-        if item.kind == "structured-slot"
+        item.slots["metric"] for item in contract.requirements if item.kind == "structured-slot"
     ]
 
     assert metrics == ["goodwill"]
@@ -595,9 +665,7 @@ def test_document_scope_entity_excludes_trailing_citation_instruction() -> None:
 
     assert contract.declared_scope["entities"] == ["贵州茅台"]
     assert {
-        item.slots["metric"]
-        for item in contract.requirements
-        if item.kind == "structured-slot"
+        item.slots["metric"] for item in contract.requirements if item.kind == "structured-slot"
     } == {"audit_opinion", "total_operating_revenue", "operating_revenue"}
     assert all(
         item.slots.get("entityName") == "贵州茅台"
@@ -622,9 +690,7 @@ def test_single_document_period_scope_applies_to_all_prose_slots() -> None:
         "**三、营业收入**\n\n> 营业收入 170,899,152,276.34 元。"
     )
 
-    structured = [
-        item for item in audit["requirements"] if item["kind"] == "structured-slot"
-    ]
+    structured = [item for item in audit["requirements"] if item["kind"] == "structured-slot"]
     assert {item["answerStatus"] for item in structured} == {"fulfilled"}
 
 
@@ -649,9 +715,7 @@ def test_policy_topic_ontology_maps_capex_to_capacity_language() -> None:
         },
     )
 
-    audit = tracker.evaluate(
-        "## FY2026 Q4\n公司本季度新增一吉瓦算力容量，用于持续扩充基础设施。"
-    )
+    audit = tracker.evaluate("## FY2026 Q4\n公司本季度新增一吉瓦算力容量，用于持续扩充基础设施。")
     topic = next(row for row in audit["requirements"] if row["kind"] == "topic")
 
     assert topic["retrievalStatus"] == "available"
@@ -784,9 +848,7 @@ def test_single_entity_heading_scopes_adjacent_reporting_period_line() -> None:
 
     assert output["answerStatus"] == "fulfilled"
     assert not [
-        row
-        for row in audit["requirements"]
-        if row["description"].endswith("reporting_period")
+        row for row in audit["requirements"] if row["description"].endswith("reporting_period")
     ]
 
 
@@ -825,9 +887,7 @@ def test_exact_bullet_list_removes_adjacent_metric_and_keeps_supported_item() ->
 - **非IFRS经调整净利润**：455,480千元
 - **商誉账面值**：3,441,128千元 [2](citation://goodwill)
 """
-    bundle = {
-        "citations": [{"citationId": "goodwill", "resolutionStatus": "ready"}]
-    }
+    bundle = {"citations": [{"citationId": "goodwill", "resolutionStatus": "ready"}]}
 
     audit = tracker.evaluate(answer, citation_bundle=bundle)
     rows = {
@@ -871,8 +931,7 @@ def test_expands_four_period_topic_matrix() -> None:
 def test_retrieval_plan_groups_structured_fields_by_entity_and_period() -> None:
     policy = _finance_like_policy()
     contract = parse_task_contract(
-        "对比甲公司和乙公司最近一期完整财报的营业收入、净利润和经营现金流，"
-        "只输出 Markdown 表格。",
+        "对比甲公司和乙公司最近一期完整财报的营业收入、净利润和经营现金流，只输出 Markdown 表格。",
         policy_snapshot=policy,
     )
 
@@ -882,8 +941,7 @@ def test_retrieval_plan_groups_structured_fields_by_entity_and_period() -> None:
     assert {step.entity_ids for step in plan.steps} == {("甲公司",), ("乙公司",)}
     assert all(step.strategy == "structured-fetch" for step in plan.steps)
     assert all(
-        step.requested_parts
-        == ("operating_revenue", "net_profit", "operating_cash_flow")
+        step.requested_parts == ("operating_revenue", "net_profit", "operating_cash_flow")
         for step in plan.steps
     )
     assert all(step.periods == ("latest-complete-before-as-of",) for step in plan.steps)
@@ -910,8 +968,7 @@ def test_retrieval_plan_groups_topics_per_relative_period() -> None:
         ("latest-published:4",),
     }
     assert all(
-        step.requested_parts
-        == ("ai_compute_demand", "capital_expenditure", "supply_constraints")
+        step.requested_parts == ("ai_compute_demand", "capital_expenditure", "supply_constraints")
         for step in plan.steps
     )
 
@@ -1114,9 +1171,7 @@ def test_local_cell_patch_rejects_incomplete_requirement_set() -> None:
 """
     audit = tracker.evaluate(draft)
     requirement_id = next(
-        row["requirementId"]
-        for row in audit["requirements"]
-        if row["kind"] == "structured-slot"
+        row["requirementId"] for row in audit["requirements"] if row["kind"] == "structured-slot"
     )
 
     result = tracker.apply_local_revision_patch(
@@ -1149,9 +1204,7 @@ def test_complete_looking_answer_without_turn_evidence_requests_retrieval_revisi
     baseline = tracker.evaluate(answer)
 
     assert baseline["status"] == "partial"
-    revenue = next(
-        row for row in baseline["requirements"] if row["kind"] == "structured-slot"
-    )
+    revenue = next(row for row in baseline["requirements"] if row["kind"] == "structured-slot")
     assert revenue["answerStatus"] == "fulfilled"
     assert revenue["modelInputStatus"] == "not-visible"
     assert tracker.should_request_revision(baseline) is True
@@ -1292,18 +1345,10 @@ AI 算力需求保持强劲；资本开支增加；供应约束仍然存在。
 """
 
     audit = tracker.evaluate(answer)
-    rows = {
-        row["description"]: row
-        for row in audit["requirements"]
-        if row["kind"] == "topic"
-    }
+    rows = {row["description"]: row for row in audit["requirements"] if row["kind"] == "topic"}
 
-    assert rows["微软 / relative period 1 / capital_expenditure"]["answerStatus"] == (
-        "fulfilled"
-    )
-    assert rows["微软 / relative period 1 / supply_constraints"]["answerStatus"] == (
-        "missing"
-    )
+    assert rows["微软 / relative period 1 / capital_expenditure"]["answerStatus"] == ("fulfilled")
+    assert rows["微软 / relative period 1 / supply_constraints"]["answerStatus"] == ("missing")
 
 
 def test_relative_topic_selector_resolves_each_discovered_period_ordinal() -> None:
@@ -1374,8 +1419,7 @@ def test_recent_quarter_selector_ignores_interleaved_annual_scope() -> None:
 
     audit = tracker.evaluate(
         "\n\n".join(
-            f"## FY2026 Q{quarter}\nAI 算力需求；资本开支；供应约束。"
-            for quarter in (4, 3, 2, 1)
+            f"## FY2026 Q{quarter}\nAI 算力需求；资本开支；供应约束。" for quarter in (4, 3, 2, 1)
         )
     )
     topic_rows = [row for row in audit["requirements"] if row["kind"] == "topic"]
@@ -1476,20 +1520,14 @@ def test_unresolved_relative_period_does_not_reuse_latest_for_every_ordinal() ->
     tracker.record_tool_result(
         "conferences_search",
         {"query": "微软", "fiscal_quarter": "Q4"},
-        {
-            "documents": [
-                {"id": "doc-q4", "title": "微软 Microsoft FY2026 Q4 Earnings Call"}
-            ]
-        },
+        {"documents": [{"id": "doc-q4", "title": "微软 Microsoft FY2026 Q4 Earnings Call"}]},
     )
 
     audit = tracker.evaluate("## FY2026 Q4\nAI 算力需求、资本开支和供应约束。")
     topic_rows = [row for row in audit["requirements"] if row["kind"] == "topic"]
 
     assert {
-        row["selectorResolution"]["period"]
-        for row in topic_rows
-        if "selectorResolution" in row
+        row["selectorResolution"]["period"] for row in topic_rows if "selectorResolution" in row
     } == {"2026-q4"}
     assert sum("selectorResolution" in row for row in topic_rows) == 3
 
@@ -1616,9 +1654,7 @@ AI 算力需求保持强劲；资本开支和供需约束在当前检索内容�
     audit = tracker.evaluate(answer)
     topics = [row for row in audit["requirements"] if row["kind"] == "topic"]
     q4_ai = next(row for row in topics if "period 1 / ai_compute_demand" in row["description"])
-    q4_capex = next(
-        row for row in topics if "period 1 / capital_expenditure" in row["description"]
-    )
+    q4_capex = next(row for row in topics if "period 1 / capital_expenditure" in row["description"])
     q3_ai = next(row for row in topics if "period 2 / ai_compute_demand" in row["description"])
 
     assert q4_ai["retrievalStatus"] == "available"
@@ -1838,9 +1874,7 @@ def test_partial_retrieval_keeps_scoped_content_attempt_for_deterministic_patch(
 
     audit = tracker.evaluate(draft)
     cash_flow = next(
-        row
-        for row in audit["requirements"]
-        if row["description"].endswith("operating_cash_flow")
+        row for row in audit["requirements"] if row["description"].endswith("operating_cash_flow")
     )
     patched, requirement_ids = tracker.patch_unavailable_table_slots(draft, audit)
 
@@ -1955,10 +1989,7 @@ def test_ready_period_local_topic_citations_prove_visibility() -> None:
     assert all(row["retrievalStatus"] == "available" for row in rows)
     assert all(row["modelInputStatus"] == "visible" for row in rows)
     assert {
-        attempt
-        for row in rows
-        for attempt in row["attemptIds"]
-        if attempt.startswith("citation:")
+        attempt for row in rows for attempt in row["attemptIds"] if attempt.startswith("citation:")
     } == {
         "citation:cit_ai",
         "citation:cit_capex",
@@ -1993,8 +2024,7 @@ def test_unreferenced_or_wrong_cell_citation_does_not_prove_visibility() -> None
 
     assert rows["闪迪 / latest-published / operating_revenue"]["modelInputStatus"] == "visible"
     assert (
-        rows["闪迪 / latest-published / operating_cash_flow"]["modelInputStatus"]
-        == "not-visible"
+        rows["闪迪 / latest-published / operating_cash_flow"]["modelInputStatus"] == "not-visible"
     )
 
 
@@ -2052,9 +2082,7 @@ def test_partial_chunk_scope_does_not_prove_absent_metric_visible() -> None:
 
     audit = tracker.evaluate(answer)
     cash_flow = next(
-        row
-        for row in audit["requirements"]
-        if row["description"].endswith("operating_cash_flow")
+        row for row in audit["requirements"] if row["description"].endswith("operating_cash_flow")
     )
 
     assert audit["status"] == "partial"
@@ -2289,9 +2317,7 @@ def test_row_citation_proves_reporting_period_model_visibility() -> None:
         },
     )
     reporting_period = next(
-        row
-        for row in audit["requirements"]
-        if row["description"].endswith("reporting_period")
+        row for row in audit["requirements"] if row["description"].endswith("reporting_period")
     )
 
     assert reporting_period["retrievalStatus"] == "available"
@@ -2334,9 +2360,7 @@ def test_out_of_scope_indexed_chunks_do_not_prove_locked_document_field() -> Non
 
     audit = tracker.evaluate("SK海力士经营现金流：当前资料未披露。")
     cash_flow = next(
-        row
-        for row in audit["requirements"]
-        if row["description"].endswith("operating_cash_flow")
+        row for row in audit["requirements"] if row["description"].endswith("operating_cash_flow")
     )
 
     assert cash_flow["retrievalStatus"] == "partial"
@@ -2353,10 +2377,7 @@ def test_unavailable_fallback_is_metric_local_within_shared_document() -> None:
     tracker.record_tool_result(
         "document_raw_content",
         {"doc_id": "sk-q2"},
-        (
-            "SK海力士 2026 Q2 净利润为93.9226万亿韩元；"
-            "经营现金流在当前材料中未披露。"
-        ),
+        ("SK海力士 2026 Q2 净利润为93.9226万亿韩元；经营现金流在当前材料中未披露。"),
     )
     answer = """| 公司 | 报告期 | 净利润 | 经营现金流 |
 |---|---|---:|---:|
@@ -2368,9 +2389,7 @@ def test_unavailable_fallback_is_metric_local_within_shared_document() -> None:
     assert "| SK海力士 | 2026 Q2 |  | 当前资料未披露 |" in patched
     assert len(requirement_ids) == 1
     requirement = next(
-        item
-        for item in contract.requirements
-        if item.requirement_id == requirement_ids[0]
+        item for item in contract.requirements if item.requirement_id == requirement_ids[0]
     )
     assert requirement.slots.get("metric") == "operating_cash_flow"
 
@@ -2384,11 +2403,10 @@ def test_nominal_quantum_computing_topic_is_not_a_calculation_task() -> None:
 
     assert contract.task_type == "document-qa"
     assert not [item for item in contract.requirements if item.kind == "calculation"]
-    assert {
-        item.slots.get("topic")
-        for item in contract.requirements
-        if item.kind == "topic"
-    } == {"technical_directions", "candidate_companies"}
+    assert {item.slots.get("topic") for item in contract.requirements if item.kind == "topic"} == {
+        "technical_directions",
+        "candidate_companies",
+    }
     assert contract.enforceable is True
 
 
@@ -2409,8 +2427,7 @@ def test_open_research_topics_are_derived_from_policy_ontology() -> None:
 
 def test_multi_period_structured_query_expands_metric_period_matrix_and_topics_once() -> None:
     contract = parse_task_contract(
-        "查询微软过去四个季度的单季毛利率和运营利润率，逐季列成表，"
-        "解释趋势并拆解驱动。",
+        "查询微软过去四个季度的单季毛利率和运营利润率，逐季列成表，解释趋势并拆解驱动。",
         policy_snapshot=_finance_like_policy(),
     )
 

@@ -58,6 +58,7 @@ class TaskCoveragePatchResult:
     requirement_ids: tuple[str, ...] = ()
     code: str | None = None
 
+
 _ZH_ENTITY_TRIGGER_RE = re.compile(
     r"(?:对比|比较|列出|分析|总结|归纳)\s*"
     r"(?P<body>.{1,180}?)"
@@ -82,7 +83,7 @@ _POSSESSIVE_ENTITY_RE = re.compile(
     re.IGNORECASE,
 )
 _ZH_DIRECT_ENTITY_RE = re.compile(
-    r"(?:对比|比较|列出|查询|检索|检查|分析|总结|归纳|研究|梳理)\s*"
+    r"(?P<verb>对比|比较|列出|查询|检索|检查|分析|总结|归纳|研究|梳理|判断|拆解)\s*"
     r"(?P<body>[^，,。；;\n]{1,180})",
     re.IGNORECASE,
 )
@@ -100,9 +101,18 @@ _ENTITY_SCOPE_BOUNDARY_RE = re.compile(
     r"(?:最近|最新|过去|此前|前|近)\s*[一二两三四五六七八九十\d]*\s*个?"
     r"(?:已(?:披露|发布|公布|公开)|公开(?:披露|发布)|连续|完整|可得|可获取)?\s*"
     r"(?:季度|财季|报告期|月|年|一期|两期)|"
-    r"(?:19|20)\d{2}\s*年?|"
+    r"(?:19|20)\d{2}\s*(?:年|年度|FY|Q)|"
+    r"(?:本年|今年|去年|上年|当年|本期|上期|当期).{0,8}"
+    r"(?:一季报|中报|三季报|年报|季度|财季|报告期)|"
+    r"(?:最近|最新|当前|现在|截至).{0,12}"
+    r"(?:收盘价|行情|股价|估值|数据|数值|指标|情况)|"
     r"(?:单季|当季|本季|同季|同期|年度|季度)(?=[\u3400-\u9fffA-Za-z])|"
-    r"(?:财报|年报|报告|电话会|业绩发布|业绩)(?:的|中|里)?",
+    r"(?:财报|年报|报告|电话会|业绩发布|业绩)(?:的|中|里)?|"
+    r"[一二两三四五六七八九十\d]+家[^，,。；;\n]{0,24}公司(?:的)?|"
+    r"[一二两三四五六七八九十]+大指数(?:的)?|"
+    r"(?:的)?(?:各业务板块|业务板块)(?:的)?|"
+    r"的(?:核心产品|产品涨价|行情走势|走势|基本面|投资价值|财务数据)|"
+    r"(?:是否|为什么|为何|怎么|如何|多少|能否|会不会|更接近)",
     re.IGNORECASE,
 )
 _ZH_DOCUMENT_SCOPE_ENTITY_RE = re.compile(
@@ -110,10 +120,32 @@ _ZH_DOCUMENT_SCOPE_ENTITY_RE = re.compile(
     r"(?=(?:19|20)\d{2}\s*年?(?:年度)?(?:报告|财报|年报))",
     re.IGNORECASE,
 )
+_ZH_CONTEXT_SCOPE_ENTITY_RE = re.compile(
+    r"(?:根据|基于|使用)\s*(?P<body>[^，,。；;\n]{1,80}?)"
+    r"(?=(?:最近|最新|过去|此前|前|近)\s*[一二两三四五六七八九十\d]*\s*个?"
+    r"(?:季度|财季|报告期|月|年|一期|两期)|"
+    r"(?:19|20)\d{2}\s*(?:年|年度|FY|Q)|"
+    r"的(?:财务数据|财报|年报|报告|电话会))",
+    re.IGNORECASE,
+)
+_ZH_LEADING_SUBJECT_ENTITY_RE = re.compile(
+    r"(?:^|[。！？；;\n])\s*(?:请)?(?P<body>[\u3400-\u9fffA-Za-z]"
+    r"[\u3400-\u9fffA-Za-z0-9 .&-]{0,63}?)"
+    r"(?=(?:19|20)\d{2}\s*(?:年|年度|FY|Q)|"
+    r"(?:最近|最新|过去|此前|前|近|本年|今年|去年|上年).{0,12}"
+    r"(?:一期|一季|季度|财季|财报|年报|报告|电话会|收盘价|行情|数据))",
+    re.IGNORECASE,
+)
+_ZH_FOR_ENTITY_RE = re.compile(
+    r"(?:^|[。！？；;\n])\s*为\s*(?P<body>[^，,。；;\n]{1,64}?)"
+    r"(?=(?:股东|投资者|管理层)(?:交流会|电话会|沟通会))",
+    re.IGNORECASE,
+)
 _ENTITY_SPLIT_RE = re.compile(r"\s*(?:、|，|,|；|;|以及|及|与|和|\band\b)\s*", re.I)
 _NON_ENTITY_INSTRUCTION_RE = re.compile(
     r"(?:引用|标注|注明|说明|对应|原文|来源|逐项|逐行|分别|"
-    r"不要|仅|只|输出|列出|展示|返回|cite|source|reference|output)",
+    r"不要|仅|只|输出|列出|展示|返回|输入|公式|结果|判定|阈值|状态|差距|方法|"
+    r"是否通过|红\s*/?\s*黄\s*/?\s*绿(?:灯)?|cite|source|reference|output)",
     re.IGNORECASE,
 )
 _ENTITY_STOP_WORDS = {
@@ -138,14 +170,26 @@ _ENTITY_STOP_WORDS = {
     "结果",
     "公式",
     "输入",
+    "原始数字",
+    "计算过程",
+    "判定",
+    "是否通过",
+    "差距",
+    "状态",
     "阈值",
     "当前状态",
     "还需连续观察",
+    "未来",
     "目标公司",
     "目标企业",
     "该公司",
     "该企业",
 }
+_VAGUE_ENTITY_RE = re.compile(
+    r"^(?:(?:海外|国内|全球|头部|主要|大型)\s*)?"
+    r"(?:大厂|厂商|公司|企业|同行|市场|行业|产业)$",
+    re.IGNORECASE,
+)
 _ZH_TOPIC_RE = re.compile(
     r"电话会(?:中)?(?:管理层)?(?:对|关于)?\s*"
     r"(?P<body>[^。；\n]{2,180}?)"
@@ -200,7 +244,7 @@ _SINGLE_TABLE_RE = re.compile(
 _CALCULATION_RE = re.compile(
     r"(?:(?:^|[，,。；;\n]|请|并|再|然后|需要|要求|分别|逐项)\s*"
     r"(?:帮我)?计算(?:一下)?|"
-    r"算出|求出|复算|增幅|变化率|占比|合计|差额|"
+    r"程序化计算|算出|求出|复算|增幅|变化率|同比(?:增速|增长率)|占比|合计|差额|"
     r"\bcalculate\b|\bcompute\b|\brecalculate\b|\bchange rate\b)",
     re.IGNORECASE,
 )
@@ -208,6 +252,19 @@ _EXPLANATORY_REQUEST_RE = re.compile(
     r"(?:是什么意思|什么是|含义|通俗(?:解释|理解)|解释|定义|计算方式|计算方法|"
     r"为什么|为何|怎么理解|\bwhat\s+is\b|\bwhat\s+does\b|\bexplain\b|"
     r"\bmeaning\b|\bdefinition\b|\bformula\b|\bhow\s+is\b.{0,30}\bcalculated\b)",
+    re.IGNORECASE,
+)
+_EXPLICIT_RETRIEVAL_REQUEST_RE = re.compile(
+    r"(?:查询|检索|搜索|查找|查阅|根据|基于|使用).{0,32}"
+    r"(?:数据|资料|财报|年报|报告|公告|电话会|原文|来源)|"
+    r"(?:最新|当前|现在|截至).{0,24}(?:数据|数值|指标|财报|报告|情况)|"
+    r"\b(?:search|retrieve|look\s+up|using|based\s+on)\b.{0,40}"
+    r"\b(?:data|filing|report|transcript|source)\b",
+    re.IGNORECASE,
+)
+_NEGATED_RETRIEVAL_REQUEST_RE = re.compile(
+    r"(?:不要|无需|无须|不必|禁止|不需要)\s*"
+    r"(?:查询|检索|搜索|查找|查阅|使用)[^。；;\n]*",
     re.IGNORECASE,
 )
 _NEGATED_CALCULATION_RE = re.compile(
@@ -454,9 +511,7 @@ def parse_task_contract(
     task_policy = task_policy if isinstance(task_policy, Mapping) else {}
     topics = _extract_topics(user_prompt, semantics, task_policy)
     period_scoped_topics = (
-        topics
-        if _ZH_TOPIC_RE.search(user_prompt) or _EN_TOPIC_RE.search(user_prompt)
-        else ()
+        topics if _ZH_TOPIC_RE.search(user_prompt) or _EN_TOPIC_RE.search(user_prompt) else ()
     )
     dimension_groups = _extract_dimension_members(user_prompt, task_policy)
     period_count = output.requested_period_count
@@ -465,29 +520,36 @@ def parse_task_contract(
     )
     metric_prompt = _without_topic_phrases(user_prompt, topics) if period_count else user_prompt
     metrics = _extract_metrics(metric_prompt, semantics, output)
-    entities = _extract_entities(
-        user_prompt,
-        non_entity_terms=(
-            *output.requested_fields,
-            *(alias for _metric, aliases, _policy_ref in metrics for alias in aliases),
-            *(alias for _topic, aliases in topics for alias in aliases),
-        ),
-    )
     periods = _extract_periods(user_prompt)
     latest_selector = _relative_selector(user_prompt)
+    retrieval_prompt = _NEGATED_RETRIEVAL_REQUEST_RE.sub("", user_prompt)
     explanatory_only = bool(
         _EXPLANATORY_REQUEST_RE.search(user_prompt)
-        and not entities
         and not periods
         and latest_selector is None
         and period_count is None
         and not locked_documents
+        and not _EXPLICIT_RETRIEVAL_REQUEST_RE.search(retrieval_prompt)
     )
     if explanatory_only:
         # Concept/formula education is not a request to retrieve the current
-        # value of the mentioned metric. Keeping a structured slot here made
-        # ordinary knowledge answers launch an expensive, impossible repair.
+        # value of a mentioned metric or industry.  Parse this before broad
+        # Chinese comparison verbs: sentence-final phrases such as
+        # ``为什么不能用同一阈值比较？`` otherwise look like entity prefixes
+        # and launch an expensive, impossible structured-data repair.
         metrics = ()
+        topics = ()
+        period_scoped_topics = ()
+        entities: tuple[str, ...] = ()
+    else:
+        entities = _extract_entities(
+            user_prompt,
+            non_entity_terms=(
+                *output.requested_fields,
+                *(alias for _metric, aliases, _policy_ref in metrics for alias in aliases),
+                *(alias for _topic, aliases in topics for alias in aliases),
+            ),
+        )
     calculation_prompt = _NEGATED_CALCULATION_RE.sub("", user_prompt)
     calculation_requested = (
         bool(_CALCULATION_RE.search(calculation_prompt)) and not explanatory_only
@@ -570,9 +632,7 @@ def parse_task_contract(
                             for index, member in enumerate(dimension_combination)
                         }
                         dimension_policy_refs = tuple(
-                            member[2]
-                            for member in dimension_combination
-                            if member[2]
+                            member[2] for member in dimension_combination if member[2]
                         )
                         requirements.append(
                             _requirement(
@@ -601,12 +661,8 @@ def parse_task_contract(
                             )
                         )
 
-    if period_count and period_count > 0 and (
-        period_scoped_topics or (not metrics and not topics)
-    ):
-        requested_topics = period_scoped_topics or (
-            ("requested-summary", ("requested-summary",)),
-        )
+    if period_count and period_count > 0 and (period_scoped_topics or (not metrics and not topics)):
+        requested_topics = period_scoped_topics or (("requested-summary", ("requested-summary",)),)
         entity_scopes: tuple[str | None, ...] = tuple(entities) if entities else (None,)
         for entity in entity_scopes:
             for ordinal in range(period_count):
@@ -689,11 +745,7 @@ def parse_task_contract(
                 ),
                 slots={
                     **({"metrics": [metric[0] for metric in metrics]} if metrics else {}),
-                    **(
-                        {"formulaRequired": True}
-                        if output.calculation_formula_required
-                        else {}
-                    ),
+                    **({"formulaRequired": True} if output.calculation_formula_required else {}),
                 },
             )
         )
@@ -942,11 +994,7 @@ def build_task_retrieval_plan(
     """
 
     selected_ids = (
-        {
-            str(requirement_id)
-            for requirement_id in requirement_ids
-            if str(requirement_id)
-        }
+        {str(requirement_id) for requirement_id in requirement_ids if str(requirement_id)}
         if requirement_ids is not None
         else None
     )
@@ -974,9 +1022,7 @@ def build_task_retrieval_plan(
         if requirement.kind not in {"structured-slot", "topic", "document-section"}:
             continue
         entity = str(
-            requirement.slots.get("entityName")
-            or requirement.slots.get("entityId")
-            or ""
+            requirement.slots.get("entityName") or requirement.slots.get("entityId") or ""
         ).strip()
         document = str(requirement.slots.get("documentId") or "").strip()
         period = str(requirement.slots.get("period") or "").strip()
@@ -1006,9 +1052,7 @@ def build_task_retrieval_plan(
             )
             dimensions = requirement.slots.get("dimensions")
             if isinstance(dimensions, Mapping) and dimensions:
-                suffix = ",".join(
-                    f"{key}={value}" for key, value in sorted(dimensions.items())
-                )
+                suffix = ",".join(f"{key}={value}" for key, value in sorted(dimensions.items()))
                 part = f"{part}[{suffix}]"
             requested_parts.append(part)
         basis = {
@@ -1098,15 +1142,18 @@ def task_contract_prompt(
             )
         )
         for step in retrieval_plan.steps[:24]:
-            scope = ", ".join(
-                item
-                for item in (
-                    f"entity={','.join(step.entity_ids)}" if step.entity_ids else "",
-                    f"period={','.join(step.periods)}" if step.periods else "",
-                    f"document={','.join(step.document_ids)}" if step.document_ids else "",
+            scope = (
+                ", ".join(
+                    item
+                    for item in (
+                        f"entity={','.join(step.entity_ids)}" if step.entity_ids else "",
+                        f"period={','.join(step.periods)}" if step.periods else "",
+                        f"document={','.join(step.document_ids)}" if step.document_ids else "",
+                    )
+                    if item
                 )
-                if item
-            ) or "request scope"
+                or "request scope"
+            )
             lines.append(
                 f"- {step.step_id}: {step.strategy}; {scope}; "
                 f"parts={','.join(step.requested_parts)}; maxAttempts={step.max_attempts}"
@@ -1138,8 +1185,7 @@ class TaskCoverageTracker:
         self._entity_aliases: dict[str, set[str]] = {
             entity: {entity}
             for entity in {
-                str(item.slots.get("entityName") or "").strip()
-                for item in contract.requirements
+                str(item.slots.get("entityName") or "").strip() for item in contract.requirements
             }
             if entity
         }
@@ -1153,10 +1199,7 @@ class TaskCoverageTracker:
         ontology and are discarded with the turn.
         """
 
-        return {
-            entity: tuple(sorted(aliases))
-            for entity, aliases in self._entity_aliases.items()
-        }
+        return {entity: tuple(sorted(aliases)) for entity, aliases in self._entity_aliases.items()}
 
     def record_tool_result(
         self,
@@ -1184,10 +1227,9 @@ class TaskCoverageTracker:
             name,
             self._config,
         )
-        indexed_search_empty = (
-            name.rsplit("__", 1)[-1] == "kb_search"
-            and _indexed_search_has_explicitly_empty_chunks(scoped_model_content)
-        )
+        indexed_search_empty = name.rsplit("__", 1)[
+            -1
+        ] == "kb_search" and _indexed_search_has_explicitly_empty_chunks(scoped_model_content)
         coverage_text = _materialize_coverage_text(
             tool_input,
             scoped_model_content,
@@ -1208,16 +1250,10 @@ class TaskCoverageTracker:
             scope_pairs = result_scope_pairs
         else:
             scope_ids = input_scope_ids
-            period_keys = tuple(
-                dict.fromkeys((*input_period_keys, *result_period_keys))
-            )
-            scope_pairs = tuple(
-                dict.fromkeys((*input_scope_pairs, *result_scope_pairs))
-            )
+            period_keys = tuple(dict.fromkeys((*input_period_keys, *result_period_keys)))
+            scope_pairs = tuple(dict.fromkeys((*input_scope_pairs, *result_scope_pairs)))
         if role == "candidate":
-            for scope_id, context in _extract_scoped_record_contexts(
-                scoped_model_content
-            ).items():
+            for scope_id, context in _extract_scoped_record_contexts(scoped_model_content).items():
                 self._candidate_scope_contexts[scope_id] = context
                 self._candidate_scope_periods[scope_id] = _period_keys_in_text(context)
         lineage_context = "\n".join(
@@ -1407,9 +1443,7 @@ class TaskCoverageTracker:
                     str(attempt_id)
                     for row in requirement_rows
                     for attempt_id in (
-                        row.get("attemptIds")
-                        if isinstance(row.get("attemptIds"), list)
-                        else []
+                        row.get("attemptIds") if isinstance(row.get("attemptIds"), list) else []
                     )
                     if str(attempt_id).startswith("attempt_")
                 )
@@ -1484,8 +1518,7 @@ class TaskCoverageTracker:
         if not self.contract.enforceable:
             return False
         has_requested_table = any(
-            requirement.kind == "output-shape"
-            and requirement.slots.get("format") == "table"
+            requirement.kind == "output-shape" and requirement.slots.get("format") == "table"
             for requirement in self.contract.requirements
         )
         if not has_requested_table:
@@ -1521,9 +1554,7 @@ class TaskCoverageTracker:
 
         expected_rows = self._actionable_revision_gaps(audit)
         expected_ids = {
-            str(row.get("requirementId"))
-            for row in expected_rows
-            if row.get("requirementId")
+            str(row.get("requirementId")) for row in expected_rows if row.get("requirementId")
         }
         requirements = {
             requirement.requirement_id: requirement
@@ -1582,9 +1613,7 @@ class TaskCoverageTracker:
         patched = baseline_text
         patched_ids: list[str] = []
         for requirement, replacement, handles in normalized:
-            citation_links = " ".join(
-                f"[source](evidence://{handle})" for handle in handles
-            )
+            citation_links = " ".join(f"[source](evidence://{handle})" for handle in handles)
             value = f"{replacement} {citation_links}".strip()
             updated = _patch_markdown_table_slot(patched, requirement, value=value)
             if updated == patched:
@@ -1715,8 +1744,7 @@ class TaskCoverageTracker:
         """
 
         has_requested_table = any(
-            requirement.kind == "output-shape"
-            and requirement.slots.get("format") == "table"
+            requirement.kind == "output-shape" and requirement.slots.get("format") == "table"
             for requirement in self.contract.requirements
         )
         has_exact_items = any(
@@ -1736,7 +1764,7 @@ class TaskCoverageTracker:
         }
         patched = answer
         patched_ids: list[str] = []
-        for requirement in (self.contract.requirements if has_requested_table else ()):
+        for requirement in self.contract.requirements if has_requested_table else ():
             if requirement.kind != "structured-slot":
                 continue
             row = rows_by_id.get(requirement.requirement_id)
@@ -1981,10 +2009,7 @@ class TaskCoverageTracker:
                 or len(headers) != 2
                 or not separator
                 or len(separator) != 2
-                or not all(
-                    re.fullmatch(r":?-{3,}:?", cell.replace(" ", ""))
-                    for cell in separator
-                )
+                or not all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in separator)
                 or not re.search(r"(?:项目|指标|字段|item|metric)", headers[0], re.I)
                 or not _contains_alias(_nearest_table_context(lines, index), entity)
             ):
@@ -2190,20 +2215,14 @@ class TaskCoverageTracker:
                 _add_identity_alias(aliases, value)
 
     def _entity_aliases_for(self, requirement: TaskRequirement) -> tuple[str, ...]:
-        entity = str(
-            requirement.slots.get("entityName")
-            or requirement.slots.get("entityId")
-            or ""
-        )
+        entity = str(requirement.slots.get("entityName") or requirement.slots.get("entityId") or "")
         return tuple(self._entity_aliases.get(entity, {entity}) if entity else ())
 
     def _explicitly_unavailable(self, requirement: TaskRequirement) -> bool:
         target_scope = self._relative_scope(requirement)
         aliases = self._entity_aliases_for(requirement)
         metric = str(requirement.slots.get("metric") or "")
-        metric_aliases = requirement.aliases.get("metric", ()) or (
-            (metric,) if metric else ()
-        )
+        metric_aliases = requirement.aliases.get("metric", ()) or ((metric,) if metric else ())
         return any(
             attempt.role == "content"
             and _attempt_matches_requirement(
@@ -2319,9 +2338,7 @@ class TaskCoverageTracker:
                         target_scope=target_scope,
                         entity_aliases=entity_aliases,
                     )
-                    and any(
-                        _contains_alias(attempt.coverage_text, alias) for alias in aliases
-                    )
+                    and any(_contains_alias(attempt.coverage_text, alias) for alias in aliases)
                 ),
                 None,
             )
@@ -2351,10 +2368,14 @@ class TaskCoverageTracker:
         scopes: list[tuple[str | None, str | None]] = []
 
         def add(scope_id: str | None, period_key: str | None) -> None:
-            if period_granularity == "quarter" and period_key and not re.fullmatch(
-                r"(?:19|20)\d{2}-q[1-4]",
-                period_key,
-                re.IGNORECASE,
+            if (
+                period_granularity == "quarter"
+                and period_key
+                and not re.fullmatch(
+                    r"(?:19|20)\d{2}-q[1-4]",
+                    period_key,
+                    re.IGNORECASE,
+                )
             ):
                 return
             value = (scope_id or None, period_key or None)
@@ -2526,11 +2547,7 @@ def task_coverage_improves(
             return False
         if candidate_axes.get("modelInput", -1) < axes["modelInput"]:
             return False
-        if (
-            axes["answer"] == 2
-            and axes["modelInput"] == 2
-            and candidate_axes.get("answer", -1) < 2
-        ):
+        if axes["answer"] == 2 and axes["modelInput"] == 2 and candidate_axes.get("answer", -1) < 2:
             return False
         before_score += sum(axes.values())
         after_score += sum(candidate_axes.values())
@@ -2608,18 +2625,31 @@ def _extract_entities(
     non_entity_terms: Iterable[str] = (),
 ) -> tuple[str, ...]:
     terms = tuple(str(term) for term in non_entity_terms if str(term).strip())
+    raw_scoped_bodies: list[str] = []
+    for pattern in (
+        _ZH_DOCUMENT_SCOPE_ENTITY_RE,
+        _ZH_CONTEXT_SCOPE_ENTITY_RE,
+        _ZH_LEADING_SUBJECT_ENTITY_RE,
+        _ZH_FOR_ENTITY_RE,
+    ):
+        raw_scoped_bodies.extend(match.group("body") for match in pattern.finditer(prompt))
     scoped_bodies = [
-        match.group("body") for match in _ZH_DOCUMENT_SCOPE_ENTITY_RE.finditer(prompt)
+        cleaned for body in raw_scoped_bodies if (cleaned := _clean_entity_body_prefix(body))
     ]
     direct_bodies: list[str] = []
-    for match in _ZH_DIRECT_ENTITY_RE.finditer(prompt):
+    direct_matches = list(_ZH_DIRECT_ENTITY_RE.finditer(prompt))
+    calculation_matches = list(_ZH_CALCULATION_ENTITY_RE.finditer(prompt))
+    for match in direct_matches:
         prefix = prompt[max(0, match.start() - 16) : match.start()]
-        if re.search(r"(?:不要|无需|无须|不必|禁止|不需要)\s*$", prefix):
+        if re.search(
+            r"(?:不要|无需|无须|不必|禁止|不需要|无法|不能|难以)\s*$",
+            prefix,
+        ):
             continue
         body = _trim_entity_body(match.group("body"), terms)
         if body:
             direct_bodies.append(body)
-    for match in _ZH_CALCULATION_ENTITY_RE.finditer(prompt):
+    for match in calculation_matches:
         body = _trim_entity_body(match.group("body"), terms)
         if body:
             direct_bodies.append(body)
@@ -2627,6 +2657,11 @@ def _extract_entities(
         bodies = list(scoped_bodies)
     elif direct_bodies:
         bodies = direct_bodies
+    elif direct_matches or calculation_matches:
+        # An explicit action whose body starts with a period, output label, or
+        # generic scope has no named entity.  Falling back to the older broad
+        # trigger parser would turn that same non-entity phrase into a subject.
+        bodies = []
     else:
         bodies = [match.group("body") for match in _ZH_ENTITY_TRIGGER_RE.finditer(prompt)]
         bodies.extend(match.group("body") for match in _EN_ENTITY_TRIGGER_RE.finditer(prompt))
@@ -2637,7 +2672,8 @@ def _extract_entities(
     excluded = {_fold(term) for term in terms}
     entities: list[str] = []
     for body in bodies:
-        body = re.sub(r"^(?:请|帮我|一下|the\s+)", "", body.strip(), flags=re.I)
+        body = _clean_entity_body_prefix(body)
+        body = re.sub(r"^(?:所有|全部)(?:讨论|分析|研究|检查)?", "", body).strip()
         for raw in _ENTITY_SPLIT_RE.split(body):
             entity = raw.strip(" `*'\"：:()（）.的")
             entity = re.sub(r"^[一二三四五六七八九十\d]+家\s*", "", entity)
@@ -2650,6 +2686,7 @@ def _extract_entities(
                 not entity
                 or entity.casefold() in _ENTITY_STOP_WORDS
                 or _fold(entity) in excluded
+                or _VAGUE_ENTITY_RE.fullmatch(entity)
                 or len(entity) > 64
                 or _DOCUMENT_RE.fullmatch(entity)
                 or _NON_ENTITY_INSTRUCTION_RE.search(entity)
@@ -2658,6 +2695,42 @@ def _extract_entities(
             if entity not in entities:
                 entities.append(entity)
     return tuple(entities)
+
+
+def _clean_entity_body_prefix(body: str) -> str:
+    candidate = body.strip()
+    candidate = re.sub(
+        r"^(?:(?:请|帮我|一下|仅|只|分别|逐项)\s*)+",
+        "",
+        candidate,
+        flags=re.I,
+    )
+    candidate = re.sub(
+        r"^(?:用|使用)\s*(?:Markdown\s*)?表格(?:列出|展示)?\s*",
+        "",
+        candidate,
+        flags=re.I,
+    )
+    candidate = re.sub(
+        r"^(?:根据|基于|使用|相对|用|查阅|查找|查询|检索|检查|分析|研究|"
+        r"判断|拆解|对比|比较|列出|总结|归纳|梳理)\s*",
+        "",
+        candidate,
+        flags=re.I,
+    )
+    nested_action = list(
+        re.finditer(
+            r"(?:查询|检索|搜索|查找|查阅|检查|分析|研究)\s*",
+            candidate,
+            flags=re.I,
+        )
+    )
+    if nested_action:
+        last_action = nested_action[-1]
+        tool_prefix = candidate[: last_action.start()]
+        if re.search(r"[A-Za-z0-9_.-]", tool_prefix):
+            candidate = candidate[last_action.end() :]
+    return candidate.strip()
 
 
 def _trim_entity_body(body: str, non_entity_terms: tuple[str, ...]) -> str:
@@ -2670,10 +2743,7 @@ def _trim_entity_body(body: str, non_entity_terms: tuple[str, ...]) -> str:
     """
 
     candidate = body.strip()
-    boundaries = [
-        match.start()
-        for match in _ENTITY_SCOPE_BOUNDARY_RE.finditer(candidate)
-    ]
+    boundaries = [match.start() for match in _ENTITY_SCOPE_BOUNDARY_RE.finditer(candidate)]
     for term in non_entity_terms:
         if not term.strip():
             continue
@@ -2693,31 +2763,19 @@ def _extract_metrics(
     ontology = semantics.get("metric_ontology")
     metrics = ontology.get("metrics") if isinstance(ontology, Mapping) else None
     explicit_fields = tuple(
-        cleaned
-        for field in output.requested_fields
-        if (cleaned := _clean_requested_field(field))
+        cleaned for field in output.requested_fields if (cleaned := _clean_requested_field(field))
     )
-    search_texts = (
-        explicit_fields
-        if explicit_fields
-        else (_metric_request_text(prompt),)
-    )
+    search_texts = explicit_fields if explicit_fields else (_metric_request_text(prompt),)
     resolved: list[tuple[str, tuple[str, ...], str]] = []
     for search_text in search_texts:
-        found: list[
-            tuple[str, tuple[str, ...], str, tuple[tuple[int, int], ...]]
-        ] = []
+        found: list[tuple[str, tuple[str, ...], str, tuple[tuple[int, int], ...]]] = []
         if isinstance(metrics, Mapping):
             for metric, definition in metrics.items():
                 if not isinstance(definition, Mapping):
                     continue
                 aliases = [str(metric)]
-                aliases.extend(
-                    str(item) for item in definition.get("aliases", []) if str(item)
-                )
-                aliases.extend(
-                    str(item) for item in definition.get("fields", []) if str(item)
-                )
+                aliases.extend(str(item) for item in definition.get("aliases", []) if str(item))
+                aliases.extend(str(item) for item in definition.get("fields", []) if str(item))
                 deduped = tuple(dict.fromkeys(aliases))
                 spans = tuple(
                     span for alias in deduped for span in _alias_spans(search_text, alias)
@@ -2943,8 +3001,7 @@ def _extract_dimension_members(
                     min(start for start, _end in dimension_spans),
                     str(dimension),
                     tuple(
-                        (member, aliases, policy_ref)
-                        for _, member, aliases, policy_ref in members
+                        (member, aliases, policy_ref) for _, member, aliases, policy_ref in members
                     ),
                 )
             )
@@ -2970,11 +3027,7 @@ def _extract_topics(
             raw_aliases = definition.get("aliases")
             if isinstance(raw_aliases, list):
                 candidates.extend(str(alias) for alias in raw_aliases if str(alias).strip())
-            spans = [
-                span
-                for candidate in candidates
-                for span in _alias_spans(prompt, candidate)
-            ]
+            spans = [span for candidate in candidates for span in _alias_spans(prompt, candidate)]
             if spans:
                 discovered.append(
                     (
@@ -3004,10 +3057,7 @@ def _extract_topics(
                 _fold(candidate) == _fold(topic)
                 or (
                     min(len(_fold(candidate)), len(_fold(topic))) >= 3
-                    and (
-                        _fold(candidate) in _fold(topic)
-                        or _fold(topic) in _fold(candidate)
-                    )
+                    and (_fold(candidate) in _fold(topic) or _fold(topic) in _fold(candidate))
                 )
                 for candidate in candidates
             ):
@@ -3131,9 +3181,7 @@ def _tool_result_mapping(
                 coverage_source = mapping.get("coverage_text", "result")
                 raw_scope = mapping.get("coverage_scope", "partial")
                 coverage_scope: Literal["partial", "full-document", "full-record"] = (
-                    raw_scope
-                    if raw_scope in {"full-document", "full-record"}
-                    else "partial"
+                    raw_scope if raw_scope in {"full-document", "full-record"} else "partial"
                 )
                 selected = (
                     role,
@@ -3340,9 +3388,7 @@ def _attempt_matches_requirement(
     target_scope: tuple[str | None, str | None] | None = None,
     entity_aliases: tuple[str, ...] = (),
 ) -> bool:
-    scope_haystack = (
-        f"{attempt.input_text}\n{attempt.model_content}\n{attempt.scope_context}"
-    )
+    scope_haystack = f"{attempt.input_text}\n{attempt.model_content}\n{attempt.scope_context}"
     evidence_haystack = attempt.coverage_text
     if attempt.role == "content" and not evidence_haystack.strip():
         return False
@@ -3358,8 +3404,7 @@ def _attempt_matches_requirement(
         entity
         and requirement.kind == "structured-slot"
         and not any(
-            _contains_alias(scope_haystack, alias)
-            for alias in (entity_aliases or (entity,))
+            _contains_alias(scope_haystack, alias) for alias in (entity_aliases or (entity,))
         )
     ):
         return False
@@ -3424,16 +3469,13 @@ def _attempt_matches_request_scope(
     if target_scope is not None and not _attempt_matches_scope(attempt, target_scope):
         return False
     request_haystack = attempt.input_text
-    scope_haystack = (
-        f"{attempt.input_text}\n{attempt.model_content}\n{attempt.scope_context}"
-    )
+    scope_haystack = f"{attempt.input_text}\n{attempt.model_content}\n{attempt.scope_context}"
     slots = requirement.slots
     matched = target_scope is not None
     entity = str(slots.get("entityName") or slots.get("entityId") or "")
     if entity:
         if not any(
-            _contains_alias(scope_haystack, alias)
-            for alias in (entity_aliases or (entity,))
+            _contains_alias(scope_haystack, alias) for alias in (entity_aliases or (entity,))
         ):
             return False
         matched = True
@@ -3475,14 +3517,11 @@ def _attempt_matches_requirement_scope(
 ) -> bool:
     if target_scope is not None and not _attempt_matches_scope(attempt, target_scope):
         return False
-    scope_haystack = (
-        f"{attempt.input_text}\n{attempt.model_content}\n{attempt.scope_context}"
-    )
+    scope_haystack = f"{attempt.input_text}\n{attempt.model_content}\n{attempt.scope_context}"
     slots = requirement.slots
     entity = str(slots.get("entityName") or slots.get("entityId") or "")
     if entity and not any(
-        _contains_alias(scope_haystack, alias)
-        for alias in (entity_aliases or (entity,))
+        _contains_alias(scope_haystack, alias) for alias in (entity_aliases or (entity,))
     ):
         return False
     period = str(slots.get("period") or "")
@@ -4110,9 +4149,7 @@ def _is_actionable_coverage_gap(
     roles = attempt_roles or {}
     attempt_ids = row.get("attemptIds")
     attempt_ids = attempt_ids if isinstance(attempt_ids, list) else []
-    has_content_attempt = any(
-        roles.get(str(attempt_id)) == "content" for attempt_id in attempt_ids
-    )
+    has_content_attempt = any(roles.get(str(attempt_id)) == "content" for attempt_id in attempt_ids)
     # For free-text topics, candidate discovery alone is a concrete retrieval
     # gap.  Once period-scoped content has actually been read, a deterministic
     # semantic miss is uncertainty rather than proof of absence; publishing
@@ -4270,10 +4307,7 @@ def _reorder_exact_markdown_dimension_table(
             not header
             or not separator
             or len(header) != len(separator)
-            or not all(
-                re.fullmatch(r":?-{3,}:?", cell.replace(" ", ""))
-                for cell in separator
-            )
+            or not all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in separator)
         ):
             index += 1
             continue
@@ -4321,9 +4355,7 @@ def _reorder_exact_markdown_dimension_table(
             return text
         updated = list(lines)
         original_rows = lines[row_start:row_end]
-        updated[row_start:row_end] = [
-            original_rows[position] for position in selected_positions
-        ]
+        updated[row_start:row_end] = [original_rows[position] for position in selected_positions]
         candidates.append(updated)
         index = max(index + 1, row_end)
     if len(candidates) != 1:
@@ -4384,9 +4416,7 @@ def _patch_markdown_table_slot(
             not headers
             or not separator
             or len(headers) != len(separator)
-            or not all(
-                re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in separator
-            )
+            or not all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in separator)
         ):
             index += 1
             continue
@@ -4587,8 +4617,7 @@ def _indexed_search_has_explicitly_empty_chunks(content: Any) -> bool:
             and isinstance(block.get("text"), str)
         ]
         return bool(text_payloads) and all(
-            _indexed_search_has_explicitly_empty_chunks(payload)
-            for payload in text_payloads
+            _indexed_search_has_explicitly_empty_chunks(payload) for payload in text_payloads
         )
     return (
         isinstance(content, Mapping)
@@ -4729,8 +4758,7 @@ def _extract_scoped_record_contexts(value: Any) -> dict[str, str]:
                 if text and len(text) <= 160 and text not in selected:
                     selected.append(text)
         if not selected and any(
-            node.get(key) is not None
-            for key in ("title", "document_title", "source_title")
+            node.get(key) is not None for key in ("title", "document_title", "source_title")
         ):
             generic = node.get("id")
             if generic is not None and not isinstance(
