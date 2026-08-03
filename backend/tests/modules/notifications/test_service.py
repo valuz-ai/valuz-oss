@@ -91,6 +91,7 @@ def test_ingest_publishes_created_event_only_for_new_row(
     topic, payload = published[0]
     assert topic == "notification.created"
     assert payload["owner_user_id"] == OWNER
+    assert payload["unread"] == 1
     assert payload["notification"]["kind"] == "question"
     assert payload["notification"]["pending_id"] == "p1"
 

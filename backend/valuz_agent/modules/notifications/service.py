@@ -60,7 +60,8 @@ class NotificationService:
         its next poll."""
         try:
             async with async_unit_of_work() as db:
-                row, created = await NotificationDatastore(db).upsert(
+                datastore = NotificationDatastore(db)
+                row, created = await datastore.upsert(
                     user_id,
                     dedup_key=dedup_key,
                     kind=kind,
@@ -77,6 +78,7 @@ class NotificationService:
                     payload=payload,
                 )
                 entry = _entry(row)
+                unread = await datastore.count_unread(user_id) if created else None
             if created:
                 try:
                     from valuz_agent.infra.eventbus import event_bus
@@ -85,6 +87,7 @@ class NotificationService:
                         NOTIFICATION_CREATED,
                         owner_user_id=user_id,
                         notification=entry.model_dump(mode="json"),
+                        unread=unread,
                     )
                 except Exception:  # noqa: BLE001
                     logger.debug(
