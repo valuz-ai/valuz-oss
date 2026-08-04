@@ -313,10 +313,15 @@ class ArtifactDatastore:
         re-read and retry rather than silently forking the history or clobbering
         the winner.
 
-        The revision row is inserted first and left behind on a lost race. That
-        is deliberate: it is an immutable record that the generation happened,
-        and the alternative (delete it) would race with the retry that is about
-        to re-append the same content and hit the idempotency constraint.
+        **The head moves before the revision is written**, which is why the
+        revision id is minted up front. Written the other way round, a delivery
+        that lost the race at the UPDATE would already have inserted its
+        revision, and the caller's retry — same artifact, same bytes — would
+        then collide with the content-hash idempotency constraint and fail a
+        delivery that should have succeeded. Ordering it this way means a
+        refused attempt leaves nothing at all behind. The two writes commit
+        together, so the window where the head names a not-yet-inserted revision
+        never escapes this transaction.
         """
         head = await self.get_head(user_id, artifact_id)
         current = head.revision_id if head is not None else None
@@ -324,8 +329,42 @@ class ArtifactDatastore:
             return None
 
         version_no = (head.version_no + 1) if head is not None else 1
+        revision_id = _short_id(10)
+
+        if head is None:
+            # First generation. The primary key on ``artifact_id`` is the race
+            # guard here; a genuine collision would need two deliveries to have
+            # separately created the same artifact, which the key table's own
+            # uniqueness already rules out.
+            self._db.add(
+                ArtifactHeadRow(
+                    user_id=user_id,
+                    artifact_id=artifact_id,
+                    revision_id=revision_id,
+                    version_no=version_no,
+                )
+            )
+            await self._db.flush()
+        else:
+            result = await self._db.execute(
+                update(ArtifactHeadRow)
+                .where(
+                    ArtifactHeadRow.artifact_id == artifact_id,
+                    ArtifactHeadRow.user_id == user_id,
+                    # The compare half of compare-and-set.
+                    ArtifactHeadRow.revision_id == current,
+                )
+                .values(revision_id=revision_id, version_no=version_no, updated_at=now_ms())
+            )
+            # ``rowcount`` on an UPDATE is how the compare-and-set reports its
+            # verdict: 0 means another delivery moved the head between our read
+            # and this write. Typed as the generic ``Result`` here, which does
+            # not expose it — every DBAPI backing this does.
+            if result.rowcount == 0:  # type: ignore[attr-defined]
+                return None
+
         revision = ArtifactRevisionRow(
-            id=_short_id(10),
+            id=revision_id,
             user_id=user_id,
             artifact_id=artifact_id,
             parent_revision_id=current,
@@ -343,34 +382,6 @@ class ArtifactDatastore:
         )
         self._db.add(revision)
         await self._db.flush()
-
-        if head is None:
-            self._db.add(
-                ArtifactHeadRow(
-                    user_id=user_id,
-                    artifact_id=artifact_id,
-                    revision_id=revision.id,
-                    version_no=version_no,
-                )
-            )
-            await self._db.flush()
-        else:
-            result = await self._db.execute(
-                update(ArtifactHeadRow)
-                .where(
-                    ArtifactHeadRow.artifact_id == artifact_id,
-                    ArtifactHeadRow.user_id == user_id,
-                    # The compare half of compare-and-set.
-                    ArtifactHeadRow.revision_id == current,
-                )
-                .values(revision_id=revision.id, version_no=version_no, updated_at=now_ms())
-            )
-            # ``rowcount`` on an UPDATE is how the compare-and-set reports its
-            # verdict: 0 means another delivery moved the head between our read
-            # and this write. Typed as the generic ``Result`` here, which does
-            # not expose it — every DBAPI backing this does.
-            if result.rowcount == 0:  # type: ignore[attr-defined]
-                return None
         return revision
 
     # ---- Reads ----

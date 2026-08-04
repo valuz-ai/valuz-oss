@@ -420,3 +420,61 @@ def test_name_key_is_directory_qualified() -> None:
         rel_dir_of("out/b.md"), "report"
     )
     assert name_key_value(rel_dir_of("top.md"), "Top") == "top"
+
+
+async def test_lost_race_leaves_nothing_behind_for_the_retry(session_factory, scope):  # type: ignore[no-untyped-def]
+    """A refused delivery must not block its own retry.
+
+    The caller's response to ``None`` is to re-read the head and try again with
+    the same content. If the losing attempt had already written its revision
+    row, that retry would collide with the content-hash idempotency constraint
+    and fail a delivery that should have succeeded.
+    """
+    async with session_factory() as db:
+        ds = ArtifactDatastore(db)
+        artifact = await ds.create_artifact(
+            scope, kind="document", display_name="r.md", rel_path="r.md"
+        )
+        base = await ds.append_revision(
+            "u1",
+            artifact.id,
+            expected_head_revision_id=None,
+            content=await _content(ds, "h1"),
+            file_name="r.md",
+            abs_path="/ws/v1/r.md",
+        )
+        assert base is not None
+        winner = await ds.append_revision(
+            "u1",
+            artifact.id,
+            expected_head_revision_id=base.id,
+            content=await _content(ds, "h2"),
+            file_name="r.md",
+            abs_path="/ws/v2/r.md",
+        )
+        assert winner is not None
+
+        content = await _content(ds, "h3")
+        assert (
+            await ds.append_revision(
+                "u1",
+                artifact.id,
+                expected_head_revision_id=base.id,  # stale
+                content=content,
+                file_name="r.md",
+                abs_path="/ws/v3/r.md",
+            )
+            is None
+        )
+        # Nothing recorded for the refused attempt.
+        assert await ds.find_revision_by_content("u1", artifact.id, "h3") is None
+
+        retried = await ds.append_revision(
+            "u1",
+            artifact.id,
+            expected_head_revision_id=winner.id,  # re-read head
+            content=content,
+            file_name="r.md",
+            abs_path="/ws/v3/r.md",
+        )
+        assert retried is not None and retried.version_no == 3
