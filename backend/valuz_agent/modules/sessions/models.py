@@ -79,19 +79,19 @@ class SessionAttachmentRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
 
 
 class SessionArtifactRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
-    """Agent-delivered deliverables for a session — the "生成文件" list.
+    """SUPERSEDED. The pre-versioning "生成文件" list: one mutable row per
+    ``(session_id, file_path)``, holding a live reference rather than a copy.
 
-    Distinct from ``SessionAttachmentRow`` (which is the per-turn *upload*
-    staging set, files the **user** hands the agent). This table is the
-    inverse: files the **agent** declares as finished outputs by calling the
-    built-in ``deliver_artifacts`` MCP tool. Rows are durable (no per-turn
-    consume marker) and the side panel renders them as a curated, read-only
-    list the user can click to open.
+    Nothing reads or writes it. Deliveries now go to the Artifact / Revision /
+    Content tables (``modules/artifacts``), where re-delivering a file appends a
+    version instead of overwriting the row, and the recorded path points at an
+    immutable snapshot rather than a file the agent can still edit.
 
-    ``stored_path`` is the absolute path the agent wrote inside the session's
-    working directory; there is no copy — the row is a live reference. A
-    re-delivery of the same ``(session_id, stored_path)`` upserts (refreshes
-    size / mime / name) rather than appending a duplicate.
+    Kept, table and rows both, because installs that delivered before the switch
+    still have their history here and no backfill has been run — deliberately,
+    the measured volume did not justify one. Dropping this would turn "not yet
+    migrated" into "gone". The declaration stays so alembic keeps seeing the
+    table as part of the schema rather than proposing to drop it.
     """
 
     __tablename__ = "valuz_session_artifact"

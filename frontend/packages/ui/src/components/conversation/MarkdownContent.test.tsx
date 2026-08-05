@@ -45,6 +45,27 @@ const CITATIONS: CitationBundleV1 = {
   ],
 };
 
+it("projects a post-publish evidence link from sidecar metadata", () => {
+  const bundle: CitationBundleV1 = {
+    ...CITATIONS,
+    citations: [CITATIONS.citations[0]!],
+    projection: {
+      evidenceHandleToCitationId: {
+        ev_revenue_12345678: "cit_first",
+      },
+    },
+  };
+  const { container } = render(
+    <MarkdownContent
+      content="Revenue increased [source](evidence://ev_revenue_12345678)."
+      citationBundle={bundle}
+    />,
+  );
+
+  expect(container.querySelector('[data-citation-id="cit_first"]')).not.toBeNull();
+  expect(container.textContent).not.toContain("evidence://");
+});
+
 describe("MarkdownContent local file links", () => {
   it("routes local file hrefs through the provided handler", () => {
     const onLocalFileLinkClick = vi.fn();
@@ -236,6 +257,26 @@ describe("MarkdownContent citations", () => {
     expect(secondSource.className).toContain("w-full");
     expect(firstSource.className).not.toContain("border");
     expect(secondSource.className).not.toContain("border");
+  });
+
+  it("uses a smaller centered font for multi-digit citation pills", () => {
+    render(
+      <MarkdownContent
+        content={"Revenue [source](citation://cit_first)."}
+        citationBundle={CITATIONS}
+        citationDisplayOrderOverride={new Map([["cit_first", 15]])}
+      />,
+    );
+
+    const pills = screen.getAllByRole("button", {
+      name: /(?:citation|引用) 15/i,
+    });
+    expect(pills).toHaveLength(1);
+    expect(pills[0]?.textContent).toBe("15");
+    const label = pills[0]?.querySelector("span");
+    expect(label?.className).toContain("text-micro");
+    expect(label?.className).toContain("justify-center");
+    expect(label?.style.transform).toBe("translateX(-0.5px) scale(0.9)");
   });
 
   it("groups chunk citations from the same document into one source row", () => {
@@ -1013,15 +1054,27 @@ describe("MarkdownContent citations", () => {
       />,
     );
 
-    fireEvent.focus(
-      screen.getByRole("button", { name: /(?:citation|引用) 1/i }),
-    );
+    const calculationPill = screen.getByRole("button", {
+      name: /(?:citation|引用) 1/i,
+    });
+    fireEvent.click(calculationPill);
+    expect(onCitationClick).not.toHaveBeenCalled();
+
+    fireEvent.focus(calculationPill);
     fireEvent.click(screen.getByRole("button", { name: /revenue.*annual report/i }));
 
     expect(onCitationClick).toHaveBeenCalledWith({
       messageId: "msg-1",
       citationId: "cit_first",
     });
+
+    const calculationSource = document.querySelector(
+      "[data-citation-calculation-source]",
+    );
+    expect(calculationSource).not.toBeNull();
+    expect(calculationSource?.closest("button")).toBeNull();
+    fireEvent.mouseEnter(calculationSource!);
+    expect(screen.getAllByText(/revenue \/ 100 = 1\.18 x/i).length).toBeGreaterThan(0);
   });
 
   it("opens a known citation and degrades an unknown citation", () => {

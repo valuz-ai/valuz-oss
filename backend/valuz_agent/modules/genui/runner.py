@@ -28,12 +28,6 @@ logger = logging.getLogger(__name__)
 Completer = Callable[[str], Awaitable[str]]
 _LOG_PREVIEW_CHARS = 240
 _DIRECT_GENUI_MAX_TOKENS = 16384
-_DIRECT_LLM_FINAL_OUTPUT_INSTRUCTIONS = (
-    "Direct LLM final-output requirement: if you perform any thinking or reasoning, "
-    "you must continue after it and emit the final answer as normal text containing "
-    "ONLY valid OpenUI Lang. Never stop after thinking, never return only thinking "
-    "or reasoning blocks, and do not include prose or markdown fences."
-)
 
 # Ephemeral event type → live event type emitted on the CALLING session.
 # ``text_delta`` is the OpenUI code stream (frontend concatenates it into the
@@ -75,8 +69,18 @@ def _is_deepseek_anthropic_channel(*, model: str, mp: Any) -> bool:
     return "deepseek" in base_url or model.lower().startswith("deepseek-")
 
 
-def _with_direct_llm_final_output_requirement(prompt: str) -> str:
-    return f"{prompt.rstrip()}\n\n{_DIRECT_LLM_FINAL_OUTPUT_INSTRUCTIONS}"
+def _with_direct_llm_final_output_requirement(
+    prompt: str,
+    *,
+    output_format: str = "OpenUI Lang",
+) -> str:
+    requirement = (
+        "Direct LLM final-output requirement: if you perform any thinking or reasoning, "
+        "you must continue after it and emit the final answer as normal text containing "
+        f"ONLY valid {output_format}. Never stop after thinking, never return only "
+        "thinking or reasoning blocks, and do not include prose or markdown fences."
+    )
+    return f"{prompt.rstrip()}\n\n{requirement}"
 
 
 def _make_completer(
@@ -87,6 +91,8 @@ def _make_completer(
     mp: Any,
     calling_session_id: str | None = None,
     tool_use_id: str | None = None,
+    session_instructions: str = GENERATIVE_UI_INSTRUCTIONS,
+    output_format: str = "OpenUI Lang",
 ) -> Completer:
     """Build the ``complete`` seam backed by a throwaway no-tools kernel session
     cloning the source's runtime/provider/model. Each call is a fresh ephemeral
@@ -103,14 +109,15 @@ def _make_completer(
     text as the canonical ToolResult. When either is None, behaves as the
     synchronous (non-streaming) version."""
 
-    if not _uses_official_cli_auth(runtime_provider=runtime_provider, mp=mp):
-        return _make_direct_llm_completer(
-            user_id=user_id,
-            model=model,
-            mp=mp,
-            calling_session_id=calling_session_id,
-            tool_use_id=tool_use_id,
-        )
+    # if not _uses_official_cli_auth(runtime_provider=runtime_provider, mp=mp):
+    #     return _make_direct_llm_completer(
+    #         user_id=user_id,
+    #         model=model,
+    #         mp=mp,
+    #         calling_session_id=calling_session_id,
+    #         tool_use_id=tool_use_id,
+    #         output_format=output_format,
+    #     )
 
     async def _forward_deltas(ephem_id: str) -> None:
         forwarded = 0
@@ -182,14 +189,14 @@ def _make_completer(
                 name="generative-ui",
                 model=model,
                 runtime_provider=runtime_provider,
-                instructions=GENERATIVE_UI_INSTRUCTIONS,
+                instructions=session_instructions,
                 metadata=marker,
             ),
             cwd=str(gen_cwd),
             runtime_provider=runtime_provider,
             model=model,
             model_provider=mp_schema,
-            instructions=GENERATIVE_UI_INSTRUCTIONS,
+            instructions=session_instructions,
             permission_mode="default",
             metadata=marker,
         )
@@ -230,6 +237,7 @@ def _make_direct_llm_completer(
     mp: Any,
     calling_session_id: str | None = None,
     tool_use_id: str | None = None,
+    output_format: str = "OpenUI Lang",
 ) -> Completer:
     """Build a no-session completer for API-key / non-official model channels.
 
@@ -269,7 +277,12 @@ def _make_direct_llm_completer(
         logged_first_text_chunk = False
         try:
             messages = [
-                HumanMessage(content=_with_direct_llm_final_output_requirement(prompt))
+                HumanMessage(
+                    content=_with_direct_llm_final_output_requirement(
+                        prompt,
+                        output_format=output_format,
+                    )
+                )
             ]
             async for chunk in chat_model.astream(messages):
                 text = _extract_langchain_text(chunk)

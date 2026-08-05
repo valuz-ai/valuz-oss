@@ -149,6 +149,43 @@ def test_policy_passes_structured_data_and_adds_stable_annotations() -> None:
     assert "annotations" not in bundle["citations"][0]
 
 
+def test_retrieval_progress_message_is_a_quality_noop() -> None:
+    result = evaluate_citation_quality(
+        (
+            "搜索结果只覆盖到 Q4 FY2026（MSFT）和 Q2 FY2026（Alphabet），"
+            "都属于同一个季度期间。需要找到各自上一季度的电话会。"
+        ),
+        {
+            "version": 1,
+            "citations": [],
+            "integrity": _integrity(),
+        },
+        _policy(),
+    )
+
+    assert result["quality"]["issues"] == []
+    assert result["quality"]["metrics"]["claimCitationRequiredCount"] == 0
+    assert result["quality"]["metrics"]["unverifiedClaimCount"] == 0
+
+
+def test_search_result_fact_remains_auditable() -> None:
+    result = evaluate_citation_quality(
+        "搜索显示，公司收入增长 20%。",
+        {
+            "version": 1,
+            "citations": [],
+            "integrity": _integrity(),
+        },
+        _policy(),
+    )
+
+    assert result["quality"]["metrics"]["claimCitationRequiredCount"] == 1
+    assert result["quality"]["metrics"]["claimUnsupportedCount"] == 1
+    assert {issue["code"] for issue in result["quality"]["issues"]} == {
+        "numeric_claim_without_citation"
+    }
+
+
 def test_same_field_address_for_different_entities_is_not_a_source_conflict() -> None:
     citations = []
     for citation_id, entity_id, value in (
@@ -184,6 +221,77 @@ def test_same_field_address_for_different_entities_is_not_a_source_conflict() ->
 
     codes = {issue["code"] for issue in result["quality"]["issues"]}
     assert "structured_source_conflict" not in codes
+
+
+def test_same_generic_factor_field_for_different_metrics_is_not_a_conflict() -> None:
+    citations = []
+    answer_parts = []
+    for citation_id, metric, label, value in (
+        ("cit_ma20", "moving_average_20", "MA20", 203.69),
+        ("cit_ma60", "moving_average_60", "MA60", 228.58),
+        ("cit_ma120", "moving_average_120", "MA120", 168.89),
+        ("cit_ma250", "moving_average_250", "MA250", 123.64),
+    ):
+        citation = _structured(citation_id)
+        citation["source"]["sourceId"] = f"factor-result:{metric}"
+        citation["evidence"].update(
+            {
+                "datasetId": "factors_compute",
+                "recordKey": "/datas/0/factor_value",
+                "field": "/datas/0/factor_value",
+                "metric": metric,
+                "entityId": "MRVL",
+                "value": value,
+                "unit": "USD",
+                "period": "2026-08-03",
+                "asOf": "2026-08-03",
+            }
+        )
+        citations.append(citation)
+        answer_parts.append(f"{label} was {value} USD [{label}](citation://{citation_id}).")
+
+    result = evaluate_citation_quality(
+        " ".join(answer_parts),
+        {
+            "version": 1,
+            "citations": citations,
+            "integrity": _integrity(),
+        },
+        _policy(),
+    )
+
+    codes = {issue["code"] for issue in result["quality"]["issues"]}
+    assert "structured_source_conflict" not in codes
+    assert "cross_source_value_conflict" not in codes
+
+
+def test_structured_value_accepts_rounding_when_evidence_unit_is_missing() -> None:
+    citation = _structured("cit_price")
+    citation["evidence"].update(
+        {
+            "field": "stock_price",
+            "metric": "stock_price",
+            "value": 193.775,
+            "unit": "",
+            "period": "2026-08-03",
+            "asOf": "2026-08-03",
+        }
+    )
+
+    result = evaluate_citation_quality(
+        "The stock price was 193.78 [source](citation://cit_price).",
+        {
+            "version": 1,
+            "citations": [citation],
+            "integrity": _integrity(),
+        },
+        _policy(),
+    )
+
+    codes = {issue["code"] for issue in result["quality"]["issues"]}
+    assert "structured_value_not_present_in_answer" not in codes
+    assert "claim_evidence_mismatch" not in codes
+    assert "numeric_unit_missing" in codes
 
 
 def test_policy_degrades_missing_unit_period_and_out_of_range_date() -> None:
@@ -258,8 +366,7 @@ def test_policy_requires_coverage_for_a_claimed_time_range() -> None:
     citation["evidence"].pop("coverage")
 
     result = evaluate_citation_quality(
-        "Revenue trend from 2024-01-01 to 2025-12-31 was stable "
-        "[source](citation://cit_revenue).",
+        "Revenue trend from 2024-01-01 to 2025-12-31 was stable [source](citation://cit_revenue).",
         {
             "version": 1,
             "citations": [citation],
@@ -270,6 +377,186 @@ def test_policy_requires_coverage_for_a_claimed_time_range() -> None:
 
     codes = {issue["code"] for issue in result["quality"]["issues"]}
     assert "evidence_coverage_missing" in codes
+
+
+def test_point_in_time_indicator_interpretation_does_not_require_range_coverage() -> None:
+    citation = _structured()
+    citation["evidence"].update(
+        {
+            "metric": "moving_average_20",
+            "field": "moving_average_20",
+            "value": 203.69,
+            "unit": "USD",
+            "asOf": "2026-08-03",
+        }
+    )
+    citation["evidence"].pop("coverage", None)
+
+    result = evaluate_citation_quality(
+        "Price is below MA20 (203.69 USD), so the short-term trend is weak "
+        "[source](citation://cit_revenue).",
+        {
+            "version": 1,
+            "citations": [citation],
+            "integrity": _integrity(),
+        },
+        _policy(),
+    )
+
+    assert "evidence_coverage_missing" not in {
+        issue["code"] for issue in result["quality"]["issues"]
+    }
+
+
+def test_table_citation_coverage_ignores_uncited_reasoning_cells() -> None:
+    price = _structured("cit_price")
+    price["evidence"].update(
+        {
+            "metric": "stock_price",
+            "field": "stock_price",
+            "value": 193.775,
+            "unit": "USD",
+            "asOf": "2026-08-03",
+        }
+    )
+    price["evidence"].pop("coverage", None)
+    ma20 = _structured("cit_ma20")
+    ma20["evidence"].update(
+        {
+            "metric": "moving_average_20",
+            "field": "factor_value",
+            "value": 203.69,
+            "unit": "USD",
+            "asOf": "2026-08-03",
+        }
+    )
+    ma20["evidence"].pop("coverage", None)
+    answer = "\n".join(
+        (
+            "| Rule | Current value | Conclusion |",
+            "|---|---:|---|",
+            "| Price vs MA20 | $193.775 [p](citation://cit_price) < "
+            "$203.69 [m](citation://cit_ma20) | Price is below MA20; short-term trend is weak |",
+        )
+    )
+
+    result = evaluate_citation_quality(
+        answer,
+        {
+            "version": 1,
+            "citations": [price, ma20],
+            "integrity": _integrity(),
+        },
+        _policy(),
+    )
+
+    assert "evidence_coverage_missing" not in {
+        issue["code"] for issue in result["quality"]["issues"]
+    }
+
+
+def test_false_numeric_comparison_is_a_confirmed_claim_conflict() -> None:
+    ma20 = _structured("cit_ma20")
+    ma20["evidence"].update(
+        {
+            "metric": "moving_average_20",
+            "field": "moving_average_20",
+            "value": 203.69,
+            "unit": "USD",
+        }
+    )
+    ma60 = _structured("cit_ma60")
+    ma60["evidence"].update(
+        {
+            "metric": "moving_average_60",
+            "field": "moving_average_60",
+            "value": 228.58,
+            "unit": "USD",
+        }
+    )
+
+    result = evaluate_citation_quality(
+        "MA20 203.69 USD > MA60 228.58 USD [a](citation://cit_ma20) [b](citation://cit_ma60).",
+        {
+            "version": 1,
+            "citations": [ma20, ma60],
+            "integrity": _integrity(),
+        },
+        _policy(),
+    )
+
+    comparison_issue = next(
+        issue
+        for issue in result["quality"]["issues"]
+        if issue["code"] == "numeric_comparison_false"
+    )
+    assert comparison_issue["severity"] == "degraded"
+    assert comparison_issue["claim"]["exact"].startswith("MA20 203.69 USD >")
+
+
+def test_true_numeric_comparison_does_not_create_a_conflict() -> None:
+    price = _structured("cit_price")
+    price["evidence"].update(
+        {
+            "metric": "stock_price",
+            "field": "stock_price",
+            "value": 193.78,
+            "unit": "USD",
+        }
+    )
+
+    result = evaluate_citation_quality(
+        "Price 193.78 USD > stop 160 USD [source](citation://cit_price).",
+        {
+            "version": 1,
+            "citations": [price],
+            "integrity": _integrity(),
+        },
+        _policy(),
+        user_prompt="The stop is 160 USD.",
+    )
+
+    assert "numeric_comparison_false" not in {
+        issue["code"] for issue in result["quality"]["issues"]
+    }
+
+
+def test_explicit_binding_is_verified_even_when_claim_came_from_user_prompt() -> None:
+    citation = _structured("cit_user_claim")
+    citation["evidence"].update(
+        {
+            "entityName": "Example Co",
+            "metric": "revenue",
+            "field": "revenue",
+            "value": 120,
+            "unit": "USDm",
+            "period": "FY2025",
+        }
+    )
+    answer = "Example Co FY2025 revenue was 999 USDm [source](citation://cit_user_claim)."
+
+    result = evaluate_citation_quality(
+        answer,
+        {
+            "version": 1,
+            "citations": [citation],
+            "integrity": _integrity(),
+        },
+        _policy(),
+        user_prompt=answer,
+    )
+
+    claim = result["quality"]["claims"][0]
+    assert claim["citationRequired"] is False
+    assert claim["status"] == "unverified"
+    assert "claim_evidence_conflict" in claim["issueCodes"]
+    assert claim["bindings"] == [
+        {
+            "citationId": "cit_user_claim",
+            "role": "conflicting",
+            "supportStatus": "contradicted",
+        }
+    ]
 
 
 def test_policy_audits_non_numeric_external_facts_and_dates() -> None:
@@ -417,6 +704,42 @@ def test_text_chunk_numeric_miss_is_advisory_not_a_confirmed_conflict() -> None:
     assert "claim_evidence_conflict" not in claim["issueCodes"]
 
 
+def test_explicit_text_source_period_mismatch_is_a_concrete_conflict() -> None:
+    citation = {
+        "citationId": "cit_msft_q4",
+        "source": {
+            "sourceId": "msft-q4",
+            "providerId": "reportify",
+            "sourceType": "document",
+            "title": "Microsoft (MSFT) - FY2026 Q4 - Earnings Call Transcript",
+            "retrievedAt": "2026-08-03T08:00:00Z",
+        },
+        "evidence": {
+            "kind": "text",
+            "quote": "We added another gigawatt of capacity this quarter.",
+            "capturedAt": "2026-08-03T08:00:00Z",
+        },
+    }
+    result = evaluate_citation_quality(
+        "Q2 — 当季新增产能：单季约 1 GW [1](citation://cit_msft_q4)。",
+        {
+            "version": 1,
+            "citations": [citation],
+            "integrity": _integrity(),
+        },
+        _policy(),
+    )
+
+    claim = result["quality"]["claims"][0]
+    assert "claim_source_period_conflict" in claim["issueCodes"]
+    issue = next(
+        item
+        for item in result["quality"]["issues"]
+        if item["code"] == "claim_source_period_conflict"
+    )
+    assert issue["severity"] == "degraded"
+
+
 def test_cross_language_paraphrase_is_not_reported_as_evidence_mismatch() -> None:
     citation = {
         "citationId": "cit_transcript",
@@ -439,8 +762,7 @@ def test_cross_language_paraphrase_is_not_reported_as_evidence_mismatch() -> Non
     }
 
     result = evaluate_citation_quality(
-        "管理层表示人工智能平台的需求正在持续增长 "
-        "[source](citation://cit_transcript)。",
+        "管理层表示人工智能平台的需求正在持续增长 [source](citation://cit_transcript)。",
         {
             "version": 1,
             "citations": [citation],
@@ -516,13 +838,9 @@ def test_displayed_formula_inherits_the_adjacent_calculation_evidence() -> None:
     policy["config"]["source_tiers"][0]["match"]["source_types"].append("tool-result")
     policy["config"]["source_tiers"][0]["match"]["tools"].append("runtime.calculation")
     current = _structured("cit_current")
-    current["evidence"].update(
-        {"field": "current_revenue", "value": 120, "period": "FY2025"}
-    )
+    current["evidence"].update({"field": "current_revenue", "value": 120, "period": "FY2025"})
     prior = _structured("cit_prior")
-    prior["evidence"].update(
-        {"field": "prior_revenue", "value": 100, "period": "FY2024"}
-    )
+    prior["evidence"].update({"field": "prior_revenue", "value": 100, "period": "FY2024"})
     calculation = {
         "citationId": "cit_growth",
         "source": {
@@ -706,6 +1024,112 @@ def test_calculation_text_input_must_contain_the_claimed_value() -> None:
     assert result["quality"]["publishStatus"] == "draft-only"
 
 
+def test_calculation_accepts_user_input_when_value_is_in_task_prompt() -> None:
+    price = _structured("cit_price")
+    price["evidence"].update(
+        {
+            "metric": "stock_price",
+            "field": "stock_price",
+            "value": 193.775,
+            "unit": "USD",
+            "asOf": "2026-08-03",
+        }
+    )
+    calculation = {
+        "citationId": "cit_calc",
+        "source": {
+            "sourceId": "calculation-1",
+            "providerId": "runtime",
+            "sourceType": "tool-result",
+            "title": "Calculation",
+            "retrievedAt": "2026-08-04T10:00:00Z",
+        },
+        "evidence": {
+            "kind": "calculation",
+            "expression": "((price / cost) - 1) * 100",
+            "inputs": [
+                {
+                    "name": "price",
+                    "citationId": "cit_price",
+                    "value": "193.775",
+                    "unit": "USD",
+                },
+                {
+                    "name": "cost",
+                    "origin": "user-input",
+                    "value": "150",
+                    "unit": "USD",
+                },
+            ],
+            "result": "29.2",
+            "unit": "%",
+            "rounding": "1dp",
+            "metric": "return_since_cost",
+            "calculatedAt": "2026-08-04T10:00:00Z",
+        },
+    }
+
+    result = evaluate_citation_quality(
+        "The gain since cost is 29.2% [calc](citation://cit_calc).",
+        {
+            "version": 1,
+            "citations": [price, calculation],
+            "integrity": _integrity(),
+        },
+        _policy(),
+        user_prompt="The position cost is 150 USD.",
+    )
+
+    assert "calculation_user_input_not_found" not in {
+        issue["code"] for issue in result["quality"]["issues"]
+    }
+
+
+def test_calculation_rejects_claimed_user_input_missing_from_task_prompt() -> None:
+    calculation = {
+        "citationId": "cit_calc",
+        "source": {
+            "sourceId": "calculation-1",
+            "providerId": "runtime",
+            "sourceType": "tool-result",
+            "title": "Calculation",
+            "retrievedAt": "2026-08-04T10:00:00Z",
+        },
+        "evidence": {
+            "kind": "calculation",
+            "expression": "cost * 1.2",
+            "inputs": [
+                {
+                    "name": "cost",
+                    "origin": "user-input",
+                    "value": "150",
+                    "unit": "USD",
+                }
+            ],
+            "result": "180",
+            "unit": "USD",
+            "rounding": "0dp",
+            "metric": "price_threshold",
+            "calculatedAt": "2026-08-04T10:00:00Z",
+        },
+    }
+
+    result = evaluate_citation_quality(
+        "The threshold is 180 USD [calc](citation://cit_calc).",
+        {
+            "version": 1,
+            "citations": [calculation],
+            "integrity": _integrity(),
+        },
+        _policy(),
+        user_prompt="Use my existing rule.",
+    )
+
+    assert "calculation_user_input_not_found" in {
+        issue["code"] for issue in result["quality"]["issues"]
+    }
+
+
 def test_calculation_accepts_scaled_structured_input_units() -> None:
     policy = _policy()
     policy["config"]["semantics"] = {
@@ -768,6 +1192,152 @@ def test_calculation_accepts_scaled_structured_input_units() -> None:
 
     assert "calculation_input_value_mismatch" not in codes
     assert "calculation_input_unit_mismatch" not in codes
+
+
+def test_calculation_accepts_a_verified_calculation_as_an_input() -> None:
+    current = _structured("cit_current")
+    current["evidence"].update({"field": "q1", "value": 10, "unit": "USDm"})
+    prior = _structured("cit_prior")
+    prior["evidence"].update({"field": "q2", "value": 20, "unit": "USDm"})
+    market_cap = _structured("cit_market_cap")
+    market_cap["evidence"].update(
+        {"field": "market_cap", "metric": "market_cap", "value": 585, "unit": "USDm"}
+    )
+    ttm = {
+        "citationId": "cit_ttm",
+        "source": {
+            "sourceId": "calculation-ttm",
+            "providerId": "runtime",
+            "sourceType": "tool-result",
+            "title": "TTM calculation",
+            "retrievedAt": "2026-08-03T10:00:00Z",
+        },
+        "evidence": {
+            "kind": "calculation",
+            "metric": "ttm_revenue",
+            "expression": "q1 + q2",
+            "inputs": [
+                {"name": "q1", "citationId": "cit_current", "value": 10, "unit": "USDm"},
+                {"name": "q2", "citationId": "cit_prior", "value": 20, "unit": "USDm"},
+            ],
+            "result": 30,
+            "unit": "USDm",
+            "rounding": "0dp",
+            "calculatedAt": "2026-08-03T10:00:00Z",
+        },
+    }
+    ratio = {
+        "citationId": "cit_ratio",
+        "source": {
+            "sourceId": "calculation-ratio",
+            "providerId": "runtime",
+            "sourceType": "tool-result",
+            "title": "PS calculation",
+            "retrievedAt": "2026-08-03T10:00:00Z",
+        },
+        "evidence": {
+            "kind": "calculation",
+            "metric": "price_to_sales_ttm",
+            "expression": "market_cap / ttm_revenue",
+            "inputs": [
+                {
+                    "name": "market_cap",
+                    "citationId": "cit_market_cap",
+                    "value": 585,
+                    "unit": "USDm",
+                },
+                {
+                    "name": "ttm_revenue",
+                    "citationId": "cit_ttm",
+                    "value": 30,
+                    "unit": "USDm",
+                },
+            ],
+            "result": 19.5,
+            "unit": "x",
+            "rounding": "1dp",
+            "calculatedAt": "2026-08-03T10:00:00Z",
+        },
+    }
+
+    result = evaluate_citation_quality(
+        "TTM PS was 19.5x [calc](citation://cit_ratio).",
+        {
+            "version": 1,
+            "citations": [current, prior, market_cap, ttm, ratio],
+            "integrity": _integrity(),
+        },
+        _policy(),
+    )
+
+    codes = {issue["code"] for issue in result["quality"]["issues"]}
+    assert "calculation_input_evidence_unsupported" not in codes
+    assert "calculation_input_value_mismatch" not in codes
+    assert "calculation_input_unit_mismatch" not in codes
+    assert "calculation_result_not_present_in_answer" not in codes
+
+
+def test_calculation_does_not_invent_a_unit_conflict_when_source_unit_is_missing() -> None:
+    source = _structured("cit_source")
+    source["evidence"].update({"field": "market_cap", "value": 120, "unit": ""})
+    calculation = {
+        "citationId": "cit_calc",
+        "source": {
+            "sourceId": "calculation-1",
+            "providerId": "runtime",
+            "sourceType": "tool-result",
+            "title": "Calculation",
+            "retrievedAt": "2026-08-03T10:00:00Z",
+        },
+        "evidence": {
+            "kind": "calculation",
+            "expression": "market_cap",
+            "inputs": [
+                {
+                    "name": "market_cap",
+                    "citationId": "cit_source",
+                    "value": 120,
+                    "unit": "USDm",
+                }
+            ],
+            "result": 120,
+            "unit": "USDm",
+            "rounding": "0dp",
+            "calculatedAt": "2026-08-03T10:00:00Z",
+        },
+    }
+
+    result = evaluate_citation_quality(
+        "Market cap was 120 USDm [calc](citation://cit_calc).",
+        {
+            "version": 1,
+            "citations": [source, calculation],
+            "integrity": _integrity(),
+        },
+        _policy(),
+    )
+
+    codes = {issue["code"] for issue in result["quality"]["issues"]}
+    assert "numeric_unit_missing" in codes
+    assert "calculation_input_unit_mismatch" not in codes
+
+
+def test_user_supplied_threshold_is_not_reported_as_requiring_external_citation() -> None:
+    result = evaluate_citation_quality(
+        "The stop-loss threshold is 160 USD.",
+        {
+            "version": 1,
+            "citations": [],
+            "integrity": _integrity(),
+        },
+        _policy(),
+        user_prompt="Use a stop-loss threshold of 160 USD.",
+    )
+
+    assert result["quality"]["metrics"]["claimCitationRequiredCount"] == 0
+    assert result["quality"]["metrics"]["unsourcedClaimCount"] == 0
+    assert result["quality"]["claims"][0]["citationRequired"] is False
+    assert result["quality"]["claims"][0]["status"] == "passed"
 
 
 def test_structured_preflight_preserves_markdown_table_header_unit() -> None:
@@ -1014,6 +1584,38 @@ def test_opaque_structured_ticker_is_unknown_not_cross_company_conflict() -> Non
     }
 
 
+def test_unlinked_translated_company_name_is_unknown_not_cross_company_conflict() -> None:
+    citation = {
+        "citationId": "cit_msft_q1",
+        "source": {
+            "sourceId": "msft-q1",
+            "providerId": "reportify",
+            "sourceType": "document",
+            "title": "Microsoft (MSFT) - FY2026 Q1 - Earnings Call Transcript",
+            "retrievedAt": "2026-08-03T08:00:00Z",
+        },
+        "evidence": {
+            "kind": "text",
+            "quote": "Microsoft Cloud revenue surpassed $49 billion, up 26% year-over-year.",
+            "capturedAt": "2026-08-03T08:00:00Z",
+        },
+    }
+    result = evaluate_citation_quality(
+        "微软云收入超过490亿美元，同比增长26% [1](citation://cit_msft_q1)。",
+        {
+            "version": 1,
+            "citations": [citation],
+            "integrity": _integrity(),
+        },
+        _policy(),
+        entity_aliases={"微软": ("微软",)},
+    )
+
+    assert "claim_source_entity_conflict" not in {
+        issue["code"] for issue in result["quality"]["issues"]
+    }
+
+
 def test_metric_acronym_in_parentheses_is_not_a_company_identifier() -> None:
     microsoft = {
         "citationId": "cit_msft",
@@ -1031,8 +1633,7 @@ def test_metric_acronym_in_parentheses_is_not_a_company_identifier() -> None:
         },
     }
     result = evaluate_citation_quality(
-        "Microsoft AI 业务年化收入（ARR）突破 370 亿美元，同比增长 123% "
-        "[1](citation://cit_msft)。",
+        "Microsoft AI 业务年化收入（ARR）突破 370 亿美元，同比增长 123% [1](citation://cit_msft)。",
         {
             "version": 1,
             "citations": [microsoft],

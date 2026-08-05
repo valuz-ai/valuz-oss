@@ -1,0 +1,24 @@
+/*
+ * Style entry point for @valuz/genui-blocks.
+ *
+ * `@import` rules must precede every other rule in a stylesheet, so this file
+ * holds nothing but imports — one line per family. Add a family stylesheet
+ * under `styles/` and import it here; never write rules directly in this file.
+ *
+ * Authoring rules for every file below:
+ *  1. Class names are prefixed `.vgb-`. Blocks share a subtree with
+ *     `.openui-*` components, so an unprefixed class would collide.
+ *  2. Colour, spacing, radius and type come from `--openui-*` custom
+ *     properties only. No literal colours — the host theme owns them.
+ *  3. Responsive behaviour uses container queries (`@container vgb (...)`),
+ *     never viewport media queries: blocks render inside a chat column whose
+ *     width is unrelated to the viewport's.
+ */
+
+@import "./styles/base.css";
+@import "./styles/cards.css";
+@import "./styles/mermaid.css";
+@import "./styles/sources.css";
+@import "./styles/report.css";
+@import "./styles/market.css";
+@import "./styles/icons.css";

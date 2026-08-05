@@ -57,6 +57,7 @@ import {
   citationOffsetFromHref,
   CitationPill,
   CitationSourceCards,
+  projectEvidenceMarkdownLinks,
   rewriteCitationMarkdownLinks,
   type CitationQualityDisplayIssue,
 } from "./CitationInline";
@@ -94,6 +95,7 @@ interface LocalizedClaimQualityEntry {
 const CRITICAL_CITATION_ISSUE_CODES = new Set([
   "claim_evidence_conflict",
   "claim_source_entity_conflict",
+  "claim_source_period_conflict",
   "structured_source_conflict",
   "cross_source_value_conflict",
   "conflicting_values_must_not_be_averaged",
@@ -426,6 +428,19 @@ interface MarkdownContentProps {
   citationBundle?: CitationBundleV1;
   messageId?: string;
   onCitationClick?: (input: OpenCitationInput) => void;
+  /**
+   * A conversation turn may contain more than one durable assistant message
+   * (for example a completed answer followed by a repair patch).  The turn
+   * owns citation numbering and the single source list in that case; each
+   * Markdown fragment still renders its own audited claim locations.
+   */
+  citationDisplayOrderOverride?: ReadonlyMap<string, number>;
+  citationLookupBundleOverride?: CitationBundleV1;
+  citationMessageIdByCitationIdOverride?: ReadonlyMap<
+    string,
+    string | undefined
+  >;
+  showCitationSources?: boolean;
 }
 
 /**
@@ -493,6 +508,18 @@ const RICH_TEXT_OVERRIDES = [
   "[&_[data-streamdown='table-wrapper']>div:not(:has([data-streamdown='table']))]:border-0",
   "[&_[data-streamdown='table-wrapper']>div:not(:has([data-streamdown='table']))]:p-0",
   "[&_[data-streamdown='table-wrapper']>div:not(:has([data-streamdown='table']))]:items-center",
+  // The toolbar sits on top of the last header cell, so the two cannot both
+  // be visible. Resting state belongs to the header: the last column keeps
+  // its title like every other column, and the buttons only fade in while
+  // the reader is on the table (hover, or keyboard focus inside it — without
+  // the focus case a tabbed-to button would stay invisible).
+  "[&_[data-streamdown='table-wrapper']>div:not(:has([data-streamdown='table']))]:opacity-0",
+  "[&_[data-streamdown='table-wrapper']>div:not(:has([data-streamdown='table']))]:pointer-events-none",
+  "[&_[data-streamdown='table-wrapper']>div:not(:has([data-streamdown='table']))]:transition-opacity",
+  "[&_[data-streamdown='table-wrapper']:hover>div:not(:has([data-streamdown='table']))]:opacity-100",
+  "[&_[data-streamdown='table-wrapper']:hover>div:not(:has([data-streamdown='table']))]:pointer-events-auto",
+  "[&_[data-streamdown='table-wrapper']:focus-within>div:not(:has([data-streamdown='table']))]:opacity-100",
+  "[&_[data-streamdown='table-wrapper']:focus-within>div:not(:has([data-streamdown='table']))]:pointer-events-auto",
   // Table region — flat white, no inner border, bottom rounded.
   "[&_[data-streamdown='table-wrapper']>div:has([data-streamdown='table'])]:border-0",
   "[&_[data-streamdown='table-wrapper']>div:has([data-streamdown='table'])]:rounded-none",
@@ -511,8 +538,15 @@ const RICH_TEXT_OVERRIDES = [
   "[&_[data-streamdown='table-header-cell']]:text-[color:var(--fg-60)]",
   "[&_[data-streamdown='table-header-cell']]:text-right",
   "[&_[data-streamdown='table-header-cell']:first-child]:text-left",
-  "[&_[data-streamdown='table-header-cell']:last-child]:text-transparent",
-  "[&_[data-streamdown='table-header-cell']:last-child]:select-none",
+  // Counterpart to the toolbar fade above: the last column reads as a normal
+  // header until the toolbar takes that spot, then yields to it. Fading the
+  // colour (rather than hiding the cell) keeps the column widths fixed, so
+  // the swap does not reflow the table under the cursor.
+  "[&_[data-streamdown='table-header-cell']:last-child]:transition-colors",
+  "[&_[data-streamdown='table-wrapper']:hover_[data-streamdown='table-header-cell']:last-child]:text-transparent",
+  "[&_[data-streamdown='table-wrapper']:hover_[data-streamdown='table-header-cell']:last-child]:select-none",
+  "[&_[data-streamdown='table-wrapper']:focus-within_[data-streamdown='table-header-cell']:last-child]:text-transparent",
+  "[&_[data-streamdown='table-wrapper']:focus-within_[data-streamdown='table-header-cell']:last-child]:select-none",
   "[&_[data-streamdown='table-row']]:border-b",
   "[&_[data-streamdown='table-row']]:border-[color:var(--fg-3)]",
   "[&_[data-streamdown='table-row']:last-child]:border-b-0",
@@ -876,6 +910,10 @@ export const MarkdownContent = memo(function MarkdownContent({
   citationBundle,
   messageId,
   onCitationClick,
+  citationDisplayOrderOverride,
+  citationLookupBundleOverride,
+  citationMessageIdByCitationIdOverride,
+  showCitationSources = true,
 }: MarkdownContentProps) {
   const { t } = useI18n();
   const [pendingUrl, setPendingUrl] = useState<string | null>(null);
@@ -884,26 +922,40 @@ export const MarkdownContent = memo(function MarkdownContent({
   // the UI communicates concrete issues at the relevant citation instead of
   // replacing the entire response with a generic failure sentence.
   const displayContent = stripStandaloneCitationLines(
-    stripDecorativeHeadingCitations(stripProtocolSourcePlaceholders(content)),
+    stripDecorativeHeadingCitations(
+      stripProtocolSourcePlaceholders(
+        projectEvidenceMarkdownLinks(content, citationBundle),
+      ),
+    ),
   );
-  const citationOrder = useMemo(
+  const localCitationOrder = useMemo(
     () => citationDisplayOrder(displayContent),
     [displayContent],
   );
+  const citationOrder = citationDisplayOrderOverride ?? localCitationOrder;
   const citationOccurrenceOffsets = useMemo(
     () => citationOccurrences(displayContent),
     [displayContent],
   );
-  const citationsById = useMemo(
-    () =>
-      new Map(
-        citationBundle?.citations.map((citation) => [
-          citation.citationId,
-          citation,
-        ]) ?? [],
-      ),
-    [citationBundle],
-  );
+  const citationsById = useMemo(() => {
+    const citations = new Map<
+      string,
+      CitationBundleV1["citations"][number]
+    >();
+    // A single user turn can contain several durable assistant messages
+    // (for example, an answer followed by a local repair). Citations are
+    // numbered and listed across that whole trailing answer run, so inline
+    // pills must resolve against the same turn-level registry as the source
+    // list. Keep the local bundle last so its current annotations win when
+    // both registries contain the same citation.
+    for (const citation of citationLookupBundleOverride?.citations ?? []) {
+      citations.set(citation.citationId, citation);
+    }
+    for (const citation of citationBundle?.citations ?? []) {
+      citations.set(citation.citationId, citation);
+    }
+    return citations;
+  }, [citationBundle, citationLookupBundleOverride]);
   const qualityIssueLabel = useCallback(
     (issue: CitationQualityIssueV1): string => {
       const code = issue.code;
@@ -998,6 +1050,9 @@ export const MarkdownContent = memo(function MarkdownContent({
       }
       if (code === "claim_source_entity_conflict") {
         return t("ui.citation.qualityIssueEntityConflict");
+      }
+      if (code === "claim_source_period_conflict") {
+        return t("ui.citation.qualityIssuePeriodConflict");
       }
       if (code.includes("conflict")) {
         return t("ui.citation.qualityIssueConflict");
@@ -1281,7 +1336,10 @@ export const MarkdownContent = memo(function MarkdownContent({
                 occurrenceIssues ??
                 qualityIssuePlacement.byCitationId.get(citationId)
               }
-              messageId={messageId}
+              messageId={
+                citationMessageIdByCitationIdOverride?.get(citationId) ??
+                messageId
+              }
               onCitationClick={onCitationClick}
             />
           );
@@ -1331,6 +1389,7 @@ export const MarkdownContent = memo(function MarkdownContent({
       claimQualityById,
       isLocalFileHref,
       messageId,
+      citationMessageIdByCitationIdOverride,
       onCitationClick,
       onLocalFileLinkClick,
       qualityIssuePlacement.byCitationId,
@@ -1363,12 +1422,15 @@ export const MarkdownContent = memo(function MarkdownContent({
           {renderedContent}
         </Streamdown>
       </div>
-      <CitationSourceCards
-        content={displayContent}
-        citationBundle={citationBundle}
-        messageId={messageId}
-        onCitationClick={onCitationClick}
-      />
+      {showCitationSources ? (
+        <CitationSourceCards
+          content={displayContent}
+          citationBundle={citationBundle}
+          messageId={messageId}
+          onCitationClick={onCitationClick}
+          displayOrder={citationOrder}
+        />
+      ) : null}
       <ExternalLinkConfirmDialog
         url={pendingUrl}
         onClose={() => setPendingUrl(null)}

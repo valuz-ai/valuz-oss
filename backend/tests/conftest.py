@@ -32,7 +32,7 @@ _HOME_SANDBOX = Path(tempfile.mkdtemp(prefix="valuz-test-home-"))
 # sandbox. Each of these fields defaults to a location under the user's actual
 # home; pinning them makes the resolved path sandbox-relative instead.
 os.environ["VALUZ_DATA_DIR"] = str(_HOME_SANDBOX / "valuz-data")
-os.environ["VALUZ_LOG_DIR"] = str(_HOME_SANDBOX / "logs")
+os.environ["VALUZ_LOG_FILE_PATH"] = str(_HOME_SANDBOX / "logs" / "backend.log")
 os.environ["VALUZ_USER_SKILLS_DIR"] = str(_HOME_SANDBOX / "user-skills")
 # ``user_project_root`` defaults to ``~/Valuz`` — a REAL directory the user
 # keeps data in (backups live under ``~/Valuz/backups``). Tests that create a

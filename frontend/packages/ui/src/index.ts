@@ -47,6 +47,8 @@ export * from "./components/conversation/DragUploadOverlay";
 export * from "./components/conversation/ErrorMessageCard";
 export * from "./components/conversation/FileUploadMessage";
 export * from "./components/conversation/GenerativeUICard";
+export * from "./components/conversation/GenerativeUIRenderer";
+export * from "./components/conversation/generative-ui-payload";
 export * from "./components/conversation/MarkdownContent";
 export * from "./components/conversation/AskUserQuestionCard";
 export * from "./components/conversation/RequiresActionCard";

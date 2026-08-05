@@ -1,0 +1,150 @@
+/*
+ * IconTag / IconText.
+ *
+ * Sizes follow the reference implementation this vocabulary is modelled on, so
+ * a tag reads at the same weight beside a metric as it does in a feature list.
+ */
+
+.vgb-icon-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  /* Never let a tag be squeezed by a long label next to it: a squashed icon
+     reads as a rendering fault, and it has no text to fall back on. */
+  flex-shrink: 0;
+}
+
+.vgb-icon-tag-xs {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--openui-radius-xs);
+}
+
+.vgb-icon-tag-s {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--openui-radius-s);
+}
+
+.vgb-icon-tag-m {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--openui-radius-s);
+}
+
+.vgb-icon-tag-l {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--openui-radius-m);
+}
+
+.vgb-icon-tag-xl {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--openui-radius-m);
+}
+
+/* Tone pairs a surface with a matching foreground so the glyph keeps its
+   contrast on every background. */
+
+.vgb-icon-tag-neutral {
+  background-color: var(--openui-highlight);
+  color: var(--openui-text-neutral-primary);
+}
+
+.vgb-icon-tag-brand {
+  background-color: var(--openui-highlight);
+  color: var(--openui-text-brand);
+}
+
+.vgb-icon-tag-info {
+  background-color: var(--openui-info-background);
+  color: var(--openui-text-info-primary);
+}
+
+.vgb-icon-tag-success {
+  background-color: var(--openui-success-background);
+  color: var(--openui-text-success-primary);
+}
+
+.vgb-icon-tag-warning {
+  background-color: var(--openui-alert-background);
+  color: var(--openui-text-alert-primary);
+}
+
+.vgb-icon-tag-danger {
+  background-color: var(--openui-danger-background);
+  color: var(--openui-text-danger-primary);
+}
+
+/* ── IconText ─────────────────────────────────────────────────────── */
+
+.vgb-icon-text {
+  display: flex;
+  min-width: 0;
+  gap: var(--openui-space-m);
+}
+
+.vgb-icon-text-horizontal {
+  flex-direction: row;
+  /* `flex-start`, not `center`: once the text wraps to a second line, a centred
+     icon floats between them instead of marking where the entry begins. */
+  align-items: flex-start;
+}
+
+.vgb-icon-text-vertical {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.vgb-icon-text-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--openui-space-3xs);
+}
+
+.vgb-icon-text-title {
+  color: var(--openui-text-neutral-primary);
+  font: var(--openui-text-label-default-heavy);
+  overflow-wrap: anywhere;
+}
+
+.vgb-icon-text-note {
+  color: var(--openui-text-neutral-secondary);
+  font: var(--openui-text-label-sm);
+  overflow-wrap: anywhere;
+}
+
+/* ── Icons inside a card heading ──────────────────────────────────── */
+
+/*
+ * A bare mark beside the heading, not a tinted tag: the card already draws a
+ * surface, and a second filled square inside it competes with the figure the
+ * card exists to show.
+ */
+.vgb-card-heading-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--openui-space-xs);
+}
+
+.vgb-card-icon {
+  flex-shrink: 0;
+  width: 1em;
+  height: 1em;
+  color: var(--openui-text-neutral-tertiary);
+}
+
+/*
+ * Belt and braces for the same hazard from the other side: a fixed-size mark
+ * must never be grown or shrunk by whatever flex container it lands in. Host
+ * stylesheets legitimately size a row's children, and this is the one child
+ * that has to opt out.
+ */
+.vgb-icon-tag {
+  flex-grow: 0;
+  flex-basis: auto;
+}

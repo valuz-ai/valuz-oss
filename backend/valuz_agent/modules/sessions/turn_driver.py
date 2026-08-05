@@ -160,7 +160,10 @@ async def run_session_to_idle(
                 _attachment_specs,
                 _load_pending_attachments,
             )
-            from valuz_agent.modules.sessions.context_builder import _build_additional_context
+            from valuz_agent.modules.sessions.context_builder import (
+                _build_additional_context,
+                worktree_name_of,
+            )
 
             if queued_attachments is not None:
                 # Queue drain: rebuild minimal (detached) attachment rows from
@@ -205,7 +208,11 @@ async def run_session_to_idle(
         )
         try:
             additional_context = await _build_additional_context(
-                session_id, project_id, pending_attachments, user_id=user_id
+                session_id,
+                project_id,
+                pending_attachments,
+                user_id=user_id,
+                worktree=worktree_name_of(loaded_session),
             )
         except Exception:  # noqa: BLE001
             additional_context = ""

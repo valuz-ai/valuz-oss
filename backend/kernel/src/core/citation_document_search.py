@@ -6,8 +6,10 @@ import hashlib
 import json
 import re
 import shlex
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 _REQUEST_FIELD_BLOCK_RE = re.compile(
     r"(?:列出|给出|查找|查询|提取|说明)\s*(?P<fields>[^。；\n]{2,220}?)"
@@ -78,11 +80,7 @@ def constrain_indexed_document_scope(
         # There is no contrary document identity to prove leakage, so preserve
         # them. Scope enforcement activates only on explicit returned ids.
         return content
-    chunks = [
-        chunk
-        for chunk in identified_chunks
-        if _indexed_chunk_document_id(chunk) in allowed
-    ]
+    chunks = [chunk for chunk in identified_chunks if _indexed_chunk_document_id(chunk) in allowed]
     result = {**content, "chunks": chunks}
     if len(chunks) != len(content["chunks"]):
         result["_valuz_scope"] = {
@@ -186,7 +184,7 @@ def _is_low_value_transcript_chunk(chunk: dict[str, Any]) -> bool:
     greetings, replay instructions and forward-looking disclaimers ahead of
     the semantically matched business passages. Those chunks are authentic but
     cannot support a user-facing business claim; registering them wastes model
-    and repair evidence slots. Apply this only to transcript/minutes sources
+    and focused Evidence slots. Apply this only to transcript/minutes sources
     and only for unambiguous boilerplate templates.
     """
 
@@ -224,8 +222,8 @@ def _indexed_chunk_evidence(
     if not quote or not document_id or not chunk_id:
         return None
     quote = quote[:32_000]
-    title = str(document.get("title") or f"Document · {document_id}").strip()
     url = str(document.get("url") or document.get("file_url") or "").strip()
+    title = str(document.get("title") or _document_title_fallback(url)).strip()
     published_at = _published_at(document.get("published_at"))
     digest = hashlib.sha256(
         f"valuz-search\0{document_id}\0{chunk_id}\0{quote}".encode()
@@ -276,6 +274,16 @@ def _indexed_chunk_evidence(
     }
 
 
+def _document_title_fallback(url: str) -> str:
+    """Avoid surfacing an opaque document id as a source title."""
+
+    if url:
+        hostname = urlparse(url).hostname
+        if hostname:
+            return hostname.removeprefix("www.")[:1_024]
+    return "Document"
+
+
 def _published_at(value: Any) -> str | None:
     if isinstance(value, bool):
         return None
@@ -284,9 +292,7 @@ def _published_at(value: Any) -> str | None:
         if timestamp > 10_000_000_000:
             timestamp /= 1_000
         try:
-            return datetime.fromtimestamp(timestamp, UTC).isoformat().replace(
-                "+00:00", "Z"
-            )
+            return datetime.fromtimestamp(timestamp, UTC).isoformat().replace("+00:00", "Z")
         except (OSError, OverflowError, ValueError):
             return None
     if isinstance(value, str) and value.strip():
@@ -347,11 +353,7 @@ def grep_document_evidence(
     raw_text = str(raw_document.get("content") or "")
     if not pattern or not raw_text:
         return None
-    try:
-        matcher = re.compile(pattern, re.IGNORECASE)
-    except re.error:
-        matcher = re.compile(re.escape(pattern), re.IGNORECASE)
-    matches = list(matcher.finditer(raw_text))[:500]
+    matches = _document_matches(raw_text, pattern)[:500]
     if not matches:
         return None
 
@@ -368,9 +370,9 @@ def grep_document_evidence(
             excerpts.append(excerpt)
     quote = "\n…\n".join(excerpts)[:32_000]
     first = matches[0]
-    snippet = raw_text[
-        max(0, first.start() - 260) : min(len(raw_text), first.end() + 420)
-    ].strip()[:4_000]
+    snippet = raw_text[max(0, first.start() - 260) : min(len(raw_text), first.end() + 420)].strip()[
+        :4_000
+    ]
     document_id = str(raw_document.get("doc_id") or "document")
     url = str(raw_document.get("url") or raw_document.get("original_url") or "").strip()
     title = str(raw_document.get("title") or f"Reportify document · {document_id}")
@@ -417,6 +419,78 @@ def grep_document_evidence(
         separators=(",", ":"),
     )
     return visible, envelope
+
+
+@dataclass(frozen=True)
+class _DocumentMatch:
+    start_offset: int
+    end_offset: int
+
+    def start(self) -> int:
+        return self.start_offset
+
+    def end(self) -> int:
+        return self.end_offset
+
+
+def _document_matches(raw_text: str, pattern: str) -> list[re.Match[str] | _DocumentMatch]:
+    """Find exact regex matches, then tolerate PDF-only whitespace wrapping.
+
+    PDF text extraction commonly inserts a newline in the middle of one CJK
+    word (for example ``归属\n于``). The user's/tool's literal query is still
+    exact, but ordinary regex matching cannot see it. Only when the original
+    regex has no match do we retry literal alternatives against a whitespace-
+    free view and map the offsets back to the immutable raw text. Regex
+    semantics never get broadened and the Evidence quote remains byte-for-byte
+    from the retrieved document.
+    """
+
+    try:
+        matcher = re.compile(pattern, re.IGNORECASE)
+    except re.error:
+        matcher = re.compile(re.escape(pattern), re.IGNORECASE)
+    direct = list(matcher.finditer(raw_text))
+    if direct:
+        return direct
+
+    normalized_chars: list[str] = []
+    raw_offsets: list[int] = []
+    for index, char in enumerate(raw_text):
+        if char.isspace():
+            continue
+        normalized_chars.append(char.casefold())
+        raw_offsets.append(index)
+    if not normalized_chars:
+        return []
+    normalized_text = "".join(normalized_chars)
+
+    output: list[_DocumentMatch] = []
+    seen: set[tuple[int, int]] = set()
+    for alternative in pattern.split("|"):
+        literal = re.sub(r"\\(.)", r"\1", alternative).strip()
+        # This fallback is deliberately literal. Do not reinterpret arbitrary
+        # regular expressions or loosen short tokens that would create noisy
+        # evidence windows throughout a long report.
+        if len(literal) < 4 or re.search(r"[.^$*+?{}\[\]()]", literal):
+            continue
+        normalized_literal = "".join(
+            char.casefold() for char in literal if not char.isspace()
+        )
+        if len(normalized_literal) < 4:
+            continue
+        cursor = 0
+        while True:
+            found = normalized_text.find(normalized_literal, cursor)
+            if found < 0:
+                break
+            start = raw_offsets[found]
+            end = raw_offsets[found + len(normalized_literal) - 1] + 1
+            identity = (start, end)
+            if identity not in seen:
+                seen.add(identity)
+                output.append(_DocumentMatch(start, end))
+            cursor = found + max(1, len(normalized_literal))
+    return sorted(output, key=lambda item: item.start())
 
 
 def request_search_terms(request: str) -> tuple[str, ...]:
@@ -472,9 +546,7 @@ def targeted_document_evidence(
         if focused is None and len(term) >= 4 and re.fullmatch(r"[\u3400-\u9fff]+", term):
             focused = grep_document_evidence(
                 "",
-                tool_args={
-                    "pattern": f"{re.escape(term[:2])}|{re.escape(term[-2:])}"
-                },
+                tool_args={"pattern": f"{re.escape(term[:2])}|{re.escape(term[-2:])}"},
                 raw_documents=raw_documents,
                 captured_at=captured_at,
             )
@@ -482,9 +554,7 @@ def targeted_document_evidence(
             continue
         visible, envelope = focused
         parsed = json.loads(visible)
-        if envelope["evidenceHandle"] in {
-            item["evidenceHandle"] for item in envelopes
-        }:
+        if envelope["evidenceHandle"] in {item["evidenceHandle"] for item in envelopes}:
             continue
         envelopes.append(envelope)
         rows.append(
@@ -513,7 +583,10 @@ def targeted_document_evidence(
     )
 
 
-def _document_match_score(raw_text: str, match: re.Match[str]) -> tuple[int, int]:
+def _document_match_score(
+    raw_text: str,
+    match: re.Match[str] | _DocumentMatch,
+) -> tuple[int, int]:
     """Prefer numeric/table rows over an earlier prose definition match."""
 
     start = max(0, match.start() - 800)
@@ -531,7 +604,10 @@ def _document_match_score(raw_text: str, match: re.Match[str]) -> tuple[int, int
     return score, -match.start()
 
 
-def _document_match_excerpt(raw_text: str, match: re.Match[str]) -> str:
+def _document_match_excerpt(
+    raw_text: str,
+    match: re.Match[str] | _DocumentMatch,
+) -> str:
     """Return a bounded row/paragraph window around one exact match.
 
     A multi-thousand-character window made a table-header occurrence outrank

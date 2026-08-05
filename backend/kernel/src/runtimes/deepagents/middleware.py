@@ -7,23 +7,25 @@ middleware so the runtime stays focused on graph wiring and event mapping.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
 import re
-import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware, ToolCallRequest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 from src.core.citation import (
+    EvidenceRecord,
     EvidenceRegistry,
     compact_citation_tool_content,
     private_citation_tool_content,
+    rebase_collection_projections,
 )
 from src.core.citation_document_search import (
     augment_indexed_document_evidence,
@@ -35,38 +37,126 @@ from src.core.citation_document_search import (
 from src.core.citation_document_search import (
     grep_document_evidence as _grep_document_evidence,
 )
-from src.core.citation_research_budget import (
-    RESEARCH_FINALIZATION_ATTEMPT_LIMIT,
-    RESEARCH_MODEL_CALL_LIMIT,
-    TRANSCRIPT_DISCOVERY_RESULT_FLOOR,
-    TRANSCRIPT_DISCOVERY_TOOLS,
-    TRANSCRIPT_INDEXED_CHUNK_LIMIT,
-    CitationResearchBudget,
-    is_document_discovery_tool,
-    is_stable_general_knowledge_query,
-    prioritize_discovery_documents,
-)
 from src.core.mcp_source_metadata import (
     adapt_mcp_source_result,
     unwrap_mcp_source_transport,
 )
-from src.core.output_contract import parse_output_contract
 
 logger = logging.getLogger(__name__)
 
 _CITATION_ARTIFACT_KEY = "_valuz_citation_content"
-_DISCOVERY_RESULT_LIMIT = 4
-_DISCOVERY_SUMMARY_LIMIT = 360
-_DOCUMENT_FETCH_FAILURE_LIMIT = 2
-_DOCUMENT_FETCH_BLOCK_SECONDS = 60.0
-_STRUCTURED_FALLBACK_EVIDENCE_LIMIT = 128
 _RAW_DOCUMENT_CACHE_LIMIT = 8
-_FINANCIAL_STATEMENT_TOOLS = {
-    "income_statement",
-    "balance_sheet",
-    "cashflow_statement",
-}
-_REQUESTED_YEAR_RE = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
+_TRANSCRIPT_DISCOVERY_TOOLS = {"conferences_search", "minutes_search"}
+_NON_DOCUMENT_SEARCH_TOOLS = {"agent_search", "company_search", "skill_search"}
+
+
+def _is_document_discovery_tool(tool_name: str | None) -> bool:
+    name = str(tool_name or "").rsplit("__", 1)[-1]
+    if name in _NON_DOCUMENT_SEARCH_TOOLS:
+        return False
+    return name.endswith("_search") or name in {"search", "docs_list", "docs_by_tags"}
+
+
+def _normalized_document_text(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "")).casefold()
+
+
+def _prefer_registered_chunk_for_grep(
+    envelope: dict[str, Any],
+    registry: EvidenceRegistry,
+) -> EvidenceRecord | None:
+    """Reuse a uniquely matching located chunk for a raw-document grep hit.
+
+    Raw document payloads do not carry page/chunk coordinates, while an
+    earlier ``kb_search``/``document_fetch`` in the same turn often registered
+    the exact indexed chunk. Reusing that immutable record preserves the
+    document locator without inventing coordinates. Ambiguous matches retain
+    the grep Evidence's external locator.
+    """
+
+    source = envelope.get("source")
+    evidence = envelope.get("evidence")
+    if not isinstance(source, dict) or not isinstance(evidence, dict):
+        return None
+    document_id = str(source.get("documentId") or source.get("sourceId") or "")
+    grep_quote = _normalized_document_text(evidence.get("quote"))
+    if not document_id or not grep_quote:
+        return None
+
+    scored: list[tuple[int, EvidenceRecord]] = []
+    for record in registry.values():
+        record_document_id = str(
+            record.source.get("documentId") or record.source.get("sourceId") or ""
+        )
+        locator = record.locator
+        if (
+            record_document_id != document_id
+            or not isinstance(locator, dict)
+            or locator.get("kind") not in {"pdf", "chunk", "html"}
+            or not locator.get("chunkId")
+            or record.evidence.get("kind") != "text"
+        ):
+            continue
+        chunk_quote = _normalized_document_text(record.evidence.get("quote"))
+        if len(chunk_quote) < 40:
+            continue
+        if chunk_quote in grep_quote:
+            scored.append((len(chunk_quote), record))
+            continue
+        # Grep may return only a bounded window from a larger indexed chunk.
+        # Require a substantial exact window; token overlap is deliberately
+        # insufficient for choosing a locator.
+        for excerpt in str(evidence.get("quote") or "").split("\n…\n"):
+            normalized_excerpt = _normalized_document_text(excerpt)
+            if len(normalized_excerpt) >= 80 and normalized_excerpt in chunk_quote:
+                scored.append((len(normalized_excerpt), record))
+                break
+    if not scored:
+        return None
+    scored.sort(key=lambda item: (-item[0], item[1].handle))
+    best_score = scored[0][0]
+    best = [record for score, record in scored if score == best_score]
+    identities = {
+        (
+            str(record.locator.get("kind") if record.locator else ""),
+            str(record.locator.get("chunkId") if record.locator else ""),
+            _normalized_document_text(record.evidence.get("quote")),
+        )
+        for record in best
+    }
+    return best[0] if len(identities) == 1 else None
+
+
+def _project_grep_to_registered_chunk(
+    visible: str,
+    envelope: dict[str, Any],
+    registry: EvidenceRegistry,
+) -> tuple[str, dict[str, Any]]:
+    record = _prefer_registered_chunk_for_grep(envelope, registry)
+    if record is None:
+        return visible, envelope
+    located_envelope = {
+        "evidenceHandle": record.handle,
+        "source": copy.deepcopy(record.source),
+        "evidence": copy.deepcopy(record.evidence),
+        "locator": copy.deepcopy(record.locator),
+    }
+    try:
+        model_payload = json.loads(visible)
+    except (TypeError, ValueError):
+        return visible, located_envelope
+    hints = model_payload.get("_valuz_evidence")
+    if isinstance(hints, list) and hints and isinstance(hints[0], dict):
+        hints[0] = {
+            **hints[0],
+            "evidenceHandle": record.handle,
+            "sourceTitle": record.source.get("title"),
+            "excerpt": record.evidence.get("snippet") or record.evidence.get("quote"),
+        }
+    return (
+        json.dumps(model_payload, ensure_ascii=False, separators=(",", ":")),
+        located_envelope,
+    )
 
 
 class ToolErrorTolerantMiddleware(AgentMiddleware):
@@ -80,10 +170,6 @@ class ToolErrorTolerantMiddleware(AgentMiddleware):
     eventually give up via max_turns.
     """
 
-    def __init__(self) -> None:
-        self._document_fetch_failures = 0
-        self._document_fetch_blocked_until = 0.0
-
     async def awrap_tool_call(
         self,
         request: ToolCallRequest,
@@ -91,37 +177,9 @@ class ToolErrorTolerantMiddleware(AgentMiddleware):
     ) -> ToolMessage | Command[Any]:
         tool_call = request.tool_call
         tool_name = str(tool_call.get("name") or "")
-        if (
-            tool_name == "document_fetch"
-            and self._document_fetch_failures >= _DOCUMENT_FETCH_FAILURE_LIMIT
-            and time.monotonic() < self._document_fetch_blocked_until
-        ):
-            return ToolMessage(
-                content=(
-                    "The document service returned Not Found for multiple selected search "
-                    "results in this turn. Do not call document_fetch again now. You may still "
-                    "answer from an exact provider-returned search summary by citing that row's "
-                    "ev_summary_* evidenceHandle. Treat it as lower-confidence summary evidence, "
-                    "do not claim that you opened the original document, and omit facts not "
-                    "present in the summary."
-                ),
-                tool_call_id=tool_call["id"],
-                name=tool_name,
-                status="error",
-            )
         try:
-            result = await handler(request)
-            if tool_name == "document_fetch":
-                self._document_fetch_failures = 0
-                self._document_fetch_blocked_until = 0.0
-            return result
+            return await handler(request)
         except Exception as exc:
-            if tool_name == "document_fetch" and "404" in str(exc):
-                self._document_fetch_failures += 1
-                if self._document_fetch_failures >= _DOCUMENT_FETCH_FAILURE_LIMIT:
-                    self._document_fetch_blocked_until = (
-                        time.monotonic() + _DOCUMENT_FETCH_BLOCK_SECONDS
-                    )
             logger.warning(
                 "Tool '%s' raised %s — returning error to model: %s",
                 tool_name,
@@ -136,383 +194,6 @@ class ToolErrorTolerantMiddleware(AgentMiddleware):
             )
 
 
-class ResearchToolBudgetMiddleware(AgentMiddleware):
-    """Bound discovery queries within one user turn.
-
-    Search results are only candidates for later source retrieval. Letting the
-    model repeatedly reformulate the same research request multiplies both tool
-    traffic and the context replayed into every following model call. Keep a
-    small per-invocation budget while leaving entity lookup and source fetches
-    available.
-    """
-
-    def __init__(self, *, lead_owned_evidence: bool = False) -> None:
-        self._research_budget = CitationResearchBudget()
-        self._transcript_document_ids: set[str] = set()
-        self._model_calls = 0
-        self._repair_catalog_locked = False
-        self._forced_finalization_attempts = 0
-        self._lead_owned_evidence = lead_owned_evidence
-        self._no_research_scope = False
-        self._requested_period_count: int | None = None
-        self._requested_years: tuple[int, ...] = ()
-
-    def before_agent(self, state: Any, runtime: Any) -> None:
-        del runtime
-        self._research_budget.reset()
-        self._transcript_document_ids.clear()
-        self._model_calls = 0
-        self._repair_catalog_locked = _state_has_repair_evidence_catalog(state)
-        self._forced_finalization_attempts = 0
-        self._no_research_scope = is_stable_general_knowledge_query(
-            _state_last_human_text(state)
-        )
-        prompt = _state_last_human_text(state)
-        self._requested_period_count = parse_output_contract(prompt).requested_period_count
-        self._requested_years = tuple(
-            sorted({int(match.group(0)) for match in _REQUESTED_YEAR_RE.finditer(prompt)})
-        )
-
-    async def awrap_model_call(
-        self,
-        request: Any,
-        handler: Callable[[Any], Awaitable[Any]],
-    ) -> Any:
-        if self._no_research_scope and hasattr(request, "override"):
-            messages = list(getattr(request, "messages", None) or [])
-            direct_instruction = (
-                "路由判断：这是稳定的通用知识定义或公式解释。直接使用通用知识回答；"
-                "不要调用任何工具，不要生成引用或 evidence 链接，也不要声称回答包含"
-                "实时数据。公式示例必须明确是便于理解的假设。"
-                if _request_prefers_chinese(request)
-                else (
-                    "Routing decision: this is a stable general-knowledge definition "
-                    "or formula explanation. Answer directly without tools, citations, "
-                    "or evidence links, and do not imply that the answer contains current "
-                    "data. Any numeric formula example must be clearly hypothetical."
-                )
-            )
-            direct_request = request.override(
-                messages=[*messages, HumanMessage(content=direct_instruction)],
-                tools=[],
-                tool_choice=None,
-            )
-            self._model_calls += 1
-            return await handler(direct_request)
-        if (
-            self._research_budget.has_research_activity
-            and self._model_calls >= RESEARCH_MODEL_CALL_LIMIT
-        ):
-            content = (
-                "检索步骤已达到安全上限。现在停止调用工具，立即使用已经取得的"
-                "证据撰写最终回答；已核验的结果保留引用，资料没有覆盖的具体项目"
-                "逐项说明来源不足。不要只回复进度、待办或内部错误。"
-                if _request_prefers_chinese(request)
-                else (
-                    "The retrieval steps reached their safe limit. Stop calling tools and "
-                    "write the final answer now from the evidence already collected. Keep "
-                    "citations on verified results and state a source-coverage limitation "
-                    "beside each requested item that remains unavailable. Do not return only "
-                    "progress, todos, or an internal error."
-                )
-            )
-            if (
-                self._forced_finalization_attempts
-                < RESEARCH_FINALIZATION_ATTEMPT_LIMIT
-                and hasattr(request, "override")
-            ):
-                self._forced_finalization_attempts += 1
-                messages = list(getattr(request, "messages", None) or [])
-                final_request = request.override(
-                    messages=[*messages, HumanMessage(content=content)],
-                    tools=[],
-                    tool_choice=None,
-                )
-                self._model_calls += 1
-                return await handler(final_request)
-            return AIMessage(
-                content=(
-                    "本次检索未能在安全上限内完成最终整理。请缩小查询范围后重试。"
-                    if _request_prefers_chinese(request)
-                    else (
-                        "The research run could not finish its final response within "
-                        "the safe limit. Please retry with a narrower scope."
-                    )
-                )
-            )
-        self._model_calls += 1
-        return await handler(request)
-
-    async def awrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
-    ) -> ToolMessage | Command[Any]:
-        tool_call = request.tool_call
-        tool_name = str(tool_call.get("name") or "")
-        if self._lead_owned_evidence and tool_name in {
-            "task",
-            "dispatch",
-            "create_task",
-        }:
-            return ToolMessage(
-                content=(
-                    "Citation mode requires the lead agent to own the evidence catalogue. "
-                    "Do not delegate this answer. Retrieve the necessary sources with the "
-                    "lead agent's tools and attach their exact evidenceHandle values to the "
-                    "final claims."
-                ),
-                tool_call_id=tool_call["id"],
-                name=tool_name,
-                status="error",
-            )
-        if self._repair_catalog_locked:
-            return ToolMessage(
-                content=(
-                    "This citation repair already has a registered evidence catalogue. "
-                    "Do not call tools or restart research. Rewrite only from the supplied "
-                    "candidateEvidence; state a source-coverage limitation for anything "
-                    "that catalogue cannot support."
-                ),
-                tool_call_id=tool_call["id"],
-                name=tool_name,
-                status="error",
-            )
-        args = tool_call.get("args")
-        args = args if isinstance(args, dict) else {}
-        normalized_tool_name = tool_name.rsplit("__", 1)[-1]
-        if normalized_tool_name == "kb_search":
-            singular_document_id = str(
-                args.get("doc_id") or args.get("document_id") or ""
-            ).strip()
-            if (
-                singular_document_id
-                and not args.get("doc_ids")
-                and not args.get("document_ids")
-            ):
-                args = {
-                    key: value
-                    for key, value in args.items()
-                    if key not in {"doc_id", "document_id"}
-                }
-                args["doc_ids"] = [singular_document_id]
-                request = request.override(tool_call={**tool_call, "args": args})
-                tool_call = request.tool_call
-        if (
-            normalized_tool_name in _FINANCIAL_STATEMENT_TOOLS
-            and str(args.get("period") or "").casefold() in {"annual", "yearly", "fy"}
-            and self._requested_years
-        ):
-            # Statement APIs return the latest rows first.  A request for an
-            # older explicit fiscal year therefore needs enough rows to reach
-            # that year, not merely ``len(requested_years)``.  Keep a bounded
-            # deterministic window and let the model select the requested
-            # periods from the returned rows.
-            latest_completed_year = datetime.now(UTC).year - 1
-            oldest_requested_year = min(self._requested_years)
-            minimum_limit = min(
-                10,
-                max(
-                    len(self._requested_years),
-                    latest_completed_year - oldest_requested_year + 1,
-                ),
-            )
-            requested_limit = args.get("limit")
-            if not isinstance(requested_limit, int) or requested_limit < minimum_limit:
-                args = {**args, "limit": minimum_limit}
-                request = request.override(tool_call={**tool_call, "args": args})
-                tool_call = request.tool_call
-        if tool_name in TRANSCRIPT_DISCOVERY_TOOLS and (self._requested_period_count or 0) > 1:
-            args = {
-                key: value
-                for key, value in args.items()
-                if key not in {"fiscal_quarter", "fiscal_year"}
-            }
-            requested_num = args.get("num")
-            args["num"] = max(
-                TRANSCRIPT_DISCOVERY_RESULT_FLOOR,
-                requested_num if isinstance(requested_num, int) else 0,
-            )
-            request = request.override(tool_call={**tool_call, "args": args})
-            tool_call = request.tool_call
-        if (
-            tool_name in TRANSCRIPT_DISCOVERY_TOOLS
-            and not args.get("fiscal_quarter")
-            and (
-                not isinstance(args.get("num"), int)
-                or args["num"] < TRANSCRIPT_DISCOVERY_RESULT_FLOOR
-            )
-        ):
-            args = {**args, "num": TRANSCRIPT_DISCOVERY_RESULT_FLOOR}
-            request = request.override(
-                tool_call={**tool_call, "args": args},
-            )
-            tool_call = request.tool_call
-        document_ids = _tool_document_ids(args)
-        if tool_name == "kb_search" and any(
-            document_id in self._transcript_document_ids
-            for document_id in document_ids
-        ):
-            requested_num = args.get("num")
-            if (
-                not isinstance(requested_num, int)
-                or requested_num > TRANSCRIPT_INDEXED_CHUNK_LIMIT
-            ):
-                args = {**args, "num": TRANSCRIPT_INDEXED_CHUNK_LIMIT}
-                request = request.override(
-                    tool_call={**tool_call, "args": args},
-                )
-                tool_call = request.tool_call
-            decision = self._research_budget.allow_indexed_document_search(document_ids)
-            if not decision.allowed:
-                return ToolMessage(
-                    content=decision.reason or "Citation research budget exhausted.",
-                    tool_call_id=tool_call["id"],
-                    name=tool_name,
-                    status="error",
-                )
-            return await handler(request)
-        if tool_name == "document_raw_content":
-            doc_id = (
-                str(args.get("doc_id") or "").strip()
-                if isinstance(args, dict)
-                else ""
-            )
-            if doc_id in self._transcript_document_ids:
-                return _transcript_original_read_denial(
-                    tool_call,
-                    searched=(
-                        doc_id in self._research_budget.indexed_document_search_ids
-                    ),
-                )
-            if doc_id and doc_id in self._research_budget.complete_document_ids:
-                return ToolMessage(
-                    content=(
-                        "This document was already read through its final indexed chunk in "
-                        "this turn. Do not load the full raw document again. Use the returned "
-                        "evidence excerpts and handles to answer; if an optional value was not "
-                        "present, state that it was not disclosed."
-                    ),
-                    tool_call_id=tool_call["id"],
-                    name=tool_name,
-                    status="error",
-                )
-        if tool_name == "document_fetch":
-            doc_id = ""
-            if isinstance(args, dict):
-                requested_limit = args.get("chunk_limit")
-                doc_id = str(args.get("doc_id") or "").strip()
-                if doc_id in self._transcript_document_ids:
-                    return _transcript_original_read_denial(
-                        tool_call,
-                        searched=(
-                            doc_id in self._research_budget.indexed_document_search_ids
-                        ),
-                    )
-                requested_offset = args.get("chunk_offset")
-                normalized_offset = (
-                    requested_offset
-                    if isinstance(requested_offset, int) and requested_offset >= 0
-                    else 0
-                )
-                decision = self._research_budget.allow_document_read(
-                    tool_name=tool_name,
-                    document_id=doc_id,
-                    chunk_offset=normalized_offset,
-                    requested_chunk_limit=(
-                        requested_limit if isinstance(requested_limit, int) else None
-                    ),
-                    allow_sequential_window=doc_id in self._transcript_document_ids,
-                )
-                if not decision.allowed:
-                    return ToolMessage(
-                        content=decision.reason or "Citation research budget exhausted.",
-                        tool_call_id=tool_call["id"],
-                        name=tool_name,
-                        status="error",
-                    )
-                if requested_limit != decision.chunk_limit:
-                    request = request.override(
-                        tool_call={
-                            **tool_call,
-                            "args": {
-                                **args,
-                                "chunk_limit": decision.chunk_limit,
-                            },
-                        }
-                    )
-            else:
-                decision = self._research_budget.allow_document_read(
-                    tool_name=tool_name,
-                    document_id="",
-                )
-                if not decision.allowed:
-                    return ToolMessage(
-                        content=decision.reason or "Citation research budget exhausted.",
-                        tool_call_id=tool_call["id"],
-                        name=tool_name,
-                        status="error",
-                    )
-            result = await handler(request)
-            if (
-                doc_id
-                and isinstance(result, ToolMessage)
-                and _document_fetch_reached_end(result.content)
-            ):
-                self._research_budget.mark_document_complete(doc_id)
-                result = _append_complete_document_coverage_note(result, doc_id=doc_id)
-            return result
-        if not is_document_discovery_tool(tool_name):
-            return await handler(request)
-        if tool_name in TRANSCRIPT_DISCOVERY_TOOLS:
-            symbols = args.get("symbols")
-            decision = self._research_budget.allow_transcript_discovery(
-                symbols if isinstance(symbols, list) else ()
-            )
-        else:
-            decision = self._research_budget.allow_discovery()
-        if not decision.allowed:
-            return ToolMessage(
-                content=decision.reason or "Citation research budget exhausted.",
-                tool_call_id=tool_call["id"],
-                name=tool_name,
-                status="error",
-            )
-        result = await handler(request)
-        if tool_name in {"conferences_search", "minutes_search"}:
-            self._transcript_document_ids.update(
-                _discovery_document_ids(
-                    result.content if isinstance(result, ToolMessage) else result
-                )
-            )
-        return result
-
-
-def _discovery_document_ids(content: Any) -> set[str]:
-    """Extract document ids from native or JSON-encoded discovery payloads."""
-
-    if isinstance(content, str):
-        try:
-            return _discovery_document_ids(json.loads(content))
-        except (TypeError, ValueError):
-            return set()
-    if isinstance(content, list):
-        document_ids: set[str] = set()
-        for item in content:
-            document_ids.update(_discovery_document_ids(item))
-        return document_ids
-    if not isinstance(content, Mapping):
-        return set()
-    document_ids = {
-        str(doc.get("doc_id") or doc.get("document_id") or "").strip()
-        for doc in content.get("docs", [])
-        if isinstance(doc, Mapping)
-    }
-    nested = content.get("text")
-    if isinstance(nested, str):
-        document_ids.update(_discovery_document_ids(nested))
-    document_ids.discard("")
-    return document_ids
 
 
 def _tool_document_ids(args: Mapping[str, Any]) -> tuple[str, ...]:
@@ -524,68 +205,9 @@ def _tool_document_ids(args: Mapping[str, Any]) -> tuple[str, ...]:
     )
     candidates = raw if isinstance(raw, list) else [raw]
     return tuple(
-        document_id
-        for candidate in candidates
-        if (document_id := str(candidate or "").strip())
+        document_id for candidate in candidates if (document_id := str(candidate or "").strip())
     )
 
-
-def _transcript_original_read_denial(
-    tool_call: Mapping[str, Any],
-    *,
-    searched: bool,
-) -> ToolMessage:
-    return ToolMessage(
-        content=(
-            "This transcript already had its one targeted indexed search. Use the "
-            "returned chunks and evidence handles and finish this quarter; do not "
-            "load or page the original again."
-            if searched
-            else (
-                "Do not load or page this transcript. Run exactly one kb_search "
-                "scoped to this doc_id with the user's requested concepts, then use "
-                "those indexed original chunks and evidence handles."
-            )
-        ),
-        tool_call_id=str(tool_call["id"]),
-        name=str(tool_call.get("name") or ""),
-        status="error",
-    )
-
-
-def _state_has_repair_evidence_catalog(state: Any) -> bool:
-    messages = (
-        state.get("messages")
-        if isinstance(state, Mapping)
-        else getattr(state, "messages", None)
-    )
-    if not isinstance(messages, list):
-        return False
-    for message in reversed(messages):
-        content = getattr(message, "content", None)
-        if not isinstance(content, str):
-            continue
-        if "Restricted repair context (JSON):" not in content:
-            continue
-        return '"candidateEvidence":[' in content and '"candidateEvidence":[]' not in content
-    return False
-
-
-def _state_last_human_text(state: Any) -> str:
-    messages = (
-        state.get("messages")
-        if isinstance(state, Mapping)
-        else getattr(state, "messages", None)
-    )
-    if not isinstance(messages, list):
-        return ""
-    for message in reversed(messages):
-        if not isinstance(message, HumanMessage):
-            continue
-        content = message.content
-        if isinstance(content, str):
-            return content
-    return ""
 
 
 class CitationEvidenceCompactionMiddleware(AgentMiddleware):
@@ -599,10 +221,17 @@ class CitationEvidenceCompactionMiddleware(AgentMiddleware):
     The private sidecar is never a second copy of the original result.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        citation_artifact_emitter: (
+            Callable[[str, str | None, Any, str], Awaitable[None]] | None
+        ) = None,
+    ) -> None:
         self._raw_documents: dict[str, dict[str, Any]] = {}
         self._document_titles: dict[str, str] = {}
         self._evidence_registry = EvidenceRegistry()
+        self._citation_artifact_emitter = citation_artifact_emitter
 
     async def awrap_tool_call(
         self,
@@ -628,9 +257,7 @@ class CitationEvidenceCompactionMiddleware(AgentMiddleware):
         if not isinstance(result, ToolMessage):
             return result
         fallback_request_name = request_call.get("name") if not result.name else None
-        tool_name = result.name or (
-            str(fallback_request_name) if fallback_request_name else None
-        )
+        tool_name = result.name or (str(fallback_request_name) if fallback_request_name else None)
         tool_args = request_call.get("args")
         tool_args = tool_args if isinstance(tool_args, dict) else {}
         captured_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -647,36 +274,68 @@ class CitationEvidenceCompactionMiddleware(AgentMiddleware):
             )
             if adaptation is not None:
                 artifact = restored_artifact or {}
+                self._remember_document_titles(adaptation.model_content)
+                self._cache_raw_document(
+                    adaptation.model_content,
+                    tool_name=str(tool_name or ""),
+                    tool_call_id=str(result.tool_call_id or request_call.get("id") or ""),
+                )
+                model_projection = adaptation.model_content
                 if not adaptation.citable:
-                    if adaptation.resource_kinds == {"operational"}:
-                        return result.model_copy(update={"artifact": artifact or None})
+                    # A provider descriptor can lag behind its response shape
+                    # during a rolling MCP deployment.  Do not let a stale
+                    # discovery/non-citable declaration suppress exact
+                    # indexed chunks from kb_search: the local trust-boundary
+                    # adapter can still prove documentId + chunkId + quote
+                    # directly from this immutable result.  Other tools keep
+                    # the provider's non-citable declaration unchanged.
+                    indexed = augment_indexed_document_evidence(
+                        model_projection,
+                        tool_name=str(tool_name or ""),
+                        captured_at=captured_at,
+                    )
+                    if indexed is not None:
+                        model_projection = indexed
+                    else:
+                        if adaptation.resource_kinds == {"operational"}:
+                            return result.model_copy(update={"artifact": artifact or None})
+                        discovery = _compact_discovery_tool_content(
+                            model_projection,
+                            tool_name,
+                            tool_args=tool_args,
+                            allow_summary_evidence=False,
+                        )
+                        visible = discovery[0] if discovery is not None else model_projection
+                        return result.model_copy(
+                            update={
+                                "content": _serialize_tool_content(visible),
+                                "artifact": artifact or None,
+                            }
+                        )
+                if "document-discovery" in adaptation.resource_kinds:
                     discovery = _compact_discovery_tool_content(
-                        adaptation.model_content,
+                        model_projection,
                         tool_name,
                         tool_args=tool_args,
                         allow_summary_evidence=False,
                     )
-                    visible = discovery[0] if discovery is not None else adaptation.model_content
-                    return result.model_copy(
-                        update={
-                            "content": _serialize_tool_content(visible),
-                            "artifact": artifact or None,
-                        }
-                    )
+                    if discovery is not None:
+                        model_projection = discovery[0]
+                model_projection = rebase_collection_projections(model_projection)
                 compacted = compact_citation_tool_content(
-                    adaptation.model_content,
+                    model_projection,
                     max_text_evidence_items=80,
                 )
                 if compacted is None:
-                    compacted = adaptation.model_content
-                private_content = private_citation_tool_content(adaptation.model_content)
+                    compacted = model_projection
+                private_content = private_citation_tool_content(model_projection)
                 if private_content is not None:
                     artifact[_CITATION_ARTIFACT_KEY] = private_content
-                    self._evidence_registry.register_tool_projection(
-                        compacted,
-                        private_content,
+                    await self._publish_citation_artifact(
+                        tool_call_id=str(result.tool_call_id or request_call.get("id") or ""),
                         tool_name=str(tool_name or "") or None,
-                        trusted_private=True,
+                        model_content=compacted,
+                        citation_content=private_content,
                     )
                 return result.model_copy(
                     update={
@@ -693,19 +352,13 @@ class CitationEvidenceCompactionMiddleware(AgentMiddleware):
             if constrained is not result.content:
                 result = result.model_copy(update={"content": constrained})
 
-        if tool_name == "document_raw_content":
-            raw_document = _extract_raw_document(result.content)
-            if raw_document is not None:
-                document_id = str(raw_document.get("doc_id") or "")
-                if document_id and document_id in self._document_titles:
-                    raw_document["title"] = self._document_titles[document_id]
-                cache_key = str(result.tool_call_id or request_call.get("id") or "")
-                if cache_key:
-                    if len(self._raw_documents) >= _RAW_DOCUMENT_CACHE_LIMIT:
-                        self._raw_documents.pop(next(iter(self._raw_documents)))
-                    self._raw_documents[cache_key] = raw_document
+        self._cache_raw_document(
+            result.content,
+            tool_name=str(tool_name or ""),
+            tool_call_id=str(result.tool_call_id or request_call.get("id") or ""),
+        )
 
-        if tool_name == "grep":
+        if str(tool_name or "").rsplit("__", 1)[-1] == "grep":
             grep_evidence = _grep_document_evidence(
                 result.content,
                 tool_args=tool_args,
@@ -714,11 +367,22 @@ class CitationEvidenceCompactionMiddleware(AgentMiddleware):
             )
             if grep_evidence is not None:
                 visible, envelope = grep_evidence
+                visible, envelope = _project_grep_to_registered_chunk(
+                    visible,
+                    envelope,
+                    self._evidence_registry,
+                )
                 artifact = dict(result.artifact) if isinstance(result.artifact, dict) else {}
                 artifact[_CITATION_ARTIFACT_KEY] = json.dumps(
                     {"_valuz_evidence": [envelope]},
                     ensure_ascii=False,
                     separators=(",", ":"),
+                )
+                await self._publish_citation_artifact(
+                    tool_call_id=str(result.tool_call_id or request_call.get("id") or ""),
+                    tool_name=str(tool_name or "") or None,
+                    model_content=visible,
+                    citation_content=artifact[_CITATION_ARTIFACT_KEY],
                 )
                 return result.model_copy(update={"content": visible, "artifact": artifact})
 
@@ -762,6 +426,12 @@ class CitationEvidenceCompactionMiddleware(AgentMiddleware):
                     ensure_ascii=False,
                     separators=(",", ":"),
                 )
+                await self._publish_citation_artifact(
+                    tool_call_id=str(result.tool_call_id or request_call.get("id") or ""),
+                    tool_name=str(tool_name or "") or None,
+                    model_content=compact_discovery,
+                    citation_content=artifact[_CITATION_ARTIFACT_KEY],
+                )
             return result.model_copy(update={"content": compact_discovery, "artifact": artifact})
         compacted = compact_citation_tool_content(
             result.content,
@@ -776,13 +446,98 @@ class CitationEvidenceCompactionMiddleware(AgentMiddleware):
             result.content
         )
         artifact[_CITATION_ARTIFACT_KEY] = private_content
-        self._evidence_registry.register_tool_projection(
-            compacted,
-            private_content,
+        await self._publish_citation_artifact(
+            tool_call_id=str(result.tool_call_id or request_call.get("id") or ""),
             tool_name=str(tool_name or "") or None,
-            trusted_private=True,
+            model_content=compacted,
+            citation_content=private_content,
         )
         return result.model_copy(update={"content": compacted, "artifact": artifact})
+
+    async def _publish_citation_artifact(
+        self,
+        *,
+        tool_call_id: str,
+        tool_name: str | None,
+        model_content: Any,
+        citation_content: str,
+    ) -> None:
+        """Register and stream a sidecar before graph history can compact it.
+
+        LangChain's public ``on_tool_end`` callback precedes post-tool
+        middleware, while a long graph may summarize away early ToolMessages
+        before the final checkpoint.  Publishing here closes that timing gap;
+        checkpoint replay remains a compatibility fallback and registration is
+        idempotent.
+        """
+
+        self._evidence_registry.register_tool_projection(
+            model_content,
+            citation_content,
+            tool_name=tool_name,
+            trusted_private=True,
+        )
+        if self._citation_artifact_emitter is None or not tool_call_id:
+            return
+        await self._citation_artifact_emitter(
+            tool_call_id,
+            tool_name,
+            model_content,
+            citation_content,
+        )
+
+    def _remember_document_titles(self, content: Any) -> None:
+        for document_id, title in _document_title_pairs(content):
+            self._document_titles[document_id] = title
+
+    def _cache_raw_document(
+        self,
+        content: Any,
+        *,
+        tool_name: str,
+        tool_call_id: str,
+    ) -> None:
+        if tool_name.rsplit("__", 1)[-1] != "document_raw_content" or not tool_call_id:
+            return
+        raw_document = _extract_raw_document(content)
+        if raw_document is None:
+            return
+        document_id = str(raw_document.get("doc_id") or "")
+        if document_id and document_id in self._document_titles:
+            raw_document["title"] = self._document_titles[document_id]
+        if len(self._raw_documents) >= _RAW_DOCUMENT_CACHE_LIMIT:
+            self._raw_documents.pop(next(iter(self._raw_documents)))
+        self._raw_documents[tool_call_id] = raw_document
+
+
+def _document_title_pairs(value: Any) -> set[tuple[str, str]]:
+    """Extract stable discovery titles without scanning raw document bodies."""
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped or stripped[0] not in "[{":
+            return set()
+        try:
+            return _document_title_pairs(json.loads(stripped))
+        except (TypeError, ValueError):
+            return set()
+    if isinstance(value, list):
+        pairs: set[tuple[str, str]] = set()
+        for item in value:
+            pairs.update(_document_title_pairs(item))
+        return pairs
+    if not isinstance(value, Mapping):
+        return set()
+    pairs = set()
+    document_id = str(value.get("doc_id") or value.get("document_id") or "").strip()
+    title = str(value.get("title") or "").strip()
+    if document_id and title:
+        pairs.add((document_id, title))
+    for key, item in value.items():
+        if key in {"content", "summary", "html", "markdown", "raw_content"}:
+            continue
+        pairs.update(_document_title_pairs(item))
+    return pairs
 
 
 def _calculation_input_validation_error(
@@ -894,17 +649,11 @@ def _append_complete_document_coverage_note(
     *,
     doc_id: str,
 ) -> ToolMessage:
-    artifact = dict(result.artifact) if isinstance(result.artifact, dict) else {}
-    coverage_handle = _append_document_coverage_evidence(
-        artifact,
-        doc_id=doc_id,
-    )
+    # End-of-document coverage is internal retrieval state, not localized
+    # support for a user-facing claim.  Preserve the instruction for answer
+    # construction without manufacturing a citation handle or locator.
+    _ = doc_id
     content = result.content
-    if coverage_handle is None:
-        content, coverage_handle = _append_document_coverage_evidence_to_content(
-            content,
-            doc_id=doc_id,
-        )
     note = (
         "Document coverage for answer construction: the adjacent indexed windows "
         "reached this document's final chunk. Ellipses inside evidence excerpts are "
@@ -913,175 +662,75 @@ def _append_complete_document_coverage_note(
         "disclosure anywhere in the returned evidence, state simply that the original "
         "document did not disclose it."
     )
-    if coverage_handle:
-        note = (
-            f"{note} Bind that document-level non-disclosure statement to "
-            f"evidence://{coverage_handle}."
-        )
     blocks = list(content) if isinstance(content, list) else [{"type": "text", "text": content}]
     blocks.append({"type": "text", "text": note})
-    update: dict[str, Any] = {"content": blocks}
-    if coverage_handle:
-        update["artifact"] = artifact
-    return result.model_copy(update=update)
+    return result.model_copy(update={"content": blocks})
 
 
-def _append_document_coverage_evidence(
-    artifact: dict[str, Any],
-    *,
-    doc_id: str,
-) -> str | None:
-    """Register one document-level proof that indexed coverage reached EOF."""
-
-    raw = artifact.get(_CITATION_ARTIFACT_KEY)
-    if not isinstance(raw, str):
-        return None
-    try:
-        payload = json.loads(raw)
-    except (TypeError, ValueError):
-        return None
-    payload, handle = _append_document_coverage_evidence_to_content(
-        payload,
-        doc_id=doc_id,
-    )
-    if handle is None:
-        return None
-    artifact[_CITATION_ARTIFACT_KEY] = json.dumps(
-        payload,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-    return handle
-
-
-def _append_document_coverage_evidence_to_content(
-    content: Any,
-    *,
-    doc_id: str,
-) -> tuple[Any, str | None]:
-    if isinstance(content, str):
-        try:
-            payload = json.loads(content)
-        except (TypeError, ValueError):
-            return content, None
-        if not isinstance(payload, dict):
-            return content, None
-        handle = _append_document_coverage_evidence_to_payload(payload, doc_id=doc_id)
-        if handle is None:
-            return content, None
-        return (
-            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-            handle,
-        )
-    if isinstance(content, list):
-        output = list(content)
-        for index, item in enumerate(output):
-            if not isinstance(item, dict) or item.get("type") != "text":
-                continue
-            updated, handle = _append_document_coverage_evidence_to_content(
-                item.get("text"),
-                doc_id=doc_id,
-            )
-            if handle is None:
-                continue
-            output[index] = {**item, "text": updated}
-            return output, handle
-        return content, None
-    if isinstance(content, dict):
-        payload = dict(content)
-        handle = _append_document_coverage_evidence_to_payload(payload, doc_id=doc_id)
-        return (payload, handle) if handle is not None else (content, None)
-    return content, None
-
-
-def _append_document_coverage_evidence_to_payload(
-    payload: dict[str, Any],
-    *,
-    doc_id: str,
-) -> str | None:
-    source = _find_document_evidence_source(payload, doc_id=doc_id)
-    if source is None:
-        return None
-    version = str(source.get("documentVersion") or "")
-    digest = hashlib.sha256(
-        f"{doc_id}\0{version}\0document-coverage-complete".encode()
-    ).hexdigest()[:24]
-    handle = f"ev_doc_coverage_{digest}"
-    evidence = {
-        "evidenceHandle": handle,
-        "source": source,
-        "evidence": {
-            "kind": "structured-data",
-            "datasetId": f"document:{doc_id}",
-            "toolName": "document_fetch",
-            "recordKey": f"{doc_id}:complete",
-            "field": "document_coverage_complete",
-            "metric": "document_coverage_complete",
-            "value": True,
-            "basis": "full-document",
-            "capturedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+_STRUCTURED_FALLBACK_SPECS: dict[str, dict[str, Any]] = {
+    "income_statement": {"contentRoot": "/data"},
+    "balance_sheet": {"contentRoot": "/data"},
+    "cashflow_statement": {"contentRoot": "/data"},
+    "revenue_breakdown": {"contentRoot": "/data"},
+    "company_income_statement": {"contentRoot": "/data"},
+    "company_balance_sheet": {"contentRoot": "/data"},
+    "company_cashflow_statement": {"contentRoot": "/data"},
+    # Compatibility adapters for Reportify MCP deployments that predate the
+    # source-metadata transport. Each tool call still becomes one immutable
+    # Collection; no row or scalar Evidence is generated eagerly.
+    "factors_compute": {
+        "contentRoot": "/datas",
+        "itemsPointer": "/datas",
+        "identityFields": ["/symbol", "/date"],
+        "sourceCategory": "structured_market_data",
+        "semantics": {
+            "entity": {"symbol": "/symbol", "name": "/name"},
+            "asOf": {"date": "/date"},
+            "metric": {"mode": "field-name", "valueRoots": [""]},
         },
-    }
-    existing = payload.get("_valuz_evidence")
-    if isinstance(existing, list):
-        if not any(
-            isinstance(item, dict) and item.get("evidenceHandle") == handle
-            for item in existing
-        ):
-            existing.append(evidence)
-    elif isinstance(existing, dict):
-        if existing.get("evidenceHandle") != handle:
-            payload["_valuz_evidence"] = [existing, evidence]
-    else:
-        payload["_valuz_evidence"] = [evidence]
-    return handle
+    },
+    "stock_quote": {
+        "contentRoot": "/data",
+        "itemsPointer": "/data/items",
+        "identityFields": ["/symbol", "/date"],
+        "sourceCategory": "structured_market_data",
+        "semantics": {
+            "entity": {"symbol": "/symbol", "name": "/stock_name"},
+            "asOf": {"date": "/date"},
+            "metric": {"mode": "field-name", "valueRoots": [""]},
+        },
+    },
+}
 
 
-def _find_document_evidence_source(
-    value: Any,
-    *,
-    doc_id: str,
-) -> dict[str, Any] | None:
-    if isinstance(value, dict):
-        envelope = value.get("_valuz_evidence")
-        items = envelope if isinstance(envelope, list) else [envelope]
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            source = item.get("source")
-            if (
-                isinstance(source, dict)
-                and str(source.get("documentId") or source.get("sourceId") or "") == doc_id
-            ):
-                return dict(source)
-        for item in value.values():
-            found = _find_document_evidence_source(item, doc_id=doc_id)
-            if found is not None:
-                return found
-    elif isinstance(value, list):
-        for item in value:
-            found = _find_document_evidence_source(item, doc_id=doc_id)
-            if found is not None:
-                return found
+_SIMPLE_FACTOR_METRICS = {
+    "PS": "price_to_sales",
+    "PS_TTM": "price_to_sales_ttm",
+    "PE": "price_to_earnings",
+    "PE_TTM": "price_to_earnings_ttm",
+    "PB": "price_to_book",
+    "PCF": "price_to_cash_flow",
+}
+
+
+def _canonical_metric_for_factor_formula(formula: str) -> str | None:
+    """Map a small, auditable factor grammar to canonical metric ids."""
+
+    normalized = re.sub(r"\s+", "", str(formula or "")).upper()
+    simple = re.fullmatch(r"([A-Z][A-Z0-9_]*)\(\)", normalized)
+    if simple and simple.group(1) in _SIMPLE_FACTOR_METRICS:
+        return _SIMPLE_FACTOR_METRICS[simple.group(1)]
+    moving_average = re.fullmatch(r"MA\(CLOSE,(\d{1,4})\)", normalized)
+    if moving_average:
+        window = int(moving_average.group(1))
+        if 1 <= window <= 1_000:
+            return f"moving_average_{window}"
+    rsi = re.fullmatch(r"RSI\((\d{1,3})\)", normalized)
+    if rsi:
+        window = int(rsi.group(1))
+        if 1 <= window <= 999:
+            return f"rsi_{window}"
     return None
-
-
-_STRUCTURED_FALLBACK_TOOLS = {
-    "income_statement",
-    "balance_sheet",
-    "cashflow_statement",
-    "revenue_breakdown",
-    "company_income_statement",
-    "company_balance_sheet",
-    "company_cashflow_statement",
-}
-_STRUCTURED_CONTEXT_KEYS = {
-    "currency",
-    "end_date",
-    "fiscal_year",
-    "name",
-    "period",
-}
 
 
 def _augment_structured_tool_content(
@@ -1091,17 +740,17 @@ def _augment_structured_tool_content(
     tool_args: dict[str, Any],
     captured_at: str,
 ) -> Any | None:
-    """Add exact per-field envelopes when a trusted data tool only cites status.
+    """Add one lazy Collection when a trusted legacy data tool lacks Metadata.
 
     Some connector versions attach one envelope for the top-level HTTP
-    ``status`` but none for the actual nested financial values. The tool result
-    is already inside the trusted runtime boundary, so deriving immutable
-    per-scalar snapshots here is safer than letting the model cite ``status``
-    or an unrelated document cover page.
+    ``status`` but none for the actual structured values. The compatibility
+    adapter freezes the exact result root once and exposes JSON-pointer
+    addresses. Only fields used by final claims are materialized later.
     """
 
-    name = str(tool_name or "")
-    if name not in _STRUCTURED_FALLBACK_TOOLS:
+    name = str(tool_name or "").rsplit("__", 1)[-1]
+    spec = _STRUCTURED_FALLBACK_SPECS.get(name)
+    if spec is None:
         return None
     if isinstance(content, str):
         return _augment_structured_json_text(
@@ -1109,6 +758,7 @@ def _augment_structured_tool_content(
             tool_name=name,
             tool_args=tool_args,
             captured_at=captured_at,
+            spec=spec,
         )
     if not isinstance(content, list):
         return None
@@ -1125,6 +775,7 @@ def _augment_structured_tool_content(
                 tool_name=name,
                 tool_args=tool_args,
                 captured_at=captured_at,
+                spec=spec,
             )
             if isinstance(raw_text, str)
             else None
@@ -1143,6 +794,7 @@ def _augment_structured_json_text(
     tool_name: str,
     tool_args: dict[str, Any],
     captured_at: str,
+    spec: dict[str, Any],
 ) -> str | None:
     try:
         payload = json.loads(raw_text)
@@ -1162,6 +814,7 @@ def _augment_structured_json_text(
                     tool_name=tool_name,
                     tool_args=tool_args,
                     captured_at=captured_at,
+                    spec=spec,
                 )
                 if isinstance(text, str)
                 else None
@@ -1171,20 +824,22 @@ def _augment_structured_json_text(
                 continue
             output.append({**block, "text": nested})
             changed = True
-        return (
-            json.dumps(output, ensure_ascii=False, separators=(",", ":"))
-            if changed
-            else None
-        )
-    if not isinstance(payload, dict) or not isinstance(payload.get("data"), (dict, list)):
+        return json.dumps(output, ensure_ascii=False, separators=(",", ":")) if changed else None
+    if not isinstance(payload, dict):
+        return None
+    if isinstance(payload.get("_valuz_evidence_hint"), (dict, list)):
+        # A prior middleware pass already split this projection into a visible
+        # hint and a private descriptor. Preserve that exact immutable handle;
+        # the ToolMessage artifact carries the descriptor across wrappers.
+        return None
+    content_root = str(spec.get("contentRoot") or "")
+    root_key = content_root.removeprefix("/")
+    snapshot = payload.get(root_key)
+    if "/" in root_key or not isinstance(snapshot, (dict, list)):
         return None
     existing = payload.get("_valuz_evidence")
     existing_items = (
-        existing
-        if isinstance(existing, list)
-        else [existing]
-        if isinstance(existing, dict)
-        else []
+        existing if isinstance(existing, list) else [existing] if isinstance(existing, dict) else []
     )
     valid_existing = [
         item
@@ -1197,10 +852,12 @@ def _augment_structured_json_text(
     if valid_existing:
         return None
     synthesized = _structured_fallback_collection(
-        payload["data"],
+        snapshot,
         tool_name=tool_name,
         tool_args=tool_args,
         captured_at=captured_at,
+        payload=payload,
+        spec=spec,
     )
     if synthesized is None:
         return None
@@ -1215,22 +872,32 @@ def _structured_fallback_collection(
     tool_name: str,
     tool_args: dict[str, Any],
     captured_at: str,
+    payload: dict[str, Any],
+    spec: dict[str, Any],
 ) -> dict[str, Any] | None:
-    identifier = next(
-        (
-            str(tool_args.get(key)).strip()
-            for key in ("symbol", "ticker", "code", "symbols", "names")
-            if str(tool_args.get(key) or "").strip()
-        ),
-        "result",
-    )
+    identifier_values: list[str] = []
+    for key in ("symbol", "ticker", "code", "symbols", "names"):
+        raw_identifier = tool_args.get(key)
+        if isinstance(raw_identifier, list):
+            identifier_values = [str(item).strip() for item in raw_identifier if str(item).strip()]
+        elif str(raw_identifier or "").strip():
+            identifier_values = [str(raw_identifier).strip()]
+        if identifier_values:
+            break
+    identifier = ",".join(identifier_values[:8]) or "result"
     source_id = f"tool-result:{tool_name}:{identifier}"[:512]
+    metadata = payload.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    formula = str(metadata.get("formula") or tool_args.get("formula") or "").strip()
+    title_parts = [tool_name, identifier]
+    if formula:
+        title_parts.append(formula)
     source: dict[str, Any] = {
         "sourceId": source_id,
         "providerId": "valuz-stock",
         "sourceType": "tool-result",
-        "sourceCategory": "financials",
-        "title": f"{tool_name} · {identifier}"[:1_024],
+        "sourceCategory": str(spec.get("sourceCategory") or "financials"),
+        "title": " · ".join(title_parts)[:1_024],
         "retrievedAt": captured_at,
     }
     try:
@@ -1243,48 +910,60 @@ def _structured_fallback_collection(
     except (TypeError, ValueError):
         return None
     content_hash = f"sha256:{hashlib.sha256(serialized.encode()).hexdigest()}"
-    digest = hashlib.sha256(
-        f"{source_id}\0{tool_name}\0{content_hash}".encode()
-    ).hexdigest()[:24]
     common: dict[str, Any] = {
         "datasetId": f"tool-result:{tool_name}",
         "toolName": tool_name,
         "capturedAt": captured_at,
     }
+    as_of = payload.get("as_of") or metadata.get("as_of")
+    if as_of not in (None, ""):
+        common["asOf"] = str(as_of)
     if isinstance(data, dict) and data.get("currency"):
         common["currency"] = str(data["currency"])
-    if identifier != "result":
-        common["entityId"] = identifier
+    if len(identifier_values) == 1:
+        common["entityId"] = identifier_values[0]
+    content_root = str(spec.get("contentRoot") or "/data")
+    addressing: dict[str, Any] = {
+        "mode": "json-pointer",
+        "contentRoot": content_root,
+        "identityFields": list(spec.get("identityFields") or []),
+        "allowedPathRoots": [content_root],
+    }
+    items_pointer = spec.get("itemsPointer")
+    if isinstance(items_pointer, str) and items_pointer:
+        addressing["itemsPointer"] = items_pointer
+    semantics = dict(spec.get("semantics") or {})
+    if tool_name == "factors_compute":
+        canonical_metric = _canonical_metric_for_factor_formula(formula)
+        if canonical_metric:
+            semantics["metric"] = {
+                "mode": "field-map",
+                "fields": {"/factor_value": canonical_metric},
+            }
+    descriptor_identity = json.dumps(
+        {
+            "source": source,
+            "common": common,
+            "addressing": addressing,
+            "semantics": semantics,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(
+        f"{source_id}\0{tool_name}\0{content_hash}\0{descriptor_identity}".encode()
+    ).hexdigest()[:24]
     return {
         "version": 1,
         "kind": "structured-evidence-collection",
         "collectionHandle": f"evc_tool_{digest}",
         "source": source,
         "common": common,
-        "addressing": {
-            "mode": "json-pointer",
-            "contentRoot": "/data",
-            "identityFields": [],
-            "allowedPathRoots": ["/data"],
-        },
+        "addressing": addressing,
+        "semantics": semantics,
         "contentHash": content_hash,
     }
-
-
-def _structured_fallback_value(
-    field: str, value: int | float, *, root_currency: str
-) -> tuple[int | float, str]:
-    normalized = field.casefold()
-    if normalized.endswith("_rate") and abs(float(value)) <= 1:
-        return float(value) * 100, "percent"
-    if any(term in normalized for term in ("percentage", "growth", "yoy", "rate")):
-        return value, "percent"
-    if root_currency and any(
-        term in normalized
-        for term in ("revenue", "cost", "profit", "asset", "liabil", "cash", "income")
-    ):
-        return value, root_currency
-    return value, ""
 
 
 def _compact_discovery_tool_content(
@@ -1307,7 +986,7 @@ def _compact_discovery_tool_content(
     """
 
     name = str(tool_name or "")
-    if not is_document_discovery_tool(name):
+    if not _is_document_discovery_tool(name):
         return None
     captured_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     if isinstance(content, str):
@@ -1428,34 +1107,26 @@ def _compact_discovery_payload(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
     if not isinstance(payload.get("docs"), list):
         return None
-    raw_docs = [doc for doc in payload["docs"] if isinstance(doc, dict)]
-    primary_docs = [
-        doc
-        for doc in raw_docs
-        if _discovery_doc_matches_requested_primary_symbol(
-            doc,
-            tool_name=tool_name,
-            tool_args=tool_args,
-        )
-    ]
-    filtered_docs = _deduplicate_discovery_docs(primary_docs, tool_name=tool_name)
-    prioritized_docs = prioritize_discovery_documents(
-        filtered_docs,
-        tool_name=tool_name,
-    )
+    del tool_args
+    raw_docs = payload["docs"]
     docs: list[Any] = []
     evidence: list[dict[str, Any]] = []
-    transcript_discovery = tool_name in TRANSCRIPT_DISCOVERY_TOOLS
-    for raw_doc in prioritized_docs[:_DISCOVERY_RESULT_LIMIT]:
+    transcript_discovery = tool_name.rsplit("__", 1)[-1] in _TRANSCRIPT_DISCOVERY_TOOLS
+    # Discovery is part of the Primary Agent's normal tool result. Citation
+    # infrastructure must never filter, deduplicate, rank, truncate, or remove
+    # provider rows/summaries. For legacy non-transcript search results we may
+    # add an opaque handle beside an existing summary, but the provider's
+    # business content and ordering stay byte-for-byte equivalent otherwise.
+    if transcript_discovery or not allow_summary_evidence:
+        return None
+    changed = False
+    for raw_doc in raw_docs:
+        if not isinstance(raw_doc, dict):
+            docs.append(raw_doc)
+            continue
         doc = dict(raw_doc)
         summary = doc.get("summary")
-        if transcript_discovery:
-            # Transcript/minutes discovery selects the original document only.
-            # Provider summaries are useful ranking metadata, but they are not
-            # original-document evidence and must never become answer facts.
-            # The one scoped kb_search that follows supplies traceable chunks.
-            doc.pop("summary", None)
-        elif allow_summary_evidence and isinstance(summary, str) and summary.strip():
+        if isinstance(summary, str) and summary.strip():
             envelope = _discovery_summary_evidence(
                 doc,
                 summary=summary,
@@ -1464,129 +1135,11 @@ def _compact_discovery_payload(
             )
             doc["evidenceHandle"] = envelope["evidenceHandle"]
             evidence.append(envelope)
-        if (
-            not transcript_discovery
-            and isinstance(summary, str)
-            and len(summary) > _DISCOVERY_SUMMARY_LIMIT
-        ):
-            doc["summary"] = summary[:_DISCOVERY_SUMMARY_LIMIT].rstrip() + "…"
+            changed = True
         docs.append(doc)
-    compacted = dict(payload)
-    compacted["docs"] = docs
-    compacted["_valuz_discovery"] = {
-        "returned": len(payload["docs"]),
-        "shown": len(docs),
-        "filteredOut": len(raw_docs) - len(primary_docs),
-        "duplicatesRemoved": len(primary_docs) - len(filtered_docs),
-        "summariesTruncated": not transcript_discovery,
-        "citationEvidence": (
-            "original-indexed-chunk-required"
-            if transcript_discovery or not allow_summary_evidence
-            else "summary-fallback"
-        ),
-        "originalDocumentPreferred": True,
-    }
-    return compacted, evidence
-
-
-def _deduplicate_discovery_docs(
-    docs: list[dict[str, Any]],
-    *,
-    tool_name: str,
-) -> list[dict[str, Any]]:
-    """Collapse duplicate transcript rows before the model chooses documents.
-
-    Report providers can index the same earnings call more than once under
-    different document ids a few minutes apart. Presenting both encourages the
-    agent to fetch and scan the same long transcript twice. Only transcript and
-    minutes discovery use this conservative issuer/title/period identity.
-    """
-
-    if tool_name not in {"conferences_search", "minutes_search"}:
-        return docs
-    deduplicated: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str, str]] = set()
-    for doc in docs:
-        title = " ".join(str(doc.get("title") or "").lower().split())
-        metadata = doc.get("metadata")
-        metadata = metadata if isinstance(metadata, Mapping) else {}
-        fiscal_year = str(metadata.get("fiscal_year") or "").strip().upper()
-        fiscal_quarter = str(metadata.get("fiscal_quarter") or "").strip().upper()
-        primary_symbol = ""
-        companies = doc.get("companies")
-        if isinstance(companies, list) and companies and isinstance(companies[0], Mapping):
-            stocks = companies[0].get("stocks")
-            if isinstance(stocks, list) and stocks and isinstance(stocks[0], Mapping):
-                primary_symbol = str(stocks[0].get("symbol") or "").strip().upper()
-        # Missing titles cannot be safely identified as duplicates.
-        if not title:
-            deduplicated.append(doc)
-            continue
-        identity = (primary_symbol, title, fiscal_year, fiscal_quarter)
-        if identity in seen:
-            continue
-        seen.add(identity)
-        deduplicated.append(doc)
-    return deduplicated
-
-
-def _discovery_doc_matches_requested_primary_symbol(
-    doc: Mapping[str, Any],
-    *,
-    tool_name: str,
-    tool_args: Mapping[str, Any] | None,
-) -> bool:
-    """Exclude transcripts where the requested company is only mentioned.
-
-    Conference/minutes search can legitimately tag every company discussed in
-    a call.  That makes a supplier's transcript appear in an issuer query when
-    the supplier merely names the issuer as a customer.  For these document
-    types, the first company (or the ticker embedded in the title) is the
-    authority owner; secondary mentions must not enter the citation registry
-    as if they were the requested issuer's call.
-    """
-
-    if tool_name not in {"conferences_search", "minutes_search"}:
-        return True
-    args = tool_args if isinstance(tool_args, Mapping) else {}
-    requested = args.get("symbols")
-    requested_values = (
-        requested
-        if isinstance(requested, list)
-        else [requested]
-        if isinstance(requested, str)
-        else []
-    )
-    requested_symbols = {
-        str(value).strip().upper()
-        for value in requested_values
-        if str(value or "").strip()
-    }
-    if not requested_symbols:
-        return True
-
-    companies = doc.get("companies")
-    if isinstance(companies, list) and companies:
-        primary = companies[0]
-        if isinstance(primary, Mapping):
-            stocks = primary.get("stocks")
-            if isinstance(stocks, list):
-                primary_symbols = {
-                    str(stock.get("symbol") or "").strip().upper()
-                    for stock in stocks
-                    if isinstance(stock, Mapping)
-                    and str(stock.get("symbol") or "").strip()
-                }
-                if primary_symbols:
-                    return bool(primary_symbols & requested_symbols)
-
-    requested_codes = {symbol.rsplit(":", 1)[-1] for symbol in requested_symbols}
-    title = str(doc.get("title") or "")
-    title_codes = {
-        match.group(1).strip().upper()
-        for match in re.finditer(r"[\(（]\s*([A-Za-z0-9._-]+)\s*[\)）]", title)
-    }
-    return bool(title_codes & requested_codes) if title_codes else True
+    if not changed:
+        return None
+    return {**payload, "docs": docs}, evidence
 
 
 def _discovery_summary_evidence(
@@ -1603,9 +1156,7 @@ def _discovery_summary_evidence(
     # model citation would become unknown. Identity fields stay stable across
     # compaction and retries; the immutable quote itself still lives in the
     # private envelope protected by first-writer-wins Registry semantics.
-    digest = hashlib.sha256(
-        f"{raw_source_id}\0{url}\0{title}".encode()
-    ).hexdigest()[:24]
+    digest = hashlib.sha256(f"{raw_source_id}\0{url}\0{title}".encode()).hexdigest()[:24]
     source: dict[str, Any] = {
         "sourceId": (raw_source_id or digest)[:512],
         "providerId": "valuz-search",

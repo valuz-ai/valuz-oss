@@ -16,7 +16,10 @@ from src.adapters.runtime_store import RuntimeStore
 from src.adapters.sqlalchemy_store.engine import create_engine, create_session_factory
 from src.adapters.sqlalchemy_store.store import SQLAlchemyStore
 from src.core import NullTokenVerifier, StorePort, TokenVerifier
+from src.core.claim_evidence_resolution import SemanticVerifierPort
 from src.core.orchestrator import SessionOrchestrator
+from src.core.semantic_verifier import build_session_semantic_verifier
+from src.core.types import Session
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +38,15 @@ _runtime_store: RuntimeStore | None = None
 # ``get_owner_id`` keeps using the trusted ``X-Valuz-Owner-Id`` header. A SaaS
 # overlay binds a real verifier via ``set_token_verifier``.
 _token_verifier: TokenVerifier = NullTokenVerifier()
+
+
+async def _session_semantic_verifier_factory(
+    user_id: str,
+    session: Session,
+) -> SemanticVerifierPort | None:
+    """Use the Session's explicit provider; unsupported providers return None."""
+
+    return build_session_semantic_verifier(user_id, session)
 
 
 async def init_dependencies(config: AppConfig) -> None:
@@ -79,6 +91,7 @@ async def init_dependencies(config: AppConfig) -> None:
         max_warm_runtimes=_env_int("VALUZ_MAX_WARM_RUNTIMES"),
         runtime_idle_ttl_s=_env_float("VALUZ_RUNTIME_IDLE_TTL_S"),
         bg_busy_runtime_ttl_s=_env_float("VALUZ_BG_BUSY_RUNTIME_TTL_S"),
+        semantic_verifier_factory=_session_semantic_verifier_factory,
     )
     # Start the warm-runtime idle sweeper (bounds leaked claude/codex
     # subprocesses; see SessionOrchestrator). Safe before the orphan scan's

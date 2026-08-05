@@ -300,7 +300,12 @@ describe("ProjectDetailContextPanel — Generated files section", () => {
     render(
       <ProjectDetailContextPanel
         generatedFiles={[
-          { id: "a1", name: "报告.html", size: "76.8 KB", path: "/d/报告.html" },
+          {
+            id: "a1",
+            name: "报告.html",
+            size: "76.8 KB",
+            path: "/d/报告.html",
+          },
           { id: "a2", name: "报告.md", size: "19.8 KB", path: "/d/报告.md" },
         ]}
       />,
@@ -335,5 +340,267 @@ describe("ProjectDetailContextPanel — Generated files section", () => {
   it("should hide the section entirely when generatedFiles is undefined", () => {
     render(<ProjectDetailContextPanel todos={[]} />);
     expect(screen.queryByText("生成文件")).toBeNull();
+  });
+});
+
+describe("ProjectDetailContextPanel — Artifact version history", () => {
+  const v2 = {
+    id: "r2",
+    name: "报告.md",
+    path: "/d/.artifact/A1/v2/报告.md",
+    versionNo: 2,
+    isCurrent: true,
+    artifactId: "A1",
+  };
+
+  it("should offer history on a superseded row, whose versions it cannot see", async () => {
+    // The session delivered v1; another session then made v2. This row shows v1
+    // and the versions worth reaching are exactly the ones it has no record of.
+    const onLoadArtifactVersions = vi.fn().mockResolvedValue([
+      { id: "rev1", versionNo: 1, path: "/d/v1", when: "旧", openable: true },
+      { id: "rev2", versionNo: 2, path: "/d/v2", when: "新", openable: true },
+    ]);
+    render(
+      <ProjectDetailContextPanel
+        generatedFiles={[
+          {
+            id: "r1",
+            name: "报告.md",
+            path: "/d/.artifact/A1/v1/报告.md",
+            versionNo: 1,
+            isCurrent: false,
+            artifactId: "A1",
+          },
+        ]}
+        onLoadArtifactVersions={onLoadArtifactVersions}
+      />,
+    );
+
+    await userEvent.click(screen.getByTitle("查看历史版本"));
+
+    expect(onLoadArtifactVersions).toHaveBeenCalledWith("A1");
+    expect(await screen.findByText("新")).toBeTruthy();
+  });
+
+  it("should not offer history for a deliverable still on its first version", () => {
+    // Nothing behind it to show — an expander would open onto one row.
+    render(
+      <ProjectDetailContextPanel
+        generatedFiles={[
+          {
+            id: "r1",
+            name: "报告.md",
+            path: "/d/报告.md",
+            versionNo: 1,
+            artifactId: "A1",
+          },
+        ]}
+        onLoadArtifactVersions={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByTitle("查看历史版本")).toBeNull();
+  });
+
+  it("should not offer history when no loader is provided", () => {
+    render(<ProjectDetailContextPanel generatedFiles={[v2]} />);
+
+    expect(screen.getByText("v2")).toBeTruthy();
+    expect(screen.queryByTitle("查看历史版本")).toBeNull();
+  });
+
+  it("should load a deliverable's versions on demand and list them newest first", async () => {
+    const onLoadArtifactVersions = vi.fn().mockResolvedValue([
+      {
+        id: "rev1",
+        versionNo: 1,
+        path: "/d/.artifact/A1/v1/报告.md",
+        size: "5.1 KB",
+        when: "08-04 19:24",
+        openable: true,
+      },
+      {
+        id: "rev2",
+        versionNo: 2,
+        path: "/d/.artifact/A1/v2/报告.md",
+        size: "6.5 KB",
+        when: "08-04 19:29",
+        openable: true,
+      },
+    ]);
+    render(
+      <ProjectDetailContextPanel
+        generatedFiles={[v2]}
+        onLoadArtifactVersions={onLoadArtifactVersions}
+      />,
+    );
+
+    // Nothing fetched until the badge is opened — most histories are never read.
+    expect(onLoadArtifactVersions).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByTitle("查看历史版本"));
+
+    expect(onLoadArtifactVersions).toHaveBeenCalledWith("A1");
+    expect(await screen.findByText("08-04 19:24")).toBeTruthy();
+    expect(screen.getByText("08-04 19:29")).toBeTruthy();
+  });
+
+  it("should open the clicked version's own snapshot, not the current one", async () => {
+    const onOpenGeneratedFile = vi.fn();
+    render(
+      <ProjectDetailContextPanel
+        generatedFiles={[v2]}
+        onOpenGeneratedFile={onOpenGeneratedFile}
+        onLoadArtifactVersions={vi.fn().mockResolvedValue([
+          {
+            id: "rev1",
+            versionNo: 1,
+            path: "/d/.artifact/A1/v1/报告.md",
+            when: "旧",
+            openable: true,
+          },
+          {
+            id: "rev2",
+            versionNo: 2,
+            path: "/d/.artifact/A1/v2/报告.md",
+            when: "新",
+            openable: true,
+          },
+        ])}
+      />,
+    );
+
+    await userEvent.click(screen.getByTitle("查看历史版本"));
+    await userEvent.click(await screen.findByText("旧"));
+
+    expect(onOpenGeneratedFile).toHaveBeenCalledWith(
+      "/d/.artifact/A1/v1/报告.md",
+    );
+  });
+
+  it("should fetch a history only once however often it is toggled", async () => {
+    const onLoadArtifactVersions = vi
+      .fn()
+      .mockResolvedValue([
+        { id: "rev1", versionNo: 1, path: "/d/v1", when: "旧", openable: true },
+      ]);
+    render(
+      <ProjectDetailContextPanel
+        generatedFiles={[v2]}
+        onLoadArtifactVersions={onLoadArtifactVersions}
+      />,
+    );
+
+    const badge = screen.getByTitle("查看历史版本");
+    await userEvent.click(badge);
+    await screen.findByText("旧");
+    await userEvent.click(badge);
+    await userEvent.click(badge);
+
+    expect(onLoadArtifactVersions).toHaveBeenCalledTimes(1);
+  });
+
+  it("should show a version whose bytes are gone, without offering to open it", async () => {
+    // The generation happened; hiding it would misrepresent the history.
+    const onOpenGeneratedFile = vi.fn();
+    render(
+      <ProjectDetailContextPanel
+        generatedFiles={[v2]}
+        onOpenGeneratedFile={onOpenGeneratedFile}
+        onLoadArtifactVersions={vi.fn().mockResolvedValue([
+          { id: "rev1", versionNo: 1, path: "", openable: false },
+          {
+            id: "rev2",
+            versionNo: 2,
+            path: "/d/v2",
+            when: "新",
+            openable: true,
+          },
+        ])}
+      />,
+    );
+
+    await userEvent.click(screen.getByTitle("查看历史版本"));
+    const gone = await screen.findByText("该版本的文件已不存在");
+    await userEvent.click(gone);
+
+    expect(onOpenGeneratedFile).not.toHaveBeenCalled();
+  });
+
+  it("should say so when the history cannot be loaded", async () => {
+    render(
+      <ProjectDetailContextPanel
+        generatedFiles={[v2]}
+        onLoadArtifactVersions={vi.fn().mockRejectedValue(new Error("boom"))}
+      />,
+    );
+
+    await userEvent.click(screen.getByTitle("查看历史版本"));
+
+    expect(await screen.findByText("历史版本加载失败")).toBeTruthy();
+  });
+});
+
+describe("ProjectDetailContextPanel — Project deliverables section", () => {
+  it("should list what the project holds, separately from one session's output", () => {
+    // A conversation that delivered nothing shows an empty 生成文件 list; the
+    // workspace section is the only place those deliverables appear.
+    render(
+      <ProjectDetailContextPanel
+        generatedFiles={[]}
+        projectArtifacts={[
+          {
+            id: "A1",
+            name: "季度报告.pdf",
+            path: "/d/.artifact/A1/v3/季度报告.pdf",
+            versionNo: 3,
+            isCurrent: true,
+            artifactId: "A1",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("交付物")).toBeTruthy();
+    expect(screen.getByText("季度报告.pdf")).toBeTruthy();
+    expect(screen.getByText("暂无生成文件")).toBeTruthy();
+  });
+
+  it("should expand a project deliverable's history the same way a session row does", async () => {
+    const onLoadArtifactVersions = vi.fn().mockResolvedValue([
+      { id: "r1", versionNo: 1, path: "/d/v1", when: "旧", openable: true },
+      { id: "r2", versionNo: 2, path: "/d/v2", when: "新", openable: true },
+    ]);
+    render(
+      <ProjectDetailContextPanel
+        projectArtifacts={[
+          {
+            id: "A1",
+            name: "报告.md",
+            path: "/d/.artifact/A1/v2/报告.md",
+            versionNo: 2,
+            isCurrent: true,
+            artifactId: "A1",
+          },
+        ]}
+        onLoadArtifactVersions={onLoadArtifactVersions}
+      />,
+    );
+
+    await userEvent.click(screen.getByTitle("查看历史版本"));
+
+    expect(onLoadArtifactVersions).toHaveBeenCalledWith("A1");
+    expect(await screen.findByText("旧")).toBeTruthy();
+  });
+
+  it("should show an empty state rather than vanishing when the project has none", () => {
+    render(<ProjectDetailContextPanel projectArtifacts={[]} />);
+    expect(screen.getByText("交付物")).toBeTruthy();
+    expect(screen.getByText("暂无交付物")).toBeTruthy();
+  });
+
+  it("should hide the section entirely when projectArtifacts is undefined", () => {
+    render(<ProjectDetailContextPanel todos={[]} />);
+    expect(screen.queryByText("交付物")).toBeNull();
   });
 });

@@ -29,6 +29,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import uuid
@@ -38,6 +39,7 @@ from typing import Any, Literal
 
 from deepagents import SubAgent, create_deep_agent
 from deepagents.backends import LocalShellBackend
+from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 from src.core.agent_config import AgentConfig, SubAgentDef
@@ -46,6 +48,7 @@ from src.core.events import AVAILABLE_DECISIONS_EDITABLE_WITH_SESSION, Event, Ev
 from src.core.mcp_source_metadata import wrap_mcp_result_metadata_for_transport
 from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
+from src.core.task_coverage_continuation import TASK_COVERAGE_NOOP_TOOL_NAME
 from src.core.tools import ExecContext, ToolDef, ToolKit, ToolResult
 from src.core.types import (
     EndTurn,
@@ -68,7 +71,6 @@ from src.runtimes.deepagents.approval_bridge import (
 )
 from src.runtimes.deepagents.middleware import (
     CitationEvidenceCompactionMiddleware,
-    ResearchToolBudgetMiddleware,
     ToolErrorTolerantMiddleware,
     citation_artifact_content,
 )
@@ -87,6 +89,7 @@ async def _preserve_mcp_source_metadata(request: Any, handler: Any) -> Any:
         server_name=str(getattr(request, "server_name", "") or "unknown"),
     )
 
+
 # Apply third-party deepagents shims once, before any graph is built. See
 # ``_patches`` — raises *subagents* above langgraph's default 25-step recursion
 # limit (which they otherwise never escape). The *main* graph's limit is fixed
@@ -100,6 +103,19 @@ apply_deepagents_patches()
 # alembic history don't interfere with each other. Override with env var.
 DEFAULT_CHECKPOINT_DB = "./deepagents_checkpoints.db"
 CHECKPOINT_DB_ENV = "DEEPAGENTS_CHECKPOINT_DB"
+
+_CITATION_SYSTEM_POLICY_BLOCK_RE = re.compile(
+    r'<citation-system-policy(?:\s+revision="[^"]*")?>\s*.*?'
+    r"</citation-system-policy>",
+    re.DOTALL,
+)
+
+
+def _citation_system_policy_block(instructions: str) -> str:
+    """Extract only the immutable Evidence protocol for nested agents."""
+
+    matches = list(_CITATION_SYSTEM_POLICY_BLOCK_RE.finditer(instructions or ""))
+    return matches[-1].group(0).strip() if matches else ""
 
 # In an ephemeral cloud sandbox the checkpoint must be EXTERNALIZED (per-owner
 # COS mount) so it survives sandbox recreation ("resume in a fresh sandbox").
@@ -166,16 +182,24 @@ def _build_local_shell_backend(workspace_root: str | None) -> LocalShellBackend:
 DEEPAGENTS_TODO_TOOL_NAME = "write_todos"
 
 
-def _session_citation_mode_enabled(session: Session) -> bool:
-    """Whether this graph must keep source retrieval in the lead agent."""
+def _session_evidence_binding_enabled(session: Session) -> bool:
+    """Whether the model needs the minimal private Evidence binding protocol."""
 
     metadata = session.metadata if isinstance(session.metadata, dict) else {}
     valuz = metadata.get("valuz")
-    return bool(isinstance(valuz, dict) and valuz.get("citation_enabled"))
+    return bool(
+        isinstance(valuz, dict)
+        and (
+            valuz.get("citation_enabled")
+            or valuz.get("citation_verification_enabled")
+        )
+    )
 
 
 class DeepAgentsRuntime:
     """Wraps deepagents `create_deep_agent` as a RuntimePort implementation."""
+
+    supports_native_continuation = True
 
     def __init__(
         self,
@@ -238,6 +262,7 @@ class DeepAgentsRuntime:
         self._cached_permission_mode: Literal["default", "auto_review", "full_access"] = (
             "full_access"
         )
+
         # Last value actually applied to a turn. Used by ``run()`` to
         # detect a PATCH on ``session.permission_mode`` /
         # ``session.model_settings.effort`` between turns and trigger a
@@ -274,6 +299,27 @@ class DeepAgentsRuntime:
         # runtimes' phases. Held as a single instance — matcher is
         # stateless and re-instantiation per call would be wasteful.
         self._approval_rule_matcher: RuntimeApprovalRuleMatcher = ExactArgsRuleMatcher()
+
+    async def _emit_citation_evidence(
+        self,
+        citation_join_id: str,
+        tool_name: str | None,
+        model_content: Any,
+        citation_content: str,
+    ) -> None:
+        """Bridge a completed middleware sidecar into the generic event layer."""
+
+        await self.event_sink.emit(
+            Event(
+                type="citation_evidence",
+                data={
+                    "tool_name": tool_name,
+                    "model_content": model_content,
+                    "content": citation_content,
+                    "citation_join_id": citation_join_id,
+                },
+            )
+        )
 
     APPROVAL_TIMEOUT_SECONDS: float = 3600.0  # 1h; class attr for test override
 
@@ -472,6 +518,11 @@ class DeepAgentsRuntime:
                             "content": _stringify_tool_output(output),
                             "is_error": is_error,
                         }
+                        raw_tool_call_id = getattr(output, "tool_call_id", None)
+                        if raw_tool_call_id is None and isinstance(output, dict):
+                            raw_tool_call_id = output.get("tool_call_id")
+                        if raw_tool_call_id:
+                            event_data["citation_join_id"] = str(raw_tool_call_id)
                         if citation_content is not None:
                             event_data["_citation_content"] = citation_content
                         await self.event_sink.emit(
@@ -506,6 +557,7 @@ class DeepAgentsRuntime:
                                 "tool_name": tool_name,
                                 "model_content": model_content,
                                 "content": citation_content,
+                                "citation_join_id": key,
                             },
                         )
                     )
@@ -622,6 +674,32 @@ class DeepAgentsRuntime:
                     },
                 )
             )
+
+    async def run_task_coverage(
+        self,
+        session: Session,
+        user_message: UserMessage,
+        *,
+        no_op_tool: ToolDef,
+    ) -> None:
+        """Resume this Runtime/thread with one private terminal no-gap tool."""
+
+        previous = self.toolkit.get(no_op_tool.name)
+        self.toolkit.register(no_op_tool)
+        # The compiled graph freezes its tool list.  Recompile on the same
+        # runtime and checkpointer; ``session.runtime_session_id`` remains the
+        # LangGraph thread id, so history and native continuity are preserved.
+        self._graph = None
+        try:
+            await self.run(session, user_message)
+        finally:
+            if previous is None:
+                self.toolkit.unregister(no_op_tool.name)
+            else:
+                self.toolkit.register(previous)
+            # Primary turns after Coverage must regain the exact public tool
+            # surface instead of inheriting the private protocol tool.
+            self._graph = None
 
     async def interrupt(self) -> None:
         self._cancelled = True
@@ -988,7 +1066,7 @@ class DeepAgentsRuntime:
 
         new_mode = session.permission_mode
         new_effort = session.model_settings.effort if session.model_settings else None
-        new_citation_mode = _session_citation_mode_enabled(session)
+        new_citation_mode = _session_evidence_binding_enabled(session)
 
         if (
             new_mode == self._applied_permission_mode
@@ -1019,7 +1097,7 @@ class DeepAgentsRuntime:
             self._cached_permission_mode = session.permission_mode
             self._applied_permission_mode = session.permission_mode
             self._applied_effort = session.model_settings.effort if session.model_settings else None
-            self._applied_citation_mode = _session_citation_mode_enabled(session)
+            self._applied_citation_mode = _session_evidence_binding_enabled(session)
             return self._graph
 
         # inherit_env=True so the agent shell sees the host's PATH / HOME / etc.
@@ -1041,10 +1119,16 @@ class DeepAgentsRuntime:
         if mcp_tools:
             tools = [*tools, *mcp_tools]
 
-        subagents = self._build_subagents()
-        await self._open_checkpointer()
-
         skill_roots = self._materialize_skills(session)
+        subagents = self._build_subagents(
+            citation_protocol=(
+                _citation_system_policy_block(session.instructions)
+                if _session_evidence_binding_enabled(session)
+                else ""
+            ),
+            skill_roots=skill_roots,
+        )
+        await self._open_checkpointer()
 
         # D9: session is the runtime's source of truth for ``permission_mode``;
         # the agent value was prefilled at session creation but is decoupled
@@ -1058,7 +1142,7 @@ class DeepAgentsRuntime:
         self._cached_permission_mode = session.permission_mode
         self._applied_permission_mode = session.permission_mode
         self._applied_effort = session.model_settings.effort if session.model_settings else None
-        self._applied_citation_mode = _session_citation_mode_enabled(session)
+        self._applied_citation_mode = _session_evidence_binding_enabled(session)
         interrupt_on = self._build_interrupt_on(session.permission_mode, tools)
 
         graph_kwargs: dict[str, Any] = {
@@ -1069,10 +1153,13 @@ class DeepAgentsRuntime:
             "checkpointer": self._checkpointer,
             "middleware": [
                 ToolErrorTolerantMiddleware(),
-                ResearchToolBudgetMiddleware(
-                    lead_owned_evidence=_session_citation_mode_enabled(session)
+                CitationEvidenceCompactionMiddleware(
+                    # Evidence Registry is shared infrastructure.  Always
+                    # publish trusted source metadata to the Host; Citation
+                    # and Audit switches decide only which post-run sidecars
+                    # consume it.
+                    citation_artifact_emitter=self._emit_citation_evidence
                 ),
-                CitationEvidenceCompactionMiddleware(),
             ],
         }
         # DeepAgents prepends our ``system_prompt`` argument to its base
@@ -1421,15 +1508,60 @@ class DeepAgentsRuntime:
             name=tdef.name,
             description=tdef.description or tdef.name,
             args_schema=tdef.parameters or None,
+            # A no-gap decision must terminate the agent loop at the tool
+            # boundary.  Otherwise LangGraph invokes the model once more and
+            # many providers manufacture a visible "(empty)" confirmation.
+            return_direct=tdef.name == TASK_COVERAGE_NOOP_TOOL_NAME,
         )
 
-    def _build_subagents(self) -> list[SubAgent]:
+    def _build_subagents(
+        self,
+        *,
+        citation_protocol: str = "",
+        skill_roots: list[str] | None = None,
+    ) -> list[SubAgent]:
         subagents: list[SubAgent] = []
         for sub_def in self.config.callable_agents:
-            subagents.append(self._to_subagent(sub_def))
+            subagents.append(
+                self._to_subagent(
+                    sub_def,
+                    citation_protocol=citation_protocol,
+                )
+            )
+        if citation_protocol and not any(
+            subagent["name"] == GENERAL_PURPOSE_SUBAGENT["name"]
+            for subagent in subagents
+        ):
+            # DeepAgents auto-creates ``general-purpose`` with a private
+            # system prompt and middleware stack. Explicitly mirror that
+            # default only while Evidence binding is active so nested source
+            # tools expose the same handles and the nested assistant knows the
+            # same minimal protocol. Parent task instructions, Host plans, and
+            # other session text are intentionally not copied.
+            general_purpose: SubAgent = {
+                "name": GENERAL_PURPOSE_SUBAGENT["name"],
+                "description": GENERAL_PURPOSE_SUBAGENT["description"],
+                "system_prompt": (
+                    f"{GENERAL_PURPOSE_SUBAGENT['system_prompt']}\n\n"
+                    f"{citation_protocol}"
+                ),
+                "middleware": [
+                    CitationEvidenceCompactionMiddleware(
+                        citation_artifact_emitter=self._emit_citation_evidence
+                    )
+                ],
+            }
+            if skill_roots:
+                general_purpose["skills"] = list(skill_roots)
+            subagents.insert(0, general_purpose)
         return subagents
 
-    def _to_subagent(self, sub_def: SubAgentDef) -> SubAgent:
+    def _to_subagent(
+        self,
+        sub_def: SubAgentDef,
+        *,
+        citation_protocol: str = "",
+    ) -> SubAgent:
         sub_tools: list[StructuredTool] = []
         if sub_def.tools:
             for name in sub_def.tools:
@@ -1440,8 +1572,18 @@ class DeepAgentsRuntime:
         entry: SubAgent = {
             "name": sub_def.name,
             "description": sub_def.description,
-            "system_prompt": sub_def.prompt,
+            "system_prompt": (
+                f"{sub_def.prompt}\n\n{citation_protocol}".strip()
+                if citation_protocol
+                else sub_def.prompt
+            ),
         }
+        if citation_protocol:
+            entry["middleware"] = [
+                CitationEvidenceCompactionMiddleware(
+                    citation_artifact_emitter=self._emit_citation_evidence
+                )
+            ]
         if sub_tools:
             entry["tools"] = sub_tools
         if sub_def.model:

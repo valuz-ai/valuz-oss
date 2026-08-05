@@ -23,6 +23,7 @@
       "@valuz/core/config/features": ["./packages/core/src/config/features.ts"],
       "@valuz/parser-plugins": ["./packages/parser-plugins/src/index.ts"],
       "@valuz/ui": ["./packages/ui/src/index.ts"],
+      "@valuz/genui-blocks": ["./packages/genui-blocks/src/index.ts"],
       "@valuz/app": ["./packages/app/src/index.ts"],
       "@valuz/app/platform": ["./packages/app/src/platform/index.ts"],
       "@valuz/app/pages": ["./packages/app/src/pages/index.ts"],

@@ -76,7 +76,11 @@ async def cleanup_task_worktree_if_clean(task_row: Any) -> bool:
         return False
     from valuz_agent.modules.worktrees.service import worktree_service
 
-    removed = await worktree_service.cleanup_if_clean(snapshot)
+    removed = await worktree_service.cleanup_if_clean(
+        snapshot,
+        user_id=str(getattr(task_row, "user_id", "") or ""),
+        project_id=str(getattr(task_row, "project_id", "") or ""),
+    )
     if removed:
         logger.info(
             "task_worktree: removed clean worktree '%s' for task %s",

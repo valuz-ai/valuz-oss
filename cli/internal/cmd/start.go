@@ -181,7 +181,8 @@ func splitTargetAndPassthrough(args []string, dash int) (target string, extras [
 // devDataEnv mirrors scripts/dev.sh's data isolation: a dev-mode backend
 // never runs on the packaged app's ~/.valuz-oss (a source backend migrating
 // that store strands the released app). VALUZ_DATA_DIR defaults to
-// ~/.valuz-oss-dev and VALUZ_LOG_DIR to <data-dir>/logs; explicit env wins.
+// ~/.valuz-oss-dev and VALUZ_LOG_FILE_PATH to <data-dir>/logs/backend.log;
+// explicit env wins.
 func devDataEnv() []string {
 	dataDir := os.Getenv("VALUZ_DATA_DIR")
 	var env []string
@@ -193,8 +194,8 @@ func devDataEnv() []string {
 		dataDir = filepath.Join(home, ".valuz-oss-dev")
 		env = append(env, "VALUZ_DATA_DIR="+dataDir)
 	}
-	if os.Getenv("VALUZ_LOG_DIR") == "" {
-		env = append(env, "VALUZ_LOG_DIR="+filepath.Join(dataDir, "logs"))
+	if os.Getenv("VALUZ_LOG_FILE_PATH") == "" {
+		env = append(env, "VALUZ_LOG_FILE_PATH="+filepath.Join(dataDir, "logs", "backend.log"))
 	}
 	return env
 }

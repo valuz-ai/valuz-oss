@@ -48,6 +48,30 @@ def test_indexed_chunks_are_standardized_into_traceable_evidence() -> None:
     assert registry.register_tool_result(result, tool_name="kb_search") == 1
 
 
+def test_indexed_chunk_without_title_uses_readable_host_fallback() -> None:
+    result = augment_indexed_document_evidence(
+        {
+            "chunks": [
+                {
+                    "id": "chunk-untitled",
+                    "content": "A stable indexed passage.",
+                    "doc": {
+                        "doc_id": "W13341981828044806",
+                        "url": "https://www.news.cn/tech/example.html",
+                    },
+                }
+            ]
+        },
+        tool_name="kb_search",
+        captured_at="2026-08-03T00:00:00Z",
+    )
+
+    assert result is not None
+    source = result["_valuz_evidence"][0]["source"]
+    assert source["title"] == "news.cn"
+    assert source["documentId"] not in source["title"]
+
+
 def test_existing_connector_evidence_is_not_rewritten() -> None:
     content = {"chunks": [], "_valuz_evidence": [{"evidenceHandle": "ev_existing_1"}]}
 

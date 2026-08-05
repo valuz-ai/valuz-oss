@@ -23,7 +23,6 @@ import logging
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.tasks.datastore import TaskDatastore, TaskEventDatastore
 
@@ -94,15 +93,29 @@ async def finalize_task(
         )
         return None
     publish_task_finalized(task_id, user_id, status)
-    return await TaskEventDatastore(db).append_event(
+    event_payload = payload or {}
+    event = await TaskEventDatastore(db).append_event(
         user_id,
         project_id=project_id,
         task_id=task_id,
         type=event_type,
         actor=actor,
         session_id=session_id,
-        payload=payload or {},
+        payload=event_payload,
     )
+    if status == "completed":
+        from valuz_agent.modules.notifications.projectors import (
+            record_task_completion_notification,
+        )
+
+        await record_task_completion_notification(
+            task_id=task_id,
+            project_id=project_id,
+            event_id=event.id,
+            summary=str(event_payload.get("summary") or ""),
+            user_id=user_id,
+        )
+    return event
 
 
 async def block_task(

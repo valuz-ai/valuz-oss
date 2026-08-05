@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import { AlertTriangle, MessageCircleQuestion } from "lucide-react";
 
 import {
-  notificationsApi,
+  dismissNotification,
   sessionsApi,
   tasksApi,
   useTranslation,
@@ -49,12 +49,10 @@ function BackupFailedCard({
   const { t } = useTranslation();
   const navigate = useNavigate();
 
-  const handleDismiss = useCallback(async () => {
-    try {
-      await notificationsApi.dismiss(entry.id);
-    } catch {
-      // best-effort
-    }
+  // Optimistic — the card leaves the drawer immediately; a failed persist
+  // self-heals on the next SSE snapshot.
+  const handleDismiss = useCallback(() => {
+    dismissNotification(entry.id);
   }, [entry.id]);
 
   return (
@@ -74,7 +72,7 @@ function BackupFailedCard({
             size="sm"
             variant="ghost"
             className="text-xs"
-            onClick={() => void handleDismiss()}
+            onClick={handleDismiss}
           >
             {t("notification.dismiss" as I18nKey)}
           </Button>
@@ -213,12 +211,10 @@ function FailureCard({ entry, onNavigateAway }: NotificationCardProps): ReactEle
     }
   }, [entry.task_id, t]);
 
-  const handleDismiss = useCallback(async () => {
-    try {
-      await notificationsApi.dismiss(entry.id);
-    } catch {
-      // best-effort
-    }
+  // Optimistic — the card leaves the drawer immediately; a failed persist
+  // self-heals on the next SSE snapshot.
+  const handleDismiss = useCallback(() => {
+    dismissNotification(entry.id);
   }, [entry.id]);
 
   return (
@@ -249,7 +245,7 @@ function FailureCard({ entry, onNavigateAway }: NotificationCardProps): ReactEle
             size="sm"
             variant="ghost"
             className="text-xs"
-            onClick={() => void handleDismiss()}
+            onClick={handleDismiss}
             disabled={busy}
           >
             {t("notification.dismiss" as I18nKey)}

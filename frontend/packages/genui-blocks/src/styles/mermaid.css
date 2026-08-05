@@ -1,0 +1,64 @@
+/*
+ * Mermaid diagram blocks: Mermaid · MermaidBadge.
+ *
+ * These render the diagram *definition*, not a drawn picture — the package
+ * deliberately carries no mermaid dependency. A host that wants live rendering
+ * selects `[data-vgb-mermaid]`, reads the `<pre>`'s textContent as source, and
+ * swaps in SVG; the hook sits on the root so the caption survives hydration.
+ */
+
+.vgb-mermaid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--openui-space-xs);
+  width: 100%;
+  margin: 0;
+  padding: var(--openui-space-m);
+  background-color: var(--openui-highlight-subtle);
+  border: 1px solid var(--openui-border-default);
+  border-radius: var(--openui-radius-l);
+}
+
+.vgb-mermaid-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--openui-space-xs);
+}
+
+.vgb-mermaid-title {
+  color: var(--openui-text-neutral-primary);
+  font-family: var(--openui-font-label);
+  font-size: var(--openui-font-size-sm);
+  font-weight: var(--openui-font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Diagram source is code: preserve its whitespace and let it scroll inside
+ * `.vgb-scroll-x` rather than widening the chat column.
+ */
+.vgb-mermaid-code {
+  margin: 0;
+  color: var(--openui-text-neutral-secondary);
+  font-family: var(--openui-font-code);
+  font-size: var(--openui-font-size-xs);
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.vgb-mermaid-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--openui-space-xs);
+  border: 1px solid transparent;
+  border-radius: var(--openui-radius-full);
+  font-family: var(--openui-font-label);
+  font-size: var(--openui-font-size-2xs);
+  font-weight: var(--openui-font-weight-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+

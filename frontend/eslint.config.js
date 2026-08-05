@@ -96,6 +96,26 @@ export default tseslint.config(
     },
   },
   {
+    // genui-blocks 坐在 ui 下面（ui 可以依赖它），所以它不能依赖任何 @valuz/* 包，
+    // 包括 shared——它的对外契约只有 @openuidev/* + react + zod，这样才能被
+    // 任何装了 OpenUI 的宿主直接消费。
+    files: ["packages/genui-blocks/src/**/*.{ts,tsx}"],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@valuz/*"],
+              message:
+                "@valuz/genui-blocks 是 OpenUI 组件库扩展，禁止 import 任何内部 @valuz/* 包（含 shared）——它必须只依赖 @openuidev/*",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: [
       "apps/desktop/src/main/**/*.ts",
       "apps/desktop/src/preload/**/*.ts",

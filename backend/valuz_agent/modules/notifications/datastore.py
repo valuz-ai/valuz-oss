@@ -102,6 +102,21 @@ class NotificationDatastore:
             .all()
         )
 
+    async def list_history(
+        self, user_id: str, *, limit: int = 50, before: int | None = None
+    ) -> list[NotificationRow]:
+        """Resolved (dismissed / handled) notifications, newest first.
+        ``before`` is a ``created_at`` cursor — only rows strictly older are
+        returned, so the caller pages by passing the last entry's stamp."""
+        stmt = select(NotificationRow).where(
+            NotificationRow.user_id == user_id,
+            NotificationRow.resolved_at.is_not(None),
+        )
+        if before is not None:
+            stmt = stmt.where(NotificationRow.created_at < before)
+        stmt = stmt.order_by(NotificationRow.created_at.desc()).limit(limit)
+        return list((await self._db.execute(stmt)).scalars().all())
+
     async def count_unread(self, user_id: str) -> int:
         return int(
             (
@@ -233,6 +248,31 @@ class NotificationDatastore:
         await async_commit_with_retry(
             self._db, where="NotificationDatastore.resolve_open_by_session"
         )
+        return [r.id for r in rows]
+
+    async def resolve_all_open(self, user_id: str) -> list[str]:
+        """Resolve every open notification — the drawer's "clear all". Marks
+        unread ones read too. Returns resolved ids."""
+        rows = list(
+            (
+                await self._db.execute(
+                    select(NotificationRow).where(
+                        NotificationRow.user_id == user_id,
+                        NotificationRow.resolved_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return []
+        ts = now_ms()
+        for row in rows:
+            row.resolved_at = ts
+            if row.read_at is None:
+                row.read_at = ts
+        await async_commit_with_retry(self._db, where="NotificationDatastore.resolve_all_open")
         return [r.id for r in rows]
 
     async def resolve_by_id(self, user_id: str, notification_id: str) -> NotificationRow | None:

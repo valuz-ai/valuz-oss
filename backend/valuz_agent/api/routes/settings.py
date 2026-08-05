@@ -126,26 +126,13 @@ async def patch_preferences(
                 await set_theme(db, payload.theme, user_id=user_id)
             if payload.font_size is not None:
                 await set_font_size(db, payload.font_size, user_id=user_id)
-            if (
-                payload.conversation_citations_enabled is False
-                and payload.conversation_verification_enabled is True
-            ):
-                raise ValueError("conversation verification requires citations")
             if payload.conversation_citations_enabled is not None:
                 await set_conversation_citations_enabled(
                     db,
                     payload.conversation_citations_enabled,
                     user_id=user_id,
                 )
-                if not payload.conversation_citations_enabled:
-                    await set_conversation_verification_enabled(
-                        db,
-                        False,
-                        user_id=user_id,
-                    )
             if payload.conversation_verification_enabled is not None:
-                if payload.conversation_verification_enabled:
-                    await set_conversation_citations_enabled(db, True, user_id=user_id)
                 await set_conversation_verification_enabled(
                     db,
                     payload.conversation_verification_enabled,

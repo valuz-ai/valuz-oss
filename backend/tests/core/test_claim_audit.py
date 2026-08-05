@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from src.core.claim_audit import (
     MAX_CLAIMS_PER_ANSWER,
+    ClaimCandidate,
     _claim_amounts,
     auto_bind_composite_text_claims,
     auto_bind_unique_claims,
+    bind_claims_to_evidence,
     calculation_formula_matches_evidence,
     extract_claims,
     extract_claims_with_status,
@@ -301,6 +303,94 @@ def test_calculation_metric_accepts_edition_alias() -> None:
     )
 
 
+def test_structured_metric_prefers_exact_mixed_language_alias_over_short_machine_tokens() -> None:
+    semantics = {
+        "metric_ontology": {
+            "metrics": {
+                "ttm_revenue": {
+                    "aliases": ["TTM 营业收入"],
+                    "fields": ["ttm_revenue"],
+                },
+                "price_to_sales_ttm": {
+                    "aliases": ["TTM 市销率"],
+                    "fields": ["price_to_sales_ttm"],
+                },
+            }
+        },
+        "unit_ontology": {
+            "units": {
+                "cny": {"canonical": "CNY", "aliases": ["CNY"], "scale": 1},
+            }
+        },
+    }
+    claim = ClaimCandidate(
+        claim_id="claim-mixed-alias",
+        exact="TTM 市销率 in 2024 was 123 CNY.",
+        segment_index=0,
+        kind="structured-fact",
+        citation_required=True,
+        attached_citation_ids=(),
+        normalized={
+            "metric": "TTM 市销率",
+            "period": "2024 FY",
+            "value": "123",
+            "unit": "CNY",
+        },
+        location={"kind": "fixture", "blockIndex": 0, "start": 0, "end": 34},
+        semantic_text="TTM 市销率 in 2024 was 123 CNY.",
+        insertion_offset=34,
+    )
+    evidence = {
+        "kind": "structured-data",
+        "metric": "price_to_sales_ttm",
+        "period": "2024 FY",
+        "value": 123,
+        "unit": "CNY",
+    }
+
+    assert verify_evidence_support(claim, evidence, semantics=semantics).status == "supported"
+
+
+def test_structured_unit_accepts_policy_currency_symbol_alias() -> None:
+    semantics = {
+        "unit_ontology": {
+            "units": {
+                "usd": {
+                    "canonical": "USD",
+                    "aliases": ["美元", "USD", "$", "US$"],
+                    "scale": 1,
+                }
+            }
+        }
+    }
+    claim = ClaimCandidate(
+        claim_id="claim-symbol-unit",
+        exact="Policy amount in 2024 was 2 $.",
+        segment_index=0,
+        kind="structured-fact",
+        citation_required=True,
+        attached_citation_ids=(),
+        normalized={
+            "metric": "policy_unit_usd",
+            "period": "2024 FY",
+            "value": "2",
+            "unit": "$",
+        },
+        location={"kind": "fixture", "blockIndex": 0, "start": 0, "end": 30},
+        semantic_text="Policy amount in 2024 was 2 $.",
+        insertion_offset=30,
+    )
+    evidence = {
+        "kind": "structured-data",
+        "metric": "policy_unit_usd",
+        "period": "2024 FY",
+        "value": 2,
+        "unit": "USD",
+    }
+
+    assert verify_evidence_support(claim, evidence, semantics=semantics).status == "supported"
+
+
 def test_calculation_metric_accepts_table_header_base_metric_dependency() -> None:
     claims = extract_claims(
         (
@@ -530,6 +620,158 @@ def test_strict_domain_does_not_flag_assistant_progress_narration() -> None:
     assert claims == []
 
 
+def test_strict_domain_does_not_flag_english_progress_narration() -> None:
+    claims = extract_claims(
+        "All data retrieved. Now compiling the requested report.",
+        mode="strict-domain",
+    )
+
+    assert claims
+    assert all(claim.kind == "presentation" for claim in claims)
+    assert all(claim.citation_required is False for claim in claims)
+
+
+def test_strict_domain_does_not_flag_runtime_retrieval_progress_messages() -> None:
+    messages = (
+        "Now let me run targeted searches on all four transcripts for the CFO sections.\n\n"
+        "I now need the financial sections with capex numbers, "
+        "so I will fetch the later chunks.\n\n"
+        "I now have all the evidence needed from all four transcripts. Let me build the table.\n\n"
+        "非IFRS调整净利润已取到。现在查商誉余额。\n\n"
+        "找到了年度财报。现在获取年报原文中的具体表述。"
+    )
+
+    claims = extract_claims(messages, mode="strict-domain")
+
+    assert claims
+    assert all(claim.kind == "presentation" for claim in claims)
+    assert all(claim.citation_required is False for claim in claims)
+
+
+def test_strict_domain_does_not_flag_chinese_search_progress_with_future_action() -> None:
+    claims = extract_claims(
+        "搜索到了两份报告，现在继续读取下一份。",
+        mode="strict-domain",
+    )
+
+    assert claims == []
+
+
+def test_strict_domain_does_not_flag_named_tool_progress_narration() -> None:
+    claims = extract_claims(
+        "现在用 kb_search 定位原文段落。",
+        mode="strict-domain",
+    )
+
+    assert claims
+    assert all(claim.kind == "presentation" for claim in claims)
+    assert all(claim.citation_required is False for claim in claims)
+
+
+def test_strict_domain_does_not_flag_search_coverage_status_as_domain_fact() -> None:
+    claims = extract_claims(
+        (
+            "搜索结果只覆盖到 Q4 FY2026（MSFT）和 Q2 FY2026（Alphabet），"
+            "都属于同一个季度期间。需要找到各自上一季度的电话会。"
+        ),
+        mode="strict-domain",
+    )
+
+    assert claims
+    assert all(claim.kind == "presentation" for claim in claims)
+    assert all(claim.citation_required is False for claim in claims)
+
+
+def test_strict_domain_does_not_flag_retrieved_corpus_count_as_domain_fact() -> None:
+    claims = extract_claims(
+        "已获得全部4份电话会摘要。现在精确提取各主题的原文证据。",
+        mode="strict-domain",
+    )
+
+    assert claims
+    assert all(claim.kind == "presentation" for claim in claims)
+    assert all(claim.citation_required is False for claim in claims)
+
+
+def test_search_result_prefix_does_not_hide_a_factual_numeric_claim() -> None:
+    claims = extract_claims(
+        "搜索显示，公司收入增长 20%。",
+        mode="strict-domain",
+    )
+
+    assert len(claims) == 1
+    assert claims[0].kind == "financial-fact"
+    assert claims[0].citation_required is True
+
+
+def test_imperative_source_read_preamble_is_process_text_not_an_external_claim() -> None:
+    claims = extract_claims(
+        "用年度财报文件（doc_id `1246596091500171264`）获取两个指标的原文数据。",
+        mode="strict-domain",
+    )
+
+    assert len(claims) == 1
+    assert claims[0].kind == "presentation"
+    assert claims[0].citation_required is False
+
+
+def test_strict_domain_does_not_treat_coverage_review_conclusions_as_claims() -> None:
+    claims = extract_claims(
+        (
+            "The response is complete and accurate. Nothing was omitted.\n\n"
+            "The response fully satisfies the original request: "
+            "all requested fields are present.\n\n"
+            "No omissions or corrections are needed."
+        ),
+        mode="strict-domain",
+    )
+
+    assert claims
+    assert all(claim.kind == "presentation" for claim in claims)
+    assert all(claim.citation_required is False for claim in claims)
+
+
+def test_exact_metric_calculation_supports_a_plain_display_value() -> None:
+    semantics = {
+        "metric_ontology": {
+            "metrics": {
+                "price_to_sales_ttm": {
+                    "aliases": ["TTM PS"],
+                    "fields": ["price_to_sales_ttm"],
+                }
+            }
+        },
+        "unit_ontology": {
+            "units": {"multiple": {"canonical": "multiple", "aliases": ["x", "倍"], "scale": 1}}
+        },
+    }
+    claim = extract_claims(
+        "TTM PS was 19.47x.",
+        mode="strict-domain",
+        semantics=semantics,
+    )[0]
+    support = verify_evidence_support(
+        claim,
+        {
+            "evidence": {
+                "kind": "calculation",
+                "metric": "price_to_sales_ttm",
+                "expression": "market_cap / ttm_revenue",
+                "inputs": [
+                    {"name": "market_cap", "citationId": "cit_cap", "value": 169.7},
+                    {"name": "ttm_revenue", "citationId": "cit_revenue", "value": 8.717},
+                ],
+                "result": 19.47,
+                "unit": "x",
+                "period": "2026-08-03",
+            }
+        },
+        semantics=semantics,
+    )
+
+    assert support.status == "supported"
+
+
 def test_presentation_preface_is_separate_from_the_following_factual_claim() -> None:
     claims = extract_claims(
         "本报告按产品品类横向呈现，三家公司在该品类下均是供给方。",
@@ -618,6 +860,24 @@ def test_company_period_title_with_explicit_date_range_is_presentation_context()
         "贵州茅台 2024 年度（2024-01-01 至 2024-12-31）",
         "营业收入 — 金额（亿元，人民币）: 1,708.99",
     ]
+
+
+def test_company_period_title_with_year_inherited_date_range_is_presentation_context() -> None:
+    claims = extract_claims(
+        "**海吉亚医疗（HK:06078）2025年度财报（报告期：2025年1月1日—12月31日）**\n\n"
+        "- **商誉**（截至2025年12月31日账面值）：人民币 **34.41亿元** "
+        "[1](citation://cit_goodwill)",
+        mode="strict-domain",
+        semantics=_FINANCE_SEMANTICS,
+    )
+
+    assert [claim.exact for claim in claims] == [
+        "海吉亚医疗（HK:06078）2025年度财报（报告期：2025年1月1日—12月31日）",
+        "商誉（截至2025年12月31日账面值）：人民币 34.41亿元",
+    ]
+    assert claims[0].kind == "presentation"
+    assert claims[0].citation_required is False
+    assert claims[1].citation_required is True
     assert claims[0].kind == "presentation"
     assert claims[0].citation_required is False
     assert claims[1].citation_required is True
@@ -846,6 +1106,88 @@ def test_one_citation_in_value_cell_does_not_leak_across_the_same_table_row() ->
     assert claims[1].attached_citation_ids == ("cit_row",)
 
 
+def test_cited_table_period_cell_remains_nonfactual_context() -> None:
+    claims = extract_claims(
+        "| 字段 | 数值 | 单位 | 报告期 |\n"
+        "|---|---:|---|---|\n"
+        "| 归属于上市公司股东的净利润 | 862.28 | 亿元 | "
+        "2024年度（FY2024） [source](evidence://ev_parent_profit) |",
+        mode="strict-domain",
+        semantics=_FINANCE_SEMANTICS,
+    )
+
+    period_claim = next(claim for claim in claims if "报告期:" in claim.exact)
+
+    assert period_claim.kind == "presentation"
+    assert period_claim.citation_required is False
+    assert period_claim.attached_evidence_handles == ("ev_parent_profit",)
+
+
+def test_parenthetical_reporting_context_stays_with_the_numeric_claim() -> None:
+    claims = extract_claims(
+        "营业收入（2024年年报，报告期：2024-12-31）："
+        "**1,708.99 亿元** [source](evidence://ev_revenue)",
+        mode="strict-domain",
+        semantics=_FINANCE_SEMANTICS,
+    )
+
+    assert len(claims) == 1
+    assert claims[0].exact == (
+        "营业收入（2024年年报，报告期：2024-12-31）：1,708.99 亿元"
+    )
+    assert claims[0].kind == "financial-fact"
+    assert claims[0].normalized["metric"] == "operating_revenue"
+    assert claims[0].normalized["period"] == "2024 FY"
+    assert claims[0].attached_evidence_handles == ("ev_revenue",)
+
+
+def test_ranked_table_uses_named_entity_column_for_value_claims() -> None:
+    answer = (
+        "| 排名 | 模型 | 本周用量 | 周环比（vs 7.13—7.19） |\n"
+        "|---:|---|---:|---:|\n"
+        "| 1 | MiMo-V2.5 | 10.5T | +12% |"
+    )
+    claims = extract_claims(
+        answer,
+        mode="strict-domain",
+        semantics=_FINANCE_SEMANTICS,
+    )
+
+    usage_claim = next(claim for claim in claims if claim.location.get("columnIndex") == 2)
+    growth_claim = next(claim for claim in claims if claim.location.get("columnIndex") == 3)
+    assert usage_claim.exact == "MiMo-V2.5 — 本周用量: 10.5T"
+    assert growth_claim.exact == "MiMo-V2.5 — 周环比（vs 7.13—7.19）: +12%"
+
+    evidence = {
+        "source": {"title": "OpenRouter weekly ranking"},
+        "evidence": {
+            "kind": "text",
+            "quote": "MiMo-V2.5以10.5T Token居首，份额环比增长12.2%。",
+        },
+    }
+    assert (
+        verify_evidence_support(usage_claim, evidence, semantics=_FINANCE_SEMANTICS).status
+        == "supported"
+    )
+    assert (
+        verify_evidence_support(growth_claim, evidence, semantics=_FINANCE_SEMANTICS).status
+        == "supported"
+    )
+    bound = bind_claims_to_evidence(
+        answer,
+        [
+            {
+                "evidenceHandle": "ev_openrouter_mimo",
+                **evidence,
+            }
+        ],
+        mode="strict-domain",
+        semantics=_FINANCE_SEMANTICS,
+    )
+    assert bound.auto_bound_claim_handles[growth_claim.claim_id] == ("ev_openrouter_mimo",)
+    assert "+12% [source](evidence://ev_openrouter_mimo)" in bound.text
+
+
 def test_table_visual_placeholders_are_not_factual_claims() -> None:
     claims = extract_claims(
         "| 指标 | Q1 FY26 | Q2 FY26 | Q3 FY26 |\n"
@@ -854,9 +1196,7 @@ def test_table_visual_placeholders_are_not_factual_claims() -> None:
         mode="strict-domain",
     )
 
-    assert [claim.exact for claim in claims] == [
-        "单季新增容量 — Q2 FY26: ~1 GW"
-    ]
+    assert [claim.exact for claim in claims] == ["单季新增容量 — Q2 FY26: ~1 GW"]
     assert claims[0].normalized["period"] == "2026 Q2"
 
 
@@ -877,6 +1217,28 @@ def test_fiscal_shorthand_rejects_cross_quarter_text_binding() -> None:
     assert verify_evidence_support(claim, q2_evidence).status == "contradicted"
 
 
+def test_fiscal_shorthand_after_table_prefix_matches_same_period_document() -> None:
+    claim = extract_claims(
+        (
+            "| 维度 | Microsoft FY26 Q3 |\n"
+            "|---|---|\n"
+            "| 资产类型拆分 | This quarter, roughly 2/3 of CapEx was for "
+            "short-lived assets. |"
+        ),
+        mode="strict-domain",
+    )[0]
+    evidence = {
+        "source": {"title": "Microsoft(MSFT) - 2026 Q3 - Earnings Call Transcript"},
+        "evidence": {
+            "kind": "text",
+            "quote": "This quarter, roughly 2/3 of CapEx was for short-lived assets.",
+        },
+    }
+
+    assert claim.normalized["period"] == "2026 Q3"
+    assert verify_evidence_support(claim, evidence).status == "supported"
+
+
 def test_unique_fiscal_year_scopes_abbreviated_quarter_table_columns() -> None:
     claims = extract_claims(
         "## FY2026 产能变化\n\n"
@@ -889,6 +1251,24 @@ def test_unique_fiscal_year_scopes_abbreviated_quarter_table_columns() -> None:
     assert [claim.normalized["period"] for claim in claims] == [
         "2026 Q2",
         "2026 Q4",
+    ]
+
+
+def test_explicit_table_cell_period_overrides_multi_period_intro_context() -> None:
+    claims = extract_claims(
+        (
+            "## 覆盖范围：Microsoft FY2026 Q3、FY2026 Q4；Alphabet 2026 Q1、2026 Q2\n\n"
+            "| 维度 | Microsoft FY2026 Q4（2026-07-29） | Alphabet 2026 Q2（2026-07-22） |\n"
+            "|---|---|---|\n"
+            "| 当季资本开支 | $41 billion | $44.9 billion |"
+        ),
+        mode="strict-domain",
+    )
+
+    table_claims = [claim for claim in claims if claim.location["kind"] == "table-cell"]
+    assert [claim.normalized["period"] for claim in table_claims] == [
+        "2026 Q4",
+        "2026 Q2",
     ]
 
 
@@ -1231,6 +1611,106 @@ def test_auto_bind_accepts_attribution_when_named_speaker_is_in_exact_chunk() ->
     assert len(result.claim_handles) == 1
 
 
+def test_paragraph_terminal_handles_bound_only_supported_preceding_claims() -> None:
+    revenue_a = {
+        "evidenceHandle": "ev_company_a_revenue_12345678",
+        "source": {
+            "sourceId": "company-a-report",
+            "providerId": "docs",
+            "sourceType": "document",
+            "title": "甲公司 2025 年报",
+        },
+        "evidence": {
+            "kind": "text",
+            "quote": "甲公司2025年营业收入为100亿元。",
+        },
+    }
+    revenue_b = {
+        "evidenceHandle": "ev_company_b_revenue_12345678",
+        "source": {
+            "sourceId": "company-b-report",
+            "providerId": "docs",
+            "sourceType": "document",
+            "title": "乙公司 2025 年报",
+        },
+        "evidence": {
+            "kind": "text",
+            "quote": "乙公司2025年营业收入为100亿元。",
+        },
+    }
+    answer = (
+        "甲公司2025年营业收入为100亿元。业务保持稳定 "
+        "[source](evidence://ev_company_a_revenue_12345678)。\n\n"
+        "乙公司2025年营业收入为100亿元。业务仍在调整 "
+        "[source](evidence://ev_company_b_revenue_12345678)。"
+    )
+
+    result = bind_claims_to_evidence(
+        answer,
+        [revenue_a, revenue_b],
+        mode="strict-domain",
+        semantics=_FINANCE_SEMANTICS,
+    )
+
+    first, second = result.text.split("\n\n")
+    assert first.count("evidence://ev_company_a_revenue_12345678") == 2
+    assert "evidence://ev_company_b_revenue_12345678" not in first
+    assert second.count("evidence://ev_company_b_revenue_12345678") == 2
+    assert "evidence://ev_company_a_revenue_12345678" not in second
+
+
+def test_numbered_result_section_handles_are_candidates_without_sibling_spill() -> None:
+    evidence_a = {
+        "evidenceHandle": "ev_company_a_product_12345678",
+        "source": {
+            "sourceId": "company-a-report",
+            "providerId": "docs",
+            "sourceType": "document",
+            "title": "甲公司 AI 产品报告",
+        },
+        "evidence": {
+            "kind": "text",
+            "quote": "甲公司AI办公产品已经规模落地，企业客户续约率提升20%。",
+        },
+    }
+    evidence_b = {
+        "evidenceHandle": "ev_company_b_product_12345678",
+        "source": {
+            "sourceId": "company-b-report",
+            "providerId": "docs",
+            "sourceType": "document",
+            "title": "乙公司 AI 产品报告",
+        },
+        "evidence": {
+            "kind": "text",
+            "quote": "乙公司AI安全产品已经规模落地，企业客户续约率提升20%。",
+        },
+    }
+    answer = (
+        "### 1. 甲公司\n\n"
+        "甲公司AI办公产品已经规模落地 "
+        "[source](evidence://ev_company_a_product_12345678)。\n\n"
+        "企业客户续约率提升20%。\n\n"
+        "### 2. 乙公司\n\n"
+        "乙公司AI安全产品已经规模落地 "
+        "[source](evidence://ev_company_b_product_12345678)。\n\n"
+        "企业客户续约率提升20%。"
+    )
+
+    result = bind_claims_to_evidence(
+        answer,
+        [evidence_a, evidence_b],
+        mode="strict-domain",
+        semantics=_FINANCE_SEMANTICS,
+    )
+
+    first, second = result.text.split("### 2. 乙公司", 1)
+    assert first.count("evidence://ev_company_a_product_12345678") == 2
+    assert "evidence://ev_company_b_product_12345678" not in first
+    assert second.count("evidence://ev_company_b_product_12345678") == 2
+    assert "evidence://ev_company_a_product_12345678" not in second
+
+
 def test_equivalent_recap_claim_reuses_verified_period_binding() -> None:
     handle = "ev_msft_q3_throughput_12345678"
     answer = (
@@ -1334,9 +1814,7 @@ def test_equivalent_recap_never_crosses_reporting_periods() -> None:
 def test_equivalent_recap_never_crosses_canonical_metrics() -> None:
     handle = "ev_revenue_growth_12345678"
     answer = (
-        "### 2024 FY\n\n"
-        f"营业收入同比增长40% [source](evidence://{handle})。\n\n"
-        "净利润同比增长40%。"
+        f"### 2024 FY\n\n营业收入同比增长40% [source](evidence://{handle})。\n\n净利润同比增长40%。"
     )
     evidence = {
         "evidenceHandle": handle,
@@ -1559,7 +2037,7 @@ def test_auto_bind_negative_disclosure_with_unique_quoted_anchor() -> None:
     assert result.claim_handles == {claim.claim_id: "ev_msft_ai_12345678"}
 
 
-def test_auto_bind_negative_disclosure_from_unique_complete_document() -> None:
+def test_negative_disclosure_does_not_bind_document_coverage_marker() -> None:
     answer = "AI 服务贡献百分点：原文未披露具体数字。"
     coverage = {
         "evidenceHandle": "ev_doc_coverage_12345678",
@@ -1588,9 +2066,8 @@ def test_auto_bind_negative_disclosure_from_unique_complete_document() -> None:
         semantics=_FINANCE_SEMANTICS,
     )
 
-    assert result.text == (
-        "AI 服务贡献百分点：原文未披露具体数字 [source](evidence://ev_doc_coverage_12345678)。"
-    )
+    assert result.text == answer
+    assert result.claim_handles == {}
 
 
 def test_auto_bind_negative_disclosure_does_not_choose_between_complete_documents() -> None:
@@ -1796,7 +2273,7 @@ def test_plain_six_digit_value_is_not_mistaken_for_a_ticker() -> None:
     assert verify_evidence_support(claim, evidence["evidence"]).status == "supported"
 
 
-def test_finance_semantics_accept_display_rounding_but_not_wrong_value() -> None:
+def test_finance_semantics_accept_display_rounding_and_prove_wrong_value_conflict() -> None:
     claim = extract_claims(
         "贵州茅台（600519）2024 年营业收入为 1,708.99 亿元。",
         mode="strict-domain",
@@ -1837,14 +2314,13 @@ def test_finance_semantics_accept_display_rounding_but_not_wrong_value() -> None
         ).status
         == "supported"
     )
-    assert (
-        verify_evidence_support(
-            claim,
-            wrong,
-            semantics=_FINANCE_SEMANTICS,
-        ).status
-        == "not-found"
+    conflict = verify_evidence_support(
+        claim,
+        wrong,
+        semantics=_FINANCE_SEMANTICS,
     )
+    assert conflict.status == "contradicted"
+    assert conflict.reason == "value-conflict"
 
 
 def test_reportify_nine_month_period_matches_chinese_ytd_claim() -> None:
@@ -1998,17 +2474,20 @@ def test_compact_line_label_scopes_every_claim_on_only_that_line() -> None:
     assert "批发代理" not in claims[1].semantic_text
     assert "批发代理" in claims[3].semantic_text
     assert "直销" not in claims[3].semantic_text
-    assert verify_evidence_support(
-        claims[1],
-        {
-            "kind": "text",
-            "quote": (
-                "| 销售模式 | 营业收入 | 营业收入比上年增减（%） |\n"
-                "| 直销 | 74,843,327,030.79 | 11.32 |"
-            ),
-        },
-        semantics=_FINANCE_SEMANTICS,
-    ).status == "supported"
+    assert (
+        verify_evidence_support(
+            claims[1],
+            {
+                "kind": "text",
+                "quote": (
+                    "| 销售模式 | 营业收入 | 营业收入比上年增减（%） |\n"
+                    "| 直销 | 74,843,327,030.79 | 11.32 |"
+                ),
+            },
+            semantics=_FINANCE_SEMANTICS,
+        ).status
+        == "supported"
+    )
 
 
 def test_text_evidence_snippet_is_verified_as_trusted_local_context() -> None:
@@ -2287,10 +2766,7 @@ def test_currency_prefix_billion_matches_localized_hundred_million_usd() -> None
         },
         "evidence": {
             "kind": "text",
-            "quote": (
-                "Microsoft Cloud exceeded $54 billion in revenue, "
-                "up 29% year-over-year."
-            ),
+            "quote": ("Microsoft Cloud exceeded $54 billion in revenue, up 29% year-over-year."),
         },
     }
 
@@ -2732,3 +3208,29 @@ def test_definition_heading_without_verb_is_not_an_external_claim() -> None:
 
     assert claims[0].kind == "definition"
     assert all(not claim.citation_required for claim in claims)
+
+
+def test_rule_table_threshold_and_decision_cells_are_reasoning_not_external_facts() -> None:
+    claims = extract_claims(
+        (
+            "| 规则 | 阈值 | 当前状态 | 触发？ |\n"
+            "|---|---:|---|---|\n"
+            "| 固定止损线 | $160 | 现价 $193.78 > $160 | ✅ 未触发 |\n"
+            "| 价格 vs MA120 | 需站上 | $193.78 > $168.89 | ✅ 站上 |"
+        ),
+        mode="strict-domain",
+        semantics=_FINANCE_SEMANTICS,
+    )
+
+    by_exact = {claim.exact: claim for claim in claims}
+    assert by_exact["固定止损线 — 阈值: $160"].kind == "reasoning"
+    assert by_exact["固定止损线 — 触发？: ✅ 未触发"].kind == "reasoning"
+    assert by_exact["价格 vs MA120 — 阈值: 需站上"].kind == "reasoning"
+    assert by_exact["价格 vs MA120 — 触发？: ✅ 站上"].kind == "reasoning"
+    assert all(
+        not claim.citation_required
+        for claim in by_exact.values()
+        if "阈值:" in claim.exact or "触发？:" in claim.exact
+    )
+    assert by_exact["固定止损线 — 当前状态: 现价 $193.78 > $160"].citation_required
+    assert by_exact["价格 vs MA120 — 当前状态: $193.78 > $168.89"].citation_required

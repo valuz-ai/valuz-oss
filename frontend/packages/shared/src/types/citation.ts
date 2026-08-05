@@ -8,6 +8,10 @@
 export interface CitationBundleV1 {
   version: 1;
   citations: CitationRefV1[];
+  /** Post-publish projection from Runtime evidence links to trusted ids. */
+  projection?: {
+    evidenceHandleToCitationId: Record<string, string>;
+  };
   integrity?: CitationIntegrityV1;
   quality?: CitationQualityResultV1;
 }

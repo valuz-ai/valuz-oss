@@ -65,7 +65,7 @@ from src.core.approval_rule_matcher import ExactArgsRuleMatcher, RuntimeApproval
 from src.core.events import AVAILABLE_DECISIONS_V1_WITH_SESSION, Event, EventSink
 from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
-from src.core.tools import ExecContext, ToolKit
+from src.core.tools import ExecContext, ToolDef, ToolKit
 from src.core.types import (
     BudgetExhausted,
     EndTurn,
@@ -135,6 +135,8 @@ _HARNESS_TOOLKIT_TOOL_TIMEOUT_SEC = 720.0
 
 class CodexRuntime:
     """Wraps the Codex SDK (``AsyncCodex`` + ``AsyncThread``) as a RuntimePort."""
+
+    supports_native_continuation = True
 
     def __init__(
         self,
@@ -576,6 +578,29 @@ class CodexRuntime:
                     },
                 )
             )
+
+    async def run_task_coverage(
+        self,
+        session: Session,
+        user_message: UserMessage,
+        *,
+        no_op_tool: ToolDef,
+    ) -> None:
+        """Resume the same Codex thread with a turn-scoped private tool."""
+
+        previous = self.toolkit.get(no_op_tool.name)
+        self.toolkit.register(no_op_tool)
+        # Codex discovers harness MCP tools at process startup.  Reconnect the
+        # SDK client, then resume the persisted native thread id.
+        await self.close()
+        try:
+            await self.run(session, user_message)
+        finally:
+            if previous is None:
+                self.toolkit.unregister(no_op_tool.name)
+            else:
+                self.toolkit.register(previous)
+            await self.close()
 
     async def submit_action(
         self,

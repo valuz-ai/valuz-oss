@@ -14,6 +14,7 @@ export * from "./api/notifications-api";
 export * from "./api/docs-api";
 export * from "./api/base-resolver";
 export * from "./api/fetch-json";
+export * from "./api/artifacts-api";
 export * from "./api/files-api";
 export * from "./api/mcp-providers-api";
 export * from "./api/memory-api";

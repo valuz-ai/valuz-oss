@@ -26,6 +26,7 @@ import json
 import valuz_agent.boot.kernel  # noqa: F401 — sys.path side-effect
 
 from openai_codex.generated.v2_all import (
+    AgentMessageThreadItem,
     ContextCompactionThreadItem,
     ImageViewThreadItem,
     ItemCompletedNotification,
@@ -65,6 +66,37 @@ def _completed(item: ThreadItem) -> Notification:
             {"item": item, "completedAtMs": 2, "threadId": "th_1", "turnId": "tu_1"}
         ),
     )
+
+
+def _assistant_item(item_id: str, text: str) -> ThreadItem:
+    return ThreadItem(
+        root=AgentMessageThreadItem(id=item_id, type="agentMessage", text=text)
+    )
+
+
+def test_assistant_messages_remain_visible_before_and_after_tools() -> None:
+    events = [
+        *map_notification(_completed(_assistant_item("msg-1", "先说明当前进度。"))),
+        *map_notification(
+            _completed(
+                _web_search_item(
+                    "annual report",
+                    {"type": "search", "query": "annual report"},
+                )
+            )
+        ),
+        *map_notification(_completed(_assistant_item("msg-2", "再给出最终答案。"))),
+    ]
+
+    assert [event.type for event in events] == [
+        "assistant_message",
+        "tool_use",
+        "tool_result",
+        "assistant_message",
+    ]
+    assert [
+        event.data["text"] for event in events if event.type == "assistant_message"
+    ] == ["先说明当前进度。", "再给出最终答案。"]
 
 
 def test_web_search_item_started_placeholder_is_dropped() -> None:

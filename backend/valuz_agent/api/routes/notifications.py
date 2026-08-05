@@ -19,13 +19,14 @@ import logging
 import os
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
 from valuz_agent.api.deps import get_current_user_id
 from valuz_agent.infra.sse import shielded
 from valuz_agent.modules.notifications.schemas import (
     NotificationEntry,
+    NotificationHistoryResponse,
     NotificationListResponse,
     NotificationStreamEvent,
 )
@@ -63,6 +64,18 @@ async def list_notifications(
     """Open (unresolved) notifications + the unread count, for cold-start."""
     entries, unread = await notification_service.snapshot(user_id)
     return NotificationListResponse(entries=entries, unread=unread)
+
+
+@router.get("/v1/notifications/history", response_model=NotificationHistoryResponse)
+async def list_notification_history(
+    limit: int = Query(50, ge=1, le=200),
+    before: int | None = Query(None, description="created_at ms cursor (strictly below)"),
+    user_id: str = Depends(get_current_user_id),
+) -> NotificationHistoryResponse:
+    """Resolved notifications, newest first — the drawer's History tab. Page by
+    passing the last entry's ``created_at`` as ``before``."""
+    entries, has_more = await notification_service.history(user_id, limit=limit, before=before)
+    return NotificationHistoryResponse(entries=entries, has_more=has_more)
 
 
 @router.get("/v1/notifications/stream")
@@ -129,6 +142,16 @@ async def mark_all_read(
     user_id: str = Depends(get_current_user_id),
 ) -> dict[str, bool]:
     await notification_service.mark_all_read(user_id)
+    return {"ok": True}
+
+
+@router.post("/v1/notifications:dismiss-all")
+async def dismiss_all(
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, bool]:
+    """The drawer's "clear all" — every open entry moves to history. A pending
+    question stays answerable in its session; only its notification clears."""
+    await notification_service.dismiss_all(user_id)
     return {"ok": True}
 
 

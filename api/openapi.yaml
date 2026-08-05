@@ -3666,6 +3666,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/NotificationListResponse"
+  /v1/notifications/history:
+    get:
+      summary: Resolved (dismissed / handled) notifications, newest first
+      description: |
+        The read-only history behind the drawer's History tab. Returns resolved
+        rows only — the open set stays on GET /v1/notifications. Paginated by a
+        created_at cursor: pass the last entry's created_at as `before` to load
+        the next page.
+      operationId: listNotificationHistory
+      tags: [notifications]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+        - name: before
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            description: "Only entries with created_at strictly below this (ms cursor)."
+      responses:
+        "200":
+          description: Resolved notifications page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationHistoryResponse"
   /v1/notifications/stream:
     get:
       summary: SSE stream of notification changes (snapshot/added/updated/resolved)
@@ -3674,6 +3703,18 @@ paths:
       responses:
         "200":
           description: SSE stream
+  /v1/notifications:dismiss-all:
+    post:
+      summary: Dismiss (resolve) every open notification of the caller
+      description: |
+        The drawer's "clear all" — resolves every open entry (marking unread ones
+        read) so they move to history. Pending questions stay answerable in
+        their session; only the notification entry is cleared.
+      operationId: dismissAllNotifications
+      tags: [notifications]
+      responses:
+        "200":
+          description: OK
   /v1/notifications:read-all:
     post:
       summary: Mark all of the caller's notifications read
@@ -5200,6 +5241,17 @@ components:
           items:
             $ref: "#/components/schemas/NotificationEntry"
         unread: {type: integer}
+    NotificationHistoryResponse:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationEntry"
+        has_more:
+          type: boolean
+          description: "True when another page exists below the returned entries."
     DraftTaskRequest:
       type: object
       required: [goal, lead_agent_slug, originating_session_id]

@@ -146,7 +146,7 @@ async def test_conversation_trust_preferences_round_trip(db) -> None:
     )
 
 
-async def test_preferences_route_disabling_citations_also_disables_verification(
+async def test_preferences_route_disabling_citations_preserves_verification(
     db,
     monkeypatch,
 ) -> None:
@@ -167,11 +167,11 @@ async def test_preferences_route_disabling_citations_also_disables_verification(
     )
 
     assert result.conversation_citations_enabled is False
-    assert result.conversation_verification_enabled is False
+    assert result.conversation_verification_enabled is True
     assert result.conversation_task_coverage_enabled is True
 
 
-async def test_preferences_route_enabling_verification_also_enables_citations(
+async def test_preferences_route_enabling_verification_preserves_citations_setting(
     db,
     monkeypatch,
 ) -> None:
@@ -191,7 +191,31 @@ async def test_preferences_route_enabling_verification_also_enables_citations(
         user_id=_OWNER,
     )
 
-    assert result.conversation_citations_enabled is True
+    assert result.conversation_citations_enabled is False
+    assert result.conversation_verification_enabled is True
+    assert result.conversation_task_coverage_enabled is True
+
+
+async def test_preferences_route_accepts_audit_only_combination(
+    db,
+    monkeypatch,
+) -> None:
+    @asynccontextmanager
+    async def unit_of_work(*, commit=True):
+        del commit
+        yield db
+
+    monkeypatch.setattr(settings_routes, "async_unit_of_work", unit_of_work)
+
+    result = await settings_routes.patch_preferences(
+        settings_routes.PreferencesPatchPayload(
+            conversation_citations_enabled=False,
+            conversation_verification_enabled=True,
+        ),
+        user_id=_OWNER,
+    )
+
+    assert result.conversation_citations_enabled is False
     assert result.conversation_verification_enabled is True
     assert result.conversation_task_coverage_enabled is True
 

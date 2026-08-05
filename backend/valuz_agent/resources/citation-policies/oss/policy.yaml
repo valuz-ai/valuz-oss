@@ -42,64 +42,43 @@ semantics:
         scale: 1000000000000
 
 task_coverage:
-  contract:
-    requirement_kinds:
-      - structured-slot
-      - document-section
-      - topic
+  revision: oss-task-coverage-v2
+  review_guidance:
+    material_gap_types:
+      - missing-explicit-requirement
+      - unfinished-requested-item
+      - material-correction
+    completion_dimensions:
+      - entity
+      - document
+      - field
+      - metric
+      - period
+      - as-of
+      - count
+      - order
+      - output-format
       - comparison
       - calculation
-      - output-shape
-    dimensions: [entity, document, field, metric, period, as-of, count, order, output-format]
-    selectors: [explicit]
-    output_constraints: [prose, list, table, exact-count, required-columns, preserve-order]
-    ontology_refs: []
-  retrieval:
-    identity_mappings:
-      - id: oss-entity-identity
-        tool_patterns: ["*entity*search*", "*identity*lookup*"]
-        query_fields: [query, name, symbol, ticker, identifier]
-        result_fields: [id, symbol, ticker, name, full_name, entity_name, aliases, synonyms]
-    content_mappings:
-      - id: oss-discovery-result
-        role: candidate
-        tool_patterns: ["*search*"]
-      - id: oss-full-document-content
-        role: content
-        coverage_text: result
-        coverage_scope: full-document
-        tool_patterns: ["*document*raw*content*", "*document*fetch*", "*document*read*"]
-      - id: oss-content-result
-        role: content
-        coverage_text: result
-        coverage_scope: partial
-        tool_patterns: ["*fetch*", "*read*", "*get*", "*query*", "*lookup*"]
-    candidate_selection:
-      - compatible-scope
-      - required-parts-covered
-      - locator-complete
-      - inspect-beyond-first-partial-candidate
-    source_constraints: [explicit-document-scope, same-entity, same-period]
-  answer:
-    structure_rules: [markdown-table, list-count, section-count, required-columns, preserve-order]
-  remediation:
-    allowed_actions:
-      - re-inject
-      - retrieve-and-patch
-      - patch-answer
-      - regenerate
-      - report-unavailable
-  observability:
-    record:
-      - task_contract
-      - requirement_coverage
-      - retrieval_attempts
-      - model_input_manifest
-      - answer_manifest
-      - resolver_revision
+    source_boundary_notes:
+      - Review the original request and every visible message in the current turn.
+      - Treat tool use as context, not as proof that the requested answer was completed.
+    supplement_rules:
+      append_only: true
+      do_not_repeat_completed_content: true
+      preserve_visible_history: true
+  evaluation:
+    scenario_families:
+      - explicit-requirement
+      - exact-count-and-order
+      - requested-output-shape
+      - comparison-completeness
+      - calculation-completeness
+      - multi-message-turn
+      - no-op-when-complete
+      - continuation-failure-preserves-primary
 
 failure:
-  repair_attempts: 1
   publish_on_degraded: ready
 
 observability:

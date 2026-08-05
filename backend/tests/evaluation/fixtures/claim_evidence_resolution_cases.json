@@ -35,7 +35,7 @@
       "gold_relation": "entailed",
       "expected_status": "verified",
       "expected_binding_action": "auto-bind",
-      "expected_repair_action": "none",
+      "expected_user_visible_severity": "none",
       "notes": "逐字原文是所有版本共用的确定性基线。"
     },
     {
@@ -67,7 +67,7 @@
       "gold_relation": "unresolved",
       "expected_status": "unresolved",
       "expected_binding_action": "none",
-      "expected_repair_action": "none",
+      "expected_user_visible_severity": "none",
       "notes": "OSS 只召回候选，不用 token overlap 冒充语义支持。"
     },
     {
@@ -109,7 +109,7 @@
       "gold_relation": "entailed",
       "expected_status": "verified",
       "expected_binding_action": "keep",
-      "expected_repair_action": "none",
+      "expected_user_visible_severity": "none",
       "notes": "OSS SI 单位和有效显式绑定属于通用协议能力。"
     },
     {
@@ -165,7 +165,7 @@
       "gold_relation": "entailed",
       "expected_status": "verified",
       "expected_binding_action": "auto-rebind",
-      "expected_repair_action": "none",
+      "expected_user_visible_severity": "none",
       "notes": "只有唯一完整支持替代项时才自动换绑。"
     },
     {
@@ -208,7 +208,7 @@
       "gold_relation": "entailed",
       "expected_status": "ambiguous",
       "expected_binding_action": "none",
-      "expected_repair_action": "none",
+      "expected_user_visible_severity": "none",
       "notes": "多个独立来源都支持时不按数组顺序静默选择。"
     },
     {
@@ -258,7 +258,7 @@
       "gold_relation": "entailed",
       "expected_status": "verified",
       "expected_binding_action": "auto-bind",
-      "expected_repair_action": "none",
+      "expected_user_visible_severity": "none",
       "notes": "一个 Claim 的不同数值由最多三条文本 Evidence 联合覆盖。"
     },
     {
@@ -278,7 +278,7 @@
       "gold_relation": "unresolved",
       "expected_status": "invalid-binding",
       "expected_binding_action": "none",
-      "expected_repair_action": "none",
+      "expected_user_visible_severity": "advisory",
       "notes": "显式 handle 不存在时必须报告无效绑定，不能伪装成普通无证据。"
     },
     {
@@ -298,7 +298,7 @@
       "gold_relation": "unresolved",
       "expected_status": "unresolved",
       "expected_binding_action": "none",
-      "expected_repair_action": "none",
+      "expected_user_visible_severity": "none",
       "notes": "没有 Evidence 不是确认错误，也不能触发 repair。"
     },
     {
@@ -338,7 +338,7 @@
       "gold_relation": "contradicted",
       "expected_status": "contradicted",
       "expected_binding_action": "none",
-      "expected_repair_action": "local-patch",
+      "expected_user_visible_severity": "warning",
       "notes": "身份和单位明确后值不一致才是可操作冲突。"
     }
   ]

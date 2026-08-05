@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 from valuz_agent.adapters.system_prompt_builder import (
+    AUTHORIZATION_BOUNDARY_INSTRUCTIONS,
     OUTPUT_FORMAT_INSTRUCTIONS,
     assemble_session_instructions,
 )
+
+
+def test_global_authorization_boundary_is_static_and_request_agnostic() -> None:
+    assert "unless the user explicitly requested" in AUTHORIZATION_BOUNDARY_INSTRUCTIONS
+    assert "files" in AUTHORIZATION_BOUNDARY_INSTRUCTIONS
+    assert "automations" in AUTHORIZATION_BOUNDARY_INSTRUCTIONS
+    assert "external messages" in AUTHORIZATION_BOUNDARY_INSTRUCTIONS
+    for prohibited in ("required items", "retrieval plan", "candidate source", "attempt budget"):
+        assert prohibited not in AUTHORIZATION_BOUNDARY_INSTRUCTIONS.lower()
 
 
 def test_output_format_instructions_reference_valuz_file_scheme() -> None:

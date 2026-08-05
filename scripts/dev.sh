@@ -44,11 +44,10 @@ BACKEND_PORT="${VALUZ_BACKEND_PORT:-8000}"
 RELOAD_FLAG=""
 [[ "${VALUZ_RELOAD:-}" == "1" ]] && RELOAD_FLAG="--reload"
 
-# Dev data isolation (see header). The backend's log dir now defaults under
-# VALUZ_DATA_DIR (infra/config.py); the explicit VALUZ_LOG_DIR export is kept
-# so child tooling sees the resolved path and older checkouts stay isolated.
+# Dev data isolation (see header). Keep the complete log file path explicit so
+# child tooling and the backend share the same single-field contract.
 export VALUZ_DATA_DIR="${VALUZ_DATA_DIR:-$HOME/.valuz-oss-dev}"
-export VALUZ_LOG_DIR="${VALUZ_LOG_DIR:-$VALUZ_DATA_DIR/logs}"
+export VALUZ_LOG_FILE_PATH="${VALUZ_LOG_FILE_PATH:-$VALUZ_DATA_DIR/logs/backend.log}"
 
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'

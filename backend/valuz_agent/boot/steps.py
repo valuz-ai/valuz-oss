@@ -8,7 +8,6 @@ expressed explicitly in ``boot/lifespan.py``.
 
 import asyncio
 import logging
-from pathlib import Path
 
 from fastapi import FastAPI
 
@@ -60,12 +59,14 @@ def guard_source_run_data_dir() -> None:
             "or set VALUZ_DATA_DIR. To operate on the packaged store on purpose, "
             "set VALUZ_ALLOW_PACKAGED_DATA_DIR=1."
         )
-    if Path(settings.log_dir).expanduser().resolve() == (packaged_root / "logs").resolve():
+    if settings.log_file_path.expanduser().resolve().parent == (
+        packaged_root / "logs"
+    ).resolve():
         raise RuntimeError(
             "refusing to start: this backend runs from source but its log dir "
             f"resolves to {PACKAGED_DATA_DIR / 'logs'} — the packaged app's logs "
             "(source-run log lines there corrupt release forensics). The default "
-            "log dir follows VALUZ_DATA_DIR; unset VALUZ_LOG_DIR or point it "
+            "log path follows VALUZ_DATA_DIR; unset VALUZ_LOG_FILE_PATH or point it "
             "elsewhere, or set VALUZ_ALLOW_PACKAGED_DATA_DIR=1 to operate on "
             "the packaged store on purpose."
         )

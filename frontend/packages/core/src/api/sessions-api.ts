@@ -427,10 +427,15 @@ export interface SessionAttachmentItem {
 }
 
 /**
- * A file the **agent** delivered as a finished output via the built-in
+ * One version of a deliverable the **agent** produced via the built-in
  * ``deliver_artifacts`` MCP tool — the inverse of {@link SessionAttachmentItem}
- * (user uploads). Durable (no per-turn staging); rendered as the read-only
- * "生成文件" panel list. ``file_path`` is an absolute path the client opens.
+ * (user uploads). Rendered as the read-only "生成文件" panel list.
+ *
+ * This is a *version*, not a deliverable: ``id`` is a revision id and
+ * ``file_path`` is that version's immutable snapshot, so it keeps working after
+ * the agent edits its working copy. Re-delivering the same file appends a
+ * version instead of replacing one, which is why the same ``artifact_id`` can
+ * appear more than once in a session's list.
  */
 export interface SessionArtifactItem {
   id: string;
@@ -446,6 +451,16 @@ export interface SessionArtifactItem {
   file_size: number;
   mime_type: string | null;
   created_at: number;
+  /** Stable identity of the deliverable this is a version of. */
+  artifact_id: string;
+  /** 1-based version number within that deliverable. */
+  version_no: number;
+  /**
+   * Whether this is still the latest version. False once another session (or a
+   * later turn) delivered a newer one — the panel marks those so a superseded
+   * version is not mistaken for the deliverable.
+   */
+  is_current: boolean;
 }
 
 const fetchJson = createFetchJson(() => _apiBase);
@@ -826,9 +841,12 @@ export const sessionsApi = {
   },
 
   /**
-   * List the files the agent delivered for ``sessionId`` (the "生成文件"
+   * List the versions the agent delivered in ``sessionId`` (the "生成文件"
    * panel list), recorded by the built-in ``deliver_artifacts`` MCP tool.
-   * Durable — the full set is returned every call.
+   *
+   * Session-scoped: it answers "what did this conversation produce", so a
+   * revision another session made to the same deliverable is not included.
+   * Use ``artifactsApi`` for the workspace-wide view and for history.
    */
   listArtifacts(sessionId: string): Promise<{ items: SessionArtifactItem[] }> {
     return fetchJson(

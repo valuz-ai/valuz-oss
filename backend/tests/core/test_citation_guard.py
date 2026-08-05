@@ -12,6 +12,12 @@ from src.core.citation import (
     compact_citation_tool_content,
     private_citation_tool_content,
 )
+from src.core.claim_audit import ClaimCandidate
+from src.core.claim_evidence_resolution import (
+    EvidenceCandidate,
+    SemanticVerificationRequest,
+    SemanticVerificationResult,
+)
 
 
 def _item(
@@ -86,6 +92,167 @@ def test_guard_accepts_unique_evidence_digest_when_model_rewrites_prefix() -> No
     assert len(result.bundle["citations"]) == 1
     assert result.bundle["integrity"]["unknownCitationIds"] == []
     assert "citation://cit_" in result.text
+
+
+def test_guard_accepts_unique_mcp_chunk_id_alias() -> None:
+    item = _item(
+        "ev_mcp_8407070380061a6f4dcd6e90",
+        locator={"kind": "pdf", "page": 7, "chunkId": "829938771212395"},
+    )
+    registry = _registry(item)
+
+    resolved = registry.resolve("ev_mcp_829938771212395")
+    assert resolved is not None
+    assert resolved.handle == "ev_mcp_8407070380061a6f4dcd6e90"
+
+    result = CitationGuard(
+        registry,
+        message_id="message-mcp-chunk-alias",
+        user_prompt="cite the source",
+        policy_available=True,
+    ).finalize(
+        "Revenue increased by 12% "
+        "[source](evidence://ev_mcp_829938771212395)."
+    )
+
+    assert result.bundle is not None
+    assert len(result.bundle["citations"]) == 1
+    citation = result.bundle["citations"][0]
+    assert citation["locator"]["chunkId"] == "829938771212395"
+    assert citation["annotations"]["binding"]["evidenceHandle"] == (
+        "ev_mcp_8407070380061a6f4dcd6e90"
+    )
+    assert result.bundle["integrity"]["unknownCitationIds"] == []
+
+
+def test_registry_does_not_guess_ambiguous_mcp_chunk_id_alias() -> None:
+    first = _item(
+        "ev_mcp_first_8407070380061a6f4dcd6e90",
+        locator={"kind": "pdf", "page": 7, "chunkId": "829938771212395"},
+    )
+    second = _item(
+        "ev_mcp_second_9407070380061a6f4dcd6e90",
+        locator={"kind": "pdf", "page": 8, "chunkId": "829938771212395"},
+    )
+    second["source"].update({"sourceId": "doc-2", "documentId": "doc-2"})
+    registry = _registry(first, second)
+
+    assert registry.resolve("ev_mcp_829938771212395") is None
+
+
+def test_guard_rebases_external_excerpt_to_unique_later_located_chunk() -> None:
+    external = _item(
+        "ev_grep_external_12345678",
+        locator={"kind": "external", "fragment": "Revenue"},
+    )
+    external["evidence"]["quote"] = (
+        "Earlier context.\nRevenue increased by 12%.\nLater context."
+    )
+    external["evidence"]["snippet"] = external["evidence"]["quote"]
+    located = _item(
+        "ev_chunk_located_12345678",
+        locator={"kind": "pdf", "page": 12, "chunkId": "chunk-12"},
+    )
+    registry = _registry(external, located)
+
+    result = CitationGuard(
+        registry,
+        message_id="message-late-locator",
+        user_prompt="cite the source",
+        policy_available=True,
+        verification_enabled=False,
+    ).finalize(
+        "Revenue increased by 12% "
+        "[source](evidence://ev_grep_external_12345678)."
+    )
+
+    assert result.bundle is not None
+    assert len(result.bundle["citations"]) == 1
+    citation = result.bundle["citations"][0]
+    assert citation["annotations"]["binding"]["evidenceHandle"] == (
+        "ev_chunk_located_12345678"
+    )
+    assert citation["locator"] == {
+        "kind": "pdf",
+        "page": 12,
+        "chunkId": "chunk-12",
+    }
+    projection = result.bundle["projection"]["evidenceHandleToCitationId"]
+    assert projection["ev_grep_external_12345678"] == citation["citationId"]
+
+
+def test_guard_keeps_external_excerpt_when_multiple_located_chunks_match() -> None:
+    external = _item(
+        "ev_grep_ambiguous_12345678",
+        locator={"kind": "external", "fragment": "increased"},
+    )
+    external["evidence"]["quote"] = (
+        "Revenue increased by 12%.\nOperating margin increased by 3 points."
+    )
+    external["evidence"]["snippet"] = external["evidence"]["quote"]
+    first = _item(
+        "ev_chunk_first_12345678",
+        locator={"kind": "pdf", "page": 12, "chunkId": "chunk-12"},
+    )
+    second = _item(
+        "ev_chunk_second_12345678",
+        locator={"kind": "pdf", "page": 13, "chunkId": "chunk-13"},
+    )
+    second["evidence"]["quote"] = "Operating margin increased by 3 points."
+    second["evidence"]["snippet"] = second["evidence"]["quote"]
+    registry = _registry(external, first, second)
+
+    result = CitationGuard(
+        registry,
+        message_id="message-ambiguous-locator",
+        user_prompt="cite the source",
+        policy_available=True,
+        verification_enabled=False,
+    ).finalize(
+        "Revenue increased by 12% "
+        "[source](evidence://ev_grep_ambiguous_12345678)."
+    )
+
+    assert result.bundle is not None
+    citation = result.bundle["citations"][0]
+    assert citation["annotations"]["binding"]["evidenceHandle"] == (
+        "ev_grep_ambiguous_12345678"
+    )
+    assert citation["locator"]["kind"] == "external"
+
+
+def test_projection_guard_keeps_runtime_body_and_does_not_extract_claims(monkeypatch) -> None:
+    registry = _registry(
+        _item(
+            "ev_projection_12345678",
+            locator={"kind": "pdf", "page": 12},
+        )
+    )
+    original = (
+        "Revenue increased by 12% "
+        "[source](evidence://ev_projection_12345678)."
+    )
+
+    def fail_if_called(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("Citation-only projection must not split claims")
+
+    monkeypatch.setattr("src.core.citation.bind_claims_to_evidence", fail_if_called)
+    result = CitationGuard(
+        registry,
+        message_id="message-projection",
+        user_prompt="cite the source",
+        policy_available=True,
+        verification_enabled=False,
+    ).finalize_projection(original)
+
+    assert result.text == original
+    assert result.bundle is not None
+    assert "quality" not in result.bundle
+    citation = result.bundle["citations"][0]
+    assert citation["annotations"]["binding"]["evidenceHandle"] == (
+        "ev_projection_12345678"
+    )
+    assert result.bundle["integrity"]["unknownCitationIds"] == []
 
 
 def test_registry_decodes_json_nested_in_mcp_text_content_blocks() -> None:
@@ -315,6 +482,115 @@ def test_native_reportify_collection_materializes_only_addressed_field() -> None
     assert revenue.evidence["value"] == 170_899_152_276
     assert revenue.evidence["unit"] == "CNY yuan"
     assert revenue.evidence["scale"] == "yuan"
+
+
+def test_guard_recovers_unknown_collection_handle_only_from_unique_valid_pointer() -> None:
+    data = [
+        {
+            "symbol": "600519",
+            "fiscal_year": 2024,
+            "fiscal_quarter": "FY",
+            "end_date": "2024-12-31",
+            "currency": "CNY",
+            "net_profit": 86_228_146_422,
+        }
+    ]
+    raw = {
+        "data": data,
+        "_valuz_evidence": [
+            {
+                "evidenceHandle": "ev_net_profit_2024_12345678",
+                "source": {
+                    "sourceId": "financials:600519",
+                    "providerId": "valuz-stock",
+                    "sourceType": "dataset",
+                    "title": "Company income statement · 600519",
+                    "retrievedAt": "2026-08-05T08:00:00Z",
+                },
+                "evidence": {
+                    "kind": "structured-data",
+                    "datasetId": "financials",
+                    "toolName": "income_statement",
+                    "recordKey": "600519|2024 FY",
+                    "entityId": "600519",
+                    "field": "net_profit",
+                    "metric": "net_profit",
+                    "value": 86_228_146_422,
+                    "unit": "CNY",
+                    "period": "2024 FY",
+                    "capturedAt": "2026-08-05T08:00:00Z",
+                },
+            }
+        ],
+    }
+    visible = compact_citation_tool_content(raw)
+    private = private_citation_tool_content(raw)
+    assert visible is not None and private is not None
+
+    registry = EvidenceRegistry()
+    assert registry.register_tool_projection(visible, private, trusted_private=True) == 1
+    result = CitationGuard(
+        registry,
+        message_id="msg-unique-address-recovery",
+        user_prompt="查询 2024 年净利润",
+        policy_available=True,
+        verification_enabled=False,
+    ).finalize(
+        "2024 年净利润为 86228146422 CNY "
+        "[source](evidence://evc_model_typo_12345678#/data/0/net_profit)。"
+    )
+
+    assert result.bundle is not None
+    assert len(result.bundle["citations"]) == 1
+    assert result.bundle["citations"][0]["evidence"]["metric"] == "net_profit"
+    assert result.bundle["integrity"]["unknownCitationIds"] == []
+    assert "evc_model_typo_12345678" not in result.text
+
+
+def test_registry_does_not_guess_unknown_collection_when_pointer_is_ambiguous() -> None:
+    registry = EvidenceRegistry()
+    for symbol, value in (("600519", 86_228_146_422), ("000858", 32_430_000_000)):
+        raw = {
+            "data": [{"symbol": symbol, "fiscal_year": 2024, "net_profit": value}],
+            "_valuz_evidence": [
+                {
+                    "evidenceHandle": f"ev_net_profit_{symbol}_12345678",
+                    "source": {
+                        "sourceId": f"financials:{symbol}",
+                        "providerId": "valuz-stock",
+                        "sourceType": "dataset",
+                        "title": f"Company income statement · {symbol}",
+                        "retrievedAt": "2026-08-05T08:00:00Z",
+                    },
+                    "evidence": {
+                        "kind": "structured-data",
+                        "datasetId": "financials",
+                        "toolName": "income_statement",
+                        "recordKey": f"{symbol}|2024 FY",
+                        "entityId": symbol,
+                        "field": "net_profit",
+                        "metric": "net_profit",
+                        "value": value,
+                        "unit": "CNY",
+                        "period": "2024 FY",
+                        "capturedAt": "2026-08-05T08:00:00Z",
+                    },
+                }
+            ],
+        }
+        visible = compact_citation_tool_content(raw)
+        private = private_citation_tool_content(raw)
+        assert visible is not None and private is not None
+        assert registry.register_tool_projection(visible, private, trusted_private=True) == 1
+
+    assert (
+        registry.materialize_reference(
+            "evc_model_typo_12345678",
+            "#/data/0/net_profit",
+        )
+        is None
+    )
+    assert len(registry) == 0
 
 
 def test_materialized_structured_period_prefers_fiscal_quarter_over_frequency() -> None:
@@ -886,7 +1162,7 @@ def test_unrelated_rejected_tool_payload_does_not_degrade_valid_final_citation()
     assert result.bundle["integrity"]["evidenceRejectedCount"] == 1
 
 
-def test_complete_document_coverage_is_ready_without_fake_page_locator() -> None:
+def test_complete_document_coverage_marker_is_internal_not_citation_evidence() -> None:
     coverage = _item("ev_doc_coverage_12345678")
     coverage["evidence"] = {
         "kind": "structured-data",
@@ -900,23 +1176,19 @@ def test_complete_document_coverage_is_ready_without_fake_page_locator() -> None
         "capturedAt": "2026-08-02T08:00:00Z",
     }
 
-    result = CitationGuard(
-        _registry(coverage),
-        message_id="msg-coverage",
-        user_prompt="What was not disclosed?",
-        policy_available=True,
-    ).finalize(
-        "The document did not disclose the value [source](evidence://ev_doc_coverage_12345678)."
+    registry = EvidenceRegistry()
+    assert (
+        registry.register_tool_result(
+            {"_valuz_evidence": coverage},
+            tool_name="document_fetch",
+        )
+        == 0
     )
-
-    assert result.bundle is not None
-    citation = result.bundle["citations"][0]
-    assert citation["resolutionStatus"] == "ready"
-    assert "locator" not in citation
-    assert result.bundle["integrity"]["missingLocatorCitationIds"] == []
+    assert registry.rejected_count == 0
+    assert list(registry.values()) == []
 
 
-def test_complete_document_coverage_auto_binds_when_verification_policy_is_absent() -> None:
+def test_complete_document_coverage_does_not_auto_bind_when_verification_is_absent() -> None:
     coverage = _item("ev_doc_coverage_auto_12345678")
     coverage["evidence"] = {
         "kind": "structured-data",
@@ -929,19 +1201,25 @@ def test_complete_document_coverage_auto_binds_when_verification_policy_is_absen
         "basis": "full-document",
         "capturedAt": "2026-08-02T08:00:00Z",
     }
+    registry = EvidenceRegistry()
+    assert (
+        registry.register_tool_result(
+            {"_valuz_evidence": coverage},
+            tool_name="document_fetch",
+        )
+        == 0
+    )
 
     result = CitationGuard(
-        _registry(coverage),
+        registry,
         message_id="msg-coverage-auto",
         user_prompt="What was not disclosed?",
         policy_available=False,
         verification_enabled=False,
     ).finalize("AI 服务贡献百分点：原文未披露具体数字。")
 
-    assert "citation://" in result.text
-    assert result.bundle is not None
-    assert len(result.bundle["citations"]) == 1
-    assert result.bundle["citations"][0]["evidence"]["field"] == ("document_coverage_complete")
+    assert result.text == "AI 服务贡献百分点：原文未披露具体数字。"
+    assert result.bundle is None
 
 
 def test_registry_rejects_oversized_snapshots_and_locator_geometry() -> None:
@@ -959,6 +1237,20 @@ def test_registry_rejects_oversized_snapshots_and_locator_geometry() -> None:
 
     assert registry.register_tool_result({"_valuz_evidence": [oversized, too_many_rects]}) == 0
     assert len(registry) == 0
+
+
+def test_projection_registration_readiness_is_idempotent() -> None:
+    registry = EvidenceRegistry()
+    projection = {
+        "_valuz_evidence": [
+            _item("ev_ready_12345678", locator={"kind": "chunk", "chunkId": "chunk-1"})
+        ]
+    }
+
+    assert registry.register_tool_projection(projection, projection, trusted_private=True) == 1
+    assert registry.projection_is_registered(projection, trusted_private=True) is True
+    assert registry.register_tool_projection(projection, projection, trusted_private=True) == 0
+    assert registry.projection_is_registered(projection, trusted_private=True) is True
 
 
 def test_registry_never_persists_signed_urls_paths_or_unknown_locator_fields() -> None:
@@ -1134,7 +1426,7 @@ def test_strict_guard_respects_explicit_request_not_to_cite() -> None:
     assert result.bundle is None
 
 
-def test_guard_uses_one_deterministic_repair_for_fallback_marker() -> None:
+def test_guard_normalizes_fallback_marker_without_reporting_repair() -> None:
     registry = _registry(_item(locator={"kind": "chunk", "chunkId": "chunk-1"}))
     guard = CitationGuard(
         registry,
@@ -1146,12 +1438,12 @@ def test_guard_uses_one_deterministic_repair_for_fallback_marker() -> None:
     result = guard.finalize("Revenue increased [[evidence:ev_revenue_2025]].")
 
     assert result.bundle is not None
-    assert result.bundle["integrity"]["status"] == "repaired"
-    assert result.bundle["integrity"]["repairAttempts"] == 1
+    assert result.bundle["integrity"]["status"] == "passed"
+    assert result.bundle["integrity"]["repairAttempts"] == 0
     assert "citation://cit_" in result.text
 
 
-def test_guard_repairs_bare_numbered_claims_from_trusted_source_list() -> None:
+def test_guard_normalizes_bare_numbered_claims_from_trusted_source_list() -> None:
     registry = _registry(_item(locator={"kind": "chunk", "chunkId": "chunk-1"}))
     guard = CitationGuard(
         registry,
@@ -1172,8 +1464,8 @@ def test_guard_repairs_bare_numbered_claims_from_trusted_source_list() -> None:
     assert f"20 USD [1](citation://{citation_id})" in result.text
     assert "Sources:" not in result.text
     assert result.text.count(f"citation://{citation_id}") == 2
-    assert result.bundle["integrity"]["status"] == "repaired"
-    assert result.bundle["integrity"]["repairAttempts"] == 1
+    assert result.bundle["integrity"]["status"] == "passed"
+    assert result.bundle["integrity"]["repairAttempts"] == 0
 
 
 def test_guard_removes_redundant_chinese_source_section_and_divider() -> None:
@@ -1286,30 +1578,6 @@ def test_guard_never_promotes_unknown_model_minted_source() -> None:
     ]
 
 
-def test_guard_preserves_registered_canonical_ids_only_for_host_owned_patch() -> None:
-    registry = _registry(_item(locator={"kind": "chunk", "chunkId": "chunk-1"}))
-    guard = CitationGuard(
-        registry,
-        message_id="msg-1",
-        user_prompt="请给出引用",
-        policy_available=True,
-        verification_enabled=False,
-    )
-    first = guard.finalize("Revenue increased by 12% [source](evidence://ev_revenue_2025).")
-    assert "citation://" in first.text
-
-    preserved = guard.finalize(
-        first.text,
-        preserve_registered_citation_ids=True,
-    )
-    rejected_as_model_authored = guard.finalize(first.text)
-
-    assert preserved.text == first.text
-    assert preserved.bundle is not None
-    assert len(preserved.bundle["citations"]) == 1
-    assert "citation://" not in rejected_as_model_authored.text
-
-
 def test_guard_strips_truncated_protocol_prefix_without_dropping_limitation_text() -> None:
     registry = _registry(_item(locator={"kind": "chunk", "chunkId": "chunk-1"}))
     guard = CitationGuard(
@@ -1354,7 +1622,7 @@ def test_guard_drops_contradictory_generic_limitation_from_cited_value_cell() ->
     assert "citation://" in result.text
 
 
-def test_guard_preserves_its_registered_citation_ids_during_hidden_repair() -> None:
+def test_guard_rejects_canonical_ids_when_replayed_as_runtime_input() -> None:
     registry = _registry(_item(locator={"kind": "chunk", "chunkId": "chunk-1"}))
     guard = CitationGuard(
         registry,
@@ -1367,12 +1635,12 @@ def test_guard_preserves_its_registered_citation_ids_during_hidden_repair() -> N
     assert sealed.bundle is not None
     assert sealed.bundle["integrity"]["unknownCitationIds"] == []
 
-    repaired = guard.finalize(sealed.text, repair_attempts=1)
+    replayed = guard.finalize(sealed.text)
 
-    assert repaired.bundle is not None
-    assert repaired.text == sealed.text
-    assert repaired.bundle["integrity"]["unknownCitationIds"] == []
-    assert len(repaired.bundle["citations"]) == 1
+    assert replayed.bundle is not None
+    assert replayed.text != sealed.text
+    assert replayed.bundle["integrity"]["unknownCitationIds"]
+    assert replayed.bundle["citations"] == []
 
 
 def test_guard_removes_protocol_source_placeholders_without_rewriting_prose() -> None:
@@ -1393,6 +1661,36 @@ def test_guard_removes_protocol_source_placeholders_without_rewriting_prose() ->
     assert "12%。[1](citation://" in result.text
     assert ") source" not in result.text
     assert "The primary source is the annual report." in result.text
+
+
+def test_guard_removes_legacy_reportify_summary_source_link() -> None:
+    guard = CitationGuard(
+        EvidenceRegistry(),
+        message_id="msg-1",
+        user_prompt="请列出十家公司并引用来源",
+        policy_available=True,
+    )
+
+    result = guard.finalize("泛微网络利润同比增长42%。[source](:1239333165953323008:summary)")
+
+    assert result.text == "泛微网络利润同比增长42%。"
+    assert "source" not in result.text
+    assert ":summary" not in result.text
+
+
+def test_guard_removes_non_navigable_relative_source_link() -> None:
+    guard = CitationGuard(
+        EvidenceRegistry(),
+        message_id="msg-1",
+        user_prompt="请列出十家公司并引用来源",
+        policy_available=True,
+    )
+
+    result = guard.finalize(
+        "万兴科技 AI 原生收入同比增长90%。[source](.cn/reports/1239333165953323008)"
+    )
+
+    assert result.text == "万兴科技 AI 原生收入同比增长90%。"
 
 
 def test_guard_moves_citation_out_of_a_split_grouped_number() -> None:
@@ -1475,6 +1773,28 @@ def test_guard_moves_citation_after_table_boundary_into_last_cell() -> None:
     assert "citation://cit_" in data_row
 
 
+def test_guard_folds_trailing_citation_only_overflow_cell_into_last_declared_cell() -> None:
+    registry = _registry(_item(locator={"kind": "chunk", "chunkId": "chunk-1"}))
+    guard = CitationGuard(
+        registry,
+        message_id="msg-1",
+        user_prompt="请用表格列出数据和计算公式",
+        policy_available=True,
+    )
+
+    result = guard.finalize(
+        "| 项目 | 原始金额 | 折合亿元 |\n"
+        "| --- | ---: | ---: |\n"
+        "| 2026 Q1 营业收入 | 10,285,128,726 | 102.85 亿元 |"
+        "[1](evidence://ev_revenue_2025) |"
+    )
+
+    data_row = result.text.splitlines()[2]
+    assert data_row.endswith(" |")
+    assert data_row.count("|") == 4
+    assert "102.85 亿元 [1](citation://cit_" in data_row
+
+
 def test_guard_focuses_long_text_preview_on_the_cited_table_row() -> None:
     item = _item(locator={"kind": "chunk", "chunkId": "chunk-1"})
     item["evidence"] = {
@@ -1543,13 +1863,13 @@ def test_guard_drops_unknown_numeric_citation_labels_without_leaking_digits() ->
 
 
 def test_guard_marks_missing_document_locator_and_unused_evidence() -> None:
-    registry = _registry(
-        _item(),
-        _item(
-            "ev_other_12345678",
-            locator={"kind": "chunk", "chunkId": "chunk-other"},
-        ),
+    unrelated = _item(
+        "ev_other_12345678",
+        locator={"kind": "chunk", "chunkId": "chunk-other"},
     )
+    unrelated["evidence"]["quote"] = "Operating margin increased by 3 points."
+    unrelated["evidence"]["snippet"] = unrelated["evidence"]["quote"]
+    registry = _registry(_item(), unrelated)
     guard = CitationGuard(
         registry,
         message_id="msg-1",
@@ -1732,6 +2052,277 @@ def test_guard_auto_binds_one_unique_structured_candidate_without_model_repair()
     assert result.bundle["integrity"]["repairAttempts"] == 0
     assert result.bundle["quality"]["claims"][0]["status"] == "auto-bound"
     assert result.bundle["quality"]["metrics"]["claimAutoBoundCount"] == 1
+
+
+def test_guard_combines_user_thresholds_with_unique_structured_values() -> None:
+    price = _item("ev_price_12345678")
+    price["source"] = {
+        "sourceId": "quote:MRVL",
+        "providerId": "market-data",
+        "sourceType": "dataset",
+        "title": "MRVL stock quote",
+        "retrievedAt": "2026-08-03T10:00:00Z",
+    }
+    price["evidence"] = {
+        "kind": "structured-data",
+        "datasetId": "stock_quote",
+        "toolName": "stock_quote",
+        "recordKey": "MRVL|2026-08-03",
+        "entityId": "MRVL",
+        "field": "price",
+        "metric": "stock_price",
+        "value": 193.775,
+        "unit": "USD",
+        "asOf": "2026-08-03",
+        "capturedAt": "2026-08-03T10:00:00Z",
+    }
+    ma20 = json.loads(json.dumps(price))
+    ma20["evidenceHandle"] = "ev_ma20_12345678"
+    ma20["source"]["sourceId"] = "factor:MRVL:MA20"
+    ma20["source"]["title"] = "MRVL MA20"
+    ma20["evidence"].update(
+        {
+            "datasetId": "factors_compute",
+            "recordKey": "MRVL|MA20|2026-08-03",
+            "field": "/datas/0/factor_value",
+            "metric": "moving_average_20",
+            "value": 203.69,
+        }
+    )
+    policy = {
+        "mode": "strict-domain",
+        "config": {
+            "semantics": {
+                "metric_ontology": {
+                    "metrics": {
+                        "stock_price": {
+                            "aliases": ["current price", "stock price"],
+                            "fields": ["price"],
+                        },
+                        "moving_average_20": {
+                            "aliases": ["MA20"],
+                            "fields": ["moving_average_20"],
+                        },
+                    }
+                },
+                "unit_ontology": {
+                    "units": {"usd": {"canonical": "USD", "aliases": ["USD", "$"], "scale": 1}}
+                },
+            },
+            "rules": {"factual_claim": {"citation_required": True}},
+        },
+    }
+    guard = CitationGuard(
+        _registry(price, ma20),
+        message_id="msg-user-threshold-composite",
+        user_prompt="Use a stop-loss threshold of 160 USD.",
+        policy_available=True,
+        quality_policy=policy,
+    )
+
+    result = guard.finalize(
+        "The stop-loss threshold is 160 USD, current price is 193.78 USD, and MA20 is 203.69 USD."
+    )
+
+    assert result.bundle is not None
+    assert result.text.count("citation://") == 2
+    assert result.bundle["quality"]["metrics"]["unsourcedClaimCount"] == 0
+    assert result.bundle["quality"]["metrics"]["unverifiedClaimCount"] == 0
+
+
+def test_guard_prefers_canonical_metric_over_agreeing_structured_mirrors() -> None:
+    price = _item("ev_price_direct_12345678")
+    price["source"] = {
+        "sourceId": "quote:MRVL",
+        "providerId": "market-data",
+        "sourceType": "dataset",
+        "title": "MRVL stock quote",
+        "retrievedAt": "2026-08-03T10:00:00Z",
+    }
+    price["evidence"] = {
+        "kind": "structured-data",
+        "datasetId": "stock_quote",
+        "toolName": "stock_quote",
+        "recordKey": "MRVL|2026-08-03",
+        "entityId": "MRVL",
+        "field": "/data/items/9/stock_price",
+        "metric": "stock_price",
+        "value": 193.775,
+        "asOf": "2026-08-03",
+        "capturedAt": "2026-08-03T10:00:00Z",
+    }
+    mirrors = []
+    for period in (20, 60, 120, 250):
+        mirror = json.loads(json.dumps(price))
+        mirror["evidenceHandle"] = f"ev_price_ma{period}_12345678"
+        mirror["source"]["sourceId"] = f"factor:MRVL:MA{period}"
+        mirror["source"]["title"] = f"MRVL MA{period}"
+        mirror["evidence"].update(
+            {
+                "datasetId": "factors_compute",
+                "toolName": "factors_compute",
+                "field": "/datas/0/close",
+                "metric": "close",
+            }
+        )
+        mirrors.append(mirror)
+    policy = {
+        "mode": "strict-domain",
+        "config": {
+            "semantics": {
+                "metric_ontology": {
+                    "metrics": {
+                        "stock_price": {
+                            "aliases": ["current price", "stock price", "现价"],
+                            "fields": ["stock_price", "close"],
+                        }
+                    }
+                },
+                "unit_ontology": {
+                    "units": {
+                        "usd": {
+                            "canonical": "USD",
+                            "aliases": ["USD", "$"],
+                            "scale": 1,
+                        }
+                    }
+                },
+            },
+            "rules": {"factual_claim": {"citation_required": True}},
+        },
+    }
+    result = CitationGuard(
+        _registry(price, *mirrors),
+        message_id="msg-canonical-price-over-mirrors",
+        user_prompt="Use a stop-loss threshold of 160 USD.",
+        policy_available=True,
+        quality_policy=policy,
+    ).finalize("Current price was $193.78, above the $160 stop-loss threshold.")
+
+    assert result.bundle is not None
+    assert result.text.count("citation://") == 1
+    assert len(result.bundle["citations"]) == 1
+    assert result.bundle["citations"][0]["evidence"]["metric"] == "stock_price"
+    assert result.bundle["quality"]["metrics"]["unsourcedClaimCount"] == 0
+    assert result.bundle["quality"]["metrics"]["unverifiedClaimCount"] == 0
+
+
+def test_guard_auto_binds_rounded_collection_values_and_collapses_duplicate_factor_paths() -> None:
+    data = [
+        {
+            "date": "2026-08-03",
+            "symbol": "MRVL",
+            "close": 193.775,
+            "factor_value": 203.69,
+            "indicators": {"ma(close, 20)": 203.69},
+        }
+    ]
+    raw_hash = json.dumps(
+        data,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    collection_handle = "evc_factor_ma20_12345678"
+    raw = {
+        "datas": data,
+        "_valuz_evidence": [
+            {
+                "version": 1,
+                "kind": "structured-evidence-collection",
+                "collectionHandle": collection_handle,
+                "source": {
+                    "sourceId": "reportify.factors_compute:MRVL:MA20:2026-08-03",
+                    "providerId": "reportify",
+                    "sourceType": "dataset",
+                    "sourceCategory": "derived_analytics",
+                    "title": "Reportify · factors_compute",
+                    "retrievedAt": "2026-08-03T10:00:00Z",
+                },
+                "common": {
+                    "datasetId": "reportify.factors_compute",
+                    "toolName": "factors_compute",
+                    "capturedAt": "2026-08-03T10:00:00Z",
+                },
+                "addressing": {
+                    "mode": "json-pointer",
+                    "contentRoot": "/datas",
+                    "itemsPointer": "/datas",
+                    "identityFields": ["/symbol", "/date"],
+                    "allowedPathRoots": ["/datas"],
+                },
+                "semantics": {
+                    "entity": {"symbol": "/symbol"},
+                    "asOf": {"date": "/date"},
+                    "metric": {
+                        "mode": "field-map",
+                        "fields": {"/factor_value": "moving_average_20"},
+                    },
+                },
+                "contentHash": (f"sha256:{hashlib.sha256(raw_hash.encode('utf-8')).hexdigest()}"),
+            }
+        ],
+    }
+    visible = compact_citation_tool_content(raw)
+    private = private_citation_tool_content(raw)
+    assert visible is not None and private is not None
+    registry = EvidenceRegistry()
+    assert (
+        registry.register_tool_projection(
+            visible,
+            private,
+            tool_name="factors_compute",
+            trusted_private=True,
+        )
+        == 1
+    )
+    policy = {
+        "mode": "strict-domain",
+        "config": {
+            "semantics": {
+                "metric_ontology": {
+                    "metrics": {
+                        "stock_price": {
+                            "aliases": ["current price", "stock price"],
+                            "fields": ["close"],
+                        },
+                        "moving_average_20": {
+                            "aliases": ["MA20", "ma(close, 20)"],
+                            "fields": ["moving_average_20", "factor_value"],
+                        },
+                    }
+                },
+                "unit_ontology": {
+                    "units": {
+                        "usd": {
+                            "canonical": "USD",
+                            "aliases": ["USD", "$"],
+                            "scale": 1,
+                        }
+                    }
+                },
+            },
+            "rules": {"factual_claim": {"citation_required": True}},
+        },
+    }
+    result = CitationGuard(
+        registry,
+        message_id="msg-rounded-factor-collection",
+        user_prompt="Show the current price and MA20.",
+        policy_available=True,
+        quality_policy=policy,
+    ).finalize("Current price was $193.78.\n\nMA20 was $203.69.")
+
+    assert result.bundle is not None
+    assert result.text.count("citation://") == 2
+    assert len(result.bundle["citations"]) == 2
+    assert {citation["evidence"]["metric"] for citation in result.bundle["citations"]} == {
+        "close",
+        "moving_average_20",
+    }
+    assert result.bundle["quality"]["metrics"]["unsourcedClaimCount"] == 0
+    assert result.bundle["quality"]["metrics"]["unverifiedClaimCount"] == 0
 
 
 def test_guard_auto_binds_composite_claim_to_multiple_document_excerpts() -> None:
@@ -2093,3 +2684,93 @@ def test_guard_does_not_auto_bind_ambiguous_structured_candidates() -> None:
     assert "claim_evidence_ambiguous" in {
         issue["code"] for issue in result.bundle["quality"]["issues"]
     }
+
+
+class _GuardSemanticVerifier:
+    def __init__(self) -> None:
+        self.calls: list[tuple[ClaimCandidate, tuple[EvidenceCandidate, ...]]] = []
+        self.batch_calls = 0
+
+    def verify_batch(
+        self,
+        requests: tuple[SemanticVerificationRequest, ...],
+    ) -> dict[str, SemanticVerificationResult]:
+        self.batch_calls += 1
+        results: dict[str, SemanticVerificationResult] = {}
+        for request in requests:
+            claim = request.claim
+            candidates = request.candidates
+            self.calls.append((claim, candidates))
+            results[claim.claim_id] = SemanticVerificationResult(
+                verdict="entailed",
+                evidence_handles=tuple(candidate.handle for candidate in candidates),
+                confidence=0.98,
+                covered_parts=(claim.exact,),
+                verifier_revision="guard-semantic-test-v1",
+            )
+        return results
+
+
+def test_guard_uses_bounded_semantic_verifier_for_bound_paraphrase() -> None:
+    item = _item("ev_product_mix_paraphrase")
+    item["evidence"].update(
+        {
+            "quote": "The richer product mix was the principal driver of margin expansion.",
+            "snippet": "The richer product mix was the principal driver of margin expansion.",
+        }
+    )
+    verifier = _GuardSemanticVerifier()
+    guard = CitationGuard(
+        _registry(item),
+        message_id="msg-semantic-paraphrase",
+        user_prompt="Explain the profitability improvement with a citation.",
+        policy_available=True,
+        semantic_verifier=verifier,
+    )
+
+    result = guard.finalize(
+        "Premium products improved profitability "
+        "[source](evidence://ev_product_mix_paraphrase)."
+    )
+
+    assert len(verifier.calls) >= 1
+    assert result.bundle is not None
+    assert result.bundle["quality"]["metrics"]["unverifiedClaimCount"] == 0
+    assert result.bundle["quality"]["claims"][0]["status"] in {"passed", "auto-bound"}
+
+
+def test_guard_batches_all_message_semantic_claims_in_one_verifier_call() -> None:
+    first = _item("ev_product_mix_batch")
+    first["evidence"].update(
+        {
+            "quote": "A richer mix of premium products was the main margin tailwind.",
+            "snippet": "A richer mix of premium products was the main margin tailwind.",
+        }
+    )
+    second = _item("ev_demand_batch")
+    second["evidence"].update(
+        {
+            "quote": "Order intake and the backlog remained resilient through the quarter.",
+            "snippet": "Order intake and the backlog remained resilient through the quarter.",
+        }
+    )
+    verifier = _GuardSemanticVerifier()
+    guard = CitationGuard(
+        _registry(first, second),
+        message_id="msg-semantic-batch",
+        user_prompt="Summarize profitability and demand with citations.",
+        policy_available=True,
+        semantic_verifier=verifier,
+    )
+
+    result = guard.finalize(
+        "Premium products improved profitability "
+        "[source](evidence://ev_product_mix_batch). "
+        "Demand remained strong "
+        "[source](evidence://ev_demand_batch)."
+    )
+
+    assert verifier.batch_calls == 1
+    assert len(verifier.calls) == 2
+    assert result.bundle is not None
+    assert result.bundle["quality"]["metrics"]["unverifiedClaimCount"] == 0

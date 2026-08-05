@@ -1,0 +1,24 @@
+{
+  "name": "@valuz/genui-blocks",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./styles.css": "./src/styles.css"
+  },
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src --ext .ts,.tsx",
+    "test": "vitest run --passWithNoTests --config ../../vitest.config.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@openuidev/react-lang": "^0.2.8",
+    "@openuidev/react-ui": "^0.12.1",
+    "lucide-react": "^1.8.0",
+    "react": "^19.2.0",
+    "zod": "^4.3.6"
+  }
+}

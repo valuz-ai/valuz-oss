@@ -1,0 +1,205 @@
+/*
+ * Styles for @valuz/genui-blocks.
+ *
+ * Rules for anything added here:
+ *  1. Every class is prefixed `.vgb-`. Blocks render inside the same subtree as
+ *     `.openui-*` components, so an unprefixed class would collide.
+ *  2. Colour, spacing, radius and type come from `--openui-*` custom properties
+ *     only. No literal colours — the host theme owns them.
+ *  3. Responsive behaviour uses container queries, never viewport media
+ *     queries: blocks render inside a chat column whose width is unrelated to
+ *     the viewport's. `.vgb-root` establishes the container.
+ */
+
+.vgb-root {
+  container-type: inline-size;
+  container-name: vgb;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.vgb-root *,
+.vgb-root *::before,
+.vgb-root *::after {
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+/* ── Shared surfaces ─────────────────────────────────────────────── */
+
+.vgb-surface {
+  background-color: var(--openui-highlight-subtle);
+  border: 1px solid var(--openui-border-default);
+  border-radius: var(--openui-radius-2xl);
+}
+
+.vgb-surface-flat {
+  background-color: var(--openui-highlight-subtle);
+  border-radius: var(--openui-radius-2xl);
+}
+
+/* ── Wrapping block: the layout every *Block container shares ────── */
+
+.vgb-block {
+  /* Each wrapping block is its own query container. Naming only an outer
+     `.vgb-root` measures the whole generated document, so a tile inside a
+     half-width column still sees the full width, never reaches a breakpoint,
+     and keeps a floor wider than the column it sits in — it then overflows and
+     paints over its neighbour. A block asks about *its own* row instead. */
+  container-type: inline-size;
+  container-name: vgb;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--openui-space-m);
+  width: 100%;
+}
+
+/* ── Tiles ───────────────────────────────────────────────────────── */
+
+/*
+ * The tile grid. `flex-basis` is the knob that decides how many tiles share a
+ * row: peers wrap once they can no longer hold their basis.
+ *
+ * 320px matches the reference implementation these blocks are modelled on, and
+ * it is a deliberate floor rather than a preference — below it a label and its
+ * figure stop fitting on one line and the tile reflows into two, which reads as
+ * a different component. The container queries further down relax the floor
+ * instead of letting tiles overflow: a chat column narrower than the floor has
+ * to give somewhere, and wrapping early beats a horizontal scrollbar.
+ */
+.vgb-tile {
+  display: flex;
+  flex: 1 1 320px;
+  /* `min(320px, 100%)` rather than a bare floor: a floor wider than the
+     container does not shrink the container, it overflows it — which is how a
+     tile ended up painted across the column beside it. This keeps the intent
+     (do not go narrower than 320px) while conceding to a container that simply
+     has less room than that. */
+  min-width: min(320px, 100%);
+  flex-direction: column;
+  gap: var(--openui-space-s);
+  padding: var(--openui-space-m);
+  background-color: var(--openui-highlight-subtle);
+  border-radius: var(--openui-radius-2xl);
+}
+
+.vgb-tile-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--openui-space-s);
+}
+
+/* The two halves of a label/value row. */
+.vgb-tile-slot-start,
+.vgb-tile-slot-end {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  overflow: hidden;
+}
+
+/*
+ * The figure side never shrinks. A 35% cap looks tidy until the value and its
+ * change together need more than that, at which point the number breaks
+ * mid-digit — and "26,58 / 4" does not read as a squeezed 26,584, it reads as a
+ * different number. So the label is what gives way, and the value keeps the
+ * width it needs.
+ */
+.vgb-tile-slot-end {
+  flex: 0 0 auto;
+  max-width: 70%;
+  min-width: 0;
+  gap: var(--openui-space-s);
+}
+
+.vgb-tile-slot-start {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.vgb-tile-label {
+  color: var(--openui-text-neutral-secondary);
+  font-size: var(--openui-font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.vgb-tile-value {
+  color: var(--openui-text-neutral-primary);
+  font-size: var(--openui-font-size-2xl);
+  font-weight: var(--openui-font-weight-bold);
+  font-family: var(--openui-font-numbers);
+  /* Figures are read as one token. The host stylesheet sets
+     `overflow-wrap: anywhere` on every span in scope, which is right for prose
+     and wrong for a number, so this has to say so explicitly. */
+  white-space: nowrap;
+  overflow-wrap: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.vgb-tile-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--openui-font-size-sm);
+  overflow-wrap: normal;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/*
+ * The 320px floor above is right for a full-width surface and wrong for a chat
+ * column, which is routinely narrower than two tiles and sometimes narrower
+ * than one. `min-width` has to be relaxed alongside `flex-basis` — leaving it
+ * at 320px would make a single tile overflow its own container rather than
+ * shrink, and the whole column would scroll sideways.
+ */
+@container vgb (max-width: 48rem) {
+  .vgb-tile {
+    flex-basis: 15rem;
+    min-width: min(15rem, 100%);
+  }
+}
+
+@container vgb (max-width: 30rem) {
+  .vgb-tile {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+}
+
+/* ── Text ────────────────────────────────────────────────────────── */
+
+.vgb-title {
+  color: var(--openui-text-neutral-primary);
+  font-family: var(--openui-font-heading);
+  font-weight: var(--openui-font-weight-bold);
+  overflow-wrap: anywhere;
+}
+
+.vgb-body {
+  color: var(--openui-text-neutral-secondary);
+  font-family: var(--openui-font-body);
+  font-size: var(--openui-font-size-md);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.vgb-eyebrow {
+  color: var(--openui-text-neutral-tertiary);
+  font-size: var(--openui-font-size-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* ── Scroll containment ──────────────────────────────────────────── */
+
+/*
+ * Wide content (tables, charts) scrolls inside its own box. Without this the
+ * whole chat column scrolls sideways, which moves the composer off-screen.
+ */
+.vgb-scroll-x {
+  width: 100%;
+  overflow-x: auto;
+}

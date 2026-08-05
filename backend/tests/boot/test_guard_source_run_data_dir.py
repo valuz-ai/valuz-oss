@@ -20,7 +20,9 @@ from valuz_agent.infra.config import PACKAGED_DATA_DIR, settings
 def _sandboxed_dirs(monkeypatch, tmp_path: Path):
     """Default both roots to a sandbox; each test overrides what it probes."""
     monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
-    monkeypatch.setattr(settings, "log_dir", tmp_path / "data" / "logs")
+    monkeypatch.setattr(
+        settings, "log_file_path", tmp_path / "data" / "logs" / "backend.log"
+    )
     monkeypatch.delenv("VALUZ_ALLOW_PACKAGED_DATA_DIR", raising=False)
 
 
@@ -35,21 +37,27 @@ def test_refuses_packaged_data_dir(monkeypatch) -> None:
 
 
 def test_refuses_packaged_log_dir(monkeypatch) -> None:
-    monkeypatch.setattr(settings, "log_dir", PACKAGED_DATA_DIR / "logs")
+    monkeypatch.setattr(
+        settings, "log_file_path", PACKAGED_DATA_DIR / "logs" / "backend.log"
+    )
     with pytest.raises(RuntimeError, match="log dir"):
         steps.guard_source_run_data_dir()
 
 
 def test_escape_hatch_allows_packaged_root(monkeypatch) -> None:
     monkeypatch.setattr(settings, "data_dir", PACKAGED_DATA_DIR)
-    monkeypatch.setattr(settings, "log_dir", PACKAGED_DATA_DIR / "logs")
+    monkeypatch.setattr(
+        settings, "log_file_path", PACKAGED_DATA_DIR / "logs" / "backend.log"
+    )
     monkeypatch.setenv("VALUZ_ALLOW_PACKAGED_DATA_DIR", "1")
     steps.guard_source_run_data_dir()  # must not raise
 
 
 def test_frozen_build_is_exempt(monkeypatch) -> None:
     monkeypatch.setattr(settings, "data_dir", PACKAGED_DATA_DIR)
-    monkeypatch.setattr(settings, "log_dir", PACKAGED_DATA_DIR / "logs")
+    monkeypatch.setattr(
+        settings, "log_file_path", PACKAGED_DATA_DIR / "logs" / "backend.log"
+    )
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     steps.guard_source_run_data_dir()  # must not raise
 

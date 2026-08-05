@@ -144,8 +144,8 @@ async def collect_system_status(*, port: int) -> SystemStatusResponse:
     else:
         status = "running"
 
-    log_dir = settings.log_dir
-    log_file = settings.log_file
+    log_file = settings.log_file_path
+    log_dir = log_file.parent
 
     db_path = sqlite_path_from_url(db_url())
 

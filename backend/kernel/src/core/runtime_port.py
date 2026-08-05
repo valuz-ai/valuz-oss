@@ -6,11 +6,17 @@ from typing import Any, Literal, Protocol
 
 from src.core.approval_rule_matcher import RuntimeApprovalRuleMatcher
 from src.core.events import EventSink
+from src.core.tools import ToolDef
 from src.core.types import Session, UserMessage
 
 
 class RuntimePort(Protocol):
     """Agent Runtime unified interface — Application's only runtime dependency."""
+
+    @property
+    def supports_native_continuation(self) -> bool:
+        """Whether a second ``run`` resumes the same provider-native thread."""
+        ...
 
     @property
     def approval_rule_matcher(self) -> RuntimeApprovalRuleMatcher:
@@ -42,6 +48,21 @@ class RuntimePort(Protocol):
         The runtime renders `user_message` through `build_user_prompt` (kernel
         helper) and feeds the resulting string into its SDK. Events are pushed
         via EventSink; session status is updated in place.
+        """
+        ...
+
+    async def run_task_coverage(
+        self,
+        session: Session,
+        user_message: UserMessage,
+        *,
+        no_op_tool: ToolDef,
+    ) -> None:
+        """Run one append-only continuation on the same native thread.
+
+        ``no_op_tool`` is a runtime-private terminal signal available only
+        during this invocation.  Calling it lets a model finish a no-gap pass
+        without manufacturing an assistant confirmation message.
         """
         ...
 

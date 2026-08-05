@@ -654,6 +654,24 @@ const createTurnsBuilder = () => {
 
       const turn = ensureTurn();
 
+      if (eventType === "message.assistant.sidecar") {
+        const segmentIndex = Number(payload.assistant_segment_index);
+        const bundle = parseCitationBundle(payload.citation_bundle);
+        if (Number.isInteger(segmentIndex) && segmentIndex >= 0 && bundle) {
+          const assistantBlocks = turn.blocks.filter(
+            (
+              block,
+            ): block is Extract<ConversationBlock, { kind: "assistant" }> =>
+              block.kind === "assistant" &&
+              (payload.message_id === undefined ||
+                block.messageId === payload.message_id),
+          );
+          const target = assistantBlocks[segmentIndex];
+          if (target) target.citationBundle = bundle;
+        }
+        continue;
+      }
+
       if (eventType === "session.compaction") {
         // A context compaction happened in this turn (``/compact`` or
         // autocompact). Push a single label-only marker block; the event's

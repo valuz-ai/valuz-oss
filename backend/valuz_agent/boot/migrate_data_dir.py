@@ -59,7 +59,8 @@ logger = logging.getLogger(__name__)
 # kernel ``events`` + ``messages``); v2 sweeps every text column generically.
 _MIGRATION_VERSION = 2
 
-# Name of the active log directory (mirrors ``settings.log_dir``). It holds the
+# Name of the active log directory (mirrors
+# ``settings.log_file_path.parent``). It holds the
 # RUNNING boot process's own open ``backend.log`` — structured logging is
 # configured before this migration runs — and on Windows an open file can be
 # neither deleted nor overwritten ([WinError 32] sharing violation; POSIX allows

@@ -13,6 +13,8 @@ from valuz_agent.adapters.event_sse_adapter import iter_events_sse
 from valuz_agent.api.deps import get_current_user_id, get_session_service
 from valuz_agent.infra.db import get_async_session
 from valuz_agent.infra.fs_registry import fs_registry
+from valuz_agent.modules.artifacts.datastore import ArtifactDatastore
+from valuz_agent.modules.artifacts.models import ArtifactContentRow, ArtifactRevisionRow
 from valuz_agent.modules.files.uri import build_valuz_file_uri
 from valuz_agent.modules.sessions.datastore import SessionDatastore
 from valuz_agent.modules.sessions.dto import (
@@ -1133,9 +1135,17 @@ async def delete_attachment(
 
 
 class ArtifactItem(BaseModel):
-    id: str
+    """One delivered artifact, at the version this session produced.
+
+    Field names are unchanged from when a delivery was a single mutable row, so
+    existing clients keep working; ``file_path`` now points at the immutable
+    snapshot rather than the agent's working copy, which is the same absolute
+    path the model was handed and the same one ``ref`` wraps.
+    """
+
+    id: str  # revision id — a version, not a deliverable
     session_id: str
-    file_path: str  # absolute path the agent wrote (kept for back-compat)
+    file_path: str  # absolute path of THIS version's snapshot
     # Stable file identity — the client passes this to POST /v1/files/resolve to
     # get an access address (local path or signed URL). Derived from file_path;
     # not stored. See docs/design/file-address-resolution.md.
@@ -1144,10 +1154,37 @@ class ArtifactItem(BaseModel):
     file_size: int
     mime_type: str | None = None
     created_at: int
+    # Version coordinates. The panel shows "v3" and can offer the history.
+    artifact_id: str
+    version_no: int
+    is_current: bool
 
 
 class ArtifactListResponse(BaseModel):
     items: list[ArtifactItem]
+
+
+def _artifact_item(
+    revision: ArtifactRevisionRow,
+    content: ArtifactContentRow | None,
+    *,
+    session_id: str,
+    is_current: bool,
+) -> ArtifactItem:
+    path = revision.abs_path or ""
+    return ArtifactItem(
+        id=revision.id,
+        session_id=session_id,
+        file_path=path,
+        ref=build_valuz_file_uri(path) if path else "",
+        file_name=revision.file_name,
+        file_size=content.byte_size if content else 0,
+        mime_type=content.mime_type if content else None,
+        created_at=revision.created_at,
+        artifact_id=revision.artifact_id,
+        version_no=revision.version_no,
+        is_current=is_current,
+    )
 
 
 @router.get("/{session_id}/artifacts")
@@ -1156,28 +1193,45 @@ async def list_artifacts(
     db: AsyncSession = Depends(get_async_session),
     user_id: str = Depends(get_current_user_id),
 ) -> ArtifactListResponse:
-    """Return the files the agent delivered for ``session_id``.
+    """Return the deliverables this session produced, one row each.
 
-    These are recorded by the built-in ``deliver_artifacts`` MCP tool (the
-    inverse of the upload pipeline) and rendered in the session panel's
-    "生成文件" section. Durable — no per-turn staging — so the full set is
-    returned every time.
+    Session-scoped on purpose: the panel answers "what did this conversation
+    produce", so a revision another session made to the same deliverable does
+    not appear here. ``is_current`` distinguishes a version that is still the
+    latest from one that has since been superseded — without it the panel would
+    present a stale version as the deliverable.
+
+    One row per *deliverable*, not per revision. A session that delivered the
+    same file three times produced one thing, three times — listing it three
+    times reads as three files, and now that the panel can expand a version
+    history, it would also show that history once per row. The row carries the
+    latest version THIS session produced.
     """
     if await data_reader().get_session(user_id, session_id) is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
-    rows = await SessionDatastore(db).list_artifacts(user_id, session_id)
+    ds = ArtifactDatastore(db)
+    revisions = await ds.list_session_revisions(user_id, session_id)
+    # Oldest first from the datastore, so the last write per artifact wins and
+    # each deliverable ends up on its newest version from this session.
+    latest = {rev.artifact_id: rev for rev in revisions}
+    ordered = sorted(latest.values(), key=lambda rev: rev.created_at)
+
+    # Two queries for the whole list rather than two per row — the panel reloads
+    # this on every turn end.
+    heads = await ds.get_heads(user_id, [rev.artifact_id for rev in ordered])
+    contents = await ds.get_contents(user_id, [rev.content_id for rev in ordered])
+
     return ArtifactListResponse(
         items=[
-            ArtifactItem(
-                id=r.id,
-                session_id=r.session_id,
-                file_path=r.file_path,
-                ref=build_valuz_file_uri(r.file_path),
-                file_name=r.file_name,
-                file_size=r.file_size,
-                mime_type=r.mime_type,
-                created_at=r.created_at,
+            _artifact_item(
+                revision,
+                contents.get(revision.content_id),
+                session_id=session_id,
+                is_current=(
+                    (head := heads.get(revision.artifact_id)) is not None
+                    and head.revision_id == revision.id
+                ),
             )
-            for r in rows
+            for revision in ordered
         ]
     )

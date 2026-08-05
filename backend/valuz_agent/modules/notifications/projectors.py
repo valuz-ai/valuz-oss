@@ -11,6 +11,43 @@ from __future__ import annotations
 from valuz_agent.modules.notifications.service import notification_service
 
 
+async def record_task_completion_notification(
+    *,
+    task_id: str,
+    project_id: str,
+    event_id: str,
+    summary: str | None,
+    task_title: str | None = None,
+    user_id: str,
+) -> None:
+    """Mirror one completed task event into the durable notification ledger."""
+
+    title = task_title
+    if title is None:
+        try:
+            from valuz_agent.modules.tasks import service as task_queries
+
+            task, _runs = await task_queries.get_task_with_runs(user_id, task_id)
+            title = task.title if task is not None else task_id
+        except Exception:  # noqa: BLE001
+            title = task_id
+
+    await notification_service.ingest(
+        user_id or "",
+        dedup_key=f"c:{event_id}",
+        kind="task_completed",
+        title=title or task_id,
+        body=summary or "",
+        route=f"/tasks/{task_id}",
+        action="none",
+        urgency="info",
+        task_id=task_id,
+        project_id=project_id,
+        source_event_id=event_id,
+        payload={"summary": summary or ""},
+    )
+
+
 async def record_task_failure_notification(
     *,
     task_id: str,
@@ -55,5 +92,4 @@ async def record_task_failure_notification(
         source_event_id=event_id,
         payload={"reason": reason, "event_type": event_type},
     )
-
 

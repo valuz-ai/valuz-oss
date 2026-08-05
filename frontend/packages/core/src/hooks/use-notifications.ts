@@ -124,3 +124,32 @@ export function markSessionNotificationsRead(sessionId: string): void {
     });
   }
 }
+
+/**
+ * Dismiss one notification with an OPTIMISTIC store removal — the card leaves
+ * the drawer immediately instead of waiting for the ~2.5s SSE re-snapshot
+ * (which is what made dismiss feel slow). Fire-and-forget: a failed persist
+ * self-heals on the next snapshot, which re-reads the durable ledger and
+ * restores the entry.
+ */
+export function dismissNotification(id: string): void {
+  useNotificationStore.getState().remove(id);
+  notificationsApi.dismiss(id).catch(() => {
+    // Non-fatal — the next SSE snapshot reconciles from the ledger.
+  });
+}
+
+/**
+ * The drawer's "clear all": optimistically empty the open set (badge and cards
+ * clear at once), then persist via ``:dismiss-all``. Entries move to history —
+ * a pending question stays answerable in its session.
+ */
+export function dismissAllNotifications(): void {
+  const store = useNotificationStore.getState();
+  for (const id of Array.from(store.entries.keys())) {
+    store.remove(id);
+  }
+  notificationsApi.dismissAll().catch(() => {
+    // Non-fatal — the next SSE snapshot reconciles from the ledger.
+  });
+}

@@ -1,0 +1,315 @@
+/*
+ * Market data: DataList / DataListItem, MarketIndexGrid / MarketIndexCard,
+ * MarketBreadth.
+ *
+ * These blocks render under two protocols. Under OpenUI Lang this file is the
+ * whole of their styling. Under A2UI the host's generative-UI stylesheet
+ * (`GenerativeUICard.tsx`) also matches them, through the `data-a2ui-*`
+ * attributes each block emits — that sheet uses attribute selectors, so it
+ * wins over the classes here on any declaration they share. Values below are
+ * therefore chosen to agree with it wherever both set the same property; the
+ * two exceptions, where agreement is impossible because the value depends on
+ * the data, stay inline in the component and are commented there.
+ */
+
+/* ── DataList ─────────────────────────────────────────────────────── */
+
+.vgb-data-list {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--openui-space-s);
+}
+
+/*
+ * The rows share one rule line between them: the container draws the top edge,
+ * every row draws its own bottom edge. A `border` on the container instead
+ * would box the list, which reads as a card it is not.
+ */
+.vgb-data-list-rows {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  border-top: 1px solid var(--openui-border-default);
+}
+
+/* `grid-template-columns` and `gap` are set inline — see DataList/index.tsx. */
+.vgb-data-list-row {
+  display: grid;
+  min-width: 0;
+  align-items: center;
+  padding-block: var(--openui-space-s);
+  border-bottom: 1px solid var(--openui-border-default);
+}
+
+.vgb-data-list-rank {
+  min-width: 1.5rem;
+  color: var(--openui-text-neutral-secondary);
+  font: var(--openui-text-label-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.vgb-data-list-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--openui-space-2xs);
+}
+
+.vgb-data-list-title {
+  color: var(--openui-text-neutral-primary);
+  font: var(--openui-text-body-default-heavy);
+  overflow-wrap: anywhere;
+}
+
+.vgb-data-list-description {
+  color: var(--openui-text-neutral-secondary);
+  font: var(--openui-text-label-sm);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Value and change are read down the column, not across the row, so both are
+ * right-aligned and never wrap: a figure that breaks mid-number stops being
+ * comparable with the one above it.
+ */
+.vgb-data-list-value,
+.vgb-data-list-meta {
+  font: var(--openui-text-label-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.vgb-data-list-value {
+  color: var(--openui-text-neutral-secondary);
+}
+
+.vgb-data-list-meta {
+  color: var(--openui-text-neutral-primary);
+}
+
+/* ── MarketIndexGrid / MarketIndexCard ────────────────────────────── */
+
+.vgb-market-grid {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--openui-space-m);
+}
+
+.vgb-market-grid-list {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14.5rem), 1fr));
+  gap: var(--openui-space-m-l);
+  align-items: stretch;
+}
+
+/* `min-height` is set inline — see MarketIndexGrid/index.tsx. */
+.vgb-market-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--openui-space-s);
+}
+
+.vgb-market-card-heading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--openui-space-s);
+}
+
+.vgb-market-card-name {
+  color: var(--openui-text-neutral-primary);
+  font: var(--openui-text-label-default-heavy);
+  overflow-wrap: anywhere;
+}
+
+.vgb-market-card-code {
+  color: var(--openui-text-neutral-secondary);
+  font: var(--openui-text-label-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.vgb-market-card-value {
+  color: var(--openui-text-neutral-primary);
+  font: var(--openui-text-numbers-heading-md);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/*
+ * `margin-top: auto` pins the change to the bottom of the card, so a grid of
+ * quotes lines its change figures up even when one card carries an extra line.
+ */
+.vgb-market-card-change-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--openui-space-xs);
+  margin-top: auto;
+}
+
+.vgb-market-card-change {
+  color: var(--openui-text-neutral-primary);
+  font: var(--openui-text-body-default-heavy);
+  font-variant-numeric: tabular-nums;
+}
+
+.vgb-market-card-delta {
+  color: var(--openui-text-neutral-secondary);
+  font: var(--openui-text-label-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.vgb-market-card-meta {
+  color: var(--openui-text-neutral-secondary);
+  font: var(--openui-text-label-sm);
+  overflow-wrap: anywhere;
+}
+
+.vgb-market-card-footnote {
+  color: var(--openui-text-neutral-tertiary);
+  font: var(--openui-text-label-sm);
+  overflow-wrap: anywhere;
+}
+
+/* ── MarketBreadth ────────────────────────────────────────────────── */
+
+.vgb-breadth {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--openui-space-m);
+}
+
+.vgb-breadth-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--openui-space-xs);
+}
+
+.vgb-breadth-title {
+  color: var(--openui-text-neutral-primary);
+  font: var(--openui-text-label-default-heavy);
+}
+
+.vgb-breadth-total {
+  color: var(--openui-text-neutral-secondary);
+  font: var(--openui-text-label-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.vgb-breadth-track {
+  display: flex;
+  width: 100%;
+  min-height: 8px;
+  overflow: hidden;
+  border-radius: var(--openui-radius-full);
+  /* The unfilled remainder of the breadth bar. `--openui-background-neutral-muted`
+     was used here originally but is not a token this OpenUI version defines, so
+     the track rendered with no background at all — the segments floated on the
+     card. */
+  background: var(--openui-highlight-subtle);
+}
+
+/*
+ * Advance/decline colour, in the Greater China convention: up is red, down is
+ * green. `trendTone()` in lib/tone.ts is the statement of that convention and
+ * this must agree with it — a breadth bar disagreeing with the quote card above
+ * it reads as a data error, not a styling one. Single-class selectors on
+ * purpose, so a host serving Western markets overrides with an attribute
+ * selector and wins without `!important`.
+ */
+.vgb-breadth-bar-up {
+  background: var(--openui-text-danger-primary);
+}
+
+.vgb-breadth-bar-down {
+  background: var(--openui-text-success-primary);
+}
+
+.vgb-breadth-bar-flat {
+  background: var(--openui-border-default);
+}
+
+.vgb-breadth-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--openui-space-s);
+}
+
+.vgb-breadth-stat {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--openui-space-2xs);
+}
+
+.vgb-breadth-stat-label,
+.vgb-breadth-source {
+  color: var(--openui-text-neutral-secondary);
+  font: var(--openui-text-label-sm);
+}
+
+/* ── Narrow column ────────────────────────────────────────────────── */
+
+/*
+ * One column each. The row template is `!important` because its inline value
+ * carries the ranked/unranked distinction, which stops mattering the moment
+ * every cell is on its own line.
+ */
+@container vgb (max-width: 30rem) {
+  .vgb-market-grid-list,
+  .vgb-breadth-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .vgb-data-list-row {
+    grid-template-columns: 1fr !important;
+  }
+
+  .vgb-data-list-value,
+  .vgb-data-list-meta {
+    justify-self: start;
+    text-align: left;
+  }
+}
+
+/* ── Trend colour ─────────────────────────────────────────────────── */
+
+/*
+ * Blocks emit `data-a2ui-trend` and, until now, nothing coloured it — an index
+ * card's change figure rendered in body text, so a fall looked identical to a
+ * rise. Same convention as everywhere else: up red, down green (see
+ * `trendTone()` in lib/tone.ts).
+ *
+ * Scoped to the change figures rather than the whole card: colouring the name
+ * and the price too would turn a red day into a wall of red and cost the
+ * change figure the emphasis that makes it readable at a glance.
+ */
+[data-a2ui-trend="up"] .vgb-market-card-change,
+[data-a2ui-trend="up"] .vgb-market-card-delta,
+[data-a2ui-trend="up"] .vgb-data-list-meta {
+  color: var(--openui-text-danger-primary);
+}
+
+[data-a2ui-trend="down"] .vgb-market-card-change,
+[data-a2ui-trend="down"] .vgb-market-card-delta,
+[data-a2ui-trend="down"] .vgb-data-list-meta {
+  color: var(--openui-text-success-primary);
+}
+
+[data-a2ui-trend="flat"] .vgb-market-card-change,
+[data-a2ui-trend="flat"] .vgb-market-card-delta,
+[data-a2ui-trend="flat"] .vgb-data-list-meta {
+  color: var(--openui-text-neutral-secondary);
+}

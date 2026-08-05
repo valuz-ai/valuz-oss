@@ -22,7 +22,13 @@ import valuz_agent.boot.kernel  # noqa: F401 — sets sys.path for ``src`` / ``a
 from src.core.agent_config import AgentConfig
 from src.core.events import Event
 from src.core.orchestrator import SessionOrchestrator
-from src.core.types import BARE_COMPLETION_METADATA_KEY, EndTurn, Session, UserMessage
+from src.core.types import (
+    BARE_COMPLETION_METADATA_KEY,
+    EndTurn,
+    Error,
+    Session,
+    UserMessage,
+)
 
 
 class _FakeStore:
@@ -79,6 +85,128 @@ class _FakeRuntime:
 
     async def close(self) -> None:
         pass
+
+
+async def test_run_turn_does_not_create_pending_task_clarification(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    session = Session(
+        id="sess-pending-turns",
+        agent_config=AgentConfig(id="agent-1", name="tester"),
+        cwd=str(tmp_path),
+        user_id="owner-1",
+        status="created",
+        metadata={"valuz": {"task_coverage_enabled": True}},
+    )
+    store = _FakeStore(session)
+    orch = SessionOrchestrator(store)  # type: ignore[arg-type]
+
+    def create_runtime(*_args, **_kwargs) -> _FakeRuntime:
+        return _FakeRuntime(store)
+
+    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
+
+    await orch.run_turn(
+        "owner-1",
+        session.id,
+        UserMessage(
+            text="按用户给定的连续季度阈值判断是否触发，不重新制定规则。"
+        ),
+    )
+
+    assert "pending_task_clarification" not in store._session.metadata["valuz"]
+
+    await orch.run_turn(
+        "owner-1",
+        session.id,
+        UserMessage(text="连续季度阈值为 50%，继续按原任务检查。"),
+    )
+
+    assert "pending_task_clarification" not in store._session.metadata["valuz"]
+
+
+async def test_missing_context_is_left_to_the_native_runtime(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    session = Session(
+        id="sess-host-clarification",
+        agent_config=AgentConfig(id="agent-1", name="tester"),
+        cwd=str(tmp_path),
+        user_id="owner-1",
+        status="created",
+        metadata={"valuz": {"task_coverage_enabled": True}},
+    )
+    store = _FakeStore(session)
+    orch = SessionOrchestrator(store)  # type: ignore[arg-type]
+
+    runtime = _FakeRuntime(store)
+
+    monkeypatch.setattr(
+        "src.runtimes.factory.create_runtime",
+        lambda *_args, **_kwargs: runtime,
+    )
+
+    message = await orch.run_turn(
+        "owner-1",
+        session.id,
+        UserMessage(text="按用户给定的连续季度阈值判断是否触发，不重新制定规则。"),
+    )
+
+    assert runtime.types_at_run == ["user_message", "session_update"]
+    assert message.assistant_message is None
+    assert not any(event.type in {"tool_use", "tool_result"} for event in store.appended)
+    assert "pending_task_clarification" not in store._session.metadata["valuz"]
+
+
+async def test_failed_turn_does_not_restore_legacy_pending_task_clarification(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    session = Session(
+        id="sess-pending-failed-resume",
+        agent_config=AgentConfig(id="agent-1", name="tester"),
+        cwd=str(tmp_path),
+        user_id="owner-1",
+        status="created",
+        metadata={
+            "valuz": {
+                "task_coverage_enabled": True,
+                "pending_task_clarification": {
+                    "version": 1,
+                    "originalRequest": "按用户给定的连续季度阈值判断是否触发。",
+                    "missingInputs": ["连续季度阈值"],
+                    "supplements": [],
+                },
+            }
+        },
+    )
+    store = _FakeStore(session)
+    orch = SessionOrchestrator(store)  # type: ignore[arg-type]
+
+    class _FailingRuntime(_FakeRuntime):
+        async def run(self, session: Session, user_message: UserMessage) -> None:
+            self.types_at_run = [e.type for e in self._store.appended]
+            session.status = "idle"
+            session.stop_reason = Error(
+                category="execution_error",
+                message="transient provider stream failure",
+            )
+
+    monkeypatch.setattr(
+        "src.runtimes.factory.create_runtime",
+        lambda *_args, **_kwargs: _FailingRuntime(store),
+    )
+
+    message = await orch.run_turn(
+        "owner-1",
+        session.id,
+        UserMessage(text="连续季度阈值为 50%，继续按原任务检查。"),
+    )
+
+    assert message.status == "errored"
+    assert "pending_task_clarification" not in store._session.metadata["valuz"]
 
 
 async def test_run_turn_emits_running_session_update_before_runtime(tmp_path, monkeypatch) -> None:
@@ -204,7 +332,12 @@ async def test_run_turn_does_not_repair_an_unresolved_claim(tmp_path, monkeypatc
         user_id="owner-1",
         status="created",
         skills=("/bundled/skills/citation",),
-        metadata={"valuz": {"citation_verification_enabled": True}},
+        metadata={
+            "valuz": {
+                "citation_verification_enabled": True,
+                "task_coverage_enabled": False,
+            }
+        },
     )
     store = _FakeStore(session)
     orch = SessionOrchestrator(store)  # type: ignore[arg-type]
@@ -232,47 +365,3 @@ async def test_run_turn_does_not_repair_an_unresolved_claim(tmp_path, monkeypatc
     assert "Revenue declined." in message.assistant_message
     assert [event.type for event in store.appended].count("assistant_message") == 1
     assert [event.type for event in store.appended].count("session_idle") == 1
-
-
-async def test_unresolved_claim_does_not_refresh_credentials_for_repair(
-    tmp_path, monkeypatch
-) -> None:
-    agent = AgentConfig(id="agent-1", name="tester")
-    session = Session(
-        id="sess-refresh",
-        agent_config=agent,
-        cwd=str(tmp_path),
-        user_id="owner-1",
-        status="created",
-        skills=("/bundled/skills/citation",),
-        metadata={"valuz": {"citation_verification_enabled": True}},
-    )
-    store = _FakeStore(session)
-    orch = SessionOrchestrator(store)  # type: ignore[arg-type]
-    runtimes: list[_CitationRepairRuntime] = []
-    refresh_calls: list[tuple[str, str]] = []
-
-    async def refresh(user_id: str, session_id: str) -> bool:
-        refresh_calls.append((user_id, session_id))
-        return True
-
-    orch.set_citation_repair_refresh_hook(refresh)
-
-    def create_runtime(*args, **kwargs) -> _CitationRepairRuntime:  # noqa: ANN002, ANN003
-        runtime = _CitationRepairRuntime(args[2])
-        runtimes.append(runtime)
-        return runtime
-
-    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
-
-    message = await orch.run_turn(
-        "owner-1",
-        "sess-refresh",
-        UserMessage(text="Answer with citations"),
-    )
-
-    assert refresh_calls == []
-    assert len(runtimes) == 1
-    assert runtimes[0].prompts == ["Answer with citations"]
-    assert message.assistant_message is not None
-    assert "Revenue declined." in message.assistant_message

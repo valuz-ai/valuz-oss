@@ -14,14 +14,28 @@ vi.mock("@openuidev/react-ui", () => ({
   // real style-injection/context machinery here.
   ThemeProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
-vi.mock("@openuidev/react-ui/genui-lib", () => ({
-  openuiLibrary: {},
+vi.mock("@openuidev/react-ui/Modal", () => ({
+  Modal: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
+// The OpenUI Lang branch no longer builds its library from OpenUI's alone — it
+// merges in @valuz/genui-blocks. Stubbing the factory keeps this file about the
+// card's own behaviour; the merge itself is covered by that package's tests and
+// by GenerativeUICard.blocks.test.tsx, which use the real parser rather than a
+// stub Renderer.
+vi.mock("@valuz/genui-blocks", () => ({
+  createValuzLibrary: () => ({}),
+  // A2UIRenderer builds its component registry from these; this file exercises
+  // the card's chrome, so an empty registry is the point — no block should be
+  // needed to render it.
+  blockComponents: [],
+  blockNames: [],
 }));
 vi.mock("../../hooks/use-i18n", () => ({
   useI18n: () => ({ t: (k: string) => k }),
 }));
 
-import { GenerativeUICard, extractContentText } from "./GenerativeUICard";
+import { GenerativeUICard } from "./GenerativeUICard";
+import { extractContentText } from "./generative-ui-payload";
 
 describe("GenerativeUICard", () => {
   it("renders the OpenUI Renderer with the openui payload", () => {
@@ -65,19 +79,35 @@ describe("GenerativeUICard", () => {
       .join("\n");
 
     expect(styles).toContain("container-type: inline-size");
+    expect(styles).toContain("container-name: genui-inline");
     expect(styles).toContain("flex-basis: max-content !important");
-    expect(styles).toContain("@container (max-width: 34rem)");
+    expect(styles).toContain("@container genui-inline (max-width: 48rem)");
+    expect(styles).toContain("@container genui-inline (max-width: 34rem)");
     expect(styles).toContain("flex-basis: 100% !important");
     expect(styles).toContain(":has(> .openui-card:nth-child(3)) > .openui-card");
     expect(styles).toContain(".openui-card-sunk");
     expect(styles).toContain(
       "> :not([class]):has(> .openui-tag):has(> :nth-child(2) .openui-markdown-renderer)",
     );
-    expect(styles).toContain("flex: 1 1 15rem");
+    expect(styles).toContain("flex: 1 1 16rem");
     expect(styles).toContain(
       "padding: var(--openui-space-l)",
     );
-    expect(styles).toContain("background: var(--color-surface-soft)");
+    expect(styles).toContain("background: var(--openui-foreground)");
+    expect(styles).toContain("border-color: var(--openui-border-default)");
+    expect(styles).not.toContain("box-shadow: var(--openui-shadow-s)");
+    expect(styles).toContain('[data-a2ui-card-content]');
+    expect(styles).toContain('[data-a2ui-metric-value]');
+    expect(styles).toContain('[data-a2ui-component="market-index-grid"]');
+    expect(styles).toContain('[data-a2ui-component="market-index-card"]');
+    expect(styles).toContain("[data-a2ui-market-index-value]");
+    expect(styles).toContain('[data-a2ui-component="finance-metric"]');
+    expect(styles).toContain('[data-a2ui-component="data-list"]');
+    expect(styles).toContain("[data-a2ui-data-list-row]");
+    expect(styles).toContain("[data-a2ui-data-list-main]");
+    expect(styles).toContain('[data-a2ui-component="market-breadth"]');
+    expect(styles).toContain("[data-a2ui-market-breadth-track]");
+    expect(styles).toContain("repeat(auto-fit, minmax(min(100%, 14.5rem), 1fr))");
     expect(styles).toContain("background: transparent");
     expect(styles).toContain(".openui-table-container");
     expect(styles).toContain("border-radius: 0");

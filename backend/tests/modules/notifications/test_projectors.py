@@ -83,7 +83,10 @@ def _seed_task(db_factory, *, task_id="t1", project_id="w1", subtask_key="arch")
 def _notifs(db_factory):
     db = db_factory()
     try:
-        return list(db.execute(select(NotificationRow).order_by(NotificationRow.created_at)).scalars())
+        result = db.execute(
+            select(NotificationRow).order_by(NotificationRow.created_at)
+        )
+        return list(result.scalars())
     finally:
         db.close()
 
@@ -186,3 +189,36 @@ def test_failure_deduped_by_event_id(db_factory) -> None:
 
     asyncio.run(run())
     assert len(_notifs(db_factory)) == 1
+
+
+def test_completed_task_projects_informational_notification(db_factory) -> None:
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.tasks.events import finalize_task
+
+    _seed_task(db_factory)
+
+    async def run() -> None:
+        async with async_unit_of_work() as db:
+            await finalize_task(
+                db,
+                user_id=OWNER,
+                project_id="w1",
+                task_id="t1",
+                status="completed",
+                event_type="task_completed",
+                actor="lead",
+                session_id="lead-session",
+                payload={"summary": "报告已经生成"},
+            )
+
+    asyncio.run(run())
+
+    rows = _notifs(db_factory)
+    assert len(rows) == 1
+    notification = rows[0]
+    assert notification.kind == "task_completed"
+    assert notification.title == "季度报告"
+    assert notification.body == "报告已经生成"
+    assert notification.action == "none"
+    assert notification.urgency == "info"
+    assert notification.route == "/tasks/t1"

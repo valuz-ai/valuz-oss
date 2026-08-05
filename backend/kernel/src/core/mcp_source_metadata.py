@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 MCP_SOURCE_METADATA_KEY = "cn.valuz/citation-source"
 MCP_SOURCE_TRANSPORT_KEY = "_valuz_mcp_source_transport_v1"
@@ -28,6 +29,7 @@ _MAX_STRING_CHARS = 4_096
 _SUPPORTED_RESOURCE_KINDS = {
     "document-discovery",
     "document-chunks",
+    "document-summary",
     "structured-collection",
     "operational",
 }
@@ -40,6 +42,7 @@ class McpSourceAdaptation:
     model_content: Any
     resource_kinds: frozenset[str]
     provider_id: str
+    evidence_count: int = 0
 
     @property
     def discovery_only(self) -> bool:
@@ -50,10 +53,7 @@ class McpSourceAdaptation:
 
     @property
     def citable(self) -> bool:
-        return bool(
-            self.resource_kinds
-            & {"document-chunks", "structured-collection"}
-        )
+        return self.evidence_count > 0
 
 
 def wrap_mcp_result_metadata_for_transport(
@@ -192,6 +192,23 @@ def adapt_mcp_source_result(
             if chunk_envelopes is None:
                 return None
             envelopes.extend(chunk_envelopes)
+        elif kind == "document-summary":
+            summary_envelopes = _document_summary_envelopes(
+                target,
+                descriptor=descriptor,
+                resource=raw_resource,
+                captured_at=captured_at,
+            )
+            if summary_envelopes is None:
+                return None
+            envelopes.extend(summary_envelopes)
+        elif kind == "document-discovery":
+            # Discovery rows select what to read next.  Even their title or
+            # doc_id cannot support a business claim, and exposing a generic
+            # metadata Collection lets models bind arbitrary prose to search
+            # result fields.  Keep the rows in Model Content and Task Coverage
+            # only; document_fetch/kb_search supplies citable chunks.
+            continue
         elif kind == "structured-collection":
             collection = _structured_collection_envelope(
                 target,
@@ -216,6 +233,7 @@ def adapt_mcp_source_result(
         model_content=model_content,
         resource_kinds=frozenset(kinds),
         provider_id=provider_id,
+        evidence_count=len(envelopes),
     )
 
 
@@ -243,8 +261,10 @@ def _structured_content_from_wire(value: Any) -> Any | None:
 
 
 def _content_from_wire(value: Any) -> Any:
-    if isinstance(value, Mapping) and "content" in value and (
-        "_meta" in value or "meta" in value or "structuredContent" in value
+    if (
+        isinstance(value, Mapping)
+        and "content" in value
+        and ("_meta" in value or "meta" in value or "structuredContent" in value)
     ):
         return value["content"]
     return value
@@ -267,6 +287,17 @@ def _document_envelopes(
     resource: Mapping[str, Any],
     captured_at: str,
 ) -> list[dict[str, Any]] | None:
+    operation = descriptor.get("operation")
+    operation = operation if isinstance(operation, Mapping) else {}
+    operation_tool = str(operation.get("toolName") or "").rsplit("__", 1)[-1]
+    if operation_tool == "document_raw_content":
+        # Older Reportify metadata described the root ``content`` string as
+        # one document chunk and reused doc_id as chunkId.  Raw content is a
+        # retrieval substrate; targeted grep/search creates the actual local
+        # Evidence.  This is operation-specific, not a blanket size rule:
+        # document_fetch may legitimately return one real chunk for a short
+        # or naturally indivisible document.
+        return []
     root_pointer = _pointer(resource.get("rootPointer"))
     items_pointer = _pointer(resource.get("itemsPointer"))
     mapping = resource.get("mapping")
@@ -301,11 +332,14 @@ def _document_envelopes(
         document_id = _mapped_value(doc_base, document.get("documentId")) or source_id
         if not source_id or not document_id:
             continue
-        title = _mapped_value(doc_base, document.get("title")) or f"Document · {document_id}"
         version = _mapped_value(doc_base, document.get("documentVersion"))
         published_at = _mapped_value(doc_base, document.get("publishedAt"))
         url = _mapped_value(doc_base, document.get("url"))
         category = _mapped_value(doc_base, document.get("providerCategory"))
+        title = _mapped_value(doc_base, document.get("title")) or _fallback_document_title(
+            url,
+            category=category,
+        )
         quote = text.strip()[:_MAX_QUOTE_CHARS]
         if not isinstance(chunk_id, (str, int)) or not str(chunk_id).strip():
             continue
@@ -315,7 +349,12 @@ def _document_envelopes(
             source_id=str(source_id),
             document_id=str(document_id),
             title=str(title),
-            version=str(version or published_at or "") or None,
+            # Publication time identifies when a document was issued, not
+            # which immutable content/locator snapshot produced this chunk.
+            # Substituting it for a missing version makes a later canonical
+            # content hash look like a document change even when the cited
+            # chunk and quote are unchanged.
+            version=str(version or "") or None,
             published_at=published_at,
             url=url,
             category=category,
@@ -345,6 +384,114 @@ def _document_envelopes(
             }
         )
     return output
+
+
+def _document_summary_envelopes(
+    target: Any,
+    *,
+    descriptor: Mapping[str, Any],
+    resource: Mapping[str, Any],
+    captured_at: str,
+) -> list[dict[str, Any]] | None:
+    """Materialize one fetched document summary as direct text Evidence.
+
+    This resource covers provider-authored text that is already present once in
+    the opened-document result but is not represented by any returned chunk.
+    It deliberately has no fake chunk id, page, or bbox.  Raw-document tools
+    remain retrieval substrates and cannot promote the whole body through this
+    lower-confidence summary path.
+    """
+
+    operation = descriptor.get("operation")
+    operation = operation if isinstance(operation, Mapping) else {}
+    operation_tool = str(operation.get("toolName") or "").rsplit("__", 1)[-1]
+    if operation_tool == "document_raw_content":
+        return []
+    if resource.get("authority") != "derived":
+        return None
+    resource_id = _bounded_string(resource.get("resourceId"), 512)
+    root_pointer = _pointer(resource.get("rootPointer"))
+    text_pointer = _pointer(resource.get("textPointer"))
+    document = resource.get("document")
+    locator_spec = resource.get("locator")
+    if (
+        not resource_id
+        or root_pointer is None
+        or text_pointer is None
+        or not isinstance(document, Mapping)
+        or document.get("scope") != "resource"
+        or not isinstance(locator_spec, Mapping)
+        or locator_spec.get("kind") != "external"
+    ):
+        return None
+    found, root = _resolve_pointer(target, root_pointer)
+    if not found or not isinstance(root, Mapping):
+        return None
+    found, text = _resolve_pointer(root, text_pointer)
+    if not found or not isinstance(text, str) or not text.strip():
+        return None
+    quote = text.strip()
+    if len(quote) > _MAX_QUOTE_CHARS:
+        return None
+    source_id = _mapped_value(root, document.get("sourceId"))
+    document_id = _mapped_value(root, document.get("documentId")) or source_id
+    if not source_id or not document_id:
+        return None
+    version = _mapped_value(root, document.get("documentVersion"))
+    published_at = _mapped_value(root, document.get("publishedAt"))
+    url = _mapped_value(root, document.get("url"))
+    category = _mapped_value(root, document.get("providerCategory"))
+    title = _mapped_value(root, document.get("title")) or _fallback_document_title(
+        url,
+        category=category,
+    )
+    source = _document_source(
+        descriptor,
+        source_id=str(source_id),
+        document_id=str(document_id),
+        title=str(title),
+        version=str(version or published_at or "") or None,
+        published_at=published_at,
+        url=url,
+        category=category or "document_summary",
+        captured_at=captured_at,
+    )
+    fragment = _bounded_string(locator_spec.get("fragment"), 512)
+    if not fragment:
+        return None
+    provider = descriptor.get("provider")
+    provider = provider if isinstance(provider, Mapping) else {}
+    digest = hashlib.sha256(
+        (
+            f"{provider.get('id')}\0{resource_id}\0{document_id}\0"
+            f"{text_pointer}\0{hashlib.sha256(quote.encode()).hexdigest()}"
+        ).encode()
+    ).hexdigest()[:24]
+    return [
+        {
+            "evidenceHandle": f"ev_mcp_{digest}",
+            "source": source,
+            "evidence": {
+                "kind": "text",
+                "quote": quote,
+                "snippet": quote[:4_000],
+                "capturedAt": captured_at,
+                "contentHash": f"sha256:{hashlib.sha256(quote.encode()).hexdigest()}",
+            },
+            "locator": {"kind": "external", "fragment": fragment},
+        }
+    ]
+
+
+def _fallback_document_title(value: Any, *, category: Any) -> str:
+    """Return a readable fallback without exposing an opaque document id."""
+
+    if isinstance(value, str) and value.strip():
+        parsed = urlparse(value.strip())
+        if parsed.hostname:
+            return parsed.hostname.removeprefix("www.")[:1_024]
+    normalized_category = str(category or "").replace("_", " ").strip()
+    return normalized_category[:1_024] or "Document"
 
 
 def _document_source(
@@ -463,15 +610,28 @@ def _structured_collection_envelope(
         return None
     if addressing.get("mode") != "json-pointer":
         return None
+    items_pointer = _pointer(resource.get("itemsPointer")) or root_pointer
+    if not _pointer_inside(items_pointer, root_pointer):
+        return None
     allowed_roots = addressing.get("allowedPathRoots")
-    if not isinstance(allowed_roots, list) or not allowed_roots:
+    allowed_item_paths = addressing.get("allowedItemPaths")
+    if not (
+        (isinstance(allowed_roots, list) and allowed_roots)
+        or (isinstance(allowed_item_paths, list) and allowed_item_paths)
+    ):
         return None
     normalized_roots: list[str] = []
-    for root in allowed_roots:
+    for root in allowed_roots if isinstance(allowed_roots, list) else []:
         pointer = _pointer(root)
         if pointer is None or not _pointer_inside(pointer, root_pointer):
             return None
         normalized_roots.append(pointer)
+    normalized_item_paths: list[str] = []
+    for item_path in allowed_item_paths if isinstance(allowed_item_paths, list) else []:
+        pointer = _pointer(item_path)
+        if pointer in {None, ""}:
+            return None
+        normalized_item_paths.append(pointer)
     dataset_id = _bounded_string(dataset.get("id"), 512)
     resource_id = _bounded_string(resource.get("resourceId"), 512)
     if not dataset_id or not resource_id:
@@ -512,14 +672,15 @@ def _structured_collection_envelope(
     collection_addressing: dict[str, Any] = {
         "mode": "json-pointer",
         "contentRoot": root_pointer,
-        "itemsPointer": _pointer(resource.get("itemsPointer")) or root_pointer,
+        "itemsPointer": items_pointer,
         "identityFields": [
-            pointer
-            for value in identity_fields[:32]
-            if (pointer := _pointer(value)) is not None
+            pointer for value in identity_fields[:32] if (pointer := _pointer(value)) is not None
         ],
-        "allowedPathRoots": normalized_roots,
     }
+    if normalized_roots:
+        collection_addressing["allowedPathRoots"] = normalized_roots
+    if normalized_item_paths:
+        collection_addressing["allowedItemPaths"] = normalized_item_paths
     if normalized_schema:
         collection_addressing["fieldSchemaRef"] = normalized_schema
     return {

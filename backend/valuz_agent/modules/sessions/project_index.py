@@ -85,9 +85,7 @@ async def list_session_ids(
     if user_id is None:
         raise ValueError("user_id is required")
     async with async_unit_of_work(commit=False) as db:
-        stmt = select(ProjectSessionRow.session_id).where(
-            ProjectSessionRow.user_id == user_id
-        )
+        stmt = select(ProjectSessionRow.session_id).where(ProjectSessionRow.user_id == user_id)
         if project_id is not None:
             stmt = stmt.where(ProjectSessionRow.project_id == project_id)
         if kind is not None:

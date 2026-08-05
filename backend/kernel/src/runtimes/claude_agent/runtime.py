@@ -72,23 +72,15 @@ from src.core.approval_rule_matcher import (
     RuntimeApprovalRuleMatcher,
     _permission_update_to_dict,
 )
-from src.core.citation import compact_citation_tool_content, private_citation_tool_content
+from src.core.citation import (
+    compact_citation_tool_content,
+    private_citation_tool_content,
+    rebase_collection_projections,
+)
 from src.core.citation_document_search import (
     augment_indexed_document_evidence,
     extract_raw_document,
     grep_document_evidence,
-    request_search_terms,
-    targeted_document_evidence,
-)
-from src.core.citation_research_budget import (
-    DOCUMENT_FETCH_CHUNK_LIMIT,
-    TRANSCRIPT_DISCOVERY_RESULT_FLOOR,
-    TRANSCRIPT_DISCOVERY_TOOLS,
-    TRANSCRIPT_INDEXED_CHUNK_LIMIT,
-    CitationResearchBudget,
-    is_document_discovery_tool,
-    is_stable_general_knowledge_query,
-    prioritize_discovery_documents,
 )
 from src.core.events import (
     AVAILABLE_DECISIONS_CLARIFYING,
@@ -99,7 +91,6 @@ from src.core.events import (
 )
 from src.core.hooks import Hooks
 from src.core.mcp_source_metadata import adapt_mcp_source_result
-from src.core.output_contract import parse_output_contract
 from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
 from src.core.tools import ExecContext, ToolDef, ToolKit, ToolResult
@@ -172,8 +163,6 @@ _PERSISTED_OUTPUT_PATH_RE = re.compile(
 # default so a large result can't crash the session.
 # See https://github.com/valuz-ai/valuz-oss/issues/74.
 _MAX_BUFFER_SIZE: int = 32 * 1024 * 1024  # 32 MB
-_DISCOVERY_RESULT_LIMIT: int = 4
-_DISCOVERY_SUMMARY_LIMIT: int = 360
 
 
 # Workflows contributor to ``_build_settings``. Dynamic workflows /
@@ -361,6 +350,8 @@ _TERMINAL_BG_TASK_STATUSES = frozenset({"completed", "failed", "stopped"})
 class ClaudeAgentRuntime:
     """Wraps Claude Agent SDK (ClaudeSDKClient) as a RuntimePort implementation."""
 
+    supports_native_continuation = True
+
     def __init__(
         self,
         config: AgentConfig,
@@ -447,13 +438,9 @@ class ClaudeAgentRuntime:
         # matching ToolResultBlock and reset at each user turn.
         self._citation_tool_result_sidecars: dict[str, str] = {}
         self._citation_compaction_enabled: bool = True
-        self._citation_research_budget = CitationResearchBudget()
         self._citation_transcript_documents: set[str] = set()
         self._citation_raw_documents: dict[str, dict[str, Any]] = {}
         self._citation_document_metadata: dict[str, dict[str, Any]] = {}
-        self._citation_user_query = ""
-        self._citation_no_research_scope = False
-        self._citation_requested_period_count: int | None = None
 
         # Slice 3 — approval contract.
         # ``_pending_futures`` maps pending_id → asyncio.Future that
@@ -591,17 +578,9 @@ class ClaudeAgentRuntime:
         self._workflow_pollers = []
         self._active_workflows = []
         self._citation_tool_result_sidecars = {}
-        self._citation_research_budget.reset()
         self._citation_transcript_documents = set()
         self._citation_raw_documents = {}
         self._citation_document_metadata = {}
-        self._citation_user_query = user_message.text
-        self._citation_requested_period_count = (
-            parse_output_contract(user_message.text).requested_period_count
-        )
-        self._citation_no_research_scope = is_stable_general_knowledge_query(
-            user_message.text
-        )
         self._cur_session_id = session.id
         self._cancelled = False
         # Reset stderr buffer so any ``session_error`` from this turn
@@ -637,14 +616,6 @@ class ClaudeAgentRuntime:
                 cwd=self.workspace_root,
                 now=datetime.now().astimezone(),
             )
-            if self._citation_no_research_scope:
-                prompt = (
-                    f"{prompt}\n\n"
-                    "[Routing decision: This is a stable general-knowledge definition "
-                    "or formula explanation. Answer directly without tools, citations, "
-                    "or evidence links. Do not imply that the answer contains current "
-                    "data. Any numeric formula example must be clearly hypothetical.]"
-                )
             self._active_client = self._client
             self._active_task = asyncio.current_task()
             await self._client.query(prompt)
@@ -679,6 +650,7 @@ class ClaudeAgentRuntime:
                 message="cancelled",
             )
             await self._destroy_client()
+
         except Exception as exc:
             session.status = "idle"
             if self._cancelled:
@@ -792,6 +764,30 @@ class ClaudeAgentRuntime:
             # clean turn.
             if not self._cancelled and self._client is not None:
                 self._start_idle_drainer(session)
+
+    async def run_task_coverage(
+        self,
+        session: Session,
+        user_message: UserMessage,
+        *,
+        no_op_tool: ToolDef,
+    ) -> None:
+        """Resume the same Claude session with a turn-scoped private tool."""
+
+        previous = self.toolkit.get(no_op_tool.name)
+        self.toolkit.register(no_op_tool)
+        # Claude SDK fixes in-process MCP tools at client construction.  A
+        # rebuild resumes ``session.runtime_session_id`` rather than creating
+        # a fresh conversation.
+        await self._destroy_client()
+        try:
+            await self.run(session, user_message)
+        finally:
+            if previous is None:
+                self.toolkit.unregister(no_op_tool.name)
+            else:
+                self.toolkit.register(previous)
+            await self._destroy_client()
 
     # -- Background tasks: turn brackets, wake-up turns, idle drainer --
     #
@@ -1648,14 +1644,12 @@ class ClaudeAgentRuntime:
             perm = "plan"
         else:
             perm = PERMISSION_MAP.get(session.permission_mode, "default")
-        raw_metadata = getattr(session, "metadata", None)
-        metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
-        valuz_metadata = metadata.get("valuz")
-        valuz_metadata = valuz_metadata if isinstance(valuz_metadata, dict) else {}
-        self._citation_compaction_enabled = (
-            valuz_metadata.get("citation_enabled") is not False
-            and not is_bare_completion(session)
-        )
+        # Source metadata capture is shared Evidence infrastructure, not a
+        # user-visible Citation feature.  Keep the tool hook active even when
+        # Citation and Audit are both disabled; the switches only decide
+        # whether the Host later projects or verifies the registered data.
+        # Bare completions have no tool surface, so the hook remains omitted.
+        self._citation_compaction_enabled = not is_bare_completion(session)
         sdk_hooks = self._map_hooks()
 
         system_prompt = self._build_system_prompt(session)
@@ -2054,52 +2048,6 @@ class ClaudeAgentRuntime:
                             continue_=False,
                             stopReason=r.reason or "blocked",
                         )
-                if self._citation_compaction_enabled:
-                    tool_name = str(data.get("tool_name") or "")
-                    tool_input = data.get("tool_input")
-                    normalized_input = self._citation_normalized_tool_input(
-                        tool_name=tool_name,
-                        tool_input=tool_input,
-                    )
-                    guarded_input = normalized_input or tool_input
-                    small_window_reason = self._citation_small_document_window_reason(
-                        tool_name=tool_name,
-                        tool_input=guarded_input,
-                    )
-                    if small_window_reason:
-                        return SyncHookJSONOutput(
-                            hookSpecificOutput={
-                                "hookEventName": "PreToolUse",
-                                "permissionDecision": "deny",
-                                "permissionDecisionReason": small_window_reason,
-                            }
-                        )
-                    reason = self._citation_research_guard_reason(
-                        tool_name=tool_name,
-                        tool_input=guarded_input,
-                    )
-                    if reason:
-                        return SyncHookJSONOutput(
-                            hookSpecificOutput={
-                                "hookEventName": "PreToolUse",
-                                "permissionDecision": "deny",
-                                "permissionDecisionReason": reason,
-                            }
-                        )
-                    if normalized_input is not None:
-                        return SyncHookJSONOutput(
-                            hookSpecificOutput={
-                                "hookEventName": "PreToolUse",
-                                "permissionDecision": "allow",
-                                "updatedInput": normalized_input,
-                                "additionalContext": (
-                                    "A broad transcript discovery request was expanded "
-                                    "once so the bounded visible results can cover distinct "
-                                    "fiscal periods. Do not issue another discovery query "
-                                    "unless a requested period is still absent."
-                                ),
-                            }
-                        )
                 return SyncHookJSONOutput()
 
             sdk_hooks["PreToolUse"] = [HookMatcher(hooks=[pre_tool_use])]
@@ -2146,80 +2094,44 @@ class ClaudeAgentRuntime:
                     "operational"
                 }:
                     effective_tool_response = source_adaptation.model_content
+                simple_name = tool_name.rsplit("__", 1)[-1].lower()
+                if (
+                    source_adaptation is not None
+                    and not source_adaptation.citable
+                    and simple_name == "kb_search"
+                ):
+                    # Keep parity with DeepAgents during rolling MCP metadata
+                    # upgrades: an exact indexed chunk remains locally
+                    # provable even when the provider temporarily labels the
+                    # result as discovery/non-citable.
+                    augmented_indexed_content = augment_indexed_document_evidence(
+                        effective_tool_response,
+                        tool_name=tool_name,
+                        captured_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    )
+                    if augmented_indexed_content is not None:
+                        effective_tool_response = augmented_indexed_content
                 self._record_citation_discovery_documents(
                     tool_name=tool_name,
                     tool_response=effective_tool_response,
                 )
-                self._record_citation_document_fetch(
-                    tool_name=tool_name,
-                    tool_input=data.get("tool_input"),
-                    tool_response=effective_tool_response,
-                )
-                simple_name = tool_name.rsplit("__", 1)[-1].lower()
                 if simple_name == "document_raw_content":
                     raw_document = extract_raw_document(effective_tool_response)
                     if raw_document is not None:
                         document_id = str(
-                            raw_document.get("doc_id")
-                            or raw_document.get("document_id")
-                            or ""
+                            raw_document.get("doc_id") or raw_document.get("document_id") or ""
                         )
                         metadata = self._citation_document_metadata.get(document_id, {})
                         for key in ("title", "url", "file_url", "category"):
                             if not raw_document.get(key) and metadata.get(key):
                                 raw_document[key] = metadata[key]
-                        cache_key = str(
-                            tool_use_id
-                            or document_id
-                            or ""
-                        )
+                        cache_key = str(tool_use_id or document_id or "")
                         if cache_key:
                             if len(self._citation_raw_documents) >= 8:
                                 self._citation_raw_documents.pop(
                                     next(iter(self._citation_raw_documents))
                                 )
                             self._citation_raw_documents[cache_key] = raw_document
-                        targeted = targeted_document_evidence(
-                            raw_document,
-                            terms=request_search_terms(self._citation_user_query),
-                            captured_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                        )
-                        if targeted is not None:
-                            visible, envelopes = targeted
-                            if tool_use_id:
-                                self._citation_tool_result_sidecars[tool_use_id] = json.dumps(
-                                    {"_valuz_evidence": envelopes},
-                                    ensure_ascii=False,
-                                    separators=(",", ":"),
-                                )
-                            return SyncHookJSONOutput(
-                                hookSpecificOutput={
-                                    "hookEventName": "PostToolUse",
-                                    "updatedMCPToolOutput": visible,
-                                }
-                            )
-                        match = _PERSISTED_OUTPUT_PATH_RE.match(serialized_tool_response)
-                        focused_output: dict[str, Any] = {
-                            "doc_id": raw_document.get("doc_id"),
-                            "title": raw_document.get("title"),
-                            "rawContentCached": True,
-                            "nextAction": (
-                                "Run one targeted Grep or Bash grep for the requested "
-                                "field names or table row. Do not Read the whole file."
-                            ),
-                        }
-                        if match is not None:
-                            focused_output["path"] = match.group(1).strip()
-                        return SyncHookJSONOutput(
-                            hookSpecificOutput={
-                                "hookEventName": "PostToolUse",
-                                "updatedMCPToolOutput": json.dumps(
-                                    focused_output,
-                                    ensure_ascii=False,
-                                    separators=(",", ":"),
-                                ),
-                            }
-                        )
                 if simple_name in {"grep", "bash"}:
                     focused = grep_document_evidence(
                         effective_tool_response,
@@ -2254,18 +2166,6 @@ class ClaudeAgentRuntime:
                     )
                     if augmented_indexed_content is not None:
                         effective_tool_response = augmented_indexed_content
-                private_citation_content = private_citation_tool_content(
-                    effective_tool_response
-                )
-                if (
-                    tool_use_id
-                    and private_citation_content is not None
-                    and len(private_citation_content.encode())
-                    <= _MAX_PERSISTED_CITATION_CONTENT_BYTES
-                ):
-                    self._citation_tool_result_sidecars[tool_use_id] = (
-                        private_citation_content
-                    )
                 # Claude Agent receives the task-selected Model Content with
                 # repeated trusted metadata removed. The private sidecar keeps
                 # only immutable Evidence/Collection descriptors; it is not a
@@ -2276,52 +2176,39 @@ class ClaudeAgentRuntime:
                 # excerpts or forcing repeated small-page reads.
                 input_mapping = _tool_input_mapping(data.get("tool_input"))
                 document_id = str(
-                    input_mapping.get("doc_id")
-                    or input_mapping.get("document_id")
-                    or ""
+                    input_mapping.get("doc_id") or input_mapping.get("document_id") or ""
                 )
                 evidence_limit = (
                     _CITATION_TRANSCRIPT_MODEL_EVIDENCE_LIMIT
                     if document_id in self._citation_transcript_documents
                     else _CITATION_FILING_MODEL_EVIDENCE_LIMIT
                 )
-                compacted = _compact_claude_discovery_tool_response(
-                    effective_tool_response,
-                    tool_name=tool_name,
-                    tool_input=data.get("tool_input"),
+                # Citation capture must not select the Primary Agent's search
+                # candidates. Preserve provider row order, duplicates,
+                # summaries, and result cardinality exactly as returned.
+                model_projection = effective_tool_response
+                model_projection = rebase_collection_projections(model_projection)
+                private_citation_content = private_citation_tool_content(model_projection)
+                if (
+                    tool_use_id
+                    and private_citation_content is not None
+                    and len(private_citation_content.encode())
+                    <= _MAX_PERSISTED_CITATION_CONTENT_BYTES
+                ):
+                    self._citation_tool_result_sidecars[tool_use_id] = private_citation_content
+                compacted = compact_citation_tool_content(
+                    model_projection,
+                    max_text_evidence_items=evidence_limit,
                 )
-                if compacted is None:
-                    compacted = compact_citation_tool_content(
-                        effective_tool_response,
-                        max_text_evidence_items=evidence_limit,
-                    )
                 if compacted is None:
                     return SyncHookJSONOutput()
                 output_key = (
-                    "updatedMCPToolOutput"
-                    if tool_name.startswith("mcp__")
-                    else "updatedToolOutput"
+                    "updatedMCPToolOutput" if tool_name.startswith("mcp__") else "updatedToolOutput"
                 )
                 hook_output: dict[str, Any] = {
                     "hookEventName": "PostToolUse",
                     output_key: compacted,
                 }
-                additional_context = [
-                    context
-                    for context in (
-                        self._citation_document_fetch_context(
-                            tool_name=tool_name,
-                            tool_response=effective_tool_response,
-                        ),
-                        self._citation_indexed_search_context(
-                            tool_name=tool_name,
-                            tool_input=data.get("tool_input"),
-                        ),
-                    )
-                    if context
-                ]
-                if additional_context:
-                    hook_output["additionalContext"] = " ".join(additional_context)
                 return SyncHookJSONOutput(
                     hookSpecificOutput=hook_output,
                 )
@@ -2339,166 +2226,6 @@ class ClaudeAgentRuntime:
             sdk_hooks["Stop"] = [HookMatcher(hooks=[stop_hook])]
 
         return sdk_hooks if sdk_hooks else None
-
-    def _citation_research_guard_reason(
-        self,
-        *,
-        tool_name: str,
-        tool_input: Any,
-    ) -> str | None:
-        if self._citation_no_research_scope:
-            return (
-                "This turn is a stable general-knowledge definition or formula "
-                "explanation. Do not call tools or add citations. Answer directly "
-                "from general knowledge and label any numeric example hypothetical."
-            )
-        simple_name = tool_name.rsplit("__", 1)[-1]
-        input_mapping = _tool_input_mapping(tool_input)
-        document_ids = _tool_document_ids(input_mapping)
-        if simple_name in TRANSCRIPT_DISCOVERY_TOOLS:
-            symbols = input_mapping.get("symbols")
-            decision = self._citation_research_budget.allow_transcript_discovery(
-                symbols if isinstance(symbols, list) else ()
-            )
-            return None if decision.allowed else decision.reason
-        if simple_name == "kb_search" and any(
-            document_id in self._citation_transcript_documents
-            for document_id in document_ids
-        ):
-            decision = self._citation_research_budget.allow_indexed_document_search(
-                document_ids
-            )
-            return None if decision.allowed else decision.reason
-        if is_document_discovery_tool(simple_name):
-            decision = self._citation_research_budget.allow_discovery()
-            return None if decision.allowed else decision.reason
-        if simple_name not in {"document_fetch", "document_raw_content"}:
-            return None
-        doc_id = str(input_mapping.get("doc_id") or input_mapping.get("document_id") or "")
-        if doc_id in self._citation_transcript_documents:
-            searched = doc_id in self._citation_research_budget.indexed_document_search_ids
-            return (
-                "This transcript already had its one targeted indexed search. Use "
-                "the returned chunks and evidence handles and finish this quarter; "
-                "do not load or page the original again."
-                if searched
-                else (
-                    "Do not load or page this transcript. Run exactly one kb_search "
-                    "scoped to this doc_id with the user's requested concepts, then "
-                    "use those indexed original chunks and evidence handles."
-                )
-            )
-        offset = _non_negative_int(input_mapping.get("chunk_offset")) or 0
-        requested_limit = _non_negative_int(input_mapping.get("chunk_limit"))
-        decision = self._citation_research_budget.allow_document_read(
-            tool_name=simple_name,
-            document_id=doc_id,
-            chunk_offset=offset,
-            requested_chunk_limit=requested_limit,
-            allow_sequential_window=doc_id in self._citation_transcript_documents,
-        )
-        return None if decision.allowed else decision.reason
-
-    def _citation_normalized_tool_input(
-        self,
-        *,
-        tool_name: str,
-        tool_input: Any,
-    ) -> dict[str, Any] | None:
-        simple_name = tool_name.rsplit("__", 1)[-1]
-        input_mapping = dict(_tool_input_mapping(tool_input))
-        if simple_name == "kb_search":
-            singular_document_id = str(
-                input_mapping.get("doc_id")
-                or input_mapping.get("document_id")
-                or ""
-            ).strip()
-            if (
-                singular_document_id
-                and not input_mapping.get("doc_ids")
-                and not input_mapping.get("document_ids")
-            ):
-                input_mapping.pop("doc_id", None)
-                input_mapping.pop("document_id", None)
-                input_mapping["doc_ids"] = [singular_document_id]
-                return input_mapping
-        if (
-            simple_name in TRANSCRIPT_DISCOVERY_TOOLS
-            and (self._citation_requested_period_count or 0) > 1
-        ):
-            input_mapping.pop("fiscal_quarter", None)
-            input_mapping.pop("fiscal_year", None)
-            requested_num = input_mapping.get("num")
-            input_mapping["num"] = max(
-                TRANSCRIPT_DISCOVERY_RESULT_FLOOR,
-                requested_num if isinstance(requested_num, int) else 0,
-            )
-            return input_mapping
-        if simple_name == "kb_search" and any(
-            document_id in self._citation_transcript_documents
-            for document_id in _tool_document_ids(input_mapping)
-        ):
-            requested = _non_negative_int(input_mapping.get("num"))
-            if requested is not None and requested <= TRANSCRIPT_INDEXED_CHUNK_LIMIT:
-                return None
-            input_mapping["num"] = TRANSCRIPT_INDEXED_CHUNK_LIMIT
-            return input_mapping
-        if simple_name not in TRANSCRIPT_DISCOVERY_TOOLS:
-            return None
-        if input_mapping.get("fiscal_quarter"):
-            return None
-        requested = _non_negative_int(input_mapping.get("num"))
-        if requested is not None and requested >= TRANSCRIPT_DISCOVERY_RESULT_FLOOR:
-            return None
-        input_mapping["num"] = TRANSCRIPT_DISCOVERY_RESULT_FLOOR
-        return input_mapping
-
-    def _citation_small_document_window_reason(
-        self,
-        *,
-        tool_name: str,
-        tool_input: Any,
-    ) -> str | None:
-        if tool_name.rsplit("__", 1)[-1] != "document_fetch":
-            return None
-        input_mapping = _tool_input_mapping(tool_input)
-        if not input_mapping:
-            return None
-        doc_id = str(input_mapping.get("doc_id") or input_mapping.get("document_id") or "")
-        if doc_id in self._citation_transcript_documents:
-            return None
-        chunk_limit = _non_negative_int(input_mapping.get("chunk_limit"))
-        if chunk_limit is not None and chunk_limit >= DOCUMENT_FETCH_CHUNK_LIMIT:
-            return None
-        document_kind = (
-            "transcript" if doc_id in self._citation_transcript_documents else "document"
-        )
-        return (
-            f"This is a {document_kind}. Retry document_fetch with the same "
-            f"doc_id and chunk_limit={DOCUMENT_FETCH_CHUNK_LIMIT}. Do not split it "
-            "into small sequential windows."
-        )
-
-    def _citation_indexed_search_context(
-        self,
-        *,
-        tool_name: str,
-        tool_input: Any,
-    ) -> str | None:
-        if tool_name.rsplit("__", 1)[-1] != "kb_search":
-            return None
-        document_ids = _tool_document_ids(_tool_input_mapping(tool_input))
-        if len(document_ids) != 1 or document_ids[0] not in (
-            self._citation_transcript_documents
-        ):
-            return None
-        return (
-            "The one targeted indexed search for this transcript is complete. "
-            "Use its returned chunks and evidence handles now. Do not rephrase "
-            "the search or call document_fetch/document_raw_content for this "
-            "document. If a requested theme is absent, state that quarter-local "
-            "source gap and continue with the other selected periods."
-        )
 
     def _record_citation_discovery_documents(
         self,
@@ -2523,80 +2250,6 @@ class ClaudeAgentRuntime:
                     }
                     if simple_name in {"conferences_search", "minutes_search"}:
                         self._citation_transcript_documents.add(doc_id)
-
-    def _record_citation_document_fetch(
-        self,
-        *,
-        tool_name: str,
-        tool_input: Any,
-        tool_response: Any,
-    ) -> None:
-        if tool_name.rsplit("__", 1)[-1] != "document_fetch":
-            return
-        payload = _find_document_fetch_payload(tool_response)
-        if payload is None:
-            return
-        input_mapping = _tool_input_mapping(tool_input)
-        doc_id = str(
-            payload.get("doc_id")
-            or payload.get("document_id")
-            or input_mapping.get("doc_id")
-            or input_mapping.get("document_id")
-            or ""
-        )
-        total = _non_negative_int(payload.get("total_chunks"))
-        offset = _non_negative_int(payload.get("chunk_offset")) or 0
-        next_offset = _non_negative_int(payload.get("next_chunk_offset"))
-        evidence = payload.get("_valuz_evidence")
-        evidence_count = len(evidence) if isinstance(evidence, list) else 0
-        end = next_offset
-        if end is None:
-            end = total if total is not None else offset + evidence_count
-        if not doc_id or end <= offset:
-            return
-        windows = self._citation_research_budget.document_fetch_windows.setdefault(doc_id, [])
-        windows.append((offset, end))
-        if total is not None and _windows_cover_range(windows, start=0, end=total):
-            self._citation_research_budget.mark_document_complete(doc_id)
-
-    def _citation_document_fetch_context(
-        self,
-        *,
-        tool_name: str,
-        tool_response: Any,
-    ) -> str | None:
-        if tool_name.rsplit("__", 1)[-1] != "document_fetch":
-            return None
-        payload = _find_document_fetch_payload(tool_response)
-        if payload is None:
-            return None
-        doc_id = str(payload.get("doc_id") or payload.get("document_id") or "")
-        total = _non_negative_int(payload.get("total_chunks"))
-        offset = _non_negative_int(payload.get("chunk_offset")) or 0
-        next_offset = _non_negative_int(payload.get("next_chunk_offset"))
-        if doc_id and doc_id in self._citation_research_budget.complete_document_ids:
-            return (
-                "This document is now completely covered by indexed evidence. "
-                "Do not reopen or rescan it. Answer with the found values and state "
-                "not disclosed for an independently requested optional value that "
-                "does not appear in the evidence."
-            )
-        if total is not None and next_offset is not None:
-            if doc_id not in self._citation_transcript_documents:
-                return (
-                    f"This result covers document chunks {offset}-{next_offset - 1} of "
-                    f"{total}. This is a long filing: do not fetch chunk_offset="
-                    f"{next_offset}. Load document_raw_content once and run a targeted "
-                    "in-document search for the requested field or table row, then finish "
-                    "from that exact evidence."
-                )
-            return (
-                f"This result covers document chunks {offset}-{next_offset - 1} of "
-                f"{total}. If another window is needed, call document_fetch exactly "
-                f"once with chunk_offset={next_offset} and chunk_limit=60. Do not "
-                "use another small sequential window."
-            )
-        return None
 
     # -- Permission handler --
 
@@ -3421,34 +3074,6 @@ def _stringify_tool_result_content(content: Any) -> str:
         return str(content)
 
 
-def _find_document_fetch_payload(value: Any) -> Mapping[str, Any] | None:
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except (TypeError, ValueError):
-            return None
-    if isinstance(value, Mapping):
-        if "total_chunks" in value and (
-            "doc_id" in value or "document_id" in value
-        ):
-            return value
-        for key in ("structuredContent", "structured_content", "result", "data"):
-            nested = value.get(key)
-            found = _find_document_fetch_payload(nested)
-            if found is not None:
-                return found
-        text = value.get("text")
-        if isinstance(text, str):
-            return _find_document_fetch_payload(text)
-        return None
-    if isinstance(value, list):
-        for item in value:
-            found = _find_document_fetch_payload(item)
-            if found is not None:
-                return found
-    return None
-
-
 def _iter_tool_response_mappings(value: Any):  # noqa: ANN202
     if isinstance(value, str):
         try:
@@ -3471,16 +3096,6 @@ def _iter_tool_response_mappings(value: Any):  # noqa: ANN202
             yield from _iter_tool_response_mappings(item)
 
 
-def _non_negative_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed >= 0 else None
-
-
 def _tool_input_mapping(value: Any) -> Mapping[str, Any]:
     if isinstance(value, Mapping):
         return value
@@ -3491,233 +3106,6 @@ def _tool_input_mapping(value: Any) -> Mapping[str, Any]:
             return {}
         return parsed if isinstance(parsed, Mapping) else {}
     return {}
-
-
-def _tool_document_ids(value: Mapping[str, Any]) -> tuple[str, ...]:
-    raw = (
-        value.get("doc_ids")
-        or value.get("document_ids")
-        or value.get("doc_id")
-        or value.get("document_id")
-    )
-    candidates = raw if isinstance(raw, list) else [raw]
-    return tuple(
-        document_id
-        for candidate in candidates
-        if (document_id := str(candidate or "").strip())
-    )
-
-
-def _windows_cover_range(
-    windows: list[tuple[int, int]],
-    *,
-    start: int,
-    end: int,
-) -> bool:
-    cursor = start
-    for window_start, window_end in sorted(windows):
-        if window_end <= cursor:
-            continue
-        if window_start > cursor:
-            return False
-        cursor = max(cursor, window_end)
-        if cursor >= end:
-            return True
-    return cursor >= end
-
-
-def _compact_claude_discovery_tool_response(
-    response: Any,
-    *,
-    tool_name: str,
-    tool_input: Any,
-) -> Any | None:
-    """Bound discovery rows before Claude stores them in model history.
-
-    The Finance default runtime is Claude Agent, so the DeepAgents middleware
-    cannot protect this path. Keep the filtering deliberately structural:
-    transcript/minutes results must be owned by the requested primary issuer,
-    exact duplicate issuer-period rows collapse, and every discovery summary
-    is bounded. The original provider response remains authoritative outside
-    this model-visible projection.
-    """
-
-    simple_name = tool_name.rsplit("__", 1)[-1]
-    if simple_name in {"agent_search", "company_search", "skill_search"} or not (
-        simple_name.endswith("_search")
-        or simple_name in {"search", "docs_list", "docs_by_tags"}
-    ):
-        return None
-    parsed_from_string = isinstance(response, str)
-    if parsed_from_string:
-        try:
-            value = json.loads(response)
-        except (TypeError, ValueError):
-            return None
-    else:
-        value = response
-
-    compacted = _compact_claude_discovery_value(
-        value,
-        tool_name=simple_name,
-        tool_input=tool_input if isinstance(tool_input, Mapping) else {},
-    )
-    if compacted is None:
-        return None
-    if parsed_from_string:
-        return json.dumps(compacted, ensure_ascii=False, separators=(",", ":"))
-    return compacted
-
-
-def _compact_claude_discovery_value(
-    value: Any,
-    *,
-    tool_name: str,
-    tool_input: Mapping[str, Any],
-) -> Any | None:
-    if isinstance(value, list):
-        changed = False
-        output: list[Any] = []
-        for block in value:
-            if not isinstance(block, dict) or block.get("type") != "text":
-                output.append(block)
-                continue
-            text = block.get("text")
-            compacted = (
-                _compact_claude_discovery_tool_response(
-                    text,
-                    tool_name=tool_name,
-                    tool_input=tool_input,
-                )
-                if isinstance(text, str)
-                else None
-            )
-            if compacted is None:
-                output.append(block)
-                continue
-            output.append({**block, "text": compacted})
-            changed = True
-        return output if changed else None
-    if not isinstance(value, dict) or not isinstance(value.get("docs"), list):
-        return None
-
-    raw_docs = [doc for doc in value["docs"] if isinstance(doc, dict)]
-    primary_docs = [
-        doc
-        for doc in raw_docs
-        if _claude_discovery_primary_symbol_matches(
-            doc,
-            tool_name=tool_name,
-            tool_input=tool_input,
-        )
-    ]
-    deduplicated = _deduplicate_claude_discovery_docs(primary_docs, tool_name=tool_name)
-    prioritized = prioritize_discovery_documents(
-        deduplicated,
-        tool_name=tool_name,
-    )
-    docs: list[dict[str, Any]] = []
-    transcript_discovery = tool_name in TRANSCRIPT_DISCOVERY_TOOLS
-    for raw_doc in prioritized[:_DISCOVERY_RESULT_LIMIT]:
-        doc = dict(raw_doc)
-        summary = doc.get("summary")
-        if transcript_discovery:
-            # Discovery is only a document selector for transcripts/minutes.
-            # Original indexed chunks returned by the scoped kb_search are the
-            # sole answerable evidence for these document types.
-            doc.pop("summary", None)
-        elif isinstance(summary, str) and len(summary) > _DISCOVERY_SUMMARY_LIMIT:
-            doc["summary"] = summary[:_DISCOVERY_SUMMARY_LIMIT].rstrip() + "…"
-        docs.append(doc)
-    return {
-        **value,
-        "docs": docs,
-        "_valuz_discovery": {
-            "returned": len(raw_docs),
-            "shown": len(docs),
-            "filteredOut": len(raw_docs) - len(primary_docs),
-            "duplicatesRemoved": len(primary_docs) - len(deduplicated),
-            "summariesTruncated": not transcript_discovery,
-            "citationEvidence": (
-                "original-indexed-chunk-required"
-                if transcript_discovery
-                else "summary-fallback"
-            ),
-            "originalDocumentPreferred": True,
-        },
-    }
-
-
-def _claude_discovery_primary_symbol_matches(
-    doc: Mapping[str, Any],
-    *,
-    tool_name: str,
-    tool_input: Mapping[str, Any],
-) -> bool:
-    if tool_name not in {"conferences_search", "minutes_search"}:
-        return True
-    requested = tool_input.get("symbols")
-    requested_values = requested if isinstance(requested, list) else [requested]
-    requested_symbols = {
-        str(value).strip().upper()
-        for value in requested_values
-        if str(value or "").strip()
-    }
-    if not requested_symbols:
-        return True
-    companies = doc.get("companies")
-    if isinstance(companies, list) and companies and isinstance(companies[0], Mapping):
-        stocks = companies[0].get("stocks")
-        if isinstance(stocks, list):
-            primary_symbols = {
-                str(stock.get("symbol") or "").strip().upper()
-                for stock in stocks
-                if isinstance(stock, Mapping) and str(stock.get("symbol") or "").strip()
-            }
-            if primary_symbols:
-                return bool(primary_symbols & requested_symbols)
-    requested_codes = {symbol.rsplit(":", 1)[-1] for symbol in requested_symbols}
-    title = str(doc.get("title") or "")
-    title_codes = {
-        match.group(1).strip().upper()
-        for match in re.finditer(r"[\(（]\s*([A-Za-z0-9._-]+)\s*[\)）]", title)
-    }
-    return bool(title_codes & requested_codes) if title_codes else True
-
-
-def _deduplicate_claude_discovery_docs(
-    docs: list[dict[str, Any]],
-    *,
-    tool_name: str,
-) -> list[dict[str, Any]]:
-    if tool_name not in {"conferences_search", "minutes_search"}:
-        return docs
-    output: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str, str]] = set()
-    for doc in docs:
-        title = " ".join(str(doc.get("title") or "").lower().split())
-        metadata = doc.get("metadata")
-        metadata = metadata if isinstance(metadata, Mapping) else {}
-        companies = doc.get("companies")
-        primary_symbol = ""
-        if isinstance(companies, list) and companies and isinstance(companies[0], Mapping):
-            stocks = companies[0].get("stocks")
-            if isinstance(stocks, list) and stocks and isinstance(stocks[0], Mapping):
-                primary_symbol = str(stocks[0].get("symbol") or "").strip().upper()
-        if not title:
-            output.append(doc)
-            continue
-        identity = (
-            primary_symbol,
-            title,
-            str(metadata.get("fiscal_year") or "").strip().upper(),
-            str(metadata.get("fiscal_quarter") or "").strip().upper(),
-        )
-        if identity in seen:
-            continue
-        seen.add(identity)
-        output.append(doc)
-    return output
 
 
 def _load_persisted_tool_result_content(

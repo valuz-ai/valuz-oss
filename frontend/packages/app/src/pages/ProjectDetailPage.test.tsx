@@ -619,8 +619,14 @@ describe("ProjectDetailPage auto-refresh wiring", () => {
     expect(sent.projectId).toBe("A");
     expect(sent.execOrigin).toBeDefined();
     expect("permissionMode" in sent).toBe(true);
-    expect("providerId" in sent).toBe(true);
-    expect("modelId" in sent).toBe(true);
+    // ...but NOT provider/model. This composer picks an AGENT, not a model —
+    // its provider/model state only ever holds the project's last-used channel
+    // or the global default. Handing them over made the create override the
+    // agent's own brain (backend ADR-006), so an agent pinned to one channel
+    // silently ran on whatever the project's previous chat had used. The
+    // conversation page derives the brain from ``agent`` in the URL.
+    expect("providerId" in sent).toBe(false);
+    expect("modelId" in sent).toBe(false);
   });
 
   it("auto-refresh adds a newly-appearing task without duplicating existing rows", async () => {

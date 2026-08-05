@@ -24,7 +24,7 @@ power-user operations beyond starting/stopping.
    - `./scripts/dev.sh backend` / `./scripts/dev.sh frontend`
    - `VALUZ_BACKEND_PORT=18080 ./scripts/dev.sh` + `VALUZ_RELOAD=1` env knobs
    - Dev data isolation: dev.sh defaults `VALUZ_DATA_DIR` to `~/.valuz-oss-dev`
-     (+ `VALUZ_LOG_DIR` under it). `~/.valuz-oss` belongs to the packaged app —
+     (+ `VALUZ_LOG_FILE_PATH` under it). `~/.valuz-oss` belongs to the packaged app —
      never point a dev/source backend at it: newer dev migrations stamp the
      store ahead of the release, which then refuses to boot.
 2. **`valuz` CLI** (`cli/build/valuz` after `cd cli && go build -o build/valuz .`):
@@ -178,6 +178,9 @@ Stop and ask the human when:
 - Never skip tests or use `--no-verify`
 - Database migrations must be reversible
 - Secrets go in `.env`, never in code
+- Frontend: keep a single source file under ~1000 lines — when a page/component
+  grows past that, split it (extract hooks, subcomponents, and pure helpers into
+  sibling modules)
 
 ## Compact Instructions
 

@@ -43,13 +43,13 @@ KEY_THEME = "ui.theme"
 KEY_FONT_SIZE = "ui.font_size"
 # Conversation trust controls. Citation rendering remains on by default so
 # source-bearing answers keep their inspectable indices. Verification is an
-# explicit opt-in because claim audit and the optional hidden repair can add
-# latency and model usage.
+# explicit opt-in because Claim Audit and the bounded semantic verifier can
+# add latency and model usage.
 KEY_CONVERSATION_CITATIONS_ENABLED = "conversation.citations_enabled"
 KEY_CONVERSATION_VERIFICATION_ENABLED = "conversation.verification_enabled"
-# Deterministic task-completeness checks are on by default and independent of
-# citation rendering/verification.  They can add one bounded candidate
-# revision for explicit closed tasks, so users retain a separate control.
+# Task-completeness review is on by default and independent of citation
+# rendering/verification. It can add one bounded same-runtime continuation,
+# so users retain a separate control.
 KEY_CONVERSATION_TASK_COVERAGE_ENABLED = "conversation.task_coverage_enabled"
 # Memory system toggles (memory-system-design §11). ``memory.enabled`` is the
 # product master switch (gates injection, the foreground tool, and the
@@ -434,7 +434,7 @@ async def set_conversation_verification_enabled(
 async def get_conversation_task_coverage_enabled(
     db: AsyncSession, user_id: str | None = None
 ) -> bool:
-    """Whether explicit task completeness is checked before publication."""
+    """Whether a completed primary turn may receive one native continuation."""
 
     return await _read_bool(
         db,

@@ -1,7 +1,7 @@
 import { createRef } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { ConversationTurn } from "@valuz/shared";
+import type { CitationBundleV1, ConversationTurn } from "@valuz/shared";
 import { ConversationTurnList } from "./ConversationTurnList";
 
 const processedElapsedName = /已处理 (?:\d+ 秒|\d+ 分(?: \d+ 秒)?)/;
@@ -40,6 +40,48 @@ function buildTurn(i: number): ConversationTurn {
     userText: `user-${i}`,
     blocks: [{ kind: "assistant", text: `assistant-${i}` }],
     failedMessage: null,
+  };
+}
+
+function citationBundle(
+  citationId: string,
+  sourceId: string,
+  title: string,
+): CitationBundleV1 {
+  return {
+    version: 1,
+    citations: [
+      {
+        citationId,
+        source: {
+          sourceId,
+          providerId: "test",
+          sourceType: "document",
+          title,
+          retrievedAt: "2026-08-04T00:00:00Z",
+        },
+        evidence: {
+          kind: "text",
+          quote: `${title} evidence`,
+          snippet: `${title} evidence`,
+          capturedAt: "2026-08-04T00:00:00Z",
+        },
+      },
+    ],
+  };
+}
+
+function projectedCitationBundle(
+  citationId: string,
+  evidenceHandle: string,
+  sourceId: string,
+  title: string,
+): CitationBundleV1 {
+  return {
+    ...citationBundle(citationId, sourceId, title),
+    projection: {
+      evidenceHandleToCitationId: { [evidenceHandle]: citationId },
+    },
   };
 }
 
@@ -265,6 +307,129 @@ describe("ConversationTurnList virtualization", () => {
     });
     expect(indicators).toHaveLength(1);
     expect(indicators[0].textContent).toContain("已处理 2 分");
+  });
+
+  it("merges sources and citation numbering across adjacent answer messages", () => {
+    virtualState.start = 0;
+    const turns: ConversationTurn[] = [
+      {
+        id: "turn-repaired-answer",
+        userMessageSeq: 4,
+        userText: "research",
+        failedMessage: null,
+        blocks: [
+          {
+            kind: "assistant",
+            text: "Main answer [source](citation://cit_main).",
+            messageId: "message-main",
+            citationBundle: citationBundle("cit_main", "doc-main", "Main source"),
+          },
+          {
+            kind: "assistant",
+            text: "Repair detail [source](citation://cit_repair).",
+            messageId: "message-repair",
+            citationBundle: citationBundle(
+              "cit_repair",
+              "doc-repair",
+              "Repair source",
+            ),
+          },
+        ],
+      },
+    ];
+
+    const { container } = renderList(turns);
+
+    expect(
+      container.querySelectorAll("[data-citation-source-list]"),
+    ).toHaveLength(1);
+    expect(
+      screen.getByRole("button", { name: /(?:citation|引用) 1/i })
+        .textContent,
+    ).toBe("1");
+    expect(
+      screen.getByRole("button", { name: /(?:citation|引用) 2/i })
+        .textContent,
+    ).toBe("2");
+    expect(screen.getByRole("button", { name: /^1Main source$/i })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /^2Repair source$/i }),
+    ).toBeTruthy();
+  });
+
+  it("resolves an inline citation from the merged turn bundle on hover", () => {
+    virtualState.start = 0;
+    const turns: ConversationTurn[] = [
+      {
+        id: "turn-cross-message-citation",
+        userMessageSeq: 5,
+        userText: "research",
+        failedMessage: null,
+        blocks: [
+          {
+            kind: "assistant",
+            text: "Main answer [source](citation://cit_late).",
+            messageId: "message-main",
+          },
+          {
+            kind: "assistant",
+            text: "Repair completed.",
+            messageId: "message-repair",
+            citationBundle: citationBundle(
+              "cit_late",
+              "doc-late",
+              "Late sidecar source",
+            ),
+          },
+        ],
+      },
+    ];
+
+    renderList(turns);
+
+    const pill = screen.getByRole("button", {
+      name: /(?:citation|引用) 1/i,
+    });
+    fireEvent.mouseEnter(pill);
+    expect(screen.getByRole("tooltip").textContent).toContain(
+      "Late sidecar source",
+    );
+    expect(screen.getByRole("tooltip").textContent).toContain(
+      "Late sidecar source evidence",
+    );
+  });
+
+  it("numbers post-publish evidence links through the turn projection", () => {
+    virtualState.start = 0;
+    const turns: ConversationTurn[] = [
+      {
+        id: "turn-projected-evidence",
+        userMessageSeq: 6,
+        userText: "research",
+        failedMessage: null,
+        blocks: [
+          {
+            kind: "assistant",
+            text: "Revenue [source](evidence://ev_revenue_q2).",
+            messageId: "message-projected",
+            citationBundle: projectedCitationBundle(
+              "cit_revenue_q2",
+              "ev_revenue_q2",
+              "doc-revenue",
+              "Revenue source",
+            ),
+          },
+        ],
+      },
+    ];
+
+    const { container } = renderList(turns);
+
+    expect(
+      screen.getByRole("button", { name: /(?:citation|引用) 1/i }).textContent,
+    ).toBe("1");
+    expect(container.querySelectorAll("[data-citation-source-list]")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: /^1Revenue source$/i })).toBeTruthy();
   });
 });
 

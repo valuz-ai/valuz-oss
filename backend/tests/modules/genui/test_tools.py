@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +22,16 @@ def _ctx(session_id="s1", user_id="u1"):
 
 @pytest.fixture
 def patched(monkeypatch):
+    if hasattr(t, "settings"):
+        monkeypatch.setattr(t.settings, "genui_protocol", "openui")
+    else:
+        monkeypatch.setattr(
+            t,
+            "settings",
+            SimpleNamespace(genui_protocol="openui"),
+            raising=False,
+        )
+
     async def _get_session(user_id, sid):
         return SimpleNamespace(
             model="claude-sonnet-4-6",
@@ -51,12 +62,39 @@ def patched(monkeypatch):
     monkeypatch.setattr(t, "resolve_tool_use_id", _no_tool_use_id)
 
 
-async def test_handler_returns_openui_lang(patched):
+async def test_handler_returns_openui_lang_when_configured(patched):
     defs = build_generative_ui_tool_defs()
     handler = defs[0].handler
     res = await handler({"request": "sales chart"}, _ctx())
     assert res.is_error is False
     assert res.content == "Chart\n  data: 5,10"
+
+
+async def test_handler_defaults_to_a2ui_payload(monkeypatch, patched):
+    monkeypatch.setattr(t.settings, "genui_protocol", "a2ui")
+    seen = {}
+
+    async def _comp(prompt):
+        seen["prompt"] = prompt
+        return '{"version":"v0.9","createSurface":{"surfaceId":"dashboard"}}'
+
+    def _make(**kw):
+        seen["make_kwargs"] = kw
+        return _comp
+
+    monkeypatch.setattr(t, "_make_completer", _make)
+    handler = build_generative_ui_tool_defs()[0].handler
+
+    res = await handler({"request": "sales chart"}, _ctx())
+
+    assert res.is_error is False
+    assert json.loads(res.content) == {
+        "protocol": "a2ui-json",
+        "content": '{"version":"v0.9","createSurface":{"surfaceId":"dashboard"}}',
+    }
+    assert "A2UI" in seen["prompt"]
+    assert seen["make_kwargs"]["output_format"] == "A2UI v0.9 JSON message stream"
+    assert "A2UI" in seen["make_kwargs"]["session_instructions"]
 
 
 async def test_handler_requires_request(patched):
@@ -68,14 +106,19 @@ async def test_handler_requires_request(patched):
 
 async def test_handler_rejects_dashboard_when_user_only_asked_for_a_list(monkeypatch, patched):
     async def _list_messages(user_id, sid, *, limit=1):
-        return [SimpleNamespace(user_message=SimpleNamespace(text="列出最近四个季度的数据"))]
+        # The gate now looks back a few turns, so the whole window has to be
+        # free of a visual request for the rejection to be the one under test.
+        return [
+            SimpleNamespace(user_message=SimpleNamespace(text="列出最近四个季度的数据")),
+            SimpleNamespace(user_message=SimpleNamespace(text="这些数字怎么来的")),
+        ]
 
     monkeypatch.setattr(t.kernel_client, "list_messages", _list_messages)
     handler = build_generative_ui_tool_defs()[0].handler
     res = await handler({"request": "Create a quarterly dashboard"}, _ctx())
 
     assert res.is_error is True
-    assert "did not explicitly request" in res.content
+    assert "no recent user message asked for" in res.content
 
 
 async def test_handler_passes_data_into_prompt(monkeypatch, patched):

@@ -353,24 +353,9 @@ async def init_kernel_dependencies() -> None:
     """
     _set_kernel_env()
     from app.config import AppConfig
-    from app.dependencies import get_orchestrator, init_dependencies
+    from app.dependencies import init_dependencies
 
     await init_dependencies(AppConfig())
-
-    async def _refresh_citation_repair_credentials(user_id: str, session_id: str) -> bool:
-        # Keep the kernel independent of host modules: the Valuz in-process
-        # composition installs this callback after both sides are initialized.
-        # A hidden citation repair is a second runtime run inside one user turn,
-        # so the normal turn-entry connector refresh would otherwise be skipped.
-        from valuz_agent.modules.sessions.capabilities import (
-            refresh_always_on_mcp_for_session,
-        )
-
-        return await refresh_always_on_mcp_for_session(session_id, user_id)
-
-    get_orchestrator().set_citation_repair_refresh_hook(
-        _refresh_citation_repair_credentials
-    )
 
     # No kernel-side owner default to seed: every kernel write stamps ``user_id``
     # explicitly (host → kernel_client → route → store), so there is nothing to

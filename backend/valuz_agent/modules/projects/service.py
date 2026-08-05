@@ -11,6 +11,7 @@ from uuid import uuid4
 from valuz_agent.adapters import kernel_client
 from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.fs_registry import fs_registry
+from valuz_agent.modules.artifacts.snapshot import ARTIFACT_DIR_NAME
 from valuz_agent.modules.automations.datastore import AutomationDatastore
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.docs.datastore import DocumentDatastore
@@ -36,6 +37,13 @@ _VALID_PERMISSION_MODES = ("default", "auto_review", "full_access")
 def _coerce_permission_mode(value: str) -> str:
     return value if value in _VALID_PERMISSION_MODES else "full_access"
 
+
+# Never listed, even with ``include_hidden``. Unlike the names below — which a
+# user may reasonably want to see — this one is not user content: it is the
+# artifact store, holding the immutable snapshot of every delivered version.
+# Showing it invites edits to files whose whole value is that they do not
+# change, and buries the working tree under one directory per version.
+ALWAYS_EXCLUDED_NAMES = frozenset({ARTIFACT_DIR_NAME})
 
 HIDDEN_NAMES = frozenset(
     {
@@ -696,7 +704,6 @@ def _normalize_explicit_root(root_path: str) -> str:
     return str(path.resolve()) if path.is_absolute() else value.strip("/")
 
 
-
 def _root_path(user_id: str, root_path: str) -> Path:
     path = Path(root_path).expanduser()
     if path.is_absolute():
@@ -736,6 +743,8 @@ def _walk_dir(
     except PermissionError:
         return []
     for entry in entries:
+        if entry.name in ALWAYS_EXCLUDED_NAMES:
+            continue
         if not include_hidden and entry.name in HIDDEN_NAMES:
             continue
         if not include_hidden and entry.name.startswith(".") and entry.name != ".":
@@ -765,7 +774,6 @@ def _project_root(user_id: str, row: ProjectRow, project_id: str) -> Path:
             raise ValueError("Project has no root path")
         return _root_path(user_id, row.root_path)
     return fs_registry.project_cwd(user_id, project_id, "chat").resolve()
-
 
 
 def _extension(name: str) -> str:

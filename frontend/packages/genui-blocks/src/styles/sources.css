@@ -1,0 +1,340 @@
+/*
+ * Citations and sources — Citation, SourceItem, SourceList, CondensedSources.
+ *
+ * Family rules, same as every file under styles/: `.vgb-` prefix, `--openui-*`
+ * custom properties only, container queries rather than media queries.
+ */
+
+/* ── Screen-reader-only text ─────────────────────────────────────── */
+
+/*
+ * Scoped to this family on purpose. A generic `.vgb-sr-only` would be a
+ * package-wide utility and belongs in base.css, which families do not own.
+ */
+.vgb-cite-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ── Citation — the inline marker ────────────────────────────────── */
+
+/*
+ * `display: inline` + `line-height: 0` is the classic superscript recipe: an
+ * inline box's vertical padding and its raised position contribute nothing to
+ * the line box, so a paragraph keeps identical leading with or without
+ * markers. `top` moves it visually only — relative positioning never affects
+ * layout. Switching this to inline-block or vertical-align: super would push
+ * every cited line apart, which is exactly what this must not do.
+ */
+.vgb-cite {
+  position: relative;
+  top: -0.35em;
+  display: inline;
+  padding: 0.15em 0.4em;
+  border-radius: var(--openui-radius-full);
+  background-color: var(--openui-highlight-subtle);
+  color: var(--openui-text-neutral-secondary);
+  font-family: var(--openui-font-numbers);
+  font-size: 0.72em;
+  font-weight: var(--openui-font-weight-medium);
+  line-height: 0;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+a.vgb-cite:hover,
+a.vgb-cite:focus-visible {
+  background-color: var(--openui-highlight);
+  color: var(--openui-text-brand);
+}
+
+.vgb-cite:focus-visible {
+  outline: 2px solid var(--openui-border-accent);
+  outline-offset: 2px;
+}
+
+.vgb-cite-index {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Citation hover card ─────────────────────────────────────────── */
+
+/*
+ * CSS-only: shown by `:hover` / `:focus-visible` on the marker, never by
+ * component state. Offsets are in `em` rather than `100%` because the marker's
+ * line-height is zero — a percentage of that box is not a usable distance.
+ *
+ * `pointer-events: none` means the card can never sit between the cursor and
+ * the marker, which is what makes a hover card without JS flicker-free. It
+ * also means the card's text cannot be selected; the link itself is the
+ * affordance for actually reading the source.
+ */
+.vgb-cite-card {
+  position: absolute;
+  z-index: 30;
+  top: 1.8em;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--openui-space-3xs);
+  width: max-content;
+  max-width: min(20rem, 80cqi);
+  padding: var(--openui-space-s) var(--openui-space-sm);
+  border: 1px solid var(--openui-border-default);
+  border-radius: var(--openui-radius-l);
+  background-color: var(--openui-background);
+  color: var(--openui-text-neutral-primary);
+  font-family: var(--openui-font-body);
+  font-size: var(--openui-font-size-xs);
+  font-weight: var(--openui-font-weight-regular);
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 120ms ease,
+    visibility 120ms ease;
+}
+
+.vgb-cite:hover > .vgb-cite-card,
+.vgb-cite:focus-visible > .vgb-cite-card {
+  visibility: visible;
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vgb-cite-card {
+    transition: none;
+  }
+}
+
+.vgb-cite-card-title {
+  font-weight: var(--openui-font-weight-medium);
+}
+
+.vgb-cite-card-host {
+  color: var(--openui-text-neutral-tertiary);
+  font-size: var(--openui-font-size-2xs);
+}
+
+/* ── SourceList ──────────────────────────────────────────────────── */
+
+.vgb-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--openui-space-3xs);
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* ── SourceItem ──────────────────────────────────────────────────── */
+
+.vgb-source {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: var(--openui-space-sm);
+  padding: var(--openui-space-sm);
+  border-radius: var(--openui-radius-l);
+  transition: background-color 120ms ease;
+}
+
+.vgb-source:hover {
+  background-color: var(--openui-highlight-subtle);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vgb-source {
+    transition: none;
+  }
+}
+
+.vgb-source-avatar {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  /* Optical alignment with the first line of the headline beside it. */
+  margin-top: 0.1rem;
+  border-radius: var(--openui-radius-s);
+  background-color: var(--openui-highlight-subtle);
+  color: var(--openui-text-neutral-secondary);
+  font-size: var(--openui-font-size-2xs);
+  font-weight: var(--openui-font-weight-bold);
+  line-height: 1;
+  overflow: hidden;
+}
+
+.vgb-source:hover .vgb-source-avatar {
+  background-color: var(--openui-highlight);
+}
+
+.vgb-source-favicon {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.vgb-source-main {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--openui-space-3xs);
+}
+
+.vgb-source-head {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--openui-space-2xs);
+  min-width: 0;
+}
+
+.vgb-source-index {
+  flex: 0 0 auto;
+  color: var(--openui-text-neutral-tertiary);
+  font-family: var(--openui-font-numbers);
+  font-size: var(--openui-font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.vgb-source-title {
+  color: var(--openui-text-neutral-primary);
+  font-family: var(--openui-font-body);
+  font-size: var(--openui-font-size-sm);
+  font-weight: var(--openui-font-weight-medium);
+  line-height: 1.45;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+a.vgb-source-title:hover {
+  color: var(--openui-text-brand);
+  text-decoration: underline;
+}
+
+a.vgb-source-title:focus-visible {
+  outline: 2px solid var(--openui-border-accent);
+  outline-offset: 2px;
+  border-radius: var(--openui-radius-xs);
+}
+
+.vgb-source-site {
+  color: var(--openui-text-neutral-tertiary);
+  font-size: var(--openui-font-size-2xs);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Two lines of the extract, then an ellipsis. The list is a navigation aid,
+ * not the reading surface — an unclamped snippet turns a twelve-source list
+ * into a page of its own.
+ */
+.vgb-source-snippet {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  color: var(--openui-text-neutral-secondary);
+  font-family: var(--openui-font-body);
+  font-size: var(--openui-font-size-xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* ── CondensedSources ────────────────────────────────────────────── */
+
+.vgb-sources {
+  width: 100%;
+}
+
+/*
+ * `list-style: none` plus the WebKit pseudo-element removes the default
+ * disclosure triangle in every engine. Nothing else about <summary> is
+ * touched: it stays focusable and Enter/Space still toggles the element,
+ * because that behaviour is the reason this block uses <details> at all.
+ */
+.vgb-sources-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--openui-space-2xs);
+  padding: var(--openui-space-2xs) var(--openui-space-sm);
+  border-radius: var(--openui-radius-full);
+  background-color: var(--openui-highlight-subtle);
+  color: var(--openui-text-neutral-secondary);
+  font-family: var(--openui-font-body);
+  font-size: var(--openui-font-size-xs);
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.vgb-sources-summary::-webkit-details-marker {
+  display: none;
+}
+
+.vgb-sources-summary:hover {
+  background-color: var(--openui-highlight);
+  color: var(--openui-text-neutral-primary);
+}
+
+.vgb-sources-summary:focus-visible {
+  outline: 2px solid var(--openui-border-accent);
+  outline-offset: 2px;
+}
+
+/* Chevron, drawn from two borders so no icon asset is needed. */
+.vgb-sources-summary::after {
+  content: "";
+  width: 0.4em;
+  height: 0.4em;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-0.15em) rotate(45deg);
+  transition: transform 120ms ease;
+}
+
+.vgb-sources[open] > .vgb-sources-summary::after {
+  transform: translateY(0.05em) rotate(-135deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vgb-sources-summary::after {
+    transition: none;
+  }
+}
+
+.vgb-sources-body {
+  margin-top: var(--openui-space-s);
+}
+
+/* ── Narrow column ───────────────────────────────────────────────── */
+
+@container vgb (max-width: 30rem) {
+  .vgb-source {
+    gap: var(--openui-space-xs);
+    padding: var(--openui-space-xs);
+  }
+
+  .vgb-cite-card {
+    max-width: min(15rem, 90cqi);
+  }
+}

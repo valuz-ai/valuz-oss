@@ -137,6 +137,34 @@ def test_should_propagate_citation_bundle_on_final_assistant_frames():
     assert json.loads(payload["citation_bundle"]) == bundle
 
 
+def test_should_translate_post_publish_assistant_sidecar_without_body_text():
+    bundle = {"version": 1, "citations": []}
+    coverage = {
+        "status": "complete",
+        "supplemented": True,
+        "assistant_segment_indices": [2],
+    }
+
+    result = _translate_kernel_event(
+        "assistant_message_sidecar",
+        {
+            "assistant_segment_index": 2,
+            "citation_bundle": bundle,
+            "task_coverage": coverage,
+            "message_id": "msg-3",
+        },
+    )
+
+    assert result is not None
+    legacy_type, payload = result
+    assert legacy_type == "message.assistant.sidecar"
+    assert payload["assistant_segment_index"] == "2"
+    assert json.loads(payload["citation_bundle"]) == bundle
+    assert json.loads(payload["task_coverage"]) == coverage
+    assert payload["message_id"] == "msg-3"
+    assert "text" not in payload
+
+
 def test_should_propagate_task_coverage_on_final_assistant_frames():
     coverage = {
         "version": 1,

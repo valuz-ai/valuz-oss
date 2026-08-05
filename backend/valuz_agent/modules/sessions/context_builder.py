@@ -1,7 +1,8 @@
 """Per-turn ``<additional-context>`` assembly.
 
 Composes the cache-friendly per-turn context block (current time + pending
-attachments + bound KB scope) that rides ``UserMessage.additional_context``.
+attachments + bound KB scope + delivered artifacts) that rides
+``UserMessage.additional_context``.
 Kept out of the system prompt on purpose: attachments and KB bindings churn,
 but the system prompt / skills / MCP list must stay stable for prompt-cache
 hits. Shared by the session run path and the task orchestrator.
@@ -21,11 +22,30 @@ from valuz_agent.infra.db import async_unit_of_work
 logger = logging.getLogger(__name__)
 
 
+def worktree_name_of(session: object) -> str:
+    """The worktree a session runs in, or ``""`` for the project's own cwd.
+
+    Read from the ``metadata["valuz"]["worktree"]`` snapshot stamped at session
+    creation. Only the name is taken: the snapshot's ``path`` is the worktree
+    ROOT as it was then, while a session runs in the project's subdirectory
+    inside it, and the worktree may since have been removed.
+    """
+    meta = getattr(session, "metadata", None) or {}
+    if not isinstance(meta, dict):
+        return ""
+    valuz = meta.get("valuz") or {}
+    snapshot = valuz.get("worktree") if isinstance(valuz, dict) else None
+    if not isinstance(snapshot, dict):
+        return ""
+    return str(snapshot.get("name") or "")
+
+
 async def _build_additional_context(
     session_id: str,
     project_id: str,
     attachment_rows=None,  # type: ignore[no-untyped-def]
     user_id: str | None = None,
+    worktree: str = "",
 ) -> str:
     if user_id is None:
         raise ValueError("user_id is required")
@@ -46,14 +66,24 @@ async def _build_additional_context(
     ``None`` the function loads the pending set itself (kept as a
     safety fallback; callers should pass the captured list).
 
-    Emitted only when the turn has pending attachments OR the project
-    has KB bindings; otherwise returns ``""`` so the kernel omits the
-    block entirely.
+    ``worktree`` is the session's worktree name (``""`` on the project's
+    own cwd). Artifacts are scoped to the directory a session runs in, so
+    a worktree session must be shown its own deliverables and not the
+    main line's — otherwise the listed paths would not be the ones its
+    ``ls .artifact/`` finds.
+
+    Emitted only when the turn has pending attachments, the project has
+    KB bindings, or the scope holds delivered artifacts; otherwise
+    returns ``""`` so the kernel omits the block entirely.
     """
+    from valuz_agent.modules.artifacts.context import build_artifacts_section
     from valuz_agent.modules.docs.datastore import DocumentDatastore
     from valuz_agent.modules.sessions.datastore import SessionDatastore
 
     sections: list[str] = []
+    # Resolved once and shared: the clock section and the artifact timestamps
+    # must not disagree about what "today" means for this user.
+    tz_name: str | None = None
     async with async_unit_of_work() as db:
         # 0) Current wall-clock + the user's effective timezone. Without this
         #    the model has no idea what time it is or where the user lives, so
@@ -120,6 +150,23 @@ async def _build_additional_context(
             kb_section = await _format_kb_scope(ds, bindings)
             if kb_section:
                 sections.append(kb_section)
+
+        # 3) Delivered artifacts for this session's scope. Last, because it is
+        #    the section most likely to be truncated by the model's attention
+        #    and the least urgent of the three — the tool works without it.
+        try:
+            artifacts_section = await build_artifacts_section(
+                db,
+                user_id=user_id,
+                project_id=project_id,
+                worktree=worktree,
+                tz_name=tz_name,
+            )
+        except Exception:  # noqa: BLE001 — never block a turn on an artifact lookup
+            logger.debug("artifacts context skipped", exc_info=True)
+            artifacts_section = ""
+        if artifacts_section:
+            sections.append(artifacts_section)
 
     return "\n\n".join(sections)
 

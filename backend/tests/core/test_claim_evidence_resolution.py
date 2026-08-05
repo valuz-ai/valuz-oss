@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -12,18 +13,17 @@ from src.core.claim_audit import ClaimCandidate, extract_claims
 from src.core.claim_evidence_resolution import (
     EvidenceCandidate,
     EvidenceCandidateIndex,
+    SemanticVerificationRequest,
     SemanticVerificationResult,
     resolve_claim_evidence,
 )
 
 _FIXTURE_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "evaluation/fixtures/claim_evidence_resolution_cases.json"
+    Path(__file__).resolve().parents[1] / "evaluation/fixtures/claim_evidence_resolution_cases.json"
 )
 _FIXTURE = json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))
 _OSS_POLICY_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "valuz_agent/resources/citation-policies/oss/policy.yaml"
+    Path(__file__).resolve().parents[2] / "valuz_agent/resources/citation-policies/oss/policy.yaml"
 )
 _OSS_POLICY = yaml.safe_load(_OSS_POLICY_PATH.read_text(encoding="utf-8"))
 _SEMANTICS = _OSS_POLICY["semantics"]
@@ -57,45 +57,245 @@ def test_resolver_fixture(case: dict[str, Any]) -> None:
 
     assert resolution.status == case["expected_status"]
     assert resolution.binding_action == case["expected_binding_action"]
-    assert resolution.repair_action == case["expected_repair_action"]
+    assert resolution.user_visible_severity == case["expected_user_visible_severity"]
     gold = set(case.get("gold_evidence_ids") or ())
     if gold:
         assert gold.intersection(resolution.candidate_handles[:5])
 
 
 class _EntailingVerifier:
-    def verify(
+    def verify_batch(
         self,
-        claim: ClaimCandidate,
-        candidates: tuple[EvidenceCandidate, ...],
-    ) -> SemanticVerificationResult:
+        requests: tuple[SemanticVerificationRequest, ...],
+    ) -> dict[str, SemanticVerificationResult]:
+        assert len(requests) == 1
+        claim = requests[0].claim
+        candidates = requests[0].candidates
         assert claim.claim_id == "OSS-TEXT-002"
         assert len(candidates) <= 8
-        return SemanticVerificationResult(
-            verdict="entailed",
-            evidence_handles=("ev_oss_doc_paraphrase",),
-            confidence=0.98,
-            verifier_revision="test-semantic-v1",
-        )
+        return {
+            claim.claim_id: SemanticVerificationResult(
+                verdict="entailed",
+                evidence_handles=("ev_oss_doc_paraphrase",),
+                confidence=0.98,
+                verifier_revision="test-semantic-v1",
+            )
+        }
 
 
-def test_bounded_semantic_verifier_can_resolve_paraphrase() -> None:
-    case = next(
-        item
-        for item in _FIXTURE["cases"]
-        if item["resolver_case_id"] == "OSS-TEXT-002"
+def test_bounded_semantic_verifier_can_verify_existing_paraphrase_binding() -> None:
+    case = next(item for item in _FIXTURE["cases"] if item["resolver_case_id"] == "OSS-TEXT-002")
+    claim = replace(
+        _claim(case),
+        attached_evidence_handles=("ev_oss_doc_paraphrase",),
     )
 
     resolution = resolve_claim_evidence(
-        _claim(case),
+        claim,
         case["evidence_pool"],
         semantics=_SEMANTICS,
         semantic_verifier=_EntailingVerifier(),
     )
 
     assert resolution.status == "verified"
-    assert resolution.binding_action == "auto-bind"
+    assert resolution.binding_action == "keep"
     assert resolution.selected_handles == ("ev_oss_doc_paraphrase",)
+
+
+class _RecordingVerifier:
+    def __init__(self, result: SemanticVerificationResult | Exception) -> None:
+        self.result = result
+        self.calls: list[tuple[ClaimCandidate, tuple[EvidenceCandidate, ...]]] = []
+
+    def verify_batch(
+        self,
+        requests: tuple[SemanticVerificationRequest, ...],
+    ) -> dict[str, SemanticVerificationResult]:
+        self.calls.extend((request.claim, request.candidates) for request in requests)
+        if isinstance(self.result, Exception):
+            raise self.result
+        return {request.claim.claim_id: self.result for request in requests}
+
+
+def _semantic_case() -> dict[str, Any]:
+    return next(
+        item for item in _FIXTURE["cases"] if item["resolver_case_id"] == "OSS-TEXT-002"
+    )
+
+
+def _semantic_claim(case: dict[str, Any]) -> ClaimCandidate:
+    return replace(
+        _claim(case),
+        attached_evidence_handles=("ev_oss_doc_paraphrase",),
+    )
+
+
+@pytest.mark.parametrize(
+    "verifier",
+    (
+        _RecordingVerifier(RuntimeError("provider unavailable")),
+        _RecordingVerifier(
+            SemanticVerificationResult(
+                verdict="entailed",
+                evidence_handles=("ev_oss_doc_paraphrase",),
+                confidence=0.49,
+                verifier_revision="test-semantic-low-confidence",
+            )
+        ),
+        _RecordingVerifier(
+            SemanticVerificationResult(
+                verdict="entailed",
+                evidence_handles=("ev_not_in_candidate_set",),
+                confidence=0.99,
+                verifier_revision="test-semantic-unknown-handle",
+            )
+        ),
+        _RecordingVerifier(
+            SemanticVerificationResult(
+                verdict="contradicted",
+                evidence_handles=("ev_oss_doc_paraphrase",),
+                confidence=0.99,
+                verifier_revision="test-semantic-advisory-conflict",
+            )
+        ),
+    ),
+    ids=("provider-error", "low-confidence", "unknown-handle", "semantic-contradiction"),
+)
+def test_semantic_verifier_failure_never_changes_unresolved_result(
+    verifier: _RecordingVerifier,
+) -> None:
+    case = _semantic_case()
+
+    resolution = resolve_claim_evidence(
+        _semantic_claim(case),
+        case["evidence_pool"],
+        semantics=_SEMANTICS,
+        semantic_verifier=verifier,
+    )
+
+    assert resolution.status == "unresolved"
+    assert resolution.binding_action == "keep"
+    assert resolution.user_visible_severity == "advisory"
+    assert resolution.selected_handles == ("ev_oss_doc_paraphrase",)
+
+
+def test_semantic_verifier_receives_only_bounded_text_candidates() -> None:
+    case = _semantic_case()
+    verifier = _RecordingVerifier(
+        SemanticVerificationResult(
+            verdict="unresolved",
+            evidence_handles=(),
+            confidence=0.9,
+            verifier_revision="test-semantic-bounds",
+        )
+    )
+    evidence_pool = [
+        *case["evidence_pool"],
+        *(
+            {
+                "evidenceHandle": f"ev_extra_{index}",
+                "source": {"providerId": "fixture"},
+                "evidence": {
+                    "kind": "text" if index % 2 == 0 else "structured-data",
+                    "quote": f"Unrelated document passage {index}",
+                    "metric": "unrelated_metric",
+                    "value": index,
+                },
+            }
+            for index in range(40)
+        ),
+    ]
+
+    resolve_claim_evidence(
+        _semantic_claim(case),
+        evidence_pool,
+        semantics=_SEMANTICS,
+        semantic_verifier=verifier,
+        limit=5,
+    )
+
+    assert len(verifier.calls) == 1
+    verified_claim, candidates = verifier.calls[0]
+    assert verified_claim.claim_id == "OSS-TEXT-002"
+    assert 0 < len(candidates) <= 5
+    assert all(candidate.evidence.get("kind") == "text" for candidate in candidates)
+
+
+def test_semantic_verifier_never_creates_a_new_citation_binding() -> None:
+    case = _semantic_case()
+    verifier = _RecordingVerifier(
+        SemanticVerificationResult(
+            verdict="entailed",
+            evidence_handles=("ev_oss_doc_paraphrase",),
+            confidence=0.99,
+            verifier_revision="must-not-auto-bind",
+        )
+    )
+
+    resolution = resolve_claim_evidence(
+        _claim(case),
+        case["evidence_pool"],
+        semantics=_SEMANTICS,
+        semantic_verifier=verifier,
+    )
+
+    assert verifier.calls == []
+    assert resolution.status == "unresolved"
+    assert resolution.binding_action == "none"
+    assert resolution.selected_handles == ()
+
+
+def test_semantic_verifier_does_not_override_deterministic_conflict() -> None:
+    exact = "Alpha Corp revenue was 100 USD in 2025."
+    claim = ClaimCandidate(
+        claim_id="deterministic-conflict",
+        exact=exact,
+        segment_index=0,
+        kind="structured-fact",
+        citation_required=True,
+        attached_citation_ids=(),
+        normalized={
+            "entityId": "ALPHA",
+            "metric": "revenue",
+            "period": "2025 FY",
+            "value": "100",
+            "unit": "USD",
+        },
+        location={"kind": "fixture", "blockIndex": 0, "start": 0, "end": len(exact)},
+        semantic_text=exact,
+        insertion_offset=len(exact),
+        attached_evidence_handles=("ev_conflict",),
+    )
+    verifier = _RecordingVerifier(
+        SemanticVerificationResult(
+            verdict="entailed",
+            evidence_handles=("ev_conflict",),
+            confidence=1.0,
+            verifier_revision="must-not-run",
+        )
+    )
+
+    resolution = resolve_claim_evidence(
+        claim,
+        [
+            {
+                "evidenceHandle": "ev_conflict",
+                "source": {"providerId": "fixture"},
+                "evidence": {
+                    "kind": "text",
+                    "entityId": "BETA",
+                    "quote": "Beta Corp revenue was 100 USD in 2025.",
+                },
+            }
+        ],
+        semantics=_SEMANTICS,
+        entity_aliases={"Alpha Corp": ("Alpha Corp", "ALPHA"), "Beta Corp": ("Beta Corp", "BETA")},
+        semantic_verifier=verifier,
+    )
+
+    assert verifier.calls == []
+    assert resolution.status == "contradicted"
+    assert resolution.selected_handles == ("ev_conflict",)
 
 
 def test_explicit_structured_binding_accepts_appended_period_metadata() -> None:
@@ -206,10 +406,7 @@ def test_local_period_metric_overrides_inherited_financial_metric() -> None:
     "claim_text",
     (
         "数值：170,899,152,276 [1](evidence://ev_context_revenue_2024)",
-        (
-            "170,899,152,276 元（人民币），约 1,708.99 亿元 "
-            "[1](evidence://ev_context_revenue_2024)"
-        ),
+        ("170,899,152,276 元（人民币），约 1,708.99 亿元 [1](evidence://ev_context_revenue_2024)"),
     ),
 )
 def test_generic_value_and_unit_labels_do_not_create_false_metric_conflicts(
@@ -268,12 +465,8 @@ def test_generic_value_and_unit_labels_do_not_create_false_metric_conflicts(
     assert resolution.selected_handles == (handle,)
 
 
-def test_unresolved_claim_never_requests_repair() -> None:
-    case = next(
-        item
-        for item in _FIXTURE["cases"]
-        if item["resolver_case_id"] == "OSS-NEG-001"
-    )
+def test_unbound_unresolved_claim_has_no_user_visible_severity() -> None:
+    case = next(item for item in _FIXTURE["cases"] if item["resolver_case_id"] == "OSS-NEG-001")
 
     resolution = resolve_claim_evidence(
         _claim(case),
@@ -282,7 +475,7 @@ def test_unresolved_claim_never_requests_repair() -> None:
     )
 
     assert resolution.status == "unresolved"
-    assert resolution.repair_action == "none"
+    assert resolution.user_visible_severity == "none"
 
 
 def test_turn_local_index_bounds_large_registry_verification(
@@ -407,13 +600,61 @@ def test_turn_local_entity_aliases_rebind_cross_company_source() -> None:
     assert resolution.support_by_handle["ev_wrong_sk_doc"] == "contradicted"
 
 
+def test_text_evidence_quote_participates_in_turn_local_entity_identity() -> None:
+    claim = ClaimCandidate(
+        claim_id="exact-result-entity",
+        exact="公司是全球电子价签市场领军企业，AI 驱动零售场景智能化。",
+        segment_index=0,
+        kind="factual-claim",
+        citation_required=True,
+        attached_citation_ids=(),
+        normalized={},
+        location={"kind": "fixture", "blockIndex": 0, "start": 0, "end": 30},
+        semantic_text=(
+            "A 股 AI 应用公司 7. 汉朔科技（AI+零售，电子价签） "
+            "公司是全球电子价签市场领军企业，AI 驱动零售场景智能化。"
+        ),
+        insertion_offset=30,
+        attached_evidence_handles=("ev_wrong_company",),
+    )
+    evidence_pool = [
+        {
+            "evidenceHandle": "ev_wrong_company",
+            "source": {"title": "科大讯飞：AI 大模型商业化加速落地"},
+            "evidence": {
+                "kind": "text",
+                "quote": "公司通过 AI 能力推动海外业务和零售场景增长。",
+            },
+        },
+        {
+            "evidenceHandle": "ev_industry_report",
+            "source": {"title": "AI 应用春潮涌动：行业深度报告"},
+            "evidence": {
+                "kind": "text",
+                "quote": ("汉朔科技：公司是全球电子价签市场领军企业，AI 驱动零售场景智能化。"),
+            },
+        },
+    ]
+
+    resolution = resolve_claim_evidence(
+        claim,
+        evidence_pool,
+        semantics=_SEMANTICS,
+        entity_aliases={
+            "汉朔科技": ("汉朔科技",),
+            "科大讯飞": ("科大讯飞", "002230"),
+        },
+    )
+
+    assert resolution.status == "verified"
+    assert resolution.binding_action == "auto-rebind"
+    assert resolution.selected_handles == ("ev_industry_report",)
+    assert resolution.support_by_handle["ev_wrong_company"] == "contradicted"
+
+
 def test_added_distribution_ontology_does_not_weaken_unknown_base_metric() -> None:
     case = copy.deepcopy(
-        next(
-            item
-            for item in _FIXTURE["cases"]
-            if item["resolver_case_id"] == "OSS-BIND-001"
-        )
+        next(item for item in _FIXTURE["cases"] if item["resolver_case_id"] == "OSS-BIND-001")
     )
     case["claim"]["explicitBindings"] = []
     semantics = copy.deepcopy(_SEMANTICS)
@@ -476,6 +717,80 @@ def test_normalized_metric_matches_without_surface_label_or_ontology() -> None:
 
     assert resolution.status == "verified"
     assert resolution.binding_action == "auto-bind"
+
+
+def test_unique_structured_metric_can_bind_when_source_unit_is_unknown() -> None:
+    claim = ClaimCandidate(
+        claim_id="missing-source-unit",
+        exact="MRVL MA20 was $203.69 on 2026-08-03.",
+        segment_index=0,
+        kind="structured-fact",
+        citation_required=True,
+        attached_citation_ids=(),
+        normalized={
+            "entityId": "MRVL",
+            "metric": "moving_average_20",
+            "period": "2026-08-03",
+            "value": "203.69",
+            "unit": "USD",
+        },
+        location={"kind": "fixture", "blockIndex": 0, "start": 0, "end": 39},
+        semantic_text="MRVL MA20 was $203.69 on 2026-08-03.",
+        insertion_offset=39,
+        attached_evidence_handles=(),
+    )
+    evidence = {
+        "evidenceHandle": "ev_ma20_missing_unit",
+        "source": {"providerId": "market-data"},
+        "evidence": {
+            "kind": "structured-data",
+            "entityId": "MRVL",
+            "metric": "moving_average_20",
+            "asOf": "2026-08-03",
+            "value": 203.69,
+        },
+    }
+
+    resolution = resolve_claim_evidence(claim, [evidence], semantics=_SEMANTICS)
+
+    assert resolution.status == "verified"
+    assert resolution.binding_action == "auto-bind"
+    assert resolution.selected_handles == ("ev_ma20_missing_unit",)
+    assert resolution.support_by_handle["ev_ma20_missing_unit"] == "supported"
+
+
+def test_missing_source_unit_never_guesses_a_scale_conversion() -> None:
+    claim = ClaimCandidate(
+        claim_id="missing-source-unit-scale",
+        exact="The amount was $203.69.",
+        segment_index=0,
+        kind="structured-fact",
+        citation_required=True,
+        attached_citation_ids=(),
+        normalized={
+            "metric": "amount",
+            "value": "203.69",
+            "unit": "USD",
+        },
+        location={"kind": "fixture", "blockIndex": 0, "start": 0, "end": 23},
+        semantic_text="The amount was $203.69.",
+        insertion_offset=23,
+        attached_evidence_handles=(),
+    )
+    evidence = {
+        "evidenceHandle": "ev_amount_missing_unit",
+        "source": {"providerId": "market-data"},
+        "evidence": {
+            "kind": "structured-data",
+            "metric": "amount",
+            "value": 2.0369,
+        },
+    }
+
+    resolution = resolve_claim_evidence(claim, [evidence], semantics=_SEMANTICS)
+
+    assert resolution.status == "unresolved"
+    assert resolution.binding_action == "none"
 
 
 def test_metricless_calculation_input_auto_binds_by_unique_value_period_and_unit() -> None:
@@ -674,3 +989,56 @@ def test_missing_explicit_handle_is_invalid_instead_of_plain_unresolved() -> Non
     assert resolution.status == "invalid-binding"
     assert resolution.binding_action == "none"
     assert resolution.reason_codes == ("explicit-binding-missing",)
+
+
+def test_metric_alias_parameter_numbers_are_not_treated_as_claim_values() -> None:
+    semantics = copy.deepcopy(_SEMANTICS)
+    semantics["metric_ontology"] = {
+        "metrics": {
+            "moving_average_60": {
+                "aliases": ["MA60", "MA(CLOSE,60)", "60-day moving average"],
+                "fields": ["moving_average_60", "ma60"],
+            }
+        }
+    }
+    exact = "MA(CLOSE,60) in 2024 was 123 CNY."
+    claim = ClaimCandidate(
+        claim_id="metric-parameter-number",
+        exact=exact,
+        segment_index=0,
+        kind="structured-fact",
+        citation_required=True,
+        attached_citation_ids=(),
+        normalized={
+            "metric": "MA(CLOSE,60)",
+            "period": "2024 FY",
+            "value": "123",
+            "unit": "CNY",
+        },
+        location={"kind": "fixture", "blockIndex": 0, "start": 0, "end": len(exact)},
+        semantic_text=exact,
+        insertion_offset=len(exact),
+        attached_evidence_handles=(),
+    )
+
+    resolution = resolve_claim_evidence(
+        claim,
+        [
+            {
+                "evidenceHandle": "ev_ma60",
+                "source": {"providerId": "factor-data"},
+                "evidence": {
+                    "kind": "structured-data",
+                    "metric": "moving_average_60",
+                    "period": "2024 FY",
+                    "value": 123,
+                    "unit": "CNY",
+                },
+            }
+        ],
+        semantics=semantics,
+    )
+
+    assert resolution.status == "verified"
+    assert resolution.binding_action == "auto-bind"
+    assert resolution.selected_handles == ("ev_ma60",)

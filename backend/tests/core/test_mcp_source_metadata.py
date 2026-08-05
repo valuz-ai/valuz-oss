@@ -72,15 +72,16 @@ def test_transport_preserves_meta_and_restores_original_structured_content() -> 
     assert restored == {"structured_content": structured, "existing": True}
 
 
-def test_discovery_metadata_never_creates_summary_evidence() -> None:
+def test_discovery_metadata_stays_non_citable_retrieval_input() -> None:
     payload = {
         "docs": [
             {
-                "doc_id": "doc-1",
-                "title": "Annual report",
-                "summary": "Revenue was 100.",
-                "url": "https://example.com/doc-1",
+                "doc_id": f"doc-{index}",
+                "title": f"Annual report {index}",
+                "summary": f"Revenue was {index}00.",
+                "url": f"https://example.com/doc-{index}",
             }
+            for index in range(20)
         ]
     }
     descriptor = _descriptor(
@@ -117,6 +118,7 @@ def test_discovery_metadata_never_creates_summary_evidence() -> None:
     assert adapted is not None
     assert adapted.discovery_only is True
     assert adapted.citable is False
+    assert adapted.evidence_count == 0
     assert adapted.model_content == payload
     assert "_valuz_evidence" not in adapted.model_content
 
@@ -201,6 +203,265 @@ def test_document_chunks_create_direct_evidence_with_pdf_locator() -> None:
     assert registry.resolve(envelope["evidenceHandle"]) is not None
 
 
+def test_document_published_at_is_not_substituted_for_document_version() -> None:
+    payload = {
+        "chunks": [
+            {
+                "id": "chunk-1",
+                "content": "Stable cited text.",
+                "doc": {
+                    "doc_id": "doc-1",
+                    "title": "Issuer filing",
+                    "url": "https://example.com/doc-1.pdf",
+                    "published_at": 1_785_364_320_000,
+                },
+            }
+        ]
+    }
+    descriptor = _descriptor(
+        payload,
+        tool_name="kb_search",
+        resources=[
+            {
+                "resourceId": "kb-search-chunks",
+                "kind": "document-chunks",
+                "authority": "authoritative",
+                "rootPointer": "",
+                "document": {
+                    "scope": "item",
+                    "sourceId": "/doc/doc_id",
+                    "documentId": "/doc/doc_id",
+                    "title": "/doc/title",
+                    "url": "/doc/url",
+                    "publishedAt": "/doc/published_at",
+                },
+                "itemsPointer": "/chunks",
+                "mapping": {"chunkId": "/id", "text": "/content"},
+            }
+        ],
+    )
+
+    adapted = adapt_mcp_source_result(
+        [],
+        tool_name="mcp__reportify__kb_search",
+        descriptor=descriptor,
+        structured_content=payload,
+    )
+
+    assert adapted is not None and adapted.citable
+    source = adapted.model_content["_valuz_evidence"][0]["source"]
+    assert source["publishedAt"] == "2026-07-29T22:32:00Z"
+    assert "documentVersion" not in source
+
+
+def test_document_summary_creates_direct_evidence_without_copying_model_content() -> None:
+    summary = (
+        "Top Models Weekly usage. 1. Alpha 8.25T tokens. "
+        "2. Beta 7.31T tokens. 3. Gamma 5.26T tokens."
+    )
+    payload = {
+        "doc_id": "doc-live-ranking",
+        "title": "Live model ranking",
+        "url": "https://example.com/rankings",
+        "category": "webpages",
+        "summary": summary,
+        "chunks": [
+            {
+                "id": "chunk-intro",
+                "content": "Live rankings based on real usage.",
+            }
+        ],
+    }
+    descriptor = _descriptor(
+        payload,
+        tool_name="document_fetch",
+        resources=[
+            {
+                "resourceId": "document-fetch-summary",
+                "kind": "document-summary",
+                "authority": "derived",
+                "rootPointer": "",
+                "document": {
+                    "scope": "resource",
+                    "sourceId": "/doc_id",
+                    "documentId": "/doc_id",
+                    "title": "/title",
+                    "url": "/url",
+                    "providerCategory": "/category",
+                },
+                "textPointer": "/summary",
+                "locator": {
+                    "kind": "external",
+                    "fragment": "provider-summary",
+                },
+            }
+        ],
+    )
+
+    adapted = adapt_mcp_source_result(
+        [],
+        tool_name="mcp__reportify__document_fetch",
+        descriptor=descriptor,
+        structured_content=payload,
+    )
+
+    assert adapted is not None and adapted.citable
+    assert adapted.resource_kinds == frozenset({"document-summary"})
+    envelope = adapted.model_content["_valuz_evidence"][0]
+    assert envelope["source"] == {
+        "sourceId": "doc-live-ranking",
+        "documentId": "doc-live-ranking",
+        "providerId": "reportify",
+        "sourceType": "document",
+        "sourceCategory": "webpages",
+        "title": "Live model ranking",
+        "retrievedAt": "2026-08-03T00:00:00Z",
+        "canonicalUrl": "https://example.com/rankings",
+    }
+    assert envelope["evidence"]["quote"] == summary
+    assert envelope["locator"] == {
+        "kind": "external",
+        "fragment": "provider-summary",
+    }
+
+    compacted = compact_citation_tool_content(adapted.model_content)
+    private = private_citation_tool_content(adapted.model_content)
+    assert compacted is not None and private is not None
+    assert compacted["summary"] == summary
+    assert compacted["evidenceHandle"] == envelope["evidenceHandle"]
+    assert compacted["citationLink"] == f"[source](evidence://{envelope['evidenceHandle']})"
+    assert "_valuz_evidence" not in compacted
+    assert json.dumps(compacted, ensure_ascii=False).count(summary) == 1
+    registry = EvidenceRegistry()
+    assert registry.register_tool_projection(compacted, private, trusted_private=True) == 1
+    assert registry.resolve(envelope["evidenceHandle"]) is not None
+
+
+def test_raw_document_metadata_cannot_elevate_provider_summary() -> None:
+    payload = {
+        "doc_id": "doc-annual-report",
+        "original_url": "https://example.com/annual-report.pdf",
+        "summary": "The complete original document body.",
+    }
+    descriptor = _descriptor(
+        payload,
+        tool_name="document_raw_content",
+        resources=[
+            {
+                "resourceId": "document-fetch-summary",
+                "kind": "document-summary",
+                "authority": "derived",
+                "rootPointer": "",
+                "document": {
+                    "scope": "resource",
+                    "sourceId": "/doc_id",
+                    "documentId": "/doc_id",
+                    "url": "/original_url",
+                },
+                "textPointer": "/summary",
+                "locator": {
+                    "kind": "external",
+                    "fragment": "provider-summary",
+                },
+            }
+        ],
+    )
+
+    adapted = adapt_mcp_source_result(
+        [],
+        tool_name="document_raw_content",
+        descriptor=descriptor,
+        structured_content=payload,
+    )
+
+    assert adapted is not None
+    assert adapted.citable is False
+    assert adapted.evidence_count == 0
+    assert "_valuz_evidence" not in adapted.model_content
+
+
+def test_raw_document_metadata_cannot_turn_the_whole_body_into_one_chunk() -> None:
+    payload = {
+        "doc_id": "doc-annual-report",
+        "original_url": "https://example.com/annual-report.pdf",
+        "content": "The complete original document body.",
+    }
+    descriptor = _descriptor(
+        payload,
+        tool_name="document_raw_content",
+        resources=[
+            {
+                "resourceId": "document-raw-content",
+                "kind": "document-chunks",
+                "authority": "authoritative",
+                "rootPointer": "",
+                "document": {
+                    "scope": "resource",
+                    "sourceId": "/doc_id",
+                    "documentId": "/doc_id",
+                    "url": "/original_url",
+                },
+                "itemsPointer": "",
+                "mapping": {"chunkId": "/doc_id", "text": "/content"},
+            }
+        ],
+    )
+
+    adapted = adapt_mcp_source_result(
+        [],
+        tool_name="document_raw_content",
+        descriptor=descriptor,
+        structured_content=payload,
+    )
+
+    assert adapted is not None
+    assert adapted.citable is False
+    assert adapted.evidence_count == 0
+    assert "_valuz_evidence" not in adapted.model_content
+
+
+def test_chunk_source_title_falls_back_to_hostname_not_document_id() -> None:
+    payload = {
+        "doc_id": "W13341981828044806",
+        "title": "",
+        "url": "https://www.news.cn/tech/example.html",
+        "chunks": [{"id": "chunk-1", "content": "A short real chunk."}],
+    }
+    descriptor = _descriptor(
+        payload,
+        tool_name="document_fetch",
+        resources=[
+            {
+                "resourceId": "document-fetch-chunks",
+                "kind": "document-chunks",
+                "authority": "authoritative",
+                "rootPointer": "",
+                "document": {
+                    "scope": "resource",
+                    "sourceId": "/doc_id",
+                    "documentId": "/doc_id",
+                    "title": "/title",
+                    "url": "/url",
+                },
+                "itemsPointer": "/chunks",
+                "mapping": {"chunkId": "/id", "text": "/content"},
+            }
+        ],
+    )
+
+    adapted = adapt_mcp_source_result(
+        [],
+        tool_name="document_fetch",
+        descriptor=descriptor,
+        structured_content=payload,
+    )
+
+    assert adapted is not None and adapted.citable
+    source = adapted.model_content["_valuz_evidence"][0]["source"]
+    assert source["title"] == "news.cn"
+    assert source["documentId"] not in source["title"]
+
+
 def test_large_structured_result_registers_one_collection_and_materializes_one_address() -> None:
     rows = [
         {
@@ -273,9 +534,7 @@ def test_large_structured_result_registers_one_collection_and_materializes_one_a
     assert compacted is not None and private is not None
     assert len(compacted["data"]) == 1_000
     assert "_valuz_evidence" not in compacted
-    assert compacted["_valuz_evidence_hint"]["collectionHandle"] == collection[
-        "collectionHandle"
-    ]
+    assert compacted["_valuz_evidence_hint"]["collectionHandle"] == collection["collectionHandle"]
 
     registry = EvidenceRegistry()
     assert registry.register_tool_projection(compacted, private, trusted_private=True) == 1
@@ -316,3 +575,77 @@ def test_tampered_business_result_rejects_metadata() -> None:
         )
         is None
     )
+
+
+def test_factor_collection_materializes_formula_bound_metric() -> None:
+    payload = {
+        "metadata": {"formula": "MA(CLOSE, 20)", "as_of": "2026-08-03"},
+        "datas": [
+            {
+                "date": "2026-08-03",
+                "symbol": "MRVL",
+                "factor_value": 203.69,
+            }
+        ],
+    }
+    descriptor = _descriptor(
+        payload,
+        tool_name="factors_compute",
+        resources=[
+            {
+                "resourceId": "reportify-factors-compute",
+                "kind": "structured-collection",
+                "authority": "derived",
+                "rootPointer": "/datas",
+                "itemsPointer": "/datas",
+                "dataset": {
+                    "id": "reportify.factors_compute",
+                    "revision": "v1",
+                    "sourceCategory": "derived_analytics",
+                },
+                "identity": {"fields": ["/symbol", "/date"]},
+                "semantics": {
+                    "entity": {"symbol": "/symbol"},
+                    "asOf": {"date": "/date"},
+                    "metric": {
+                        "mode": "field-map",
+                        "fields": {"/factor_value": "moving_average_20"},
+                    },
+                },
+                "addressing": {
+                    "mode": "json-pointer",
+                    "allowedPathRoots": ["/datas"],
+                    "fieldSchemaRef": {
+                        "id": "reportify.factors_compute",
+                        "revision": "v1",
+                    },
+                },
+            }
+        ],
+    )
+
+    adapted = adapt_mcp_source_result(
+        [],
+        tool_name="mcp__reportify__factors_compute",
+        descriptor=descriptor,
+        structured_content=payload,
+    )
+    assert adapted is not None and adapted.citable
+    compacted = compact_citation_tool_content(adapted.model_content)
+    private = private_citation_tool_content(adapted.model_content)
+    assert compacted is not None and private is not None
+    assert compacted["_valuz_evidence_hint"]["metricFields"] == {
+        "/factor_value": "moving_average_20"
+    }
+
+    registry = EvidenceRegistry()
+    assert registry.register_tool_projection(compacted, private, trusted_private=True) == 1
+    factor = registry.materialize_reference(
+        compacted["_valuz_evidence_hint"]["collectionHandle"],
+        "#/datas/0/factor_value",
+    )
+    assert factor is not None
+    assert factor.evidence["metric"] == "moving_average_20"
+    assert factor.evidence["value"] == 203.69
+    assert factor.evidence["entityId"] == "MRVL"
+    assert factor.evidence["asOf"] == "2026-08-03"

@@ -26,6 +26,8 @@ import { useI18n } from "../../hooks/use-i18n";
 
 const CITATION_HREF_PREFIX = "https://valuz.citation.invalid/";
 const CITATION_URI_PATTERN = /citation:\/\/([A-Za-z0-9._~:-]+)/g;
+const EVIDENCE_LINK_PATTERN =
+  /\[([^\]\n]{0,240})\]\(evidence:\/\/([A-Za-z0-9_-]{1,160})(#[^\s)\n]{1,2048})?\)/g;
 const HOVER_CLOSE_DELAY_MS = 150;
 const HOVER_CARD_GAP_PX = 8;
 const VIEWPORT_PADDING_PX = 16;
@@ -73,6 +75,43 @@ export function rewriteCitationMarkdownLinks(content: string): string {
     CITATION_URI_PATTERN,
     (_whole, citationId: string, sourceOffset: number) =>
       `${CITATION_HREF_PREFIX}${encodeURIComponent(citationId)}?offset=${sourceOffset}`,
+  );
+}
+
+export function projectEvidenceMarkdownLinks(
+  content: string,
+  bundle?: CitationBundleV1,
+): string {
+  const projection = new Map<string, string>(
+    Object.entries(bundle?.projection?.evidenceHandleToCitationId ?? {}),
+  );
+  for (const citation of bundle?.citations ?? []) {
+    const binding = citation.annotations?.binding;
+    if (!binding || typeof binding !== "object") continue;
+    const handle = (binding as Record<string, unknown>).evidenceHandle;
+    if (typeof handle === "string" && handle) {
+      projection.set(handle, citation.citationId);
+    }
+  }
+  return content.replace(
+    EVIDENCE_LINK_PATTERN,
+    (_whole, label: string, handle: string, fragment?: string) => {
+      const citationId =
+        projection.get(`${handle}${fragment ?? ""}`) ?? projection.get(handle);
+      if (citationId) return `[${label}](citation://${citationId})`;
+      const normalized = label.replace(/\s+/gu, "").toLocaleLowerCase();
+      return [
+        "source",
+        "sources",
+        "citation",
+        "reference",
+        "来源",
+        "引用",
+        "出处",
+      ].includes(normalized)
+        ? ""
+        : label;
+    },
   );
 }
 
@@ -127,11 +166,14 @@ export function citationDisplayOrder(content: string): Map<string, number> {
 export function usedCitations(
   content: string,
   bundle?: CitationBundleV1,
+  displayOrder?: ReadonlyMap<string, number>,
 ): Array<{ displayIndex: number; citation: CitationRefV1 }> {
   if (!bundle) return [];
   const byId = new Map(bundle.citations.map((citation) => [citation.citationId, citation]));
-  return Array.from(citationDisplayOrder(content), ([citationId, displayIndex]) => {
+  const localOrder = citationDisplayOrder(content);
+  return Array.from(localOrder, ([citationId, localDisplayIndex]) => {
     const citation = byId.get(citationId);
+    const displayIndex = displayOrder?.get(citationId) ?? localDisplayIndex;
     return citation ? { displayIndex, citation } : null;
   }).filter(
     (
@@ -408,6 +450,7 @@ function CitationHoverCard({
   side,
   position,
   canOpen,
+  canOpenLinkedEvidence,
   onOpen,
   citationById,
   onOpenCitation,
@@ -421,6 +464,7 @@ function CitationHoverCard({
   side: CitationCardSide;
   position: CitationCardPosition;
   canOpen: boolean;
+  canOpenLinkedEvidence: boolean;
   onOpen: () => void;
   citationById?: ReadonlyMap<string, CitationRefV1>;
   onOpenCitation: (citationId: string) => void;
@@ -558,7 +602,7 @@ function CitationHoverCard({
           <span className="mt-1 flex flex-col gap-1">
             {calculationInputs.map(({ input, source }) => {
               const disabled =
-                !canOpen ||
+                !canOpenLinkedEvidence ||
                 source.resolutionStatus === "forbidden" ||
                 source.resolutionStatus === "missing";
               return (
@@ -612,6 +656,8 @@ export function CitationPill({
   qualityIssues,
   messageId,
   onCitationClick,
+  variant = "pill",
+  sourceLabel,
 }: {
   citationId: string;
   displayIndex?: number;
@@ -620,6 +666,8 @@ export function CitationPill({
   qualityIssues?: CitationQualityDisplayIssue[];
   messageId?: string;
   onCitationClick?: (input: OpenCitationInput) => void;
+  variant?: "pill" | "source-row";
+  sourceLabel?: string;
 }) {
   const { t } = useI18n();
   const [hovered, setHovered] = useState(false);
@@ -628,11 +676,12 @@ export function CitationPill({
     left: VIEWPORT_PADDING_PX,
     top: VIEWPORT_PADDING_PX,
   });
-  const triggerRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = useRef<HTMLElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const closeTimerRef = useRef<number | null>(null);
   const canOpen =
     Boolean(citation) &&
+    citation?.evidence.kind !== "calculation" &&
     citation?.resolutionStatus !== "forbidden" &&
     citation?.resolutionStatus !== "missing" &&
     Boolean(onCitationClick);
@@ -729,8 +778,14 @@ export function CitationPill({
   return (
     <span
       className={cn(
-        "relative -top-px inline-flex align-middle leading-none",
-        qualityStatus ? "mx-1" : "mx-0.5",
+        variant === "source-row"
+          ? "relative block w-full"
+          : "relative -top-px inline-flex align-middle leading-none",
+        variant === "pill"
+          ? qualityStatus
+            ? "mx-1"
+            : "mx-0.5"
+          : undefined,
       )}
       onMouseEnter={showCard}
       onMouseLeave={scheduleClose}
@@ -745,36 +800,75 @@ export function CitationPill({
         }
       }}
     >
-      <button
-        ref={triggerRef}
-        type="button"
-        aria-label={
-          citation && displayIndex
-            ? [
-                t("ui.citation.ariaLabel", "Citation {index}", {
+      {variant === "source-row" ? (
+        <span
+          ref={(node) => {
+            triggerRef.current = node;
+          }}
+          tabIndex={0}
+          aria-label={
+            citation && displayIndex
+              ? t("ui.citation.ariaLabel", "Citation {index}", {
                   index: displayIndex,
-                }),
-                qualityStatus ? t("ui.citation.qualityNeedsReview") : null,
-              ]
-                .filter(Boolean)
-                .join(" · ")
-            : t("ui.citation.unavailable", "Citation unavailable")
-        }
-        aria-disabled={!canOpen}
-        data-citation-id={citationId}
-        data-citation-quality={qualityStatus}
-        className={cn(
-          "inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border p-0 text-2xs font-medium tabular-nums no-underline transition-colors",
-          qualityStatus === "critical"
-            ? "border-warning/50 bg-warning-light/70 text-warning-text hover:bg-warning-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warning/20"
-            : citation
-              ? "border-surface-border bg-surface-muted text-ink-body hover:text-ink-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
-            : "cursor-default border-surface-border bg-surface-muted text-ink-meta",
-        )}
-        onClick={open}
-      >
-        {indexLabel}
-      </button>
+                })
+              : t("ui.citation.unavailable", "Citation unavailable")
+          }
+          data-citation-id={citationId}
+          data-citation-calculation-source
+          className="flex w-full max-w-full cursor-default items-center rounded-md bg-transparent px-2 py-1 text-left text-xs text-ink-body outline-none transition hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-primary/20"
+        >
+          <span className="mr-1 font-semibold text-primary">{indexLabel}</span>
+          <span className="min-w-0 truncate">{sourceLabel}</span>
+        </span>
+      ) : (
+        <button
+          ref={(node) => {
+            triggerRef.current = node;
+          }}
+          type="button"
+          aria-label={
+            citation && displayIndex
+              ? [
+                  t("ui.citation.ariaLabel", "Citation {index}", {
+                    index: displayIndex,
+                  }),
+                  qualityStatus ? t("ui.citation.qualityNeedsReview") : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
+              : t("ui.citation.unavailable", "Citation unavailable")
+          }
+          aria-disabled={!canOpen}
+          data-citation-id={citationId}
+          data-citation-quality={qualityStatus}
+          className={cn(
+            "inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border p-0 font-medium leading-none tabular-nums no-underline transition-colors",
+            qualityStatus === "critical"
+              ? "border-warning/50 bg-warning-light/70 text-warning-text hover:bg-warning-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warning/20"
+              : citation
+                ? "border-surface-border bg-surface-muted text-ink-body hover:text-ink-heading focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                : "cursor-default border-surface-border bg-surface-muted text-ink-meta",
+          )}
+          onClick={open}
+        >
+          <span
+            className={cn(
+              "inline-flex h-full w-full items-center justify-center leading-none",
+              indexLabel.length > 1 ? "text-micro" : "text-2xs",
+            )}
+            // At this 16px control size, a whole CSS pixel crosses the optical
+            // centre on Retina displays. Half a pixel centres two tabular
+            // digits without moving the circle or single-digit labels.
+            style={
+              indexLabel.length > 1
+                ? { transform: "translateX(-0.5px) scale(0.9)" }
+                : undefined
+            }
+          >
+            {indexLabel}
+          </span>
+        </button>
+      )}
       {hovered && citation && displayIndex && typeof document !== "undefined"
         ? createPortal(
             <CitationHoverCard
@@ -783,6 +877,7 @@ export function CitationPill({
               side={cardSide}
               position={cardPosition}
               canOpen={canOpen}
+              canOpenLinkedEvidence={Boolean(onCitationClick)}
               onOpen={open}
               citationById={citationById}
               onOpenCitation={openCitation}
@@ -805,28 +900,62 @@ export function CitationSourceCards({
   citationBundle,
   messageId,
   onCitationClick,
+  displayOrder,
+  messageIdByCitationId,
 }: {
   content: string;
   citationBundle?: CitationBundleV1;
   messageId?: string;
   onCitationClick?: (input: OpenCitationInput) => void;
+  displayOrder?: ReadonlyMap<string, number>;
+  messageIdByCitationId?: ReadonlyMap<string, string | undefined>;
 }) {
   const { t } = useI18n();
   const used = useMemo(
-    () => usedCitations(content, citationBundle),
-    [content, citationBundle],
+    () => usedCitations(content, citationBundle, displayOrder),
+    [content, citationBundle, displayOrder],
   );
   const sourceGroups = useMemo(() => groupedCitationSources(used), [used]);
+  const citationById = useMemo(
+    () =>
+      new Map(
+        citationBundle?.citations.map((citation) => [
+          citation.citationId,
+          citation,
+        ]) ?? [],
+      ),
+    [citationBundle],
+  );
   if (!used.length) return null;
 
   return (
-    <section className="mt-3 border-t border-surface-border pt-2">
+    <section
+      data-citation-source-list
+      className="mt-3 border-t border-surface-border pt-2"
+    >
       <h3 className="text-xs font-medium text-ink-meta">
         {t("ui.citation.sources", "Sources")}
       </h3>
       <div className="mt-1.5 flex flex-col gap-1.5">
         {sourceGroups.map(({ key, displayIndexes, citation }) => {
           const displayIndex = citationIndexLabel(displayIndexes);
+          const citationMessageId =
+            messageIdByCitationId?.get(citation.citationId) ?? messageId;
+          if (citation.evidence.kind === "calculation") {
+            return (
+              <CitationPill
+                key={key}
+                citationId={citation.citationId}
+                displayIndex={displayIndexes[0]}
+                citation={citation}
+                citationById={citationById}
+                messageId={citationMessageId}
+                onCitationClick={onCitationClick}
+                variant="source-row"
+                sourceLabel={citation.source.title}
+              />
+            );
+          }
           const disabled =
             !onCitationClick ||
             citation.resolutionStatus === "forbidden" ||
@@ -839,7 +968,7 @@ export function CitationSourceCards({
               disabled={disabled}
               onClick={() =>
                 onCitationClick?.({
-                  messageId,
+                  messageId: citationMessageId,
                   citationId: citation.citationId,
                 })
               }

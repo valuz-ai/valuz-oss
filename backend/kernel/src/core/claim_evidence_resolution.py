@@ -7,6 +7,8 @@ items are verified; they never prove support or trigger a repair by themselves.
 
 from __future__ import annotations
 
+import logging
+import math
 import re
 from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping
@@ -29,6 +31,9 @@ from src.core.claim_audit import (
 RESOLVER_REVISION = "claim-evidence-resolver-v1"
 DEFAULT_CANDIDATE_LIMIT = 8
 DEFAULT_PREFILTER_LIMIT = 64
+DEFAULT_SEMANTIC_CONFIDENCE_THRESHOLD = 0.8
+
+logger = logging.getLogger(__name__)
 
 CandidateSignalName = Literal[
     "explicit-binding",
@@ -51,7 +56,7 @@ ResolutionStatus = Literal[
     "calculation-invalid",
 ]
 BindingAction = Literal["keep", "auto-bind", "auto-rebind", "none"]
-RepairAction = Literal["none", "local-patch", "research-required"]
+UserVisibleSeverity = Literal["none", "advisory", "warning"]
 SemanticVerdict = Literal[
     "entailed",
     "partially-entailed",
@@ -79,24 +84,39 @@ class EvidenceCandidate:
 
 
 @dataclass(frozen=True)
+class SemanticSupportSpan:
+    evidence_handle: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
 class SemanticVerificationResult:
     verdict: SemanticVerdict
     evidence_handles: tuple[str, ...]
     confidence: float
+    support_spans: tuple[SemanticSupportSpan, ...] = ()
     covered_parts: tuple[str, ...] = ()
     missing_parts: tuple[str, ...] = ()
     conflicts: tuple[str, ...] = ()
     verifier_revision: str = ""
 
 
-class SemanticVerifierPort(Protocol):
-    """Bounded semantic verifier; it cannot search or create Evidence."""
+@dataclass(frozen=True)
+class SemanticVerificationRequest:
+    """One isolated Claim plus only its already-bound text candidates."""
 
-    def verify(
+    claim: ClaimCandidate
+    candidates: tuple[EvidenceCandidate, ...]
+
+
+class SemanticVerifierPort(Protocol):
+    """Bounded batch verifier; each request keeps its Evidence scope isolated."""
+
+    def verify_batch(
         self,
-        claim: ClaimCandidate,
-        candidates: tuple[EvidenceCandidate, ...],
-    ) -> SemanticVerificationResult: ...
+        requests: tuple[SemanticVerificationRequest, ...],
+    ) -> Mapping[str, SemanticVerificationResult]: ...
 
 
 @dataclass(frozen=True)
@@ -106,7 +126,7 @@ class ClaimResolution:
     selected_handles: tuple[str, ...]
     candidate_handles: tuple[str, ...]
     binding_action: BindingAction
-    repair_action: RepairAction
+    user_visible_severity: UserVisibleSeverity
     support_by_handle: Mapping[str, str]
     reason_codes: tuple[str, ...]
     resolver_revision: str = RESOLVER_REVISION
@@ -182,9 +202,7 @@ class EvidenceCandidateIndex:
                     entity_text,
                     str(evidence.get("field") or ""),
                     str(evidence.get("metric") or ""),
-                    " ".join(
-                        str(evidence.get(key) or "") for key in ("period", "asOf")
-                    ),
+                    " ".join(str(evidence.get(key) or "") for key in ("period", "asOf")),
                     _text_evidence(evidence) if kind == "text" else "",
                 )
             )
@@ -435,6 +453,51 @@ def retrieve_evidence_candidates(
     return tuple((*explicit_candidates, *ranked[: max(0, limit - len(explicit_candidates))]))
 
 
+def prepare_semantic_verification_request(
+    claim: ClaimCandidate,
+    records: Iterable[Any],
+    *,
+    semantics: Mapping[str, Any] | None = None,
+    entity_aliases: Mapping[str, Iterable[str]] | None = None,
+    limit: int = DEFAULT_CANDIDATE_LIMIT,
+) -> SemanticVerificationRequest | None:
+    """Return the bounded semantic request after deterministic screening.
+
+    This is the message-level batching seam. It never broadens the candidate
+    pool: only legal explicit bindings that point to text Evidence and remain
+    unresolved after deterministic checks are projected to the model.
+    """
+
+    candidate_index = ensure_evidence_candidate_index(records, semantics=semantics)
+    candidates = retrieve_evidence_candidates(
+        claim,
+        candidate_index,
+        semantics=semantics,
+        entity_aliases=entity_aliases,
+        limit=limit,
+    )
+    explicit = set(claim.attached_evidence_handles)
+    semantic_candidates: list[EvidenceCandidate] = []
+    for candidate in candidates:
+        if candidate.handle not in explicit or candidate.evidence.get("kind") != "text":
+            continue
+        support = _deterministic_support(
+            claim,
+            candidate,
+            semantics,
+            candidate_index=candidate_index,
+        )
+        if support.status in {"supported", "contradicted"} or candidate.hard_conflicts:
+            continue
+        semantic_candidates.append(candidate)
+    if not semantic_candidates:
+        return None
+    return SemanticVerificationRequest(
+        claim=claim,
+        candidates=tuple(semantic_candidates),
+    )
+
+
 def resolve_claim_evidence(
     claim: ClaimCandidate,
     records: Iterable[Any],
@@ -442,6 +505,7 @@ def resolve_claim_evidence(
     semantics: Mapping[str, Any] | None = None,
     entity_aliases: Mapping[str, Iterable[str]] | None = None,
     semantic_verifier: SemanticVerifierPort | None = None,
+    semantic_result: SemanticVerificationResult | None = None,
     limit: int = DEFAULT_CANDIDATE_LIMIT,
 ) -> ClaimResolution:
     """Resolve one claim without mutating answer text or triggering repair."""
@@ -471,26 +535,69 @@ def resolve_claim_evidence(
         )
         support_by_handle[candidate.handle] = support.status
 
-    semantic_result: SemanticVerificationResult | None = None
     semantic_candidates = tuple(
         candidate
         for candidate in candidates
+        if candidate.handle in explicit
         if candidate.evidence.get("kind") == "text"
-        and support_by_handle[candidate.handle] != "supported"
+        and support_by_handle[candidate.handle] not in {"supported", "contradicted"}
+        and not candidate.hard_conflicts
     )
-    if semantic_verifier is not None and semantic_candidates:
-        semantic_result = semantic_verifier.verify(claim, semantic_candidates)
-        allowed = {candidate.handle for candidate in semantic_candidates}
-        selected = tuple(handle for handle in semantic_result.evidence_handles if handle in allowed)
-        mapped_status = {
-            "entailed": "supported",
-            "partially-entailed": "partially-supported",
-            "unresolved": "not-found",
-            "contradicted": "contradicted",
-            "unrelated": "not-found",
-        }[semantic_result.verdict]
-        for handle in selected:
-            support_by_handle[handle] = mapped_status
+    if semantic_result is None and semantic_verifier is not None and semantic_candidates:
+        try:
+            candidate_result = semantic_verifier.verify_batch(
+                (
+                    SemanticVerificationRequest(
+                        claim=claim,
+                        candidates=semantic_candidates,
+                    ),
+                )
+            ).get(claim.claim_id)
+        except Exception:  # noqa: BLE001 — optional verifier always fails open
+            logger.debug(
+                "bounded semantic verifier unavailable for claim %s",
+                claim.claim_id,
+                exc_info=True,
+            )
+        else:
+            confidence = (
+                float(candidate_result.confidence)
+                if isinstance(candidate_result, SemanticVerificationResult)
+                else math.nan
+            )
+            if (
+                isinstance(candidate_result, SemanticVerificationResult)
+                and math.isfinite(confidence)
+                and confidence >= DEFAULT_SEMANTIC_CONFIDENCE_THRESHOLD
+            ):
+                semantic_result = candidate_result
+    if semantic_result is not None and semantic_candidates:
+        try:
+            confidence = float(semantic_result.confidence)
+        except (TypeError, ValueError):
+            confidence = math.nan
+        if math.isfinite(confidence) and confidence >= DEFAULT_SEMANTIC_CONFIDENCE_THRESHOLD:
+            allowed = {candidate.handle for candidate in semantic_candidates}
+            selected = tuple(
+                dict.fromkeys(
+                    handle
+                    for handle in semantic_result.evidence_handles
+                    if handle in allowed
+                )
+            )
+            # A semantic model may establish support, but it is not a
+            # programmatic contradiction oracle. Only deterministic
+            # entity/period/value/formula conflicts may enter the
+            # confirmed-conflict path and its prominent UI treatment.
+            mapped_status = {
+                "entailed": "supported",
+                "partially-entailed": "partially-supported",
+                "unresolved": "not-found",
+                "contradicted": "not-found",
+                "unrelated": "not-found",
+            }.get(semantic_result.verdict, "not-found")
+            for handle in selected:
+                support_by_handle[handle] = mapped_status
 
     supported = tuple(
         candidate.handle
@@ -576,7 +683,7 @@ def resolve_claim_evidence(
             (),
             candidates,
             "none",
-            "none",
+            "advisory" if requested_explicit else "none",
             support_by_handle,
             ("multiple-verified-candidates",),
         )
@@ -587,20 +694,43 @@ def resolve_claim_evidence(
             explicit_contradicted,
             candidates,
             "none",
-            "local-patch",
+            "warning",
             support_by_handle,
             ("explicit-binding-contradicted",),
         )
-    if requested_explicit:
+    explicit_partial = tuple(handle for handle in explicit if handle in partial)
+    if explicit_partial:
+        return _resolution(
+            claim,
+            "supported-with-limits",
+            explicit_partial,
+            candidates,
+            "keep",
+            "advisory",
+            support_by_handle,
+            ("explicit-binding-partially-supported",),
+        )
+    if missing_explicit and not explicit:
         return _resolution(
             claim,
             "invalid-binding",
-            explicit,
+            (),
             candidates,
             "none",
-            "none",
+            "advisory",
             support_by_handle,
-            ("explicit-binding-missing" if missing_explicit else "explicit-binding-unresolved",),
+            ("explicit-binding-missing",),
+        )
+    if explicit:
+        return _resolution(
+            claim,
+            "unresolved",
+            explicit,
+            candidates,
+            "keep",
+            "advisory",
+            support_by_handle,
+            ("explicit-binding-unresolved",),
         )
     if partial:
         return _resolution(
@@ -669,7 +799,7 @@ def _resolution(
     selected: tuple[str, ...],
     candidates: tuple[EvidenceCandidate, ...],
     binding_action: BindingAction,
-    repair_action: RepairAction,
+    user_visible_severity: UserVisibleSeverity,
     support_by_handle: Mapping[str, str],
     reason_codes: tuple[str, ...],
 ) -> ClaimResolution:
@@ -679,7 +809,7 @@ def _resolution(
         selected_handles=selected,
         candidate_handles=tuple(candidate.handle for candidate in candidates),
         binding_action=binding_action,
-        repair_action=repair_action,
+        user_visible_severity=user_visible_severity,
         support_by_handle=dict(support_by_handle),
         reason_codes=reason_codes,
     )
@@ -787,6 +917,21 @@ def _deterministic_support(
         )
     ):
         return support
+    if bool(claim_unit) != bool(evidence_unit):
+        # A missing unit is unknown, not a contradiction.  Exact canonical
+        # metric/value identity can still support a unique binding, but only
+        # without applying any scale conversion.  The quality layer keeps the
+        # missing-unit issue on the resulting citation so this never invents a
+        # currency or display unit.
+        if structured_values_equivalent(
+            claim_value,
+            "",
+            evidence_value,
+            "",
+            semantics=semantics,
+        ):
+            return EvidenceSupport("supported", 3)
+        return support
     if not structured_values_equivalent(
         claim_value,
         claim_unit,
@@ -795,7 +940,7 @@ def _deterministic_support(
         semantics=semantics,
     ):
         return EvidenceSupport("contradicted", 4)
-    return support
+    return EvidenceSupport("supported", 3)
 
 
 def _candidate_signals(
@@ -1022,6 +1167,10 @@ def _evidence_entity_text(
             source.get("title"),
             source.get("organization"),
             source.get("sourceId"),
+            evidence.get("prefix"),
+            evidence.get("quote"),
+            evidence.get("suffix"),
+            evidence.get("snippet"),
         )
     )
 

@@ -44,6 +44,7 @@ from valuz_agent.adapters.capability_resolver import (
     resolve_skill_slugs_to_paths,
 )
 from valuz_agent.adapters.system_prompt_builder import (
+    AUTHORIZATION_BOUNDARY_INSTRUCTIONS,
     OUTPUT_FORMAT_INSTRUCTIONS,
     assemble_session_instructions,
     build_project_system_prompt,
@@ -1130,6 +1131,7 @@ async def build_member_session(
                 "global-instructions",
                 prompt_snapshot.content if prompt_snapshot is not None else "",
             ),
+            ("authorization-boundary", AUTHORIZATION_BOUNDARY_INSTRUCTIONS),
             ("agent-instructions", agent.instructions or ""),
             ("project-instructions", project_prompt),
             ("memory", mem_block),

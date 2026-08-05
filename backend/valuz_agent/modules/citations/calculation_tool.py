@@ -5,7 +5,9 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import keyword
 import re
+import unicodedata
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
@@ -15,11 +17,8 @@ from src.core.calculation import evaluate_decimal_expression
 from src.core.tools import ExecContext
 
 CITATION_CALCULATE_TOOL_NAME = "citation_calculate"
-_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _HANDLE_RE = re.compile(r"^ev_[A-Za-z0-9_-]{8,128}$")
-_COLLECTION_ADDRESS_RE = re.compile(
-    r"^evc_[A-Za-z0-9_-]{8,128}#/[^\s#?]{1,1024}$"
-)
+_COLLECTION_ADDRESS_RE = re.compile(r"^evc_[A-Za-z0-9_-]{8,128}#/[^\s#?]{1,1024}$")
 
 _PARAMS = {
     "type": "object",
@@ -39,8 +38,16 @@ _PARAMS = {
                     "value": {"type": ["number", "string"]},
                     "unit": {"type": "string"},
                     "evidenceHandle": {"type": "string"},
+                    "origin": {
+                        "type": "string",
+                        "enum": ["user-input"],
+                        "description": (
+                            "Use only when this exact input value was explicitly supplied "
+                            "by the user. Retrieved facts must use evidenceHandle instead."
+                        ),
+                    },
                 },
-                "required": ["name", "value", "evidenceHandle"],
+                "required": ["name", "value"],
             },
         },
         "unit": {"type": "string"},
@@ -66,6 +73,26 @@ def _decimal(value: Any) -> Decimal:
     if not result.is_finite():
         raise ValueError("invalid_input_value")
     return result
+
+
+def _input_name(value: Any) -> str | None:
+    """Return the canonical language-neutral expression identifier.
+
+    Python's bounded AST accepts Unicode identifiers safely. Restricting names
+    to ASCII made otherwise valid calculations fail whenever a model used
+    natural Chinese, Japanese, or other localized input labels. NFKC mirrors
+    Python's own identifier normalization so the stored input key and the
+    parsed expression always address the same variable.
+    """
+
+    if not isinstance(value, str):
+        return None
+    normalized = unicodedata.normalize("NFKC", value)
+    if not normalized or len(normalized) > 64:
+        return None
+    if not normalized.isidentifier() or keyword.iskeyword(normalized):
+        return None
+    return normalized
 
 
 def _stable_decimal(value: Decimal, decimal_places: int) -> str:
@@ -141,22 +168,29 @@ async def _citation_calculate_handler(
         for raw in raw_inputs:
             if not isinstance(raw, dict):
                 raise ValueError("invalid_input")
-            name = raw.get("name")
+            name = _input_name(raw.get("name"))
             handle = raw.get("evidenceHandle")
-            if not isinstance(name, str) or not _NAME_RE.fullmatch(name) or name in values:
+            origin = raw.get("origin")
+            if name is None or name in values:
                 raise ValueError("invalid_input_name")
-            if not isinstance(handle, str) or not (
-                _HANDLE_RE.fullmatch(handle)
-                or _COLLECTION_ADDRESS_RE.fullmatch(handle)
+            has_handle = isinstance(handle, str) and bool(handle)
+            has_user_origin = origin == "user-input"
+            if has_handle == has_user_origin:
+                raise ValueError("invalid_input_origin")
+            if has_handle and not (
+                _HANDLE_RE.fullmatch(handle) or _COLLECTION_ADDRESS_RE.fullmatch(handle)
             ):
                 raise ValueError("invalid_evidence_handle")
             value = _decimal(raw.get("value"))
             values[name] = value
             item: dict[str, Any] = {
                 "name": name,
-                "citationId": handle,
                 "value": format(value, "f"),
             }
+            if has_handle:
+                item["citationId"] = handle
+            else:
+                item["origin"] = "user-input"
             if isinstance(raw.get("unit"), str) and raw["unit"].strip():
                 item["unit"] = raw["unit"].strip()
             inputs.append(item)
@@ -222,13 +256,16 @@ def build_citation_calculation_tool_defs() -> tuple[ToolDef, ...]:
         ToolDef(
             name=CITATION_CALCULATE_TOOL_NAME,
             description=(
-                "Compute a derived numeric result deterministically from values that already "
-                "have direct evidence handles or exact structured Collection Addresses, and "
+                "Compute a derived numeric result deterministically from retrieved values that "
+                "have direct evidence handles or exact structured Collection Addresses, plus "
+                "optional values explicitly supplied by the user using origin='user-input', and "
                 "return a calculation evidence handle. Use this "
                 "for growth rates, margins, ratios, differences, sums, and other arithmetic "
                 "that appears in a citation-aware answer. Cite the returned handle on the "
                 "derived claim; do not calculate those values only in prose. When unit is %, "
-                "a unitless ratio expression is converted to percentage points automatically."
+                "a unitless ratio expression is converted to percentage points automatically. "
+                "Never mark a retrieved or model-invented value as user-input; the host verifies "
+                "every such value against the task prompt before accepting the calculation."
             ),
             parameters=_PARAMS,
             handler=_citation_calculate_handler,

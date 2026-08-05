@@ -1,0 +1,569 @@
+/*
+ * Report family — the document layer.
+ *
+ * Everything here is page furniture: the paper, the running head and foot, the
+ * folio, the table of contents, and the few blocks that only exist between two
+ * page edges. Content blocks (KPI strips, prose, charts) come from their own
+ * families and are styled by their own stylesheets — a report reuses them, it
+ * does not re-skin them.
+ *
+ * Two deviations from the package's usual rules, both deliberate:
+ *  - `color-mix()` appears for the cover scrim and the page shadow. The inputs
+ *    are still `--openui-*` tokens; there is no token for a translucent
+ *    variant, and a literal colour would ignore the host theme.
+ *  - A viewport `@media print` block sits at the bottom. Print is the one
+ *    context a container query cannot describe: the sheet of paper is not the
+ *    chat column.
+ */
+
+/* ── Document ─────────────────────────────────────────────────────── */
+
+.vgb-report-doc {
+  display: flex;
+  flex-direction: column;
+  gap: var(--openui-space-xl);
+  width: 100%;
+}
+
+.vgb-report-doc-title {
+  color: var(--openui-text-neutral-tertiary);
+  font-family: var(--openui-font-label);
+  font-size: var(--openui-font-size-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+
+/* ── The page ─────────────────────────────────────────────────────── */
+
+/*
+ * `aspect-ratio` gives the page its A4 proportion without pinning a height:
+ * a box with a preferred aspect ratio and `overflow: visible` still takes its
+ * automatic minimum size from its content, so an over-filled page grows rather
+ * than clipping the last paragraph off the bottom.
+ */
+.vgb-report-page {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--openui-space-l);
+  width: 100%;
+  aspect-ratio: 1 / 1.414;
+  padding: var(--openui-space-2xl);
+  background-color: var(--openui-background);
+  border: 1px solid var(--openui-border-default);
+  border-radius: var(--openui-radius-l);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--openui-text-neutral-primary) 10%, transparent);
+  color: var(--openui-text-neutral-primary);
+  font-family: var(--openui-font-body);
+}
+
+.vgb-report-page-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--openui-space-l);
+}
+
+/* Running head / foot. The folio always sits at the outer edge. */
+
+.vgb-report-running {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--openui-space-m);
+  color: var(--openui-text-neutral-tertiary);
+  font-family: var(--openui-font-label);
+  font-size: var(--openui-font-size-xs);
+  letter-spacing: 0.04em;
+}
+
+.vgb-report-running-head {
+  padding-bottom: var(--openui-space-xs);
+  border-bottom: 1px solid var(--openui-border-default);
+}
+
+.vgb-report-running-foot {
+  padding-top: var(--openui-space-xs);
+  border-top: 1px solid var(--openui-border-default);
+}
+
+.vgb-report-running-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.vgb-report-folio {
+  margin-inline-start: auto;
+  font-family: var(--openui-font-numbers);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Cover ────────────────────────────────────────────────────────── */
+
+.vgb-report-cover-body {
+  justify-content: center;
+}
+
+.vgb-report-cover-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--openui-space-s);
+  min-width: 0;
+}
+
+.vgb-report-cover-title {
+  margin: 0;
+  color: var(--openui-text-neutral-primary);
+  font-family: var(--openui-font-heading);
+  font-size: var(--openui-font-size-4xl);
+  font-weight: var(--openui-font-weight-heavy);
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+  overflow-wrap: anywhere;
+}
+
+.vgb-report-cover-subtitle {
+  margin: 0;
+  color: var(--openui-text-neutral-secondary);
+  font-size: var(--openui-font-size-lg);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.vgb-report-cover-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--openui-space-s);
+  margin: var(--openui-space-m) 0 0;
+  color: var(--openui-text-neutral-tertiary);
+  font-family: var(--openui-font-label);
+  font-size: var(--openui-font-size-sm);
+}
+
+/* standard — text and picture share the page, DOM order text-first so the
+   title is read before the artwork whatever the layout does visually. */
+
+.vgb-report-cover-layout {
+  display: flex;
+  flex: 1 1 auto;
+  gap: var(--openui-space-xl);
+  min-height: 0;
+}
+
+.vgb-report-cover-layout[data-position="top"] {
+  flex-direction: column-reverse;
+}
+
+.vgb-report-cover-layout[data-position="bottom"] {
+  flex-direction: column;
+}
+
+.vgb-report-cover-layout[data-position="right"] {
+  flex-direction: row;
+  align-items: center;
+}
+
+.vgb-report-cover-layout[data-position="left"] {
+  flex-direction: row-reverse;
+  align-items: center;
+}
+
+.vgb-report-cover-layout > .vgb-report-cover-text {
+  flex: 0 0 auto;
+  justify-content: center;
+}
+
+.vgb-report-cover-layout[data-position="left"] > .vgb-report-cover-text,
+.vgb-report-cover-layout[data-position="right"] > .vgb-report-cover-text {
+  flex: 1 1 50%;
+}
+
+.vgb-report-cover-media {
+  flex: 1 1 40%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background-color: var(--openui-highlight-subtle);
+  border-radius: var(--openui-radius-l);
+}
+
+.vgb-report-cover-media img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* minimal — type alone, anchored to the foot of the page over a hairline. */
+
+.vgb-report-cover-minimal .vgb-report-cover-body {
+  justify-content: flex-end;
+}
+
+.vgb-report-cover-rule {
+  flex: 0 0 auto;
+  height: 1px;
+  margin-top: var(--openui-space-l);
+  background-color: var(--openui-border-default);
+}
+
+/* dramatic — full-bleed artwork, scrim, title at the foot. */
+
+.vgb-report-cover-bleed {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
+.vgb-report-cover-dramatic::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-image: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--openui-background) 94%, transparent),
+    color-mix(in srgb, var(--openui-background) 40%, transparent)
+  );
+}
+
+.vgb-report-cover-dramatic .vgb-report-cover-body {
+  position: relative;
+  z-index: 1;
+  justify-content: flex-end;
+}
+
+.vgb-report-cover-dramatic .vgb-report-cover-title {
+  font-size: var(--openui-font-size-5xl);
+}
+
+/* ── Table of contents ────────────────────────────────────────────── */
+
+.vgb-report-toc-title {
+  margin: 0;
+  color: var(--openui-text-neutral-primary);
+  font-family: var(--openui-font-heading);
+  font-size: var(--openui-font-size-2xl);
+  font-weight: var(--openui-font-weight-bold);
+}
+
+.vgb-report-toc-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--openui-space-m);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vgb-report-toc-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--openui-space-s);
+  font-size: var(--openui-font-size-md);
+}
+
+.vgb-report-toc-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--openui-text-neutral-primary);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The leader. A flex filler carrying a dotted bottom border is the only way to
+ * get true leader dots that stop exactly at the folio — a repeating background
+ * cannot align to the baseline of two different type sizes.
+ */
+.vgb-report-toc-leader {
+  flex: 1 1 auto;
+  align-self: center;
+  min-width: var(--openui-space-l);
+  border-bottom: 1px dotted var(--openui-border-default);
+  translate: 0 0.15em;
+}
+
+.vgb-report-toc-page {
+  flex: 0 0 auto;
+  color: var(--openui-text-neutral-secondary);
+  font-family: var(--openui-font-numbers);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Sections and headlines ───────────────────────────────────────── */
+
+.vgb-report-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--openui-space-s);
+  break-inside: avoid;
+}
+
+.vgb-report-section-title {
+  margin: 0;
+  color: var(--openui-text-neutral-primary);
+  font-family: var(--openui-font-heading);
+  font-size: var(--openui-font-size-xl);
+  font-weight: var(--openui-font-weight-bold);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.vgb-report-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--openui-space-m);
+  color: var(--openui-text-neutral-secondary);
+  font-size: var(--openui-font-size-md);
+  line-height: 1.65;
+}
+
+.vgb-report-headline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--openui-space-2xs);
+  break-inside: avoid;
+}
+
+.vgb-report-headline-text {
+  margin: 0;
+  color: var(--openui-text-neutral-primary);
+  font-family: var(--openui-font-heading);
+  font-size: var(--openui-font-size-3xl);
+  font-weight: var(--openui-font-weight-bold);
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+/* ── Key statement ────────────────────────────────────────────────── */
+
+.vgb-report-statement {
+  display: flex;
+  flex-direction: column;
+  gap: var(--openui-space-xs);
+  margin: 0;
+  padding: var(--openui-space-l) var(--openui-space-ml);
+  border-inline-start: 3px solid var(--openui-border-default);
+  border-radius: 0 var(--openui-radius-m) var(--openui-radius-m) 0;
+  break-inside: avoid;
+}
+
+.vgb-report-statement-text {
+  margin: 0;
+  font-family: var(--openui-font-heading);
+  font-size: var(--openui-font-size-lg);
+  font-weight: var(--openui-font-weight-medium);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.vgb-report-statement-attribution {
+  color: var(--openui-text-neutral-tertiary);
+  font-family: var(--openui-font-label);
+  font-size: var(--openui-font-size-sm);
+}
+
+/* ── Table ────────────────────────────────────────────────────────── */
+
+/*
+ * Booktabs, not a card: a rule under the column labels, a rule under the last
+ * row, nothing else. No zebra striping, no container border, no radius — those
+ * read as UI, and this is a printed exhibit.
+ */
+.vgb-report-table-figure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--openui-space-xs);
+  margin: 0;
+  break-inside: avoid;
+}
+
+.vgb-report-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--openui-font-size-sm);
+}
+
+.vgb-report-table th {
+  padding: var(--openui-space-xs) var(--openui-space-s);
+  border-bottom: 1px solid var(--openui-border-default);
+  color: var(--openui-text-neutral-secondary);
+  font-family: var(--openui-font-label);
+  font-weight: var(--openui-font-weight-medium);
+  white-space: nowrap;
+}
+
+.vgb-report-table td {
+  padding: var(--openui-space-xs) var(--openui-space-s);
+  color: var(--openui-text-neutral-primary);
+  vertical-align: top;
+}
+
+.vgb-report-table tbody tr:last-child td {
+  border-bottom: 1px solid var(--openui-border-default);
+}
+
+.vgb-report-table th:first-child,
+.vgb-report-table td:first-child {
+  padding-inline-start: 0;
+}
+
+.vgb-report-table th:last-child,
+.vgb-report-table td:last-child {
+  padding-inline-end: 0;
+}
+
+.vgb-report-caption {
+  color: var(--openui-text-neutral-tertiary);
+  font-size: var(--openui-font-size-xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* ── Figure ───────────────────────────────────────────────────────── */
+
+.vgb-report-figure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--openui-space-xs);
+  margin: 0;
+  break-inside: avoid;
+}
+
+.vgb-report-figure-full {
+  width: 100%;
+}
+
+.vgb-report-figure-half {
+  width: 50%;
+  max-width: 100%;
+}
+
+.vgb-report-figure-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--openui-radius-m);
+}
+
+/* Shown when the model supplied a URL that is not http(s) — see safe-url.ts. */
+.vgb-report-figure-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--openui-space-3xl);
+  padding: var(--openui-space-l);
+  background-color: var(--openui-highlight-subtle);
+  border: 1px dashed var(--openui-border-default);
+  border-radius: var(--openui-radius-m);
+  color: var(--openui-text-neutral-tertiary);
+  font-size: var(--openui-font-size-xs);
+  text-align: center;
+}
+
+/* ── Narrow columns ───────────────────────────────────────────────── */
+
+@container vgb (max-width: 48rem) {
+  .vgb-report-page {
+    padding: var(--openui-space-xl);
+  }
+
+  .vgb-report-cover-title {
+    font-size: var(--openui-font-size-3xl);
+  }
+
+  .vgb-report-cover-dramatic .vgb-report-cover-title {
+    font-size: var(--openui-font-size-4xl);
+  }
+
+  .vgb-report-headline-text {
+    font-size: var(--openui-font-size-2xl);
+  }
+}
+
+@container vgb (max-width: 30rem) {
+  .vgb-report-page {
+    padding: var(--openui-space-l);
+  }
+
+  .vgb-report-cover-title {
+    font-size: var(--openui-font-size-2xl);
+  }
+
+  .vgb-report-cover-dramatic .vgb-report-cover-title {
+    font-size: var(--openui-font-size-3xl);
+  }
+
+  .vgb-report-cover-layout[data-position="left"],
+  .vgb-report-cover-layout[data-position="right"] {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .vgb-report-cover-layout[data-position="left"] > .vgb-report-cover-text,
+  .vgb-report-cover-layout[data-position="right"] > .vgb-report-cover-text {
+    flex: 0 0 auto;
+  }
+
+  .vgb-report-figure-half {
+    width: 100%;
+  }
+
+  /* Let the exhibit scroll in its own box instead of crushing every column. */
+  .vgb-report-table td {
+    white-space: nowrap;
+  }
+}
+
+/* ── Print ────────────────────────────────────────────────────────── */
+
+/*
+ * The one correct viewport media query in this package: the target is a sheet
+ * of paper, which no container describes. Screen affordances (shadow, border,
+ * radius, the document label) come off, and every page ends a sheet.
+ */
+@media print {
+  .vgb-report-doc {
+    gap: 0;
+  }
+
+  .vgb-report-doc-title {
+    display: none;
+  }
+
+  .vgb-report-page {
+    /* The sheet sets the page size; keeping the A4 ratio here would compute a
+       box taller than the printable area and emit a blank sheet after each. */
+    aspect-ratio: auto;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    break-after: page;
+    break-inside: avoid;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .vgb-report-page:last-child {
+    break-after: auto;
+  }
+
+  .vgb-report-section,
+  .vgb-report-headline,
+  .vgb-report-statement,
+  .vgb-report-table-figure,
+  .vgb-report-figure {
+    break-inside: avoid;
+  }
+
+  /* Scroll containment is a screen affordance; on paper it would hide columns. */
+  .vgb-report-table-figure .vgb-scroll-x {
+    overflow-x: visible;
+  }
+}

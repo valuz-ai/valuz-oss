@@ -93,6 +93,50 @@ describe("buildTurns — streaming deltas", () => {
     });
   });
 
+  it("attaches a later sidecar without replacing or duplicating assistant text", () => {
+    const bundle = {
+      version: 1 as const,
+      citations: [
+        {
+          citationId: "cit_1",
+          source: {
+            sourceId: "doc:1",
+            providerId: "docs",
+            sourceType: "document" as const,
+            title: "Annual report",
+            retrievedAt: "2026-08-04T00:00:00Z",
+          },
+          evidence: {
+            kind: "text" as const,
+            quote: "Revenue increased.",
+            snippet: "Revenue increased.",
+            capturedAt: "2026-08-04T00:00:00Z",
+          },
+        },
+      ],
+    };
+    const original = "Revenue [source](evidence://ev_revenue_12345678).";
+    const turns = buildTurns([
+      evt(1, "message.user", { text: "hi", message_id: "a1" }),
+      evt(2, "message.assistant.delta", {
+        text: original,
+        message_id: "a1",
+      }),
+      evt(3, "message.assistant.sidecar", {
+        assistant_segment_index: "0",
+        citation_bundle: JSON.stringify(bundle),
+        message_id: "a1",
+      }),
+    ]);
+
+    expect(turns[0]!.blocks).toHaveLength(1);
+    expect(turns[0]!.blocks[0]).toMatchObject({
+      kind: "assistant",
+      text: original,
+      citationBundle: bundle,
+    });
+  });
+
   it("should ignore malformed citation bundles without dropping answer text", () => {
     const turns = buildTurns([
       evt(1, "message.user", { text: "hi", message_id: "u1" }),

@@ -1,0 +1,359 @@
+/*
+ * Rich cards and tiles.
+ *
+ * Two surfaces underpin the whole family:
+ *  - `.vgb-card`  — a bordered card on the page background. Everything with a
+ *    title and prose sits on it (StatsCard, OverviewCard, ContextCard,
+ *    CompositeCard, VisualFirstCard, ValueCard, OptionCard).
+ *  - `.vgb-tile`  — the filled, borderless tile from `base.css`, reused as-is
+ *    by DataTileCard, ProfileTile and TileOption so they inherit its
+ *    flex-basis step-down at the two container breakpoints.
+ *
+ * Rules that override a class defined elsewhere (`.vgb-card`, `.vgb-tile`) are
+ * written double-classed — `.vgb-card.vgb-option-card` — so they do not depend
+ * on `@import` order in `styles.css` or on the order of rules in this file.
+ */
+
+/* ── Card surface ────────────────────────────────────────────────── */
+
+.vgb-card {
+  display: flex;
+  flex: 1 1 100%;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--openui-space-s);
+  padding: var(--openui-space-m);
+  background-color: var(--openui-background);
+  border: 1px solid var(--openui-border-default);
+  border-radius: var(--openui-radius-2xl);
+}
+
+.vgb-card-title {
+  margin: 0;
+  font-size: var(--openui-font-size-lg);
+  line-height: 1.35;
+}
+
+/* Secondary sentence under a figure or an option title. */
+.vgb-card-note {
+  margin: 0;
+  font-size: var(--openui-font-size-sm);
+  color: var(--openui-text-neutral-tertiary);
+}
+
+/* Attribution foot of a ContextCard. */
+.vgb-card-source {
+  margin: 0;
+  padding-top: var(--openui-space-s);
+  border-top: 1px solid var(--openui-border-default);
+  color: var(--openui-text-neutral-tertiary);
+  font-size: var(--openui-font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+/* The children slot. Nested blocks stack; each is free to lay itself out. */
+.vgb-card-slot {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--openui-space-m);
+}
+
+.vgb-card-head {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--openui-space-m);
+}
+
+.vgb-card-head-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--openui-space-3xs);
+}
+
+/* Trailing figure in a CompositeCard heading. */
+.vgb-card-lead {
+  flex: none;
+  font-size: var(--openui-font-size-xl);
+  white-space: nowrap;
+}
+
+/*
+ * `clickable` is an affordance, not a behaviour: these cards carry no handler
+ * and no navigation, so the hover shift is deliberately quiet and the cursor
+ * is left alone — a pointer cursor would promise something that never happens.
+ */
+.vgb-card-clickable {
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.vgb-card-clickable:hover {
+  border-color: var(--openui-border-accent);
+  background-color: var(--openui-highlight-subtle);
+}
+
+/* ── StatsCard ───────────────────────────────────────────────────── */
+
+.vgb-stat-figure {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--openui-space-s);
+}
+
+.vgb-stat-value {
+  font-size: var(--openui-font-size-4xl);
+  line-height: 1.1;
+}
+
+/* ── DataTileCard ────────────────────────────────────────────────── */
+
+.vgb-tile.vgb-data-tile {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: var(--openui-space-m);
+}
+
+.vgb-data-tile-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--openui-radius-l);
+  font-size: var(--openui-font-size-lg);
+  line-height: 1;
+}
+
+.vgb-data-tile-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--openui-space-3xs);
+}
+
+.vgb-data-tile-sub {
+  color: var(--openui-text-neutral-secondary);
+  font-size: var(--openui-font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+/* ── ValueCard ───────────────────────────────────────────────────── */
+
+.vgb-card.vgb-value-card {
+  gap: var(--openui-space-m);
+  min-width: 0;
+  padding: var(--openui-space-s-m);
+}
+
+.vgb-value-card-value {
+  font-size: var(--openui-font-size-xl);
+}
+
+/* ── VisualFirstCard ─────────────────────────────────────────────── */
+
+/* The image bleeds to the card edge, so the padding moves onto the body. */
+.vgb-card.vgb-visual-card {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.vgb-visual-card-media {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background-color: var(--openui-highlight-subtle);
+}
+
+.vgb-visual-card-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--openui-space-2xs);
+  padding: var(--openui-space-l);
+}
+
+/* ── ProfileTile ─────────────────────────────────────────────────── */
+
+.vgb-tile.vgb-profile-tile {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--openui-space-m);
+}
+
+/* One class for both the <img> and the initials fallback so the circle is the
+   same size either way. */
+.vgb-profile-avatar {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: var(--openui-radius-full);
+  background-color: var(--openui-highlight);
+  color: var(--openui-text-neutral-secondary);
+  font-size: var(--openui-font-size-sm);
+  font-weight: var(--openui-font-weight-bold);
+  text-transform: uppercase;
+  object-fit: cover;
+}
+
+.vgb-profile-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--openui-space-3xs);
+}
+
+.vgb-profile-name {
+  color: var(--openui-text-neutral-primary);
+  font-weight: var(--openui-font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.vgb-profile-role {
+  color: var(--openui-text-neutral-secondary);
+  font-size: var(--openui-font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.vgb-profile-detail {
+  color: var(--openui-text-neutral-tertiary);
+  font-size: var(--openui-font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+/* ── OptionCard / TileOption ─────────────────────────────────────── */
+
+/*
+ * `selected` is presentational. These blocks render from LLM output and carry
+ * no handler, so the state is drawn but never entered — no focus ring, no
+ * pointer cursor, nothing that reads as an actionable control.
+ */
+
+.vgb-card.vgb-option-card {
+  flex: 1 1 16rem;
+  gap: var(--openui-space-2xs);
+  padding: var(--openui-space-s-m);
+}
+
+.vgb-option-card-title {
+  font-size: var(--openui-font-size-md);
+}
+
+.vgb-card.vgb-option-card[data-selected="true"] {
+  border-color: var(--openui-border-accent);
+  background-color: var(--openui-highlight-subtle);
+}
+
+.vgb-tile.vgb-tile-option {
+  flex: 1 1 9rem;
+  gap: var(--openui-space-3xs);
+  padding: var(--openui-space-m) var(--openui-space-ml);
+  border: 1px solid transparent;
+}
+
+.vgb-tile.vgb-tile-option[data-selected="true"] {
+  border-color: var(--openui-border-accent);
+  background-color: var(--openui-highlight);
+}
+
+.vgb-tile-option-label {
+  color: var(--openui-text-neutral-primary);
+  font-weight: var(--openui-font-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.vgb-tile-option-note {
+  color: var(--openui-text-neutral-secondary);
+  font-size: var(--openui-font-size-xs);
+  overflow-wrap: anywhere;
+}
+
+/* ── Wrapping card rows ──────────────────────────────────────────── */
+
+/*
+ * SmallCardBlock / MediumCardBlock own their children's width: the child is
+ * whatever block the model nested, so the basis has to be set from the parent
+ * with `> *`. Double-classed to outrank `.vgb-card`'s own `flex` shorthand.
+ */
+
+.vgb-card-block {
+  /* Each wrapping block is its own query container. Naming only an outer
+     `.vgb-root` measures the whole generated document, so a tile inside a
+     half-width column still sees the full width, never reaches a breakpoint,
+     and keeps a floor wider than the column it sits in — it then overflows and
+     paints over its neighbour. A block asks about *its own* row instead. */
+  container-type: inline-size;
+  container-name: vgb;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--openui-space-m);
+  width: 100%;
+}
+
+/*
+ * Child widths follow the reference implementation: a compact card holds its
+ * shape down to ~158px, a roomier one needs 15rem before its body text starts
+ * breaking one word per line. These are floors, relaxed at the breakpoints
+ * below rather than allowed to overflow.
+ */
+.vgb-card-block.vgb-card-block-small > * {
+  flex: 1 1 158px;
+  min-width: min(158px, 100%);
+}
+
+.vgb-card-block.vgb-card-block-medium > * {
+  flex: 1 1 15rem;
+  min-width: min(15rem, 100%);
+}
+
+/* ── Container breakpoints ───────────────────────────────────────── */
+
+/*
+ * Ordered wide-to-narrow: the two blocks carry equal specificity, so the
+ * narrower one must come second to win where both match.
+ */
+
+@container vgb (max-width: 48rem) {
+  /* Relax the floor with the basis: leaving min-width at its wide value makes
+     a card overflow its own container instead of shrinking, and the column
+     scrolls sideways. */
+  .vgb-card-block.vgb-card-block-medium > * {
+    flex-basis: 13rem;
+    min-width: min(13rem, 100%);
+  }
+
+  .vgb-card.vgb-option-card {
+    flex-basis: 12rem;
+  }
+}
+
+@container vgb (max-width: 30rem) {
+  .vgb-card-block.vgb-card-block-small > *,
+  .vgb-card-block.vgb-card-block-medium > *,
+  .vgb-card.vgb-option-card {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  .vgb-stat-value {
+    font-size: var(--openui-font-size-3xl);
+  }
+
+  .vgb-card-head {
+    flex-direction: column;
+    gap: var(--openui-space-2xs);
+  }
+}

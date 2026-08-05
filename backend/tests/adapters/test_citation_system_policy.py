@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from valuz_agent.adapters.system_prompt_builder import (
     CITATION_POLICY_REVISION,
     ensure_citation_system_policy,
@@ -14,8 +16,31 @@ def test_citation_policy_is_appended_without_changing_user_sections() -> None:
     assert result.startswith(original)
     assert f'<citation-system-policy revision="{CITATION_POLICY_REVISION}">' in result
     assert "evidence://<evidenceHandle>" in result
-    assert "Do not answer those claims from model memory" in result
-    assert "Never write a\n`citation://` link yourself" in result
+    assert "Model memory, drafts, or discovery metadata" in result
+    assert "Never write a `citation://` link\nyourself" in result
+    assert "Never name, quote, list, explain" in result
+    assert "progress updates, handoffs, status" in result
+
+
+def test_citation_prompt_and_skill_do_not_plan_or_control_agent_execution() -> None:
+    prompt = ensure_citation_system_policy("")
+    skill_path = (
+        Path(__file__).resolve().parents[2]
+        / "valuz_agent/resources/builtin_skills/citation/SKILL.md"
+    )
+    combined = prompt + "\n" + skill_path.read_text(encoding="utf-8")
+
+    for prohibited in (
+        "Before answering",
+        "first retrieve",
+        "exactly one indexed search",
+        "Use one evidence-retrieval route",
+        "pass those unchanged",
+        "citation_calculate.inputs",
+        "Before returning, check",
+        "later repair pass",
+    ):
+        assert prohibited not in combined
 
 
 def test_citation_policy_install_is_idempotent() -> None:

@@ -24,6 +24,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { MarkdownContent } from "./MarkdownContent";
+import {
+  CitationSourceCards,
+  citationDisplayOrder,
+  projectEvidenceMarkdownLinks,
+} from "./CitationInline";
 import { ToolCallCard } from "../ToolCallCard";
 import { ErrorMessageCard } from "./ErrorMessageCard";
 import { FileUploadMessage } from "./FileUploadMessage";
@@ -564,6 +569,66 @@ const buildDisplayBlocks = (
   return result;
 };
 
+function buildTrailingCitationContext(
+  blocks: DisplayBlock[],
+  startIndex: number,
+): {
+  content: string;
+  bundle?: CitationBundleV1;
+  displayOrder: ReadonlyMap<string, number>;
+  messageIdByCitationId: ReadonlyMap<string, string | undefined>;
+} {
+  const content: string[] = [];
+  const citations = new Map<
+    string,
+    CitationBundleV1["citations"][number]
+  >();
+  const displayOrder = new Map<string, number>();
+  const messageIdByCitationId = new Map<string, string | undefined>();
+
+  for (let index = startIndex; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    if (block?.kind !== "segment" || block.header === null) continue;
+    const projectedHeader = projectEvidenceMarkdownLinks(
+      block.header,
+      block.citationBundle,
+    );
+    content.push(projectedHeader);
+
+    const localCitations = new Map(
+      block.citationBundle?.citations.map((citation) => [
+        citation.citationId,
+        citation,
+      ]) ?? [],
+    );
+    for (const citation of block.citationBundle?.citations ?? []) {
+      if (!citations.has(citation.citationId)) {
+        citations.set(citation.citationId, citation);
+        messageIdByCitationId.set(citation.citationId, block.messageId);
+      }
+    }
+    for (const citationId of citationDisplayOrder(projectedHeader).keys()) {
+      if (!displayOrder.has(citationId)) {
+        displayOrder.set(citationId, displayOrder.size + 1);
+      }
+      const citation = localCitations.get(citationId);
+      if (citation && !citations.has(citationId)) {
+        citations.set(citationId, citation);
+        messageIdByCitationId.set(citationId, block.messageId);
+      }
+    }
+  }
+
+  return {
+    content: content.join("\n\n"),
+    bundle: citations.size
+      ? { version: 1, citations: Array.from(citations.values()) }
+      : undefined,
+    displayOrder,
+    messageIdByCitationId,
+  };
+}
+
 const formatTurnTime = (ms: number | undefined): string => {
   if (!ms) return "";
   const d = new Date(ms);
@@ -813,6 +878,10 @@ const TurnRow = memo(
       }
       return 0;
     }, [displayBlocks]);
+    const trailingCitationContext = useMemo(
+      () => buildTrailingCitationContext(displayBlocks, trailingContentStart),
+      [displayBlocks, trailingContentStart],
+    );
 
     // Auto-fold the process trail when the turn finishes streaming. The
     // header is informational during streaming (no chevron, no fold);
@@ -1037,6 +1106,7 @@ const TurnRow = memo(
                 showStreamingCaret &&
                 block.items.length === 0 &&
                 block.header !== null;
+              const isTrailingAnswer = blockIndex >= trailingContentStart;
               return (
                 <div
                   key={`segment-${turn.id}-${blockIndex}`}
@@ -1051,6 +1121,22 @@ const TurnRow = memo(
                       citationBundle={block.citationBundle}
                       messageId={block.messageId}
                       onCitationClick={onCitationClick}
+                      citationDisplayOrderOverride={
+                        isTrailingAnswer
+                          ? trailingCitationContext.displayOrder
+                          : undefined
+                      }
+                      citationLookupBundleOverride={
+                        isTrailingAnswer
+                          ? trailingCitationContext.bundle
+                          : undefined
+                      }
+                      citationMessageIdByCitationIdOverride={
+                        isTrailingAnswer
+                          ? trailingCitationContext.messageIdByCitationId
+                          : undefined
+                      }
+                      showCitationSources={!isTrailingAnswer}
                     />
                   ) : null}
                   {block.items.length > 0 ? (
@@ -1066,6 +1152,16 @@ const TurnRow = memo(
                 </div>
               );
             })}
+
+            <CitationSourceCards
+              content={trailingCitationContext.content}
+              citationBundle={trailingCitationContext.bundle}
+              displayOrder={trailingCitationContext.displayOrder}
+              messageIdByCitationId={
+                trailingCitationContext.messageIdByCitationId
+              }
+              onCitationClick={onCitationClick}
+            />
 
             {showLoadingDots ? (
               <div className="flex items-center py-2.5">

@@ -293,7 +293,7 @@ cd backend
 uv sync                          # create .venv, install deps
 uv sync --extra dev              # + pytest, mypy, ruff
 
-VALUZ_DATA_DIR=~/.valuz-oss-dev VALUZ_LOG_DIR=~/.valuz-oss-dev/logs \
+VALUZ_DATA_DIR=~/.valuz-oss-dev VALUZ_LOG_FILE_PATH=~/.valuz-oss-dev/logs/backend.log \
 uv run python -m valuz_agent --port 8000 --reload   # what dev.sh spawns
 # Direct invocation REQUIRES VALUZ_DATA_DIR: a source-run backend refuses to
 # boot on the packaged app's ~/.valuz-oss (boot/steps.py

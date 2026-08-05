@@ -9,6 +9,7 @@ import pytest
 
 import valuz_agent.boot.kernel  # noqa: F401
 from valuz_agent.adapters.system_prompt_builder import (
+    AUTHORIZATION_BOUNDARY_INSTRUCTIONS,
     assemble_session_instructions,
     prepend_global_instructions,
 )
@@ -139,8 +140,10 @@ async def test_raw_path_prepends_prompt_and_accepts_existing_snapshot(
     )
 
     assert prompt == (
-        "<global-instructions>\nprompt for owner-a\n</global-instructions>"
-        "\n\nYou are working in project X."
+        "<global-instructions>\nprompt for owner-a\n</global-instructions>\n\n"
+        "<authorization-boundary>\n"
+        f"{AUTHORIZATION_BOUNDARY_INSTRUCTIONS}\n"
+        "</authorization-boundary>\n\nYou are working in project X."
     )
     # The already-resolved snapshot prevents a second provider read.
     assert provider.owners == [OWNER]
@@ -151,5 +154,8 @@ async def test_raw_path_prompt_alone_when_no_project_prompt(
 ) -> None:
     ext.global_instructions = _OwnerProvider()
     assert await prepend_global_instructions("", user_id=OWNER) == (
-        "<global-instructions>\nprompt for owner-a\n</global-instructions>"
+        "<global-instructions>\nprompt for owner-a\n</global-instructions>\n\n"
+        "<authorization-boundary>\n"
+        f"{AUTHORIZATION_BOUNDARY_INSTRUCTIONS}\n"
+        "</authorization-boundary>"
     )

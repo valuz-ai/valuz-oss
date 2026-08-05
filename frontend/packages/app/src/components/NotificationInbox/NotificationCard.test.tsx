@@ -7,11 +7,13 @@ import type { NotificationEntry } from "@valuz/core";
 
 import { NotificationCard } from "./NotificationCard";
 
-const { submitActionMock, interveneMock, dismissMock } = vi.hoisted(() => ({
-  submitActionMock: vi.fn().mockResolvedValue({}),
-  interveneMock: vi.fn().mockResolvedValue({}),
-  dismissMock: vi.fn().mockResolvedValue({ ok: true }),
-}));
+const { submitActionMock, interveneMock, dismissNotificationMock } = vi.hoisted(
+  () => ({
+    submitActionMock: vi.fn().mockResolvedValue({}),
+    interveneMock: vi.fn().mockResolvedValue({}),
+    dismissNotificationMock: vi.fn(),
+  }),
+);
 
 vi.mock("@valuz/core", async () => {
   const actual =
@@ -20,7 +22,7 @@ vi.mock("@valuz/core", async () => {
     ...actual,
     sessionsApi: { ...actual.sessionsApi, submitAction: submitActionMock },
     tasksApi: { ...actual.tasksApi, intervene: interveneMock },
-    notificationsApi: { ...actual.notificationsApi, dismiss: dismissMock },
+    dismissNotification: dismissNotificationMock,
   };
 });
 
@@ -108,12 +110,14 @@ describe("NotificationCard — task_failed kind", () => {
     expect(interveneMock.mock.calls[0][1]).toEqual({ action: "resume" });
   });
 
-  it("dismiss calls notificationsApi.dismiss", async () => {
+  it("dismiss removes optimistically via dismissNotification", async () => {
     renderCard(failure);
     const dismissBtn = screen
       .getAllByRole("button")
-      .find((b) => b.textContent?.includes("忽略"));
+      .find((b) => b.textContent?.includes("清除"));
     fireEvent.click(dismissBtn!);
-    await waitFor(() => expect(dismissMock).toHaveBeenCalledWith("n2"));
+    await waitFor(() =>
+      expect(dismissNotificationMock).toHaveBeenCalledWith("n2"),
+    );
   });
 });

@@ -367,23 +367,41 @@ def list_worktrees(git_root: Path) -> list[ListedWorktree]:
     return items
 
 
+# Host bookkeeping that lives inside the working tree and must never read as
+# the user's own uncommitted work. ``.valuz/`` holds the managed worktrees;
+# ``.artifact/`` holds the immutable snapshot of every delivered version.
+#
+# Excluding the artifact store is not cosmetic. ``git status --porcelain``
+# reports untracked files, so without this ANY delivery would make a worktree
+# permanently "dirty" — which silently disables clean-teardown and makes
+# ``discard`` refuse with "has work worth keeping" about files the user never
+# wrote. Whether a worktree holding deliverables may be removed is a decision
+# worth making explicitly (see ``worktree_service.cleanup_if_clean``), not one
+# to inherit from what git happens to consider noise.
+_EXCLUDED_DIRS = (
+    (".valuz/", "# valuz project worktrees"),
+    (".artifact/", "# valuz delivered-artifact snapshots"),
+)
+
+
 def ensure_info_exclude(common_dir: Path) -> None:
-    """Idempotently exclude ``.valuz/`` from the main workspace's status.
+    """Idempotently exclude the host's in-tree bookkeeping from git status.
 
     Written to ``<common_dir>/info/exclude`` (repo-local, shared by all
-    worktrees, never a tracked file) so ``.valuz/worktrees/`` doesn't show
-    up as untracked noise in the user's own ``git status``.
+    worktrees, never a tracked file). Each marker is checked separately so a
+    repo excluded before a marker was added picks up the new one.
     """
     exclude = common_dir / "info" / "exclude"
-    marker = ".valuz/"
     try:
         existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-        if any(line.strip() == marker for line in existing.splitlines()):
+        present = {line.strip() for line in existing.splitlines()}
+        missing = [(m, c) for m, c in _EXCLUDED_DIRS if m not in present]
+        if not missing:
             return
         exclude.parent.mkdir(parents=True, exist_ok=True)
         prefix = "" if not existing or existing.endswith("\n") else "\n"
         with exclude.open("a", encoding="utf-8") as fh:
-            fh.write(f"{prefix}# valuz project worktrees\n{marker}\n")
+            fh.write(prefix + "".join(f"{comment}\n{marker}\n" for marker, comment in missing))
     except OSError as exc:
         logger.warning("git_worktree: could not update info/exclude: %s", exc)
 

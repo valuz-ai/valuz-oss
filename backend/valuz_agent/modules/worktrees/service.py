@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 _git_root_locks: dict[str, asyncio.Lock] = {}
 
+
 # Friendly auto-names (design D11): ``fervent-bohr-14379d``-style
 # adjective-surname pairs, using Docker's names-generator vocabulary
 # (see slug_words.py; ~97 adjectives × 237 surnames ≈ 23k combos) — readable
@@ -54,8 +55,7 @@ def _generate_slug(git_root: Path) -> str:
         # 3 bytes → 6 hex chars, matching the harness's own worktree names
         # (fervent-bohr-14379d) that this scheme is borrowed from.
         slug = (
-            f"{secrets.choice(SLUG_ADJECTIVES)}-"
-            f"{secrets.choice(SLUG_NOUNS)}-{secrets.token_hex(3)}"
+            f"{secrets.choice(SLUG_ADJECTIVES)}-{secrets.choice(SLUG_NOUNS)}-{secrets.token_hex(3)}"
         )
         if not gw.worktree_path(git_root, slug).exists():
             return slug
@@ -158,6 +158,51 @@ def _remove_sidecar(git_root: Path, flat: str) -> None:
         pass
 
 
+async def _scope_artifact_count(user_id: str, project_id: str, worktree: str) -> int:
+    """How many live deliverables a worktree holds. ``0`` if it cannot be told.
+
+    Best-effort by design: this gates *automatic* teardown, and a lookup failure
+    must not wedge cleanup forever. Failing open risks removing a worktree whose
+    deliverables the DB could not be read for; failing closed would leak
+    worktrees on every transient DB error. The explicit ``discard`` path does
+    not consult this at all — there the user has already decided.
+    """
+    if not project_id:
+        return 0
+    try:
+        from valuz_agent.infra.db import async_unit_of_work
+        from valuz_agent.modules.artifacts.datastore import ArtifactDatastore, Scope
+
+        async with async_unit_of_work(commit=False) as db:
+            return await ArtifactDatastore(db).count_scope_artifacts(
+                Scope(user_id=user_id, project_id=project_id, worktree=worktree)
+            )
+    except Exception:  # noqa: BLE001 — never block teardown on a lookup
+        logger.warning("worktrees: artifact lookup failed for '%s'", worktree, exc_info=True)
+        return 0
+
+
+async def _archive_scope_artifacts(user_id: str, project_id: str, worktree: str) -> int:
+    """Retire the worktree's deliverables — their snapshots died with it.
+
+    Rows are kept and marked, never deleted: a link the user still holds should
+    explain itself rather than 404.
+    """
+    if not project_id:
+        return 0
+    try:
+        from valuz_agent.infra.db import async_unit_of_work
+        from valuz_agent.modules.artifacts.datastore import ArtifactDatastore, Scope
+
+        async with async_unit_of_work() as db:
+            return await ArtifactDatastore(db).archive_scope(
+                Scope(user_id=user_id, project_id=project_id, worktree=worktree)
+            )
+    except Exception:  # noqa: BLE001 — the worktree is already gone; do not raise
+        logger.warning("worktrees: could not archive artifacts for '%s'", worktree, exc_info=True)
+        return 0
+
+
 class WorktreeService:
     """Stateless orchestration — safe to construct per call site."""
 
@@ -203,9 +248,7 @@ class WorktreeService:
             raise WorktreeNotAvailable("git is not installed or not usable on this machine")
         info = await asyncio.to_thread(gw.detect_git, cwd)
         if info is None:
-            raise WorktreeNotAvailable(
-                f"project directory {cwd} is not inside a git repository"
-            )
+            raise WorktreeNotAvailable(f"project directory {cwd} is not inside a git repository")
 
         if name:
             slug = name
@@ -218,9 +261,7 @@ class WorktreeService:
 
         async with _lock_for(info.git_root):
             try:
-                wt = await asyncio.to_thread(
-                    gw.get_or_create, info.git_root, slug, origin
-                )
+                wt = await asyncio.to_thread(gw.get_or_create, info.git_root, slug, origin)
             except gw.GitWorktreeError as exc:
                 raise WorktreeOperationFailed(str(exc)) from exc
 
@@ -350,12 +391,35 @@ class WorktreeService:
                 raise WorktreeOperationFailed(str(exc)) from exc
             _remove_sidecar(git_root, flat)
 
-    async def cleanup_if_clean(self, snapshot: dict[str, object]) -> bool:
+        # The snapshots lived inside the worktree, so they went with it. Retire
+        # the rows AFTER the removal actually succeeded — archiving first would
+        # mark deliverables gone that are still sitting there if git refuses.
+        retired = await _archive_scope_artifacts(user_id, project_row.id, name)
+        if retired:
+            logger.info("worktrees: retired %d deliverable(s) with worktree '%s'", retired, name)
+
+    async def cleanup_if_clean(
+        self,
+        snapshot: dict[str, object],
+        *,
+        user_id: str = "",
+        project_id: str = "",
+    ) -> bool:
         """Session-teardown hook: remove the session's worktree iff clean.
 
         *snapshot* is the immutable ``metadata["valuz"]["worktree"]`` blob.
         Never raises — teardown must not fail the caller. Returns True when
         the worktree was removed.
+
+        A worktree holding delivered artifacts is never removed here. Git no
+        longer counts the snapshot store as dirty (it is excluded from
+        ``info/exclude``), so without this check an automatic teardown would
+        quietly destroy the very outputs the session was asked to produce.
+        Deliverables are the point of the work; discarding them has to be
+        something the user asks for, which is what ``discard`` is.
+
+        ``user_id`` / ``project_id`` identify the artifact scope. Callers that
+        cannot supply them get the old behaviour — clean means removable.
         """
         try:
             git_root = Path(str(snapshot["git_root"]))
@@ -376,6 +440,10 @@ class WorktreeService:
         if not (path / ".git").exists():
             return False  # already gone (or never materialized)
 
+        if user_id and await _scope_artifact_count(user_id, project_id, name):
+            logger.info("worktrees: keeping '%s' — it holds delivered artifacts", name)
+            return False
+
         try:
             async with _lock_for(git_root):
                 if await asyncio.to_thread(gw.has_changes, path, base_sha):
@@ -392,9 +460,7 @@ class WorktreeService:
             logger.warning("worktrees: clean-teardown failed for %s", path, exc_info=True)
             return False
 
-    async def heal_from_snapshot(
-        self, snapshot: dict[str, object]
-    ) -> dict[str, object] | None:
+    async def heal_from_snapshot(self, snapshot: dict[str, object]) -> dict[str, object] | None:
         """Recreate a session's worktree that was removed since creation.
 
         Re-entry path (design §4-R): a historical session's cwd is frozen to

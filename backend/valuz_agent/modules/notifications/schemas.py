@@ -34,6 +34,13 @@ class NotificationListResponse(BaseModel):
     unread: int
 
 
+class NotificationHistoryResponse(BaseModel):
+    """One page of resolved notifications (the drawer's History tab)."""
+
+    entries: list[NotificationEntry]
+    has_more: bool = False
+
+
 class NotificationStreamEvent(BaseModel):
     """SSE frame. ``snapshot`` carries the full open set; ``added`` / ``updated``
     (read) / ``resolved`` are deltas."""

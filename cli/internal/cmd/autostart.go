@@ -57,7 +57,7 @@ func defaultLogDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Matches valuz_agent.infra.config.settings.log_dir default.
+	// Matches valuz_agent.infra.config.settings.log_file_path.parent default.
 	return filepath.Join(home, ".valuz-oss", "logs"), nil
 }
 

@@ -1,7 +1,4 @@
-import { useEffect, useRef, useState, type ComponentProps } from "react";
-import { Renderer } from "@openuidev/react-lang";
-import { ThemeProvider } from "@openuidev/react-ui";
-import { openuiLibrary } from "@openuidev/react-ui/genui-lib";
+import { useEffect, useRef, useState } from "react";
 import { Maximize2 } from "lucide-react";
 
 import { useI18n } from "../../hooks/use-i18n";
@@ -20,230 +17,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "../ui/tooltip";
-
-type OpenUiTheme = NonNullable<
-  ComponentProps<typeof ThemeProvider>["lightTheme"]
->;
-
-const chartPalette = [
-  "var(--accent-sky)",
-  "var(--accent-teal)",
-  "var(--accent-amber)",
-  "var(--accent-pink)",
-  "var(--accent-blue)",
-  "var(--accent-lime)",
-  "var(--accent-orange)",
-  "var(--accent-fuchsia)",
-];
-
-/** Maps OpenUI directly onto the authoritative Valuz design tokens. */
-const VALUZ_OPENUUI_THEME: OpenUiTheme = {
-  background: "var(--color-background)",
-  foreground: "var(--color-surface)",
-  popoverBackground: "var(--color-surface)",
-  sunkLight: "var(--color-surface-soft)",
-  sunk: "var(--color-surface)",
-  sunkDeep: "var(--color-surface-muted)",
-  elevatedLight: "var(--color-surface-soft)",
-  elevated: "var(--color-surface)",
-  elevatedStrong: "var(--color-surface)",
-  elevatedIntense: "var(--color-surface)",
-  highlightSubtle: "var(--color-surface-soft)",
-  highlight: "var(--color-surface-2)",
-  highlightStrong: "var(--color-surface-muted)",
-  highlightIntense: "var(--color-surface-border)",
-  infoBackground: "var(--info-soft)",
-  successBackground: "var(--success-soft)",
-  alertBackground: "var(--warning-soft)",
-  dangerBackground: "var(--error-soft)",
-
-  textNeutralPrimary: "var(--color-ink-heading)",
-  textNeutralSecondary: "var(--color-ink-body)",
-  textNeutralTertiary: "var(--color-ink-disabled)",
-  textNeutralLink: "var(--color-brand)",
-  textBrand: "var(--color-brand)",
-  textAccentPrimary: "white",
-  textAccentSecondary: "var(--color-brand-700)",
-  textAccentTertiary: "var(--color-brand)",
-  textSuccessPrimary: "var(--success-text)",
-  textSuccessInverted: "white",
-  textAlertPrimary: "var(--warning-text)",
-  textAlertInverted: "var(--foreground)",
-  textDangerPrimary: "var(--error-text)",
-  textDangerSecondary: "var(--error-text)",
-  textDangerTertiary: "var(--color-ink-disabled)",
-  textDangerInvertedPrimary: "white",
-  textInfoPrimary: "var(--info-text)",
-  textInfoInverted: "white",
-
-  interactiveAccentDefault: "var(--color-brand)",
-  interactiveAccentHover: "var(--color-brand-hover)",
-  interactiveAccentPressed: "var(--color-brand-700)",
-  interactiveAccentDisabled:
-    "color-mix(in oklab, var(--color-brand) 40%, transparent)",
-  interactiveDestructiveDefault: "var(--error-soft)",
-  interactiveDestructiveHover: "var(--error-border)",
-  interactiveDestructiveDisabled: "var(--color-surface-2)",
-  interactiveDestructivePressed: "var(--error-border)",
-  interactiveDestructiveAccentDefault: "var(--error-strong)",
-  interactiveDestructiveAccentHover: "var(--error-hover)",
-  interactiveDestructiveAccentPressed: "var(--error-hover)",
-  interactiveDestructiveAccentDisabled:
-    "color-mix(in oklab, var(--error-strong) 40%, transparent)",
-
-  borderDefault: "var(--color-surface-border)",
-  borderInteractive: "var(--color-surface-border-strong)",
-  borderInteractiveEmphasis: "var(--color-surface-border-strong)",
-  borderInteractiveSelected: "var(--color-brand)",
-  borderAccent: "var(--color-brand)",
-  borderAccentEmphasis: "var(--color-brand-600)",
-  borderAccentSelected: "var(--color-brand-700)",
-  borderInfo: "var(--info-border)",
-  borderInfoEmphasis: "var(--color-brand)",
-  borderAlert: "var(--warning-border)",
-  borderAlertEmphasis: "var(--warning)",
-  borderSuccess: "var(--success-border)",
-  borderSuccessEmphasis: "var(--success)",
-  borderDanger: "var(--error-border)",
-  borderDangerEmphasis: "var(--error)",
-
-  space000: "0px",
-  space3xs: "4px",
-  space2xs: "4px",
-  spaceXs: "8px",
-  spaceS: "8px",
-  spaceSM: "12px",
-  spaceM: "12px",
-  spaceML: "16px",
-  spaceL: "16px",
-  spaceXl: "20px",
-  space2xl: "24px",
-  space3xl: "32px",
-  radiusNone: "0px",
-  radius3xs: "4px",
-  radius2xs: "4px",
-  radiusXs: "4px",
-  radiusS: "4px",
-  radiusM: "6px",
-  radiusL: "8px",
-  radiusXl: "10px",
-  radius2xl: "12px",
-  radius3xl: "12px",
-  radius4xl: "12px",
-  radius5xl: "12px",
-  radius6xl: "12px",
-  radius7xl: "12px",
-  radius8xl: "12px",
-  radius9xl: "12px",
-  radiusFull: "9999px",
-
-  fontBody:
-    '"PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  fontHeading:
-    '"PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  fontLabel:
-    '"PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  fontNumbers:
-    '"PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  fontCode: 'ui-monospace, "SF Mono", Menlo, monospace',
-  fontSize2xs: "10px",
-  fontSizeXs: "11px",
-  fontSizeSm: "12px",
-  fontSizeMd: "13px",
-  fontSizeLg: "14px",
-  fontSizeXl: "15px",
-  fontSize2xl: "18px",
-  fontSize3xl: "24px",
-  fontSize4xl: "24px",
-  fontSize5xl: "24px",
-  fontWeightRegular: "400",
-  fontWeightMedium: "500",
-  fontWeightBold: "600",
-  fontWeightHeavy: "600",
-  letterSpacingNormal: "0",
-  letterSpacingTight: "0",
-  letterSpacingTighter: "0",
-
-  shadow0: "none",
-  shadowS: "var(--shadow-outline)",
-  // OpenUI's card/popover primitives already draw a border. Valuz requires
-  // bordered surfaces to use the ring-free outline shadow, avoiding a double edge.
-  shadowM: "var(--shadow-outline)",
-  shadowL: "var(--shadow-2)",
-  shadowXl: "var(--shadow-3)",
-  shadow2xl: "var(--shadow-4)",
-  shadow3xl: "var(--shadow-4)",
-
-  defaultChartPalette: chartPalette,
-  barChartPalette: chartPalette,
-  lineChartPalette: chartPalette,
-  areaChartPalette: chartPalette,
-  pieChartPalette: chartPalette,
-  radarChartPalette: chartPalette,
-  radialChartPalette: chartPalette,
-  horizontalBarChartPalette: chartPalette,
-};
-
-/**
- * Extract the raw text payload from a kernel tool-output string.
- *
- * MCP tool results surface on the frontend wrapped in a JSON content-block
- * envelope — ``[{"type":"text","text":"<payload>"}]`` — because the host
- * toolkit MCP server returns ``TextContent`` and the kernel JSON-stringifies
- * the content blocks at the SSE boundary (``event_sse_adapter._stringify``).
- * Some runtimes also emit a Python-repr variant (``[{'type': 'text', ...}]``).
- * The OpenUI ``<Renderer>`` needs the inner text (the OpenUI Lang), not the
- * envelope, so unwrap both; fall through to the raw string when there's none.
- */
-export function extractContentText(raw: string | undefined | null): string {
-  const s = (raw ?? "").trim();
-  if (!s) return "";
-
-  // 1. JSON envelope (the common path).
-  try {
-    const parsed: unknown = JSON.parse(s);
-    const text = readTextBlocks(parsed);
-    if (text !== null) return text;
-  } catch {
-    /* not JSON — try repr / fall through */
-  }
-
-  // 2. Python-repr envelope from other runtimes: {'type': 'text', 'text': '…'}.
-  const repr = matchReprText(s);
-  if (repr !== null) return repr;
-
-  // 3. No envelope — already raw text (OpenUI Lang passed through directly).
-  return s;
-}
-
-function readTextBlocks(parsed: unknown): string | null {
-  const entries = Array.isArray(parsed) ? parsed : [parsed];
-  const texts: string[] = [];
-  for (const e of entries) {
-    if (
-      e &&
-      typeof e === "object" &&
-      typeof (e as Record<string, unknown>).text === "string"
-    ) {
-      texts.push((e as Record<string, string>).text);
-    }
-  }
-  if (texts.length) return texts.join("");
-  if (typeof parsed === "string") return parsed; // double-stringified
-  return null;
-}
-
-function matchReprText(s: string): string | null {
-  // Match  'text': '…'  tolerating escaped quotes inside the value.
-  const m = s.match(/'text'\s*:\s*'((?:[^'\\]|\\.)*)'/);
-  if (!m || !m[1]) return null;
-  return m[1]
-    .replace(/\\n/g, "\n")
-    .replace(/\\t/g, "\t")
-    .replace(/\\'/g, "'")
-    .replace(/\\"/g, '"')
-    .replace(/\\\\/g, "\\");
-}
+import { GenerativeUIRenderer } from "./GenerativeUIRenderer";
+import { parseGenerativeUIPayload } from "./generative-ui-payload";
 
 export interface GenerativeUICardProps {
   /** OpenUI Lang string — the generate_ui tool's output. */
@@ -264,6 +39,7 @@ const GENERATIVE_UI_LAYOUT_CSS = `
     min-width: 0;
     max-width: 100%;
     container-type: inline-size;
+    container-name: genui-inline;
   }
 
   ${OPENUI_SCOPE_SELECTOR} * {
@@ -281,9 +57,16 @@ const GENERATIVE_UI_LAYOUT_CSS = `
      module to start from the same fixed width. */
   ${OPENUI_SCOPE_SELECTOR} .openui-card {
     flex-basis: max-content !important;
+    gap: var(--openui-space-m) !important;
   }
 
-  ${OPENUI_SCOPE_SELECTOR} .openui-card-card,
+  ${OPENUI_SCOPE_SELECTOR} .openui-card-card {
+    border-color: var(--openui-border-default);
+    background: var(--openui-foreground);
+    box-shadow: none;
+    border-radius: 8px;
+  }
+
   ${OPENUI_SCOPE_SELECTOR} .openui-card-clear {
     border-color: transparent;
     background: transparent;
@@ -291,18 +74,21 @@ const GENERATIVE_UI_LAYOUT_CSS = `
   }
 
   ${OPENUI_SCOPE_SELECTOR} .openui-card-sunk {
-    border-color: transparent;
-    background: var(--color-surface-soft);
+    border-color: var(--openui-border-default);
+    background: var(--openui-foreground);
     box-shadow: none;
+    border-radius: 8px;
   }
 
-  /* A compact row of three or more cards is the KPI strip. Keep headings and
-     larger content sections unframed, and give only these metrics a soft tile. */
+  /* A compact row of three or more cards is the KPI strip. Give these tiles
+     enough width and surface structure to read like a dashboard without adding
+     elevation shadows. */
   ${OPENUI_SCOPE_SELECTOR}
     :has(> .openui-card:nth-child(3)) > .openui-card {
-    flex: 1 1 15rem !important;
-    border-color: transparent;
-    background: var(--color-surface-soft);
+    flex: 1 1 16rem !important;
+    border-color: var(--openui-border-default);
+    background: var(--openui-foreground);
+    box-shadow: none;
     border-radius: 8px;
     padding: var(--openui-space-l);
   }
@@ -313,8 +99,10 @@ const GENERATIVE_UI_LAYOUT_CSS = `
   ${OPENUI_SCOPE_SELECTOR}
     :has(> :nth-child(3))
     > :not([class]):has(> .openui-tag):has(> :nth-child(2) .openui-markdown-renderer) {
-    flex: 1 1 15rem;
-    background: var(--color-surface-soft);
+    flex: 1 1 16rem;
+    border: 1px solid var(--openui-border-default);
+    background: var(--openui-foreground);
+    box-shadow: none;
     border-radius: 8px;
     padding: var(--openui-space-l);
   }
@@ -421,6 +209,166 @@ const GENERATIVE_UI_LAYOUT_CSS = `
     overflow-wrap: anywhere;
   }
 
+  ${OPENUI_SCOPE_SELECTOR} [data-slot="a2ui-renderer"] {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-component="grid"] {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+    gap: var(--openui-space-m-l) !important;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-component="row"] {
+    gap: var(--openui-space-m-l) !important;
+  }
+
+  /* A row's children share the width — except a fixed-size mark, which is
+     sized in px precisely so it stays that size. Without the exclusion an
+     IconTag stretches to 16rem and renders as a wide tinted bar with a small
+     glyph adrift in the middle of it. */
+  ${OPENUI_SCOPE_SELECTOR}
+    [data-a2ui-component="row"] > *:not([data-a2ui-component="icon-tag"]) {
+    flex: 1 1 16rem;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-card-content] {
+    gap: var(--openui-space-m) !important;
+    min-height: 100%;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR}
+    [data-a2ui-card-content] > .text-content:first-child
+    [data-a2ui-text-size] {
+    color: var(--openui-text-neutral-primary) !important;
+    font: var(--openui-text-label-default-heavy) !important;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR}
+    [data-a2ui-card-content] > .text-content:nth-child(n + 4)
+    [data-a2ui-text-size="small"] {
+    color: var(--openui-text-neutral-secondary) !important;
+    font: var(--openui-text-label-sm) !important;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-metric-value] {
+    font: var(--openui-text-numbers-heading-md) !important;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-component="market-index-grid"] {
+    width: 100%;
+    flex: 1 1 100%;
+    gap: var(--openui-space-m-l) !important;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-market-index-grid-list] {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 14.5rem), 1fr));
+    gap: var(--openui-space-m-l) !important;
+    align-items: stretch;
+    width: 100%;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-market-index-grid-list] > .openui-card {
+    width: 100%;
+    min-width: 0;
+    height: auto !important;
+    align-self: start;
+    flex: 1 1 auto !important;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-component="market-index-card"] {
+    min-height: 7.25rem;
+    justify-content: flex-start;
+    gap: var(--openui-space-xs) !important;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-market-index-heading] {
+    border-bottom: 1px solid var(--openui-border-default);
+    padding-bottom: var(--openui-space-s);
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-market-index-name] {
+    line-height: 1.25;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-market-index-code] {
+    flex: 0 0 auto;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-market-index-value] {
+    margin-top: var(--openui-space-2xs);
+    line-height: 1.15;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-market-index-change-row] {
+    min-height: 1.5rem;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-market-index-meta],
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-market-index-footnote] {
+    line-height: 1.35;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-component="finance-metric"] {
+    min-height: 6.5rem;
+    justify-content: space-between;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-finance-metric-value-row] {
+    line-height: 1.15;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-component="data-list"] {
+    width: 100%;
+    flex: 1 1 100%;
+    gap: var(--openui-space-s) !important;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-data-list-rows] {
+    width: 100%;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-data-list-row] {
+    grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
+    column-gap: var(--openui-space-m);
+    row-gap: var(--openui-space-2xs);
+    min-height: 2.75rem;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-data-list-main] {
+    overflow: hidden;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-data-list-title] {
+    line-height: 1.35;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-data-list-value],
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-data-list-meta] {
+    justify-self: end;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-component="market-breadth"] {
+    width: 100%;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-market-breadth-track] {
+    width: 100%;
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-market-breadth-bar="up"] {
+    background: var(--error-text);
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-market-breadth-bar="down"] {
+    background: var(--success-text);
+  }
+
+  ${OPENUI_SCOPE_SELECTOR} [data-a2ui-market-breadth-bar="flat"] {
+    background: var(--openui-border-default);
+  }
+
   /* OpenUI chart roots sit inside anonymous flex wrappers that otherwise shrink
      to their intrinsic plot width. Cover every chart component exposed by the
      library and let Cartesian plots consume the space left after the Y axis. */
@@ -484,37 +432,58 @@ const GENERATIVE_UI_LAYOUT_CSS = `
     overflow-y: visible;
   }
 
-  @container (max-width: 34rem) {
+  @container genui-inline (max-width: 48rem) {
     ${OPENUI_SCOPE_SELECTOR} .openui-card {
+      flex-basis: min(100%, 18rem) !important;
+    }
+
+    ${OPENUI_SCOPE_SELECTOR}
+      :has(> .openui-card:nth-child(3)) > .openui-card,
+    ${OPENUI_SCOPE_SELECTOR}
+      :has(> :nth-child(3))
+      > :not([class]):has(> .openui-tag):has(> :nth-child(2) .openui-markdown-renderer) {
+      flex-basis: min(100%, 15rem) !important;
+    }
+  }
+
+  @container genui-inline (max-width: 34rem) {
+    ${OPENUI_SCOPE_SELECTOR} .openui-card {
+      flex-basis: 100% !important;
+    }
+
+    ${OPENUI_SCOPE_SELECTOR}
+      :has(> .openui-card:nth-child(3)) > .openui-card,
+    ${OPENUI_SCOPE_SELECTOR}
+      :has(> :nth-child(3))
+      > :not([class]):has(> .openui-tag):has(> :nth-child(2) .openui-markdown-renderer) {
       flex-basis: 100% !important;
     }
 
     ${OPENUI_SCOPE_SELECTOR} .openui-card-clear {
       padding-inline: 0;
     }
+
+    ${OPENUI_SCOPE_SELECTOR} [data-a2ui-component="grid"] {
+      grid-template-columns: 1fr;
+    }
+
+    ${OPENUI_SCOPE_SELECTOR} [data-a2ui-component="row"] > * {
+      flex-basis: 100%;
+    }
+
+    ${OPENUI_SCOPE_SELECTOR} [data-a2ui-market-index-grid-list],
+    ${OPENUI_SCOPE_SELECTOR} [data-a2ui-data-list-row],
+    ${OPENUI_SCOPE_SELECTOR} [data-a2ui-market-breadth-stats] {
+      grid-template-columns: 1fr !important;
+    }
+
+    ${OPENUI_SCOPE_SELECTOR} [data-a2ui-data-list-value],
+    ${OPENUI_SCOPE_SELECTOR} [data-a2ui-data-list-meta] {
+      justify-self: start;
+      text-align: left !important;
+    }
   }
 `;
-
-function OpenUiBody({
-  body,
-  status,
-}: {
-  body: string;
-  status?: GenerativeUICardProps["status"];
-}) {
-  return (
-    <ThemeProvider
-      lightTheme={VALUZ_OPENUUI_THEME}
-      cssSelector={OPENUI_SCOPE_SELECTOR}
-    >
-      <Renderer
-        library={openuiLibrary}
-        response={body}
-        isStreaming={status === "running"}
-      />
-    </ThemeProvider>
-  );
-}
 
 /**
  * Renders the OpenUI Lang produced by the ``generate_ui`` MCP tool as live,
@@ -529,7 +498,8 @@ export function GenerativeUICard({
 }: GenerativeUICardProps) {
   const { t } = useI18n();
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
-  const body = extractContentText(openui);
+  const payload = parseGenerativeUIPayload(openui);
+  const body = payload.body;
   const cardTitle = t("genui.cardTitle" as Parameters<typeof t>[0]);
   const fullscreenLabel = t("genui.fullscreen" as Parameters<typeof t>[0]);
   // Reasoning is transient live progress: visible only while the tool runs
@@ -593,7 +563,7 @@ export function GenerativeUICard({
       {body || !showThinking ? (
         <div className="min-w-0 overflow-x-auto p-3 [&>*]:min-w-0 [&>*]:max-w-full">
           {body ? (
-            <OpenUiBody body={body} status={status} />
+            <GenerativeUIRenderer payload={payload} status={status} />
           ) : (
             <div
               data-testid="genui-empty"
@@ -625,7 +595,9 @@ export function GenerativeUICard({
             data-openui-scope="generative-ui"
             className="min-h-0 flex-1 overflow-auto p-4 [&>*]:min-w-0 [&>*]:max-w-full"
           >
-            {body ? <OpenUiBody body={body} status={status} /> : null}
+            {body ? (
+              <GenerativeUIRenderer payload={payload} status={status} />
+            ) : null}
           </div>
         </DialogContent>
       </Dialog>

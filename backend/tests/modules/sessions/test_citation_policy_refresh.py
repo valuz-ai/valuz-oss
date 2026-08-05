@@ -92,6 +92,9 @@ async def test_refresh_is_idempotent(
         session_metadata=session.metadata,
     )
     session.metadata["valuz"]["citation_quality_policy"] = snapshot.session_metadata()
+    task_policy = dict(snapshot.config["task_coverage"])
+    task_policy["layers"] = [dict(item) for item in snapshot.layers]
+    session.metadata["valuz"]["task_coverage_policy"] = task_policy
 
     async def get_session(user_id: str, session_id: str) -> object:
         return session
@@ -241,7 +244,7 @@ async def test_refresh_stamps_trusted_quality_policy_and_replaces_user_value(
     ]
 
 
-async def test_refresh_disables_citation_skill_prompt_and_quality(
+async def test_verification_remains_independent_when_citation_rendering_is_disabled(
     citation_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -274,15 +277,18 @@ async def test_refresh_disables_citation_skill_prompt_and_quality(
 
     assert changed is True
     body = updates[0]
-    assert body.skills == []
-    assert "<citation-system-policy" not in body.instructions
+    # Audit-only still needs the private Evidence binding protocol.  Keeping
+    # it must not implicitly turn user-visible Citation projection back on.
+    assert body.skills == [str(citation_dir.resolve())]
+    assert "<citation-system-policy" in body.instructions
+    assert body.metadata["valuz"]["citation_policy_revision"] == CITATION_POLICY_REVISION
     assert body.metadata["valuz"]["citation_enabled"] is False
-    assert body.metadata["valuz"]["citation_verification_enabled"] is False
+    assert body.metadata["valuz"]["citation_verification_enabled"] is True
     assert body.metadata["valuz"]["task_coverage_enabled"] is False
-    assert "citation_quality_policy" not in body.metadata["valuz"]
+    assert body.metadata["valuz"]["citation_quality_policy"]["policy_id"]
 
 
-async def test_task_coverage_keeps_effective_policy_when_citations_are_disabled(
+async def test_task_coverage_does_not_implicitly_load_citation_quality_policy(
     citation_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -314,4 +320,64 @@ async def test_task_coverage_keeps_effective_policy_when_citations_are_disabled(
     assert body.metadata["valuz"]["citation_enabled"] is False
     assert body.metadata["valuz"]["citation_verification_enabled"] is False
     assert body.metadata["valuz"]["task_coverage_enabled"] is True
-    assert body.metadata["valuz"]["citation_quality_policy"]["policy_id"]
+    assert "citation_quality_policy" not in body.metadata["valuz"]
+    task_policy = body.metadata["valuz"]["task_coverage_policy"]
+    assert task_policy["revision"] == "oss-task-coverage-v2"
+    assert task_policy["review_guidance"]["supplement_rules"] == {
+        "append_only": True,
+        "do_not_repeat_completed_content": True,
+        "preserve_visible_history": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("citation_enabled", "verification_enabled", "task_coverage_enabled"),
+    [
+        (False, False, False),
+        (False, False, True),
+        (False, True, False),
+        (False, True, True),
+        (True, False, False),
+        (True, False, True),
+        (True, True, False),
+        (True, True, True),
+    ],
+)
+async def test_three_preferences_are_independent_for_every_truth_table_row(
+    citation_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    citation_enabled: bool,
+    verification_enabled: bool,
+    task_coverage_enabled: bool,
+) -> None:
+    session = _session()
+    updates: list[object] = []
+
+    async def get_session(user_id: str, session_id: str) -> object:
+        return session
+
+    async def update_session(user_id: str, session_id: str, body: object) -> object:
+        updates.append(body)
+        return session
+
+    monkeypatch.setattr(capabilities.kernel_client, "get_session", get_session)
+    monkeypatch.setattr(capabilities.kernel_client, "update_session", update_session)
+
+    await capabilities.refresh_citation_policy_for_session(
+        "session-1",
+        "owner-1",
+        citation_enabled_override=citation_enabled,
+        verification_enabled_override=verification_enabled,
+        task_coverage_enabled_override=task_coverage_enabled,
+    )
+
+    body = updates[0]
+    valuz = body.metadata["valuz"]
+    evidence_binding_enabled = citation_enabled or verification_enabled
+    assert (str(citation_dir.resolve()) in body.skills) is evidence_binding_enabled
+    assert ("<citation-system-policy" in body.instructions) is evidence_binding_enabled
+    assert valuz["citation_enabled"] is citation_enabled
+    assert valuz["citation_verification_enabled"] is verification_enabled
+    assert valuz["task_coverage_enabled"] is task_coverage_enabled
+    assert ("citation_quality_policy" in valuz) is verification_enabled
+    assert ("task_coverage_policy" in valuz) is task_coverage_enabled

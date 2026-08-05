@@ -2,15 +2,13 @@
 (docs/design/notifications.md §0.2).
 
 Every source (question projector, failure projector, …) calls ``ingest`` /
-``resolve``; every delivery surface reads the durable ``valuz_notification``
-table. There is **no in-process fan-out**: the service only writes the table,
-and the SSE stream (``/v1/notifications/stream``) reconciles by re-reading it on
-an interval. That is deliberate — a process-local subscriber list only ever
-reaches SSE clients pinned to the SAME pod, so a notification ingested on pod A
-never reached a stream on pod B (a SaaS multi-pod hazard). Because the ledger is
-persisted and shared (one SQLite file locally, one Postgres in SaaS), a DB-poll
-stream is correct across every pod with no shared bus. See
-``api/routes/notifications.py`` for the poll loop.
+``resolve``; every UI delivery surface reads the durable ``valuz_notification``
+table. The SSE stream (``/v1/notifications/stream``) reconciles by re-reading it
+on an interval, so cross-pod UI delivery never depends on an in-process bus.
+
+New rows also publish the additive ``notification.created`` extension event.
+It is a best-effort side-effect hook for overlays (for example an external push
+gateway), not a replacement for the durable ledger or DB-poll SSE.
 """
 
 from __future__ import annotations
@@ -25,6 +23,8 @@ from valuz_agent.modules.notifications.schemas import NotificationEntry
 
 logger = logging.getLogger(__name__)
 
+NOTIFICATION_CREATED = "notification.created"
+
 
 def _entry(row: NotificationRow) -> NotificationEntry:
     return NotificationEntry.model_validate(row)
@@ -32,7 +32,7 @@ def _entry(row: NotificationRow) -> NotificationEntry:
 
 class NotificationService:
     """Durable-only notification ledger. Writes go to ``valuz_notification``;
-    delivery is by the DB-poll SSE stream, never an in-memory broadcast."""
+    UI delivery is by DB-poll SSE; the created hook is side-effect-only."""
 
     # ---- Sources (projectors call these) ----------------------------
 
@@ -60,7 +60,8 @@ class NotificationService:
         its next poll."""
         try:
             async with async_unit_of_work() as db:
-                row, _created = await NotificationDatastore(db).upsert(
+                datastore = NotificationDatastore(db)
+                row, created = await datastore.upsert(
                     user_id,
                     dedup_key=dedup_key,
                     kind=kind,
@@ -76,7 +77,25 @@ class NotificationService:
                     source_event_id=source_event_id,
                     payload=payload,
                 )
-                return _entry(row)
+                entry = _entry(row)
+                unread = await datastore.count_unread(user_id) if created else None
+            if created:
+                try:
+                    from valuz_agent.infra.eventbus import event_bus
+
+                    event_bus.publish(
+                        NOTIFICATION_CREATED,
+                        owner_user_id=user_id,
+                        notification=entry.model_dump(mode="json"),
+                        unread=unread,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.debug(
+                        "notifications: notification.created publish failed for %s",
+                        dedup_key,
+                        exc_info=True,
+                    )
+            return entry
         except Exception:  # noqa: BLE001
             logger.warning("notifications: ingest failed for %s", dedup_key, exc_info=True)
             return None
@@ -139,6 +158,18 @@ class NotificationService:
             unread = await ds.count_unread(user_id)
         return [_entry(r) for r in rows], unread
 
+    async def history(
+        self, user_id: str, *, limit: int = 50, before: int | None = None
+    ) -> tuple[list[NotificationEntry], bool]:
+        """Resolved notifications page, newest first — the drawer's History
+        tab. Returns ``(entries, has_more)``; fetches one extra row to learn
+        whether another page exists below."""
+        async with async_unit_of_work(commit=False) as db:
+            rows = await NotificationDatastore(db).list_history(
+                user_id, limit=limit + 1, before=before
+            )
+        return [_entry(r) for r in rows[:limit]], len(rows) > limit
+
     async def mark_read(self, user_id: str, notification_id: str) -> None:
         async with async_unit_of_work() as db:
             await NotificationDatastore(db).mark_read(user_id, notification_id)
@@ -151,6 +182,11 @@ class NotificationService:
         """User-driven resolve (e.g. swiping away a failure they acknowledge)."""
         async with async_unit_of_work() as db:
             await NotificationDatastore(db).resolve_by_id(user_id, notification_id)
+
+    async def dismiss_all(self, user_id: str) -> None:
+        """User-driven resolve of every open entry (the drawer's "clear all")."""
+        async with async_unit_of_work() as db:
+            await NotificationDatastore(db).resolve_all_open(user_id)
 
 
 # Process singleton.

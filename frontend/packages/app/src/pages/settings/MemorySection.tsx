@@ -152,7 +152,6 @@ export const MemorySection = () => {
           >
             <Switch
               checked={verificationOn}
-              disabled={!citationsOn}
               onCheckedChange={(value) =>
                 void toggleConversation("conversation_verification_enabled", value)
               }

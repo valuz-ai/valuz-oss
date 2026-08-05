@@ -85,6 +85,9 @@ durable 表 `valuz_notification`:
   kickoff capability-gap)本就 append `task_blocked`/`kickoff_failed`。在同一处
   调 `ingest(task_failed, f:{event_id}, action=resume, route=/tasks/{task_id})`。
   - 可选:`resumed`/`abandoned` → `resolve` 对应失败通知。
+- **完成源**:`finalize_task(status=completed)` 写入终态事件后调用
+  `ingest(task_completed, c:{event_id}, action=none, urgency=info,
+  route=/tasks/{task_id})`。摘要取终态事件 payload，幂等键绑定该完成事件。
 - **未来**:automation 失败、长任务完成…… 各加一个 projector,不动投递层。
 
 kernel 仍是"提问是否还 pending"的真相源;通知行只镜像它 + 增加读状态。开机
@@ -106,10 +109,21 @@ resolved(和今天 aggregator 的 hydrate 同精神)。
   关键**:进程内订阅表只能覆盖同一 pod 的 SSE 客户端,pod A 写入的通知到不了连在 pod B
   的流;持久账本共享(本地一份 SQLite、SaaS 一份 Postgres),DB 轮询流对每个 pod 都正确,
   无需共享总线(Redis pub/sub 是未来的 overlay 优化路径)。
+- `GET /v1/notifications/history?limit=&before=` — 已消解（清除/已处理）的历史页，
+  最新在前；`before` 为 `created_at` 毫秒游标，响应携带 `has_more`。抽屉"历史"tab 的
+  只读数据源。
 - `POST /v1/notifications/{id}:read` / `:read-all`
-- `POST /v1/notifications/{id}:dismiss`
+- `POST /v1/notifications/{id}:dismiss` / `:dismiss-all`（抽屉"全部清除"——所有开放项
+  移入历史；question 项仅清除通知本身，问题在会话里仍可作答）。前端两者都做乐观移除
+  （store 立即删行，失败由下一帧 snapshot 自愈），不等 2.5s 轮询帧。
 - 动作本身走各自领域端点（答复 → `/sessions/{id}/actions`，恢复 →
   `/tasks/{id}:intervene action=resume`）；这些成功后经来源 `resolve` 消解通知。
+
+扩展事件：`NotificationService.ingest()` 首次创建账本行后，以 best effort 发布
+`notification.created`。稳定 payload 为 `owner_user_id` + 完整 `notification` wire
+object + 当前 owner 的 `unread` 数量；幂等 upsert 返回既有行时不重复发布。它只供
+overlay 接外部系统通知等副作用，
+不能替代持久账本或 DB-poll SSE，也不承诺跨进程重放。
 
 `/v1/decisions/*` 与 `/v1/tasks/attention` 退役（前者的能力被 question-kind 覆盖，
 后者被 stream 覆盖）。

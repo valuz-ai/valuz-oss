@@ -53,6 +53,16 @@ class ToolKit:
     def get(self, name: str) -> ToolDef | None:
         return self._tools.get(name)
 
+    def unregister(self, name: str) -> ToolDef | None:
+        """Remove and return one tool definition, if present.
+
+        Runtime-private, turn-scoped tools use this to restore the exact
+        public toolkit after a native continuation.  The operation is kept
+        deliberately small instead of exposing the backing mapping.
+        """
+
+        return self._tools.pop(name, None)
+
     def list_tools(self) -> list[ToolDef]:
         return list(self._tools.values())
 
