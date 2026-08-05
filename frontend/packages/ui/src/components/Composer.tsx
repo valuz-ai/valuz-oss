@@ -1269,25 +1269,34 @@ export const Composer = ({
   // ``deepagents`` runtime (only Claude tier ships the LLM classifier).
   const PERMISSION_LABELS: Record<
     "default" | "auto_review" | "full_access",
-    { label: string; hint: string }
+    { label: string; triggerLabel: string; hint: string }
   > = {
     default: {
       label: t("conversation.permissionReview"),
+      triggerLabel: t(
+        "conversation.permissionReviewShort" as Parameters<typeof t>[0],
+      ),
       hint: t("conversation.permissionReviewHint"),
     },
     auto_review: {
       label: t("conversation.permissionAuto"),
+      triggerLabel: t(
+        "conversation.permissionAutoShort" as Parameters<typeof t>[0],
+      ),
       hint: t("conversation.permissionAutoHint"),
     },
     full_access: {
       label: t("conversation.permissionFull"),
+      triggerLabel: t(
+        "conversation.permissionFullShort" as Parameters<typeof t>[0],
+      ),
       hint: t("conversation.permissionFullHint"),
     },
   };
   const effectivePermissionMode: "default" | "auto_review" | "full_access" =
     permissionMode ?? "full_access";
   const selectedPermissionLabel =
-    PERMISSION_LABELS[effectivePermissionMode].label;
+    PERMISSION_LABELS[effectivePermissionMode].triggerLabel;
   const isDeepAgents = selectedRuntimeId === "deepagents";
 
   // EFFORT_LABELS — visible labels for the reasoning-budget selector

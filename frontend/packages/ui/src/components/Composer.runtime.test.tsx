@@ -172,6 +172,29 @@ describe("Composer default brain flyout", () => {
   });
 });
 
+describe("Composer permission selector", () => {
+  it("uses compact toolbar labels while keeping the full labels in the menu", () => {
+    const { rerender } = render(
+      <Composer
+        permissionMode="full_access"
+        onPermissionModeChange={vi.fn()}
+      />,
+    );
+
+    const fullAccessTrigger = screen.getByRole("button", { name: "完全" });
+    fireEvent.click(fullAccessTrigger);
+    expect(screen.getByText("完全访问权限")).toBeTruthy();
+
+    rerender(
+      <Composer
+        permissionMode="default"
+        onPermissionModeChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "默认" })).toBeTruthy();
+  });
+});
+
 describe("Composer IME submission guard", () => {
   it("does not send when Enter confirms an active IME composition", () => {
     const onSend = vi.fn();
