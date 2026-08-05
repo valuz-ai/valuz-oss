@@ -2225,9 +2225,10 @@ export const Composer = ({
                                   setAgentSubmenu(null);
                                   setAgentListMenuOpen(false);
                                   // The runtime/model 二级菜单 belongs to the
-                                  // Default selection (effort stays editable when
-                                  // locked); an agent run keeps it frozen.
-                                  if (!selectedAgentSlug)
+                                  // Default selection. An unlocked agent run may
+                                  // preview it on hover without changing the
+                                  // current selection; locked runs stay frozen.
+                                  if (!(agentLocked && selectedAgentSlug))
                                     setDefaultBrainMenuOpen(true);
                                 }}
                                 onClick={() => {
@@ -2437,10 +2438,10 @@ export const Composer = ({
                           {/* Runtime / model / effort are the "默认" (no-agent)
                               entry's brain, shown as its 二级菜单 — a flyout to
                               the left of the popover, opened by hovering the
-                              Default row. Agents run on their own brain (shown
-                              in the trigger) and carry no controls here. */}
+                              Default row. Hovering only previews these controls;
+                              clicking Default still changes the selection. */}
                           {allowAgentBrainOverride &&
-                            !selectedAgentSlug &&
+                            !(agentLocked && selectedAgentSlug) &&
                             defaultBrainMenuOpen && (
                             <div
                               className={cn(

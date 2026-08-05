@@ -17,6 +17,24 @@ const sampleRuntimes: RuntimeSelectorItem[] = [
   },
 ];
 
+const sampleAgents = [
+  {
+    slug: "valurion",
+    name: "Valurion",
+    runtimeLabel: "Claude Agent",
+    modelLabel: "Sonnet 4.6",
+  },
+];
+
+const sampleProviders = [
+  {
+    providerId: "anthropic",
+    providerName: "Anthropic",
+    modelId: "claude-sonnet-4-6",
+    isDefault: true,
+  },
+];
+
 describe("Composer runtime selector (REP-107)", () => {
   it("does not render the runtime trigger when runtimes prop is empty", () => {
     render(<Composer runtimes={[]} />);
@@ -113,6 +131,44 @@ describe("Composer runtime selector (REP-107)", () => {
   it("shows the runtime's display name when one is selected", () => {
     render(<Composer runtimes={sampleRuntimes} selectedRuntimeId="codex" />);
     expect(screen.getByText("Codex Agent")).toBeTruthy();
+  });
+});
+
+describe("Composer default brain flyout", () => {
+  it("previews the default brain on hover while an agent remains selected", () => {
+    const onAgentChange = vi.fn();
+    render(
+      <Composer
+        agents={sampleAgents}
+        selectedAgentSlug="valurion"
+        onAgentChange={onAgentChange}
+        allowAgentBrainOverride
+        runtimes={sampleRuntimes}
+        selectedRuntimeId="claude_agent"
+        providers={sampleProviders}
+        selectedProviderId="anthropic"
+        selectedModelId="claude-sonnet-4-6"
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Valurion.*Sonnet 4\.6/ }),
+    );
+    const defaultBrain = screen
+      .getByText("默认")
+      .closest("button") as HTMLButtonElement | null;
+    expect(defaultBrain).toBeTruthy();
+    fireEvent.mouseEnter(defaultBrain as HTMLButtonElement);
+
+    expect(
+      screen.getByRole("button", { name: /模型.*Sonnet 4\.6/ }),
+    ).toBeTruthy();
+    expect(onAgentChange).not.toHaveBeenCalled();
+    expect(
+      screen.getAllByRole("button", {
+        name: /Valurion.*Sonnet 4\.6/,
+      }).length,
+    ).toBeGreaterThanOrEqual(2);
   });
 });
 
