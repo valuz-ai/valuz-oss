@@ -120,6 +120,29 @@ export function useSessionSubscription({
       const reconcileBurstTimers: number[] = [];
       abortRef.current = abort;
 
+      const reconcileTranscript = (turnLimit = TURN_PAGE_SIZE) => {
+        if (abort.signal.aborted) return;
+        if (selectedSessionIdRef.current !== sessionId) return;
+        void sessionsApi
+          .listEventsWindow(sessionId, { turnLimit })
+          .then((resp) => {
+            if (abort.signal.aborted) return;
+            if (selectedSessionIdRef.current !== sessionId) return;
+            if (resp.items.length === 0) return;
+            // Order-safe merge, NOT ``appendEvent`` (tail-append would render
+            // history after the current turn) and NOT a global seq sort (live
+            // deltas are ``seq 0`` — a sort throws them to the FRONT of the
+            // transcript, which rendered refreshed-mid-turn content into the
+            // previous turn's area). ``mergeEventWindow`` inserts only the
+            // genuinely-missing persisted rows at their seq position and keeps
+            // live entries glued where they arrived.
+            setEvents((prev) => mergeEventWindow(prev, resp.items));
+            const top = resp.items[resp.items.length - 1].seq;
+            if (top > historyCursorRef.current) historyCursorRef.current = top;
+          })
+          .catch(() => {});
+      };
+
       const appendEvent = (event: SessionEventDTO) => {
         // Drop deliveries that outlive this subscription. A session switch
         // aborts the stream (the ``selectedSessionId`` effect) — but an
@@ -423,6 +446,15 @@ export function useSessionSubscription({
               status !== "running" &&
               status !== "created"));
         if (terminal) {
+          // ``assistant_message_sidecar`` is generated after the visible
+          // answer and can be substantially larger than the text event. A
+          // live stream may paint the answer (and even earlier source rows)
+          // before the final sidecar frame reaches React. ``session.idle`` is
+          // emitted only after every sidecar has been durably appended, so a
+          // terminal history reconcile gives the just-finished turn one
+          // authoritative snapshot. This keeps inline citation anchors and
+          // the trailing source list atomic without restarting the stream.
+          reconcileTranscript(1);
           // The turn is over — release any lingering optimistic pending flag
           // (a send whose turn just finished, or a stale one after an error).
           setSending(false);
@@ -464,28 +496,6 @@ export function useSessionSubscription({
       // re-fetch the transcript window a few times over the first ~2.5s and
       // idempotently merge it, forcing the persisted transcript to paint
       // regardless of which async path won.
-      const reconcileTranscript = () => {
-        if (abort.signal.aborted) return;
-        if (selectedSessionIdRef.current !== sessionId) return;
-        void sessionsApi
-          .listEventsWindow(sessionId, { turnLimit: TURN_PAGE_SIZE })
-          .then((resp) => {
-            if (abort.signal.aborted) return;
-            if (selectedSessionIdRef.current !== sessionId) return;
-            if (resp.items.length === 0) return;
-            // Order-safe merge, NOT ``appendEvent`` (tail-append would render
-            // history after the current turn) and NOT a global seq sort (live
-            // deltas are ``seq 0`` — a sort throws them to the FRONT of the
-            // transcript, which rendered refreshed-mid-turn content into the
-            // previous turn's area). ``mergeEventWindow`` inserts only the
-            // genuinely-missing persisted rows at their seq position and keeps
-            // live entries glued where they arrived.
-            setEvents((prev) => mergeEventWindow(prev, resp.items));
-            const top = resp.items[resp.items.length - 1].seq;
-            if (top > historyCursorRef.current) historyCursorRef.current = top;
-          })
-          .catch(() => {});
-      };
       for (const ms of [400, 1200, 2500]) {
         reconcileBurstTimers.push(window.setTimeout(reconcileTranscript, ms));
       }
