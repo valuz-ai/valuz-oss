@@ -27,7 +27,7 @@ they do not get folded into the base catalog.
 
 Catalog ID: `https://valuz.ai/a2ui/catalogs/base/v1`
 
-The base catalog contains 43 components:
+The base catalog contains 51 components:
 
 - Layout: `Stack`, `Grid`, `Card`, `Tabs`, `Accordion`, `Steps`, `Carousel`,
   `Separator`, `Modal`
@@ -38,7 +38,9 @@ The base catalog contains 43 components:
 - Forms: `Form`, `Input`, `TextArea`, `Select`, `RadioGroup`, `CheckboxGroup`,
   `Slider`, `DatePicker`, `SwitchGroup`, `ToggleGroup`
 - Charts: `LineChart`, `AreaChart`, `BarChart`, `HorizontalBarChart`, `PieChart`,
-  `RadarChart`, `RadialChart`, `ScatterChart`
+  `DonutChart`, `ComboChart`, `FunnelChart`, `TreemapChart`, `SankeyChart`,
+  `HeatmapChart`, `GaugeChart`, `SparklineChart`, `RadarChart`, `RadialChart`,
+  `ScatterChart`
 
 Every API is strict and described. The descriptions are part of the inline
 catalog sent to a model, so component selection and property semantics remain

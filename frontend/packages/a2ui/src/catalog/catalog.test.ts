@@ -35,10 +35,18 @@ describe("Valuz A2UI base catalog", () => {
         "LineChart",
         "BarChart",
         "PieChart",
+        "DonutChart",
+        "ComboChart",
+        "FunnelChart",
+        "TreemapChart",
+        "SankeyChart",
+        "HeatmapChart",
+        "GaugeChart",
+        "SparklineChart",
         "ScatterChart",
       ]),
     );
-    expect(valuzBaseComponentNames).toHaveLength(43);
+    expect(valuzBaseComponentNames).toHaveLength(51);
     expect(valuzBaseComponents.map((component) => component.name)).toEqual(
       valuzBaseComponentNames,
     );

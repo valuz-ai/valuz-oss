@@ -95,4 +95,38 @@ describe("Valuz A2UI base components", () => {
     expect(container.querySelector(".recharts-wrapper")).toBeTruthy();
     expect(container.querySelector(".recharts-line")).toBeTruthy();
   });
+
+  it("renders bar and line series together in a combo chart", () => {
+    const processor = createProcessor(
+      [
+        { id: "root", component: "Stack", children: ["chart"] },
+        {
+          id: "chart",
+          component: "ComboChart",
+          title: "Revenue and margin",
+          data: { path: "/series" },
+          xKey: "period",
+          series: [
+            { key: "revenue", label: "Revenue", type: "bar" },
+            { key: "margin", label: "Margin", type: "line", axis: "right" },
+          ],
+          rightAxis: true,
+          height: 240,
+        },
+      ],
+      {
+        series: [
+          { period: "Q1", revenue: 32, margin: 18 },
+          { period: "Q2", revenue: 41, margin: 21 },
+          { period: "Q3", revenue: 52, margin: 24 },
+        ],
+      },
+    );
+    const surface = processor.model.getSurface("component-test")!;
+    const { container } = render(<ValuzA2UISurface surface={surface} />);
+
+    expect(screen.getByText("Revenue and margin")).toBeTruthy();
+    expect(container.querySelector(".recharts-bar-rectangle")).toBeTruthy();
+    expect(container.querySelector(".recharts-line")).toBeTruthy();
+  });
 });
