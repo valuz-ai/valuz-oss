@@ -1,0 +1,50 @@
+:root {
+  color-scheme: light;
+  font-family: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+}
+
+.demo-stage {
+  --demo-page: var(--background, whitesmoke);
+  --demo-surface: var(--surface, white);
+  --demo-text: var(--foreground, black);
+  --demo-muted: var(--fg-60, dimgray);
+  --demo-border: var(--fg-8, gainsboro);
+  background: var(--demo-page);
+  color: var(--demo-text);
+  min-height: 100vh;
+}
+.demo-stage[data-theme="dark"] {
+  --demo-page: color-mix(in oklab, black 96%, white);
+  --demo-surface: color-mix(in oklab, black 88%, white);
+  --demo-text: whitesmoke;
+  --demo-muted: darkgray;
+  --demo-border: color-mix(in oklab, white 14%, transparent);
+  color-scheme: dark;
+}
+.demo-shell { margin: 0 auto; max-width: 1240px; padding: 48px 24px 96px; }
+.demo-header { align-items: flex-end; display: flex; gap: 24px; justify-content: space-between; margin-bottom: 28px; }
+.demo-header span { color: var(--brand-700, purple); font-size: 11px; font-weight: 600; letter-spacing: 0.08em; }
+.demo-header h1 { font-size: 32px; font-weight: 500; letter-spacing: -0.03em; line-height: 1.2; margin: 6px 0 8px; }
+.demo-header p { color: var(--demo-muted); font-size: 14px; margin: 0; }
+.demo-header code { background: var(--demo-surface); border: 1px solid var(--demo-border); border-radius: 6px; color: var(--demo-muted); font-size: 11px; padding: 8px 10px; }
+.demo-header-actions { align-items: stretch; display: flex; gap: 8px; }
+.demo-header-actions button { background: var(--demo-surface); border: 1px solid var(--demo-border); border-radius: 6px; color: var(--demo-text); cursor: pointer; font: inherit; font-size: 12px; padding: 8px 12px; }
+.demo-header-actions button:hover { background: color-mix(in oklab, var(--demo-surface) 88%, var(--demo-text)); }
+.demo-header-actions button:focus-visible { outline: 2px solid var(--brand, mediumpurple); outline-offset: 2px; }
+.demo-nav { backdrop-filter: blur(16px); background: color-mix(in oklab, var(--demo-page) 88%, transparent); display: flex; gap: 4px; margin: 0 -8px 24px; padding: 8px; position: sticky; top: 0; z-index: 20; }
+.demo-nav a { border-radius: 6px; color: var(--demo-muted); font-size: 12px; padding: 7px 10px; text-decoration: none; text-transform: capitalize; }
+.demo-nav a:hover { background: color-mix(in oklab, var(--demo-surface) 88%, var(--demo-text)); color: var(--demo-text); }
+.demo-section { background: var(--demo-surface); border: 1px solid var(--demo-border); border-radius: 12px; box-shadow: var(--shadow-outline, 0 1px 2px rgb(19 19 19 / 0.07)); margin-bottom: 24px; overflow: hidden; padding: 24px; scroll-margin-top: 64px; }
+
+@media (max-width: 720px) {
+  .demo-shell { padding: 24px 12px 64px; }
+  .demo-header { align-items: flex-start; flex-direction: column; }
+  .demo-header-actions { max-width: 100%; }
+  .demo-header code { max-width: 100%; overflow: auto; }
+  .demo-section { padding: 16px; }
+}

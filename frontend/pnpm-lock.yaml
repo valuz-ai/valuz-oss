@@ -174,6 +174,37 @@ importers:
         specifier: ^7.9.4
         version: 7.14.1(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
 
+  packages/a2ui:
+    dependencies:
+      '@a2ui/react':
+        specifier: ^0.10.2
+        version: 0.10.2(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@3.25.76)
+      '@a2ui/web_core':
+        specifier: ^0.10.6
+        version: 0.10.6
+      lucide-react:
+        specifier: ^1.8.0
+        version: 1.8.0(react@19.2.8)
+      markdown-it:
+        specifier: ^14.2.0
+        version: 14.3.0
+      react:
+        specifier: '>=19.0.0'
+        version: 19.2.8
+      react-dom:
+        specifier: '>=19.0.0'
+        version: 19.2.8(react@19.2.8)
+      recharts:
+        specifier: ^3.8.0
+        version: 3.8.0(@types/react@19.2.14)(react-dom@19.2.8(react@19.2.8))(react-is@18.3.1)(react@19.2.8)(redux@5.0.1)
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@types/markdown-it':
+        specifier: ^14.1.2
+        version: 14.1.2
+
   packages/app:
     dependencies:
       '@valuz/core':
@@ -2426,8 +2457,17 @@ packages:
   '@types/keyv@3.1.4':
     resolution: {integrity: sha512-BQ5aZNSCpj7D6K2ksrRCTmKRLEpnPvWDiLPfoGyhZ++8YtiK9d/3DBKPJgry359X/P1PfruyYwvnvwFjuEiEIg==}
 
+  '@types/linkify-it@5.0.0':
+    resolution: {integrity: sha512-sVDA58zAw4eWAffKOaQH5/5j3XeayukzDk+ewSsnv3p4yJEZHCCzMDiZM8e0OUrRvmpGZ85jf4yDHkHsgBNr9Q==}
+
+  '@types/markdown-it@14.1.2':
+    resolution: {integrity: sha512-promo4eFwuiW+TfGxhi+0x3czqTYJkG8qB17ZUJiVF10Xm7NLVRSLUsfRTU/6h1e24VvRnXCx+hG7li58lkzog==}
+
   '@types/mdast@4.0.4':
     resolution: {integrity: sha512-kGaNbPh1k7AFzgpud/gMdvIm5xuECykRR+JnWKQno9TAXVa6WIVCGTPvYGekIDL4uwCZQSYbUxNBSb1aUo79oA==}
+
+  '@types/mdurl@2.0.0':
+    resolution: {integrity: sha512-RGdgjQUZba5p6QEFAVx2OGb8rQDL/cPRG7GiedRzMcJ1tYnUANBncjbSB1NRGwbvjcPeikRABz2nshyPk1bhWg==}
 
   '@types/ms@2.1.0':
     resolution: {integrity: sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA==}
@@ -5565,6 +5605,16 @@ snapshots:
       dompurify: 3.4.11
       markdown-it: 14.3.0
 
+  '@a2ui/react@0.10.2(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@3.25.76)':
+    dependencies:
+      '@a2ui/markdown-it': 0.1.1(@a2ui/web_core@0.10.6)
+      '@a2ui/web_core': 0.10.6
+      clsx: 2.1.1
+      markdown-it: 14.3.0
+      react: 19.2.8
+      react-dom: 19.2.8(react@19.2.8)
+      zod: 3.25.76
+
   '@a2ui/react@0.10.2(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.3.6)':
     dependencies:
       '@a2ui/markdown-it': 0.1.1(@a2ui/web_core@0.10.6)
@@ -7664,9 +7714,18 @@ snapshots:
     dependencies:
       '@types/node': 24.12.2
 
+  '@types/linkify-it@5.0.0': {}
+
+  '@types/markdown-it@14.1.2':
+    dependencies:
+      '@types/linkify-it': 5.0.0
+      '@types/mdurl': 2.0.0
+
   '@types/mdast@4.0.4':
     dependencies:
       '@types/unist': 3.0.3
+
+  '@types/mdurl@2.0.0': {}
 
   '@types/ms@2.1.0': {}
 

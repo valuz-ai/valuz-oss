@@ -1,0 +1,11 @@
+.va2-chart { margin: 0; min-width: 0; width: 100%; }
+.va2-chart > figcaption { display: grid; gap: 3px; margin-bottom: 14px; }
+.va2-chart > figcaption strong { color: var(--va2-text); font-size: 14px; font-weight: 600; line-height: 1.4; }
+.va2-chart > figcaption span { color: var(--va2-text-body); font-size: 12px; line-height: 1.5; }
+.va2-chart__canvas { min-height: 160px; min-width: 0; width: 100%; }
+.va2-chart .recharts-default-legend { align-items: center; display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: center; }
+.va2-chart .recharts-legend-item { margin: 0 !important; }
+.va2-chart .recharts-legend-item-text { color: var(--va2-text-body) !important; }
+.va2-chart .recharts-tooltip-label { color: var(--va2-text); font-weight: 600; margin-bottom: 4px; }
+.va2-chart .recharts-tooltip-item { padding: 2px 0 !important; }
+.va2-chart .recharts-polar-angle-axis-tick-value { fill: var(--va2-text-body); }

@@ -45,6 +45,7 @@ export default defineConfig({
       "@valuz/shared": resolvePath("./packages/shared/src"),
       "@valuz/core": resolvePath("./packages/core/src"),
       "@valuz/ui": resolvePath("./packages/ui/src"),
+      "@valuz/a2ui": resolvePath("./packages/a2ui/src"),
       "@valuz/genui-blocks": resolvePath("./packages/genui-blocks/src"),
       "@valuz/app": resolvePath("./packages/app/src"),
     },

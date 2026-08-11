@@ -1,0 +1,117 @@
+.valuz-a2ui {
+  /* Host tokens are preferred; every fallback keeps the package usable standalone. */
+  --va2-page: var(--background, #f8f9fb);
+  --va2-bg: var(--surface, #ffffff);
+  --va2-text: var(--foreground, #131313);
+  --va2-slate: var(--slate, #444b54);
+  --va2-bg-soft: var(--fg-1, color-mix(in oklab, var(--va2-text) 1%, var(--va2-page)));
+  --va2-bg-muted: var(--fg-5, color-mix(in oklab, var(--va2-text) 5%, var(--va2-page)));
+  --va2-border: var(--fg-8, color-mix(in oklab, var(--va2-text) 8%, var(--va2-page)));
+  --va2-border-strong: var(--fg-12, color-mix(in oklab, var(--va2-text) 12%, var(--va2-page)));
+  --va2-text-disabled: var(--fg-30, color-mix(in oklab, var(--va2-slate) 37%, var(--va2-page)));
+  --va2-text-icon: var(--fg-50, color-mix(in oklab, var(--va2-slate) 60%, var(--va2-page)));
+  --va2-text-body: var(--fg-60, color-mix(in oklab, var(--va2-slate) 75%, var(--va2-page)));
+  --va2-text-muted: var(--va2-text-body);
+  --va2-brand: var(--brand, #725cf9);
+  --va2-brand-hover: var(--brand-600, #5d46e8);
+  --va2-brand-text: var(--brand-700, #4936c2);
+  --va2-brand-soft: var(--brand-50, color-mix(in oklab, var(--va2-brand) 10%, var(--va2-page)));
+  --va2-brand-focus: color-mix(in oklab, var(--va2-brand) 20%, transparent);
+  --va2-info: var(--info, var(--va2-brand));
+  --va2-info-soft: var(--info-soft, var(--va2-brand-soft));
+  --va2-info-border: var(--info-border, color-mix(in oklab, var(--va2-info) 35%, var(--va2-page)));
+  --va2-info-text: var(--info-text, var(--va2-brand-text));
+  --va2-success: var(--success, #16a34a);
+  --va2-success-soft: var(--success-soft, color-mix(in oklab, var(--va2-success) 10%, var(--va2-page)));
+  --va2-success-border: var(--success-border, color-mix(in oklab, var(--va2-success) 35%, var(--va2-page)));
+  --va2-success-text: var(--success-text, color-mix(in oklab, var(--va2-success) 65%, var(--va2-text)));
+  --va2-warning: var(--warning, #ef8b0c);
+  --va2-warning-soft: var(--warning-soft, color-mix(in oklab, var(--va2-warning) 10%, var(--va2-page)));
+  --va2-warning-border: var(--warning-border, color-mix(in oklab, var(--va2-warning) 35%, var(--va2-page)));
+  --va2-warning-text: var(--warning-text, color-mix(in oklab, var(--va2-warning) 65%, var(--va2-text)));
+  --va2-danger: var(--error, #e5484d);
+  --va2-danger-soft: var(--error-soft, color-mix(in oklab, var(--va2-danger) 10%, var(--va2-page)));
+  --va2-danger-border: var(--error-border, color-mix(in oklab, var(--va2-danger) 35%, var(--va2-page)));
+  --va2-danger-text: var(--error-text, color-mix(in oklab, var(--va2-danger) 65%, var(--va2-text)));
+  --va2-danger-strong: var(--error-strong, color-mix(in oklab, var(--va2-danger) 88%, black));
+  --va2-danger-hover: var(--error-hover, color-mix(in oklab, var(--va2-danger-strong) 92%, black));
+  --va2-shadow-outline: var(--shadow-outline, 0 1px 2px color-mix(in oklab, var(--va2-text) 7%, transparent));
+  --va2-shadow-raised: var(--shadow-2, 0 4px 10px color-mix(in oklab, var(--va2-text) 7%, transparent));
+  --va2-shadow-popover: var(--shadow-3, 0 12px 32px -8px color-mix(in oklab, var(--va2-text) 14%, transparent));
+  --va2-shadow-modal: var(--shadow-4, 0 24px 48px color-mix(in oklab, var(--va2-text) 18%, transparent));
+  --va2-radius-sm: var(--radius-sm, 4px);
+  --va2-radius-md: var(--radius-md, 6px);
+  --va2-radius-lg: var(--radius-lg, 8px);
+  --va2-radius-xl: var(--radius-xl, 10px);
+  --va2-radius-2xl: var(--radius-2xl, 12px);
+  --va2-radius-full: var(--radius-full, 9999px);
+  --va2-duration-fast: var(--duration-fast, 120ms);
+  --va2-duration-base: var(--duration-base, 200ms);
+  --va2-ease: var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1));
+  --va2-chart-1: var(--accent-sky, #0ea5e9);
+  --va2-chart-2: var(--accent-teal, #14b8a6);
+  --va2-chart-3: var(--accent-amber, #eab308);
+  --va2-chart-4: var(--accent-pink, #ec4899);
+  --va2-chart-5: var(--accent-blue, #3b82f6);
+  --va2-chart-6: var(--accent-lime, #84cc16);
+  --va2-chart-7: var(--accent-orange, #f97316);
+  --va2-chart-8: var(--accent-fuchsia, #d946ef);
+  --va2-code-bg: color-mix(in oklab, var(--va2-text) 92%, black);
+  --va2-code-header: color-mix(in oklab, var(--va2-text) 84%, black);
+  --va2-code-border: color-mix(in oklab, var(--va2-text) 72%, black);
+  --va2-code-text: color-mix(in oklab, white 90%, transparent);
+  --va2-code-muted: color-mix(in oklab, white 62%, transparent);
+  --va2-font: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  box-sizing: border-box;
+  color: var(--va2-text);
+  font-family: var(--va2-font);
+  font-size: 14px;
+  line-height: 1.7;
+  min-width: 0;
+}
+
+.valuz-a2ui[data-theme="dark"],
+.dark .valuz-a2ui {
+  --va2-page: #0f1012;
+  --va2-bg: #17181c;
+  --va2-text: #e4e4e7;
+  --va2-slate: #a8b1bf;
+  --va2-brand: #8b7afc;
+  --va2-brand-hover: color-mix(in oklab, var(--va2-brand) 85%, white);
+  --va2-brand-text: color-mix(in oklab, var(--va2-brand) 70%, white);
+  --va2-success: #22c55e;
+  --va2-warning: #f59e0b;
+  --va2-danger: #ef4444;
+  --va2-chart-1: #38bdf8;
+  --va2-chart-2: #2dd4bf;
+  --va2-chart-3: #facc15;
+  --va2-chart-4: #f472b6;
+  --va2-chart-5: #60a5fa;
+  --va2-chart-6: #a3e635;
+  --va2-chart-7: #fb923c;
+  --va2-chart-8: #e879f9;
+}
+
+.valuz-a2ui *,
+.valuz-a2ui *::before,
+.valuz-a2ui *::after {
+  box-sizing: border-box;
+}
+
+.valuz-a2ui button,
+.valuz-a2ui input,
+.valuz-a2ui select,
+.valuz-a2ui textarea {
+  color: inherit;
+  font: inherit;
+}
+
+.valuz-a2ui button:focus-visible,
+.valuz-a2ui input:focus-visible,
+.valuz-a2ui select:focus-visible,
+.valuz-a2ui textarea:focus-visible,
+.valuz-a2ui a:focus-visible {
+  outline: 2px solid var(--va2-brand);
+  outline-offset: 2px;
+}

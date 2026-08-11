@@ -1,0 +1,38 @@
+{
+  "name": "@valuz/a2ui",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Standalone React renderer and component catalog for A2UI v0.9.1",
+  "type": "module",
+  "sideEffects": ["**/*.css"],
+  "exports": {
+    ".": "./src/index.ts",
+    "./catalog": "./src/catalog/index.ts",
+    "./react": "./src/react/index.ts",
+    "./styles.css": "./src/styles.css"
+  },
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json",
+    "build:demo": "vite build --config vite.config.ts",
+    "dev": "vite --config vite.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src --ext .ts,.tsx",
+    "test": "cd ../.. && vitest run --config vitest.config.ts packages/a2ui/src",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@a2ui/react": "^0.10.2",
+    "@a2ui/web_core": "^0.10.6",
+    "lucide-react": "^1.8.0",
+    "markdown-it": "^14.2.0",
+    "recharts": "^3.8.0",
+    "zod": "^3.25.76"
+  },
+  "peerDependencies": {
+    "react": ">=19.0.0",
+    "react-dom": ">=19.0.0"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2"
+  }
+}
