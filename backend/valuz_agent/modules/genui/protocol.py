@@ -164,6 +164,19 @@ when the host updates the slot, an inlined copy of the same values never
 does. Seeding the slot and then inlining the values anyway produces a board
 that polls but visibly never moves — seed the SLOT, bind the PROPERTY.
 
+CHECK BEFORE YOU FINISH: every /refs/<slot> you declared must have at least
+one component property written as {"path":"/data/<slot>/..."}. A ref with no
+reader is dead weight — the host polls, the page never changes, and the
+values you inlined instead are frozen at generation time. If you find a ref
+with no binding, either bind it or drop the ref.
+
+And bind the SLOT's shape, not the source data you were handed: the values
+arriving after a refresh have the shape the edition notes state for that
+source, which is rarely the shape of the tool output you read. Hand-copying
+the tool's own records into a component (a chip row given {"label":...}
+objects when it takes plain strings) prints raw JSON on the page — that is
+the giveaway that a binding was replaced by a transcription.
+
 The slot's shape is NOT yours to design. After every refresh the host
 replaces the slot's whole value with the source's declared shape, exactly
 as the edition notes state it (e.g. a metric source refreshes to
