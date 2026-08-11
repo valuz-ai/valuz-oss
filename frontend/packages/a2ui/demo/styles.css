@@ -233,7 +233,7 @@ button, input { font: inherit; }
   padding: 1px 5px;
 }
 .demo-specimen-preview {
-  background: var(--demo-soft);
+  background: var(--demo-surface);
   border-bottom: 1px solid var(--demo-border);
   border-top: 1px solid var(--demo-border);
   overflow-x: auto;
