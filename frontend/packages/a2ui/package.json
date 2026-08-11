@@ -16,8 +16,8 @@
     "build:demo": "vite build --config vite.config.ts",
     "dev": "vite --config vite.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "eslint src --ext .ts,.tsx",
-    "test": "cd ../.. && vitest run --config vitest.config.ts packages/a2ui/src",
+    "lint": "eslint src demo --ext .ts,.tsx",
+    "test": "cd ../.. && vitest run --config vitest.config.ts packages/a2ui/src packages/a2ui/demo",
     "clean": "rm -rf dist"
   },
   "dependencies": {

@@ -71,6 +71,7 @@ export default defineConfig({
     include: [
       `${resolvePath("./apps")}/**/src/**/*.test.{ts,tsx}`,
       `${resolvePath("./packages")}/**/src/**/*.test.{ts,tsx}`,
+      `${resolvePath("./packages/a2ui/demo")}/**/*.test.{ts,tsx}`,
     ],
     // ``**/node_modules/**`` alone does NOT stop the duplication: pnpm
     // symlinks every ``@valuz/*`` package into the other packages' (and

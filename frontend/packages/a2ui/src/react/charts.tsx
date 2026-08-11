@@ -163,6 +163,7 @@ export const LineChart = createComponentImplementation(LineChartApi, ({ props })
               strokeWidth={2}
               dot={props.showDots ? { r: 3 } : false}
               activeDot={{ r: 4 }}
+              isAnimationActive={false}
             />
           ))}
         </RechartsLineChart>
@@ -195,6 +196,7 @@ export const AreaChart = createComponentImplementation(AreaChartApi, ({ props })
                 fill={color}
                 fillOpacity={0.16}
                 strokeWidth={2}
+                isAnimationActive={false}
               />
             );
           })}
@@ -224,6 +226,7 @@ export const BarChart = createComponentImplementation(BarChartApi, ({ props }) =
               stackId={series.stack ?? (props.stacked ? "default" : undefined)}
               fill={series.color ?? chartColors[index % chartColors.length]}
               radius={[radius, radius, 0, 0]}
+              isAnimationActive={false}
             />
           ))}
         </RechartsBarChart>
@@ -252,6 +255,7 @@ export const HorizontalBarChart = createComponentImplementation(HorizontalBarCha
               stackId={series.stack ?? (props.stacked ? "default" : undefined)}
               fill={series.color ?? chartColors[index % chartColors.length]}
               radius={[0, radius, radius, 0]}
+              isAnimationActive={false}
             />
           ))}
         </RechartsBarChart>
@@ -276,6 +280,7 @@ export const PieChart = createComponentImplementation(PieChartApi, ({ props }) =
             label={props.showLabels}
             stroke="var(--va2-bg)"
             strokeWidth={2}
+            isAnimationActive={false}
           >
             {data.map((_, index) => <Cell key={index} fill={chartColors[index % chartColors.length]} />)}
           </Pie>
@@ -305,6 +310,7 @@ export const DonutChart = createComponentImplementation(DonutChartApi, ({ props 
               label={props.showLabels}
               stroke="var(--va2-bg)"
               strokeWidth={2}
+              isAnimationActive={false}
             >
               {data.map((_, index) => <Cell key={index} fill={chartColors[index % chartColors.length]} />)}
             </Pie>
@@ -336,12 +342,12 @@ export const ComboChart = createComponentImplementation(ComboChartApi, ({ props 
             const color = series.color ?? chartColors[index % chartColors.length];
             const yAxisId = series.axis ?? "left";
             if (series.type === "bar") {
-              return <Bar key={series.key} dataKey={series.key} name={asString(series.label, series.key)} fill={color} radius={[radius, radius, 0, 0]} stackId={series.stack} yAxisId={yAxisId} />;
+              return <Bar key={series.key} dataKey={series.key} name={asString(series.label, series.key)} fill={color} radius={[radius, radius, 0, 0]} stackId={series.stack} yAxisId={yAxisId} isAnimationActive={false} />;
             }
             if (series.type === "area") {
-              return <Area key={series.key} type={series.curve ?? "monotone"} dataKey={series.key} name={asString(series.label, series.key)} fill={color} fillOpacity={0.14} stroke={color} strokeWidth={2} stackId={series.stack} yAxisId={yAxisId} />;
+              return <Area key={series.key} type={series.curve ?? "monotone"} dataKey={series.key} name={asString(series.label, series.key)} fill={color} fillOpacity={0.14} stroke={color} strokeWidth={2} stackId={series.stack} yAxisId={yAxisId} isAnimationActive={false} />;
             }
-            return <Line key={series.key} type={series.curve ?? "monotone"} dataKey={series.key} name={asString(series.label, series.key)} dot={false} stroke={color} strokeWidth={2} yAxisId={yAxisId} />;
+            return <Line key={series.key} type={series.curve ?? "monotone"} dataKey={series.key} name={asString(series.label, series.key)} dot={false} stroke={color} strokeWidth={2} yAxisId={yAxisId} isAnimationActive={false} />;
           })}
         </RechartsComposedChart>
       </ResponsiveContainer>
@@ -371,7 +377,7 @@ export const TreemapChart = createComponentImplementation(TreemapChartApi, ({ pr
   return (
     <ChartFrame title={props.title} description={props.description} height={props.height ?? 300} weight={props.weight} accessibility={props.accessibility}>
       <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: props.height ?? 300 }}>
-        <RechartsTreemap data={data} dataKey={props.valueKey} nameKey={props.nameKey} fill={chartColors[0]} stroke="var(--va2-bg)">
+        <RechartsTreemap data={data} dataKey={props.valueKey} nameKey={props.nameKey} fill={chartColors[0]} stroke="var(--va2-bg)" isAnimationActive={false}>
           <ChartTooltip show={props.showTooltip} />
         </RechartsTreemap>
       </ResponsiveContainer>
@@ -447,7 +453,7 @@ export const GaugeChart = createComponentImplementation(GaugeChartApi, ({ props 
       <div className="va2-gauge">
         <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: props.height ?? 240 }}>
           <RechartsRadialChart data={[{ name: "value", value: percent }]} innerRadius="72%" outerRadius="96%" startAngle={props.startAngle ?? 210} endAngle={props.endAngle ?? -30}>
-            <RadialBar dataKey="value" fill={chartColors[0]} background={{ fill: "var(--va2-bg-muted)" }} cornerRadius={12} />
+            <RadialBar dataKey="value" fill={chartColors[0]} background={{ fill: "var(--va2-bg-muted)" }} cornerRadius={12} isAnimationActive={false} />
           </RechartsRadialChart>
         </ResponsiveContainer>
         <div className="va2-gauge__value"><strong>{value}{props.unit ?? ""}</strong><span>{Math.round(percent)}%</span></div>
@@ -494,6 +500,7 @@ export const RadarChart = createComponentImplementation(RadarChartApi, ({ props 
                 fill={color}
                 fillOpacity={0.12}
                 strokeWidth={2}
+                isAnimationActive={false}
               />
             );
           })}
@@ -510,7 +517,7 @@ export const RadialChart = createComponentImplementation(RadialChartApi, ({ prop
       <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: props.height ?? 300 }}>
         <RechartsRadialChart data={data} innerRadius="28%" outerRadius="88%" startAngle={props.startAngle ?? 90} endAngle={props.endAngle ?? -270}>
           <PolarRadiusAxis domain={[0, props.max ?? 100]} tick={false} axisLine={false} />
-          <RadialBar dataKey={props.valueKey} name={props.nameKey} background={{ fill: "var(--va2-bg-muted)" }} cornerRadius={6}>
+          <RadialBar dataKey={props.valueKey} name={props.nameKey} background={{ fill: "var(--va2-bg-muted)" }} cornerRadius={6} isAnimationActive={false}>
             {data.map((_, index) => <Cell key={index} fill={chartColors[index % chartColors.length]} />)}
           </RadialBar>
           <ChartTooltip show={props.showTooltip} />
@@ -533,7 +540,7 @@ export const ScatterChart = createComponentImplementation(ScatterChartApi, ({ pr
           {props.sizeKey && <ZAxis type="number" dataKey={props.sizeKey} range={[48, 360]} />}
           <ChartTooltip show={props.showTooltip} />
           <SeriesLegend show={props.showLegend} />
-          <Scatter name={props.seriesName ?? props.yKey} data={data} fill={chartColors[0]} />
+          <Scatter name={props.seriesName ?? props.yKey} data={data} fill={chartColors[0]} isAnimationActive={false} />
         </RechartsScatterChart>
       </ResponsiveContainer>
     </ChartFrame>
