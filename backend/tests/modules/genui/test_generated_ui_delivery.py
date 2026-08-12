@@ -234,10 +234,52 @@ class _FakeArtifactDatastore:
     async def get_artifact(self, *args: object) -> object | None:
         return type(self).artifact
 
+    async def get_revision(self, *args: object) -> object | None:
+        return getattr(type(self), "revision", None)
+
+    async def get_content(self, *args: object) -> object | None:
+        return getattr(type(self), "content", None)
+
 
 @asynccontextmanager
 async def _fake_uow(commit: bool = False) -> AsyncIterator[None]:
     yield None
+
+
+async def test_host_context_loads_the_complete_bound_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from valuz_agent.infra import db as infra_db
+    from valuz_agent.modules.artifacts import datastore as ds_mod
+    from valuz_agent.modules.genui.tools import _load_host_generation_context
+
+    document = (
+        '{"version":"v0.9.1","createSurface":{"surfaceId":"main"}}\n'
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"main",'
+        '"components":[{"id":"root","component":"Stack"}]}}'
+    )
+    _FakeArtifactDatastore.binding = SimpleNamespace(
+        artifact_id="art_A", artifact_revision_id="rev_11"
+    )
+    _FakeArtifactDatastore.artifact = SimpleNamespace(id="art_A")
+    _FakeArtifactDatastore.revision = SimpleNamespace(
+        id="rev_11", content_id="content_11", abs_path=None
+    )
+    _FakeArtifactDatastore.content = SimpleNamespace(content_inline=document)
+    monkeypatch.setattr(ds_mod, "ArtifactDatastore", _FakeArtifactDatastore)
+    monkeypatch.setattr(infra_db, "async_unit_of_work", _fake_uow)
+
+    context = await _load_host_generation_context(
+        "u1",
+        UiArtifactTargetHost(
+            host_type="finance.research-desk", host_id="desk", slot="main"
+        ),
+    )
+
+    assert context is not None
+    assert context.expected_revision_id == "rev_11"
+    assert context.bound_artifact is _FakeArtifactDatastore.artifact
+    assert context.current_document == document
 
 
 async def test_hosted_regeneration_appends_to_the_bound_lineage(

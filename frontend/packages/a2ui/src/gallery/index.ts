@@ -1,4 +1,4 @@
-export { A2UIGallery } from "./Gallery";
+export { A2UIGallery, PalettePicker } from "./Gallery";
 export {
   getA2UIGalleryExtensions,
   registerA2UIGalleryExtension,

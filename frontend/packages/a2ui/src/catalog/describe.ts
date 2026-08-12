@@ -34,7 +34,11 @@ function shapeOf(component: ComponentApi): Record<string, ZodLike> {
 export function describeA2UIComponent(component: ComponentApi): string {
   const fields = Object.entries(shapeOf(component)).map(([name, schema]) => {
     const optional = schema.safeParse?.(undefined).success ?? false;
-    return `${name}${optional ? "?" : ""}: ${typeName(schema)}`;
+    // Palette names and their selection semantics are declared once in the
+    // compiler's visualization contract. Repeating all eight enum values on
+    // every chart line costs prompt budget without adding local information.
+    const type = name === "palette" ? "palette" : typeName(schema);
+    return `${name}${optional ? "?" : ""}: ${type}`;
   });
   const description = component.schema.description?.replace(/\s+/g, " ").trim() ?? "";
   return `  - ${component.name}(${fields.join(", ")}) — ${description}`;

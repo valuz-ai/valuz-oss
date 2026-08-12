@@ -10,6 +10,7 @@
     "./catalog": "./src/catalog/index.ts",
     "./gallery": "./src/gallery/index.ts",
     "./react": "./src/react/index.ts",
+    "./theme": "./src/theme/index.ts",
     "./styles.css": "./src/styles.css"
   },
   "scripts": {

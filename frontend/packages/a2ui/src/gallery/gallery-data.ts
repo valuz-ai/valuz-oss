@@ -12,6 +12,8 @@ export interface GallerySpecimen {
   name: string;
   description: string;
   componentNames: string[];
+  components: ComponentNode[];
+  data: Record<string, unknown>;
   surface: NonNullable<ReturnType<ReturnType<typeof createValuzMessageProcessor>["model"]["getSurface"]>>;
 }
 
@@ -45,6 +47,8 @@ function specimen(
     name,
     description,
     componentNames: components.map((component) => component.component),
+    components,
+    data,
     surface: processor.model.getSurface(surfaceId)!,
   };
 }
@@ -234,58 +238,58 @@ const formSpecimens = [
 
 const chartSpecimens = [
   specimen("LineChart", "比较一个或多个序列随有序横轴的变化趋势。", [
-    { id: "root", component: "LineChart", title: "Revenue and margin trend", data: { path: "/trend" }, xKey: "period", series: [{ key: "revenue", label: "Revenue" }, { key: "margin", label: "Margin" }], height: 240 },
+    { id: "root", component: "LineChart", title: "Revenue and margin trend", data: { path: "/trend" }, xKey: "period", series: [{ key: "revenue", label: "Actual revenue", role: "actual" }, { key: "margin", label: "Estimate", role: "estimate" }], height: 240 },
   ], { trend }),
   specimen("AreaChart", "通过填充面积强调规模和累计趋势。", [
-    { id: "root", component: "AreaChart", title: "Demand trend", data: { path: "/trend" }, xKey: "period", series: [{ key: "demand", label: "Demand" }], height: 240 },
+    { id: "root", component: "AreaChart", title: "Demand trend", data: { path: "/trend" }, xKey: "period", series: [{ key: "demand", label: "Demand" }], palette: "ocean", height: 240 },
   ], { trend }),
   specimen("BarChart", "使用纵向柱形比较离散类别。", [
-    { id: "root", component: "BarChart", title: "Revenue vs cost", data: { path: "/trend" }, xKey: "period", series: [{ key: "revenue", label: "Revenue" }, { key: "cost", label: "Cost" }], height: 240 },
+    { id: "root", component: "BarChart", title: "Revenue vs cost", data: { path: "/trend" }, xKey: "period", series: [{ key: "revenue", label: "Revenue" }, { key: "cost", label: "Cost" }], palette: "vivid", height: 240 },
   ], { trend }),
   specimen("HorizontalBarChart", "适合排名和较长类别标签的横向比较。", [
-    { id: "root", component: "HorizontalBarChart", title: "Infrastructure score", data: { path: "/ranking" }, categoryKey: "name", series: [{ key: "score", label: "Score" }], height: 240, showLegend: false },
+    { id: "root", component: "HorizontalBarChart", title: "Infrastructure score", data: { path: "/ranking" }, categoryKey: "name", series: [{ key: "score", label: "Score" }], palette: "emerald", height: 240, showLegend: false },
   ], { ranking }),
   specimen("PieChart", "使用完整扇区表达少量类别的占比。", [
-    { id: "root", component: "PieChart", title: "Revenue mix", data: { path: "/mix" }, nameKey: "name", valueKey: "value", height: 240 },
+    { id: "root", component: "PieChart", title: "Revenue mix", data: { path: "/mix" }, nameKey: "name", valueKey: "value", palette: "vivid", height: 240 },
   ], { mix }),
   specimen("DonutChart", "以环形占比和中心标签突出整体结构。", [
-    { id: "root", component: "DonutChart", title: "Revenue mix", data: { path: "/mix" }, nameKey: "name", valueKey: "value", centerLabel: "100%", height: 240 },
+    { id: "root", component: "DonutChart", title: "Revenue mix", data: { path: "/mix" }, nameKey: "name", valueKey: "value", palette: "sunset", centerLabel: "100%", height: 240 },
   ], { mix }),
   specimen("ComboChart", "在同一坐标系叠加 Bar、Line、Area，可使用 stack 和左右轴。", [
     { id: "root", component: "Stack", children: ["bar-line-card", "stacked-card", "area-line-card"], gap: "lg" },
     { id: "bar-line-card", component: "Card", title: "Bar + Line · dual axis", children: ["bar-line"], variant: "muted", padding: "sm" },
-    { id: "bar-line", component: "ComboChart", data: { path: "/trend" }, xKey: "period", rightAxis: true, series: [{ key: "revenue", label: "Revenue", type: "bar" }, { key: "margin", label: "Margin %", type: "line", axis: "right" }], height: 220 },
+    { id: "bar-line", component: "ComboChart", data: { path: "/trend" }, xKey: "period", rightAxis: true, series: [{ key: "revenue", label: "Revenue", type: "bar" }, { key: "margin", label: "Margin %", type: "line", axis: "right" }], palette: "vivid", height: 220 },
     { id: "stacked-card", component: "Card", title: "Stacked Bar + Line", children: ["stacked"], variant: "muted", padding: "sm" },
-    { id: "stacked", component: "ComboChart", data: { path: "/trend" }, xKey: "period", rightAxis: true, series: [{ key: "cost", label: "Cost", type: "bar", stack: "total" }, { key: "margin", label: "Margin", type: "bar", stack: "total" }, { key: "revenue", label: "Revenue", type: "line", axis: "right" }], height: 220 },
+    { id: "stacked", component: "ComboChart", data: { path: "/trend" }, xKey: "period", rightAxis: true, series: [{ key: "cost", label: "Cost", type: "bar", stack: "total" }, { key: "margin", label: "Margin", type: "bar", stack: "total" }, { key: "revenue", label: "Revenue", type: "line", axis: "right" }], palette: "orchid", height: 220 },
     { id: "area-line-card", component: "Card", title: "Area + Line", children: ["area-line"], variant: "muted", padding: "sm" },
-    { id: "area-line", component: "ComboChart", data: { path: "/trend" }, xKey: "period", series: [{ key: "demand", label: "Demand", type: "area" }, { key: "capacity", label: "Capacity", type: "line" }], height: 220 },
+    { id: "area-line", component: "ComboChart", data: { path: "/trend" }, xKey: "period", series: [{ key: "demand", label: "Demand", type: "area" }, { key: "capacity", label: "Capacity", type: "line" }], palette: "spectrum", height: 220 },
   ], { trend }),
   specimen("FunnelChart", "展示从上游到下游逐级收窄的过程。", [
-    { id: "root", component: "FunnelChart", title: "Research funnel", data: { path: "/stages" }, nameKey: "name", valueKey: "value", height: 240 },
+    { id: "root", component: "FunnelChart", title: "Research funnel", data: { path: "/stages" }, nameKey: "name", valueKey: "value", palette: "sunset", height: 240 },
   ], { stages: [{ name: "Ideas", value: 120 }, { name: "Screened", value: 72 }, { name: "Researched", value: 36 }, { name: "Conviction", value: 12 }] }),
   specimen("TreemapChart", "用矩形面积比较类别或层级结构中的规模。", [
-    { id: "root", component: "TreemapChart", title: "Exposure map", data: { path: "/mix" }, nameKey: "name", valueKey: "value", height: 240 },
+    { id: "root", component: "TreemapChart", title: "Exposure map", data: { path: "/mix" }, nameKey: "name", valueKey: "value", palette: "emerald", height: 240 },
   ], { mix }),
   specimen("SankeyChart", "通过连线宽度展示节点之间的加权流向。", [
-    { id: "root", component: "SankeyChart", title: "Capital flow", data: { path: "/flow" }, height: 240 },
+    { id: "root", component: "SankeyChart", title: "Capital flow", data: { path: "/flow" }, palette: "spectrum", height: 240 },
   ], { flow: { nodes: [{ name: "Capital" }, { name: "Compute" }, { name: "Network" }, { name: "Growth" }, { name: "Efficiency" }], links: [{ source: 0, target: 1, value: 62 }, { source: 0, target: 2, value: 38 }, { source: 1, target: 3, value: 44 }, { source: 1, target: 4, value: 18 }, { source: 2, target: 4, value: 38 }] } }),
   specimen("HeatmapChart", "以颜色强度比较两个分类维度中的数值。", [
     { id: "root", component: "HeatmapChart", title: "Signal intensity", data: { path: "/heatmap" }, xKey: "period", yKey: "signal", valueKey: "value", height: 230 },
   ], { heatmap: ["Q1", "Q2", "Q3", "Q4"].flatMap((period, x) => ["Demand", "Supply", "Pricing"].map((signal, y) => ({ period, signal, value: 18 + x * 17 + y * 11 }))) }),
   specimen("GaugeChart", "在明确上下界内突出一个关键数值。", [
-    { id: "root", component: "GaugeChart", title: "Thesis confidence", value: { path: "/confidence" }, min: 0, max: 100, unit: "%", height: 220 },
+    { id: "root", component: "GaugeChart", title: "Thesis confidence", value: { path: "/confidence" }, min: 0, max: 100, unit: "%", palette: "emerald", height: 220 },
   ], { confidence: 78 }),
   specimen("SparklineChart", "用极少界面元素表达紧凑趋势。", [
-    { id: "root", component: "SparklineChart", title: "Weekly signal", data: { path: "/trend" }, xKey: "period", series: [{ key: "revenue", label: "Signal" }], height: 100 },
+    { id: "root", component: "SparklineChart", title: "Weekly signal", data: { path: "/trend" }, xKey: "period", series: [{ key: "revenue", label: "Signal" }], palette: "orchid", height: 100 },
   ], { trend }),
   specimen("RadarChart", "比较多个对象在相同维度上的轮廓。", [
-    { id: "root", component: "RadarChart", title: "Research profile", data: { path: "/radar" }, categoryKey: "dimension", series: [{ key: "alpha", label: "Alpha" }, { key: "beta", label: "Beta" }], domainMax: 100, height: 240 },
+    { id: "root", component: "RadarChart", title: "Research profile", data: { path: "/radar" }, categoryKey: "dimension", series: [{ key: "alpha", label: "Alpha" }, { key: "beta", label: "Beta" }], palette: "spectrum", domainMax: 100, height: 240 },
   ], { radar: [{ dimension: "Growth", alpha: 84, beta: 62 }, { dimension: "Margin", alpha: 72, beta: 80 }, { dimension: "Durability", alpha: 91, beta: 70 }, { dimension: "Valuation", alpha: 55, beta: 76 }, { dimension: "Catalysts", alpha: 79, beta: 68 }] }),
   specimen("RadialChart", "使用同心径向条表达多项有界数值。", [
-    { id: "root", component: "RadialChart", title: "Category scores", data: { path: "/mix" }, nameKey: "name", valueKey: "value", height: 240 },
+    { id: "root", component: "RadialChart", title: "Category scores", data: { path: "/mix" }, nameKey: "name", valueKey: "value", palette: "vivid", height: 240 },
   ], { mix }),
   specimen("ScatterChart", "揭示两个数值维度之间的相关性、聚类和异常点。", [
-    { id: "root", component: "ScatterChart", title: "Growth vs margin", data: { path: "/scatter" }, xKey: "growth", yKey: "margin", sizeKey: "scale", seriesName: "Companies", height: 240 },
+    { id: "root", component: "ScatterChart", title: "Growth vs margin", data: { path: "/scatter" }, xKey: "growth", yKey: "margin", sizeKey: "scale", seriesName: "Companies", palette: "orchid", height: 240 },
   ], { scatter: [{ growth: 12, margin: 22, scale: 40 }, { growth: 18, margin: 16, scale: 80 }, { growth: 24, margin: 31, scale: 120 }, { growth: 8, margin: 36, scale: 60 }, { growth: 29, margin: 12, scale: 100 }] }),
 ];
 
@@ -323,15 +327,15 @@ const analyticsSpecimens = [
 const marketSeries = Array.from({ length: 18 }, (_, index) => ({ date: `07-${String(index + 1).padStart(2, "0")}`, close: 100 + index * 1.8 + Math.sin(index * .8) * 5, benchmark: 100 + index * .9 + Math.cos(index * .6) * 2 }));
 const candles = marketSeries.map((item, index) => { const open = item.close + Math.sin(index) * 2; const close = item.close + Math.cos(index * .7) * 2.4; return { time: item.date, open, close, high: Math.max(open, close) + 2.4, low: Math.min(open, close) - 2.1, volume: 20 + Math.abs(Math.sin(index)) * 34 }; });
 const advancedChartSpecimens = [
-  specimen("TimeSeriesChart", "绘制时间序列，可选归一化和参考线。", [{ id: "root", component: "TimeSeriesChart", title: "Price vs benchmark", data: { path: "/series" }, xKey: "date", series: [{ key: "close", label: "Atlas" }, { key: "benchmark", label: "Benchmark" }], normalize: true, referenceValue: 100, height: 250 }], { series: marketSeries }),
+  specimen("TimeSeriesChart", "绘制时间序列，可选归一化和参考线。", [{ id: "root", component: "TimeSeriesChart", title: "Price vs benchmark", data: { path: "/series" }, xKey: "date", series: [{ key: "close", label: "Atlas", role: "actual" }, { key: "benchmark", label: "Benchmark", role: "benchmark" }], normalize: true, referenceValue: 100, height: 250 }], { series: marketSeries }),
   specimen("CandlestickChart", "呈现 OHLC K 线与成交量。", [{ id: "root", component: "CandlestickChart", title: "Daily price", data: { path: "/candles" }, volumeKey: "volume", height: 260 }], { candles }),
-  specimen("WaterfallChart", "解释从起点到终点的正负贡献。", [{ id: "root", component: "WaterfallChart", title: "Free cash flow bridge", data: [{ name: "EBITDA", value: 18.4 }, { name: "Tax", value: -3.2 }, { name: "Capex", value: -6.1 }, { name: "Working cap", value: 1.3 }, { name: "FCF", value: 10.4, total: true }], nameKey: "name", valueKey: "value", totalKey: "total" }]),
+  specimen("WaterfallChart", "解释从起点到终点的正负贡献。", [{ id: "root", component: "WaterfallChart", title: "Free cash flow bridge", data: [{ name: "EBITDA", value: 18.4, total: true }, { name: "Tax", value: -3.2 }, { name: "Capex", value: -6.1 }, { name: "Working cap", value: 1.3 }, { name: "FCF", value: 10.4, total: true }], nameKey: "name", valueKey: "value", totalKey: "total" }]),
   specimen("RangeChart", "在每个对象自己的区间中比较当前值和目标。", [{ id: "root", component: "RangeChart", title: "52-week ranges", data: [{ name: "Atlas", low: 108, high: 196, value: 184, target: 205 }, { name: "Nova", low: 72, high: 142, value: 121, target: 150 }, { name: "Vector", low: 44, high: 89, value: 76, target: 92 }], categoryKey: "name", minKey: "low", maxKey: "high", valueKey: "value", targetKey: "target" }]),
   specimen("HistogramChart", "把观测值分桶，展示分布的形状。", [{ id: "root", component: "HistogramChart", title: "Daily returns", data: { path: "/returns" }, bins: 14 }], { returns: Array.from({ length: 96 }, (_, index) => Math.sin(index * 2.31) * 2.8 + Math.cos(index * .37) * 1.2) }),
   specimen("BoxPlotChart", "按五数概括比较多组分布。", [{ id: "root", component: "BoxPlotChart", title: "Peer EV / EBITDA", data: [{ name: "Semis", min: 12, q1: 17, median: 22, q3: 27, max: 38 }, { name: "Cloud", min: 14, q1: 20, median: 25, q3: 33, max: 44 }, { name: "Software", min: 16, q1: 24, median: 31, q3: 39, max: 52 }], categoryKey: "name", minKey: "min", q1Key: "q1", medianKey: "median", q3Key: "q3", maxKey: "max" }]),
   specimen("BulletChart", "紧凑比较实际值、目标值与上限。", [{ id: "root", component: "BulletChart", title: "Quarterly targets", data: [{ name: "Revenue", value: 48.2, target: 46, max: 60 }, { name: "Gross margin", value: 38.1, target: 40, max: 50 }, { name: "Utilization", value: 91, target: 88, max: 100 }], labelKey: "name", valueKey: "value", targetKey: "target", maxKey: "max" }]),
   specimen("CalendarHeatmapChart", "用日历网格揭示持续性与异常密度。", [{ id: "root", component: "CalendarHeatmapChart", title: "Research activity", data: { path: "/days" }, dateKey: "date", valueKey: "count", weeks: 18, height: 160 }], { days: Array.from({ length: 126 }, (_, index) => ({ date: `2026-${String(4 + Math.floor(index / 30)).padStart(2, "0")}-${String(index % 30 + 1).padStart(2, "0")}`, count: Math.round(Math.abs(Math.sin(index * .63)) * 9) })) }),
-  specimen("NetworkGraph", "展示实体、主题或证据之间的关系网络。", [{ id: "root", component: "NetworkGraph", title: "Supply-chain relationships", data: { path: "/network" }, height: 260 }], { network: { nodes: [{ id: "atlas", label: "Atlas", value: 42, group: 0 }, { id: "foundry", label: "Foundry", value: 31, group: 1 }, { id: "memory", label: "Memory", value: 24, group: 2 }, { id: "cloud", label: "Cloud demand", value: 36, group: 0 }, { id: "power", label: "Power", value: 18, group: 3 }], links: [{ source: "atlas", target: "foundry", weight: 3 }, { source: "atlas", target: "memory", weight: 2 }, { source: "cloud", target: "atlas", weight: 4 }, { source: "power", target: "cloud", weight: 2 }] } }),
+  specimen("NetworkGraph", "展示实体、主题或证据之间的关系网络。", [{ id: "root", component: "NetworkGraph", title: "Supply-chain relationships", data: { path: "/network" }, palette: "vivid", height: 260 }], { network: { nodes: [{ id: "atlas", label: "Atlas", value: 42, group: 0 }, { id: "foundry", label: "Foundry", value: 31, group: 1 }, { id: "memory", label: "Memory", value: 24, group: 2 }, { id: "cloud", label: "Cloud demand", value: 36, group: 0 }, { id: "power", label: "Power", value: 18, group: 3 }], links: [{ source: "atlas", target: "foundry", weight: 3 }, { source: "atlas", target: "memory", weight: 2 }, { source: "cloud", target: "atlas", weight: 4 }, { source: "power", target: "cloud", weight: 2 }] } }),
 ];
 
 export const GALLERY_CATEGORIES: GalleryCategory[] = [

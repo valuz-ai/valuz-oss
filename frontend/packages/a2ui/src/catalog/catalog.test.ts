@@ -7,6 +7,8 @@ import {
 } from "./index";
 import { createValuzMessageProcessor } from "../react/catalog";
 import { valuzBaseComponents } from "../react/catalog";
+import { LineChartApi } from "./charts";
+import { describeA2UIComponent } from "./describe";
 
 describe("Valuz A2UI base catalog", () => {
   it("has a stable versioned id and unique component names", () => {
@@ -78,5 +80,36 @@ describe("Valuz A2UI base catalog", () => {
     expect(Object.keys(current.inlineCatalogs?.[0]?.components ?? {})).toHaveLength(
       valuzBaseComponentNames.length,
     );
+  });
+
+  it("accepts curated C1 palettes and semantic roles but rejects arbitrary colors", () => {
+    const common = {
+      data: [{ period: "Q1", actual: 1, estimate: 2 }],
+      xKey: "period",
+    };
+    expect(LineChartApi.schema.safeParse({
+      ...common,
+      palette: "vivid",
+      series: [
+        { key: "actual", role: "actual" },
+        { key: "estimate", role: "estimate" },
+      ],
+    }).success).toBe(true);
+    expect(LineChartApi.schema.safeParse({
+      ...common,
+      palette: "custom-rainbow",
+      series: [{ key: "actual" }],
+    }).success).toBe(false);
+    expect(LineChartApi.schema.safeParse({
+      ...common,
+      series: [{ key: "actual", color: "#ff00ff" }],
+    }).success).toBe(false);
+  });
+
+  it("describes palette through the shared compiler vocabulary", () => {
+    const description = describeA2UIComponent(LineChartApi);
+
+    expect(description).toContain("palette?: palette");
+    expect(description).not.toContain('palette?: "ocean"|');
   });
 });

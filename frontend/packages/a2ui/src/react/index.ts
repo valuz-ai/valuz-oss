@@ -3,6 +3,7 @@ export * from "./analytics";
 export * from "./advanced-charts";
 export * from "./catalog";
 export * from "./charts";
+export * from "./chart-theme";
 export * from "./content";
 export * from "./forms";
 export * from "./layout";

@@ -1,6 +1,8 @@
 import {
   Suspense,
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -9,7 +11,14 @@ import {
 import { Check, Copy, Search } from "lucide-react";
 
 import { VALUZ_BASE_CATALOG_ID, valuzBaseComponentApis } from "../catalog";
-import { ValuzA2UISurface } from "../react";
+import {
+  createValuzMessageProcessor,
+  ValuzA2UISurface,
+} from "../react";
+import {
+  CHART_PALETTES,
+  type ChartPaletteName,
+} from "../react/chart-theme";
 import "../styles.css";
 import {
   GALLERY_CATEGORIES,
@@ -23,6 +32,7 @@ import {
 import type {
   A2UIGalleryTheme,
 } from "./types";
+import type { A2uiMessage } from "@a2ui/web_core/v0_9";
 import "./gallery.css";
 
 const DEFAULT_CATEGORY: GalleryCategoryId = "layout";
@@ -45,6 +55,128 @@ interface CatalogApiView {
 const API_BY_NAME = new Map<string, CatalogApiView>(
   valuzBaseComponentApis.map((api) => [api.name, api as CatalogApiView]),
 );
+
+const PALETTE_DESCRIPTIONS: Record<ChartPaletteName, {
+  colorSystem: string;
+  usage: string;
+}> = {
+  ocean: { colorSystem: "蓝色连续色阶", usage: "趋势、单指标强度" },
+  orchid: { colorSystem: "紫色连续色阶", usage: "专题、次级连续序列" },
+  emerald: { colorSystem: "绿色连续色阶", usage: "增长、效率、健康度" },
+  spectrum: { colorSystem: "蓝—浅色—红发散", usage: "偏离、贡献、相关性" },
+  sunset: { colorSystem: "紫—洋红—橙—黄连续", usage: "热度、风险、概率" },
+  vivid: { colorSystem: "红橙黄绿青蓝紫分类", usage: "公司、资产、离散类别" },
+  steel: { colorSystem: "石墨—钢蓝—银灰连续", usage: "中性指标、基准、低强调数据" },
+  amber: { colorSystem: "深棕—琥珀—暖黄连续", usage: "估值、收益率、商品、热度" },
+};
+
+function PaletteShowcase({ theme }: { theme: A2UIGalleryTheme }) {
+  return (
+    <aside
+      aria-label="图表色板"
+      className="demo-palette-showcase valuz-a2ui"
+      data-theme={theme}
+    >
+      <header>
+        <div>
+          <h3>图表色板</h3>
+        </div>
+        <p>八套固定色板 · 每套 11 色 · 运行时从中间向两侧取色</p>
+      </header>
+      <div className="demo-palette-grid">
+        {(Object.keys(CHART_PALETTES) as ChartPaletteName[]).map((name) => (
+          <section className="demo-palette-card" key={name}>
+            <div className="demo-palette-card__title">
+              <code>{name}</code>
+              <span>{PALETTE_DESCRIPTIONS[name].colorSystem}</span>
+            </div>
+            <div aria-label={`${name} 的 11 个颜色`} className="demo-palette-strip">
+              {CHART_PALETTES[name].map((color, index) => (
+                <i
+                  key={color}
+                  style={{ background: `var(--va2-chart-${name}-${index + 1}, ${color})` }}
+                  title={`${index + 1} · ${color}`}
+                />
+              ))}
+            </div>
+            <p>{PALETTE_DESCRIPTIONS[name].usage}</p>
+          </section>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+function PaletteStrip({ name }: { name: ChartPaletteName }) {
+  return (
+    <span aria-hidden="true" className="demo-palette-mini-strip">
+      {CHART_PALETTES[name].map((color, index) => (
+        <i
+          key={color}
+          style={{ background: `var(--va2-chart-${name}-${index + 1}, ${color})` }}
+        />
+      ))}
+    </span>
+  );
+}
+
+export function PalettePicker({
+  componentName,
+  value,
+  onValueChange,
+}: {
+  componentName: string;
+  value: ChartPaletteName;
+  onValueChange: (value: ChartPaletteName) => void;
+}) {
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  return (
+    <details className="demo-palette-picker" ref={detailsRef}>
+      <summary aria-label={`${componentName} 色板，当前 ${value}`}>
+        <PaletteStrip name={value} />
+        <code>{value}</code>
+      </summary>
+      <div aria-label={`${componentName} 选择色板`} className="demo-palette-menu" role="radiogroup">
+        {(Object.keys(CHART_PALETTES) as ChartPaletteName[]).map((name) => (
+          <button
+            aria-checked={name === value}
+            key={name}
+            onClick={() => {
+              onValueChange(name);
+              detailsRef.current?.removeAttribute("open");
+            }}
+            role="radio"
+            type="button"
+          >
+            <PaletteStrip name={name} />
+            <code>{name}</code>
+            <span>{PALETTE_DESCRIPTIONS[name].colorSystem}</span>
+            {name === value ? <Check aria-hidden="true" /> : null}
+          </button>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function surfaceWithPalette(
+  specimen: GallerySpecimen,
+  palette: ChartPaletteName,
+) {
+  const surfaceId = `gallery-${specimen.name.toLowerCase()}-${palette}`;
+  const processor = createValuzMessageProcessor();
+  const components = specimen.components.map((component) => (
+    propNames(component.component).includes("palette")
+      ? { ...component, palette }
+      : component
+  ));
+  processor.processMessages([
+    { version: "v0.9.1", createSurface: { surfaceId, catalogId: VALUZ_BASE_CATALOG_ID } },
+    { version: "v0.9.1", updateDataModel: { surfaceId, path: "/", value: specimen.data } },
+    { version: "v0.9.1", updateComponents: { surfaceId, components } },
+  ] satisfies A2uiMessage[]);
+  return processor.model.getSurface(surfaceId)!;
+}
 
 function baseKey(categoryId: GalleryCategoryId) {
   return `${BASE_KEY_PREFIX}${categoryId}`;
@@ -110,6 +242,15 @@ function SpecimenCard({
   const fields = propNames(specimen.name);
   const line = catalogLine(specimen.name);
   const modelDescription = API_BY_NAME.get(specimen.name)?.schema.description ?? specimen.description;
+  const hasPalette = specimen.componentNames.some((name) => propNames(name).includes("palette"));
+  const defaultPalette = specimen.components.find((component) => (
+    propNames(component.component).includes("palette") && typeof component.palette === "string"
+  ))?.palette as ChartPaletteName | undefined;
+  const [palette, setPalette] = useState<ChartPaletteName>(defaultPalette ?? "ocean");
+  const surface = useMemo(
+    () => hasPalette ? surfaceWithPalette(specimen, palette) : specimen.surface,
+    [hasPalette, palette, specimen],
+  );
 
   return (
     <article className="demo-specimen" data-component={specimen.name}>
@@ -117,11 +258,18 @@ function SpecimenCard({
         <h3>{specimen.name}</h3>
         <span>{fields.length} 个字段</span>
         {specimen.componentNames.length > 1 ? <small>组合示例</small> : null}
+        {hasPalette ? (
+          <PalettePicker
+            componentName={specimen.name}
+            onValueChange={setPalette}
+            value={palette}
+          />
+        ) : null}
       </header>
 
       <div className="demo-specimen-preview" data-preview-theme={theme}>
         <div className="demo-specimen-surface" data-narrow={narrow || undefined}>
-          <ValuzA2UISurface surface={specimen.surface} theme={theme} />
+          <ValuzA2UISurface surface={surface} theme={theme} />
         </div>
       </div>
 
@@ -152,13 +300,59 @@ export function A2UIGallery({ embedded = false }: A2UIGalleryProps) {
   const [narrow, setNarrow] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState(keyFromHash);
+  const contentRef = useRef<HTMLElement>(null);
+  const menuScrollPositions = useRef(new Map<string, number>());
+  const restoringMenuScroll = useRef(false);
   const normalizedQuery = query.trim().toLowerCase();
 
+  const currentScrollTop = useCallback((): number => {
+    return embedded ? contentRef.current?.scrollTop ?? 0 : window.scrollY;
+  }, [embedded]);
+
+  const rememberCurrentMenuScroll = useCallback((): void => {
+    menuScrollPositions.current.set(selectedKey, currentScrollTop());
+  }, [currentScrollTop, selectedKey]);
+
+  const changeSelectedKey = useCallback((nextKey: string): void => {
+    if (nextKey === selectedKey) return;
+    rememberCurrentMenuScroll();
+    restoringMenuScroll.current = true;
+    setSelectedKey(nextKey);
+  }, [rememberCurrentMenuScroll, selectedKey]);
+
   useEffect(() => {
-    const handleHashChange = () => setSelectedKey(keyFromHash());
+    const handleHashChange = () => changeSelectedKey(keyFromHash());
     window.addEventListener("hashchange", handleHashChange);
     return () => window.removeEventListener("hashchange", handleHashChange);
-  }, []);
+  }, [changeSelectedKey]);
+
+  useLayoutEffect(() => {
+    const top = menuScrollPositions.current.get(selectedKey) ?? 0;
+    restoringMenuScroll.current = true;
+    if (embedded) contentRef.current?.scrollTo({ top });
+    else window.scrollTo({ top });
+
+    // A previously opened lazy edition view is normally already cached, but
+    // repeat once after layout so a Suspense boundary or chart measurement
+    // cannot clamp the restored position to the outgoing menu's height.
+    const frame = window.requestAnimationFrame(() => {
+      if (embedded) contentRef.current?.scrollTo({ top });
+      else window.scrollTo({ top });
+      restoringMenuScroll.current = false;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [embedded, selectedKey]);
+
+  useEffect(() => {
+    if (embedded) return;
+    const rememberWindowScroll = () => {
+      if (!restoringMenuScroll.current) {
+        menuScrollPositions.current.set(selectedKey, window.scrollY);
+      }
+    };
+    window.addEventListener("scroll", rememberWindowScroll, { passive: true });
+    return () => window.removeEventListener("scroll", rememberWindowScroll);
+  }, [embedded, selectedKey]);
 
   let selectedExtension: {
     group: (typeof extensions)[number];
@@ -215,11 +409,9 @@ export function A2UIGallery({ embedded = false }: A2UIGalleryProps) {
       );
 
   function select(nextKey: string, hash: string) {
-    setSelectedKey(nextKey);
+    changeSelectedKey(nextKey);
     setQuery("");
     window.history.replaceState(null, "", `#${encodeURI(hash)}`);
-    document.querySelector(".demo-stage")?.scrollTo({ top: 0 });
-    window.scrollTo({ top: 0 });
   }
 
   const ExtensionView = selectedExtension?.section.View ?? null;
@@ -253,14 +445,22 @@ export function A2UIGallery({ embedded = false }: A2UIGalleryProps) {
               <button aria-pressed={!narrow} onClick={() => setNarrow(false)} type="button">全宽</button>
               <button aria-pressed={narrow} onClick={() => setNarrow(true)} type="button">窄容器</button>
             </div>
-            <button
-              aria-pressed={theme === "dark"}
-              className="demo-theme"
-              onClick={() => setTheme((current) => current === "light" ? "dark" : "light")}
-              type="button"
-            >
-              {theme === "light" ? "深色预览" : "浅色预览"}
-            </button>
+            <div className="demo-segmented" aria-label="预览主题">
+              <button
+                aria-pressed={theme === "light"}
+                onClick={() => setTheme("light")}
+                type="button"
+              >
+                浅色
+              </button>
+              <button
+                aria-pressed={theme === "dark"}
+                onClick={() => setTheme("dark")}
+                type="button"
+              >
+                深色
+              </button>
+            </div>
             <span className="demo-count" aria-live="polite">
               {shown} / {baseCount + extensionCount}
             </span>
@@ -325,7 +525,18 @@ export function A2UIGallery({ embedded = false }: A2UIGalleryProps) {
             ))}
           </nav>
 
-          <main className="demo-content">
+          <main
+            className="demo-content"
+            onScroll={(event) => {
+              if (!restoringMenuScroll.current) {
+                menuScrollPositions.current.set(
+                  selectedKey,
+                  event.currentTarget.scrollTop,
+                );
+              }
+            }}
+            ref={contentRef}
+          >
             {ExtensionView && selectedExtension ? (
               <section className="demo-category" id={selectedExtension.section.id}>
                 <header className="demo-category-header">
@@ -348,6 +559,9 @@ export function A2UIGallery({ embedded = false }: A2UIGalleryProps) {
                   </div>
                   <p>{category.description}</p>
                 </header>
+                {category.id === "charts" && !normalizedQuery ? (
+                  <PaletteShowcase theme={theme} />
+                ) : null}
                 <div className="demo-specimen-list">
                   {category.specimens.map((specimen) => (
                     <SpecimenCard

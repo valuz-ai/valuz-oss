@@ -7,6 +7,7 @@ import {
   DynamicStringSchema,
   DynamicValueSchema,
   chartCommonProps,
+  chartPaletteSchema,
   chartSeriesSchema,
   commonProps,
 } from "./primitives";
@@ -16,6 +17,7 @@ const chartFrameProps = {
   title: DynamicStringSchema.optional(),
   description: DynamicStringSchema.optional(),
   height: z.number().int().min(64).max(720).optional(),
+  palette: chartPaletteSchema.default("ocean").optional(),
 };
 
 const cartesianProps = {
@@ -33,7 +35,7 @@ export const LineChartApi = {
       showDots: DynamicBooleanSchema.default(false).optional(),
     })
     .strict()
-    .describe("Compare one or more numeric series across an ordered horizontal axis."),
+    .describe("Use for one or more numeric trends across an ordered axis; assign semantic series roles when actuals, estimates, or benchmarks differ."),
 } satisfies ComponentApi;
 
 export const AreaChartApi = {
@@ -44,7 +46,7 @@ export const AreaChartApi = {
       stacked: DynamicBooleanSchema.default(false).optional(),
     })
     .strict()
-    .describe("Show magnitude and trend over an ordered axis using translucent filled series."),
+    .describe("Use when both magnitude and ordered trend matter; stack only when the filled series form a meaningful whole."),
 } satisfies ComponentApi;
 
 export const BarChartApi = {
@@ -56,7 +58,7 @@ export const BarChartApi = {
       barRadius: z.number().int().min(0).max(12).default(4).optional(),
     })
     .strict()
-    .describe("Compare categorical values using vertical bars, optionally stacked."),
+    .describe("Use for categorical magnitude comparisons; stack only for additive parts of the same total."),
 } satisfies ComponentApi;
 
 export const HorizontalBarChartApi = {
@@ -71,7 +73,7 @@ export const HorizontalBarChartApi = {
       barRadius: z.number().int().min(0).max(12).default(4).optional(),
     })
     .strict()
-    .describe("Compare ranked or long-labelled categories using horizontal bars."),
+    .describe("Use for ranked or long-labelled categorical comparisons where exact ordering matters."),
 } satisfies ComponentApi;
 
 export const PieChartApi = {
@@ -84,7 +86,7 @@ export const PieChartApi = {
       showLabels: DynamicBooleanSchema.default(false).optional(),
     })
     .strict()
-    .describe("Show a small part-to-whole comparison as a filled pie chart."),
+    .describe("Use for one small part-to-whole set with few distinct categories; prefer a table or bars when precise comparison matters."),
 } satisfies ComponentApi;
 
 export const DonutChartApi = {
@@ -99,7 +101,7 @@ export const DonutChartApi = {
       centerLabel: DynamicStringSchema.optional(),
     })
     .strict()
-    .describe("Show part-to-whole values as a donut with an optional center label."),
+    .describe("Use for one small part-to-whole set when a meaningful total belongs in the center; avoid many or near-equal categories."),
 } satisfies ComponentApi;
 
 const comboSeriesSchema = chartSeriesSchema.extend({
@@ -119,7 +121,7 @@ export const ComboChartApi = {
       barRadius: z.number().int().min(0).max(12).default(4).optional(),
     })
     .strict()
-    .describe("Overlay bar, line, and area series, with optional stacking and dual axes."),
+    .describe("Use for related bar, line, or area measures on one ordered axis; enable a right axis only for a clearly different unit."),
 } satisfies ComponentApi;
 
 export const FunnelChartApi = {
@@ -179,7 +181,7 @@ export const HeatmapChartApi = {
       showValues: DynamicBooleanSchema.default(true).optional(),
     })
     .strict()
-    .describe("Compare values across two categorical dimensions using color intensity."),
+    .describe("Use for a numeric matrix across two categorical dimensions with a meaningful shared intensity scale."),
 } satisfies ComponentApi;
 
 export const GaugeChartApi = {
@@ -195,7 +197,7 @@ export const GaugeChartApi = {
       endAngle: z.number().min(-360).max(360).default(-30).optional(),
     })
     .strict()
-    .describe("Show one bounded value against a minimum and maximum on a radial gauge."),
+    .describe("Use for one genuinely bounded value against a meaningful minimum and maximum, not for an uncalibrated confidence score."),
 } satisfies ComponentApi;
 
 export const SparklineChartApi = {
@@ -252,7 +254,7 @@ export const ScatterChartApi = {
       seriesName: z.string().optional(),
     })
     .strict()
-    .describe("Reveal correlation, clusters, and outliers between two numeric dimensions."),
+    .describe("Use for observations with two numeric dimensions to reveal correlation, clusters, and outliers; use size only for a third quantitative measure."),
 } satisfies ComponentApi;
 
 export const chartApis = [

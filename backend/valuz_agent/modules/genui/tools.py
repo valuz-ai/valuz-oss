@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from src.core import ToolDef, ToolResult
@@ -45,6 +47,7 @@ logger = logging.getLogger(__name__)
 GENERATIVE_UI_TOOL_NAME = "generate_ui"
 _GENERATION_MAX_ATTEMPTS = 2
 _GENERATION_RETRY_DELAY_SECONDS = 0.5
+_CURRENT_DOCUMENT_MAX_BYTES = 4 * 1024 * 1024
 # How many recent turns may carry the visual intent forward. A refinement
 # ("换成柱状图", "把刚才的图加上成交额") rarely restates the request, so a
 # conversation that is plainly about a chart has to keep working without the
@@ -172,6 +175,81 @@ def _parse_target_host(args: dict[str, Any], session: Any = None) -> UiArtifactT
     return _host_from_mapping(valuz.get("host_ref"))
 
 
+@dataclass(frozen=True)
+class _HostGenerationContext:
+    """The exact host state one generation started from.
+
+    Captured before the compiler runs so its input document and the later
+    adoption receipt describe the same revision even if another tab moves the
+    binding while the model is writing.
+    """
+
+    target_host: UiArtifactTargetHost
+    expected_revision_id: str | None = None
+    bound_artifact: Any = None
+    current_document: str | None = None
+
+
+def _read_revision_file(path: str) -> str | None:
+    try:
+        source = Path(path)
+        if not source.is_file() or source.stat().st_size > _CURRENT_DOCUMENT_MAX_BYTES:
+            return None
+        return source.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+async def _load_host_generation_context(
+    user_id: str,
+    target_host: UiArtifactTargetHost | None,
+) -> _HostGenerationContext | None:
+    """Load the complete A2UI revision currently shown by ``target_host``.
+
+    Hosted edits should not depend on the calling Agent remembering a
+    read-before-write ceremony. Missing or unreadable bytes leave generation
+    usable as a new page, while the captured binding still protects adoption.
+    """
+
+    if target_host is None:
+        return None
+    context = _HostGenerationContext(target_host=target_host)
+    try:
+        from valuz_agent.infra.db import async_unit_of_work
+        from valuz_agent.modules.artifacts.datastore import ArtifactDatastore
+
+        async with async_unit_of_work(commit=False) as db:
+            ds = ArtifactDatastore(db)
+            binding = await ds.get_binding(
+                user_id,
+                target_host.host_type,
+                target_host.host_id,
+                target_host.slot or "main",
+            )
+            if binding is None:
+                return context
+            revision = await ds.get_revision(user_id, binding.artifact_revision_id)
+            artifact = await ds.get_artifact(user_id, binding.artifact_id)
+            content = (
+                await ds.get_content(user_id, revision.content_id)
+                if revision is not None
+                else None
+            )
+            document = content.content_inline if content is not None else None
+            file_path = str(getattr(revision, "abs_path", "") or "")
+        if document is None and file_path:
+            document = await asyncio.to_thread(_read_revision_file, file_path)
+        return _HostGenerationContext(
+            target_host=target_host,
+            expected_revision_id=binding.artifact_revision_id,
+            bound_artifact=artifact,
+            current_document=document,
+        )
+    except Exception:  # noqa: BLE001 — generation remains useful without a base
+        logger.exception("generate_ui: could not load the host's current A2UI revision")
+        return context
+
+
 # Marker wrapping the sink receipt appended to a successful tool result. The
 # frontend extracts + strips it before handing the payload to the renderer;
 # it rides IN the persisted tool result so the adopt affordance survives
@@ -224,6 +302,7 @@ async def _deliver_generated_ui(
     target_host: UiArtifactTargetHost | None,
     request: str,
     document: str,
+    host_context: _HostGenerationContext | None = None,
 ) -> str:
     """Record the document as an artifact revision; return a receipt trailer.
 
@@ -235,13 +314,10 @@ async def _deliver_generated_ui(
     Best-effort by contract: a delivery that fails must not fail the tool call,
     because the generated page is still useful in the conversation.
     """
-    import json as _json
-
     if not session_id:
         return ""
     try:
         from valuz_agent.infra.db import async_unit_of_work
-        from valuz_agent.modules.artifacts.datastore import ArtifactDatastore
         from valuz_agent.modules.artifacts.models import ArtifactKind
         from valuz_agent.modules.artifacts.scope import (
             ScopeUnavailableError,
@@ -257,25 +333,14 @@ async def _deliver_generated_ui(
             return ""
 
         file_name = _document_file_name(target_host)
-        # Read phase: the binding (its revision id is the concurrency token the
-        # adopt click compares against) and, when one exists, the artifact it
-        # points at — the host's version lineage.
-        expected_revision_id: str | None = None
-        bound_artifact = None
-        if target_host is not None:
-            async with async_unit_of_work(commit=False) as db:
-                ds = ArtifactDatastore(db)
-                current = await ds.get_binding(
-                    user_id,
-                    target_host.host_type,
-                    target_host.host_id,
-                    target_host.slot or "main",
-                )
-                if current is not None:
-                    expected_revision_id = current.artifact_revision_id
-                    bound_artifact = await ds.get_artifact(
-                        user_id, current.artifact_id
-                    )
+        # Use the binding captured BEFORE generation. Re-reading here could
+        # produce a receipt claiming the compiler edited v6 when it saw v5.
+        if target_host is not None and host_context is None:
+            host_context = await _load_host_generation_context(user_id, target_host)
+        expected_revision_id = (
+            host_context.expected_revision_id if host_context is not None else None
+        )
+        bound_artifact = host_context.bound_artifact if host_context is not None else None
 
         # A hosted regeneration appends to the lineage the host is showing —
         # the binding names it, and it may live in ANOTHER conversation's
@@ -437,6 +502,8 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
         user_id=user_id, session_id=ctx.session_id, arguments=args
     )
     scope = normalize_component_scope(args.get("components"))
+    target_host = _parse_target_host(args, source)
+    host_context = await _load_host_generation_context(user_id, target_host)
     completer = _make_completer(
         user_id=user_id,
         runtime_provider=runtime_provider,
@@ -454,7 +521,14 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
     try:
         generated = await _complete_with_retries(
             completer,
-            build_a2ui_prompt(str(request), data, scope),
+            build_a2ui_prompt(
+                str(request),
+                data,
+                scope,
+                current_document=(
+                    host_context.current_document if host_context is not None else None
+                ),
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         logger.debug("generate_ui: generation failed", exc_info=True)
@@ -483,9 +557,10 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
             user_id=user_id,
             session_id=ctx.session_id,
             tool_use_id=tool_use_id,
-            target_host=_parse_target_host(args, source),
+            target_host=target_host,
             request=str(request),
             document=document,
+            host_context=host_context,
         )
     return ToolResult(
         content=wrap_generated_ui(generated) + receipt_trailer,

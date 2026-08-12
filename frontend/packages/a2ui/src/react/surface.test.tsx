@@ -1,9 +1,13 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { VALUZ_BASE_CATALOG_ID } from "../catalog";
 import { createValuzMessageProcessor } from "./catalog";
 import { ValuzA2UISurface } from "./surface";
+import {
+  registerA2UIThemeExtension,
+  resetA2UIThemeExtensionsForTests,
+} from "../theme/registry";
 
 const createSurface = {
   version: "v0.9.1" as const,
@@ -14,6 +18,8 @@ const createSurface = {
 };
 
 describe("ValuzA2UISurface", () => {
+  afterEach(() => act(resetA2UIThemeExtensionsForTests));
+
   it("renders catalog components and dispatches actions", () => {
     const onAction = vi.fn();
     const processor = createValuzMessageProcessor(onAction);
@@ -85,5 +91,32 @@ describe("ValuzA2UISurface", () => {
       ]);
     });
     expect(screen.getByText("Updated title")).toBeTruthy();
+  });
+
+  it("reacts to explicit distribution theme registration", () => {
+    const processor = createValuzMessageProcessor();
+    processor.processMessages([
+      createSurface,
+      {
+        version: "v0.9.1",
+        updateComponents: {
+          surfaceId: "test-surface",
+          components: [{ id: "root", component: "TextContent", text: "Theme" }],
+        },
+      },
+    ]);
+    const surface = processor.model.getSurface("test-surface")!;
+    const { container } = render(<ValuzA2UISurface surface={surface} />);
+    const root = container.querySelector<HTMLElement>(".valuz-a2ui")!;
+    expect(root.dataset.theme).toBe("light");
+    expect(root.style.getPropertyValue("--va2-test-accent")).toBe("");
+
+    act(() => {
+      registerA2UIThemeExtension({
+        id: "test",
+        tokens: { light: { "--va2-test-accent": "#123456" } },
+      });
+    });
+    expect(root.style.getPropertyValue("--va2-test-accent")).toBe("#123456");
   });
 });

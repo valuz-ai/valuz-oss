@@ -1,8 +1,11 @@
-@import "./styles/base.css";
-@import "./styles/layout.css";
-@import "./styles/content.css";
-@import "./styles/forms.css";
-@import "./styles/actions.css";
-@import "./styles/analytics.css";
-@import "./styles/advanced-charts.css";
-@import "./styles/charts.css";
+@layer a2ui.structure, a2ui.theme, a2ui.components, a2ui.distribution, a2ui.surface;
+
+@import "./themes/default.css" layer(a2ui.theme);
+@import "./styles/base.css" layer(a2ui.structure);
+@import "./styles/layout.css" layer(a2ui.components);
+@import "./styles/content.css" layer(a2ui.components);
+@import "./styles/forms.css" layer(a2ui.components);
+@import "./styles/actions.css" layer(a2ui.components);
+@import "./styles/analytics.css" layer(a2ui.components);
+@import "./styles/advanced-charts.css" layer(a2ui.components);
+@import "./styles/charts.css" layer(a2ui.components);

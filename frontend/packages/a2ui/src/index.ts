@@ -1,5 +1,6 @@
 export * from "./catalog";
 export * from "./react";
+export * from "./theme";
 export {
   createComponentImplementation,
   type ReactComponentImplementation,

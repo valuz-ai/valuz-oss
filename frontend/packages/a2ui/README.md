@@ -76,6 +76,16 @@ The loader runs only when its menu section is opened, so distribution catalogs,
 fixtures, chart libraries, and data adapters stay out of the base application
 chunk.
 
+The chart and professional-chart sections expose a one-palette-per-component
+picker. Distribution galleries reuse the same picker for their own semantic
+components. Finance components also expose independent mock/live data controls;
+data mode and palette are separate concerns.
+
+Gallery navigation keeps an in-memory scroll position per menu section. A
+section starts at the top on first open, restores its own position when revisited,
+and resets after a full page reload. Preview controls use paired light/dark and
+full/narrow choices; they are preview state and do not mutate saved artifacts.
+
 ## Render a surface
 
 ```tsx
@@ -133,19 +143,54 @@ surface and is not useful as shared application state.
 
 ## Theme
 
-Importing `styles.css` is sufficient for a polished light theme. Hosts can
-override semantic variables on `.valuz-a2ui` or provide the matching Valuz
-design tokens (`--surface`, `--foreground`, `--brand`, `--fg-*`, status tokens,
-radius tokens, shadow tokens, and the eight `--accent-*` colors). The default
-chart sequence always starts with Valuz brand purple, then uses the teal, amber,
-blue, orange, sky, pink, and fuchsia system accents. Hosts can override the
-stable `--va2-chart-1` through `--va2-chart-8` semantic series tokens when a
-different branded palette is required.
+Importing `styles.css` installs the package-owned default light and dark themes.
+Their values begin close to Valuz, but they never read host CSS variables. This
+keeps rendered artifacts deterministic in applications, exports, embeds, and an
+eventual standalone open-source renderer.
 
-The renderer uses only semantic roles. It includes keyboard focus states,
-disabled states, responsive layouts, standalone fallbacks for use outside
-Valuz, and an explicit `theme="light" | "dark"` surface option. Omitting the
-option lets a host-level `.dark` class or token overrides control appearance.
+Distributions extend the base through an explicit registry instead of broad
+host selectors:
+
+```tsx
+import { registerA2UIThemeExtension } from "@valuz/a2ui/theme";
+
+registerA2UIThemeExtension({
+  id: "finance",
+  tokens: {
+    light: { "--va2-finance-market-up": "#f54b4b" },
+    dark: { "--va2-finance-market-up": "#ff7373" },
+  },
+  overrides: {
+    light: { "--va2-chart-positive": "#2d916d" },
+  },
+  visualizationPreset: "analytical/v1",
+});
+```
+
+New tokens must use the extension namespace; replacing a base token must be
+declared under `overrides`. Distribution CSS belongs in the
+`a2ui.distribution` cascade layer.
+
+Charts choose appearance from data semantics rather than arbitrary colors.
+The base library ships six curated C1/OpenUI palettes (`ocean`, `orchid`,
+`emerald`, `spectrum`, `sunset`, and `vivid`) plus two Valuz extensions
+(`steel` and `amber`). Their fixed 11-color sequences are selected
+from the middle out according to the number of series, matching C1's published
+distribution algorithm. A chart may select one of these stable names but may
+not pass arbitrary colors. Comparison series can declare roles such as
+`actual`, `estimate`, `benchmark`, `target`, `positive`, or `negative`; the
+`analytical/v1` preset maps comparison and directional roles independently of palette colors, while `actual` follows the selected palette. Roles resolve
+to color, line treatment, opacity, and geometry.
+
+Market direction is not a palette. Candlesticks and volume emit
+`market-up`/`market-down`, which a distribution or user preference maps to its
+regional convention. The Finance distribution currently defaults to red-up and
+green-down. Waterfall reference bars use neutral gray, positive/negative bars
+use semantic direction colors, and only final totals follow the selected palette.
+
+The renderer includes keyboard focus states, disabled states, responsive
+layouts, and an explicit `theme="light" | "dark"` surface option. Omitting the
+option selects the standalone light theme rather than inheriting host state.
 
 ## Extend the catalog
 
@@ -158,6 +203,7 @@ The package exports three surfaces:
 
 - `@valuz/a2ui/catalog` — component APIs and the catalog ID
 - `@valuz/a2ui/react` — implementations, catalog, processor, and renderer
+- `@valuz/a2ui/theme` — typed distribution theme extensions
 - `@valuz/a2ui/styles.css` — standalone theme
 
 ## Quality gates

@@ -57,7 +57,7 @@
 .va2-data-table tr[data-highlight="true"] td { background: var(--va2-brand-soft); color: var(--va2-text); font-weight: 600; }
 .va2-data-table td[data-trend="up"] { color: var(--va2-success-text); }
 .va2-data-table td[data-trend="down"] { color: var(--va2-danger-text); }
-.va2-matrix td:not([data-label="true"]) { background: color-mix(in oklab, var(--va2-brand) calc(var(--va2-intensity) * 44%), var(--va2-bg)); color: var(--va2-text); text-align: center; }
+.va2-matrix td:not([data-label="true"]) { background: color-mix(in oklab, var(--va2-chart-actual) calc(var(--va2-intensity) * 44%), var(--va2-bg)); color: var(--va2-text); text-align: center; }
 .va2-matrix td[data-label="true"] { color: var(--va2-text); font-weight: 600; }
 
 .va2-description-list > dl { display: grid; gap: 8px; margin: 10px 0 0; }

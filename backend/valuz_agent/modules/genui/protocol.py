@@ -74,6 +74,34 @@ _A2UI_NO_PLACEHOLDER_CHARTS = (
     "empty chart."
 )
 
+_A2UI_THEME_AND_VISUALIZATION_CONTRACT = """\
+Theme and analytical visualization contract:
+- The host already supplies the A2UI theme, light/dark mode, density, locale,
+  accessibility preferences, and responsive container. Do not encode those
+  environment choices in the document and do not imitate the host with custom
+  CSS, raw colors, theme tokens, gradients, shadows, radii, typography, or
+  pixel-positioned layout. Use component variants and semantic properties only.
+- Choose a chart only when the data relationship requires it: ordered trend,
+  categorical comparison, part-to-whole, distribution, range/target, bridge,
+  flow, hierarchy, correlation, or network. Prefer a semantic edition component
+  when it answers the research question; do not wrap every fact in a chart.
+- A chart may select ONE registered palette for its data relationship. Use
+  ocean/orchid/emerald/steel/amber for ordered single-hue data, vivid for
+  distinct categories, spectrum for values around a meaningful midpoint, and
+  sunset for ordered intensity, risk, probability, or stage. Omit palette when
+  the deterministic default is sufficient. Never invent a palette or color.
+- Use series.role when a series has stable meaning: actual, estimate, benchmark,
+  target, positive, negative, total, or neutral. Semantic roles override the
+  palette. Mathematical positive/negative is not market up/down, and neither is
+  application success/danger. Market direction and its color convention belong
+  to the host theme; retain labels, signs, line styles, or markers so color is
+  never the only carrier of meaning.
+- The analytical theme owns chart geometry, opacity, line treatment, bar width,
+  grids, cursors, tooltips, legend styling, and light/dark contrast. The A2UI
+  document owns data, relationships, semantic roles, and necessary interaction —
+  not final pixels.
+"""
+
 # What to fall back to when the data has no chart-ready series. Named per scope
 # because a fallback the catalog does not offer is worse than no advice at all:
 # the model is being told to reach for something it was never shown.
@@ -111,10 +139,12 @@ Use flat component ids for layout children:
 Do not create placeholder charts or charts with empty series. If supplied data
 does not include chart-ready arrays, show the raw values with {fallbacks}.
 
-Live data slots (optional). By default, render supplied values directly into
-component properties — that snapshot is complete and correct on its own. When
-the answer names a host data source the edition catalog marks as pollable AND
-freshness genuinely matters (a quote line, a watchlist), you may bind instead:
+Live data slots. For persistent or ongoing UI, when the edition catalog names
+a compatible pollable source, you MUST bind it and treat supplied/retrieved
+values as the initial seed. Inline values only when no compatible registered
+source exists, the content is narrative/analysis, or the user explicitly asks
+for a frozen snapshot. When editing a current document, preserve its existing
+refs and property bindings unless the user explicitly asks to replace them:
 
 1. Seed a slot and declare its source in the data model:
 {"version":"v0.9.1","updateDataModel":{"surfaceId":"s","path":"/data/quote","value":{"items":[...]}}}
@@ -262,7 +292,10 @@ def build_a2ui_catalog(scope: GenUIComponentScope = "all") -> str:
     fallbacks = _snapshot_fallbacks(scope)
     # `.replace`, not `.format`: the message-shape text is JSON, and every brace
     # in it would be read as a format field.
-    return f"{components}{_A2UI_MESSAGE_SHAPE.replace('{fallbacks}', fallbacks)}\n"
+    return (
+        f"{components}{_A2UI_MESSAGE_SHAPE.replace('{fallbacks}', fallbacks)}\n"
+        f"{_A2UI_THEME_AND_VISUALIZATION_CONTRACT}"
+    )
 
 
 def normalize_component_scope(value: object) -> GenUIComponentScope:
@@ -299,6 +332,7 @@ def build_a2ui_prompt(
     request: str,
     data: object | None = None,
     scope: GenUIComponentScope = "all",
+    current_document: str | None = None,
 ) -> str:
     parts = [
         a2ui_instructions(scope),
@@ -310,13 +344,28 @@ def build_a2ui_prompt(
         '- every UI must include a component with id "root"; put the visible tree under root.children.',
         "",
         build_a2ui_catalog(scope).strip(),
-        "",
-        "REQUEST:",
-        request.strip(),
     ]
+    if current_document:
+        parts.extend(
+            [
+                "",
+                "CURRENT HOST DOCUMENT (the complete A2UI document currently bound to the target host):",
+                current_document.strip(),
+                "",
+                "EDIT CONTRACT:",
+                "Return a complete replacement A2UI document, not a patch. Preserve every current "
+                "component, data binding, and layout choice that the request does not change. "
+                "Apply the requested change to this document; replace the whole page only when the "
+                "request explicitly asks for a replacement.",
+            ]
+        )
+    parts.extend(["", "REQUEST:", request.strip()])
     if data is not None:
         parts.append("")
-        parts.append("DATA (render these values directly into the components):")
+        parts.append(
+            "DATA (when a compatible registered source exists, use these values as "
+            "that binding's initial seed; otherwise render them directly):"
+        )
         parts.append(json.dumps(data, ensure_ascii=False))
     return "\n".join(parts)
 

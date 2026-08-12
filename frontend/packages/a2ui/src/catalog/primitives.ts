@@ -71,11 +71,41 @@ export const fieldProps = {
   required: DynamicBooleanSchema.default(false).optional(),
 };
 
+export const chartSeriesRoles = [
+  "actual",
+  "estimate",
+  "benchmark",
+  "target",
+  "positive",
+  "negative",
+  "total",
+  "neutral",
+] as const;
+
+export const chartSeriesRoleSchema = z.enum(chartSeriesRoles);
+
+export const chartPaletteNames = [
+  "ocean",
+  "orchid",
+  "emerald",
+  "spectrum",
+  "sunset",
+  "vivid",
+  "steel",
+  "amber",
+] as const;
+
+export const chartPaletteSchema = z.enum(chartPaletteNames).describe(
+  "Curated chart palette. Choose by data relationship; never emit arbitrary colors.",
+);
+
 export const chartSeriesSchema = z
   .object({
     key: z.string(),
     label: DynamicStringSchema.optional(),
-    color: z.string().optional(),
+    role: chartSeriesRoleSchema.optional().describe(
+      "Semantic meaning used by the theme to choose color and line treatment. Omit for categorical series.",
+    ),
     stack: z.string().optional(),
     curve: z.enum(["linear", "monotone", "step"]).default("monotone").optional(),
   })
@@ -89,6 +119,7 @@ export const chartCommonProps = {
     "Array of records, or a data-model binding resolving to an array of records.",
   ),
   height: z.number().int().min(160).max(720).default(300).optional(),
+  palette: chartPaletteSchema.default("ocean").optional(),
   showLegend: DynamicBooleanSchema.default(true).optional(),
   showGrid: DynamicBooleanSchema.default(true).optional(),
   showTooltip: DynamicBooleanSchema.default(true).optional(),
