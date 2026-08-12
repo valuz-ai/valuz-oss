@@ -24,6 +24,7 @@ import valuz_agent.boot.kernel  # noqa: F401
 from valuz_agent.adapters import kernel_client
 from valuz_agent.adapters.data_reader import data_reader
 from valuz_agent.infra.eventbus import EventBus
+from valuz_agent.infra.execution_lease import hold_lease
 from valuz_agent.modules.sessions.pre_turn import chat_capability_hook
 from valuz_agent.modules.sessions.turn_driver import run_session_to_idle
 from valuz_agent.ports.message_context import HostRef
@@ -36,6 +37,9 @@ logger = logging.getLogger(__name__)
 # windows *between* drained items (see ``is_draining_queue``). In-memory by
 # design — the queue itself is durable (DB), the drain task is transient.
 _active_drains: set[str] = set()
+
+# Lease namespace for "who is draining this session's input queue".
+DRAIN_LEASE_SCOPE = "session-drain"
 
 # session_id → queued-row id the drain is executing RIGHT NOW. Set just before
 # the row is marked ``dispatched`` (which drops it from ``list_queued``) and
@@ -328,6 +332,14 @@ def schedule_drain(session_id: str, event_bus: EventBus) -> None:
     The previous late claim (inside the task, after an awaited owner lookup)
     let an idle-kick enqueue answer ``items=[], draining=false`` — the client's
     drain-follower then never armed and the turn ran invisibly until reload.
+
+    ``_active_drains`` single-flights within THIS process only. That was the
+    whole guard until now, and it does not hold across processes: ``uvicorn
+    --workers N`` (or several replicas) meant every one of them re-kicked the
+    same drain at boot from ``resume_queued_drains``, so one queued item ran N
+    times — N real turns, N× model spend, N assistant replies the user did not
+    ask for. The execution lease below is the cross-process half; the set stays
+    as the cheap local short-circuit and as the ``is_draining_queue`` signal.
     """
     if session_id in _active_drains:
         return
@@ -339,14 +351,21 @@ def schedule_drain(session_id: str, event_bus: EventBus) -> None:
             if not owner_user_id:
                 logger.warning("skip queue drain for %s: unknown session owner", session_id)
                 return
-            meter = _chat_billing_meter(session_id, user_id=owner_user_id)
-            await _drain_queue_after_turn(
-                session_id,
-                event_bus,
-                on_message=meter,
-                user_id=owner_user_id,
-                claimed=True,
-            )
+            async with hold_lease(scope=DRAIN_LEASE_SCOPE, key=session_id) as lease:
+                if lease is None:
+                    logger.info(
+                        "skip queue drain for %s: another process is already draining it",
+                        session_id,
+                    )
+                    return
+                meter = _chat_billing_meter(session_id, user_id=owner_user_id)
+                await _drain_queue_after_turn(
+                    session_id,
+                    event_bus,
+                    on_message=meter,
+                    user_id=owner_user_id,
+                    claimed=True,
+                )
         finally:
             # ``_drain_queue_after_turn`` releases on its own; this covers the
             # early returns/raises before it runs. discard is idempotent.

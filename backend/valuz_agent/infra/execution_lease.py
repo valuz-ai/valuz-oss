@@ -50,9 +50,13 @@ Single-process deployments pay nothing: see :func:`_exclusive_by_construction`.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import os
 import socket
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, cast
 from uuid import uuid4
@@ -341,6 +345,46 @@ async def acquire_lease(*, scope: str, key: str, note: str = "") -> ExecutionLea
     return _lease(1)
 
 
+@asynccontextmanager
+async def hold_lease(
+    *, scope: str, key: str, note: str = ""
+) -> AsyncIterator[ExecutionLease | None]:
+    """Hold ``(scope, key)`` for the duration of the block, renewed in the
+    background; yields ``None`` when another live process holds it.
+
+    For consumers whose work is a plain ``async with`` body — a queue drain, a
+    sweep. The task actor loop does NOT use this: it has to react to losing the
+    lease by waking a loop parked on a mailbox, which needs the fenced event
+    rather than a context manager's implicit teardown.
+
+    Losing the lease mid-body is LOGGED, not enforced: a context manager cannot
+    interrupt arbitrary code. That is deliberate rather than lax — the win here
+    is refusing to START duplicate work, which is the failure that actually
+    happens (every process kicking the same drain at boot). Mid-body takeover
+    still needs the whole TTL to elapse first, i.e. it is no worse than the
+    behaviour before any lease existed.
+    """
+    lease = await acquire_lease(scope=scope, key=key, note=note)
+    if lease is None:
+        yield None
+        return
+
+    async def _renew_forever() -> None:
+        while True:
+            await asyncio.sleep(LEASE_RENEW_INTERVAL_S)
+            if not await lease.renew():
+                logger.warning("lease %s/%s lost while its holder was still working", scope, key)
+                return
+
+    renewer = asyncio.create_task(_renew_forever(), name=f"lease-{scope}-{key}")
+    try:
+        yield lease
+    finally:
+        renewer.cancel()
+        with contextlib.suppress(Exception):
+            await lease.release()
+
+
 async def load_lease_states(scope: str, keys: list[str]) -> dict[str, LeaseState]:
     """Lease rows for *keys* within *scope*, in one query.
 
@@ -391,6 +435,7 @@ __all__ = [
     "ExecutionLeaseRow",
     "LeaseState",
     "acquire_lease",
+    "hold_lease",
     "holder_id",
     "is_held_elsewhere",
     "load_lease_states",

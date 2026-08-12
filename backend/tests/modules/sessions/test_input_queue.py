@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from valuz_agent.infra.database import Base
+from valuz_agent.infra.execution_lease import ExecutionLeaseRow
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.sessions import project_index
 from valuz_agent.modules.sessions.datastore import SessionDatastore
@@ -41,6 +42,10 @@ def _queue_db(tmp_path, monkeypatch):
             QueuedInputRow.__table__,
             SessionAttachmentRow.__table__,
             ProjectSessionRow.__table__,
+            # ``schedule_drain`` takes a cross-process lease before draining —
+            # single-flighting within one process is not enough when several
+            # host processes share the queue.
+            ExecutionLeaseRow.__table__,
         ],
     )
     async_engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
@@ -667,3 +672,75 @@ async def test_steer_missing_item_is_idempotent(monkeypatch) -> None:
     # dispatched) — steer must NOT raise, just return the live queue.
     result = await svc.steer_queued("st2", "gone", user_id=OWNER)
     assert len(result.items) == 1  # the genuinely-queued item is untouched
+
+
+async def test_a_peer_process_does_not_double_drain(monkeypatch) -> None:
+    """Regression: every host process re-kicked the same drain at boot.
+
+    ``resume_queued_drains`` is a cross-owner sweep that runs in EVERY process,
+    and the only guard was the in-memory ``_active_drains`` set — which a
+    sibling worker cannot see. One queued item therefore ran once per process:
+    real turns, real model spend, and duplicate assistant replies the user never
+    asked for.
+
+    A peer holding the drain lease is simulated the only way that is honest
+    here — by taking the lease under a DIFFERENT holder id, exactly as another
+    process would. Nothing else is stubbed: the guard under test is the real
+    one.
+    """
+    import asyncio
+
+    from valuz_agent.infra import execution_lease as lease_mod
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    async with async_unit_of_work() as db:
+        await SessionDatastore(db).create_queued(OWNER, _row("dd1", "only once"))
+
+    calls = _patch_drain(monkeypatch)
+
+    async def _owner(session_id):
+        return OWNER
+
+    monkeypatch.setattr(run_orchestrator, "_resolve_session_owner", _owner)
+
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "peer-process")
+    peer = await lease_mod.acquire_lease(
+        scope=run_orchestrator.DRAIN_LEASE_SCOPE, key="dd1"
+    )
+    assert peer is not None
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "our-process")
+
+    run_orchestrator.schedule_drain("dd1", _FakeBus())
+    for _ in range(200):
+        if not run_orchestrator.is_draining_queue("dd1"):
+            break
+        await asyncio.sleep(0.01)
+
+    assert calls == [], "the peer owns this drain — we must not run the item again"
+    # The local claim is still released, so this process is not left wedged.
+    assert run_orchestrator.is_draining_queue("dd1") is False
+
+
+async def test_drain_runs_when_no_peer_holds_it(monkeypatch) -> None:
+    """The lease must not break the ordinary single-process path."""
+    import asyncio
+
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    async with async_unit_of_work() as db:
+        await SessionDatastore(db).create_queued(OWNER, _row("dd2", "go"))
+
+    calls = _patch_drain(monkeypatch)
+
+    async def _owner(session_id):
+        return OWNER
+
+    monkeypatch.setattr(run_orchestrator, "_resolve_session_owner", _owner)
+
+    run_orchestrator.schedule_drain("dd2", _FakeBus())
+    for _ in range(200):
+        if not run_orchestrator.is_draining_queue("dd2"):
+            break
+        await asyncio.sleep(0.01)
+
+    assert calls == ["go"]

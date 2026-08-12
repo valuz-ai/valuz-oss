@@ -60,6 +60,9 @@ class _Collaborators:
     ) -> bool:
         return True
 
+    async def reconcile_finished_members(self, *, task_id, project_id, user_id) -> list:
+        return []
+
     async def session_still_working(self, session_id) -> bool:
         return False
 
@@ -294,3 +297,143 @@ def test_fenced_loop_still_signals_when_it_owns_the_inbox(db_factory) -> None:
     msg: InboxMsg = mailbox_registry._boxes["lead-s"].get_nowait()
     assert msg.kind == "shutdown"
     monkey.undo()
+
+
+# ---------------------------------------------------------------------------
+# Between-turns durable backstop: a lead must not depend on cross-process
+# mailbox delivery to learn that its members finished.
+# ---------------------------------------------------------------------------
+
+
+class _ReconcilingCoordinator(_Collaborators):
+    """Coordinator whose mailbox never delivers, but whose store knows the truth."""
+
+    def __init__(self, calls: list[str], recovered: list[InboxMsg]) -> None:
+        super().__init__(calls)
+        self._recovered = recovered
+        self.reconciles = 0
+
+    async def reconcile_finished_members(self, *, task_id, project_id, user_id) -> list:
+        self.reconciles += 1
+        out, self._recovered = self._recovered, []
+        return out
+
+
+def _member_done(session_id: str, summary: str) -> InboxMsg:
+    return InboxMsg(
+        kind="member_done",
+        from_session=session_id,
+        payload={"session_id": session_id, "status": "completed", "summary": summary},
+    )
+
+
+def test_lead_recovers_a_member_result_its_mailbox_never_received(db_factory) -> None:
+    """Regression: the false `unresolved_subtasks` block.
+
+    `dispatch` is an HTTP tool call, so it lands on whichever host process the
+    load balancer picked and the member it spawns can post `member_done` into a
+    DIFFERENT process's queue — `put` returns False, unchecked. The lead's
+    mailbox here is deliberately left EMPTY to model exactly that. Before the
+    durable backstop the lead slept out its whole idle TTL and auto-finalize
+    blocked a task whose members had all finished.
+    """
+    fake = _ReconcilingCoordinator([], [_member_done("m1", "did the thing")])
+    runner = ActorRunner(finalizer=fake, coordinator=fake)
+
+    async def _drive():
+        return await runner._await_wakeup(
+            session_id="lead-s",
+            role="lead",
+            ttl=60.0,
+            task_id="t1",
+            project_id="p1",
+            user_id=OWNER,
+            coordinator=fake,
+        )
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr("valuz_agent.modules.tasks.actor_runner.LEAD_RECONCILE_SLICE_S", 0.01)
+    mailbox_registry.register("lead-s")
+    msg = asyncio.run(_drive())
+    monkey.undo()
+
+    assert msg.kind == "member_done"
+    assert msg.payload["summary"] == "did the thing"
+    assert fake.reconciles >= 1
+
+
+def test_extra_recovered_results_are_queued_not_dropped(db_factory) -> None:
+    """Two members finished while nobody was listening — both must reach the lead."""
+    fake = _ReconcilingCoordinator([], [_member_done("m1", "first"), _member_done("m2", "second")])
+    runner = ActorRunner(finalizer=fake, coordinator=fake)
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr("valuz_agent.modules.tasks.actor_runner.LEAD_RECONCILE_SLICE_S", 0.01)
+    mailbox_registry.register("lead-s")
+
+    async def _drive():
+        first = await runner._await_wakeup(
+            session_id="lead-s", role="lead", ttl=60.0, task_id="t1",
+            project_id="p1", user_id=OWNER, coordinator=fake,
+        )
+        # The second one must already be waiting — consumed through the same
+        # path as a real arrival, not invented by a second reconcile.
+        second = await runner._await_wakeup(
+            session_id="lead-s", role="lead", ttl=60.0, task_id="t1",
+            project_id="p1", user_id=OWNER, coordinator=fake,
+        )
+        return first, second
+
+    first, second = asyncio.run(_drive())
+    monkey.undo()
+    assert [first.payload["summary"], second.payload["summary"]] == ["first", "second"]
+    assert fake.reconciles == 1, "the queued one must not need a second reconcile"
+
+
+def test_members_do_not_reconcile(db_factory) -> None:
+    """A subtask actor has no siblings to reconcile — it keeps the plain wait."""
+    fake = _ReconcilingCoordinator([], [_member_done("m1", "nope")])
+    runner = ActorRunner(finalizer=fake, coordinator=fake)
+    mailbox_registry.register("member-s")
+
+    async def _drive():
+        with pytest.raises(TimeoutError):
+            await runner._await_wakeup(
+                session_id="member-s", role="subtask", ttl=0.05, task_id="t1",
+                project_id="p1", user_id=OWNER, coordinator=fake,
+            )
+
+    asyncio.run(_drive())
+    assert fake.reconciles == 0
+
+
+def test_a_failing_reconcile_does_not_end_the_wait(db_factory) -> None:
+    """The backstop is best-effort: a broken read must not look like a timeout."""
+
+    class _Broken(_Collaborators):
+        async def reconcile_finished_members(self, *, task_id, project_id, user_id) -> list:
+            raise RuntimeError("store unreachable")
+
+    fake = _Broken([])
+    runner = ActorRunner(finalizer=fake, coordinator=fake)
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr("valuz_agent.modules.tasks.actor_runner.LEAD_RECONCILE_SLICE_S", 0.01)
+    mailbox_registry.register("lead-s")
+
+    async def _drive():
+        # A real message still gets through while the backstop is failing.
+        async def _late_put():
+            await asyncio.sleep(0.05)
+            mailbox_registry.put("lead-s", _member_done("m9", "arrived by mailbox"))
+
+        task = asyncio.create_task(_late_put())
+        msg = await runner._await_wakeup(
+            session_id="lead-s", role="lead", ttl=5.0, task_id="t1",
+            project_id="p1", user_id=OWNER, coordinator=fake,
+        )
+        await task
+        return msg
+
+    msg = asyncio.run(_drive())
+    monkey.undo()
+    assert msg.payload["summary"] == "arrived by mailbox"

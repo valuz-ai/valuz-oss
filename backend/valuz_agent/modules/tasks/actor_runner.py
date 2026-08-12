@@ -59,6 +59,14 @@ MEMBER_IDLE_TTL_S = 600.0
 # background work — which routinely outlasts one TTL — is never reaped.
 MAX_IDLE_EXTENSIONS = 6
 
+# How often a parked LEAD re-reads durable state while waiting on its mailbox.
+# Not a tuning knob for latency alone: it is the interval at which the loop
+# stops depending on cross-process message delivery at all (see
+# ``_await_wakeup``). Longer than the 8s used inside a turn — between turns
+# nobody is watching a cursor blink — but far short of the 30-minute idle TTL
+# that a dropped result used to cost.
+LEAD_RECONCILE_SLICE_S = 30.0
+
 
 # ---------------------------------------------------------------------------
 # Collaborator protocols
@@ -93,6 +101,12 @@ class ActorCoordinator(Protocol):
         self, task_id: str, project_id: str, user_id: str, lead_session_id: str = ""
     ) -> bool:
         """True when a lead has nothing left to wait for and should stop looping."""
+        ...
+
+    async def reconcile_finished_members(
+        self, *, task_id: str, project_id: str, user_id: str
+    ) -> list[InboxMsg]:
+        """Members that finished without their ``member_done`` reaching us."""
         ...
 
     async def session_still_working(self, session_id: str) -> bool:
@@ -239,9 +253,7 @@ class ActorRunner:
                 name=f"task-lease-{task_id}",
             )
         # Read once: every lead wake-up restates it (see _with_goal_restated).
-        task_goal = (
-            await self._task_goal(task_id, project_id, user_id) if role == "lead" else ""
-        )
+        task_goal = await self._task_goal(task_id, project_id, user_id) if role == "lead" else ""
         prompt = initial_prompt
         final_status = "idle"
         turns = 0
@@ -316,7 +328,15 @@ class ActorRunner:
                     break
 
                 try:
-                    msg = await mailbox_registry.get(session_id, timeout=ttl)
+                    msg = await self._await_wakeup(
+                        session_id=session_id,
+                        role=role,
+                        ttl=ttl,
+                        task_id=task_id,
+                        project_id=project_id,
+                        user_id=user_id,
+                        coordinator=coordinator,
+                    )
                 except KeyError:
                     # Our box was dropped externally — ownership moved (a newer
                     # loop claimed the session). Exit as an externally-managed
@@ -429,6 +449,76 @@ class ActorRunner:
                 except Exception:  # noqa: BLE001
                     logger.debug("actor loop %s: lease release failed", session_id)
 
+    async def _await_wakeup(
+        self,
+        *,
+        session_id: str,
+        role: Literal["lead", "subtask"],
+        ttl: float,
+        task_id: str,
+        project_id: str,
+        user_id: str,
+        coordinator: ActorCoordinator,
+    ) -> InboxMsg:
+        """Wait for the next inbox message, re-reading durable state as we go.
+
+        A lead used to park on ONE ``get(timeout=1800)``, which is only correct
+        if every ``member_done`` reaches THIS process's mailbox. It does not:
+        the lead's own ``dispatch`` is an HTTP tool call that lands on whichever
+        host process the load balancer picked, so the member it spawns can post
+        its result into a different process's queue — where ``put`` returns
+        False, unchecked, and the message is gone. The lead then slept out its
+        full idle TTL and auto-finalize blocked the task for "unresolved
+        subtasks": a task whose members had all finished.
+
+        Slicing the wait and reconciling durable run/plan state on each slice
+        removes the dependency. The mailbox stays the fast path; the store is
+        the truth. This is the same backstop ``await_member_results`` already
+        applies INSIDE a turn — the loop simply had none between turns.
+
+        Members keep the single long wait: they have no siblings to reconcile,
+        and their own results are what the lead is waiting for.
+
+        Raises ``TimeoutError`` when the full *ttl* elapses with nothing, and
+        propagates ``KeyError`` when the box is dropped (ownership moved) —
+        both exactly as the plain ``get`` did.
+        """
+        if role != "lead":
+            return await mailbox_registry.get(session_id, timeout=ttl)
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + ttl
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError
+            try:
+                return await mailbox_registry.get(
+                    session_id, timeout=min(LEAD_RECONCILE_SLICE_S, remaining)
+                )
+            except TimeoutError:
+                pass
+            try:
+                recovered = await coordinator.reconcile_finished_members(
+                    task_id=task_id, project_id=project_id, user_id=user_id
+                )
+            except Exception:  # noqa: BLE001 — a failed backstop must not end the wait
+                logger.debug("actor loop %s: member reconcile failed, still waiting", session_id)
+                continue
+            if not recovered:
+                continue
+            logger.info(
+                "actor loop %s (lead): %d member result(s) recovered from durable state "
+                "— their member_done never reached this process",
+                session_id,
+                len(recovered),
+            )
+            # Queue the rest so the loop consumes them on its next passes, in
+            # the same order and through the same path as mailbox arrivals.
+            for extra in recovered[1:]:
+                mailbox_registry.put(session_id, extra)
+            return recovered[0]
+
     @staticmethod
     async def _renew_lease(
         lease: TaskLease, session_id: str, claim_token: int, fenced: asyncio.Event
@@ -481,9 +571,7 @@ class ActorRunner:
         """The task's goal text, read once per loop (best-effort)."""
         try:
             async with async_unit_of_work(commit=False) as db:
-                row = await TaskDatastore(db).get_task_by_project(
-                    user_id, project_id, task_id
-                )
+                row = await TaskDatastore(db).get_task_by_project(user_id, project_id, task_id)
                 return (row.goal or "").strip() if row is not None else ""
         except Exception:  # noqa: BLE001 — a wake-up must never fail on this
             logger.debug("actor loop: goal read failed for task %s", task_id)

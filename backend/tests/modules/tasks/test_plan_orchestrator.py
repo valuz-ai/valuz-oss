@@ -2868,3 +2868,84 @@ def test_modify_plan_cannot_stamp_failed(db_factory, tmp_path) -> None:
         )
     )
     assert "error" in res and "illegal subtask transition" in res["error"]
+
+
+def test_reconcile_finished_members_resolves_pending_from_the_store(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """The between-turns backstop, end to end against the real store.
+
+    This is the half that was missing. `_heartbeat_pending` only ever ran while
+    the lead sat INSIDE `await_members`; parked on its mailbox between turns it
+    consulted nothing. So a `member_done` posted into another process's queue —
+    which is what happens whenever `dispatch` lands on a different host process
+    than the lead loop — was simply never seen, the lead slept out its whole
+    idle TTL, and auto-finalize blocked the task for "unresolved subtasks" with
+    every member already finished.
+
+    Here the mailbox is not involved at all: the plan says `in_progress`, the
+    kernel says the session is done, and the lead must learn it from the store.
+    """
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(
+        db_factory,
+        tmp_path,
+        members=[("B", "frontend", "sB", "in_progress"), ("C", "qa", "sC", "in_progress")],
+    )
+    sessions = {
+        "sB": SimpleNamespace(status="idle", stop_reason={"type": "end_turn"}),
+        "sC": SimpleNamespace(status="running", stop_reason=None),
+    }
+    monkeypatch.setattr(
+        kernel_client_mod, "get_session", _as_async(lambda _uid, sid: sessions.get(sid))
+    )
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    monkeypatch.setattr(
+        manifest_mod,
+        "collect_manifest",
+        _as_async(lambda *a, **k: {"status": "completed", "summary": "ok"}),
+    )
+    orch = TaskOrchestrator()
+
+    msgs = asyncio.run(
+        orch.coordination.reconcile_finished_members(
+            task_id="t1", project_id="w1", user_id=OWNER
+        )
+    )
+
+    # The finished member comes back as a normal member_done, so the loop keeps
+    # ONE formatting path whether a result arrived by mailbox or by reconcile.
+    assert [m.kind for m in msgs] == ["member_done"]
+    assert msgs[0].from_session == "sB"
+    assert msgs[0].payload["status"] == "completed"
+    # The one still running is left alone — a backstop must not invent results.
+    assert all(m.from_session != "sC" for m in msgs)
+
+
+def test_reconcile_finished_members_is_quiet_when_nothing_is_pending(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """A lead parked with no in-flight member must not pay for a kernel probe."""
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(
+        db_factory, tmp_path, members=[("B", "frontend", "sB", "done")]
+    )
+    probes: list[str] = []
+
+    async def _get_session(_uid, sid):
+        probes.append(sid)
+        return SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+
+    monkeypatch.setattr(kernel_client_mod, "get_session", _get_session)
+    orch = TaskOrchestrator()
+
+    msgs = asyncio.run(
+        orch.coordination.reconcile_finished_members(
+            task_id="t1", project_id="w1", user_id=OWNER
+        )
+    )
+    assert msgs == []
+    assert probes == []
