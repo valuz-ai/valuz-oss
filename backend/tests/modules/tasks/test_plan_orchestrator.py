@@ -2949,3 +2949,149 @@ def test_reconcile_finished_members_is_quiet_when_nothing_is_pending(
     )
     assert msgs == []
     assert probes == []
+
+
+# ---------------------------------------------------------------------------
+# Duplicate member_done: the wasted-turn bug measured on qa.
+# ---------------------------------------------------------------------------
+
+
+def test_member_already_settled_says_yes_for_a_reviewed_member(
+    db_factory, tmp_path
+) -> None:
+    """A member the lead already approved must not earn another turn.
+
+    This is the qa case: the in-turn backstop synthesized the result while the
+    member was still collecting its manifest, the lead reviewed and moved on,
+    and the real ``member_done`` then arrived to wake it for work already done.
+    """
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "done")])
+    orch = TaskOrchestrator()
+    assert asyncio.run(
+        orch.coordination.member_already_settled(
+            task_id="t1", project_id="w1", member_session_id="sB", user_id=OWNER
+        )
+    )
+
+
+def test_member_awaiting_review_is_not_settled(db_factory, tmp_path) -> None:
+    """``in_review`` still owes the lead a review — waking it is the point."""
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_review")])
+    orch = TaskOrchestrator()
+    assert not asyncio.run(
+        orch.coordination.member_already_settled(
+            task_id="t1", project_id="w1", member_session_id="sB", user_id=OWNER
+        )
+    )
+
+
+def test_a_finished_task_settles_every_member(db_factory, tmp_path) -> None:
+    """Both wasted turns on qa landed AFTER ``task_completed``.
+
+    ``finish_task``'s shutdown was queued behind the stale results, and the
+    mailbox is FIFO, so the loop burned a turn on each before reading it.
+    """
+    _seed_lead_and_members(
+        db_factory, tmp_path, members=[("B", "frontend", "sB", "in_review")],
+        task_status="completed",
+    )
+    orch = TaskOrchestrator()
+    assert asyncio.run(
+        orch.coordination.member_already_settled(
+            task_id="t1", project_id="w1", member_session_id="sB", user_id=OWNER
+        )
+    )
+
+
+def test_an_unknown_member_is_never_swallowed(db_factory, tmp_path) -> None:
+    """No run row → surface it. Dropping is the dangerous direction here."""
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    orch = TaskOrchestrator()
+    assert not asyncio.run(
+        orch.coordination.member_already_settled(
+            task_id="t1", project_id="w1", member_session_id="who-dis", user_id=OWNER
+        )
+    )
+
+
+def test_the_backstop_lets_the_real_delivery_win_the_first_slice(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """Regression for the wasted turns: the backstop must not race the member.
+
+    It reads durable state, so it sees a member as finished the moment its
+    kernel session goes terminal — while that member is still inside
+    ``notify_lead_member_idle`` collecting a manifest off the filesystem.
+    Synthesizing there strands the real ``member_done`` in a mailbox nobody
+    drains. One slice of grace hands the race to the real path; a member that
+    truly died without delivering is still caught, one slice later.
+    """
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    monkeypatch.setattr(
+        kernel_client_mod,
+        "get_session",
+        _as_async(
+            lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+        ),
+    )
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    monkeypatch.setattr(
+        manifest_mod, "collect_manifest",
+        _as_async(lambda *a, **k: {"status": "completed", "summary": "ok"}),
+    )
+    monkeypatch.setattr("valuz_agent.modules.tasks.coordination._HEARTBEAT_S", 0.01)
+
+    orch = TaskOrchestrator()
+    hits: list[int] = []
+    real = orch.coordination._heartbeat_pending
+
+    async def _counting(**kw):
+        hits.append(1)
+        return await real(**kw)
+
+    orch.coordination._heartbeat_pending = _counting  # type: ignore[method-assign]
+
+    # A window of exactly one slice: the backstop must stay out of it.
+    asyncio.run(
+        orch.coordination.await_member_results(
+            lead_session_id="lead-s", project_id="w1", task_id="t1",
+            timeout_s=0.01, user_id=OWNER,
+        )
+    )
+    assert hits == [], "the first slice belongs to the real delivery"
+
+
+
+def test_the_backstop_still_fires_for_a_member_that_never_delivers(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """The grace above must not turn the backstop off — only make it second."""
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    monkeypatch.setattr(
+        kernel_client_mod,
+        "get_session",
+        _as_async(
+            lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+        ),
+    )
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    monkeypatch.setattr(
+        manifest_mod, "collect_manifest",
+        _as_async(lambda *a, **k: {"status": "completed", "summary": "ok"}),
+    )
+    monkeypatch.setattr("valuz_agent.modules.tasks.coordination._HEARTBEAT_S", 0.01)
+
+    orch = TaskOrchestrator()
+    out = asyncio.run(
+        orch.coordination.await_member_results(
+            lead_session_id="lead-s2", project_id="w1", task_id="t1",
+            timeout_s=0.06, user_id=OWNER,
+        )
+    )
+    assert out.get("collected"), "a member that never delivers must still be caught"

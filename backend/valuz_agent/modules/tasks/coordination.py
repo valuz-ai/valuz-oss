@@ -226,15 +226,32 @@ class CoordinationService:
                 msg = await mailbox_registry.get(lead_session_id, timeout=slice_timeout)
             except TimeoutError:
                 slices_waited += 1
-                pending_now = (target - set(collected.keys())) if target else set()
-                collected.update(
-                    await self._heartbeat_pending(
-                        task_id=task_id,
-                        project_id=project_id,
-                        pending_keys=pending_now,
-                        user_id=user_id,
+                # Let the REAL delivery win the first slice. The backstop reads
+                # durable state, so it sees a member as finished the instant its
+                # kernel session goes terminal — while that member is still
+                # inside ``notify_lead_member_idle`` collecting its manifest,
+                # which scans the run directory and is not fast. Synthesizing
+                # there does not just duplicate work: the lead reviews the
+                # synthesized result and moves on, and the real ``member_done``
+                # then lands in a mailbox nobody is draining. It sits there until
+                # the turn ends and wakes the lead for a member it already
+                # handled — an extra model turn per member, on a task that is
+                # often already complete. Measured on qa: 2 members, 2 wasted
+                # turns, both after ``task_completed``.
+                #
+                # One slice of grace covers manifest collection in the normal
+                # case. A member that genuinely died without delivering is still
+                # caught, just one slice later — which is what a backstop is for.
+                if slices_waited > 1:
+                    pending_now = (target - set(collected.keys())) if target else set()
+                    collected.update(
+                        await self._heartbeat_pending(
+                            task_id=task_id,
+                            project_id=project_id,
+                            pending_keys=pending_now,
+                            user_id=user_id,
+                        )
                     )
-                )
                 # Parked-member probe: a member sitting on an AskUserQuestion
                 # keeps its kernel session ``running``, so from here it is
                 # indistinguishable from a long tool call — unless we ask the
@@ -365,6 +382,39 @@ class CoordinationService:
             out["user_inject"] = user_inject
             out["preempted_by_inject"] = True
         return out
+
+    async def member_already_settled(
+        self, *, task_id: str, project_id: str, member_session_id: str, user_id: str
+    ) -> bool:
+        """Is there still work here for the lead, or has this member been dealt with?
+
+        Answers from DURABLE state, not from what the mailbox happens to hold:
+        a ``member_done`` can be produced by several paths (the member's own
+        notify, recovery re-seeding, stop_member) and any of them can repeat.
+        The only question worth asking is whether the lead still owes this
+        member a turn.
+
+        Settled means either the task itself has ended, or the member's plan
+        node has moved past the point where a wake-up would change anything.
+        ``in_review`` counts as NOT settled: the lead has yet to review it.
+        """
+        async with async_unit_of_work(commit=False) as db:
+            row = await TaskDatastore(db).get_task_by_project(user_id, project_id, task_id)
+            if row is None:
+                return True  # nothing left to drive
+            if row.status != "active":
+                return True  # finished / stopped / blocked — a turn changes nothing
+            run = (
+                await TaskSessionDatastore(db).get_run(member_session_id)
+                if member_session_id
+                else None
+            )
+        if run is None or not run.subtask_key:
+            return False  # unknown member — let the lead see it rather than swallow it
+        node = TaskPlan.from_dict(row.plan).get(run.subtask_key)
+        if node is None:
+            return False
+        return node.status in ("done", "failed")
 
     async def reconcile_finished_members(
         self, *, task_id: str, project_id: str, user_id: str
