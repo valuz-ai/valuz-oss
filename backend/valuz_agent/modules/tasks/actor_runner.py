@@ -262,28 +262,44 @@ class ActorRunner:
         fenced = asyncio.Event()
         renewer: asyncio.Task[None] | None = None
         if role == "lead":
-            if lease is None:
-                lease = await acquire_task_lease(
-                    user_id=user_id, task_id=task_id, lead_session_id=session_id
-                )
-            if lease is None:
+            # Guarded because the inbox is ALREADY claimed at this point. An
+            # exception escaping here (a database blip in the acquire) would
+            # leave that claim behind with no loop to answer for it, and
+            # ``is_owned`` is the watchdog's second liveness opinion — so the
+            # task would read as healthy forever and could never be blocked.
+            # Undriven AND invisible is the one outcome worse than undriven.
+            try:
+                if lease is None:
+                    lease = await acquire_task_lease(
+                        user_id=user_id, task_id=task_id, lead_session_id=session_id
+                    )
+                if lease is None:
+                    mailbox_registry.release(session_id, claim_token)
+                    logger.info(
+                        "actor loop %s (lead): task %s already has a driver — exiting",
+                        session_id,
+                        task_id,
+                    )
+                    return
+                if lease.needs_renewal:
+                    renewer = asyncio.create_task(
+                        self._renew_lease(lease, session_id, claim_token, fenced),
+                        name=f"task-lease-{task_id}",
+                    )
+                    # An unobserved renewer death is invisible until the lease
+                    # has already expired, so say so at the moment it happens.
+                    renewer.add_done_callback(
+                        functools.partial(_log_renewer_exit, task_id=task_id)
+                    )
+            except Exception:
                 mailbox_registry.release(session_id, claim_token)
-                logger.info(
-                    "actor loop %s (lead): task %s already has a driver — exiting",
+                logger.exception(
+                    "actor loop %s (lead): could not take the lease on task %s — "
+                    "handing the inbox back so the watchdog can see it",
                     session_id,
                     task_id,
                 )
-                return
-            if lease.needs_renewal:
-                renewer = asyncio.create_task(
-                    self._renew_lease(lease, session_id, claim_token, fenced),
-                    name=f"task-lease-{task_id}",
-                )
-                # An unobserved renewer death is invisible until the lease has
-                # already expired, so say so at the moment it happens.
-                renewer.add_done_callback(
-                    functools.partial(_log_renewer_exit, task_id=task_id)
-                )
+                raise
         # Read once: every lead wake-up restates it (see _with_goal_restated).
         task_goal = await self._task_goal(task_id, project_id, user_id) if role == "lead" else ""
         prompt = initial_prompt
@@ -453,6 +469,13 @@ class ActorRunner:
                 if stop:
                     break
                 msg = wake
+
+                if role == "lead" and not task_goal:
+                    # The once-per-loop read failed (or the task had no goal
+                    # yet). Retry here rather than restating nothing for the
+                    # rest of this loop's life — wake-ups are infrequent, so
+                    # this costs one row read per member completion at most.
+                    task_goal = await self._task_goal(task_id, project_id, user_id)
 
                 if msg.kind == "member_done":
                     # Lead-side, single-actor (D7): flip the member's plan node
@@ -681,7 +704,17 @@ class ActorRunner:
                 row = await TaskDatastore(db).get_task_by_project(user_id, project_id, task_id)
                 return (row.goal or "").strip() if row is not None else ""
         except Exception:  # noqa: BLE001 — a wake-up must never fail on this
-            logger.debug("actor loop: goal read failed for task %s", task_id)
+            # NOT debug. An empty goal makes ``_with_goal_restated`` a no-op, and
+            # that function is load-bearing: without the restatement the kernel
+            # re-goals the lead to whatever the wake-up says ("review this
+            # result"), and goal-auto-exit fires the moment that trivial goal is
+            # met — the lead silently stops driving the real task. A read failure
+            # here is a correctness event, not a cosmetic one.
+            logger.warning(
+                "actor loop: goal read failed for task %s — wake-ups will not "
+                "restate the goal until it is read again",
+                task_id,
+            )
             return ""
 
     @staticmethod

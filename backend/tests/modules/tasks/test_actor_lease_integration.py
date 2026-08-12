@@ -645,3 +645,80 @@ def test_an_actionable_member_done_still_runs_a_turn(db_factory) -> None:
     assert len(prompts) == 2, "kickoff + the member result"
     assert "please review me" in prompts[1]
     assert prompts[1] != prompts[0], "the second turn must not repeat the first"
+
+
+def test_a_failed_acquire_hands_the_inbox_back(db_factory, monkeypatch) -> None:
+    """Undriven AND invisible is worse than undriven.
+
+    The inbox is already claimed when the lease is acquired, so an exception
+    escaping the acquire used to leave that claim behind with no loop to answer
+    for it. ``is_owned`` is the watchdog's second liveness opinion, so the task
+    would read as healthy forever and could never be blocked — stuck ``active``
+    with nothing driving it and nothing able to notice.
+    """
+    async def _boom(**kw):
+        raise RuntimeError("database blip")
+
+    monkeypatch.setattr(
+        "valuz_agent.modules.tasks.actor_runner.acquire_task_lease", _boom
+    )
+    fake = _Collaborators([])
+    runner = ActorRunner(finalizer=fake, coordinator=fake)
+    mailbox_registry.claim("lead-s")  # what spawn_actor does
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(_drive(runner))
+
+    assert not mailbox_registry.is_owned("lead-s"), (
+        "a loop that could not take the lease must not leave a claim behind"
+    )
+
+
+def test_an_unreadable_goal_is_retried_on_the_next_wake_up(db_factory, monkeypatch) -> None:
+    """A goal read that fails must not silence the restatement for the whole loop.
+
+    ``_with_goal_restated`` is a no-op on an empty goal, and without it the
+    kernel re-goals the lead to whatever the wake-up says — goal-auto-exit then
+    fires the moment that trivial goal is met and the lead stops driving the
+    real task. So one failed read used to be enough to strand a task.
+    """
+    class _Wake(_Collaborators):
+        async def member_already_settled(self, **kw) -> bool:
+            return False
+
+        async def lead_idle_with_no_pending(self, task_id, project_id, user_id, lead_session_id="") -> bool:
+            return False
+
+        async def reconcile_finished_members(self, *, task_id, project_id, user_id) -> list:
+            return []
+
+    reads: list[int] = []
+
+    async def _goal(task_id, project_id, user_id):
+        reads.append(1)
+        return "" if len(reads) == 1 else "THE REAL GOAL"
+
+    monkeypatch.setattr(ActorRunner, "_task_goal", staticmethod(_goal))
+    monkeypatch.setattr(
+        "valuz_agent.modules.tasks.planning.mark_in_review", lambda **kw: asyncio.sleep(0)
+    )
+
+    fake = _Wake([])
+    runner = ActorRunner(finalizer=fake, coordinator=fake)
+    prompts: list[str] = []
+
+    async def _turn(session_id: str, content: str, user_id: str | None = None) -> str:
+        prompts.append(content)
+        return "idle"
+
+    runner.run_turn = _turn  # type: ignore[method-assign]
+    mailbox_registry.register("lead-s")
+    mailbox_registry.put("lead-s", _member_done("m1", "result"))
+    mailbox_registry.put("lead-s", InboxMsg(kind="shutdown"))
+
+    asyncio.run(_drive(runner))
+
+    assert len(reads) == 2, "the empty first read must be retried at wake-up"
+    assert "<task-goal>THE REAL GOAL</task-goal>" in prompts[1], (
+        "the recovered goal must be restated on the wake-up"
+    )
