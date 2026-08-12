@@ -1,4 +1,6 @@
 export * from "./actions";
+export * from "./analytics";
+export * from "./advanced-charts";
 export * from "./charts";
 export * from "./content";
 export * from "./forms";
@@ -8,6 +10,8 @@ export * from "./primitives";
 import type { ComponentApi } from "@a2ui/web_core/v0_9";
 
 import { actionApis } from "./actions";
+import { analyticsApis } from "./analytics";
+import { advancedChartApis } from "./advanced-charts";
 import { chartApis } from "./charts";
 import { contentApis } from "./content";
 import { formApis } from "./forms";
@@ -20,6 +24,8 @@ export const valuzBaseComponentApis = [
   ...contentApis,
   ...formApis,
   ...actionApis,
+  ...analyticsApis,
+  ...advancedChartApis,
   ...chartApis,
 ] as const satisfies readonly ComponentApi[];
 

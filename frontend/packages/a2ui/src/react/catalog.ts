@@ -3,6 +3,8 @@ import type { ReactComponentImplementation } from "@a2ui/react/v0_9";
 
 import { VALUZ_BASE_CATALOG_ID } from "../catalog";
 import { actionComponents } from "./actions";
+import { analyticsComponents } from "./analytics";
+import { advancedChartComponents } from "./advanced-charts";
 import { chartComponents } from "./charts";
 import { contentComponents } from "./content";
 import { formComponents } from "./forms";
@@ -13,6 +15,8 @@ export const valuzBaseComponents: ReactComponentImplementation[] = [
   ...contentComponents,
   ...formComponents,
   ...actionComponents,
+  ...analyticsComponents,
+  ...advancedChartComponents,
   ...chartComponents,
 ];
 

@@ -3,4 +3,6 @@
 @import "./styles/content.css";
 @import "./styles/forms.css";
 @import "./styles/actions.css";
+@import "./styles/analytics.css";
+@import "./styles/advanced-charts.css";
 @import "./styles/charts.css";

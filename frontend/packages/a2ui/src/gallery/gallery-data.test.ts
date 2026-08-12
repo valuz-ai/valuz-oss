@@ -4,13 +4,15 @@ import { valuzBaseComponentNames } from "../index";
 import { GALLERY_CATEGORIES, GALLERY_COMPONENT_NAMES } from "./gallery-data";
 
 describe("A2UI component Gallery", () => {
-  it("contains the five canonical base component categories", () => {
+  it("contains the canonical base component categories", () => {
     expect(GALLERY_CATEGORIES.map((category) => category.id)).toEqual([
       "layout",
       "content",
       "actions",
       "forms",
+      "analytics",
       "charts",
+      "advancedCharts",
     ]);
     expect(GALLERY_CATEGORIES.map((category) => category.specimens.length)).toEqual([
       9,
@@ -18,6 +20,8 @@ describe("A2UI component Gallery", () => {
       3,
       10,
       16,
+      16,
+      9,
     ]);
   });
 

@@ -1,4 +1,6 @@
 export * from "./actions";
+export * from "./analytics";
+export * from "./advanced-charts";
 export * from "./catalog";
 export * from "./charts";
 export * from "./content";

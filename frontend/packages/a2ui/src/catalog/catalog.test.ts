@@ -44,9 +44,16 @@ describe("Valuz A2UI base catalog", () => {
         "GaugeChart",
         "SparklineChart",
         "ScatterChart",
+        "MetricGroup",
+        "DataTable",
+        "ProvenanceBar",
+        "TimeSeriesChart",
+        "CandlestickChart",
+        "WaterfallChart",
+        "NetworkGraph",
       ]),
     );
-    expect(valuzBaseComponentNames).toHaveLength(51);
+    expect(valuzBaseComponentNames).toHaveLength(76);
     expect(valuzBaseComponents.map((component) => component.name)).toEqual(
       valuzBaseComponentNames,
     );

@@ -1,0 +1,57 @@
+.va2-pro-chart__empty { display: grid; height: 100%; place-items: center; border: 1px dashed var(--va2-border-strong); border-radius: var(--va2-radius-lg); color: var(--va2-text-muted); font-size: 12px; }
+.va2-pro-chart__svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.va2-pro-chart__axis { stroke: var(--va2-chart-grid); stroke-width: 1; }
+.va2-pro-chart__label { fill: var(--va2-text-muted); font: 10px var(--va2-font); }
+.va2-pro-chart__value { fill: var(--va2-text-body); font: 10px var(--va2-font); font-weight: 600; }
+
+.va2-candle__wick { stroke: var(--va2-success); stroke-width: 1.4; }
+.va2-candle__body { fill: var(--va2-success); }
+.va2-candle__volume { fill: color-mix(in oklab, var(--va2-success) 24%, transparent); }
+[data-trend="down"] > .va2-candle__wick { stroke: var(--va2-danger); }
+[data-trend="down"] > .va2-candle__body { fill: var(--va2-danger); }
+[data-trend="down"] > .va2-candle__volume { fill: color-mix(in oklab, var(--va2-danger) 24%, transparent); }
+
+.va2-waterfall__bar { fill: var(--va2-brand); }
+[data-kind="negative"] > .va2-waterfall__bar { fill: var(--va2-danger); }
+[data-kind="positive"] > .va2-waterfall__bar { fill: var(--va2-success); }
+[data-kind="total"] > .va2-waterfall__bar { fill: var(--va2-brand); }
+.va2-waterfall__bridge { stroke: var(--va2-text-disabled); stroke-dasharray: 3 2; }
+
+.va2-range-list,
+.va2-bullets { display: grid; gap: 12px; padding: 8px 2px; }
+.va2-range-list > div,
+.va2-bullets > div { display: grid; grid-template-columns: minmax(72px, 130px) minmax(120px, 1fr) 64px; align-items: center; gap: 10px; min-width: 0; }
+.va2-range-list > div > span,
+.va2-bullets > div > span { overflow: hidden; color: var(--va2-text-body); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.va2-range-list > div > div,
+.va2-bullets > div > div { position: relative; height: 8px; border-radius: var(--va2-radius-full); background: var(--va2-chart-track); }
+.va2-range-list i { position: absolute; top: 0; bottom: 0; border-radius: var(--va2-radius-full); background: color-mix(in oklab, var(--va2-brand) 32%, var(--va2-bg)); }
+.va2-range-list b { position: absolute; top: 50%; width: 10px; height: 10px; border: 2px solid var(--va2-bg); border-radius: 50%; background: var(--va2-brand); box-shadow: 0 0 0 1px var(--va2-brand); transform: translate(-50%, -50%); }
+.va2-range-list em { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--va2-warning); transform: translateX(-50%); }
+.va2-range-list strong,
+.va2-bullets strong { color: var(--va2-text); font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
+
+.va2-histogram { display: flex; height: 100%; align-items: flex-end; gap: 2px; padding: 12px 6px 24px; border-bottom: 1px solid var(--va2-chart-grid); }
+.va2-histogram > div { position: relative; display: flex; flex: 1; height: 100%; align-items: flex-end; }
+.va2-histogram i { width: 100%; min-height: 2px; border-radius: 3px 3px 0 0; background: var(--va2-brand); opacity: .86; }
+.va2-histogram span { position: absolute; bottom: -20px; left: 50%; color: var(--va2-text-muted); font-size: 9px; transform: translateX(-50%); }
+
+.va2-boxplot__whisker { stroke: var(--va2-text-icon); stroke-width: 1.4; }
+.va2-boxplot__box { fill: var(--va2-brand-soft); stroke: var(--va2-brand); stroke-width: 1.4; }
+.va2-boxplot__median { stroke: var(--va2-brand-text); stroke-width: 2; }
+
+.va2-bullets > div > div { height: 12px; }
+.va2-bullets i { position: absolute; inset: 2px auto 2px 0; border-radius: var(--va2-radius-full); background: var(--va2-brand); }
+.va2-bullets b { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--va2-text); transform: translateX(-50%); }
+
+.va2-calendar-heatmap { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(7px, 1fr); grid-template-rows: repeat(7, 1fr); gap: 3px; width: 100%; height: 100%; padding: 10px 2px; }
+.va2-calendar-heatmap i { min-width: 4px; min-height: 4px; border-radius: 2px; background: color-mix(in oklab, var(--va2-brand) calc(6% + var(--va2-intensity) * 78%), var(--va2-bg)); }
+
+.va2-network line { stroke: var(--va2-border-strong); stroke-opacity: .8; }
+.va2-network circle { stroke: var(--va2-bg); stroke-width: 2; opacity: .92; }
+.va2-network text { fill: var(--va2-text-body); font: 10px var(--va2-font); }
+
+@container (max-width: 400px) {
+  .va2-range-list > div,
+  .va2-bullets > div { grid-template-columns: 74px minmax(90px, 1fr) 48px; gap: 6px; }
+}
