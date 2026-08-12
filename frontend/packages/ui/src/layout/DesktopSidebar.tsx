@@ -640,6 +640,10 @@ export interface DesktopSidebarProps {
   /** When provided, the "+" Projects dropdown shows an "Import project…"
    *  item that calls this. Hidden otherwise (the "+" stays a single action). */
   onImportProject?: () => void;
+  /** Additional menu items rendered at the end of the Projects "+" dropdown.
+   * Overlay editions use this stable slot to add project creation/import
+   * actions without replacing the OSS menu. */
+  projectAddMenuItems?: ReactNode;
   /** Project row "..." actions. Pass ``undefined`` to hide an option. */
   onProjectOpenInFinder?: (projectId: string) => void;
   /** When provided, the project "..." menu shows an "Export project" item
@@ -679,6 +683,7 @@ export const DesktopSidebar = ({
   projectGroups,
   onAddProject,
   onImportProject,
+  projectAddMenuItems,
   onProjectOpenInFinder,
   onProjectExport,
   onProjectRename,
@@ -1150,7 +1155,7 @@ export const DesktopSidebar = ({
                   open={projectsSectionOpen}
                   onToggle={() => setProjectsSectionOpen((v) => !v)}
                   action={
-                    onImportProject ? (
+                    onImportProject || projectAddMenuItems ? (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <button
@@ -1172,10 +1177,18 @@ export const DesktopSidebar = ({
                               {t("project.create")}
                             </DropdownMenuItem>
                           )}
-                          <DropdownMenuItem onSelect={onImportProject}>
-                            <Upload />
-                            {t("project.import")}
-                          </DropdownMenuItem>
+                          {onImportProject && (
+                            <DropdownMenuItem onSelect={onImportProject}>
+                              <Upload />
+                              {t("project.import")}
+                            </DropdownMenuItem>
+                          )}
+                          {projectAddMenuItems && (
+                            <>
+                              <DropdownMenuSeparator />
+                              {projectAddMenuItems}
+                            </>
+                          )}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     ) : (
