@@ -248,10 +248,11 @@ class ActorRunner:
                     task_id,
                 )
                 return
-            renewer = asyncio.create_task(
-                self._renew_lease(lease, session_id, claim_token, fenced),
-                name=f"task-lease-{task_id}",
-            )
+            if lease.needs_renewal:
+                renewer = asyncio.create_task(
+                    self._renew_lease(lease, session_id, claim_token, fenced),
+                    name=f"task-lease-{task_id}",
+                )
         # Read once: every lead wake-up restates it (see _with_goal_restated).
         task_goal = await self._task_goal(task_id, project_id, user_id) if role == "lead" else ""
         prompt = initial_prompt
@@ -542,6 +543,11 @@ class ActorRunner:
         would deliver our shutdown to the live replacement and stop the wrong
         loop, leaving the task with no driver at all.
         """
+        if not lease.needs_renewal:
+            # Exclusivity was proven at acquisition (single-process deployment),
+            # so ``renew`` is a no-op that always succeeds — a loop waiting for
+            # it to fail would never exit. Nothing can fence us here either.
+            return
         while True:
             try:
                 await asyncio.sleep(TASK_LEASE_RENEW_INTERVAL_S)

@@ -32,6 +32,21 @@ OWNER = "local-test-owner"
 
 
 @pytest.fixture(autouse=True)
+def _multi_process_world(monkeypatch):
+    """These tests are about CROSS-process behaviour, so pin the world to it.
+
+    ``_exclusive_by_construction`` is ambient: it answers True whenever the
+    single-writer lock happens to be held in this interpreter, which another
+    test in the same session can arrange. Leases then need no renewal and the
+    fencing these tests exercise cannot happen at all — one of them span
+    forever waiting for a renewal that could never fail.
+    """
+    monkeypatch.setattr(
+        "valuz_agent.infra.execution_lease._exclusive_by_construction", lambda: False
+    )
+
+
+@pytest.fixture(autouse=True)
 def _reset_mailbox():
     mailbox_registry._boxes.clear()
     mailbox_registry._claims.clear()

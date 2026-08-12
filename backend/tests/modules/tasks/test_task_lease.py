@@ -28,6 +28,19 @@ OWNER = "local-test-owner"
 TASK = "t1"
 
 
+@pytest.fixture(autouse=True)
+def _multi_process_world(monkeypatch):
+    """Pin the world these tests are about: several processes, real leases.
+
+    ``_exclusive_by_construction`` is ambient — it answers True whenever the
+    single-writer lock happens to be held in this interpreter, and any test in
+    the session that boots the app leaves it held (``skills/test_staging_api``
+    does, and sorts before this file). Leases would then need no renewal, and
+    every fencing assertion below would be testing the desktop path instead.
+    """
+    monkeypatch.setattr(lease_mod, "_exclusive_by_construction", lambda: False)
+
+
 @pytest.fixture
 def as_process(monkeypatch):
     """Run a coroutine as if it were a given host process."""
@@ -226,8 +239,14 @@ def test_proven_exclusivity_skips_renewal_entirely(db_factory, as_process, monke
 
 
 def test_exclusivity_needs_BOTH_sqlite_and_the_held_lock(monkeypatch) -> None:
-    """Postgres, or SQLite with the lock skipped, must fall through to real leases."""
+    """Postgres, or SQLite with the lock skipped, must fall through to real leases.
+
+    Opts OUT of ``_multi_process_world``: this is the one test that exercises
+    the probe itself rather than the world it reports.
+    """
     from valuz_agent.infra import single_writer
+
+    monkeypatch.undo()  # drop the autouse stub over the function under test
 
     monkeypatch.setattr(lease_mod, "_HOLDER_ID", "proc-a")
     monkeypatch.setattr("valuz_agent.infra.db_urls.is_sqlite_runtime", lambda: False)

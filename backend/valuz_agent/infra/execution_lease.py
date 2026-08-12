@@ -185,6 +185,16 @@ class ExecutionLease:
     _last_renewed_at: int = 0
     _renewal_required: bool = True
 
+    @property
+    def needs_renewal(self) -> bool:
+        """False when exclusivity was already proven at acquisition.
+
+        Callers that run a renewal loop must check this: with renewal a no-op,
+        such a loop can never observe the ``False`` that ends it, so it would
+        spin for the life of the holder.
+        """
+        return self._renewal_required
+
     async def renew(self) -> bool:
         """Extend the TTL. ``False`` means we must stop working on this key.
 
@@ -376,11 +386,16 @@ async def hold_lease(
                 logger.warning("lease %s/%s lost while its holder was still working", scope, key)
                 return
 
-    renewer = asyncio.create_task(_renew_forever(), name=f"lease-{scope}-{key}")
+    renewer = (
+        asyncio.create_task(_renew_forever(), name=f"lease-{scope}-{key}")
+        if lease.needs_renewal
+        else None
+    )
     try:
         yield lease
     finally:
-        renewer.cancel()
+        if renewer is not None:
+            renewer.cancel()
         with contextlib.suppress(Exception):
             await lease.release()
 
