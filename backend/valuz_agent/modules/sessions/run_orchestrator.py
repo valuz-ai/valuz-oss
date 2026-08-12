@@ -24,7 +24,8 @@ import valuz_agent.boot.kernel  # noqa: F401
 from valuz_agent.adapters import kernel_client
 from valuz_agent.adapters.data_reader import data_reader
 from valuz_agent.infra.eventbus import EventBus
-from valuz_agent.infra.execution_lease import hold_lease
+from valuz_agent.infra.execution_lease import hold_lease, load_lease_states
+from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.sessions.pre_turn import chat_capability_hook
 from valuz_agent.modules.sessions.turn_driver import run_session_to_idle
 from valuz_agent.ports.message_context import HostRef
@@ -67,6 +68,25 @@ def is_draining_queue(session_id: str) -> bool:
     slip into the sub-second idle gap between two drained queue items.
     """
     return session_id in _active_drains
+
+
+async def is_draining_queue_anywhere(session_id: str) -> bool:
+    """Like :func:`is_draining_queue`, but true for a drain in ANY host process.
+
+    The set is per-process, so with several of them the plain check answered
+    "not draining" for a session another worker was actively draining — which
+    let ``send_message`` slip a turn into the middle of someone else's drain,
+    and left the steer path skipping the interrupt that hands the promoted head
+    over. The shared lease is the cross-process half of the same signal.
+
+    Local first: a drain we are running ourselves needs no query, so the hot
+    ``list_queue`` poll only reaches the database when the answer is not
+    already known here.
+    """
+    if session_id in _active_drains:
+        return True
+    state = (await load_lease_states(DRAIN_LEASE_SCOPE, [session_id])).get(session_id)
+    return state is not None and state.is_live(now_ms())
 
 
 def get_dispatching_queue_id(session_id: str) -> str | None:

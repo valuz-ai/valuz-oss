@@ -621,7 +621,10 @@ async def test_steer_promotes_and_silently_interrupts(monkeypatch) -> None:
     monkeypatch.setattr(kc, "interrupt", _interrupt)
     # service.py binds these into its own namespace (from ... import ...),
     # so patch them there, not on run_orchestrator.
-    monkeypatch.setattr(svc_mod, "is_draining_queue", lambda sid: False)
+    async def _not_draining(sid):
+        return False
+
+    monkeypatch.setattr(svc_mod, "is_draining_queue_anywhere", _not_draining)
     monkeypatch.setattr(svc_mod, "schedule_drain", _schedule_drain)
 
     svc = SessionService.__new__(SessionService)
@@ -662,7 +665,10 @@ async def test_steer_missing_item_is_idempotent(monkeypatch) -> None:
         return _Idle()
 
     monkeypatch.setattr(kc, "get_session", _get_session)
-    monkeypatch.setattr(svc_mod, "is_draining_queue", lambda sid: False)
+    async def _not_draining(sid):
+        return False
+
+    monkeypatch.setattr(svc_mod, "is_draining_queue_anywhere", _not_draining)
     monkeypatch.setattr(svc_mod, "schedule_drain", lambda sid, bus: None)
 
     svc = SessionService.__new__(SessionService)
@@ -744,3 +750,48 @@ async def test_drain_runs_when_no_peer_holds_it(monkeypatch) -> None:
         await asyncio.sleep(0.01)
 
     assert calls == ["go"]
+
+
+async def test_a_peer_process_drain_is_visible_as_draining(monkeypatch) -> None:
+    """Regression: `is_draining_queue` answered only for THIS process.
+
+    So while a sibling worker drained a session, this one reported "not
+    draining" — which let `send_message` slip a turn into the middle of that
+    drain, and made the steer path skip the interrupt that hands the promoted
+    head over. Nothing here is stubbed but the holder id: the peer takes the
+    real lease exactly as another process would.
+    """
+    from valuz_agent.infra import execution_lease as lease_mod
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    assert await run_orchestrator.is_draining_queue_anywhere("px1") is False
+
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "peer-process")
+    peer = await lease_mod.acquire_lease(
+        scope=run_orchestrator.DRAIN_LEASE_SCOPE, key="px1"
+    )
+    assert peer is not None
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "our-process")
+
+    assert await run_orchestrator.is_draining_queue_anywhere("px1") is True
+    # ...and stops being true once the peer hands it back.
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "peer-process")
+    await peer.release()
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "our-process")
+    assert await run_orchestrator.is_draining_queue_anywhere("px1") is False
+
+
+async def test_our_own_drain_needs_no_query(monkeypatch) -> None:
+    """The hot `list_queue` poll must short-circuit on local state."""
+    from valuz_agent.infra import execution_lease as lease_mod
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    def _boom(*a, **k):
+        raise AssertionError("a locally-known drain must not hit the database")
+
+    run_orchestrator._active_drains.add("px2")
+    try:
+        monkeypatch.setattr(lease_mod, "load_lease_states", _boom)
+        assert await run_orchestrator.is_draining_queue_anywhere("px2") is True
+    finally:
+        run_orchestrator._active_drains.discard("px2")

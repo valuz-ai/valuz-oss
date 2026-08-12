@@ -108,7 +108,7 @@ from valuz_agent.modules.sessions.run_orchestrator import (
     _derive_session_name,
     _run_agent_background,
     get_dispatching_queue_id,
-    is_draining_queue,
+    is_draining_queue_anywhere,
     schedule_drain,
 )
 from valuz_agent.modules.sessions.schemas import SessionWorktreeSpec
@@ -1778,7 +1778,7 @@ class SessionService:
             paused=paused,
             # A dispatched item is invisible in ``items`` — surface the in-flight
             # drain so per-turn re-subscribers keep following (§14.5).
-            draining=is_draining_queue(session_id),
+            draining=await is_draining_queue_anywhere(session_id),
             # ...and surface the dispatched head itself so its bubble survives
             # the gap until the turn's user message lands in the transcript.
             dispatching=_queued_input_to_dto(dispatching) if dispatching else None,
@@ -1837,7 +1837,7 @@ class SessionService:
         # Idle-kick: nothing in flight → drain now so the item doesn't wait for a
         # turn boundary that never comes. If running / already draining, the
         # in-flight drain picks it up on its next peek.
-        if status != "running" and not is_draining_queue(session_id):
+        if status != "running" and not await is_draining_queue_anywhere(session_id):
             schedule_drain(session_id, self._bus)
 
         return await self.list_queue(session_id, user_id=user_id)
@@ -1875,7 +1875,7 @@ class SessionService:
             raise _kernel_session_not_found(session_id)
         await project_index.set_queue_paused(session_id, False)
         status = _map_kernel_status(session.status)
-        if status != "running" and not is_draining_queue(session_id):
+        if status != "running" and not await is_draining_queue_anywhere(session_id):
             schedule_drain(session_id, self._bus)
         return await self.list_queue(session_id, user_id=user_id)
 
@@ -1913,7 +1913,7 @@ class SessionService:
         await project_index.set_queue_paused(session_id, False)
 
         status = _map_kernel_status(session.status)
-        if status == "running" or is_draining_queue(session_id):
+        if status == "running" or await is_draining_queue_anywhere(session_id):
             # Silent interrupt: cut the in-flight turn so the existing post-turn
             # drain picks up the promoted head. Low-level kernel interrupt only —
             # no user_interrupt stamp, no re-pause (that's what makes it "silent";
