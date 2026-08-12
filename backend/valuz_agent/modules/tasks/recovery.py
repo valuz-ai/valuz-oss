@@ -37,6 +37,8 @@ from valuz_agent.modules.tasks.datastore import (
     TaskSessionDatastore,
     pick_lead_run,
 )
+from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.modules.tasks.lease import is_driven_elsewhere, load_lease_states
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
 from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 from valuz_agent.modules.tasks.member_state import (
@@ -90,8 +92,18 @@ class RecoveryService:
                 (t.id, t.project_id, t.user_id) for t in await TaskDatastore(db).list_active()
             ]
         recovered = 0
+        skipped = 0
         for task_id, project_id, user_id in active:
             try:
+                # This sweep is cross-owner and unconditional, so with several
+                # host processes every one of them used to re-drive every active
+                # task — N lead loops, N× model spend, competing plan CAS
+                # writes. A task another process is actively driving is not
+                # orphaned; leave it alone. Advisory only: the authoritative
+                # guard is the lease acquisition inside the lead's actor loop.
+                if await is_driven_elsewhere(task_id):
+                    skipped += 1
+                    continue
                 if await self._recover_one_task(task_id, project_id, user_id=user_id):
                     recovered += 1
             except Exception:  # noqa: BLE001
@@ -99,6 +111,10 @@ class RecoveryService:
         if recovered:
             logger.warning(
                 "recover_active_tasks: reconciled + re-drove %d active task(s)", recovered
+            )
+        if skipped:
+            logger.info(
+                "recover_active_tasks: left %d active task(s) to their current driver", skipped
             )
         return recovered
 
@@ -667,8 +683,13 @@ class RecoveryService:
 # process stays up (uncaught loop crash, failed finalize) would sit ``active``
 # forever with nothing dispatched. This periodic sweep is the same concern as
 # the rest of this module — notice a dead lead, make the task resumable — on a
-# timer instead of at boot. Liveness signal: the lead's mailbox registration
-# (the loop registers on entry, unregisters in its ``finally``); a task must
+# timer instead of at boot.
+#
+# Liveness signal: the task's LEASE (``tasks/lease.py``) — shared state, so it
+# answers for every host process. It used to be the lead's mailbox
+# registration, which is process-local: with more than one process this sweep
+# read every sibling's healthy lead as dead and blocked live tasks mid-run.
+# A task with no lease row is UNKNOWN, never dead. On top of that a task must
 # look dead for ``confirm_sweeps`` consecutive sweeps before we act, and the
 # intervention is deliberately minimal: ``blocked`` + notification, never a
 # respawn.
@@ -782,6 +803,13 @@ class TaskHealthMonitor:
             # full-row scan plus one list_runs per active task.
             candidates = await TaskDatastore(db).list_active_lead_bindings()
 
+        # Liveness is the LEASE, not the mailbox. ``mailbox_registry.is_owned``
+        # is process-local, so with more than one host process it reported every
+        # sibling process's healthy lead as dead and this sweep blocked it
+        # mid-run. The lease is shared state, so it answers for all of them.
+        leases = await load_lease_states([task_id for task_id, *_ in candidates])
+        now = now_ms()
+
         acted: list[str] = []
         live_task_ids: set[str] = set()
         for task_id, user_id, project_id, lead_session_id in candidates:
@@ -791,12 +819,19 @@ class TaskHealthMonitor:
                 # it to boot recovery / user action.
                 self._suspect.pop(task_id, None)
                 continue
-            if mailbox_registry.is_owned(lead_session_id):
-                # Live lead loop (running a turn, or parked on its mailbox
-                # awaiting member_done / a user question) — healthy. OWNED,
-                # not merely registered: a box pre-seeded for a loop that
-                # never started would otherwise read as healthy forever, and
-                # this monitor exists to catch exactly that task.
+            lease = leases.get(task_id)
+            if lease is None:
+                # No lease row: nobody has claimed this task under the lease
+                # scheme. Either it predates the table or its driver is still on
+                # an older build mid-rollout. UNKNOWN is not dead — refusing to
+                # act is what makes this change safe to roll out gradually.
+                self._suspect.pop(task_id, None)
+                continue
+            if lease.is_live(now) or mailbox_registry.is_owned(lead_session_id):
+                # A live lease means someone (here or elsewhere) is driving.
+                # The local ``is_owned`` check stays as a second opinion: if a
+                # loop in THIS process holds the session, we know first-hand it
+                # is alive, whatever the lease row says.
                 self._suspect.pop(task_id, None)
                 continue
             # Dead-looking: the loop has exited but the task is still active.
@@ -833,9 +868,13 @@ class TaskHealthMonitor:
             task = await task_ds.get_task_by_project(user_id, project_id, task_id)
             if task is None or task.status != "active":
                 return False
-            # Double-check liveness right before writing — the loop may have
-            # re-registered (a resume landed) in the sweep gap.
+            # Double-check liveness right before writing — a driver may have
+            # taken the task over (a resume landed, or a peer picked it up) in
+            # the sweep gap. Both oracles, for the same reason as in the sweep.
             if mailbox_registry.is_owned(lead_session_id):
+                return False
+            lease = (await load_lease_states([task_id])).get(task_id)
+            if lease is None or lease.is_live(now_ms()):
                 return False
             reason = (
                 "The lead stopped without finishing the task (the process "

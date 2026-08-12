@@ -98,7 +98,7 @@ def _runner_recording(calls: list[str], turn_status: str) -> ActorRunner:
     return runner
 
 
-def test_actor_loop_draining_skips_turn_and_finalize() -> None:
+def test_actor_loop_draining_skips_turn_and_finalize(db_factory) -> None:
     calls: list[str] = []
     runner = _runner_recording(calls, "idle")
     lifecycle.set_draining()
@@ -119,7 +119,7 @@ def test_actor_loop_draining_skips_turn_and_finalize() -> None:
     assert "finalize" not in calls
 
 
-def test_actor_loop_runs_normally_when_not_draining() -> None:
+def test_actor_loop_runs_normally_when_not_draining(db_factory) -> None:
     calls: list[str] = []
     # terminal status → the loop exits after a single turn
     runner = _runner_recording(calls, "terminated")
@@ -202,7 +202,7 @@ def _bg_runner(calls: list[str], fake: _BgAwareCollaborators) -> ActorRunner:
     return runner
 
 
-def test_idle_ttl_does_not_reap_a_session_with_background_work() -> None:
+def test_idle_ttl_does_not_reap_a_session_with_background_work(db_factory) -> None:
     """Regression for a real task that was closed while still working.
 
     A lead spawned two ``run_in_background`` subagents. Its own turn ended, so
@@ -235,7 +235,7 @@ def test_idle_ttl_does_not_reap_a_session_with_background_work() -> None:
     assert calls.count("finalize") == 1
 
 
-def test_idle_ttl_extension_is_bounded() -> None:
+def test_idle_ttl_extension_is_bounded(db_factory) -> None:
     """A session wedged ``running`` forever must not pin the loop forever."""
     from valuz_agent.modules.tasks.actor_runner import MAX_IDLE_EXTENSIONS
 

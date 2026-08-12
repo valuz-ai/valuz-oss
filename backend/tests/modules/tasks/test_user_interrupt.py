@@ -116,6 +116,7 @@ async def test_interrupted_member_breaks_without_per_turn_notify() -> None:
 
 async def test_lead_loop_member_done_cancelled_skips_mark_in_review(
     monkeypatch: pytest.MonkeyPatch,
+    db_factory,
 ) -> None:
     """A cancelled/terminated member_done must not flip the node to in_review."""
     orch = TaskOrchestrator()

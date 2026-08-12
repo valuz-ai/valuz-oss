@@ -37,6 +37,11 @@ TaskSession (valuz_task_session):
   ``result_manifest`` is populated when the session completes. ``subtask_key``
   backlinks a subtask run to its plan node on TaskRow.plan (VALUZ-TASK).
 
+TaskLease (valuz_task_lease):
+  Which host process currently drives a task, with a TTL it must renew.
+  One row per task; see ``modules/tasks/lease.py`` for why it exists (the
+  actor loops and the mailbox are process-local, the tasks they drive are not).
+
 No FK constraints (repo convention — business keys, FKs OFF).
 Mirror modules/agents/models.py style.
 """
@@ -202,3 +207,37 @@ class TaskSessionRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     result_manifest: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     # Populated when session ends — Unix epoch ms (UTC), like every host instant.
     ended_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class TaskLeaseRow(Base, TimestampMixin, UserMixin):
+    """Which process currently drives a task — see ``modules/tasks/lease.py``.
+
+    One row per task (``task_id`` IS the primary key: a task has at most one
+    driver). ``PrimaryKeyMixin`` is deliberately not used — a surrogate ``id``
+    would let two rows exist for one task, which is the single thing this table
+    is here to prevent.
+    """
+
+    __tablename__ = "valuz_task_lease"
+
+    __table_args__ = (
+        # The watchdog sweeps expired leases; the owner column inherited from
+        # ``UserMixin`` is indexed for the per-owner reads.
+        Index("ix_valuz_task_lease_expires", "lease_expires_at"),
+    )
+
+    task_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # The lead run this lease drives. Informational: the lease is keyed by task,
+    # but a stale row naming a different lead is a useful diagnostic.
+    lead_session_id: Mapped[str] = mapped_column(String(36))
+    # Opaque process identity — host:pid:boot. Compared, never parsed.
+    holder_id: Mapped[str] = mapped_column(String(128))
+    # Bumped on EVERY acquisition, including re-acquisition by the same process
+    # (mirrors ``mailbox_registry.claim``: a later claim invalidates earlier
+    # tokens). A holder whose token no longer matches has been fenced and must
+    # stop driving.
+    fence_token: Mapped[int] = mapped_column(BigInteger, default=1)
+    # held | released
+    state: Mapped[str] = mapped_column(String(16), default="held")
+    heartbeat_at: Mapped[int] = mapped_column(BigInteger, default=0)
+    lease_expires_at: Mapped[int] = mapped_column(BigInteger, default=0)

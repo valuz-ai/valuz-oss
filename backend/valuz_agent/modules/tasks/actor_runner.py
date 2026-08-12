@@ -16,6 +16,7 @@ the concrete services beats duck typing that once let delegators rot unnoticed.
 # ruff: noqa: I001
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Literal, Protocol
 
@@ -24,6 +25,11 @@ from valuz_agent.adapters.data_reader import data_reader
 from valuz_agent.infra.lifecycle import is_draining
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.tasks.datastore import TaskDatastore
+from valuz_agent.modules.tasks.lease import (
+    TASK_LEASE_RENEW_INTERVAL_S,
+    TaskLease,
+    acquire_task_lease,
+)
 from valuz_agent.modules.tasks.task_state import NON_REVIEWABLE_DONE
 from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 from valuz_agent.modules.sessions.pre_turn import always_on_mcp_hook
@@ -196,6 +202,34 @@ class ActorRunner:
             if idle_ttl is not None
             else (LEAD_IDLE_TTL_S if role == "lead" else MEMBER_IDLE_TTL_S)
         )
+        # CROSS-PROCESS ownership, before anything process-local. A lead may
+        # only drive a task no other process is driving; refusing here is what
+        # stops N booting workers from putting N lead loops on one task, and
+        # what lets the watchdog trust an expired lease as "really dead".
+        # Members are not leased: they are dispatched by a lead that already
+        # holds the task's lease.
+        lease: TaskLease | None = None
+        fenced = asyncio.Event()
+        renewer: asyncio.Task[None] | None = None
+        if role == "lead":
+            lease = await acquire_task_lease(
+                user_id=user_id, task_id=task_id, lead_session_id=session_id
+            )
+            if lease is None:
+                # ``spawn_actor`` claimed the mailbox eagerly for a loop that is
+                # not going to run. Drop it, or ``is_owned`` reports a reader
+                # this process does not have for the life of the process.
+                mailbox_registry.unregister(session_id)
+                logger.info(
+                    "actor loop %s (lead): task %s already has a driver — exiting",
+                    session_id,
+                    task_id,
+                )
+                return
+            renewer = asyncio.create_task(
+                self._renew_lease(lease, session_id, fenced),
+                name=f"task-lease-{task_id}",
+            )
         claim_token = mailbox_registry.claim(session_id)
         # Read once: every lead wake-up restates it (see _with_goal_restated).
         task_goal = (
@@ -219,6 +253,12 @@ class ActorRunner:
                 # turn that immediately hits a dead pipe). Break and let the
                 # ``finally`` leave the session for boot recovery.
                 if is_draining():
+                    exited_on_shutdown = True
+                    break
+                # Another process took this task over while we were mid-turn.
+                # Treat it exactly like a shutdown: leave WITHOUT finalizing,
+                # so we don't race the new driver into a terminal state.
+                if fenced.is_set():
                     exited_on_shutdown = True
                     break
                 final_status = await self.run_turn(session_id, prompt, user_id=user_id)
@@ -343,6 +383,17 @@ class ActorRunner:
                         else msg.text
                     )
         finally:
+            if renewer is not None:
+                renewer.cancel()
+            if lease is not None and not fenced.is_set():
+                # Hand the task back so a peer (or this process after a restart)
+                # can pick it up immediately instead of waiting out the TTL.
+                # Best-effort: a failure here must not mask the loop's own exit,
+                # and the lease expires on its own anyway.
+                try:
+                    await lease.release()
+                except Exception:  # noqa: BLE001
+                    logger.debug("actor loop %s: lease release failed", session_id)
             mailbox_registry.release(session_id, claim_token)
             # When draining, skip the ENTIRE finalize. ``_finalize_actor`` touches
             # the kernel store (status flip) AND the host DB (lead auto-finalize /
@@ -362,6 +413,46 @@ class ActorRunner:
                     via_shutdown=exited_on_shutdown,
                     user_id=user_id,
                 )
+
+    @staticmethod
+    async def _renew_lease(
+        lease: TaskLease, session_id: str, fenced: asyncio.Event
+    ) -> None:
+        """Keep the task lease alive; signal + wake the loop if we lose it.
+
+        Runs as its own task on purpose: the loop spends most of its life
+        blocked inside ``run_turn`` (minutes) or parked on the mailbox (up to
+        the idle TTL), so a renewal folded into the loop body would starve and
+        the lease would expire under a perfectly healthy driver.
+
+        Losing the lease means another process is now driving. Setting the
+        event is not enough — the loop may be parked on its mailbox for another
+        half hour — so we also post the ``shutdown`` message that every other
+        externally-managed stop uses. Both paths land on ``exited_on_shutdown``,
+        which skips finalize, so the new driver's state is never overwritten.
+        """
+        while True:
+            try:
+                await asyncio.sleep(TASK_LEASE_RENEW_INTERVAL_S)
+            except asyncio.CancelledError:
+                return
+            try:
+                still_ours = await lease.renew()
+            except Exception:  # noqa: BLE001
+                # A transient DB failure is not eviction — the TTL spans several
+                # renewals, so retry rather than abandoning a live task.
+                logger.debug("task lease renew failed for %s; retrying", lease.task_id)
+                continue
+            if still_ours:
+                continue
+            fenced.set()
+            logger.warning(
+                "actor loop %s: lost the lease on task %s (taken over elsewhere) — stopping",
+                session_id,
+                lease.task_id,
+            )
+            mailbox_registry.put(session_id, InboxMsg(kind="shutdown"))
+            return
 
     @staticmethod
     async def _task_goal(task_id: str, project_id: str, user_id: str) -> str:
