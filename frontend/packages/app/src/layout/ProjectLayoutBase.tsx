@@ -19,6 +19,7 @@ import {
   useGlobalShortcuts,
   usePanelStore,
   useConnectorAlert,
+  SlotRenderer,
   refreshConnectorAlert,
   useRegistryStore,
   useRunningRuns,
@@ -185,6 +186,10 @@ export function ProjectLayoutBase({
   const navItemsList = useNavItems();
   const navGroupsList = useNavGroups();
   const desktopRoutes = useRegistryStore((state) => state.desktopRoutes);
+  const hasProjectAddMenuItems = useRegistryStore(
+    (state) =>
+      (state.slots["sidebar.projects.add.menu-items"]?.length ?? 0) > 0,
+  );
   const fetchSessions = useSessionStore((state) => state.fetchSessions);
   const openConversationProjectId = useSessionStore(
     (state) => state.activeProjectId,
@@ -980,6 +985,11 @@ export function ProjectLayoutBase({
             collapsed={sidebarCollapsed}
             onAddProject={() => setCreateOpen(true)}
             onImportProject={() => importInputRef.current?.click()}
+            projectAddMenuItems={
+              hasProjectAddMenuItems ? (
+                <SlotRenderer name="sidebar.projects.add.menu-items" />
+              ) : undefined
+            }
             onProjectOpenInFinder={(projectId) => {
               const ws = allProjects.find(
                 (project) => project.id === projectId,

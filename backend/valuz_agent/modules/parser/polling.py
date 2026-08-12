@@ -31,12 +31,16 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from valuz_agent.infra.execution_lease import hold_lease
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.parser.datastore import PollingTaskDatastore
 from valuz_agent.modules.parser.models import PollingTaskRow
 from valuz_agent.ports.parser_backend import ParseResult
 
 logger = logging.getLogger(__name__)
+
+# Lease namespace for "who is driving this polling row".
+POLLING_LEASE_SCOPE = "polling"
 
 
 # ----- outcomes returned by handlers ----------------------------------
@@ -264,7 +268,16 @@ class PollingScheduler:
         async with async_unit_of_work(commit=False) as db:
             due = await PollingTaskDatastore(db).list_due(now=now, limit=32)
         for row in due:
-            await self._process_row(row)
+            # One claim per row. This tick runs in every host process, and
+            # ``_process_row`` calls ``handler.submit`` — an EXTERNAL side
+            # effect. Reading due rows with no claim meant N processes could
+            # each submit the same parse job to the remote service, once per
+            # process, and bill for it. Latent while no cloud handler is
+            # registered; the defect is not.
+            async with hold_lease(scope=POLLING_LEASE_SCOPE, key=row.id) as lease:
+                if lease is None:
+                    continue  # a peer is already driving this row
+                await self._process_row(row)
 
     async def _process_row(self, row: PollingTaskRow) -> None:
         handler = self._handlers.get(row.kind)

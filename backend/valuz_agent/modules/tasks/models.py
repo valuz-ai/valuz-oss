@@ -37,6 +37,11 @@ TaskSession (valuz_task_session):
   ``result_manifest`` is populated when the session completes. ``subtask_key``
   backlinks a subtask run to its plan node on TaskRow.plan (VALUZ-TASK).
 
+Execution ownership is NOT here: which process drives a task lives in the
+shared ``valuz_execution_lease`` table (``infra/execution_lease.py``, viewed
+through ``modules/tasks/lease.py``), because the same primitive serves several
+subsystems.
+
 No FK constraints (repo convention — business keys, FKs OFF).
 Mirror modules/agents/models.py style.
 """

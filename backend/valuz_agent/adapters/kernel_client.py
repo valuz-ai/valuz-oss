@@ -880,13 +880,22 @@ def _accepts(fn: Any, name: str) -> bool:
 
 
 async def _kernel_for(
-    user_id: str, scope: SandboxScope | None = None, *, new_turn: bool = False
+    user_id: str,
+    scope: SandboxScope | None = None,
+    *,
+    new_turn: bool = False,
+    session_id: str = "",
 ) -> KernelClient:
     """Resolve the execution kernel client for ``user_id`` via the allocator.
 
     ``new_turn`` marks a fresh conversation turn (``run_turn``); a scoped
     allocator may provision a NEW instance per turn for chat. Passed only when
-    the bound allocator's ``ensure`` accepts it (additive contract)."""
+    the bound allocator's ``ensure`` accepts it (additive contract).
+
+    ``session_id`` is the host-preminted id of the session this allocation
+    serves; a task-scoped allocator may stamp it into instance metadata when a
+    member reuses the shared task instance. Additive (``_accepts``-gated) - old
+    allocators ignore it."""
     from valuz_agent.ports.extensions import ext
 
     alloc = getattr(ext, "sandbox_allocator", None)
@@ -897,6 +906,8 @@ async def _kernel_for(
         kwargs["scope"] = scope
         if new_turn and _accepts(alloc.ensure, "new_turn"):
             kwargs["new_turn"] = True
+    if session_id and _accepts(alloc.ensure, "session_id"):
+        kwargs["session_id"] = session_id
     lease = await alloc.ensure(**kwargs)
     if lease is None or lease.endpoint is None:
         return client  # "use the process/global client" (BootSingletonAllocator default)
@@ -995,7 +1006,9 @@ async def create_session(
         scope = await _scope_for(user_id, req_id)
     elif scope is not None and req_id:
         _scope_cache_put(req_id, scope)
-    return await (await _kernel_for(user_id, scope)).create_session(user_id, req)
+    return await (
+        await _kernel_for(user_id, scope, session_id=req_id or "")
+    ).create_session(user_id, req)
 
 
 async def runtime_availability() -> dict[str, RuntimeAvailability]:

@@ -366,6 +366,38 @@ class CoordinationService:
             out["preempted_by_inject"] = True
         return out
 
+    async def reconcile_finished_members(
+        self, *, task_id: str, project_id: str, user_id: str
+    ) -> list[InboxMsg]:
+        """Members that finished but whose ``member_done`` never arrived here.
+
+        Same backstop as ``_heartbeat_pending``, exposed for the BETWEEN-turns
+        wait. Inside a turn the lead already re-reads durable state every few
+        seconds; parked on its mailbox it used to read nothing at all, so a
+        result posted into another process's queue was simply never seen.
+
+        Returns ready-to-consume ``member_done`` messages, so the loop keeps one
+        formatting path whether a result arrived by mailbox or by reconcile.
+        """
+        async with async_unit_of_work(commit=False) as db:
+            row = await TaskDatastore(db).get_task_by_project(user_id, project_id, task_id)
+        if row is None:
+            return []
+        pending = {n.key for n in TaskPlan.from_dict(row.plan).nodes if n.status == "in_progress"}
+        if not pending:
+            return []
+        collected = await self._heartbeat_pending(
+            task_id=task_id, project_id=project_id, pending_keys=pending, user_id=user_id
+        )
+        return [
+            InboxMsg(
+                kind="member_done",
+                from_session=str(entry.get("session_id") or ""),
+                payload=entry,
+            )
+            for entry in collected.values()
+        ]
+
     async def _heartbeat_pending(
         self,
         *,
@@ -576,9 +608,7 @@ class CoordinationService:
     # actor-loop role callbacks (driven by ActorRunner via the bound host)
     # ------------------------------------------------------------------
 
-    async def notify_lead_member_idle(
-        self, session_id: str, status: str, user_id: str
-    ) -> None:
+    async def notify_lead_member_idle(self, session_id: str, status: str, user_id: str) -> None:
         """After a member turn: ``member_done`` to the lead's inbox + a
         ``subtask_reported`` timeline event. Best-effort — a missing lead inbox
         (lead already finished) drops the mailbox message.
@@ -677,9 +707,7 @@ class CoordinationService:
             # close the task out from under work that is still running.
             return False
         async with async_unit_of_work(commit=False) as db:
-            task = await TaskDatastore(db).get_task_by_project(
-                user_id, project_id, task_id
-            )
+            task = await TaskDatastore(db).get_task_by_project(user_id, project_id, task_id)
             if task is None or task.status != "active":
                 return True  # already closed (finish_task/stop) — let the loop end
             try:
