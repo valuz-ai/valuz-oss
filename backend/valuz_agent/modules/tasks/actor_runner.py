@@ -104,6 +104,12 @@ class ActorCoordinator(Protocol):
         """True when a lead has nothing left to wait for and should stop looping."""
         ...
 
+    async def member_already_settled(
+        self, *, task_id: str, project_id: str, member_session_id: str, user_id: str
+    ) -> bool:
+        """Has this member's work already been dealt with (or the task ended)?"""
+        ...
+
     async def reconcile_finished_members(
         self, *, task_id: str, project_id: str, user_id: str
     ) -> list[InboxMsg]:
@@ -401,6 +407,35 @@ class ActorRunner:
                     exited_on_shutdown = True
                     break
                 if msg.kind == "member_done":
+                    # Already handled? Then this is a duplicate, and running a
+                    # turn on it costs a real model call for nothing.
+                    #
+                    # It happens: the in-turn backstop reads durable state, so
+                    # it can synthesize a member's result while that member is
+                    # still collecting its manifest. ``await_members`` returns,
+                    # the lead reviews and moves on, and the real ``member_done``
+                    # lands in a mailbox nobody is draining — surfacing here
+                    # after the turn ends. Measured on qa: two members, two
+                    # wasted turns, both AFTER the task had already completed
+                    # (finish_task's shutdown was queued behind them, FIFO).
+                    #
+                    # Deliberately checked against durable state rather than by
+                    # de-duplicating the mailbox: any producer can repeat, and
+                    # this asks the only question that matters — is there still
+                    # work here for the lead to do?
+                    if role == "lead" and await coordinator.member_already_settled(
+                        task_id=task_id,
+                        project_id=project_id,
+                        member_session_id=msg.from_session,
+                        user_id=user_id,
+                    ):
+                        logger.info(
+                            "actor loop %s (lead): dropping a member_done for %s — "
+                            "already settled, no turn needed",
+                            session_id,
+                            msg.from_session,
+                        )
+                        continue
                     # Lead-side, single-actor (D7): flip the member's plan node
                     # to in_review so the lead reviews it (member-idle ≠ done).
                     # ONLY for a delivering member: a failed/cancelled

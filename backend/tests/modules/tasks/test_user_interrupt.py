@@ -119,6 +119,30 @@ async def test_lead_loop_member_done_cancelled_skips_mark_in_review(
     db_factory,
 ) -> None:
     """A cancelled/terminated member_done must not flip the node to in_review."""
+    # The loop now asks durable state whether a member_done is still worth a
+    # turn, so the task has to exist for this test to exercise the path it is
+    # about. Without a row the answer is "nothing left to drive" — correct in
+    # production (a purged task should not wake anyone), just not this test.
+    db = db_factory()
+    try:
+        db.add(
+            TaskRow(
+                id="t1",
+                user_id=LOCAL_USER_ID,
+                project_id="w1",
+                file_path="tasks/t1.md",
+                title="T",
+                goal="g",
+                status="active",
+                lead_agent_slug="lead",
+                current_holder="lead",
+                plan={"subtasks": []},
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
     orch = TaskOrchestrator()
     marked: list[str] = []
     turns = 0
