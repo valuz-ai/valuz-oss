@@ -154,8 +154,10 @@ function shouldSkipPath(rel) {
   return (
     rel.includes("/node_modules/") ||
     rel.includes("/dist/") ||
+    (rel.includes("/dist-demo/") || rel.endsWith("/dist-demo")) ||
     rel.includes("/.turbo/") ||
     rel.startsWith("apps/desktop/src/renderer/assets/") ||
-    rel === "packages/ui/src/styles/project.css"
+    rel === "packages/ui/src/styles/project.css" ||
+    rel === "packages/a2ui/src/styles/base.css"
   );
 }

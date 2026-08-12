@@ -24,6 +24,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@valuz/a2ui": "workspace:*",
     "@valuz/core": "workspace:*",
     "@valuz/shared": "workspace:*",
     "@valuz/ui": "workspace:*",

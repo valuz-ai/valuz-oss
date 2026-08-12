@@ -339,9 +339,9 @@ async def test_completer_sync_when_no_tool_use_id(patched):
 #     ) in caplog.text
 #
 
-_CREATE = '{"version":"v0.9","createSurface":{"surfaceId":"main","catalogId":"openui"}}'
-_SEC1 = '{"version":"v0.9","updateComponents":{"surfaceId":"main","components":[{"id":"root","component":"Stack","children":["a"]}]}}'
-_SEC2 = '{"version":"v0.9","updateComponents":{"surfaceId":"main","components":[{"id":"a","component":"Text","text":"done"}]}}'
+_CREATE = '{"version":"v0.9.1","createSurface":{"surfaceId":"main","catalogId":"https://valuz.io/a2ui/catalogs/base/v1"}}'
+_SEC1 = '{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":[{"id":"root","component":"Stack","children":["a"]}]}}'
+_SEC2 = '{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":[{"id":"a","component":"Text","text":"done"}]}}'
 
 
 def _continuation_patched(tmp_path, monkeypatch, turn_outputs):

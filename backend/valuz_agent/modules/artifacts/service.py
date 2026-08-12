@@ -79,7 +79,7 @@ class DeliveryRequest:
     #: The file to record. Mutually exclusive with ``content``: a request
     #: carries a path OR the bytes themselves, never both.
     abs_path: Path | None = None
-    #: The second input form. A generated document (A2UI/OpenUI JSON) exists
+    #: The second input form. A generated document (A2UI JSON) exists
     #: only as a tool result — there is no file to point at, and asking the
     #: producer to write one first would put a temp-file dance in front of
     #: every generation. ``file_name`` names it; the snapshot still lands on

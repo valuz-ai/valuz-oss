@@ -207,4 +207,3 @@ class TaskSessionRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     result_manifest: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     # Populated when session ends — Unix epoch ms (UTC), like every host instant.
     ended_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-

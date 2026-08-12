@@ -615,7 +615,7 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    # ---- FS-14 — generative-UI scratch cwd (openui-generative-ui §5) ----
+    # ---- FS-14 — generative-UI scratch cwd ----
     #
     # ONE fixed cwd shared by every ephemeral generate_ui session. Runtimes key
     # per-project artifacts on the session cwd (claude-agent-sdk keeps

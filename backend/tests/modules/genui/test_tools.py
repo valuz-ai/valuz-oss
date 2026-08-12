@@ -42,7 +42,7 @@ def patched(monkeypatch):
     monkeypatch.setattr(t, "resolve_model_provider", _resolve)
 
     async def _fake_completer(prompt):
-        return '{"version":"v0.9","createSurface":{"surfaceId":"s"}}'
+        return '{"version":"v0.9.1","createSurface":{"surfaceId":"s"}}'
 
     monkeypatch.setattr(t, "_make_completer", lambda **kw: _fake_completer)
 
@@ -65,7 +65,7 @@ async def test_handler_defaults_to_a2ui_payload(monkeypatch, patched):
 
     async def _comp(prompt):
         seen["prompt"] = prompt
-        return '{"version":"v0.9","createSurface":{"surfaceId":"dashboard"}}'
+        return '{"version":"v0.9.1","createSurface":{"surfaceId":"dashboard"}}'
 
     def _make(**kw):
         seen["make_kwargs"] = kw
@@ -79,10 +79,10 @@ async def test_handler_defaults_to_a2ui_payload(monkeypatch, patched):
     assert res.is_error is False
     assert json.loads(res.content) == {
         "protocol": "a2ui-json",
-        "content": '{"version":"v0.9","createSurface":{"surfaceId":"dashboard"}}',
+        "content": '{"version":"v0.9.1","createSurface":{"surfaceId":"dashboard"}}',
     }
     assert "A2UI" in seen["prompt"]
-    assert seen["make_kwargs"]["output_format"] == "A2UI v0.9 JSON message stream"
+    assert seen["make_kwargs"]["output_format"] == "A2UI v0.9.1 JSON message stream"
     assert "A2UI" in seen["make_kwargs"]["session_instructions"]
 
 
@@ -121,6 +121,78 @@ async def test_handler_passes_data_into_prompt(monkeypatch, patched):
     handler = build_generative_ui_tool_defs()[0].handler
     await handler({"request": "table", "data": {"rows": [1, 2]}}, _ctx())
     assert "rows" in seen["prompt"]
+
+
+async def test_hosted_edit_passes_the_bound_a2ui_revision_into_prompt(
+    monkeypatch, patched
+):
+    current = (
+        '{"version":"v0.9.1","createSurface":{"surfaceId":"main"}}\n'
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"main",'
+        '"components":[{"id":"root","component":"Stack"}]}}'
+    )
+    host = t.UiArtifactTargetHost(
+        host_type="finance.research-desk", host_id="desk", slot="main"
+    )
+    context = t._HostGenerationContext(
+        target_host=host,
+        expected_revision_id="rev_5",
+        current_document=current,
+    )
+    seen = {}
+
+    async def _load(user_id, target_host):
+        assert user_id == "u1"
+        assert target_host == host
+        return context
+
+    async def _comp(prompt):
+        seen["prompt"] = prompt
+        return (
+            '{"version":"v0.9.1","createSurface":{"surfaceId":"next"}}\n'
+            '{"version":"v0.9.1","updateComponents":{"surfaceId":"next",'
+            '"components":[{"id":"root","component":"Stack"}]}}'
+        )
+
+    async def _deliver(**kwargs):
+        seen["delivery"] = kwargs
+        return ""
+
+    monkeypatch.setattr(t, "_load_host_generation_context", _load)
+    monkeypatch.setattr(t, "_make_completer", lambda **kw: _comp)
+    monkeypatch.setattr(t, "_deliver_generated_ui", _deliver)
+    handler = build_generative_ui_tool_defs()[0].handler
+
+    await handler(
+        {
+            "request": "change only the chart",
+            "target_host": {
+                "host_type": host.host_type,
+                "host_id": host.host_id,
+                "slot": host.slot,
+            },
+        },
+        _ctx(),
+    )
+
+    assert current in seen["prompt"]
+    assert seen["delivery"]["host_context"] is context
+
+
+async def test_unhosted_generation_does_not_add_a_current_document(
+    monkeypatch, patched
+):
+    seen = {}
+
+    async def _comp(prompt):
+        seen["prompt"] = prompt
+        return '{"version":"v0.9.1","createSurface":{"surfaceId":"new"}}'
+
+    monkeypatch.setattr(t, "_make_completer", lambda **kw: _comp)
+    handler = build_generative_ui_tool_defs()[0].handler
+    await handler({"request": "new chart"}, _ctx())
+
+    assert "CURRENT HOST DOCUMENT" not in seen["prompt"]
 
 
 async def test_handler_no_session(patched, monkeypatch):

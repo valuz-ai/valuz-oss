@@ -23,17 +23,8 @@ export interface GenerativeUIRendererProps {
 }
 
 /**
- * The entire A2UI rendering stack — A2UIRenderer, @valuz/genui-blocks,
- * @a2ui/react, @a2ui/web_core, @openuidev/react-ui (both ThemeProvider and
- * all chart/table/carousel/etc. components) — is loaded lazily so none of
- * it ships in the initial bundle. The genui card only mounts when a
- * conversation turn actually carries a generate_ui tool call, which is the
- * minority of sessions; keeping ~76 block components and all the chart
- * libraries out of the main chunk saves meaningful parse time.
- *
- * The OpenUI theme object (VALUZ_OPENUUI_THEME) lives inside the lazy chunk
- * too — it references ThemeProvider's type, so it naturally lives on the
- * heavy side of the boundary.
+ * The standalone A2UI catalog and renderer are loaded lazily so their chart
+ * and interaction implementations stay out of the initial application chunk.
  */
 const A2UIBody = lazy(() => import("./A2UIBody"));
 

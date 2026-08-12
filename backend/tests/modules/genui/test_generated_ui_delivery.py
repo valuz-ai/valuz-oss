@@ -21,9 +21,9 @@ from valuz_agent.modules.genui.protocol import extract_a2ui_document
 from valuz_agent.modules.genui.tools import _document_file_name, _parse_target_host
 from valuz_agent.ports.ui_artifact import UiArtifactTargetHost
 
-_CREATE = '{"version":"v0.9","createSurface":{"surfaceId":"main","catalogId":"openui"}}'
+_CREATE = '{"version":"v0.9.1","createSurface":{"surfaceId":"main","catalogId":"https://valuz.io/a2ui/catalogs/base/v1"}}'
 _COMPONENTS = (
-    '{"version":"v0.9","updateComponents":{"surfaceId":"main","components":'
+    '{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":'
     '[{"id":"root","component":"Text","text":"hello"}]}}'
 )
 DOC = f"{_CREATE}\n{_COMPONENTS}"
@@ -177,10 +177,10 @@ class TestRepeatedDocument:
     def test_stores_a_repeated_document_once(self) -> None:
         doc = "\n".join(
             [
-                json.dumps({"version": "v0.9", "createSurface": {"surfaceId": "main"}}),
+                json.dumps({"version": "v0.9.1", "createSurface": {"surfaceId": "main"}}),
                 json.dumps(
                     {
-                        "version": "v0.9",
+                        "version": "v0.9.1",
                         "updateComponents": {
                             "surfaceId": "main",
                             "components": [{"id": "root", "component": "Stack"}],
@@ -195,10 +195,10 @@ class TestRepeatedDocument:
     def test_keeps_a_second_declaration_that_differs(self) -> None:
         # Only an exact repeat is dropped; two DIFFERENT versions are a real
         # restart and picking a winner is not this function's call.
-        first = json.dumps({"version": "v0.9", "createSurface": {"surfaceId": "main"}})
+        first = json.dumps({"version": "v0.9.1", "createSurface": {"surfaceId": "main"}})
         components = json.dumps(
             {
-                "version": "v0.9",
+                "version": "v0.9.1",
                 "updateComponents": {
                     "surfaceId": "main",
                     "components": [{"id": "root", "component": "Stack"}],
@@ -207,7 +207,7 @@ class TestRepeatedDocument:
         )
         other = json.dumps(
             {
-                "version": "v0.9",
+                "version": "v0.9.1",
                 "updateComponents": {
                     "surfaceId": "main",
                     "components": [{"id": "root", "component": "Card"}],
@@ -234,10 +234,52 @@ class _FakeArtifactDatastore:
     async def get_artifact(self, *args: object) -> object | None:
         return type(self).artifact
 
+    async def get_revision(self, *args: object) -> object | None:
+        return getattr(type(self), "revision", None)
+
+    async def get_content(self, *args: object) -> object | None:
+        return getattr(type(self), "content", None)
+
 
 @asynccontextmanager
 async def _fake_uow(commit: bool = False) -> AsyncIterator[None]:
     yield None
+
+
+async def test_host_context_loads_the_complete_bound_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from valuz_agent.infra import db as infra_db
+    from valuz_agent.modules.artifacts import datastore as ds_mod
+    from valuz_agent.modules.genui.tools import _load_host_generation_context
+
+    document = (
+        '{"version":"v0.9.1","createSurface":{"surfaceId":"main"}}\n'
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"main",'
+        '"components":[{"id":"root","component":"Stack"}]}}'
+    )
+    _FakeArtifactDatastore.binding = SimpleNamespace(
+        artifact_id="art_A", artifact_revision_id="rev_11"
+    )
+    _FakeArtifactDatastore.artifact = SimpleNamespace(id="art_A")
+    _FakeArtifactDatastore.revision = SimpleNamespace(
+        id="rev_11", content_id="content_11", abs_path=None
+    )
+    _FakeArtifactDatastore.content = SimpleNamespace(content_inline=document)
+    monkeypatch.setattr(ds_mod, "ArtifactDatastore", _FakeArtifactDatastore)
+    monkeypatch.setattr(infra_db, "async_unit_of_work", _fake_uow)
+
+    context = await _load_host_generation_context(
+        "u1",
+        UiArtifactTargetHost(
+            host_type="finance.research-desk", host_id="desk", slot="main"
+        ),
+    )
+
+    assert context is not None
+    assert context.expected_revision_id == "rev_11"
+    assert context.bound_artifact is _FakeArtifactDatastore.artifact
+    assert context.current_document == document
 
 
 async def test_hosted_regeneration_appends_to_the_bound_lineage(
@@ -300,7 +342,7 @@ async def test_hosted_regeneration_appends_to_the_bound_lineage(
             host_type="finance.research-desk", host_id="desk", slot="main"
         ),
         request="req",
-        document='{"version":"v0.9","updateComponents":{"surfaceId":"s","components":[{"id":"root"}]}}',
+        document='{"version":"v0.9.1","updateComponents":{"surfaceId":"s","components":[{"id":"root"}]}}',
     )
 
     assert seen["scope"] == lineage_scope.scope
@@ -364,7 +406,7 @@ async def test_unresolvable_lineage_scope_falls_back_to_the_session(
             host_type="finance.research-desk", host_id="desk", slot="main"
         ),
         request="req",
-        document='{"version":"v0.9","updateComponents":{"surfaceId":"s","components":[{"id":"root"}]}}',
+        document='{"version":"v0.9.1","updateComponents":{"surfaceId":"s","components":[{"id":"root"}]}}',
     )
 
     assert seen["scope"] == session_scope.scope

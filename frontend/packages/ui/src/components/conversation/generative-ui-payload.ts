@@ -1,10 +1,6 @@
 /**
- * A2UI v0.9 is the only generative-UI protocol.
- *
- * The tool could once emit OpenUI Lang instead, so the payload carried a
- * protocol to dispatch on. The union is kept as a one-member type rather than
- * dropped because the envelope on the wire still names its protocol, and a
- * payload whose name we do not recognise must be refused rather than assumed.
+ * A2UI v0.9.1 is the only generative-UI protocol. The envelope keeps an
+ * explicit protocol so unknown payloads fail closed instead of being guessed.
  */
 export type GenerativeUIProtocol = "a2ui-json";
 
@@ -176,7 +172,7 @@ function parseA2UIMessages(body: string): Record<string, unknown>[] {
 function isA2UIMessage(value: unknown): boolean {
   return (
     isRecord(value) &&
-    value.version === "v0.9" &&
+    value.version === "v0.9.1" &&
     [
       "createSurface",
       "updateComponents",

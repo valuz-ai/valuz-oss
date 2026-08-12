@@ -189,7 +189,7 @@ async def test_binding_response_reads_a_file_stored_document_back(
     """
     from valuz_agent.api.routes.artifacts import _binding_response
 
-    document = '{"version":"v0.9","createSurface":{"surfaceId":"main"}}\n' * 3
+    document = '{"version":"v0.9.1","createSurface":{"surfaceId":"main"}}\n' * 3
     source = cwd / "recovered.a2ui.jsonl"
     source.write_text(document, encoding="utf-8")
 
@@ -222,7 +222,7 @@ async def test_binding_response_is_null_when_the_file_is_gone(
     from valuz_agent.api.routes.artifacts import _binding_response
 
     source = cwd / "doomed.a2ui.jsonl"
-    source.write_text('{"version":"v0.9"}\n', encoding="utf-8")
+    source.write_text('{"version":"v0.9.1"}\n', encoding="utf-8")
 
     async with session_factory() as db:
         result = await deliver_artifact(
@@ -254,10 +254,10 @@ async def test_revision_content_reads_without_a_binding(session_factory, cwd) ->
     """Browsing a version must not require binding it first."""
     from valuz_agent.api.routes.artifacts import get_revision_content
 
-    revision_id = await _generate(session_factory, cwd, '{"version":"v0.9"}')
+    revision_id = await _generate(session_factory, cwd, '{"version":"v0.9.1"}')
 
     async with session_factory() as db:
         response = await get_revision_content(revision_id, db=db, user_id=SCOPE.user_id)
 
-    assert response.content == '{"version":"v0.9"}'
+    assert response.content == '{"version":"v0.9.1"}'
     assert response.version_no == 1

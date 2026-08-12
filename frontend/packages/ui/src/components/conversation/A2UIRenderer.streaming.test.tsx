@@ -1,7 +1,5 @@
 import { render } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("@openuidev/react-ui/Modal", () => ({ Modal: () => null }));
+import { describe, expect, it } from "vitest";
 
 import { A2UIRenderer } from "./A2UIRenderer";
 
@@ -16,11 +14,11 @@ import { A2UIRenderer } from "./A2UIRenderer";
 
 const BODY = [
   JSON.stringify({
-    version: "v0.9",
-    createSurface: { surfaceId: "s", catalogId: "openui" },
+    version: "v0.9.1",
+    createSurface: { surfaceId: "s", catalogId: "https://valuz.io/a2ui/catalogs/base/v1" },
   }),
   JSON.stringify({
-    version: "v0.9",
+    version: "v0.9.1",
     updateComponents: {
       surfaceId: "s",
       components: [
@@ -93,8 +91,8 @@ describe("A2UI streaming", () => {
     // Scanning braces without tracking string state would end an object early
     // and salvage a broken component.
     const withBrace = [
-      JSON.stringify({ version: "v0.9", createSurface: { surfaceId: "s", catalogId: "openui" } }),
-      '{"version":"v0.9","updateComponents":{"surfaceId":"s","components":[' +
+      JSON.stringify({ version: "v0.9.1", createSurface: { surfaceId: "s", catalogId: "https://valuz.io/a2ui/catalogs/base/v1" } }),
+      '{"version":"v0.9.1","updateComponents":{"surfaceId":"s","components":[' +
         '{"id":"root","component":"TextContent","text":"a { b } c"},' +
         '{"id":"x","component":"TextContent","text":"未完',
     ].join("\n");

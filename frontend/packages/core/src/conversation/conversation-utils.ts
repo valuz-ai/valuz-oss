@@ -853,7 +853,7 @@ const createTurnsBuilder = () => {
         // Live, non-persisted: tool-scoped reasoning stream (the ephemeral
         // generate_ui session's thinking forwarded onto this session).
         // Accumulates onto ``thinking`` — NEVER ``output``, which is the
-        // tool's result stream (the OpenUI code the renderer paints).
+        // tool's result stream (the A2UI JSONL the renderer paints).
         const id = payload.tool_use_id || "";
         if (!id) continue;
         const streaming = activeToolCalls.get(id);

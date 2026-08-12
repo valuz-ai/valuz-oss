@@ -515,7 +515,7 @@ def _translate_kernel_event(
         # onto the calling session between started and completed. A SEPARATE
         # type from ``tool.call.output_delta`` on purpose: the frontend
         # concatenates output deltas into the tool card's output stream
-        # unconditionally (the OpenUI code the <Renderer> paints), so
+        # unconditionally (the A2UI JSONL the renderer paints), so
         # reasoning text through that channel would corrupt the render.
         # Frontends that don't know this type ignore it.
         return "tool.call.thinking_delta", _with_message_id(

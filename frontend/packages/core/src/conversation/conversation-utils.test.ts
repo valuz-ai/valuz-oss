@@ -797,7 +797,7 @@ describe("buildTurns — tool input/output streaming", () => {
   it("accumulates thinking_delta onto the card's thinking, never its output", () => {
     // Tool-scoped reasoning stream (ephemeral generate_ui thinking forwarded
     // onto the calling session). Must land on ``thinking`` — ``output`` is the
-    // tool's result stream (the OpenUI code the renderer paints) and mixing
+    // tool's result stream (the A2UI JSONL the renderer paints) and mixing
     // reasoning text into it would corrupt the progressive render.
     const turns = buildTurns([
       evt(1, "message.user", { text: "run", message_id: "u1" }),

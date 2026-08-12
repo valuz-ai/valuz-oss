@@ -1,7 +1,5 @@
 import { render } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("@openuidev/react-ui/Modal", () => ({ Modal: () => null }));
+import { describe, expect, it } from "vitest";
 
 import { A2UIRenderer } from "./A2UIRenderer";
 
@@ -22,11 +20,11 @@ import { A2UIRenderer } from "./A2UIRenderer";
 
 const ONE_COPY = [
   JSON.stringify({
-    version: "v0.9",
-    createSurface: { surfaceId: "main", catalogId: "openui" },
+    version: "v0.9.1",
+    createSurface: { surfaceId: "main", catalogId: "https://valuz.io/a2ui/catalogs/base/v1" },
   }),
   JSON.stringify({
-    version: "v0.9",
+    version: "v0.9.1",
     updateComponents: {
       surfaceId: "main",
       components: [
@@ -46,10 +44,23 @@ const textAt = (body: string): string => {
   return (container.textContent ?? "").replace(/\s+/g, " ").trim();
 };
 
-const frames = (body: string, count: number): string[] =>
-  Array.from({ length: count }, (_, i) =>
-    textAt(body.slice(0, Math.round((body.length * (i + 1)) / count))),
+const frames = (body: string, count: number): string[] => {
+  const { container, rerender, unmount } = render(
+    <A2UIRenderer body="" status="running" />,
   );
+  const result: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    rerender(
+      <A2UIRenderer
+        body={body.slice(0, Math.round((body.length * (i + 1)) / count))}
+        status="running"
+      />,
+    );
+    result.push((container.textContent ?? "").replace(/\s+/g, " ").trim());
+  }
+  unmount();
+  return result;
+};
 
 describe("A2UI progressive paint", () => {
   it("should never narrate a half-written component name to the user", () => {
@@ -143,7 +154,7 @@ describe("A2UI progressive paint", () => {
     // A continuation of the SAME document that the processor cannot build —
     // an update aimed at a surface that was never created.
     const breaks = `${ONE_COPY}\n${JSON.stringify({
-      version: "v0.9",
+      version: "v0.9.1",
       updateComponents: {
         surfaceId: "never-created",
         components: [{ id: "x", component: "TextContent", text: "y" }],

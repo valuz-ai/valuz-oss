@@ -223,7 +223,7 @@ export function useToolCallCards({
           <>
             {resolvedHost ? null : (
               <GenerativeUICard
-                openui={tool.output === undefined ? undefined : body}
+                a2ui={tool.output === undefined ? undefined : body}
                 status={tool.status === "running" ? "running" : "success"}
                 thinking={tool.thinking}
               />
