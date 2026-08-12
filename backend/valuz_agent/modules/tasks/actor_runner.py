@@ -17,6 +17,7 @@ the concrete services beats duck typing that once let delegators rot unnoticed.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from typing import Literal, Protocol
 
@@ -122,6 +123,25 @@ class ActorCoordinator(Protocol):
 # ---------------------------------------------------------------------------
 # ActorRunner
 # ---------------------------------------------------------------------------
+
+
+def _log_renewer_exit(task: asyncio.Task[None], *, task_id: str) -> None:
+    """Report a lease renewer that died on an unhandled exception.
+
+    Its silence is the dangerous part: no renewals means the lease expires
+    under a driver that is still working, and the next watchdog sweep blocks a
+    live task. Mirrors ``launcher._log_actor_exit``, for the same reason.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(
+            "task lease renewer for %s died on an unhandled exception — the lease "
+            "will expire under a live driver",
+            task_id,
+            exc_info=exc,
+        )
 
 
 class ActorRunner:
@@ -252,6 +272,11 @@ class ActorRunner:
                 renewer = asyncio.create_task(
                     self._renew_lease(lease, session_id, claim_token, fenced),
                     name=f"task-lease-{task_id}",
+                )
+                # An unobserved renewer death is invisible until the lease has
+                # already expired, so say so at the moment it happens.
+                renewer.add_done_callback(
+                    functools.partial(_log_renewer_exit, task_id=task_id)
                 )
         # Read once: every lead wake-up restates it (see _with_goal_restated).
         task_goal = await self._task_goal(task_id, project_id, user_id) if role == "lead" else ""
@@ -499,6 +524,15 @@ class ActorRunner:
                 )
             except TimeoutError:
                 pass
+            if is_draining():
+                # Teardown has started. The reconcile WRITES (it settles run
+                # rows and flips plan nodes to in_review), and the whole reason
+                # the loop skips its finalize while draining is that a terminal
+                # write here fights the boot recovery that is meant to resume
+                # this task. Keep waiting quietly instead: the loop breaks on
+                # its own drain check as soon as anything wakes it, and the
+                # process is going away regardless.
+                continue
             try:
                 recovered = await coordinator.reconcile_finished_members(
                     task_id=task_id, project_id=project_id, user_id=user_id
@@ -553,24 +587,37 @@ class ActorRunner:
                 await asyncio.sleep(TASK_LEASE_RENEW_INTERVAL_S)
             except asyncio.CancelledError:
                 return
+            # EVERYTHING below is inside the guard, not just the renew call.
+            # This task dying silently is the worst outcome available here: the
+            # lease then expires under a driver that is perfectly healthy, and
+            # a peer's watchdog blocks a live task — exactly the bug the lease
+            # exists to prevent, re-entered through a different door. asyncio
+            # would only surface it as "Task exception was never retrieved" at
+            # GC, detached from the session it belonged to.
             try:
-                still_ours = await lease.renew()
+                if await lease.renew():
+                    continue
+                fenced.set()
+                logger.warning(
+                    "actor loop %s: lost the lease on task %s (taken over) — stopping",
+                    session_id,
+                    lease.key,
+                )
+                if mailbox_registry.is_claim_current(session_id, claim_token):
+                    mailbox_registry.put(session_id, InboxMsg(kind="shutdown"))
+                return
+            except asyncio.CancelledError:
+                raise
             except Exception:  # noqa: BLE001
                 # A transient DB failure is not eviction — the TTL spans several
-                # renewals, so retry rather than abandoning a live task.
-                logger.debug("task lease renew failed for %s; retrying", lease.key)
+                # renewals, and ``renew`` itself stands the holder down once it
+                # can no longer prove ownership. Anything else is a bug here;
+                # log it loudly and keep renewing rather than leave a live
+                # driver silently unrenewed.
+                logger.exception(
+                    "task lease renewal iteration failed for %s; retrying", lease.key
+                )
                 continue
-            if still_ours:
-                continue
-            fenced.set()
-            logger.warning(
-                "actor loop %s: lost the lease on task %s (taken over) — stopping",
-                session_id,
-                lease.key,
-            )
-            if mailbox_registry.is_claim_current(session_id, claim_token):
-                mailbox_registry.put(session_id, InboxMsg(kind="shutdown"))
-            return
 
     @staticmethod
     async def _task_goal(task_id: str, project_id: str, user_id: str) -> str:

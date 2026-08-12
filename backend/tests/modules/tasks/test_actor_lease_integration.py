@@ -452,3 +452,103 @@ def test_a_failing_reconcile_does_not_end_the_wait(db_factory) -> None:
     msg = asyncio.run(_drive())
     monkey.undo()
     assert msg.payload["summary"] == "arrived by mailbox"
+
+
+def test_no_durable_writes_while_draining(db_factory) -> None:
+    """The backstop must go quiet at teardown.
+
+    ``reconcile_finished_members`` WRITES — it settles run rows and flips plan
+    nodes to ``in_review``. The loop already skips its whole finalize while
+    draining, for the reason the drain comment gives: a terminal write here
+    fights the boot recovery that is meant to resume the task. A parked lead
+    reconciling every slice through shutdown would reintroduce exactly that.
+    """
+    from valuz_agent.infra import lifecycle
+
+    fake = _ReconcilingCoordinator([], [_member_done("m1", "should not be consulted")])
+    runner = ActorRunner(finalizer=fake, coordinator=fake)
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr("valuz_agent.modules.tasks.actor_runner.LEAD_RECONCILE_SLICE_S", 0.01)
+    mailbox_registry.register("lead-s")
+    lifecycle.set_draining()
+
+    async def _drive():
+        with pytest.raises(TimeoutError):
+            await runner._await_wakeup(
+                session_id="lead-s", role="lead", ttl=0.08, task_id="t1",
+                project_id="p1", user_id=OWNER, coordinator=fake,
+            )
+
+    try:
+        asyncio.run(_drive())
+    finally:
+        lifecycle.reset_draining()
+        monkey.undo()
+
+    assert fake.reconciles == 0, "no durable write may be attempted during teardown"
+
+
+def test_renewer_survives_a_failure_after_the_renew_call(db_factory) -> None:
+    """The renewer must not die silently — that is the worst outcome here.
+
+    Only the ``renew()`` call used to be guarded, so anything raising after it
+    (posting the shutdown, the claim check) killed the task. Nothing observes
+    it, so the lease then expires under a driver that is perfectly healthy and
+    a peer's watchdog blocks a live task: the original bug, re-entered through
+    a different door.
+    """
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(lease_mod, "_HOLDER_ID", "our-proc")
+    ours = asyncio.run(
+        acquire_task_lease(user_id=OWNER, task_id="t1", lead_session_id="lead-s")
+    )
+    assert ours is not None
+    token = mailbox_registry.claim("lead-s")
+
+    # Fence it, so the renewer takes the "lost the lease" branch. A peer can
+    # only take over an expired lease, so age it out first.
+    db = db_factory()
+    try:
+        db.execute(
+            ExecutionLeaseRow.__table__.update()
+            .where(ExecutionLeaseRow.scope == "task", ExecutionLeaseRow.key == "t1")
+            .values(lease_expires_at=1)
+        )
+        db.commit()
+    finally:
+        db.close()
+    monkey.setattr(lease_mod, "_HOLDER_ID", "peer-proc")
+    assert (
+        asyncio.run(acquire_task_lease(user_id=OWNER, task_id="t1", lead_session_id="lead-s"))
+        is not None
+    )
+    monkey.setattr(lease_mod, "_HOLDER_ID", "our-proc")
+
+    # ...and make that branch blow up where it was previously unguarded.
+    calls = {"n": 0}
+
+    def _boom(session_id, tok):
+        calls["n"] += 1
+        raise RuntimeError("registry exploded")
+
+    monkey.setattr(mailbox_registry, "is_claim_current", _boom)
+    monkey.setattr("valuz_agent.modules.tasks.actor_runner.TASK_LEASE_RENEW_INTERVAL_S", 0.01)
+
+    fenced = asyncio.Event()
+
+    async def _run():
+        task = asyncio.create_task(
+            ActorRunner._renew_lease(ours, "lead-s", token, fenced)
+        )
+        await asyncio.sleep(0.15)
+        alive = not task.done()
+        task.cancel()
+        return alive
+
+    still_alive = asyncio.run(_run())
+    monkey.undo()
+
+    assert calls["n"] >= 2, "it must keep retrying rather than dying on the first raise"
+    assert still_alive, "the renewer must not exit on an unexpected failure"
+    assert fenced.is_set(), "and it must still report the lost lease"
