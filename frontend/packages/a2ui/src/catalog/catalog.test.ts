@@ -10,7 +10,7 @@ import { valuzBaseComponents } from "../react/catalog";
 
 describe("Valuz A2UI base catalog", () => {
   it("has a stable versioned id and unique component names", () => {
-    expect(VALUZ_BASE_CATALOG_ID).toBe("https://valuz.ai/a2ui/catalogs/base/v1");
+    expect(VALUZ_BASE_CATALOG_ID).toBe("https://valuz.io/a2ui/catalogs/base/v1");
     expect(new Set(valuzBaseComponentNames).size).toBe(valuzBaseComponentNames.length);
     expect(valuzBaseComponentNames).toEqual(
       expect.arrayContaining([

@@ -119,6 +119,15 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
     edition: "personal",
   },
   {
+    id: "component-gallery",
+    path: "/developer/components",
+    label: "A2UI Component Gallery",
+    description: "Shared component catalog with distribution extension groups.",
+    layout: "project",
+    showInNav: false,
+    edition: "personal",
+  },
+  {
     id: "onboarding",
     path: "/onboarding",
     label: "Onboarding",

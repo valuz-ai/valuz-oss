@@ -25,6 +25,7 @@
       "@valuz/ui": ["./packages/ui/src/index.ts"],
       "@valuz/a2ui": ["./packages/a2ui/src/index.ts"],
       "@valuz/a2ui/catalog": ["./packages/a2ui/src/catalog/index.ts"],
+      "@valuz/a2ui/gallery": ["./packages/a2ui/src/gallery/index.ts"],
       "@valuz/a2ui/react": ["./packages/a2ui/src/react/index.ts"],
       "@valuz/genui-blocks": ["./packages/genui-blocks/src/index.ts"],
       "@valuz/app": ["./packages/app/src/index.ts"],

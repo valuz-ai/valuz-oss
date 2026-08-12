@@ -25,7 +25,7 @@ they do not get folded into the base catalog.
 
 ## Catalog
 
-Catalog ID: `https://valuz.ai/a2ui/catalogs/base/v1`
+Catalog ID: `https://valuz.io/a2ui/catalogs/base/v1`
 
 The base catalog contains 51 components:
 
@@ -45,6 +45,36 @@ The base catalog contains 51 components:
 Every API is strict and described. The descriptions are part of the inline
 catalog sent to a model, so component selection and property semantics remain
 machine-readable instead of being hidden in renderer code.
+
+## Gallery and distribution extensions
+
+The reusable Gallery is exported from `@valuz/a2ui/gallery`. It always owns a
+white review surface and can either fill an application shell or run as the
+standalone demo. A distribution adds menu groups without copying the page:
+
+```tsx
+import { registerA2UIGalleryExtension } from "@valuz/a2ui/gallery";
+
+registerA2UIGalleryExtension({
+  id: "industry",
+  label: "Industry components",
+  description: "Distribution-owned vocabulary",
+  sections: [{
+    id: "research",
+    label: "Research",
+    description: "Industry research views",
+    componentCount: 12,
+    load: async () => {
+      const module = await import("./IndustryGallery");
+      return { default: module.IndustryGallery };
+    },
+  }],
+});
+```
+
+The loader runs only when its menu section is opened, so distribution catalogs,
+fixtures, chart libraries, and data adapters stay out of the base application
+chunk.
 
 ## Render a surface
 

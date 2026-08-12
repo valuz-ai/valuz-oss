@@ -207,6 +207,9 @@ importers:
 
   packages/app:
     dependencies:
+      '@valuz/a2ui':
+        specifier: workspace:*
+        version: link:../a2ui
       '@valuz/core':
         specifier: workspace:*
         version: link:../core

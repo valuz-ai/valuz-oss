@@ -1,34 +1,46 @@
-:root {
-  color-scheme: light;
-  font-family: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-
-* { box-sizing: border-box; }
-body { margin: 0; }
-button, input { font: inherit; }
-
 .demo-stage {
-  --demo-page: var(--background, whitesmoke);
-  --demo-surface: var(--surface, white);
-  --demo-soft: color-mix(in oklab, var(--demo-surface) 92%, var(--demo-text));
-  --demo-text: var(--foreground, black);
-  --demo-body: var(--fg-70, dimgray);
-  --demo-muted: var(--fg-50, gray);
-  --demo-border: var(--fg-10, gainsboro);
+  --demo-page: #fff;
+  --demo-surface: #fff;
+  --demo-soft: #f7f8fa;
+  --demo-text: #17171a;
+  --demo-body: #555b66;
+  --demo-muted: #747b88;
+  --demo-border: #e5e7eb;
+  /* The Gallery is a stable review surface, independent of the host theme. */
+  --background: #fff;
+  --foreground: #131313;
+  --surface: #fff;
+  --brand: #725cf9;
+  --slate: #444b54;
+  --fg-3: color-mix(in oklab, var(--foreground) 3%, var(--background));
+  --fg-5: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  --fg-8: color-mix(in oklab, var(--foreground) 8%, var(--background));
+  --fg-12: color-mix(in oklab, var(--foreground) 12%, var(--background));
+  --fg-30: color-mix(in oklab, var(--slate) 37%, var(--background));
+  --fg-50: color-mix(in oklab, var(--slate) 60%, var(--background));
+  --fg-60: color-mix(in oklab, var(--slate) 75%, var(--background));
+  --fg-80: var(--slate);
+  --brand-50: #f3f2ff;
+  --brand-100: #eae6ff;
+  --brand-200: #d1c8ff;
+  --brand-300: #b29ff7;
+  --brand-500: var(--brand);
+  --brand-600: #5d46e8;
+  --brand-700: #4936c2;
   background: var(--demo-page);
   color: var(--demo-text);
+  color-scheme: light;
+  font-family: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   min-height: 100vh;
 }
-
-.demo-stage[data-theme="dark"] {
-  --demo-page: color-mix(in oklab, black 96%, white);
-  --demo-surface: color-mix(in oklab, black 89%, white);
-  --demo-soft: color-mix(in oklab, black 84%, white);
-  --demo-text: whitesmoke;
-  --demo-body: lightgray;
-  --demo-muted: darkgray;
-  --demo-border: color-mix(in oklab, white 14%, transparent);
-  color-scheme: dark;
+.demo-stage,
+.demo-stage * { box-sizing: border-box; }
+.demo-stage button,
+.demo-stage input { font: inherit; }
+.demo-stage[data-embedded="true"] {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
 }
 
 .demo-shell {
@@ -152,6 +164,7 @@ button, input { font: inherit; }
   position: sticky;
   top: 20px;
 }
+.demo-nav-group + .demo-nav-group { margin-top: 18px; }
 .demo-nav-heading {
   align-items: center;
   color: var(--demo-muted);
@@ -162,7 +175,7 @@ button, input { font: inherit; }
 }
 .demo-nav-heading strong { font-weight: 600; }
 .demo-nav-heading span { margin-left: auto; }
-.demo-nav > p {
+.demo-nav-group > p {
   color: var(--demo-muted);
   font-size: 10px;
   line-height: 1.5;
@@ -239,6 +252,7 @@ button, input { font: inherit; }
   overflow-x: auto;
   padding: 20px 16px;
 }
+.demo-specimen-preview[data-preview-theme="dark"] { background: #17171a; }
 .demo-specimen-surface {
   margin-right: auto;
   min-width: 0;
@@ -328,7 +342,7 @@ button, input { font: inherit; }
     z-index: 10;
   }
   .demo-nav-heading,
-  .demo-nav > p { display: none; }
+  .demo-nav-group > p { display: none; }
   .demo-nav ul { display: flex; gap: 4px; }
   .demo-nav li { flex: 0 0 auto; }
   .demo-nav button { padding: 7px 9px; width: auto; }

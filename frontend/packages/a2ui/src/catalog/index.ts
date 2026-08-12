@@ -13,7 +13,7 @@ import { contentApis } from "./content";
 import { formApis } from "./forms";
 import { layoutApis } from "./layout";
 
-export const VALUZ_BASE_CATALOG_ID = "https://valuz.ai/a2ui/catalogs/base/v1";
+export const VALUZ_BASE_CATALOG_ID = "https://valuz.io/a2ui/catalogs/base/v1";
 
 export const valuzBaseComponentApis = [
   ...layoutApis,

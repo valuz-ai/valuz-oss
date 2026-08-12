@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { valuzBaseComponentNames } from "../src";
+import { valuzBaseComponentNames } from "../index";
 import { GALLERY_CATEGORIES, GALLERY_COMPONENT_NAMES } from "./gallery-data";
 
 describe("A2UI component Gallery", () => {

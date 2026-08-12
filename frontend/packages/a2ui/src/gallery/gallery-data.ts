@@ -1,8 +1,10 @@
 import {
   VALUZ_BASE_CATALOG_ID,
+} from "../catalog";
+import {
   createValuzMessageProcessor,
-  type A2uiMessage,
-} from "../src";
+} from "../react";
+import type { A2uiMessage } from "@a2ui/web_core/v0_9";
 
 export type GalleryCategoryId = "layout" | "content" | "actions" | "forms" | "charts";
 
