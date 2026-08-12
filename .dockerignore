@@ -1,0 +1,26 @@
+# Docker images are built from the repository root. Only the backend, frontend
+# workspace, and shared locale files are required in the build context.
+*
+!backend/
+!backend/**
+!frontend/
+!frontend/**
+!i18n/
+!i18n/**
+
+# Never send local dependencies, build output, caches, or environment files.
+**/node_modules
+**/.venv
+**/__pycache__
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+**/dist
+**/dist-ssr
+**/.turbo
+**/*.log
+**/.env
+**/.env.*
+backend/build
+backend/kernel/tests
+backend/tests
