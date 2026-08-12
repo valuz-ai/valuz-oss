@@ -359,76 +359,88 @@ class ActorRunner:
                     )
                     break
 
-                try:
-                    msg = await self._await_wakeup(
-                        session_id=session_id,
-                        role=role,
-                        ttl=ttl,
-                        task_id=task_id,
-                        project_id=project_id,
-                        user_id=user_id,
-                        coordinator=coordinator,
-                    )
-                except KeyError:
-                    # Our box was dropped externally — ownership moved (a newer
-                    # loop claimed the session). Exit as an externally-managed
-                    # shutdown; running auto-finalize here would fight the new
-                    # owner exactly like the pause→resume race.
-                    logger.info(
-                        "actor loop %s (%s): mailbox ownership moved — exiting",
-                        session_id,
-                        role,
-                    )
-                    exited_on_shutdown = True
-                    break
-                except TimeoutError:
-                    # The TTL measures silence on OUR mailbox — not session
-                    # idleness. A run_in_background subagent outlives the turn
-                    # and the CLI drives follow-up turns the loop never sees,
-                    # so ask before concluding (bounded by MAX_IDLE_EXTENSIONS
-                    # so a wedged session cannot pin the loop forever).
-                    if extensions < MAX_IDLE_EXTENSIONS and await coordinator.session_still_working(
-                        session_id
-                    ):
-                        extensions += 1
+                # Wait for something that WARRANTS a turn.
+                #
+                # This is an INNER loop, and that is load-bearing. The outer
+                # loop's next statement is ``run_turn(session_id, prompt)``,
+                # and ``prompt`` still holds the PREVIOUS turn's text — so a
+                # ``continue`` here does not mean "keep waiting", it means
+                # "re-run the last prompt". Both places that wanted to keep
+                # waiting used ``continue``, and in production that re-ran a
+                # finished task from its original goal: the user saw their own
+                # message sent a second time and the whole task done twice.
+                stop = False
+                wake: InboxMsg | None = None
+                while wake is None:
+                    try:
+                        msg = await self._await_wakeup(
+                            session_id=session_id,
+                            role=role,
+                            ttl=ttl,
+                            task_id=task_id,
+                            project_id=project_id,
+                            user_id=user_id,
+                            coordinator=coordinator,
+                        )
+                    except KeyError:
+                        # Our box was dropped externally — ownership moved (a
+                        # newer loop claimed the session). Exit as an
+                        # externally-managed shutdown; running auto-finalize
+                        # here would fight the new owner exactly like the
+                        # pause→resume race.
                         logger.info(
-                            "actor loop %s (%s) idle-TTL expired but the session is "
-                            "still working (background task) — extending (%d/%d)",
+                            "actor loop %s (%s): mailbox ownership moved — exiting",
                             session_id,
                             role,
-                            extensions,
-                            MAX_IDLE_EXTENSIONS,
                         )
-                        continue
-                    logger.info("actor loop %s (%s) idle-TTL expired", session_id, role)
-                    break
+                        exited_on_shutdown = True
+                        stop = True
+                        break
+                    except TimeoutError:
+                        # The TTL measures silence on OUR mailbox — not session
+                        # idleness. A run_in_background subagent outlives the
+                        # turn and the CLI drives follow-up turns the loop never
+                        # sees, so ask before concluding (bounded by
+                        # MAX_IDLE_EXTENSIONS so a wedged session cannot pin the
+                        # loop forever).
+                        if (
+                            extensions < MAX_IDLE_EXTENSIONS
+                            and await coordinator.session_still_working(session_id)
+                        ):
+                            extensions += 1
+                            logger.info(
+                                "actor loop %s (%s) idle-TTL expired but the session is "
+                                "still working (background task) — extending (%d/%d)",
+                                session_id,
+                                role,
+                                extensions,
+                                MAX_IDLE_EXTENSIONS,
+                            )
+                            continue
+                        logger.info("actor loop %s (%s) idle-TTL expired", session_id, role)
+                        stop = True
+                        break
 
-                if msg.kind == "shutdown":
-                    exited_on_shutdown = True
-                    break
-                if msg.kind == "member_done":
-                    # Already handled? Then this is a duplicate, and running a
-                    # turn on it costs a real model call for nothing.
-                    #
-                    # It happens: the in-turn backstop reads durable state, so
-                    # it can synthesize a member's result while that member is
-                    # still collecting its manifest. ``await_members`` returns,
-                    # the lead reviews and moves on, and the real ``member_done``
-                    # lands in a mailbox nobody is draining — surfacing here
-                    # after the turn ends. Measured on qa: two members, two
-                    # wasted turns, both AFTER the task had already completed
-                    # (finish_task's shutdown was queued behind them, FIFO).
-                    #
-                    # Deliberately checked against durable state rather than by
-                    # de-duplicating the mailbox: any producer can repeat, and
-                    # this asks the only question that matters — is there still
-                    # work here for the lead to do?
-                    if role == "lead" and await coordinator.member_already_settled(
-                        task_id=task_id,
-                        project_id=project_id,
-                        member_session_id=msg.from_session,
-                        user_id=user_id,
+                    if msg.kind == "shutdown":
+                        exited_on_shutdown = True
+                        stop = True
+                        break
+                    if (
+                        msg.kind == "member_done"
+                        and role == "lead"
+                        and await coordinator.member_already_settled(
+                            task_id=task_id,
+                            project_id=project_id,
+                            member_session_id=msg.from_session,
+                            user_id=user_id,
+                        )
                     ):
+                        # Duplicate: the node is already settled, or the task
+                        # has ended. Several paths produce these messages (the
+                        # member's own notify, recovery re-seeding, stop_member)
+                        # and any of them can repeat — so the question asked is
+                        # the only one that matters: does the lead still owe
+                        # this member a turn?
                         logger.info(
                             "actor loop %s (lead): dropping a member_done for %s — "
                             "already settled, no turn needed",
@@ -436,6 +448,13 @@ class ActorRunner:
                             msg.from_session,
                         )
                         continue
+                    wake = msg
+
+                if stop:
+                    break
+                msg = wake
+
+                if msg.kind == "member_done":
                     # Lead-side, single-actor (D7): flip the member's plan node
                     # to in_review so the lead reviews it (member-idle ≠ done).
                     # ONLY for a delivering member: a failed/cancelled

@@ -552,3 +552,96 @@ def test_renewer_survives_a_failure_after_the_renew_call(db_factory) -> None:
     assert calls["n"] >= 2, "it must keep retrying rather than dying on the first raise"
     assert still_alive, "the renewer must not exit on an unexpected failure"
     assert fenced.is_set(), "and it must still report the lost lease"
+
+
+class _DupThenShutdown(_Collaborators):
+    """Coordinator that reports every member_done as already settled."""
+
+    def __init__(self, calls: list[str]) -> None:
+        super().__init__(calls)
+        self.settled_asked = 0
+
+    async def member_already_settled(self, *, task_id, project_id, member_session_id, user_id) -> bool:
+        self.settled_asked += 1
+        return True
+
+    async def lead_idle_with_no_pending(self, task_id, project_id, user_id, lead_session_id="") -> bool:
+        return False  # keep the loop parked on its mailbox
+
+    async def reconcile_finished_members(self, *, task_id, project_id, user_id) -> list:
+        return []
+
+
+def test_dropping_a_duplicate_does_not_re_run_the_previous_prompt(db_factory) -> None:
+    """Production regression: the user's own message was sent a second time.
+
+    Dropping a duplicate `member_done` used to `continue` the OUTER loop, whose
+    very next statement is `run_turn(session_id, prompt)` — and `prompt` still
+    held the PREVIOUS turn's text. So "ignore this message" actually meant
+    "re-run the last prompt", and a finished task was executed a second time
+    from its original goal.
+
+    Here the loop must run the kickoff turn, silently drop the duplicate, and
+    then exit on the shutdown — one turn, not two.
+    """
+    fake = _DupThenShutdown([])
+    runner = ActorRunner(finalizer=fake, coordinator=fake)
+    prompts: list[str] = []
+
+    async def _turn(session_id: str, content: str, user_id: str | None = None) -> str:
+        prompts.append(content)
+        return "idle"
+
+    runner.run_turn = _turn  # type: ignore[method-assign]
+
+    mailbox_registry.register("lead-s")
+    mailbox_registry.put("lead-s", _member_done("m1", "already reviewed"))
+    mailbox_registry.put("lead-s", InboxMsg(kind="shutdown"))
+
+    asyncio.run(_drive(runner))
+
+    assert fake.settled_asked == 1, "the duplicate must have been examined"
+    assert prompts == ["go"], (
+        "exactly ONE turn, on the kickoff prompt — dropping a duplicate must "
+        f"never re-run it. Got: {prompts}"
+    )
+
+
+def test_an_actionable_member_done_still_runs_a_turn(db_factory) -> None:
+    """The drop must not swallow work that IS outstanding."""
+
+    class _NotSettled(_Collaborators):
+        async def member_already_settled(self, *, task_id, project_id, member_session_id, user_id) -> bool:
+            return False
+
+        async def lead_idle_with_no_pending(self, task_id, project_id, user_id, lead_session_id="") -> bool:
+            return False
+
+        async def reconcile_finished_members(self, *, task_id, project_id, user_id) -> list:
+            return []
+
+    fake = _NotSettled([])
+    runner = ActorRunner(finalizer=fake, coordinator=fake)
+    prompts: list[str] = []
+
+    async def _turn(session_id: str, content: str, user_id: str | None = None) -> str:
+        prompts.append(content)
+        return "idle"
+
+    runner.run_turn = _turn  # type: ignore[method-assign]
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(
+        "valuz_agent.modules.tasks.planning.mark_in_review",
+        lambda **kw: asyncio.sleep(0),
+    )
+    mailbox_registry.register("lead-s")
+    mailbox_registry.put("lead-s", _member_done("m1", "please review me"))
+    mailbox_registry.put("lead-s", InboxMsg(kind="shutdown"))
+
+    asyncio.run(_drive(runner))
+    monkey.undo()
+
+    assert len(prompts) == 2, "kickoff + the member result"
+    assert "please review me" in prompts[1]
+    assert prompts[1] != prompts[0], "the second turn must not repeat the first"
