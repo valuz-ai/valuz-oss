@@ -22,7 +22,8 @@ import pytest
 
 import valuz_agent.boot.kernel  # noqa: F401
 
-from valuz_agent.modules.tasks import lease as lease_mod
+from valuz_agent.infra import execution_lease as lease_mod
+from valuz_agent.infra.execution_lease import ExecutionLeaseRow
 from valuz_agent.modules.tasks.actor_runner import ActorRunner
 from valuz_agent.modules.tasks.lease import acquire_task_lease
 from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
@@ -98,7 +99,7 @@ def test_lease_is_still_held_while_finalize_runs(db_factory) -> None:
     seen: list[str | None] = []
 
     async def _peek_holder_during_finalize() -> None:
-        states = await lease_mod.load_lease_states(["t1"])
+        states = await lease_mod.load_lease_states("task", ["t1"])
         state = states.get("t1")
         seen.append(state.state if state else None)
 
@@ -108,7 +109,7 @@ def test_lease_is_still_held_while_finalize_runs(db_factory) -> None:
     assert calls == ["turn", "finalize"]
     assert seen == ["held"], "the lease must still be held while finalize writes"
     # ...and handed back once finalize is done, so a peer can pick it up now.
-    after = asyncio.run(lease_mod.load_lease_states(["t1"]))
+    after = asyncio.run(lease_mod.load_lease_states("task", ["t1"]))
     assert after["t1"].state == "released"
 
 
@@ -267,11 +268,9 @@ def test_fenced_loop_still_signals_when_it_owns_the_inbox(db_factory) -> None:
     monkey.setattr(lease_mod, "_HOLDER_ID", "peer-proc")
     db = db_factory()
     try:
-        from valuz_agent.modules.tasks.models import TaskLeaseRow
-
         db.execute(
-            TaskLeaseRow.__table__.update()
-            .where(TaskLeaseRow.task_id == "t1")
+            ExecutionLeaseRow.__table__.update()
+            .where(ExecutionLeaseRow.scope == "task", ExecutionLeaseRow.key == "t1")
             .values(holder_id="peer-proc", fence_token=ours.fence_token + 1)
         )
         db.commit()

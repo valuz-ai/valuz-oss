@@ -42,7 +42,7 @@ from valuz_agent.modules.tasks.lease import (
     TaskLease,
     acquire_task_lease,
     is_driven_elsewhere,
-    load_lease_states,
+    load_task_lease_states,
 )
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
 from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
@@ -870,7 +870,7 @@ class TaskHealthMonitor:
         # is process-local, so with more than one host process it reported every
         # sibling process's healthy lead as dead and this sweep blocked it
         # mid-run. The lease is shared state, so it answers for all of them.
-        leases = await load_lease_states([task_id for task_id, *_ in candidates])
+        leases = await load_task_lease_states([task_id for task_id, *_ in candidates])
         now = now_ms()
 
         acted: list[str] = []
@@ -936,7 +936,7 @@ class TaskHealthMonitor:
             # the sweep gap. Both oracles, for the same reason as in the sweep.
             if mailbox_registry.is_owned(lead_session_id):
                 return False
-            lease = (await load_lease_states([task_id])).get(task_id)
+            lease = (await load_task_lease_states([task_id])).get(task_id)
             if lease is None or lease.is_live(now_ms()):
                 return False
             reason = (

@@ -23,12 +23,8 @@ from valuz_agent.modules.tasks.recovery import (
 )
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.tasks.mailbox import mailbox_registry
-from valuz_agent.modules.tasks.models import (
-    TaskEventRow,
-    TaskLeaseRow,
-    TaskRow,
-    TaskSessionRow,
-)
+from valuz_agent.infra.execution_lease import ExecutionLeaseRow
+from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 
 OWNER = "local-test-owner"
 # A holder id that is not this process, so ``LeaseState.is_foreign`` holds.
@@ -97,11 +93,11 @@ def _seed(
                 "released": 0,
             }[lease]
             db.add(
-                TaskLeaseRow(
-                    user_id=OWNER,
-                    task_id=task_id,
-                    lead_session_id=lead_session_id or "lead-s",
+                ExecutionLeaseRow(
+                    scope="task",
+                    key=task_id,
                     holder_id=PEER,
+                    note=lead_session_id or "lead-s",
                     fence_token=1,
                     state="released" if lease == "released" else "held",
                     heartbeat_at=now,

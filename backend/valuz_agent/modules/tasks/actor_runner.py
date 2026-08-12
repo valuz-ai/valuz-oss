@@ -462,7 +462,7 @@ class ActorRunner:
             except Exception:  # noqa: BLE001
                 # A transient DB failure is not eviction — the TTL spans several
                 # renewals, so retry rather than abandoning a live task.
-                logger.debug("task lease renew failed for %s; retrying", lease.task_id)
+                logger.debug("task lease renew failed for %s; retrying", lease.key)
                 continue
             if still_ours:
                 continue
@@ -470,7 +470,7 @@ class ActorRunner:
             logger.warning(
                 "actor loop %s: lost the lease on task %s (taken over) — stopping",
                 session_id,
-                lease.task_id,
+                lease.key,
             )
             if mailbox_registry.is_claim_current(session_id, claim_token):
                 mailbox_registry.put(session_id, InboxMsg(kind="shutdown"))

@@ -19,12 +19,8 @@ from valuz_agent.infra.database import Base
 from valuz_agent.modules.agents.models import AgentRow, ProjectMemberRow
 from valuz_agent.modules.notifications.models import NotificationRow
 from valuz_agent.modules.projects.models import ProjectRow
-from valuz_agent.modules.tasks.models import (
-    TaskEventRow,
-    TaskLeaseRow,
-    TaskRow,
-    TaskSessionRow,
-)
+from valuz_agent.infra.execution_lease import ExecutionLeaseRow
+from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 
 # Every task test that touches the DB wants the same three tables. Creating all
 # of them unconditionally is cheaper than each module deciding, and removes the
@@ -51,8 +47,9 @@ _TASK_TABLES = [
     # the boot sweep that purges tasks whose project is gone — both read this.
     ProjectRow.__table__,
     # Execution ownership: the actor loop acquires one before driving and the
-    # health watchdog reads it as its liveness oracle.
-    TaskLeaseRow.__table__,
+    # health watchdog reads it as its liveness oracle. Shared infra table, not
+    # a task table — the same primitive serves other subsystems.
+    ExecutionLeaseRow.__table__,
 ]
 
 

@@ -16,13 +16,13 @@ import valuz_agent.boot.kernel  # noqa: F401
 from sqlalchemy import select
 
 from valuz_agent.infra.time_utils import now_ms
-from valuz_agent.modules.tasks import lease as lease_mod
+from valuz_agent.infra import execution_lease as lease_mod
 from valuz_agent.modules.tasks.lease import (
     acquire_task_lease,
     is_driven_elsewhere,
-    load_lease_states,
+    load_task_lease_states,
 )
-from valuz_agent.modules.tasks.models import TaskLeaseRow
+from valuz_agent.infra.execution_lease import ExecutionLeaseRow
 
 OWNER = "local-test-owner"
 TASK = "t1"
@@ -43,10 +43,12 @@ def _acquire(session_id: str = "lead-s"):
     return lambda: acquire_task_lease(user_id=OWNER, task_id=TASK, lead_session_id=session_id)
 
 
-def _row(db_factory) -> TaskLeaseRow:
+def _row(db_factory) -> ExecutionLeaseRow:
     db = db_factory()
     try:
-        return db.execute(select(TaskLeaseRow).filter_by(task_id=TASK)).scalars().one()
+        return (
+            db.execute(select(ExecutionLeaseRow).filter_by(scope="task", key=TASK)).scalars().one()
+        )
     finally:
         db.close()
 
@@ -75,8 +77,8 @@ def test_expired_lease_is_taken_over_and_fenced(db_factory, as_process) -> None:
     db = db_factory()
     try:
         db.execute(
-            TaskLeaseRow.__table__.update()
-            .where(TaskLeaseRow.task_id == TASK)
+            ExecutionLeaseRow.__table__.update()
+            .where(ExecutionLeaseRow.key == TASK)
             .values(lease_expires_at=now_ms() - 1)
         )
         db.commit()
@@ -134,8 +136,8 @@ def test_renew_extends_the_expiry(db_factory, as_process) -> None:
     db = db_factory()
     try:
         db.execute(
-            TaskLeaseRow.__table__.update()
-            .where(TaskLeaseRow.task_id == TASK)
+            ExecutionLeaseRow.__table__.update()
+            .where(ExecutionLeaseRow.key == TASK)
             .values(lease_expires_at=before - 30_000)
         )
         db.commit()
@@ -154,6 +156,87 @@ def test_is_driven_elsewhere_ignores_our_own_lease(db_factory, as_process) -> No
 
 
 def test_absent_lease_is_unknown_not_dead(db_factory, as_process) -> None:
-    states = as_process("proc-a", lambda: load_lease_states(["nope"]))
+    states = as_process("proc-a", lambda: load_task_lease_states(["nope"]))
     assert states == {}
     assert as_process("proc-a", lambda: is_driven_elsewhere("nope")) is False
+
+
+# ---------------------------------------------------------------------------
+# Self-fence: a holder that cannot PROVE it still holds must stand down.
+# ---------------------------------------------------------------------------
+
+
+def test_transient_renew_failure_does_not_evict(db_factory, as_process, monkeypatch) -> None:
+    """One failed renewal is a blip, not eviction — the TTL spans several."""
+    lease = as_process("proc-a", _acquire())
+    assert lease is not None
+
+    def _boom(*a, **k):
+        raise RuntimeError("db blip")
+
+    monkeypatch.setattr(lease_mod, "async_unit_of_work", _boom)
+    assert as_process("proc-a", lease.renew) is True
+
+
+def test_persistent_renew_failure_stands_the_holder_down(
+    db_factory, as_process, monkeypatch
+) -> None:
+    """Regression-by-design: a holder whose DB is unreachable must stop.
+
+    Silently retrying forever is the dangerous option — the lease expires while
+    the holder keeps working, a peer's watchdog is then free to hand the key on,
+    and two processes drive one task. Standing down converts that into "no
+    holder", which every consumer already recovers from.
+    """
+    lease = as_process("proc-a", _acquire())
+    assert lease is not None
+    # Backdate the last successful renewal past the self-fence threshold.
+    lease._last_renewed_at = now_ms() - lease_mod.LEASE_TTL_MS
+
+    def _boom(*a, **k):
+        raise RuntimeError("db unreachable")
+
+    monkeypatch.setattr(lease_mod, "async_unit_of_work", _boom)
+    assert as_process("proc-a", lease.renew) is False
+
+
+# ---------------------------------------------------------------------------
+# Single-process deployments pay nothing.
+# ---------------------------------------------------------------------------
+
+
+def test_proven_exclusivity_skips_renewal_entirely(db_factory, as_process, monkeypatch) -> None:
+    """Desktop shape: SQLite + the single-writer flock already prove exclusivity.
+
+    Renewing there would be a disk write every interval per active task, bought
+    on a laptop to solve a problem a single process cannot have.
+    """
+    monkeypatch.setattr(lease_mod, "_exclusive_by_construction", lambda: True)
+    lease = as_process("proc-a", _acquire())
+    assert lease is not None
+    assert lease._renewal_required is False
+    assert _row(db_factory).lease_expires_at > now_ms() + 10**12  # effectively never
+
+    # renew() must not touch the database at all on this path.
+    def _boom(*a, **k):
+        raise AssertionError("renewal must not run when exclusivity is proven")
+
+    monkeypatch.setattr(lease_mod, "async_unit_of_work", _boom)
+    assert as_process("proc-a", lease.renew) is True
+
+
+def test_exclusivity_needs_BOTH_sqlite_and_the_held_lock(monkeypatch) -> None:
+    """Postgres, or SQLite with the lock skipped, must fall through to real leases."""
+    from valuz_agent.infra import single_writer
+
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "proc-a")
+    monkeypatch.setattr("valuz_agent.infra.db_urls.is_sqlite_runtime", lambda: False)
+    monkeypatch.setattr(single_writer, "is_lock_held", lambda: True)
+    assert lease_mod._exclusive_by_construction() is False
+
+    monkeypatch.setattr("valuz_agent.infra.db_urls.is_sqlite_runtime", lambda: True)
+    monkeypatch.setattr(single_writer, "is_lock_held", lambda: False)
+    assert lease_mod._exclusive_by_construction() is False
+
+    monkeypatch.setattr(single_writer, "is_lock_held", lambda: True)
+    assert lease_mod._exclusive_by_construction() is True

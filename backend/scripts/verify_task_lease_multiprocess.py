@@ -107,13 +107,13 @@ def _maybe_shorten_lease() -> None:
     if not ttl:
         return
     try:
+        from valuz_agent.infra import execution_lease as lease_mod
         from valuz_agent.modules.tasks import actor_runner as ar
-        from valuz_agent.modules.tasks import lease as lease_mod
     except ImportError:
         return  # baseline build has no lease module
-    lease_mod.TASK_LEASE_TTL_MS = int(ttl)
+    lease_mod.LEASE_TTL_MS = int(ttl)
     renew = float(os.environ.get("E2E_RENEW_S", "1"))
-    lease_mod.TASK_LEASE_RENEW_INTERVAL_S = renew
+    lease_mod.LEASE_RENEW_INTERVAL_S = renew
     ar.TASK_LEASE_RENEW_INTERVAL_S = renew
     _stamp(f"driver: lease TTL={ttl}ms renew={renew}s")
 
