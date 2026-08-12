@@ -26,6 +26,7 @@ from typing import Any, Literal
 from valuz_agent.adapters import kernel_client
 from valuz_agent.modules.sessions import project_index
 from valuz_agent.modules.tasks.actor_runner import ActorRunner
+from valuz_agent.modules.tasks.lease import TaskLease
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
 from valuz_agent.modules.tasks.mailbox import mailbox_registry
 from valuz_agent.ports.sandbox_allocator import SandboxScope
@@ -66,6 +67,7 @@ def spawn_actor(
     registry: LiveMemberRegistry | None = None,
     dispatch_epoch: float | None = None,
     lead_session_id: str | None = None,
+    lease: TaskLease | None = None,
 ) -> None:
     """Register and start one actor loop — ATOMICALLY (plain ``def``, on purpose).
 
@@ -78,6 +80,12 @@ def spawn_actor(
     ``lead_session_id``: registering the lead's inbox here (idempotent)
     guarantees a member's ``member_done`` can never land on an unregistered
     inbox and vanish — even when the lead was not started via async kickoff.
+
+    ``lease``: leads only, and only from a caller that ALREADY holds the task's
+    execution lease (recovery/resume, which must own the task before it
+    respawns members). The loop then adopts it instead of acquiring — acquiring
+    again would bump the fence and evict the very caller that spawned it.
+    Everyone else passes None and the loop acquires for itself.
     """
     if lead_session_id:
         mailbox_registry.register(lead_session_id)
@@ -100,6 +108,7 @@ def spawn_actor(
             task_id=task_id,
             project_id=project_id,
             user_id=user_id,
+            lease=lease,
         )
     )
     loop_task.add_done_callback(

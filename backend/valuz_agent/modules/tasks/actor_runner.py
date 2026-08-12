@@ -181,12 +181,18 @@ class ActorRunner:
         project_id: str,
         idle_ttl: float | None = None,
         user_id: str,
+        lease: TaskLease | None = None,
     ) -> None:
         """Persistent actor loop: run turn → idle → await mailbox → repeat.
 
         Replaces the one-shot ``run_session_to_idle`` for v2 sessions. The loop
         exits on shutdown message, idle-TTL expiry, max-turns, or a terminal
         turn status, then finalizes the session exactly once.
+
+        ``lease``: a lead lease the CALLER already holds (recovery/resume, which
+        must own the task before respawning its members). Adopted as-is —
+        acquiring again would bump the fence and evict the caller. Omitted
+        everywhere else, and then the loop acquires for itself.
         """
         from valuz_agent.modules.tasks import planning
 
@@ -202,24 +208,26 @@ class ActorRunner:
             if idle_ttl is not None
             else (LEAD_IDLE_TTL_S if role == "lead" else MEMBER_IDLE_TTL_S)
         )
-        # CROSS-PROCESS ownership, before anything process-local. A lead may
-        # only drive a task no other process is driving; refusing here is what
-        # stops N booting workers from putting N lead loops on one task, and
-        # what lets the watchdog trust an expired lease as "really dead".
-        # Members are not leased: they are dispatched by a lead that already
-        # holds the task's lease.
-        lease: TaskLease | None = None
+        # Claim the inbox FIRST, so that bailing out below can hand it back
+        # through the claim guard. Dropping it unconditionally would be a race:
+        # ``spawn_actor`` claims eagerly, so between its claim and this line a
+        # newer loop may already have taken the session, and an unguarded
+        # ``unregister`` would pull the box out from under it.
+        claim_token = mailbox_registry.claim(session_id)
+        # CROSS-PROCESS ownership. A lead may only drive a task no other process
+        # is driving; refusing here is what stops N booting workers from putting
+        # N lead loops on one task, and what lets the watchdog trust an expired
+        # lease as "really dead". Members are not leased: they are dispatched by
+        # a lead that already holds the task's lease.
         fenced = asyncio.Event()
         renewer: asyncio.Task[None] | None = None
         if role == "lead":
-            lease = await acquire_task_lease(
-                user_id=user_id, task_id=task_id, lead_session_id=session_id
-            )
             if lease is None:
-                # ``spawn_actor`` claimed the mailbox eagerly for a loop that is
-                # not going to run. Drop it, or ``is_owned`` reports a reader
-                # this process does not have for the life of the process.
-                mailbox_registry.unregister(session_id)
+                lease = await acquire_task_lease(
+                    user_id=user_id, task_id=task_id, lead_session_id=session_id
+                )
+            if lease is None:
+                mailbox_registry.release(session_id, claim_token)
                 logger.info(
                     "actor loop %s (lead): task %s already has a driver — exiting",
                     session_id,
@@ -227,10 +235,9 @@ class ActorRunner:
                 )
                 return
             renewer = asyncio.create_task(
-                self._renew_lease(lease, session_id, fenced),
+                self._renew_lease(lease, session_id, claim_token, fenced),
                 name=f"task-lease-{task_id}",
             )
-        claim_token = mailbox_registry.claim(session_id)
         # Read once: every lead wake-up restates it (see _with_goal_restated).
         task_goal = (
             await self._task_goal(task_id, project_id, user_id) if role == "lead" else ""
@@ -385,15 +392,6 @@ class ActorRunner:
         finally:
             if renewer is not None:
                 renewer.cancel()
-            if lease is not None and not fenced.is_set():
-                # Hand the task back so a peer (or this process after a restart)
-                # can pick it up immediately instead of waiting out the TTL.
-                # Best-effort: a failure here must not mask the loop's own exit,
-                # and the lease expires on its own anyway.
-                try:
-                    await lease.release()
-                except Exception:  # noqa: BLE001
-                    logger.debug("actor loop %s: lease release failed", session_id)
             mailbox_registry.release(session_id, claim_token)
             # When draining, skip the ENTIRE finalize. ``_finalize_actor`` touches
             # the kernel store (status flip) AND the host DB (lead auto-finalize /
@@ -413,10 +411,27 @@ class ActorRunner:
                     via_shutdown=exited_on_shutdown,
                     user_id=user_id,
                 )
+            # LAST — strictly after finalize. ``finalize_actor`` writes the
+            # authoritative terminal state (kernel session status, and for a
+            # natural lead exit the task's own completed/blocked flip), so it
+            # must happen while we still own the task. Releasing first opened a
+            # window where a peer could acquire the lease and start driving,
+            # and this loop's finalize would then overwrite the new driver's
+            # state. Skipped when fenced: we no longer hold it (the guard makes
+            # it a no-op anyway) and the new driver's lease must not be touched.
+            if lease is not None and not fenced.is_set():
+                # Hand the task back so a peer — or this process after a
+                # restart — picks it up immediately instead of waiting out the
+                # TTL. Best-effort: the lease expires on its own, and a failure
+                # here must not mask the loop's own exit.
+                try:
+                    await lease.release()
+                except Exception:  # noqa: BLE001
+                    logger.debug("actor loop %s: lease release failed", session_id)
 
     @staticmethod
     async def _renew_lease(
-        lease: TaskLease, session_id: str, fenced: asyncio.Event
+        lease: TaskLease, session_id: str, claim_token: int, fenced: asyncio.Event
     ) -> None:
         """Keep the task lease alive; signal + wake the loop if we lose it.
 
@@ -425,11 +440,17 @@ class ActorRunner:
         the idle TTL), so a renewal folded into the loop body would starve and
         the lease would expire under a perfectly healthy driver.
 
-        Losing the lease means another process is now driving. Setting the
-        event is not enough — the loop may be parked on its mailbox for another
-        half hour — so we also post the ``shutdown`` message that every other
+        Losing the lease means someone else is now driving. Setting the event is
+        not enough — the loop may be parked on its mailbox for another half hour
+        — so we also post the ``shutdown`` message that every other
         externally-managed stop uses. Both paths land on ``exited_on_shutdown``,
         which skips finalize, so the new driver's state is never overwritten.
+
+        ``claim_token`` gates that post. The takeover can be a NEWER LOOP IN
+        THIS PROCESS (a rapid stop→resume, the race ``mailbox_registry.claim``
+        exists for), and both loops share one inbox — so posting unconditionally
+        would deliver our shutdown to the live replacement and stop the wrong
+        loop, leaving the task with no driver at all.
         """
         while True:
             try:
@@ -447,11 +468,12 @@ class ActorRunner:
                 continue
             fenced.set()
             logger.warning(
-                "actor loop %s: lost the lease on task %s (taken over elsewhere) — stopping",
+                "actor loop %s: lost the lease on task %s (taken over) — stopping",
                 session_id,
                 lease.task_id,
             )
-            mailbox_registry.put(session_id, InboxMsg(kind="shutdown"))
+            if mailbox_registry.is_claim_current(session_id, claim_token):
+                mailbox_registry.put(session_id, InboxMsg(kind="shutdown"))
             return
 
     @staticmethod

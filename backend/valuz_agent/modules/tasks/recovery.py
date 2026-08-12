@@ -38,7 +38,12 @@ from valuz_agent.modules.tasks.datastore import (
     pick_lead_run,
 )
 from valuz_agent.infra.time_utils import now_ms
-from valuz_agent.modules.tasks.lease import is_driven_elsewhere, load_lease_states
+from valuz_agent.modules.tasks.lease import (
+    TaskLease,
+    acquire_task_lease,
+    is_driven_elsewhere,
+    load_lease_states,
+)
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
 from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 from valuz_agent.modules.tasks.member_state import (
@@ -250,9 +255,66 @@ class RecoveryService:
             except Exception:  # noqa: BLE001
                 pass
 
-        # Re-drive (outside the DB txn): register the lead mailbox, deliver any
-        # completed members' results, respawn resumable members (kernel run_turn
-        # on the persisted session), then respawn the lead with a reconcile brief.
+        # Everything above is read + reconcile and safely repeatable. Everything
+        # below RESPAWNS: kernel evictions, member actor loops driving real
+        # turns, then the lead. Take the task's lease first, and give up if a
+        # peer holds it.
+        #
+        # The advisory check in ``recover_active_tasks`` cannot cover this: at a
+        # cold boot NOBODY holds a lease yet, so every worker passes it, and
+        # without an authoritative acquisition here each of them would respawn
+        # the same members — duplicate turns, duplicate model spend — before the
+        # lead loops raced for ownership. The lease travels into the lead loop
+        # so it does not re-acquire and fence the recovery that spawned it.
+        lease = await acquire_task_lease(
+            user_id=user_id, task_id=task_id, lead_session_id=lead_session_id
+        )
+        if lease is None:
+            logger.info(
+                "recover: task %s is already being driven — leaving it alone", task_id
+            )
+            return False
+        try:
+            return await self._respawn(
+                task_id=task_id,
+                project_id=project_id,
+                user_id=user_id,
+                lead_session_id=lead_session_id,
+                lease=lease,
+                member_done=member_done,
+                resume_members=resume_members,
+                summary=summary,
+                lead_instruction=lead_instruction,
+                evict=_evict_runtime,
+            )
+        except BaseException:
+            # We hold the task but are not going to drive it — hand it back now
+            # rather than making the next driver wait out the TTL.
+            await lease.release()
+            raise
+
+    async def _respawn(
+        self,
+        *,
+        task_id: str,
+        project_id: str,
+        user_id: str,
+        lead_session_id: str,
+        lease: TaskLease,
+        member_done: list[tuple[str, MemberManifest]],
+        resume_members: list[tuple[str, str, str, str, str]],
+        summary: list[str],
+        lead_instruction: str | None,
+        evict: Any,
+    ) -> bool:
+        """Side-effectful half of recovery, run under the task's lease.
+
+        Split out so the lease can wrap it as one unit: register the lead
+        mailbox, deliver any completed members' results, respawn resumable
+        members (kernel ``run_turn`` on the persisted session), then respawn the
+        lead with a reconcile brief.
+        """
+        _evict_runtime = evict
         mailbox_registry.register(lead_session_id)
         for member_sid, manifest in member_done:
             mailbox_registry.put(
@@ -316,6 +378,7 @@ class RecoveryService:
             task_id=task_id,
             project_id=project_id,
             user_id=user_id,
+            lease=lease,
         )
         return True
 
