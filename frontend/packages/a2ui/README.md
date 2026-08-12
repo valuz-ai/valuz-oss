@@ -106,7 +106,11 @@ surface and is not useful as shared application state.
 Importing `styles.css` is sufficient for a polished light theme. Hosts can
 override semantic variables on `.valuz-a2ui` or provide the matching Valuz
 design tokens (`--surface`, `--foreground`, `--brand`, `--fg-*`, status tokens,
-radius tokens, shadow tokens, and the eight `--accent-*` chart colors).
+radius tokens, shadow tokens, and the eight `--accent-*` colors). The default
+chart sequence always starts with Valuz brand purple, then uses the teal, amber,
+blue, orange, sky, pink, and fuchsia system accents. Hosts can override the
+stable `--va2-chart-1` through `--va2-chart-8` semantic series tokens when a
+different branded palette is required.
 
 The renderer uses only semantic roles. It includes keyboard focus states,
 disabled states, responsive layouts, standalone fallbacks for use outside

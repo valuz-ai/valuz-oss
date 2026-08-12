@@ -111,7 +111,12 @@ function SeriesLegend({ show }: { show?: boolean }) {
 }
 
 function ChartTooltip({ show }: { show?: boolean }) {
-  return show === false ? null : <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "var(--va2-bg-soft)" }} />;
+  return show === false ? null : (
+    <Tooltip
+      contentStyle={tooltipStyle}
+      cursor={{ fill: "var(--va2-chart-cursor)", stroke: "var(--va2-chart-cursor)" }}
+    />
+  );
 }
 
 function asNumber(value: unknown, fallback = 0) {
@@ -148,7 +153,7 @@ export const LineChart = createComponentImplementation(LineChartApi, ({ props })
     <ChartFrame title={props.title} description={props.description} height={props.height ?? 300} weight={props.weight} accessibility={props.accessibility}>
       <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: props.height ?? 300 }}>
         <RechartsLineChart data={data} margin={{ top: 8, right: 12, left: -12, bottom: 0 }}>
-          {props.showGrid !== false && <CartesianGrid stroke="var(--va2-border)" strokeDasharray="3 3" vertical={false} />}
+          {props.showGrid !== false && <CartesianGrid stroke="var(--va2-chart-grid)" strokeDasharray="3 3" vertical={false} />}
           {props.showAxes !== false && <XAxis dataKey={props.xKey} axisLine={false} tick={axisStyle} tickLine={false} />}
           {props.showAxes !== false && <YAxis axisLine={false} tick={axisStyle} tickLine={false} />}
           <ChartTooltip show={props.showTooltip} />
@@ -178,7 +183,7 @@ export const AreaChart = createComponentImplementation(AreaChartApi, ({ props })
     <ChartFrame title={props.title} description={props.description} height={props.height ?? 300} weight={props.weight} accessibility={props.accessibility}>
       <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: props.height ?? 300 }}>
         <RechartsAreaChart data={data} margin={{ top: 8, right: 12, left: -12, bottom: 0 }}>
-          {props.showGrid !== false && <CartesianGrid stroke="var(--va2-border)" strokeDasharray="3 3" vertical={false} />}
+          {props.showGrid !== false && <CartesianGrid stroke="var(--va2-chart-grid)" strokeDasharray="3 3" vertical={false} />}
           {props.showAxes !== false && <XAxis dataKey={props.xKey} axisLine={false} tick={axisStyle} tickLine={false} />}
           {props.showAxes !== false && <YAxis axisLine={false} tick={axisStyle} tickLine={false} />}
           <ChartTooltip show={props.showTooltip} />
@@ -213,7 +218,7 @@ export const BarChart = createComponentImplementation(BarChartApi, ({ props }) =
     <ChartFrame title={props.title} description={props.description} height={props.height ?? 300} weight={props.weight} accessibility={props.accessibility}>
       <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: props.height ?? 300 }}>
         <RechartsBarChart data={data} margin={{ top: 8, right: 12, left: -12, bottom: 0 }}>
-          {props.showGrid !== false && <CartesianGrid stroke="var(--va2-border)" strokeDasharray="3 3" vertical={false} />}
+          {props.showGrid !== false && <CartesianGrid stroke="var(--va2-chart-grid)" strokeDasharray="3 3" vertical={false} />}
           {props.showAxes !== false && <XAxis dataKey={props.xKey} axisLine={false} tick={axisStyle} tickLine={false} />}
           {props.showAxes !== false && <YAxis axisLine={false} tick={axisStyle} tickLine={false} />}
           <ChartTooltip show={props.showTooltip} />
@@ -242,7 +247,7 @@ export const HorizontalBarChart = createComponentImplementation(HorizontalBarCha
     <ChartFrame title={props.title} description={props.description} height={props.height ?? 300} weight={props.weight} accessibility={props.accessibility}>
       <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: props.height ?? 300 }}>
         <RechartsBarChart data={data} layout="vertical" margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>
-          {props.showGrid !== false && <CartesianGrid stroke="var(--va2-border)" strokeDasharray="3 3" horizontal={false} />}
+          {props.showGrid !== false && <CartesianGrid stroke="var(--va2-chart-grid)" strokeDasharray="3 3" horizontal={false} />}
           {props.showAxes !== false && <XAxis type="number" axisLine={false} tick={axisStyle} tickLine={false} />}
           {props.showAxes !== false && <YAxis dataKey={props.categoryKey} type="category" axisLine={false} tick={axisStyle} tickLine={false} width={84} />}
           <ChartTooltip show={props.showTooltip} />
@@ -332,7 +337,7 @@ export const ComboChart = createComponentImplementation(ComboChartApi, ({ props 
     <ChartFrame title={props.title} description={props.description} height={props.height ?? 300} weight={props.weight} accessibility={props.accessibility}>
       <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: props.height ?? 300 }}>
         <RechartsComposedChart data={data} margin={{ top: 8, right: hasRightAxis ? 4 : 12, left: -12, bottom: 0 }}>
-          {props.showGrid !== false && <CartesianGrid stroke="var(--va2-border)" strokeDasharray="3 3" vertical={false} />}
+          {props.showGrid !== false && <CartesianGrid stroke="var(--va2-chart-grid)" strokeDasharray="3 3" vertical={false} />}
           {props.showAxes !== false && <XAxis dataKey={props.xKey} axisLine={false} tick={axisStyle} tickLine={false} />}
           {props.showAxes !== false && <YAxis yAxisId="left" axisLine={false} tick={axisStyle} tickLine={false} />}
           {props.showAxes !== false && hasRightAxis && <YAxis yAxisId="right" orientation="right" axisLine={false} tick={axisStyle} tickLine={false} />}
@@ -453,7 +458,7 @@ export const GaugeChart = createComponentImplementation(GaugeChartApi, ({ props 
       <div className="va2-gauge">
         <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: props.height ?? 240 }}>
           <RechartsRadialChart data={[{ name: "value", value: percent }]} innerRadius="72%" outerRadius="96%" startAngle={props.startAngle ?? 210} endAngle={props.endAngle ?? -30}>
-            <RadialBar dataKey="value" fill={chartColors[0]} background={{ fill: "var(--va2-bg-muted)" }} cornerRadius={12} isAnimationActive={false} />
+            <RadialBar dataKey="value" fill={chartColors[0]} background={{ fill: "var(--va2-chart-track)" }} cornerRadius={12} isAnimationActive={false} />
           </RechartsRadialChart>
         </ResponsiveContainer>
         <div className="va2-gauge__value"><strong>{value}{props.unit ?? ""}</strong><span>{Math.round(percent)}%</span></div>
@@ -484,7 +489,7 @@ export const RadarChart = createComponentImplementation(RadarChartApi, ({ props 
     <ChartFrame title={props.title} description={props.description} height={props.height ?? 300} weight={props.weight} accessibility={props.accessibility}>
       <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: props.height ?? 300 }}>
         <RechartsRadarChart data={data} outerRadius="72%">
-          {props.showGrid !== false && <PolarGrid stroke="var(--va2-border)" />}
+          {props.showGrid !== false && <PolarGrid stroke="var(--va2-chart-grid)" />}
           <PolarAngleAxis dataKey={props.categoryKey} tick={axisStyle} />
           <PolarRadiusAxis domain={[0, props.domainMax ?? "auto"]} tick={false} axisLine={false} />
           <ChartTooltip show={props.showTooltip} />
@@ -517,7 +522,7 @@ export const RadialChart = createComponentImplementation(RadialChartApi, ({ prop
       <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: props.height ?? 300 }}>
         <RechartsRadialChart data={data} innerRadius="28%" outerRadius="88%" startAngle={props.startAngle ?? 90} endAngle={props.endAngle ?? -270}>
           <PolarRadiusAxis domain={[0, props.max ?? 100]} tick={false} axisLine={false} />
-          <RadialBar dataKey={props.valueKey} name={props.nameKey} background={{ fill: "var(--va2-bg-muted)" }} cornerRadius={6} isAnimationActive={false}>
+          <RadialBar dataKey={props.valueKey} name={props.nameKey} background={{ fill: "var(--va2-chart-track)" }} cornerRadius={6} isAnimationActive={false}>
             {data.map((_, index) => <Cell key={index} fill={chartColors[index % chartColors.length]} />)}
           </RadialBar>
           <ChartTooltip show={props.showTooltip} />
@@ -534,7 +539,7 @@ export const ScatterChart = createComponentImplementation(ScatterChartApi, ({ pr
     <ChartFrame title={props.title} description={props.description} height={props.height ?? 300} weight={props.weight} accessibility={props.accessibility}>
       <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: props.height ?? 300 }}>
         <RechartsScatterChart margin={{ top: 8, right: 12, left: -12, bottom: 0 }}>
-          {props.showGrid !== false && <CartesianGrid stroke="var(--va2-border)" strokeDasharray="3 3" />}
+          {props.showGrid !== false && <CartesianGrid stroke="var(--va2-chart-grid)" strokeDasharray="3 3" />}
           <XAxis type="number" dataKey={props.xKey} name={props.xKey} axisLine={false} tick={axisStyle} tickLine={false} />
           <YAxis type="number" dataKey={props.yKey} name={props.yKey} axisLine={false} tick={axisStyle} tickLine={false} />
           {props.sizeKey && <ZAxis type="number" dataKey={props.sizeKey} range={[48, 360]} />}

@@ -48,14 +48,20 @@
   --va2-duration-fast: var(--duration-fast, 120ms);
   --va2-duration-base: var(--duration-base, 200ms);
   --va2-ease: var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1));
-  --va2-chart-1: var(--accent-sky, #0ea5e9);
+  /* Charts lead with Valuz brand purple, then use the most harmonious and
+     distinguishable design-system accents. Keep the order stable: saved A2UI
+     surfaces rely on series position rather than renderer-specific colors. */
+  --va2-chart-1: var(--brand, #725cf9);
   --va2-chart-2: var(--accent-teal, #14b8a6);
   --va2-chart-3: var(--accent-amber, #eab308);
-  --va2-chart-4: var(--accent-pink, #ec4899);
-  --va2-chart-5: var(--accent-blue, #3b82f6);
-  --va2-chart-6: var(--accent-lime, #84cc16);
-  --va2-chart-7: var(--accent-orange, #f97316);
+  --va2-chart-4: var(--accent-blue, #3b82f6);
+  --va2-chart-5: var(--accent-orange, #f97316);
+  --va2-chart-6: var(--accent-sky, #0ea5e9);
+  --va2-chart-7: var(--accent-pink, #ec4899);
   --va2-chart-8: var(--accent-fuchsia, #d946ef);
+  --va2-chart-grid: color-mix(in oklab, var(--va2-text) 9%, transparent);
+  --va2-chart-cursor: color-mix(in oklab, var(--va2-brand) 8%, transparent);
+  --va2-chart-track: color-mix(in oklab, var(--va2-brand) 9%, var(--va2-bg));
   --va2-code-bg: color-mix(in oklab, var(--va2-text) 92%, black);
   --va2-code-header: color-mix(in oklab, var(--va2-text) 84%, black);
   --va2-code-border: color-mix(in oklab, var(--va2-text) 72%, black);
@@ -83,13 +89,13 @@
   --va2-success: #22c55e;
   --va2-warning: #f59e0b;
   --va2-danger: #ef4444;
-  --va2-chart-1: #38bdf8;
+  --va2-chart-1: #8b7afc;
   --va2-chart-2: #2dd4bf;
   --va2-chart-3: #facc15;
-  --va2-chart-4: #f472b6;
-  --va2-chart-5: #60a5fa;
-  --va2-chart-6: #a3e635;
-  --va2-chart-7: #fb923c;
+  --va2-chart-4: #60a5fa;
+  --va2-chart-5: #fb923c;
+  --va2-chart-6: #38bdf8;
+  --va2-chart-7: #f472b6;
   --va2-chart-8: #e879f9;
 }
 
