@@ -1355,6 +1355,15 @@ export const TaskDetailPage = () => {
       onCopyContent={handleArtifactCopy}
       onOpenExternal={handleArtifactOpenExternal}
     >
+      {/* THIS surface owns its scroll. It used to lean on the AppShell's own
+          scroll box, which stopped working the moment the page moved inside
+          ``ArtifactSplitPane``: the split's content column is a viewport-height
+          panel carrying an inline ``overflow: hidden`` (so a drag can never
+          spill one column into the other). That clips FIRST, so the shell's
+          box never sees overflowing content and never grows a scrollbar — the
+          timeline was simply cut off at the fold, with no wheel or bar to
+          reach the rest. */}
+      <div className="h-full overflow-y-auto">
       {/* In-flight: ``min-h-full`` lets the wrapper fill the scrolling viewport
           so the sticky action bar can pin to its bottom edge even when content
           is short (``mt-auto`` on the bar pushes it down). Completed:
@@ -2019,6 +2028,7 @@ export const TaskDetailPage = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      </div>
       </div>
     </ArtifactSplitPane>
   );
