@@ -42,7 +42,7 @@ def patched(monkeypatch):
     monkeypatch.setattr(t, "resolve_model_provider", _resolve)
 
     async def _fake_completer(prompt):
-        return '{"version":"v0.9","createSurface":{"surfaceId":"s"}}'
+        return '{"version":"v0.9.1","createSurface":{"surfaceId":"s"}}'
 
     monkeypatch.setattr(t, "_make_completer", lambda **kw: _fake_completer)
 
@@ -65,7 +65,7 @@ async def test_handler_defaults_to_a2ui_payload(monkeypatch, patched):
 
     async def _comp(prompt):
         seen["prompt"] = prompt
-        return '{"version":"v0.9","createSurface":{"surfaceId":"dashboard"}}'
+        return '{"version":"v0.9.1","createSurface":{"surfaceId":"dashboard"}}'
 
     def _make(**kw):
         seen["make_kwargs"] = kw
@@ -79,10 +79,10 @@ async def test_handler_defaults_to_a2ui_payload(monkeypatch, patched):
     assert res.is_error is False
     assert json.loads(res.content) == {
         "protocol": "a2ui-json",
-        "content": '{"version":"v0.9","createSurface":{"surfaceId":"dashboard"}}',
+        "content": '{"version":"v0.9.1","createSurface":{"surfaceId":"dashboard"}}',
     }
     assert "A2UI" in seen["prompt"]
-    assert seen["make_kwargs"]["output_format"] == "A2UI v0.9 JSON message stream"
+    assert seen["make_kwargs"]["output_format"] == "A2UI v0.9.1 JSON message stream"
     assert "A2UI" in seen["make_kwargs"]["session_instructions"]
 
 

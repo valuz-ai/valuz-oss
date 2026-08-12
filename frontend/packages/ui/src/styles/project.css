@@ -4,15 +4,6 @@
 @source "../../../*/src/**/*.{ts,tsx}";
 @source inline("absolute fixed relative inset-0 right-0 right-4 top-4 top-full bottom-2 bottom-4 left-2 left-4 z-10 z-20 z-50 flex flex-col flex-1 items-center justify-center justify-end gap-1 gap-2 gap-4 space-x-2 grid w-full w-4 h-full h-4 h-[46px] size-4 size-full min-w-[120px] max-w-md max-h-32 min-h-[200px] p-1 p-2 p-3 p-4 p-6 px-1.5 px-3 px-4 py-1 py-2 pt-0 mt-1 mt-2 mx-4 my-4 my-6 rounded rounded-full rounded-lg rounded-md rounded-xl border border-border border-b-2 border-collapse border-current border-sidebar divide-y divide-border bg-background bg-background/50 bg-background/90 bg-background/95 bg-muted bg-muted/80 bg-primary bg-red-50 bg-red-100 bg-sidebar bg-sidebar/80 text-left text-sm text-xs text-lg text-2xl text-3xl text-base text-muted-foreground text-primary-foreground text-red-600 text-red-700 text-red-800 font-medium font-mono font-semibold list-decimal list-disc list-inside shadow-lg backdrop-blur-sm transition-all transition-colors duration-150 duration-200 ease-out overflow-auto overflow-hidden overflow-x-auto overflow-y-auto cursor-pointer pointer-events-auto pointer-events-none opacity-0 animate-spin group origin-center shrink-0 whitespace-normal break-all before:font-mono before:text-[13px] before:text-right before:w-6 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_thead]:sticky [&_thead]:top-0 [&_thead]:z-10 [li_&]:pl-6 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-muted hover:bg-muted/40 hover:bg-primary-hover hover:bg-brand-hover hover:bg-background hover:text-foreground supports-[backdrop-filter]:backdrop-blur supports-[backdrop-filter]:bg-sidebar/70 dark:bg-[var(--shiki-dark-bg,var(--sdm-tbg))] dark:text-[var(--shiki-dark,var(--sdm-c,inherit))] bg-[var(--sdm-tbg)] text-[var(--sdm-c,inherit)]");
 
-/* OpenUI defaults charts to a square aspect ratio, which makes wide inline
-   conversation charts excessively tall. Keep a stable work-surface height. */
-[data-slot="generative-ui-card"] .openui-chart-container {
-  aspect-ratio: auto;
-  width: 100%;
-  height: 17.5rem;
-  min-height: 15rem;
-}
-
 :root {
   --background: #f8f9fb;
   --foreground: #131313;

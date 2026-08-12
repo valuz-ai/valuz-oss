@@ -10,11 +10,11 @@ describe("A2UIRenderer duplicate createSurface", () => {
   it("keeps rendering when the document re-creates an existing surface", () => {
     const messages = [
       {
-        version: "v0.9",
-        createSurface: { surfaceId: "main", catalogId: "openui" },
+        version: "v0.9.1",
+        createSurface: { surfaceId: "main", catalogId: "https://valuz.io/a2ui/catalogs/base/v1" },
       },
       {
-        version: "v0.9",
+        version: "v0.9.1",
         updateComponents: {
           surfaceId: "main",
           components: [
@@ -23,11 +23,11 @@ describe("A2UIRenderer duplicate createSurface", () => {
         },
       },
       {
-        version: "v0.9",
-        createSurface: { surfaceId: "main", catalogId: "openui" },
+        version: "v0.9.1",
+        createSurface: { surfaceId: "main", catalogId: "https://valuz.io/a2ui/catalogs/base/v1" },
       },
       {
-        version: "v0.9",
+        version: "v0.9.1",
         updateComponents: {
           surfaceId: "main",
           components: [

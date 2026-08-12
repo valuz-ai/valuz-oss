@@ -21,9 +21,9 @@ from valuz_agent.modules.genui.protocol import extract_a2ui_document
 from valuz_agent.modules.genui.tools import _document_file_name, _parse_target_host
 from valuz_agent.ports.ui_artifact import UiArtifactTargetHost
 
-_CREATE = '{"version":"v0.9","createSurface":{"surfaceId":"main","catalogId":"openui"}}'
+_CREATE = '{"version":"v0.9.1","createSurface":{"surfaceId":"main","catalogId":"https://valuz.io/a2ui/catalogs/base/v1"}}'
 _COMPONENTS = (
-    '{"version":"v0.9","updateComponents":{"surfaceId":"main","components":'
+    '{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":'
     '[{"id":"root","component":"Text","text":"hello"}]}}'
 )
 DOC = f"{_CREATE}\n{_COMPONENTS}"
@@ -177,10 +177,10 @@ class TestRepeatedDocument:
     def test_stores_a_repeated_document_once(self) -> None:
         doc = "\n".join(
             [
-                json.dumps({"version": "v0.9", "createSurface": {"surfaceId": "main"}}),
+                json.dumps({"version": "v0.9.1", "createSurface": {"surfaceId": "main"}}),
                 json.dumps(
                     {
-                        "version": "v0.9",
+                        "version": "v0.9.1",
                         "updateComponents": {
                             "surfaceId": "main",
                             "components": [{"id": "root", "component": "Stack"}],
@@ -195,10 +195,10 @@ class TestRepeatedDocument:
     def test_keeps_a_second_declaration_that_differs(self) -> None:
         # Only an exact repeat is dropped; two DIFFERENT versions are a real
         # restart and picking a winner is not this function's call.
-        first = json.dumps({"version": "v0.9", "createSurface": {"surfaceId": "main"}})
+        first = json.dumps({"version": "v0.9.1", "createSurface": {"surfaceId": "main"}})
         components = json.dumps(
             {
-                "version": "v0.9",
+                "version": "v0.9.1",
                 "updateComponents": {
                     "surfaceId": "main",
                     "components": [{"id": "root", "component": "Stack"}],
@@ -207,7 +207,7 @@ class TestRepeatedDocument:
         )
         other = json.dumps(
             {
-                "version": "v0.9",
+                "version": "v0.9.1",
                 "updateComponents": {
                     "surfaceId": "main",
                     "components": [{"id": "root", "component": "Card"}],
@@ -300,7 +300,7 @@ async def test_hosted_regeneration_appends_to_the_bound_lineage(
             host_type="finance.research-desk", host_id="desk", slot="main"
         ),
         request="req",
-        document='{"version":"v0.9","updateComponents":{"surfaceId":"s","components":[{"id":"root"}]}}',
+        document='{"version":"v0.9.1","updateComponents":{"surfaceId":"s","components":[{"id":"root"}]}}',
     )
 
     assert seen["scope"] == lineage_scope.scope
@@ -364,7 +364,7 @@ async def test_unresolvable_lineage_scope_falls_back_to_the_session(
             host_type="finance.research-desk", host_id="desk", slot="main"
         ),
         request="req",
-        document='{"version":"v0.9","updateComponents":{"surfaceId":"s","components":[{"id":"root"}]}}',
+        document='{"version":"v0.9.1","updateComponents":{"surfaceId":"s","components":[{"id":"root"}]}}',
     )
 
     assert seen["scope"] == session_scope.scope

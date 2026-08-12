@@ -1,9 +1,7 @@
 """A2UI prompt and payload assembly for the ``generate_ui`` tool.
 
-A2UI v0.9 is the one wire protocol. The tool used to be able to emit OpenUI
-Lang instead, chosen by ``VALUZ_GENUI_PROTOCOL``; carrying two generation
-formats meant two prompt vocabularies, two renderers and two sets of failure
-modes for one feature, so the second was removed rather than maintained.
+A2UI v0.9.1 is the one wire protocol and the Valuz A2UI catalog is the one
+component implementation.
 """
 
 from __future__ import annotations
@@ -14,9 +12,9 @@ from importlib import resources
 from typing import Literal
 
 from valuz_agent.ports.extensions import ext
-from valuz_agent.ports.genui_blocks import GenUIBlockRegistry
+from valuz_agent.ports.a2ui_components import A2UIComponentRegistry
 
-OUTPUT_FORMAT = "A2UI v0.9 JSON message stream"
+OUTPUT_FORMAT = "A2UI v0.9.1 JSON message stream"
 
 #: Follow-up prompt when the previous turn's A2UI document was cut off at the
 #: output-token cap. Sent in the SAME ephemeral session, so the model sees its
@@ -34,8 +32,7 @@ CONTINUATION_PROMPT = (
 #:
 #: The split follows where a component comes from, not what it is made of:
 #:
-#: - ``atoms`` — everything this repository ships: OpenUI's primitives *and*
-#:   the built-in blocks. The general vocabulary.
+#: - ``atoms`` — the complete Valuz OSS A2UI catalog.
 #: - ``edition`` — only what an edition registered from outside this repo.
 #:   A vertical's own set, unmixed with the general one.
 #: - ``all`` — both. The default, and right when the shape of the answer is not
@@ -51,7 +48,7 @@ CONTINUATION_PROMPT = (
 GenUIComponentScope = Literal["all", "edition", "atoms"]
 
 _A2UI_INSTRUCTIONS_BASE = (
-    "You generate user interfaces as an A2UI v0.9 JSON message stream. Output "
+    "You generate user interfaces as an A2UI v0.9.1 JSON message stream. Output "
     "ONLY newline-delimited JSON objects, with no markdown fences, prose, or "
     "explanations. The first message must create a surface, and later messages "
     "may update its data model and components. Use concise component trees "
@@ -59,15 +56,14 @@ _A2UI_INSTRUCTIONS_BASE = (
     "sidebar, top navigation, or fixed-width page chrome. Prefer compact, "
     "mobile-first layouts: KPI/detail rows may wrap, charts should occupy a "
     "readable full-width section, and tables may scroll horizontally only when "
-    "their columns cannot stay readable. Use OpenUI component names from the "
-    "catalog below so the @a2ui/react renderer can map them to OpenUI React "
-    "components one-for-one."
+    "their columns cannot stay readable. Use only component names and exact "
+    "property shapes from the Valuz A2UI catalog below."
 )
 
-_A2UI_PREFER_BLOCKS = (
+_A2UI_PREFER_EDITION_COMPONENTS = (
     " For financial market dashboards, prefer the Valuz "
-    "semantic components in the catalog: they are rendered as OpenUI surfaces "
-    "but avoid fragile Card/TextContent/Chart compositions."
+    "semantic components in the edition catalog when they directly answer the "
+    "research question; use base components to compose supporting layout."
 )
 
 _A2UI_NO_PLACEHOLDER_CHARTS = (
@@ -86,8 +82,8 @@ _A2UI_NO_PLACEHOLDER_CHARTS = (
 # what an edition installed. Generic advice is the honest limit — better than
 # naming components from a set that scope just excluded.
 _A2UI_SNAPSHOT_FALLBACKS: dict[str, str] = {
-    "all": "MarketIndexGrid, StatsCard, MarketBreadth, DataList, or Table",
-    "atoms": "MarketIndexGrid, StatsCard, MarketBreadth, DataList, or Table",
+    "all": "MetricGroup, ListBlock, DataTable, or Table",
+    "atoms": "MetricGroup, ListBlock, DataTable, or Table",
     "edition": "a tile, list, or table component from the catalog above",
 }
 
@@ -101,51 +97,17 @@ def _snapshot_fallbacks(scope: GenUIComponentScope) -> str:
     contents were chosen by a build this one cannot see.
     """
 
-    if _block_registry().baseline_suppressed():
+    if _component_registry().baseline_suppressed():
         return _A2UI_SNAPSHOT_FALLBACKS["edition"]
     return _A2UI_SNAPSHOT_FALLBACKS[scope]
 
 
-A2UI_OPENUI_COMPONENT_CATALOG = """
-OpenUI component catalog supported by the A2UI renderer. These sit alongside the
-Valuz blocks below; where both could serve, the block is the better answer —
-it is opinionated about the shape of the data, and these are not.
-
-- Stack(children: array, direction?: "row"|"column", gap?: string) — The document root every payload opens with, and the only general-purpose
-  container kept here: it stacks the answer's sections. Inline, Cluster, Split and DashboardGrid are the blocks for arranging things inside a section.
-- LineChart(labels: array, series: array, variant?: string, xLabel?: string, yLabel?: string) — Values over an ordered axis, one line per series. labels is the axis and series is {category, values} with the nth value under the nth label. This is the only multi-series line chart; ComboChart draws bars with a single line over them, so reach for that one only when the second measure genuinely is a rate over a level.
-- AreaChart(labels: array, series: array, variant?: string, xLabel?: string, yLabel?: string) — A LineChart with the area under each line filled. Use it when the quantity accumulates or when the total, not the path, is the point; a plain LineChart reads more precisely for levels that move both ways.
-- RadarChart(labels: array, series: array, variant?: string) — One subject scored across several named axes, drawn as a closed shape. Best from about four axes up, and only when the axes share a scale — mixed units make the shape meaningless. Two or three series at most before the shapes obscure each other.
-- ScatterChart(series: array, xLabel?: string, yLabel?: string) — Points in two dimensions, for the relationship between two measures rather than change over time.
-- PieChart(labels: array, values: array) — Parts of one whole. Keep it under about six slices and only when the parts really do sum to the whole; anything ranked or compared is a GroupedBar.
-- RadialChart(labels: array, values: array) — The same composition drawn as concentric arcs. Use it for a small number of shares where the ring reads better than a pie.
-
-- Callout(text: string, title?: string, variant?: string) — A tinted panel raising one thing about the answer: a caveat, a coverage gap, a figure on a different basis. variant carries the severity, and stating it is the point — a warning drawn neutral reads as a footnote. ContextCard is the neighbouring explanation of method; this is a flag above the answer.
-- Markdown(text: string) — Prose with markup: headings, bold, lists, links, inline code. The only component that parses markup — RichText renders its text literally. A real table is DataGrid or ComparisonTable, not a markdown table. (MarkDownRenderer is this component's former name and is still accepted.)
-- CodeBlock(code: string, language?: string) — Code or a formula kept verbatim and highlighted. Use it as a receipt the reader can check or re-run — the query behind a table, the formula behind a screen — and never paraphrase it to save space. language only selects highlighting; omit it rather than guess.
-- Tag(label: string, variant?: string) — A short classification label as a pill: a filing type, a category, a rating. IconTag is the sibling when the mark is an icon rather than a word.
-- TagBlock(tags: array) — A wrapping row of Tags, for a set worth reading together. A single tag needs no block.
-
-- Tabs(children: array) / TabItem(label: string, children: array) — Panels behind named tabs. Only one panel is visible, so never put the answer's main finding inside a tab the reader must discover. The selection is local to the page and reaches no agent.
-
-- Form(fields: array, buttons?: array) / FormControl(children: array) / Label(label: string) — A field group. Every control below is a picture of an input: nothing is submitted, nothing reaches an agent, and no value you set comes back. Render one to show what was asked or what a reader would fill in — never to collect an answer you intend to act on, and never write text promising that pressing something will do anything.
-- Input(name: string, type?: string, placeholder?: string, value?: string) — A single-line field.
-- TextArea(name: string, rows?: number, placeholder?: string, value?: string) — A multi-line field.
-- Select(name: string, children: array) / SelectItem(value: string, label?: string) — A dropdown and its options.
-- CheckBoxGroup(items: array) / CheckBoxItem(name: string, label: string, description?: string, checked?: boolean) — Independent toggles. StatusList is the better answer when you are reporting what is done rather than offering choices.
-- RadioGroup(name: string, items: array, defaultValue?: string) / RadioItem(value: string, label: string, description?: string) — One choice from a set. OptionCards reads better when each option needs a sentence.
-- SwitchGroup(items: array) / SwitchItem(name: string, label: string, description?: string, checked?: boolean) — On/off settings.
-- Slider(name: string, min?: number, max?: number, step?: number, value?: number, label?: string) — A value on a range.
-- DatePicker(mode?: string, value?: string) — A date or range field.
-- Button(label: string, variant?: string) / Buttons(buttons: array, direction?: string) — A button is drawn, not wired: clicking it does nothing. Use it only to depict an action that exists elsewhere, and say where — never as the way the reader is meant to proceed.
-"""
-
 _A2UI_MESSAGE_SHAPE = """\
-Use official A2UI v0.9 component objects with component properties at the top
+Use official A2UI v0.9.1 component objects with component properties at the top
 level, not nested under "props":
-{"id":"title","component":"TextContent","text":"Revenue","size":"large-heavy"}
+{"id":"title","component":"TextContent","text":"Revenue","variant":"h2"}
 Use flat component ids for layout children:
-{"id":"root","component":"Stack","children":["title","chart"],"direction":"column","gap":"m"}
+{"id":"root","component":"Stack","children":["title","chart"],"direction":"vertical","gap":"md"}
 Do not create placeholder charts or charts with empty series. If supplied data
 does not include chart-ready arrays, show the raw values with {fallbacks}.
 
@@ -155,10 +117,10 @@ the answer names a host data source the edition catalog marks as pollable AND
 freshness genuinely matters (a quote line, a watchlist), you may bind instead:
 
 1. Seed a slot and declare its source in the data model:
-{"version":"v0.9","updateDataModel":{"surfaceId":"s","path":"/data/quote","value":{"items":[...]}}}
-{"version":"v0.9","updateDataModel":{"surfaceId":"s","path":"/refs/quote","value":{"source":"<source id>","params":{"symbol":"US:NVDA"},"refresh":{"interval":60}}}}
+{"version":"v0.9.1","updateDataModel":{"surfaceId":"s","path":"/data/quote","value":{"items":[...]}}}
+{"version":"v0.9.1","updateDataModel":{"surfaceId":"s","path":"/refs/quote","value":{"source":"<source id>","params":{"symbol":"US:NVDA"},"refresh":{"interval":60}}}}
 2. Bind the component property to the slot instead of inlining:
-{"id":"q","component":"MetricStrip","items":{"path":"/data/quote/items"},"source":"Valuz","asOf":"..."}
+Bind the property named by the edition source notes to the matching slot path.
 The binding IS the refresh: a property written as {"path": ...} re-renders
 when the host updates the slot, an inlined copy of the same values never
 does. Seeding the slot and then inlining the values anyway produces a board
@@ -190,19 +152,12 @@ Only keys the notes name exist; on pages that provide none, always write
 literal params."""
 
 
-def _load_block_catalog() -> str:
-    """The Valuz block section of the catalog.
-
-    Generated from the block registry in ``@valuz/genui-blocks`` by
-    ``frontend/packages/ui/scripts/gen_openui_prompt.mjs`` — the same registry
-    ``A2UIRenderer`` builds its component list from, so the model is never told
-    about a block that cannot render, nor left unaware of one that can. Hand-
-    editing this asset re-opens exactly that drift.
-    """
+def _load_component_catalog() -> str:
+    """Catalog generated from ``@valuz/a2ui`` component schemas."""
 
     return (
         resources.files("valuz_agent.modules.genui")
-        .joinpath("a2ui_block_catalog.txt")
+        .joinpath("a2ui_component_catalog.txt")
         .read_text(encoding="utf-8")
         .rstrip("\n")
     )
@@ -210,66 +165,37 @@ def _load_block_catalog() -> str:
 
 _A2UI_EDITION_HEADING = "- Edition components:\n"
 
-_A2UI_ROOT_ONLY_CATALOG = """
-OpenUI component catalog supported by the A2UI renderer:
-- Layout: Stack — the document root, and the only component from the general
-  vocabulary offered here. Everything else comes from the edition below.
+_A2UI_ROOT_ONLY_CATALOG = """Valuz A2UI root component:
+  - Stack(children: array, direction?: \"vertical\"|\"horizontal\") — The document root.
 """
 
-#: Every component the OpenUI library defines — the reserved set the block
-#: registry refuses collisions against.
-#:
-#: Deliberately NOT derived from the catalog above. The two answer different
-#: questions: the catalog decides what the model is *offered*, while this list
-#: decides what a block may not be *named*. A name dropped from the catalog is
-#: still defined by the OpenUI library, and a block taking it collides at JSON
-#: Schema conversion — "Duplicate schema id" at render time, nowhere near the
-#: registration that caused it. So this stays complete even as the catalog
-#: narrows; add a name here whenever OpenUI grows a component.
-_OPENUI_COMPONENT_NAMES: tuple[str, ...] = (
-    "Accordion", "AccordionItem", "AreaChart", "BarChart", "Button", "Buttons",
-    "Callout", "Card", "CardHeader", "Carousel", "CheckBoxGroup", "CheckBoxItem",
-    "CodeBlock", "Col", "DatePicker", "Form", "FormControl", "Grid", "Heading",
-    "HorizontalBarChart", "Image", "ImageBlock", "ImageGallery", "Input", "KPI",
-    "Label", "LineChart", "MarkDownRenderer", "Markdown", "Modal", "Paragraph",
-    "PieChart", "Point", "RadarChart", "RadialChart", "RadioGroup", "RadioItem",
-    "Row", "ScatterChart", "ScatterSeries", "Section", "Select", "SelectItem",
-    "Separator", "Series", "SingleStackedBarChart", "Slice", "Slider", "Stack",
-    "Steps", "StepsItem", "SwitchGroup", "SwitchItem", "TabItem", "Table",
-    "Tabs", "Tag", "TagBlock", "Text", "TextArea", "TextCallout", "TextContent",
-    "Title",
-)
 
-
-def _block_registry() -> GenUIBlockRegistry:
-    """The process-wide block registry, with the OSS baseline bound.
+def _component_registry() -> A2UIComponentRegistry:
+    """The process-wide A2UI component registry, with the OSS baseline bound.
 
     Binding is lazy rather than at import so an overlay that registers before
     importing this module still gets its collisions checked — the registry
     re-validates at bind and logs loudly on a drop.
     """
 
-    registry = ext.genui_blocks
+    registry = ext.a2ui_components
     if not registry.baseline_bound:
-        catalog_text = _load_block_catalog()
+        catalog_text = _load_component_catalog()
         names = re.findall(r"^\s*-\s*([A-Za-z0-9]+)\(", catalog_text, re.MULTILINE)
         registry.bind_baseline(
-            names=[*names, *_OPENUI_COMPONENT_NAMES],
+            names=names,
             catalog_text=catalog_text,
         )
     return registry
 
 
-A2UI_COMPONENT_CATALOG = f"""{A2UI_OPENUI_COMPONENT_CATALOG}
-- Valuz blocks (cards, citations, report pages, diagrams):
-{_load_block_catalog()}
-"""
+A2UI_COMPONENT_CATALOG = _load_component_catalog()
 
 
 def edition_catalog_text() -> str:
     """Components registered from outside this repository.
 
-    The registry behind it is ``ext.genui_blocks``: an edition — a separate
+    The registry behind it is ``ext.a2ui_components``: an edition — a separate
     build that vendors this one — registers the catalog its own frontend
     generated, and this returns those layers and nothing else. Empty when
     nothing is installed, which is what makes ``resolve_component_scope``
@@ -281,7 +207,7 @@ def edition_catalog_text() -> str:
     behind every edition, forever.
     """
 
-    return _block_registry().catalog_text(baseline=False)
+    return _component_registry().catalog_text(baseline=False)
 
 
 def resolve_component_scope(scope: GenUIComponentScope) -> GenUIComponentScope:
@@ -305,22 +231,16 @@ def resolve_component_scope(scope: GenUIComponentScope) -> GenUIComponentScope:
 def build_a2ui_catalog(scope: GenUIComponentScope = "all") -> str:
     """The A2UI catalog for one scope.
 
-    Assembled rather than stored per scope because A2UI's primitive list is a
-    hand-written blob (the renderer maps those names one-for-one) while the
-    block half is generated — only the second half has a build step to hang a
-    variant on.
+    The OSS half is generated from the same strict schemas the renderer uses;
+    edition entries are appended by the distribution registry.
     """
 
     edition = edition_catalog_text()
     scope = resolve_component_scope(scope)
 
-    own = (
-        f"{A2UI_OPENUI_COMPONENT_CATALOG}\n"
-        "- Valuz blocks (cards, citations, report pages, diagrams):\n"
-        f"{_load_block_catalog()}\n"
-    )
+    own = f"Valuz A2UI component catalog:\n{_load_component_catalog()}\n"
     installed = f"{_A2UI_EDITION_HEADING}{edition}\n" if edition else ""
-    if _block_registry().baseline_suppressed():
+    if _component_registry().baseline_suppressed():
         # An edition holds `replace`: this repository's vocabulary is gone from
         # the renderer, so no scope may describe it — a described-but-
         # unrenderable component is the failure direction the seam keeps closed.
@@ -358,7 +278,7 @@ def normalize_component_scope(value: object) -> GenUIComponentScope:
             return "all"
         if normalized in {"edition", "vertical"}:
             return "edition"
-        if normalized in {"atoms", "atom", "blocks", "openui", "valuz", "base"}:
+        if normalized in {"atoms", "atom", "components", "a2ui", "valuz", "base"}:
             return "atoms"
     return "all"
 
@@ -367,9 +287,9 @@ def a2ui_instructions(scope: GenUIComponentScope = "all") -> str:
     """The A2UI system instructions, saying only what this scope can back up."""
 
     scope = resolve_component_scope(scope)
-    prefer_blocks = _A2UI_PREFER_BLOCKS if scope != "atoms" else ""
+    prefer_components = _A2UI_PREFER_EDITION_COMPONENTS if scope != "atoms" else ""
     tail = _A2UI_NO_PLACEHOLDER_CHARTS.replace("{fallbacks}", _snapshot_fallbacks(scope))
-    return f"{_A2UI_INSTRUCTIONS_BASE}{prefer_blocks}{tail}"
+    return f"{_A2UI_INSTRUCTIONS_BASE}{prefer_components}{tail}"
 
 
 A2UI_GENERATIVE_UI_INSTRUCTIONS = a2ui_instructions()
@@ -383,11 +303,10 @@ def build_a2ui_prompt(
     parts = [
         a2ui_instructions(scope),
         "",
-        "A2UI v0.9 message contract:",
-        '- createSurface: {"version":"v0.9","createSurface":{"surfaceId":"main","catalogId":"openui"}}',
-        '- updateDataModel: {"version":"v0.9","updateDataModel":{"surfaceId":"main","path":"/","value":{...}}}',
-        '- updateComponents: {"version":"v0.9","updateComponents":{"surfaceId":"main","components":[...]}}',
-        "- deleteSurface is allowed only when removing a surface.",
+        "A2UI v0.9.1 message contract:",
+        '- createSurface: {"version":"v0.9.1","createSurface":{"surfaceId":"main","catalogId":"https://valuz.io/a2ui/catalogs/base/v1"}}',
+        '- updateDataModel: {"version":"v0.9.1","updateDataModel":{"surfaceId":"main","path":"/","value":{...}}}',
+        '- updateComponents: {"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":[...]}}',
         '- every UI must include a component with id "root"; put the visible tree under root.children.',
         "",
         build_a2ui_catalog(scope).strip(),

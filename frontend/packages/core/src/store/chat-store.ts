@@ -659,7 +659,7 @@ export const reduce = (
     case "tool.call.thinking_delta": {
       // Tool-scoped reasoning stream (live-only) — same accumulation shape as
       // output_delta but onto ``thinking``, never ``output`` (the result
-      // stream, e.g. the OpenUI code generate_ui renders progressively).
+      // stream, e.g. the A2UI JSONL generate_ui renders progressively).
       const toolId = payload.tool_use_id ?? "";
       if (!toolId) return { lastSeq: nextLastSeq };
       const text = payload.text ?? "";

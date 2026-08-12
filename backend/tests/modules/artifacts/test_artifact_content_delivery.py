@@ -29,8 +29,8 @@ from valuz_agent.modules.artifacts.service import (
 
 SCOPE = Scope(user_id="owner-1", project_id="proj-1", worktree="")
 DOC = (
-    '{"version":"v0.9","createSurface":{"surfaceId":"main","catalogId":"openui"}}\n'
-    '{"version":"v0.9","updateComponents":{"surfaceId":"main","components":'
+    '{"version":"v0.9.1","createSurface":{"surfaceId":"main","catalogId":"openui"}}\n'
+    '{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":'
     '[{"id":"root","component":"Text","text":"hello"}]}}'
 )
 

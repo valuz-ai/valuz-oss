@@ -299,7 +299,7 @@ class ArtifactContentRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     1. ``storage_key`` is a location indirection — the escape hatch if content
        ever has to move out of the working directory (for true immutability),
        with no change to the revision table;
-    2. ``content_inline`` gives small generated payloads (OpenUI/A2UI JSON,
+    2. ``content_inline`` gives small generated payloads (A2UI JSON,
        short markdown) somewhere to live that is not a pile of mostly-NULL
        columns on every revision;
     3. it answers "are these two versions the same bytes" without reading files.

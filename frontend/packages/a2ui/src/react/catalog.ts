@@ -2,29 +2,23 @@ import { Catalog, MessageProcessor, type ActionListener } from "@a2ui/web_core/v
 import type { ReactComponentImplementation } from "@a2ui/react/v0_9";
 
 import { VALUZ_BASE_CATALOG_ID } from "../catalog";
-import { actionComponents } from "./actions";
-import { analyticsComponents } from "./analytics";
-import { advancedChartComponents } from "./advanced-charts";
-import { chartComponents } from "./charts";
-import { contentComponents } from "./content";
-import { formComponents } from "./forms";
-import { layoutComponents } from "./layout";
+import { valuzBaseComponents } from "./base";
+import { effectiveA2UIComponents } from "./registry";
 
-export const valuzBaseComponents: ReactComponentImplementation[] = [
-  ...layoutComponents,
-  ...contentComponents,
-  ...formComponents,
-  ...actionComponents,
-  ...analyticsComponents,
-  ...advancedChartComponents,
-  ...chartComponents,
-];
+export { valuzBaseComponents } from "./base";
 
 export const valuzBaseCatalog = new Catalog<ReactComponentImplementation>(
   VALUZ_BASE_CATALOG_ID,
   valuzBaseComponents,
 );
 
+export function createValuzCatalog() {
+  return new Catalog<ReactComponentImplementation>(
+    VALUZ_BASE_CATALOG_ID,
+    effectiveA2UIComponents(),
+  );
+}
+
 export function createValuzMessageProcessor(actionHandler?: ActionListener) {
-  return new MessageProcessor([valuzBaseCatalog], actionHandler, { version: "v0.9.1" });
+  return new MessageProcessor([createValuzCatalog()], actionHandler, { version: "v0.9.1" });
 }

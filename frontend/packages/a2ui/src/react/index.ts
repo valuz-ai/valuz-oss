@@ -6,4 +6,5 @@ export * from "./charts";
 export * from "./content";
 export * from "./forms";
 export * from "./layout";
+export * from "./registry";
 export * from "./surface";

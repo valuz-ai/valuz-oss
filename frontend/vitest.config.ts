@@ -36,17 +36,17 @@ export default defineConfig({
     },
   ],
   resolve: {
+    dedupe: ["react", "react-dom"],
     alias: {
       // This repo is often consumed from a parent commercial workspace. Pin
       // React resolution to this workspace's lockfile so Vitest cannot mix a
       // parent React dispatcher with the local ReactDOM renderer.
-      react: resolvePath("./packages/ui/node_modules/react"),
-      "react-dom": resolvePath("./packages/ui/node_modules/react-dom"),
+      react: resolvePath("./packages/a2ui/node_modules/react"),
+      "react-dom": resolvePath("./packages/a2ui/node_modules/react-dom"),
       "@valuz/shared": resolvePath("./packages/shared/src"),
       "@valuz/core": resolvePath("./packages/core/src"),
       "@valuz/ui": resolvePath("./packages/ui/src"),
       "@valuz/a2ui": resolvePath("./packages/a2ui/src"),
-      "@valuz/genui-blocks": resolvePath("./packages/genui-blocks/src"),
       "@valuz/app": resolvePath("./packages/app/src"),
     },
   },
@@ -56,16 +56,7 @@ export default defineConfig({
     setupFiles: [resolvePath("./vitest.setup.ts")],
     server: {
       deps: {
-        // ``@openuidev/react-ui@0.12.1`` ships extensionless relative imports
-        // in its subpath entries — ``dist/components/Modal/index.js`` does
-        // ``from "./Modal"``. Bundlers resolve that; Node's ESM loader does
-        // not, and Vitest externalises node_modules to Node by default. Any
-        // test that transitively reaches ``@openuidev/react-ui/Modal`` (which
-        // is every test importing ``@valuz/ui``, since its index re-exports
-        // A2UIRenderer) dies at collection with "Cannot find module …/Modal".
-        // Inlining hands the package to Vite's resolver instead. Remove this
-        // once upstream publishes fully-specified subpath imports.
-        inline: [/@openuidev\/react-ui/],
+        inline: [/@a2ui\//],
       },
     },
     include: [

@@ -144,7 +144,10 @@
   border-radius: 5px;
   color: var(--demo-body);
   cursor: pointer;
-  font-size: 12px;
+  font-family: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
   padding: 0 10px;
 }
 .demo-segmented button { background: transparent; }
@@ -160,6 +163,24 @@
 }
 .demo-theme:hover,
 .demo-segmented button:hover { color: var(--demo-text); }
+.demo-data-toggle {
+  flex: 0 0 auto;
+  height: 26px;
+  margin-left: auto;
+}
+.demo-data-toggle.is-global {
+  height: 28px;
+  margin-left: 0;
+}
+.demo-data-toggle button {
+  font-size: 10px;
+  min-width: 42px;
+  padding: 0 8px;
+}
+.demo-data-toggle.is-global button {
+  font-size: 11px;
+  min-width: 48px;
+}
 .demo-controls button:focus-visible,
 .demo-nav button:focus-visible,
 .demo-copy:focus-visible,

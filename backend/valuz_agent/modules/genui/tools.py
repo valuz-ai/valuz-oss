@@ -3,7 +3,7 @@
 Registered in the host toolkit MCP ``base`` toolset (runtime-agnostic). The
 handler resolves the caller's runtime/provider/model from the calling session,
 builds the A2UI prompt (component catalog + request + optional data), and
-returns the A2UI v0.9 message stream as the tool result — which the frontend
+returns the A2UI v0.9.1 message stream as the tool result — which the frontend
 renders with ``A2UIRenderer``. Official Claude/Codex subscription channels still run
 through an ephemeral no-tools kernel session so their CLI keychain auth works;
 explicit-credential channels call the model directly and stream chunks back to
@@ -111,7 +111,7 @@ _PARAMS = {
             "description": (
                 "Which set of components to offer this generation. 'all' "
                 "(default) is everything. 'atoms' is the general vocabulary — "
-                "OpenUI's primitives plus the built-in blocks. 'edition' is "
+                "the complete OSS A2UI component catalog. 'edition' is "
                 "only the components a vertical edition installed, for an "
                 "answer that should stay in that edition's house style. A "
                 "shorter menu is an easier one, so narrow whenever the shape of "
@@ -343,7 +343,7 @@ async def _complete_with_retries(
     max_attempts = max(1, max_attempts)
     for attempt in range(1, max_attempts + 1):
         try:
-            openui = await completer(prompt)
+            document = await completer(prompt)
         except Exception:  # noqa: BLE001
             if attempt >= max_attempts:
                 raise
@@ -354,16 +354,16 @@ async def _complete_with_retries(
                 exc_info=True,
             )
         else:
-            if (openui or "").strip():
+            if (document or "").strip():
                 if attempt > 1:
                     logger.info(
                         "generate_ui: generation succeeded on attempt %d/%d",
                         attempt,
                         max_attempts,
                     )
-                return str(openui)
+                return str(document)
             if attempt >= max_attempts:
-                return str(openui or "")
+                return str(document or "")
             logger.info(
                 "generate_ui: generation returned blank output on attempt %d/%d; retrying",
                 attempt,

@@ -11,11 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Generative UI block system** — a dedicated block package wired into OpenUI
-  Lang and A2UI: 49+ blocks with edition injection and per-call scope, a
-  backend block registry port (`ext.genui_blocks`), typed vocabulary
-  signatures, the chart family migrated to recharts, and
-  `GENERATIVE_UI_LAYOUT_CSS` exported for out-of-card hosts
+- **A2UI component system** — a standalone A2UI v0.9.1 component package with
+  edition injection and per-call scope, a backend component registry port,
+  typed schemas, analytical tables, provenance controls and a comprehensive
+  chart family
   (#733, #745, #751, #771, #779, #782 @St0neWan9).
 - **Generative UI live data** — data-binding mode (channel, resolver, grammar),
   the live-data host seam where refs start an edition host and pushes

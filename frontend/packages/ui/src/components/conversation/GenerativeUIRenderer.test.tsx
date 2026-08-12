@@ -1,12 +1,8 @@
-import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-vi.mock("@openuidev/react-ui", () => ({
-  ThemeProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
-}));
-vi.mock("./A2UIRenderer", () => ({
-  A2UIRenderer: ({ body, status }: { body: string; status?: string }) => (
+vi.mock("./A2UIBody", () => ({
+  default: ({ body, status }: { body: string; status?: string }) => (
     <div data-testid="a2ui-renderer" data-status={status}>
       {body}
     </div>
@@ -18,8 +14,8 @@ import { parseGenerativeUIPayload } from "./generative-ui-payload";
 
 describe("GenerativeUIRenderer", () => {
   it("draws nothing for a payload that is not an A2UI stream", () => {
-    // A2UI is the only protocol. Anything else — an older OpenUI Lang result,
-    // a plain-text error — has no renderer, and printing its source where a
+    // A2UI is the only protocol. Anything else — a plain-text error or unknown
+    // structured result — has no renderer, and printing its source where a
     // rendered UI belongs reads as a bug in the answer.
     const { container } = render(
       <GenerativeUIRenderer payload={"root = Stack([])"} status="success" />,
@@ -32,7 +28,7 @@ describe("GenerativeUIRenderer", () => {
   it("refuses a payload whose envelope names an unknown protocol", () => {
     expect(
       parseGenerativeUIPayload(
-        JSON.stringify({ protocol: "openui-lang", content: "root = Stack([])" }),
+        JSON.stringify({ protocol: "legacy-json", content: "root = Stack([])" }),
       ),
     ).toBeNull();
   });
@@ -40,8 +36,8 @@ describe("GenerativeUIRenderer", () => {
   it("parses an A2UI protocol envelope", () => {
     const messages = [
       JSON.stringify({
-        version: "v0.9",
-        createSurface: { surfaceId: "s1", catalogId: "openui" },
+        version: "v0.9.1",
+        createSurface: { surfaceId: "s1", catalogId: "https://valuz.io/a2ui/catalogs/base/v1" },
       }),
     ].join("\n");
 
@@ -52,14 +48,14 @@ describe("GenerativeUIRenderer", () => {
     ).toEqual({ protocol: "a2ui-json", body: messages });
   });
 
-  it("renders A2UI payloads through the A2UI renderer", () => {
+  it("renders A2UI payloads through the A2UI renderer", async () => {
     const messages = [
       JSON.stringify({
-        version: "v0.9",
-        createSurface: { surfaceId: "dashboard", catalogId: "openui" },
+        version: "v0.9.1",
+        createSurface: { surfaceId: "dashboard", catalogId: "https://valuz.io/a2ui/catalogs/base/v1" },
       }),
       JSON.stringify({
-        version: "v0.9",
+        version: "v0.9.1",
         updateComponents: {
           surfaceId: "dashboard",
           components: [
@@ -75,7 +71,7 @@ describe("GenerativeUIRenderer", () => {
       />,
     );
 
-    expect(screen.getByTestId("a2ui-renderer").textContent).toBe(messages);
+    expect((await screen.findByTestId("a2ui-renderer")).textContent).toBe(messages);
   });
 
   it("should keep showing the surface while a live run has written nothing yet", () => {
