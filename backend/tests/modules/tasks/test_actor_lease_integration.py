@@ -452,3 +452,38 @@ def test_a_failing_reconcile_does_not_end_the_wait(db_factory) -> None:
     msg = asyncio.run(_drive())
     monkey.undo()
     assert msg.payload["summary"] == "arrived by mailbox"
+
+
+def test_no_durable_writes_while_draining(db_factory) -> None:
+    """The backstop must go quiet at teardown.
+
+    ``reconcile_finished_members`` WRITES — it settles run rows and flips plan
+    nodes to ``in_review``. The loop already skips its whole finalize while
+    draining, for the reason the drain comment gives: a terminal write here
+    fights the boot recovery that is meant to resume the task. A parked lead
+    reconciling every slice through shutdown would reintroduce exactly that.
+    """
+    from valuz_agent.infra import lifecycle
+
+    fake = _ReconcilingCoordinator([], [_member_done("m1", "should not be consulted")])
+    runner = ActorRunner(finalizer=fake, coordinator=fake)
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr("valuz_agent.modules.tasks.actor_runner.LEAD_RECONCILE_SLICE_S", 0.01)
+    mailbox_registry.register("lead-s")
+    lifecycle.set_draining()
+
+    async def _drive():
+        with pytest.raises(TimeoutError):
+            await runner._await_wakeup(
+                session_id="lead-s", role="lead", ttl=0.08, task_id="t1",
+                project_id="p1", user_id=OWNER, coordinator=fake,
+            )
+
+    try:
+        asyncio.run(_drive())
+    finally:
+        lifecycle.reset_draining()
+        monkey.undo()
+
+    assert fake.reconciles == 0, "no durable write may be attempted during teardown"

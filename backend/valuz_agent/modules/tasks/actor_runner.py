@@ -499,6 +499,15 @@ class ActorRunner:
                 )
             except TimeoutError:
                 pass
+            if is_draining():
+                # Teardown has started. The reconcile WRITES (it settles run
+                # rows and flips plan nodes to in_review), and the whole reason
+                # the loop skips its finalize while draining is that a terminal
+                # write here fights the boot recovery that is meant to resume
+                # this task. Keep waiting quietly instead: the loop breaks on
+                # its own drain check as soon as anything wakes it, and the
+                # process is going away regardless.
+                continue
             try:
                 recovered = await coordinator.reconcile_finished_members(
                     task_id=task_id, project_id=project_id, user_id=user_id
