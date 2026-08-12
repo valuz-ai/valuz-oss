@@ -16,6 +16,7 @@ the concrete services beats duck typing that once let delegators rot unnoticed.
 # ruff: noqa: I001
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Literal, Protocol
 
@@ -24,6 +25,11 @@ from valuz_agent.adapters.data_reader import data_reader
 from valuz_agent.infra.lifecycle import is_draining
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.tasks.datastore import TaskDatastore
+from valuz_agent.modules.tasks.lease import (
+    TASK_LEASE_RENEW_INTERVAL_S,
+    TaskLease,
+    acquire_task_lease,
+)
 from valuz_agent.modules.tasks.task_state import NON_REVIEWABLE_DONE
 from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 from valuz_agent.modules.sessions.pre_turn import always_on_mcp_hook
@@ -52,6 +58,14 @@ MEMBER_IDLE_TTL_S = 600.0
 # pin an actor loop for the life of the process; generous enough that real
 # background work — which routinely outlasts one TTL — is never reaped.
 MAX_IDLE_EXTENSIONS = 6
+
+# How often a parked LEAD re-reads durable state while waiting on its mailbox.
+# Not a tuning knob for latency alone: it is the interval at which the loop
+# stops depending on cross-process message delivery at all (see
+# ``_await_wakeup``). Longer than the 8s used inside a turn — between turns
+# nobody is watching a cursor blink — but far short of the 30-minute idle TTL
+# that a dropped result used to cost.
+LEAD_RECONCILE_SLICE_S = 30.0
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +101,12 @@ class ActorCoordinator(Protocol):
         self, task_id: str, project_id: str, user_id: str, lead_session_id: str = ""
     ) -> bool:
         """True when a lead has nothing left to wait for and should stop looping."""
+        ...
+
+    async def reconcile_finished_members(
+        self, *, task_id: str, project_id: str, user_id: str
+    ) -> list[InboxMsg]:
+        """Members that finished without their ``member_done`` reaching us."""
         ...
 
     async def session_still_working(self, session_id: str) -> bool:
@@ -175,12 +195,18 @@ class ActorRunner:
         project_id: str,
         idle_ttl: float | None = None,
         user_id: str,
+        lease: TaskLease | None = None,
     ) -> None:
         """Persistent actor loop: run turn → idle → await mailbox → repeat.
 
         Replaces the one-shot ``run_session_to_idle`` for v2 sessions. The loop
         exits on shutdown message, idle-TTL expiry, max-turns, or a terminal
         turn status, then finalizes the session exactly once.
+
+        ``lease``: a lead lease the CALLER already holds (recovery/resume, which
+        must own the task before respawning its members). Adopted as-is —
+        acquiring again would bump the fence and evict the caller. Omitted
+        everywhere else, and then the loop acquires for itself.
         """
         from valuz_agent.modules.tasks import planning
 
@@ -196,11 +222,39 @@ class ActorRunner:
             if idle_ttl is not None
             else (LEAD_IDLE_TTL_S if role == "lead" else MEMBER_IDLE_TTL_S)
         )
+        # Claim the inbox FIRST, so that bailing out below can hand it back
+        # through the claim guard. Dropping it unconditionally would be a race:
+        # ``spawn_actor`` claims eagerly, so between its claim and this line a
+        # newer loop may already have taken the session, and an unguarded
+        # ``unregister`` would pull the box out from under it.
         claim_token = mailbox_registry.claim(session_id)
+        # CROSS-PROCESS ownership. A lead may only drive a task no other process
+        # is driving; refusing here is what stops N booting workers from putting
+        # N lead loops on one task, and what lets the watchdog trust an expired
+        # lease as "really dead". Members are not leased: they are dispatched by
+        # a lead that already holds the task's lease.
+        fenced = asyncio.Event()
+        renewer: asyncio.Task[None] | None = None
+        if role == "lead":
+            if lease is None:
+                lease = await acquire_task_lease(
+                    user_id=user_id, task_id=task_id, lead_session_id=session_id
+                )
+            if lease is None:
+                mailbox_registry.release(session_id, claim_token)
+                logger.info(
+                    "actor loop %s (lead): task %s already has a driver — exiting",
+                    session_id,
+                    task_id,
+                )
+                return
+            if lease.needs_renewal:
+                renewer = asyncio.create_task(
+                    self._renew_lease(lease, session_id, claim_token, fenced),
+                    name=f"task-lease-{task_id}",
+                )
         # Read once: every lead wake-up restates it (see _with_goal_restated).
-        task_goal = (
-            await self._task_goal(task_id, project_id, user_id) if role == "lead" else ""
-        )
+        task_goal = await self._task_goal(task_id, project_id, user_id) if role == "lead" else ""
         prompt = initial_prompt
         final_status = "idle"
         turns = 0
@@ -219,6 +273,12 @@ class ActorRunner:
                 # turn that immediately hits a dead pipe). Break and let the
                 # ``finally`` leave the session for boot recovery.
                 if is_draining():
+                    exited_on_shutdown = True
+                    break
+                # Another process took this task over while we were mid-turn.
+                # Treat it exactly like a shutdown: leave WITHOUT finalizing,
+                # so we don't race the new driver into a terminal state.
+                if fenced.is_set():
                     exited_on_shutdown = True
                     break
                 final_status = await self.run_turn(session_id, prompt, user_id=user_id)
@@ -269,7 +329,15 @@ class ActorRunner:
                     break
 
                 try:
-                    msg = await mailbox_registry.get(session_id, timeout=ttl)
+                    msg = await self._await_wakeup(
+                        session_id=session_id,
+                        role=role,
+                        ttl=ttl,
+                        task_id=task_id,
+                        project_id=project_id,
+                        user_id=user_id,
+                        coordinator=coordinator,
+                    )
                 except KeyError:
                     # Our box was dropped externally — ownership moved (a newer
                     # loop claimed the session). Exit as an externally-managed
@@ -343,6 +411,8 @@ class ActorRunner:
                         else msg.text
                     )
         finally:
+            if renewer is not None:
+                renewer.cancel()
             mailbox_registry.release(session_id, claim_token)
             # When draining, skip the ENTIRE finalize. ``_finalize_actor`` touches
             # the kernel store (status flip) AND the host DB (lead auto-finalize /
@@ -362,15 +432,152 @@ class ActorRunner:
                     via_shutdown=exited_on_shutdown,
                     user_id=user_id,
                 )
+            # LAST — strictly after finalize. ``finalize_actor`` writes the
+            # authoritative terminal state (kernel session status, and for a
+            # natural lead exit the task's own completed/blocked flip), so it
+            # must happen while we still own the task. Releasing first opened a
+            # window where a peer could acquire the lease and start driving,
+            # and this loop's finalize would then overwrite the new driver's
+            # state. Skipped when fenced: we no longer hold it (the guard makes
+            # it a no-op anyway) and the new driver's lease must not be touched.
+            if lease is not None and not fenced.is_set():
+                # Hand the task back so a peer — or this process after a
+                # restart — picks it up immediately instead of waiting out the
+                # TTL. Best-effort: the lease expires on its own, and a failure
+                # here must not mask the loop's own exit.
+                try:
+                    await lease.release()
+                except Exception:  # noqa: BLE001
+                    logger.debug("actor loop %s: lease release failed", session_id)
+
+    async def _await_wakeup(
+        self,
+        *,
+        session_id: str,
+        role: Literal["lead", "subtask"],
+        ttl: float,
+        task_id: str,
+        project_id: str,
+        user_id: str,
+        coordinator: ActorCoordinator,
+    ) -> InboxMsg:
+        """Wait for the next inbox message, re-reading durable state as we go.
+
+        A lead used to park on ONE ``get(timeout=1800)``, which is only correct
+        if every ``member_done`` reaches THIS process's mailbox. It does not:
+        the lead's own ``dispatch`` is an HTTP tool call that lands on whichever
+        host process the load balancer picked, so the member it spawns can post
+        its result into a different process's queue — where ``put`` returns
+        False, unchecked, and the message is gone. The lead then slept out its
+        full idle TTL and auto-finalize blocked the task for "unresolved
+        subtasks": a task whose members had all finished.
+
+        Slicing the wait and reconciling durable run/plan state on each slice
+        removes the dependency. The mailbox stays the fast path; the store is
+        the truth. This is the same backstop ``await_member_results`` already
+        applies INSIDE a turn — the loop simply had none between turns.
+
+        Members keep the single long wait: they have no siblings to reconcile,
+        and their own results are what the lead is waiting for.
+
+        Raises ``TimeoutError`` when the full *ttl* elapses with nothing, and
+        propagates ``KeyError`` when the box is dropped (ownership moved) —
+        both exactly as the plain ``get`` did.
+        """
+        if role != "lead":
+            return await mailbox_registry.get(session_id, timeout=ttl)
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + ttl
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError
+            try:
+                return await mailbox_registry.get(
+                    session_id, timeout=min(LEAD_RECONCILE_SLICE_S, remaining)
+                )
+            except TimeoutError:
+                pass
+            try:
+                recovered = await coordinator.reconcile_finished_members(
+                    task_id=task_id, project_id=project_id, user_id=user_id
+                )
+            except Exception:  # noqa: BLE001 — a failed backstop must not end the wait
+                logger.debug("actor loop %s: member reconcile failed, still waiting", session_id)
+                continue
+            if not recovered:
+                continue
+            logger.info(
+                "actor loop %s (lead): %d member result(s) recovered from durable state "
+                "— their member_done never reached this process",
+                session_id,
+                len(recovered),
+            )
+            # Queue the rest so the loop consumes them on its next passes, in
+            # the same order and through the same path as mailbox arrivals.
+            for extra in recovered[1:]:
+                mailbox_registry.put(session_id, extra)
+            return recovered[0]
+
+    @staticmethod
+    async def _renew_lease(
+        lease: TaskLease, session_id: str, claim_token: int, fenced: asyncio.Event
+    ) -> None:
+        """Keep the task lease alive; signal + wake the loop if we lose it.
+
+        Runs as its own task on purpose: the loop spends most of its life
+        blocked inside ``run_turn`` (minutes) or parked on the mailbox (up to
+        the idle TTL), so a renewal folded into the loop body would starve and
+        the lease would expire under a perfectly healthy driver.
+
+        Losing the lease means someone else is now driving. Setting the event is
+        not enough — the loop may be parked on its mailbox for another half hour
+        — so we also post the ``shutdown`` message that every other
+        externally-managed stop uses. Both paths land on ``exited_on_shutdown``,
+        which skips finalize, so the new driver's state is never overwritten.
+
+        ``claim_token`` gates that post. The takeover can be a NEWER LOOP IN
+        THIS PROCESS (a rapid stop→resume, the race ``mailbox_registry.claim``
+        exists for), and both loops share one inbox — so posting unconditionally
+        would deliver our shutdown to the live replacement and stop the wrong
+        loop, leaving the task with no driver at all.
+        """
+        if not lease.needs_renewal:
+            # Exclusivity was proven at acquisition (single-process deployment),
+            # so ``renew`` is a no-op that always succeeds — a loop waiting for
+            # it to fail would never exit. Nothing can fence us here either.
+            return
+        while True:
+            try:
+                await asyncio.sleep(TASK_LEASE_RENEW_INTERVAL_S)
+            except asyncio.CancelledError:
+                return
+            try:
+                still_ours = await lease.renew()
+            except Exception:  # noqa: BLE001
+                # A transient DB failure is not eviction — the TTL spans several
+                # renewals, so retry rather than abandoning a live task.
+                logger.debug("task lease renew failed for %s; retrying", lease.key)
+                continue
+            if still_ours:
+                continue
+            fenced.set()
+            logger.warning(
+                "actor loop %s: lost the lease on task %s (taken over) — stopping",
+                session_id,
+                lease.key,
+            )
+            if mailbox_registry.is_claim_current(session_id, claim_token):
+                mailbox_registry.put(session_id, InboxMsg(kind="shutdown"))
+            return
 
     @staticmethod
     async def _task_goal(task_id: str, project_id: str, user_id: str) -> str:
         """The task's goal text, read once per loop (best-effort)."""
         try:
             async with async_unit_of_work(commit=False) as db:
-                row = await TaskDatastore(db).get_task_by_project(
-                    user_id, project_id, task_id
-                )
+                row = await TaskDatastore(db).get_task_by_project(user_id, project_id, task_id)
                 return (row.goal or "").strip() if row is not None else ""
         except Exception:  # noqa: BLE001 — a wake-up must never fail on this
             logger.debug("actor loop: goal read failed for task %s", task_id)

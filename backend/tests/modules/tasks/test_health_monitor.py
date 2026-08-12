@@ -1,9 +1,10 @@
 """TaskHealthMonitor watchdog tests (task attention & reliability, P2).
 
 Drives ``sweep_once`` directly against a tmp-SQLite fixture. Liveness is the
-lead's mailbox registration; the monitor only acts after ``confirm_sweeps``
-consecutive dead-looking passes, flipping the task ``active → blocked`` and
-emitting ``task_blocked(reason="lead_dead")``.
+task's LEASE (``tasks/lease.py``) — shared state, so it answers for every host
+process, unlike the process-local mailbox it replaced. The monitor only acts
+after ``confirm_sweeps`` consecutive dead-looking passes, flipping the task
+``active → blocked`` and emitting ``task_blocked(reason="lead_dead")``.
 """
 
 # ruff: noqa: I001
@@ -20,10 +21,14 @@ from valuz_agent.modules.tasks.recovery import (
     TaskHealthConfig,
     TaskHealthMonitor,
 )
+from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.tasks.mailbox import mailbox_registry
+from valuz_agent.infra.execution_lease import ExecutionLeaseRow
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 
 OWNER = "local-test-owner"
+# A holder id that is not this process, so ``LeaseState.is_foreign`` holds.
+PEER = "peer-host:999:deadbeef"
 
 
 
@@ -35,7 +40,21 @@ def _reset_mailbox():
     mailbox_registry._boxes.clear()
 
 
-def _seed(db_factory, *, task_id="t1", status="active", lead_session_id="lead-s") -> None:
+def _seed(
+    db_factory,
+    *,
+    task_id="t1",
+    status="active",
+    lead_session_id="lead-s",
+    lease="expired",
+) -> None:
+    """Seed a task (+ lead run, + lease row).
+
+    ``lease``: ``"expired"`` = a driver that died without releasing (the case
+    the watchdog exists for), ``"live"`` = someone is driving it right now,
+    ``"released"`` = a driver that exited cleanly, ``None`` = no lease row at
+    all (a task nobody has claimed under this scheme).
+    """
     db = db_factory()
     try:
         db.add(
@@ -64,6 +83,25 @@ def _seed(db_factory, *, task_id="t1", status="active", lead_session_id="lead-s"
                     sequence=0,
                     kind="lead",
                     status="active",
+                )
+            )
+        if lease is not None:
+            now = now_ms()
+            expires = {
+                "expired": now - 1_000,
+                "live": now + 600_000,
+                "released": 0,
+            }[lease]
+            db.add(
+                ExecutionLeaseRow(
+                    scope="task",
+                    key=task_id,
+                    holder_id=PEER,
+                    note=lead_session_id or "lead-s",
+                    fence_token=1,
+                    state="released" if lease == "released" else "held",
+                    heartbeat_at=now,
+                    lease_expires_at=expires,
                 )
             )
         db.commit()
@@ -99,18 +137,57 @@ def _monitor() -> TaskHealthMonitor:
     return TaskHealthMonitor(TaskHealthConfig())
 
 
-def test_live_lead_loop_is_healthy(db_factory) -> None:
-    _seed(db_factory)
-    mailbox_registry.register("lead-s")  # loop alive
+def test_live_lease_is_healthy(db_factory) -> None:
+    _seed(db_factory, lease="live")
     mon = _monitor()
-    acted = asyncio.run(mon.sweep_once())
-    assert acted == []
+    for _ in range(4):  # well past confirm_sweeps
+        assert asyncio.run(mon.sweep_once()) == []
     assert _task_status(db_factory) == "active"
 
 
+def test_lease_held_by_another_process_is_never_blocked(db_factory) -> None:
+    """Regression: the lead runs in a SIBLING process.
+
+    The watchdog used to ask ``mailbox_registry.is_owned()``, which is
+    process-local, so a lead driven by another worker/replica read as dead and
+    its task was flipped to ``blocked`` mid-run while its conversation was
+    still streaming. Nothing here registers a mailbox — that is the point: this
+    process has no local trace of the driver, only the shared lease.
+    """
+    _seed(db_factory, lease="live")
+    assert not mailbox_registry.is_owned("lead-s")
+    mon = _monitor()
+    for _ in range(4):
+        assert asyncio.run(mon.sweep_once()) == []
+    assert _task_status(db_factory) == "active"
+    assert "task_blocked" not in _event_types(db_factory)
+
+
+def test_task_without_a_lease_row_is_left_alone(db_factory) -> None:
+    """Absence is not death — this is what makes the change safe to roll out.
+
+    A task active since before the lease table existed, or one still driven by
+    a process on an older build, has no row. Blocking those would turn a
+    gradual rollout into an outage.
+    """
+    _seed(db_factory, lease=None)
+    mon = _monitor()
+    for _ in range(4):
+        assert asyncio.run(mon.sweep_once()) == []
+    assert _task_status(db_factory) == "active"
+
+
+def test_released_lease_is_dead(db_factory) -> None:
+    """A driver that exited cleanly released its lease; the task is orphaned."""
+    _seed(db_factory, lease="released")
+    mon = _monitor()
+    assert asyncio.run(mon.sweep_once()) == []
+    assert asyncio.run(mon.sweep_once()) == ["t1"]
+    assert _task_status(db_factory) == "blocked"
+
+
 def test_dead_lead_needs_two_sweeps_before_blocking(db_factory) -> None:
-    _seed(db_factory)
-    # No mailbox registration → loop absent.
+    _seed(db_factory)  # lease expired → its holder died without releasing
     mon = _monitor()
     # First sweep: suspected, not yet acted.
     assert asyncio.run(mon.sweep_once()) == []

@@ -117,7 +117,7 @@ async def test_unregister_drops_inbox() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_lead_loop_runs_turns_until_shutdown() -> None:
+async def test_lead_loop_runs_turns_until_shutdown(db_factory) -> None:
     """Lead loop: initial turn, wakes on a message turn, breaks on shutdown."""
     orch = TaskOrchestrator()
     prompts: list[str] = []
@@ -195,7 +195,7 @@ async def test_member_loop_notifies_lead_and_self_reaps_on_ttl() -> None:
     assert finalized == ["mem-1"]
 
 
-async def test_terminal_turn_status_breaks_loop_immediately() -> None:
+async def test_terminal_turn_status_breaks_loop_immediately(db_factory) -> None:
     orch = TaskOrchestrator()
     turns = 0
 

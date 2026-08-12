@@ -147,6 +147,18 @@ class MailboxRegistry:
         """
         return session_id in self._claims
 
+    def is_claim_current(self, session_id: str, token: int) -> bool:
+        """Is *token* still the live claim on this session's inbox?
+
+        The box is SHARED by every loop that ever claimed the session (``claim``
+        reuses it), so a superseded loop must ask before posting: whatever it
+        puts there is read by whichever loop owns the box NOW. Without this a
+        stale loop's ``shutdown`` — the very message that tells it to stop —
+        would be consumed by the live loop that replaced it, killing the wrong
+        one.
+        """
+        return self._claims.get(session_id) == token
+
     def has_pending(self, session_id: str) -> bool:
         """True if the session has at least one queued message (non-blocking).
 
