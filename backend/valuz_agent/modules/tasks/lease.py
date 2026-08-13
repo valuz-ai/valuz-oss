@@ -45,6 +45,16 @@ ACTOR_LEASE_RENEW_INTERVAL_S = LEASE_RENEW_INTERVAL_S
 ActorLease = ExecutionLease
 
 
+# Scope this replaced. Deployments roll one pod at a time, so for the length of
+# a release an older peer is still holding leases under the OLD key and cannot
+# see — or be seen by — the new one. Honouring it during acquisition is what
+# keeps that window from producing two runners on one task.
+#
+# DELETE THIS once no process on the old scope can still be running: it costs a
+# query per acquisition and answers a question that stops being askable.
+_LEGACY_TASK_SCOPE = "task"
+
+
 async def acquire_actor_lease(*, session_id: str, task_id: str) -> ActorLease | None:
     """Take the right to run *session_id*, or ``None`` if a live holder has it.
 
@@ -56,6 +66,11 @@ async def acquire_actor_lease(*, session_id: str, task_id: str) -> ActorLease | 
     already globally unique, and folding anything else in would let two holders
     each believe they won.
     """
+    # A peer on the previous release holds ``('task', task_id)`` and will not
+    # notice us taking ``('actor', session_id)``. Refusing here is the whole
+    # difference between a rolling deploy and two loops driving one task.
+    if await is_held_elsewhere(_LEGACY_TASK_SCOPE, task_id):
+        return None
     return await acquire_lease(scope=ACTOR_LEASE_SCOPE, key=session_id, note=task_id)
 
 

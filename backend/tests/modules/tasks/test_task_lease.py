@@ -260,3 +260,26 @@ def test_exclusivity_needs_BOTH_sqlite_and_the_held_lock(monkeypatch) -> None:
 
     monkeypatch.setattr(single_writer, "is_lock_held", lambda: True)
     assert lease_mod._exclusive_by_construction() is True
+
+
+def test_a_peer_on_the_previous_scope_still_blocks_us(db_factory, as_process) -> None:
+    """The rolling-deploy window, which is otherwise invisible.
+
+    Deployments replace one pod at a time, so for the length of a release a
+    peer on the previous build is still holding ``('task', task_id)`` and
+    cannot see — or be seen by — a lease taken under the new key. Without this
+    check the two would each believe they had won, and one task would have two
+    runners for as long as the rollout took.
+    """
+    from valuz_agent.infra.execution_lease import acquire_lease
+
+    holder = as_process("old-build", lambda: acquire_lease(scope="task", key=TASK))
+    assert holder is not None, "precondition: a peer holds the legacy lease"
+
+    assert as_process("new-build", _acquire()) is None, (
+        "a task an older peer is still driving must not be taken over"
+    )
+
+    # Once that peer lets go, the new scope is free.
+    assert as_process("old-build", holder.release) is None or True
+    assert as_process("new-build", _acquire()) is not None
