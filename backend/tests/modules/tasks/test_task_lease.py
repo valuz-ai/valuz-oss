@@ -18,14 +18,15 @@ from sqlalchemy import select
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.infra import execution_lease as lease_mod
 from valuz_agent.modules.tasks.lease import (
-    acquire_task_lease,
-    is_driven_elsewhere,
-    load_task_lease_states,
+    acquire_actor_lease,
+    is_running_elsewhere,
+    load_actor_lease_states,
 )
 from valuz_agent.infra.execution_lease import ExecutionLeaseRow
 
 OWNER = "local-test-owner"
 TASK = "t1"
+LEAD = "lead-s"
 
 
 @pytest.fixture(autouse=True)
@@ -52,15 +53,15 @@ def as_process(monkeypatch):
     return _run
 
 
-def _acquire(session_id: str = "lead-s"):
-    return lambda: acquire_task_lease(user_id=OWNER, task_id=TASK, lead_session_id=session_id)
+def _acquire(session_id: str = LEAD):
+    return lambda: acquire_actor_lease(session_id=session_id, task_id=TASK)
 
 
 def _row(db_factory) -> ExecutionLeaseRow:
     db = db_factory()
     try:
         return (
-            db.execute(select(ExecutionLeaseRow).filter_by(scope="task", key=TASK)).scalars().one()
+            db.execute(select(ExecutionLeaseRow).filter_by(scope="actor", key=LEAD)).scalars().one()
         )
     finally:
         db.close()
@@ -91,7 +92,7 @@ def test_expired_lease_is_taken_over_and_fenced(db_factory, as_process) -> None:
     try:
         db.execute(
             ExecutionLeaseRow.__table__.update()
-            .where(ExecutionLeaseRow.key == TASK)
+            .where(ExecutionLeaseRow.key == LEAD)
             .values(lease_expires_at=now_ms() - 1)
         )
         db.commit()
@@ -150,7 +151,7 @@ def test_renew_extends_the_expiry(db_factory, as_process) -> None:
     try:
         db.execute(
             ExecutionLeaseRow.__table__.update()
-            .where(ExecutionLeaseRow.key == TASK)
+            .where(ExecutionLeaseRow.key == LEAD)
             .values(lease_expires_at=before - 30_000)
         )
         db.commit()
@@ -160,18 +161,18 @@ def test_renew_extends_the_expiry(db_factory, as_process) -> None:
     assert _row(db_factory).lease_expires_at >= before
 
 
-def test_is_driven_elsewhere_ignores_our_own_lease(db_factory, as_process) -> None:
+def test_is_running_elsewhere_ignores_our_own_lease(db_factory, as_process) -> None:
     assert as_process("proc-a", _acquire()) is not None
     # Our own live lease is not "elsewhere" — otherwise boot recovery would
     # refuse to re-drive the tasks this very process is responsible for.
-    assert as_process("proc-a", lambda: is_driven_elsewhere(TASK)) is False
-    assert as_process("proc-b", lambda: is_driven_elsewhere(TASK)) is True
+    assert as_process("proc-a", lambda: is_running_elsewhere(LEAD)) is False
+    assert as_process("proc-b", lambda: is_running_elsewhere(LEAD)) is True
 
 
 def test_absent_lease_is_unknown_not_dead(db_factory, as_process) -> None:
-    states = as_process("proc-a", lambda: load_task_lease_states(["nope"]))
+    states = as_process("proc-a", lambda: load_actor_lease_states(["nope"]))
     assert states == {}
-    assert as_process("proc-a", lambda: is_driven_elsewhere("nope")) is False
+    assert as_process("proc-a", lambda: is_running_elsewhere("nope")) is False
 
 
 # ---------------------------------------------------------------------------
@@ -259,3 +260,26 @@ def test_exclusivity_needs_BOTH_sqlite_and_the_held_lock(monkeypatch) -> None:
 
     monkeypatch.setattr(single_writer, "is_lock_held", lambda: True)
     assert lease_mod._exclusive_by_construction() is True
+
+
+def test_a_peer_on_the_previous_scope_still_blocks_us(db_factory, as_process) -> None:
+    """The rolling-deploy window, which is otherwise invisible.
+
+    Deployments replace one pod at a time, so for the length of a release a
+    peer on the previous build is still holding ``('task', task_id)`` and
+    cannot see — or be seen by — a lease taken under the new key. Without this
+    check the two would each believe they had won, and one task would have two
+    runners for as long as the rollout took.
+    """
+    from valuz_agent.infra.execution_lease import acquire_lease
+
+    holder = as_process("old-build", lambda: acquire_lease(scope="task", key=TASK))
+    assert holder is not None, "precondition: a peer holds the legacy lease"
+
+    assert as_process("new-build", _acquire()) is None, (
+        "a task an older peer is still driving must not be taken over"
+    )
+
+    # Once that peer lets go, the new scope is free.
+    assert as_process("old-build", holder.release) is None or True
+    assert as_process("new-build", _acquire()) is not None

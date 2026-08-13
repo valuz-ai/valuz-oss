@@ -70,11 +70,6 @@ class MailboxRegistry:
 
     def __init__(self) -> None:
         self._boxes: dict[str, asyncio.Queue[InboxMsg]] = {}
-        # session_id → current OWNER claim (see claim/release). Guards against
-        # a stale actor loop's ``finally`` dropping the box a freshly resumed
-        # loop is reading from.
-        self._claims: dict[str, int] = {}
-        self._claim_seq = 0
 
     def register(self, session_id: str) -> asyncio.Queue[InboxMsg]:
         """Create (or return existing) inbox for a session. Idempotent.
@@ -90,42 +85,10 @@ class MailboxRegistry:
             logger.debug("mailbox: registered %s", session_id)
         return box
 
-    def claim(self, session_id: str) -> int:
-        """Register (idempotent) AND take ownership; returns the claim token.
-
-        A later claim on the same session invalidates every earlier token, so
-        a STALE loop's :meth:`release` becomes a no-op instead of stealing the
-        new loop's box. The race this closes: stop_task interrupts the lead,
-        the old loop is still unwinding SDK teardown (seconds) when a rapid
-        resume — user click or inject's TASK_HALTED auto-revive — spawns a new
-        loop on the same session id; the old ``finally`` then popped the
-        SHARED box, recovery's queued ``member_done``s died with it, and the
-        new loop's next ``get`` raised into a spurious auto-finalize→blocked.
-        """
-        self.register(session_id)
-        self._claim_seq += 1
-        self._claims[session_id] = self._claim_seq
-        return self._claim_seq
-
-    def release(self, session_id: str, token: int) -> None:
-        """Drop the inbox — only if *token* is still the current claim."""
-        if self._claims.get(session_id) != token:
-            logger.debug("mailbox: stale release(%d) for %s ignored", token, session_id)
-            return
-        self._claims.pop(session_id, None)
-        self.unregister(session_id)
-
     def unregister(self, session_id: str) -> None:
         """Drop a session's inbox unconditionally. Idempotent.
 
-        Prefer :meth:`release` from actor loops — this bypasses the claim
-        guard and exists for tests / non-loop teardown.
-
-        Drops the CLAIM as well: an owner recorded for a box that no longer
-        exists would report :meth:`is_owned` for a session nothing can be
-        delivered to — the same lie in the other direction.
         """
-        self._claims.pop(session_id, None)
         if self._boxes.pop(session_id, None) is not None:
             logger.debug("mailbox: unregistered %s", session_id)
 
@@ -137,32 +100,6 @@ class MailboxRegistry:
         whether anyone is actually reading.
         """
         return session_id in self._boxes
-
-    def is_owned(self, session_id: str) -> bool:
-        """An actor loop HOLDS this session — the liveness oracle.
-
-        A claim is taken by the loop itself (:meth:`claim`, from
-        ``spawn_actor``) and dropped by its ``finally`` (:meth:`release`), so
-        this tracks the loop, not the box. ``is_registered`` used to stand in
-        for this and could not: a box pre-seeded by a sender for a loop that
-        then failed to start stays registered for the life of the process
-        (nothing calls ``unregister`` in production), so every reader of it
-        saw a dead task as healthy — the watchdog never blocked it, and
-        ``inject_into_task`` reported delivery into a queue nobody reads.
-        """
-        return session_id in self._claims
-
-    def is_claim_current(self, session_id: str, token: int) -> bool:
-        """Is *token* still the live claim on this session's inbox?
-
-        The box is SHARED by every loop that ever claimed the session (``claim``
-        reuses it), so a superseded loop must ask before posting: whatever it
-        puts there is read by whichever loop owns the box NOW. Without this a
-        stale loop's ``shutdown`` — the very message that tells it to stop —
-        would be consumed by the live loop that replaced it, killing the wrong
-        one.
-        """
-        return self._claims.get(session_id) == token
 
     def has_pending(self, session_id: str) -> bool:
         """True if the session has at least one queued message (non-blocking).

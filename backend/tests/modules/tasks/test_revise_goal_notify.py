@@ -78,8 +78,6 @@ async def test_a_goal_revision_reaches_a_lead_driven_by_another_process(db_facto
     is in every host process but the one driving the lead.
     """
     _seed_lead(db_factory, tmp_path, lead_session_id="lead-1")
-    assert not mailbox_registry.is_owned("lead-1"), "precondition: lead is elsewhere"
-
     async with async_unit_of_work() as db:
         res = await messaging.notify_lead_goal_revised(
             db, task_id="t1", project_id="w1", new_goal="PIVOT", user_id=LOCAL_USER_ID

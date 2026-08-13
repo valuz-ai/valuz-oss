@@ -94,10 +94,13 @@ def _seed(
             }[lease]
             db.add(
                 ExecutionLeaseRow(
-                    scope="task",
-                    key=task_id,
+                    # Keyed by the LEAD SESSION now: every actor loop holds a
+                    # lease on its own session, so the watchdog asks about the
+                    # runner rather than about the task.
+                    scope="actor",
+                    key=lead_session_id or "lead-s",
                     holder_id=PEER,
-                    note=lead_session_id or "lead-s",
+                    note=task_id,
                     fence_token=1,
                     state="released" if lease == "released" else "held",
                     heartbeat_at=now,
@@ -155,7 +158,6 @@ def test_lease_held_by_another_process_is_never_blocked(db_factory) -> None:
     process has no local trace of the driver, only the shared lease.
     """
     _seed(db_factory, lease="live")
-    assert not mailbox_registry.is_owned("lead-s")
     mon = _monitor()
     for _ in range(4):
         assert asyncio.run(mon.sweep_once()) == []
@@ -198,15 +200,37 @@ def test_dead_lead_needs_two_sweeps_before_blocking(db_factory) -> None:
     assert "task_blocked" in _event_types(db_factory)
 
 
+def _set_lease_expiry(db_factory, *, expires_at: int) -> None:
+    """Move the lead's lease in or out of liveness, as a runner would."""
+    db = db_factory()
+    try:
+        db.execute(
+            ExecutionLeaseRow.__table__.update()
+            .where(ExecutionLeaseRow.scope == "actor", ExecutionLeaseRow.key == "lead-s")
+            .values(lease_expires_at=expires_at)
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
 def test_recovered_lead_clears_suspicion(db_factory) -> None:
-    _seed(db_factory)
+    """Suspicion must reset when the lead comes back, and re-arm if it dies again.
+
+    "Came back" used to mean a mailbox appearing in THIS process. It means a
+    live lease now, which is the same statement made where every process can
+    read it.
+    """
+    _seed(db_factory, lease="expired")
     mon = _monitor()
     assert asyncio.run(mon.sweep_once()) == []  # suspected once
-    mailbox_registry.claim("lead-s")  # a resume landed — loop back, owning its box
+
+    _set_lease_expiry(db_factory, expires_at=now_ms() + 600_000)  # a resume landed
     assert asyncio.run(mon.sweep_once()) == []  # suspicion cleared
     assert _task_status(db_factory) == "active"
+
     # A later death restarts the 2-sweep count from scratch.
-    mailbox_registry.unregister("lead-s")
+    _set_lease_expiry(db_factory, expires_at=now_ms() - 1_000)
     assert asyncio.run(mon.sweep_once()) == []
     assert asyncio.run(mon.sweep_once()) == ["t1"]
     assert _task_status(db_factory) == "blocked"

@@ -25,7 +25,7 @@ import valuz_agent.boot.kernel  # noqa: F401
 from valuz_agent.infra import execution_lease as lease_mod
 from valuz_agent.infra.execution_lease import ExecutionLeaseRow
 from valuz_agent.modules.tasks.actor_runner import ActorRunner
-from valuz_agent.modules.tasks.lease import acquire_task_lease
+from valuz_agent.modules.tasks.lease import acquire_actor_lease, load_actor_lease_states
 from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 
 OWNER = "local-test-owner"
@@ -49,10 +49,8 @@ def _multi_process_world(monkeypatch):
 @pytest.fixture(autouse=True)
 def _reset_mailbox():
     mailbox_registry._boxes.clear()
-    mailbox_registry._claims.clear()
     yield
     mailbox_registry._boxes.clear()
-    mailbox_registry._claims.clear()
 
 
 class _Collaborators:
@@ -117,8 +115,8 @@ def test_lease_is_still_held_while_finalize_runs(db_factory) -> None:
     seen: list[str | None] = []
 
     async def _peek_holder_during_finalize() -> None:
-        states = await lease_mod.load_lease_states("task", ["t1"])
-        state = states.get("t1")
+        states = await lease_mod.load_lease_states("actor", ["lead-s"])
+        state = states.get("lead-s")
         seen.append(state.state if state else None)
 
     calls: list[str] = []
@@ -127,83 +125,85 @@ def test_lease_is_still_held_while_finalize_runs(db_factory) -> None:
     assert calls == ["turn", "finalize"]
     assert seen == ["held"], "the lease must still be held while finalize writes"
     # ...and handed back once finalize is done, so a peer can pick it up now.
-    after = asyncio.run(lease_mod.load_lease_states("task", ["t1"]))
-    assert after["t1"].state == "released"
+    after = asyncio.run(lease_mod.load_lease_states("actor", ["lead-s"]))
+    assert after["lead-s"].state == "released"
 
 
-def test_bailing_out_leaves_no_phantom_liveness_behind(db_factory) -> None:
-    """Regression: the eager claim must not outlive a loop that never drove.
+def test_bailing_out_leaves_the_peers_lease_untouched(db_factory) -> None:
+    """A loop that may not run must change nothing about the one that may.
 
-    ``spawn_actor`` claims the inbox eagerly, before the loop can know whether
-    it may drive. When the lease says a peer owns the task, the loop exits —
-    and if that claim stayed behind, ``is_owned`` would report a reader this
-    process does not have for the rest of its life. The watchdog reads
-    ``is_owned`` as a second liveness opinion, so the leak would make a task
-    permanently unblockable here even after its real driver died with its
-    process.
+    This used to be a test about a leaked mailbox claim: ``spawn_actor``
+    claimed eagerly, and a loop that then found the lease taken had to hand the
+    claim back, or ``is_owned`` would report a reader this process did not have
+    for the rest of its life — and the watchdog trusted that as liveness.
+
+    There is no claim any more; the lease answers the same question and it is
+    shared, so a loop that never acquired it leaves nothing behind by
+    construction. What is still worth pinning is the consequence: we do not
+    drive, and the holder's grip is exactly as it was.
     """
     monkey = pytest.MonkeyPatch()
     monkey.setattr(lease_mod, "_HOLDER_ID", "peer-proc")
-    assert (
-        asyncio.run(acquire_task_lease(user_id=OWNER, task_id="t1", lead_session_id="lead-s"))
-        is not None
-    )
+    peer = asyncio.run(acquire_actor_lease(session_id="lead-s", task_id="t1"))
+    assert peer is not None
     monkey.setattr(lease_mod, "_HOLDER_ID", "our-proc")
-
-    mailbox_registry.claim("lead-s")  # what spawn_actor does, eagerly
 
     calls: list[str] = []
     asyncio.run(_drive(_runner(calls)))
 
-    assert calls == [], "we must not drive a task a peer holds"
-    assert not mailbox_registry.is_owned("lead-s"), (
-        "a loop that never drove must not leave a claim behind"
+    assert calls == [], "we must not run a session a peer holds"
+    state = asyncio.run(load_actor_lease_states(["lead-s"]))["lead-s"]
+    assert state.holder_id == "peer-proc"
+    assert state.fence_token == peer.fence_token, (
+        "a loop that never ran must not bump the fence — that would revoke the "
+        "holder that IS running"
     )
     monkey.undo()
 
 
-def test_superseded_loop_does_not_shut_down_its_replacement(db_factory) -> None:
-    """Regression: the stale loop's ``shutdown`` killed the live loop.
+def test_a_superseded_loop_puts_nothing_in_the_shared_inbox(db_factory) -> None:
+    """A revoked runner must leave silently — no message, anywhere.
 
-    Both loops share ONE inbox for the session, so a fenced loop posting its
-    own stop signal unconditionally delivers it to whichever loop owns the box
-    now — the replacement — leaving the task with no driver at all.
+    Both loops share one inbox for the session, so a fenced loop that posts its
+    own stop signal delivers it to whichever loop reads the box now — the
+    replacement — leaving the task with no runner at all. That happened, and
+    was patched with a process-local claim token gating the post.
+
+    The post is gone entirely: losing the lease raises a fence the loop
+    observes on its own. Nothing is queued, so there is nothing to mis-deliver
+    and nothing to gate.
     """
-    stale = asyncio.run(acquire_task_lease(user_id=OWNER, task_id="t1", lead_session_id="lead-s"))
+    stale = asyncio.run(acquire_actor_lease(session_id="lead-s", task_id="t1"))
     assert stale is not None
-    stale_token = mailbox_registry.claim("lead-s")
+    mailbox_registry.register("lead-s")
 
-    # A newer loop takes both the lease and the inbox claim (a rapid resume).
-    newer = asyncio.run(acquire_task_lease(user_id=OWNER, task_id="t1", lead_session_id="lead-s"))
+    # A newer loop takes the lease — a rapid resume, or a peer process.
+    newer = asyncio.run(acquire_actor_lease(session_id="lead-s", task_id="t1"))
     assert newer is not None
-    newer_token = mailbox_registry.claim("lead-s")
-    assert newer_token != stale_token
+    assert newer.fence_token > stale.fence_token, "acquiring must revoke the predecessor"
 
-    # The stale loop's renewer now notices it was fenced.
     fenced = asyncio.Event()
 
     async def _run_renewer() -> None:
         monkey = pytest.MonkeyPatch()
-        monkey.setattr("valuz_agent.modules.tasks.actor_runner.TASK_LEASE_RENEW_INTERVAL_S", 0.0)
-        await ActorRunner._renew_lease(stale, "lead-s", stale_token, fenced)
+        monkey.setattr("valuz_agent.modules.tasks.actor_runner.ACTOR_LEASE_RENEW_INTERVAL_S", 0.0)
+        await ActorRunner._renew_lease(stale, "lead-s", fenced)
         monkey.undo()
 
     asyncio.run(_run_renewer())
 
-    assert fenced.is_set(), "the stale loop must learn it lost the lease"
+    assert fenced.is_set(), "the superseded loop must learn it lost the lease"
     assert not mailbox_registry.has_pending("lead-s"), (
-        "no shutdown may be posted into the replacement's inbox"
+        "a revoked runner must not queue anything — the replacement reads this box"
     )
-    # The live loop is untouched and still owns everything.
-    assert mailbox_registry.is_claim_current("lead-s", newer_token)
-    assert asyncio.run(newer.renew()) is True
+    assert asyncio.run(newer.renew()) is True, "the live runner is untouched"
 
 
 def test_recovery_refuses_to_respawn_a_task_a_peer_holds(db_factory) -> None:
     """Regression: at a COLD boot the advisory pre-check cannot help.
 
     Every worker boots at once, so nobody holds a lease yet and all of them
-    pass ``is_driven_elsewhere``. Without an authoritative acquisition inside
+    pass ``is_running_elsewhere``. Without an authoritative acquisition inside
     ``_recover_one_task`` — before the respawn half — each worker would evict
     the kernel runtime and respawn the same member loops, which then drive real
     turns: duplicated work and duplicated model spend on one task.
@@ -246,7 +246,7 @@ def test_recovery_refuses_to_respawn_a_task_a_peer_holds(db_factory) -> None:
     monkey = pytest.MonkeyPatch()
     monkey.setattr(lease_mod, "_HOLDER_ID", "peer-proc")
     assert (
-        asyncio.run(acquire_task_lease(user_id=OWNER, task_id="t1", lead_session_id="lead-s"))
+        asyncio.run(acquire_actor_lease(session_id="lead-s", task_id="t1"))
         is not None
     )
     monkey.setattr(lease_mod, "_HOLDER_ID", "our-proc")
@@ -269,55 +269,44 @@ def test_recovery_refuses_to_respawn_a_task_a_peer_holds(db_factory) -> None:
     monkey.undo()
 
 
-def test_fenced_loop_still_signals_when_it_owns_the_inbox(db_factory) -> None:
-    """The flip side: a fenced loop that DOES own the box must be woken.
+def test_a_parked_loop_leaves_on_its_own_when_the_fence_goes_up(db_factory) -> None:
+    """The other half: a revoked loop must actually stop, not park forever.
 
-    Cross-process takeover is the common case — there is no local replacement,
-    so the shutdown is the only thing that unparks a loop sitting on a 30-minute
-    mailbox wait.
+    Cross-process takeover is the common case, and there is no local
+    replacement to nudge it. A ``shutdown`` message used to be the only thing
+    that unparked a loop sitting on a long inbox wait — which is exactly why
+    the stop travelled as a message and could be mis-delivered.
+
+    The wait now checks the fence on every slice, so a revoked loop ends its
+    own wait. It surfaces as ``KeyError``, the signal the loop already uses for
+    "this session is no longer yours" — leave without finalizing.
     """
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(lease_mod, "_HOLDER_ID", "our-proc")
-    ours = asyncio.run(acquire_task_lease(user_id=OWNER, task_id="t1", lead_session_id="lead-s"))
-    assert ours is not None
-    token = mailbox_registry.claim("lead-s")
-
-    # A different process takes the task over.
-    monkey.setattr(lease_mod, "_HOLDER_ID", "peer-proc")
-    db = db_factory()
-    try:
-        db.execute(
-            ExecutionLeaseRow.__table__.update()
-            .where(ExecutionLeaseRow.scope == "task", ExecutionLeaseRow.key == "t1")
-            .values(holder_id="peer-proc", fence_token=ours.fence_token + 1)
-        )
-        db.commit()
-    finally:
-        db.close()
-
     fenced = asyncio.Event()
+    fenced.set()
+    runner = _runner([])
+    mailbox_registry.register("lead-s")
 
-    async def _run_renewer() -> None:
-        m = pytest.MonkeyPatch()
-        m.setattr("valuz_agent.modules.tasks.actor_runner.TASK_LEASE_RENEW_INTERVAL_S", 0.0)
-        await ActorRunner._renew_lease(ours, "lead-s", token, fenced)
-        m.undo()
+    async def _wait() -> None:
+        await runner._await_wakeup(
+            session_id="lead-s",
+            role="lead",
+            ttl=30.0,
+            task_id="t1",
+            project_id="p1",
+            user_id=OWNER,
+            coordinator=runner._coordinator,
+            fenced=fenced,
+        )
 
-    asyncio.run(_run_renewer())
+    with pytest.raises(KeyError):
+        asyncio.run(asyncio.wait_for(_wait(), timeout=15))
 
-    assert fenced.is_set()
-    assert mailbox_registry.has_pending("lead-s"), (
-        "a parked loop must be woken so it can notice it was fenced"
+    assert not mailbox_registry.has_pending("lead-s"), (
+        "leaving must not require — or leave behind — a message"
     )
-    msg: InboxMsg = mailbox_registry._boxes["lead-s"].get_nowait()
-    assert msg.kind == "shutdown"
-    monkey.undo()
 
 
-# ---------------------------------------------------------------------------
-# Between-turns durable backstop: a lead must not depend on cross-process
-# mailbox delivery to learn that its members finished.
-# ---------------------------------------------------------------------------
+
 
 
 class _ReconcilingCoordinator(_Collaborators):
@@ -364,6 +353,7 @@ def test_lead_recovers_a_member_result_its_mailbox_never_received(db_factory) ->
             project_id="p1",
             user_id=OWNER,
             coordinator=fake,
+            fenced=asyncio.Event(),
         )
 
     monkey = pytest.MonkeyPatch()
@@ -390,12 +380,14 @@ def test_extra_recovered_results_are_queued_not_dropped(db_factory) -> None:
         first = await runner._await_wakeup(
             session_id="lead-s", role="lead", ttl=60.0, task_id="t1",
             project_id="p1", user_id=OWNER, coordinator=fake,
+            fenced=asyncio.Event(),
         )
         # The second one must already be waiting — consumed through the same
         # path as a real arrival, not invented by a second reconcile.
         second = await runner._await_wakeup(
             session_id="lead-s", role="lead", ttl=60.0, task_id="t1",
             project_id="p1", user_id=OWNER, coordinator=fake,
+            fenced=asyncio.Event(),
         )
         return first, second
 
@@ -416,6 +408,7 @@ def test_members_do_not_reconcile(db_factory) -> None:
             await runner._await_wakeup(
                 session_id="member-s", role="subtask", ttl=0.05, task_id="t1",
                 project_id="p1", user_id=OWNER, coordinator=fake,
+                fenced=asyncio.Event(),
             )
 
     asyncio.run(_drive())
@@ -445,6 +438,7 @@ def test_a_failing_reconcile_does_not_end_the_wait(db_factory) -> None:
         msg = await runner._await_wakeup(
             session_id="lead-s", role="lead", ttl=5.0, task_id="t1",
             project_id="p1", user_id=OWNER, coordinator=fake,
+            fenced=asyncio.Event(),
         )
         await task
         return msg
@@ -478,6 +472,7 @@ def test_no_durable_writes_while_draining(db_factory) -> None:
             await runner._await_wakeup(
                 session_id="lead-s", role="lead", ttl=0.08, task_id="t1",
                 project_id="p1", user_id=OWNER, coordinator=fake,
+                fenced=asyncio.Event(),
             )
 
     try:
@@ -489,69 +484,52 @@ def test_no_durable_writes_while_draining(db_factory) -> None:
     assert fake.reconciles == 0, "no durable write may be attempted during teardown"
 
 
-def test_renewer_survives_a_failure_after_the_renew_call(db_factory) -> None:
-    """The renewer must not die silently — that is the worst outcome here.
+def test_the_renewer_keeps_going_when_a_renewal_raises(db_factory) -> None:
+    """A transient failure must not kill the renewer.
 
-    Only the ``renew()`` call used to be guarded, so anything raising after it
-    (posting the shutdown, the claim check) killed the task. Nothing observes
-    it, so the lease then expires under a driver that is perfectly healthy and
-    a peer's watchdog blocks a live task: the original bug, re-entered through
-    a different door.
+    If it dies, nothing renews the lease and nothing raises the fence: the
+    holder keeps running while its lease quietly expires, and the watchdog
+    eventually declares a live runner dead. So an unexpected error has to be
+    logged and retried, not propagated.
+
+    (This used to inject the failure through ``is_claim_current``, the guard on
+    the shutdown message the renewer posted. Both are gone — losing the lease
+    now only raises a fence — so the injection point is the renewal itself.)
     """
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(lease_mod, "_HOLDER_ID", "our-proc")
-    ours = asyncio.run(
-        acquire_task_lease(user_id=OWNER, task_id="t1", lead_session_id="lead-s")
-    )
-    assert ours is not None
-    token = mailbox_registry.claim("lead-s")
-
-    # Fence it, so the renewer takes the "lost the lease" branch. A peer can
-    # only take over an expired lease, so age it out first.
-    db = db_factory()
-    try:
-        db.execute(
-            ExecutionLeaseRow.__table__.update()
-            .where(ExecutionLeaseRow.scope == "task", ExecutionLeaseRow.key == "t1")
-            .values(lease_expires_at=1)
-        )
-        db.commit()
-    finally:
-        db.close()
-    monkey.setattr(lease_mod, "_HOLDER_ID", "peer-proc")
-    assert (
-        asyncio.run(acquire_task_lease(user_id=OWNER, task_id="t1", lead_session_id="lead-s"))
-        is not None
-    )
-    monkey.setattr(lease_mod, "_HOLDER_ID", "our-proc")
-
-    # ...and make that branch blow up where it was previously unguarded.
     calls = {"n": 0}
 
-    def _boom(session_id, tok):
-        calls["n"] += 1
-        raise RuntimeError("registry exploded")
+    class _FlakyLease:
+        """Raises twice, then reports the lease as lost."""
 
-    monkey.setattr(mailbox_registry, "is_claim_current", _boom)
-    monkey.setattr("valuz_agent.modules.tasks.actor_runner.TASK_LEASE_RENEW_INTERVAL_S", 0.01)
+        needs_renewal = True
+        key = "lead-s"
 
+        async def renew(self) -> bool:
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise RuntimeError("database blip")
+            return False
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr("valuz_agent.modules.tasks.actor_runner.ACTOR_LEASE_RENEW_INTERVAL_S", 0.01)
     fenced = asyncio.Event()
 
-    async def _run():
-        task = asyncio.create_task(
-            ActorRunner._renew_lease(ours, "lead-s", token, fenced)
-        )
-        await asyncio.sleep(0.15)
-        alive = not task.done()
+    async def _run() -> bool:
+        task = asyncio.create_task(ActorRunner._renew_lease(_FlakyLease(), "lead-s", fenced))
+        for _ in range(80):
+            await asyncio.sleep(0.02)
+            if task.done():
+                break
+        done_cleanly = task.done() and task.exception() is None
         task.cancel()
-        return alive
+        return done_cleanly
 
-    still_alive = asyncio.run(_run())
+    ended_cleanly = asyncio.run(_run())
     monkey.undo()
 
-    assert calls["n"] >= 2, "it must keep retrying rather than dying on the first raise"
-    assert still_alive, "the renewer must not exit on an unexpected failure"
-    assert fenced.is_set(), "and it must still report the lost lease"
+    assert calls["n"] >= 3, "it must retry past the failures rather than die on the first"
+    assert fenced.is_set(), "and it must still report the lost lease once it can"
+    assert ended_cleanly, "the renewer must not propagate the transient error"
 
 
 class _DupThenShutdown(_Collaborators):
@@ -647,30 +625,30 @@ def test_an_actionable_member_done_still_runs_a_turn(db_factory) -> None:
     assert prompts[1] != prompts[0], "the second turn must not repeat the first"
 
 
-def test_a_failed_acquire_hands_the_inbox_back(db_factory, monkeypatch) -> None:
+def test_a_failed_acquire_leaves_no_lease_behind(db_factory, monkeypatch) -> None:
     """Undriven AND invisible is worse than undriven.
 
-    The inbox is already claimed when the lease is acquired, so an exception
-    escaping the acquire used to leave that claim behind with no loop to answer
-    for it. ``is_owned`` is the watchdog's second liveness opinion, so the task
-    would read as healthy forever and could never be blocked — stuck ``active``
-    with nothing driving it and nothing able to notice.
+    An exception escaping the acquire used to strand the eagerly-taken mailbox
+    claim, and the watchdog read that claim as liveness — so the task stayed
+    ``active`` with nothing running it and nothing able to notice.
+
+    The claim is gone, and liveness is the lease. What has to hold now is that
+    a failed acquire records no holder at all, so the watchdog sees the session
+    for what it is: unheld, and therefore its business.
     """
+
     async def _boom(**kw):
         raise RuntimeError("database blip")
 
-    monkeypatch.setattr(
-        "valuz_agent.modules.tasks.actor_runner.acquire_task_lease", _boom
-    )
+    monkeypatch.setattr("valuz_agent.modules.tasks.actor_runner.acquire_actor_lease", _boom)
     fake = _Collaborators([])
     runner = ActorRunner(finalizer=fake, coordinator=fake)
-    mailbox_registry.claim("lead-s")  # what spawn_actor does
 
     with pytest.raises(RuntimeError):
         asyncio.run(_drive(runner))
 
-    assert not mailbox_registry.is_owned("lead-s"), (
-        "a loop that could not take the lease must not leave a claim behind"
+    assert asyncio.run(load_actor_lease_states(["lead-s"])) == {}, (
+        "a loop that could not take the lease must not look like a holder"
     )
 
 
@@ -745,14 +723,14 @@ def test_a_fenced_loop_does_not_finalize_the_new_drivers_session(db_factory) -> 
         try:
             db.execute(
                 ExecutionLeaseRow.__table__.update()
-                .where(ExecutionLeaseRow.scope == "task", ExecutionLeaseRow.key == "t1")
+                .where(ExecutionLeaseRow.scope == "actor", ExecutionLeaseRow.key == "lead-s")
                 .values(lease_expires_at=1)
             )
             db.commit()
         finally:
             db.close()
         monkey.setattr(lease_mod, "_HOLDER_ID", "peer-proc")
-        await acquire_task_lease(user_id=OWNER, task_id="t1", lead_session_id="lead-s")
+        await acquire_actor_lease(session_id="lead-s", task_id="t1")
         monkey.setattr(lease_mod, "_HOLDER_ID", "our-proc")
         return "terminated"  # end the loop so the finally runs now
 
@@ -768,7 +746,7 @@ def test_a_fenced_loop_does_not_finalize_the_new_drivers_session(db_factory) -> 
         f"Got: {calls}"
     )
     # And the peer's lease is untouched: still held, on the newer token.
-    row = asyncio.run(lease_mod.load_lease_states("task", ["t1"]))["t1"]
+    row = asyncio.run(lease_mod.load_lease_states("actor", ["lead-s"]))["lead-s"]
     assert row.state == "held" and row.holder_id == "peer-proc"
 
 

@@ -39,10 +39,9 @@ from valuz_agent.modules.tasks.datastore import (
 )
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.tasks.lease import (
-    TaskLease,
-    acquire_task_lease,
-    is_driven_elsewhere,
-    load_task_lease_states,
+    ActorLease,
+    acquire_actor_lease,
+    load_actor_lease_states,
 )
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
 from valuz_agent.modules.tasks import mailbox_store
@@ -98,18 +97,20 @@ class RecoveryService:
                 (t.id, t.project_id, t.user_id) for t in await TaskDatastore(db).list_active()
             ]
         recovered = 0
-        skipped = 0
         for task_id, project_id, user_id in active:
             try:
                 # This sweep is cross-owner and unconditional, so with several
                 # host processes every one of them used to re-drive every active
                 # task — N lead loops, N× model spend, competing plan CAS
-                # writes. A task another process is actively driving is not
-                # orphaned; leave it alone. Advisory only: the authoritative
-                # guard is the lease acquisition inside the lead's actor loop.
-                if await is_driven_elsewhere(task_id):
-                    skipped += 1
-                    continue
+                # writes. ``_recover_one_task`` takes the lead session's lease
+                # before respawning anything, so a task someone else is running
+                # is left alone there.
+                #
+                # There used to be an advisory pre-check here as well, keyed by
+                # task id. The lease is keyed by session now, and resolving the
+                # lead session is exactly the first thing the authoritative
+                # path does — so the pre-check bought one skipped query at the
+                # cost of a second answer to the same question.
                 if await self._recover_one_task(task_id, project_id, user_id=user_id):
                     recovered += 1
             except Exception:  # noqa: BLE001
@@ -117,10 +118,6 @@ class RecoveryService:
         if recovered:
             logger.warning(
                 "recover_active_tasks: reconciled + re-drove %d active task(s)", recovered
-            )
-        if skipped:
-            logger.info(
-                "recover_active_tasks: left %d active task(s) to their current driver", skipped
             )
         return recovered
 
@@ -267,9 +264,7 @@ class RecoveryService:
         # the same members — duplicate turns, duplicate model spend — before the
         # lead loops raced for ownership. The lease travels into the lead loop
         # so it does not re-acquire and fence the recovery that spawned it.
-        lease = await acquire_task_lease(
-            user_id=user_id, task_id=task_id, lead_session_id=lead_session_id
-        )
+        lease = await acquire_actor_lease(session_id=lead_session_id, task_id=task_id)
         if lease is None:
             logger.info(
                 "recover: task %s is already being driven — leaving it alone", task_id
@@ -301,7 +296,7 @@ class RecoveryService:
         project_id: str,
         user_id: str,
         lead_session_id: str,
-        lease: TaskLease,
+        lease: ActorLease,
         member_done: list[tuple[str, MemberManifest]],
         resume_members: list[tuple[str, str, str, str, str]],
         summary: list[str],
@@ -885,11 +880,13 @@ class TaskHealthMonitor:
             # full-row scan plus one list_runs per active task.
             candidates = await TaskDatastore(db).list_active_lead_bindings()
 
-        # Liveness is the LEASE, not the mailbox. ``mailbox_registry.is_owned``
-        # is process-local, so with more than one host process it reported every
-        # sibling process's healthy lead as dead and this sweep blocked it
-        # mid-run. The lease is shared state, so it answers for all of them.
-        leases = await load_task_lease_states([task_id for task_id, *_ in candidates])
+        # Liveness is the LEASE, and only the lease. It used to be read
+        # alongside ``mailbox_registry.is_owned``, which is process-local and
+        # therefore reported every sibling process's healthy lead as dead —
+        # this sweep then blocked it mid-run. Now every actor loop holds a
+        # lease on its own session, so one shared answer serves all processes
+        # and the second, lying opinion is gone.
+        leases = await load_actor_lease_states([sid for *_, sid in candidates if sid])
         now = now_ms()
 
         acted: list[str] = []
@@ -901,7 +898,7 @@ class TaskHealthMonitor:
                 # it to boot recovery / user action.
                 self._suspect.pop(task_id, None)
                 continue
-            lease = leases.get(task_id)
+            lease = leases.get(lead_session_id)
             if lease is None:
                 # No lease row: nobody has claimed this task under the lease
                 # scheme. Either it predates the table or its driver is still on
@@ -909,11 +906,8 @@ class TaskHealthMonitor:
                 # act is what makes this change safe to roll out gradually.
                 self._suspect.pop(task_id, None)
                 continue
-            if lease.is_live(now) or mailbox_registry.is_owned(lead_session_id):
-                # A live lease means someone (here or elsewhere) is driving.
-                # The local ``is_owned`` check stays as a second opinion: if a
-                # loop in THIS process holds the session, we know first-hand it
-                # is alive, whatever the lease row says.
+            if lease.is_live(now):
+                # Someone, here or elsewhere, is running the lead.
                 self._suspect.pop(task_id, None)
                 continue
             # Dead-looking: the loop has exited but the task is still active.
@@ -953,9 +947,7 @@ class TaskHealthMonitor:
             # Double-check liveness right before writing — a driver may have
             # taken the task over (a resume landed, or a peer picked it up) in
             # the sweep gap. Both oracles, for the same reason as in the sweep.
-            if mailbox_registry.is_owned(lead_session_id):
-                return False
-            lease = (await load_task_lease_states([task_id])).get(task_id)
+            lease = (await load_actor_lease_states([lead_session_id])).get(lead_session_id)
             if lease is None or lease.is_live(now_ms()):
                 return False
             reason = (

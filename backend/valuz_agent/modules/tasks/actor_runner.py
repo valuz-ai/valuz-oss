@@ -27,9 +27,9 @@ from valuz_agent.infra.lifecycle import is_draining
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.tasks.datastore import TaskDatastore
 from valuz_agent.modules.tasks.lease import (
-    TASK_LEASE_RENEW_INTERVAL_S,
-    TaskLease,
-    acquire_task_lease,
+    ACTOR_LEASE_RENEW_INTERVAL_S,
+    ActorLease,
+    acquire_actor_lease,
 )
 from valuz_agent.modules.tasks.task_state import NON_REVIEWABLE_DONE
 from valuz_agent.modules.tasks import mailbox_store
@@ -227,7 +227,7 @@ class ActorRunner:
         project_id: str,
         idle_ttl: float | None = None,
         user_id: str,
-        lease: TaskLease | None = None,
+        lease: ActorLease | None = None,
     ) -> None:
         """Persistent actor loop: run turn → idle → await mailbox → repeat.
 
@@ -254,58 +254,41 @@ class ActorRunner:
             if idle_ttl is not None
             else (LEAD_IDLE_TTL_S if role == "lead" else MEMBER_IDLE_TTL_S)
         )
-        # Claim the inbox FIRST, so that bailing out below can hand it back
-        # through the claim guard. Dropping it unconditionally would be a race:
-        # ``spawn_actor`` claims eagerly, so between its claim and this line a
-        # newer loop may already have taken the session, and an unguarded
-        # ``unregister`` would pull the box out from under it.
-        claim_token = mailbox_registry.claim(session_id)
-        # CROSS-PROCESS ownership. A lead may only drive a task no other process
-        # is driving; refusing here is what stops N booting workers from putting
-        # N lead loops on one task, and what lets the watchdog trust an expired
-        # lease as "really dead". Members are not leased: they are dispatched by
-        # a lead that already holds the task's lease.
+        # THE RIGHT TO RUN THIS SESSION. One lease per actor, lead and member
+        # alike, keyed by session id and carrying a fence token that names this
+        # incarnation. Acquiring it revokes whichever loop held it before, so
+        # "someone took over" and "you were told to stop" are the same event
+        # and get the same handling: leave without finalizing.
+        #
+        # Members are leased too, unlike under the old task-scoped lease. A
+        # member's loop is every bit as capable of being resumed twice, and it
+        # is the only thing that can say whether a member session is live —
+        # which used to be a question about one process's memory.
+        # The in-process queue is still the fast path (and, during a rolling
+        # deploy, the only path an older peer writes to), so the box has to
+        # exist before the first ``get`` — ``claim`` used to do this as a side
+        # effect, and removing it without this line made every loop exit on its
+        # first wait with "ownership moved".
+        mailbox_registry.register(session_id)
         fenced = asyncio.Event()
         renewer: asyncio.Task[None] | None = None
-        if role == "lead":
-            # Guarded because the inbox is ALREADY claimed at this point. An
-            # exception escaping here (a database blip in the acquire) would
-            # leave that claim behind with no loop to answer for it, and
-            # ``is_owned`` is the watchdog's second liveness opinion — so the
-            # task would read as healthy forever and could never be blocked.
-            # Undriven AND invisible is the one outcome worse than undriven.
-            try:
-                if lease is None:
-                    lease = await acquire_task_lease(
-                        user_id=user_id, task_id=task_id, lead_session_id=session_id
-                    )
-                if lease is None:
-                    mailbox_registry.release(session_id, claim_token)
-                    logger.info(
-                        "actor loop %s (lead): task %s already has a driver — exiting",
-                        session_id,
-                        task_id,
-                    )
-                    return
-                if lease.needs_renewal:
-                    renewer = asyncio.create_task(
-                        self._renew_lease(lease, session_id, claim_token, fenced),
-                        name=f"task-lease-{task_id}",
-                    )
-                    # An unobserved renewer death is invisible until the lease
-                    # has already expired, so say so at the moment it happens.
-                    renewer.add_done_callback(
-                        functools.partial(_log_renewer_exit, task_id=task_id)
-                    )
-            except Exception:
-                mailbox_registry.release(session_id, claim_token)
-                logger.exception(
-                    "actor loop %s (lead): could not take the lease on task %s — "
-                    "handing the inbox back so the watchdog can see it",
-                    session_id,
-                    task_id,
-                )
-                raise
+        if lease is None:
+            lease = await acquire_actor_lease(session_id=session_id, task_id=task_id)
+        if lease is None:
+            logger.info(
+                "actor loop %s (%s): session already has a live runner — exiting",
+                session_id,
+                role,
+            )
+            return
+        if lease.needs_renewal:
+            renewer = asyncio.create_task(
+                self._renew_lease(lease, session_id, fenced),
+                name=f"actor-lease-{session_id}",
+            )
+            # An unobserved renewer death is invisible until the lease has
+            # already expired, so say so at the moment it happens.
+            renewer.add_done_callback(functools.partial(_log_renewer_exit, task_id=task_id))
         # Read once: every lead wake-up restates it (see _with_goal_restated).
         task_goal = await self._task_goal(task_id, project_id, user_id) if role == "lead" else ""
         prompt = initial_prompt
@@ -422,6 +405,7 @@ class ActorRunner:
                             project_id=project_id,
                             user_id=user_id,
                             coordinator=coordinator,
+                            fenced=fenced,
                         )
                     except KeyError:
                         # Our box was dropped externally — ownership moved (a
@@ -543,7 +527,6 @@ class ActorRunner:
         finally:
             if renewer is not None:
                 renewer.cancel()
-            mailbox_registry.release(session_id, claim_token)
             # When draining, skip the ENTIRE finalize. ``_finalize_actor`` touches
             # the kernel store (status flip) AND the host DB (lead auto-finalize /
             # member run record), both being torn down right now; running it spams
@@ -558,7 +541,7 @@ class ActorRunner:
             # auto-finalize; the kernel write was unconditional.
             #
             # Asked authoritatively rather than off ``fenced``: the renewer
-            # ticks every ``TASK_LEASE_RENEW_INTERVAL_S``, so a takeover in the
+            # ticks every ``ACTOR_LEASE_RENEW_INTERVAL_S``, so a takeover in the
             # last few seconds has not reached that event yet.
             #
             # ONLY a proven loss skips the finalize. If the check itself fails
@@ -650,6 +633,7 @@ class ActorRunner:
         project_id: str,
         user_id: str,
         coordinator: ActorCoordinator,
+        fenced: asyncio.Event,
     ) -> InboxMsg:
         """Wait for the next inbox message, re-reading durable state as we go.
 
@@ -691,6 +675,12 @@ class ActorRunner:
                 )
             except TimeoutError:
                 pass
+            if fenced.is_set():
+                # Our right to run this session was revoked — someone else
+                # holds the lease now. Leave the way a shutdown used to make us
+                # leave, but WITHOUT a message: a stop that travels as a queued
+                # message can be read by the loop that replaced us.
+                raise KeyError(session_id)
             durable = await self._drain_durable_inbox(session_id)
             if durable:
                 for extra in durable[1:]:
@@ -737,27 +727,25 @@ class ActorRunner:
             return recovered[0]
 
     @staticmethod
-    async def _renew_lease(
-        lease: TaskLease, session_id: str, claim_token: int, fenced: asyncio.Event
-    ) -> None:
-        """Keep the task lease alive; signal + wake the loop if we lose it.
+    async def _renew_lease(lease: ActorLease, session_id: str, fenced: asyncio.Event) -> None:
+        """Keep this actor's lease alive; raise the fence if we lose it.
 
         Runs as its own task on purpose: the loop spends most of its life
-        blocked inside ``run_turn`` (minutes) or parked on the mailbox (up to
-        the idle TTL), so a renewal folded into the loop body would starve and
-        the lease would expire under a perfectly healthy driver.
+        blocked inside ``run_turn`` (minutes) or parked on its inbox, so a
+        renewal folded into the loop body would starve and the lease would
+        expire under a perfectly healthy runner.
 
-        Losing the lease means someone else is now driving. Setting the event is
-        not enough — the loop may be parked on its mailbox for another half hour
-        — so we also post the ``shutdown`` message that every other
-        externally-managed stop uses. Both paths land on ``exited_on_shutdown``,
-        which skips finalize, so the new driver's state is never overwritten.
+        Losing it means someone else now runs this session. Setting the event
+        is ALL this does — the parked loop checks it on every inbox slice and
+        leaves on its own.
 
-        ``claim_token`` gates that post. The takeover can be a NEWER LOOP IN
-        THIS PROCESS (a rapid stop→resume, the race ``mailbox_registry.claim``
-        exists for), and both loops share one inbox — so posting unconditionally
-        would deliver our shutdown to the live replacement and stop the wrong
-        loop, leaving the task with no driver at all.
+        It used to also post a ``shutdown`` message to wake the loop, because
+        the wait had no other way to notice. That was a control signal sent
+        down a message channel, and both loops share one inbox, so the message
+        could be read by the loop that REPLACED the one it was meant to stop —
+        killing the wrong one and leaving the task undriven. The guard for that
+        was a process-local claim token; observing the fence instead removes
+        the message and the guard together.
         """
         if not lease.needs_renewal:
             # Exclusivity was proven at acquisition (single-process deployment),
@@ -766,7 +754,7 @@ class ActorRunner:
             return
         while True:
             try:
-                await asyncio.sleep(TASK_LEASE_RENEW_INTERVAL_S)
+                await asyncio.sleep(ACTOR_LEASE_RENEW_INTERVAL_S)
             except asyncio.CancelledError:
                 return
             # EVERYTHING below is inside the guard, not just the renew call.
@@ -781,12 +769,9 @@ class ActorRunner:
                     continue
                 fenced.set()
                 logger.warning(
-                    "actor loop %s: lost the lease on task %s (taken over) — stopping",
+                    "actor loop %s: lost its lease (taken over) — standing down",
                     session_id,
-                    lease.key,
                 )
-                if mailbox_registry.is_claim_current(session_id, claim_token):
-                    mailbox_registry.put(session_id, InboxMsg(kind="shutdown"))
                 return
             except asyncio.CancelledError:
                 raise
