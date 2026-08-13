@@ -23,6 +23,7 @@ from app.schemas import (
     EventWindowData,
     EventWindowResponse,
     FinalizeSessionRequest,
+    ForkSessionRequest,
     ModelProviderInputSchema,
     ModelProviderUpdateSchema,
     ModelSettingsSchema,
@@ -66,6 +67,13 @@ from src.core.orchestrator import (
     RuntimeUnavailableError,
     SessionNotFoundError,
     SessionOrchestrator,
+)
+from src.core.session_fork import (
+    MissingNativeAnchorError,
+    build_forked_session,
+    collect_history,
+    copy_history,
+    resolve_native_fork_source,
 )
 from src.runtimes.factory import validate_api_protocol
 from sse_starlette.sse import EventSourceResponse
@@ -158,6 +166,115 @@ async def create_session(
     )
     await store.save_session(session)
     return {"data": _session_to_data(session)}
+
+
+@router.post("/{session_id}/fork", status_code=201, response_model=SessionResponse)
+async def fork_session(
+    session_id: str,
+    body: ForkSessionRequest,
+    store: StoreDep,
+    orchestrator: OrchestratorDep,
+    owner: OwnerDep,
+) -> dict[str, Any]:
+    """Fork an owned session into a new, independent session.
+
+    HTTP validation + composition only — the copy mechanics live in
+    ``src.core.session_fork`` (see docs/design/session-fork.md). Server-side
+    copy in the ``import_canonical_message`` mold: the caller supplies only
+    the anchor, never history content.
+
+    Ordering is native-fork-first: after validation the runtime's
+    ``fork_session`` (via ``orchestrator.fork_session``) must succeed before
+    any kernel row is written — a failed native fork therefore leaves
+    nothing to roll back. The kernel history is then copied, and the new
+    session row is saved LAST as the commit point (messages/events without
+    a session row are invisible; the cleanup delete covers the rare
+    mid-copy failure). The fork is non-destructive: the source session is
+    never written.
+    """
+    source = await store.load_session(owner, session_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    anchor = None
+    if body.message_id is not None:
+        anchor = await store.load_message(owner, body.message_id)
+        if anchor is None:
+            raise HTTPException(status_code=404, detail="Anchor message not found")
+        if anchor.session_id != session_id:
+            raise HTTPException(
+                status_code=409, detail="Anchor message belongs to a different session"
+            )
+        if anchor.status == "running":
+            raise HTTPException(status_code=409, detail="Anchor message is still running")
+    elif source.status == "running":
+        # A whole-session fork anchors at the moving tail — refuse while a
+        # turn is in flight (codex also rejects forking an in-progress
+        # turn). Forking a COMPLETED message of a running session is fine.
+        raise HTTPException(
+            status_code=409,
+            detail="Session is running; fork a completed message or wait for the turn to end",
+        )
+
+    try:
+        fork_source = resolve_native_fork_source(source, anchor)
+    except MissingNativeAnchorError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    try:
+        messages = await collect_history(
+            store,
+            owner,
+            session_id,
+            until_message_id=anchor.id if anchor is not None else None,
+        )
+    except LookupError as exc:  # pragma: no cover — load_message succeeded above
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    forked = build_forked_session(
+        source,
+        anchor_message_id=anchor.id if anchor is not None else None,
+        caller_metadata=body.metadata,
+        copied_messages=messages,
+    )
+
+    if fork_source is not None:
+        # Native fork FIRST — nothing is persisted yet, so a refused fork
+        # (bad turn id, in-progress turn, missing source rollout) costs
+        # nothing. On success ``forked.runtime_session_id`` carries the new
+        # native id and the runtime stays warm for the first Send.
+        # ``fork_source`` is None only for a never-ran source (plain config
+        # copy — works for every runtime, no native thread involved).
+        try:
+            await orchestrator.fork_session(
+                owner,
+                forked,
+                source_native_session_id=fork_source.native_session_id,
+                anchor=fork_source.anchor,
+            )
+        except NotImplementedError as exc:
+            # Rollout gate expressed by the runtime itself: codex is wired
+            # up; claude_agent / deepagents raise until design doc P1/P2
+            # land — at which point this route needs no change.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Native thread fork failed: {exc}",
+            ) from exc
+
+    try:
+        await copy_history(store, owner, messages, forked.id)
+        await store.save_session(forked)
+    except Exception:
+        # Rare mid-copy failure: sweep the orphaned rows (cascade delete
+        # works keyed on session_id even before the session row exists)
+        # and drop the warm runtime; the native fork artifact is inert.
+        await store.delete_session(owner, forked.id)
+        await orchestrator.cleanup(forked.id)
+        raise
+
+    return {"data": _session_to_data(forked)}
 
 
 def _normalize_base_url(raw: str | None) -> str | None:

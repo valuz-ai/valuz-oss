@@ -700,6 +700,13 @@ const createTurnsBuilder = () => {
         if (payload.status === "cancelled" && currentTurn) {
           currentTurn.cancelled = true;
         }
+        // Terminal frames stamp whether this turn's message carries a
+        // runtime-native fork anchor (docs/design/session-fork.md §6.5).
+        // Absent = recorded before the field existed — leave undefined so
+        // "Fork from here" stays enabled with the server 409 as backstop.
+        if (payload.fork_anchor !== undefined && currentTurn) {
+          currentTurn.forkAnchor = payload.fork_anchor === "true";
+        }
         continue;
       }
 

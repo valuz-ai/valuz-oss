@@ -25,9 +25,11 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  ForkIcon,
   cn,
 } from "@valuz/ui";
 import { SlotRenderer } from "@valuz/core";
+import { FORKABLE_RUNTIMES } from "./useTitleActions";
 import { SessionStatusPill } from "./SessionStatusPill";
 import type { useComposerConfig } from "./useComposerConfig";
 import type { useConversationHistory } from "./useConversationHistory";
@@ -61,6 +63,11 @@ type ConversationHeaderProps = {
   headerAgentSlug: string | null;
   agentNameBySlug: ComposerConfig["agentNameBySlug"];
   activeProject: ProjectDetail | null;
+  /** Whole-session fork (docs/design/session-fork.md). The item renders
+   *  only for runtimes with a wired native fork (codex today) and is
+   *  disabled while a turn is running or a fork is already in flight. */
+  onFork: () => void;
+  forkInFlight: boolean;
 };
 
 /**
@@ -93,6 +100,8 @@ export function ConversationHeader({
   headerAgentSlug,
   agentNameBySlug,
   activeProject,
+  onFork,
+  forkInFlight,
 }: ConversationHeaderProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -226,6 +235,20 @@ export function ConversationHeader({
                       <FilePenLine />
                       {t("sidebar.rename" as Parameters<typeof t>[0])}
                     </DropdownMenuItem>
+                    {FORKABLE_RUNTIMES.has(
+                      selectedSession?.runtime_provider ?? "",
+                    ) && (
+                      <DropdownMenuItem
+                        disabled={
+                          forkInFlight ||
+                          selectedSession?.status === "running"
+                        }
+                        onSelect={() => onFork()}
+                      >
+                        <ForkIcon />
+                        {t("conversation.fork" as Parameters<typeof t>[0])}
+                      </DropdownMenuItem>
+                    )}
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
                       variant="destructive"
@@ -269,6 +292,30 @@ export function ConversationHeader({
                 <Bot className="h-3 w-3" />
                 {agentNameBySlug.get(headerAgentSlug) ?? headerAgentSlug}
               </Badge>
+            ) : null}
+            {selectedSession?.forked_from_session_id ? (
+              // Fork provenance chip (design doc D6): jump back to the
+              // source conversation. The source may since have been
+              // deleted — the target page's own not-found handling covers
+              // that; the chip is a hint, not a guarantee.
+              <button
+                type="button"
+                onClick={() =>
+                  navigate(
+                    `/conversation/${selectedSession.forked_from_session_id}`,
+                  )
+                }
+                title={t("conversation.forkedFrom" as Parameters<typeof t>[0])}
+                className="shrink-0"
+              >
+                <Badge
+                  variant="metaOutline"
+                  className="cursor-pointer transition-colors hover:bg-surface-soft"
+                >
+                  <ForkIcon className="h-3 w-3" />
+                  {t("conversation.forkedFrom" as Parameters<typeof t>[0])}
+                </Badge>
+              </button>
             ) : null}
             {selectedSession?.worktree ? (
               // Worktree attribution (creation-time snapshot). Greys out

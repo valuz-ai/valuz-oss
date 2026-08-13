@@ -2897,6 +2897,49 @@ paths:
         "404":
           description: Session not found
 
+  /v1/sessions/{session_id}/fork:
+    post:
+      summary: Fork a session into a new independent session
+      operationId: forkSession
+      tags: [sessions]
+      description: |
+        Duplicates the session — configuration, kernel history, and the
+        runtime-native thread — into a new session and returns it. With
+        ``message_id`` the fork cuts inclusively at that message
+        (message-granularity fork); without it the whole session is forked
+        at its current tail. Non-destructive: the source session is never
+        modified. See docs/design/session-fork.md.
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForkSessionRequest"
+      responses:
+        "201":
+          description: The forked session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDetail"
+        "404":
+          description: Session or anchor message not found
+        "409":
+          description: |
+            Invalid anchor (recorded before anchor persistence, still
+            running, or belongs to another session), or a whole-session
+            fork was requested while a turn is in flight
+        "422":
+          description: Fork is not supported for this session's runtime yet
+        "502":
+          description: The runtime-native fork failed; nothing was created
+
   /v1/sessions/{session_id}/queue:
     get:
       summary: List queued follow-up inputs for a session
@@ -6401,6 +6444,14 @@ components:
             creation time, not liveness — the worktree may have been
             removed since; ``GET /v1/projects/{id}/worktrees`` is the
             source of truth for what still exists.
+        forked_from_session_id:
+          type: string
+          nullable: true
+          description: |
+            Fork provenance (docs/design/session-fork.md): the source
+            session this one was forked from. null for sessions that
+            are not forks. The source may since have been deleted —
+            treat as a navigation hint, not a guarantee.
         background:
           type: boolean
           default: false
@@ -7014,6 +7065,18 @@ components:
           maxLength: 64
           default: main
           description: Render seat within the host. First iteration uses ``main``.
+
+    ForkSessionRequest:
+      type: object
+      properties:
+        message_id:
+          type: string
+          nullable: true
+          description: |
+            Anchor message to fork through (inclusive). The message must
+            carry a runtime-native fork anchor
+            (``metadata.runtime_native``). Omitted — the whole session is
+            forked at its current tail.
 
     SessionMessageRequest:
       type: object

@@ -5,6 +5,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  ForkIcon,
 } from "@valuz/ui";
 import { FilePenLine, MoreHorizontal, Trash2 } from "lucide-react";
 
@@ -17,9 +18,12 @@ import { FilePenLine, MoreHorizontal, Trash2 } from "lucide-react";
 export const RowActionsMenu = ({
   onRename,
   onDelete,
+  onFork,
 }: {
   onRename: () => void;
   onDelete: () => void;
+  /** Whole-session fork (docs/design/session-fork.md); absent → no entry. */
+  onFork?: () => void;
 }) => {
   const { t } = useTranslation();
   return (
@@ -50,6 +54,12 @@ export const RowActionsMenu = ({
           <FilePenLine />
           {t("sidebar.rename" as Parameters<typeof t>[0])}
         </DropdownMenuItem>
+        {onFork && (
+          <DropdownMenuItem onSelect={onFork}>
+            <ForkIcon />
+            {t("sidebar.fork" as Parameters<typeof t>[0])}
+          </DropdownMenuItem>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem variant="destructive" onSelect={onDelete}>
           <Trash2 />

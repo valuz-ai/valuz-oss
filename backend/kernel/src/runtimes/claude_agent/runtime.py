@@ -547,6 +547,16 @@ class ClaudeAgentRuntime:
         # binds to that fresh id. Consumed (and cleared) by the next
         # ``_build_options`` call.
         self._fork_next_spawn: bool = False
+        # Native fork anchor for the turn in flight: ``{"provider":
+        # "claude_agent", "native_session_id": ..., "message_uuid": ...}``.
+        # ``message_uuid`` is the transcript-entry uuid of the LAST
+        # main-chain stream message seen this turn (last write wins) —
+        # the anchor ``claude_agent_sdk.fork_session(up_to_message_id=...)``
+        # slices on. Read-and-cleared by the orchestrator
+        # (``consume_turn_anchor``) into
+        # ``Message.metadata["runtime_native"]`` — the message-granularity
+        # fork seam (docs/design/session-fork.md).
+        self._turn_anchor: dict[str, Any] | None = None
         # Phase 3 — approve_for_session matcher. Uses the SDK's
         # ``ToolPermissionContext.suggestions`` to derive pattern-grammar
         # rules (``Bash(npm test:*)``, ``Edit(src/**/*.ts)``,
@@ -591,6 +601,65 @@ class ClaudeAgentRuntime:
 
     def update_sink(self, sink: EventSink) -> None:
         self.event_sink = sink
+
+    def consume_turn_anchor(self) -> dict[str, Any] | None:
+        """Return and clear the native anchor captured by the last ``run()``.
+
+        Read-and-clear so a turn that streams no main-chain message
+        (spawn failure, immediate error) cannot inherit a stale anchor
+        from the previous message.
+        """
+        anchor, self._turn_anchor = self._turn_anchor, None
+        return anchor
+
+    async def fork_session(
+        self,
+        session: Session,
+        *,
+        source_native_session_id: str,
+        anchor: str | None = None,
+    ) -> str:
+        """Branch a source SDK session into this session's native session.
+
+        Uses the SDK's OFFLINE transcript transform
+        (``claude_agent_sdk.fork_session`` — a public export since 0.2.x,
+        absent from the sessions docs): it slices the source transcript at
+        ``anchor`` (a transcript ``message_uuid``, inclusive; ``None`` =
+        full copy), re-mints UUIDs preserving the ``parentUuid`` chain,
+        and writes a NEW session file — no CLI process, the new native id
+        returns synchronously, and the source is never mutated. The first
+        Send resumes the new id through the normal spawn path.
+
+        Deliberately NOT the spawn-time ``--resume-session-at`` /
+        ``resume_session_at`` route (SDK PR #1198): the CLI only reports
+        the forked session id in the ``init`` message of the FIRST QUERY
+        (probe-verified: no init arrives on a bare connect), so spawn-time
+        slicing cannot satisfy the eager fork contract — reserve those
+        options for a future same-session rewind feature. Also distinct
+        from ``_fork_next_spawn``, the permission-mode workaround that
+        forks only at the tail and rewrites this session's own id.
+        """
+        try:
+            from claude_agent_sdk import fork_session as sdk_fork_session
+        except ImportError as exc:  # pragma: no cover — pinned SDK ships it
+            raise NotImplementedError(
+                "claude_agent native fork needs claude_agent_sdk.fork_session "
+                f"(not exported by the installed SDK): {exc}"
+            ) from exc
+
+        directory = self.workspace_root or session.cwd or None
+        # Sync, filesystem-only transform — keep it off the event loop.
+        result = await asyncio.to_thread(
+            sdk_fork_session,
+            source_native_session_id,
+            directory=directory,
+            up_to_message_id=anchor,
+        )
+        new_id = str(result.session_id)
+        # Same internal backfill as the init-message capture — no API
+        # write channel involved.
+        session.runtime_session_id = new_id
+        return new_id
 
     async def prepare(self, session: Session) -> None:
         """Claude prewarming is deferred until its client lifecycle is isolated."""
@@ -2778,6 +2847,28 @@ class ClaudeAgentRuntime:
 
     # -- Message conversion --
 
+    def _note_turn_anchor(self, session: Session, message: Any) -> None:
+        """Track the fork anchor from a main-chain stream message.
+
+        ``message.uuid`` is the transcript-entry uuid — what
+        ``fork_session(up_to_message_id=...)`` slices on. Sidechain
+        messages (``parent_tool_use_id`` set) are skipped: forked
+        transcripts drop sidechains, so their uuids are not valid
+        anchors. Last write wins, so at end of turn the anchor is the
+        turn's final main-chain transcript entry.
+        """
+        uuid_value = getattr(message, "uuid", None)
+        if not uuid_value or getattr(message, "parent_tool_use_id", None) is not None:
+            return
+        native_session_id = session.runtime_session_id
+        if not native_session_id:
+            return
+        self._turn_anchor = {
+            "provider": "claude_agent",
+            "native_session_id": str(native_session_id),
+            "message_uuid": str(uuid_value),
+        }
+
     async def _handle_message(self, session: Session, message: Any) -> None:
         if isinstance(message, StreamEvent):
             # ``parent_tool_use_id`` is set when this stream event was
@@ -2945,6 +3036,7 @@ class ClaudeAgentRuntime:
         elif isinstance(message, AssistantMessage):
             if not getattr(self, "_egress_first_model_event_recorded", False):
                 await self._record_egress_model_first_event()
+            self._note_turn_anchor(session, message)
             # ``parent_tool_use_id`` is set when this message was produced
             # INSIDE a subagent (Task/Agent tool run). Thread it onto every
             # emitted event so downstream consumers can tell out-of-band
@@ -3008,6 +3100,7 @@ class ClaudeAgentRuntime:
                     )
 
         elif isinstance(message, SdkUserMessage):
+            self._note_turn_anchor(session, message)
             content = message.content
             if isinstance(content, list):
                 # Same subagent attribution as AssistantMessage above: tool

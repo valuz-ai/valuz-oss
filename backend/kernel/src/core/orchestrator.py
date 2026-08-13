@@ -1188,6 +1188,45 @@ class SessionOrchestrator:
         # persist it now so a later cache eviction resumes the same thread.
         await self._store.save_session(session)
 
+    async def fork_session(
+        self,
+        user_id: str,
+        session: Any,
+        *,
+        source_native_session_id: str,
+        anchor: str | None = None,
+    ) -> str:
+        """Create *session*'s native thread by forking a source thread.
+
+        Drives ``RuntimePort.fork_session`` through the standard runtime
+        factory — the only sanctioned way to obtain a correctly-configured
+        provider client. *session* is the NEW session object and need not
+        be persisted yet: the fork route calls this BEFORE any kernel rows
+        exist, so a native-fork failure leaves nothing to roll back. On
+        success ``session.runtime_session_id`` carries the new native id
+        (also returned) and the runtime stays warm in the cache for the
+        first Send; persistence is the caller's commit point. On failure
+        the half-built runtime is evicted and the error propagates.
+        """
+        bootstrap_session_workspace(session.cwd, session.agent_config.name or None)
+        runtime = await self._ensure_runtime(
+            session.id,
+            session.agent_config,
+            session,
+            _DiscardEventSink(),
+            session.cwd,
+            user_id=user_id,
+        )
+        try:
+            return await runtime.fork_session(
+                session,
+                source_native_session_id=source_native_session_id,
+                anchor=anchor,
+            )
+        except Exception:
+            await self._evict_runtime(session.id)
+            raise
+
     def set_semantic_verifier_factory(
         self,
         factory: SemanticVerifierFactory | None,
@@ -1627,6 +1666,21 @@ class SessionOrchestrator:
             await observer.ensure_partial_assistant_message()
             await observer.finalize_sidecars()
             await observer.release_session_idle()
+            # Native per-turn fork anchor (codex turn id / Claude transcript
+            # uuid / deepagents checkpoint id), captured by the runtime during
+            # ``run()``. Consumed AFTER the optional coverage continuation so
+            # the anchor reflects the LAST native turn this Message drove.
+            # ``getattr`` keeps runtimes (and test fakes) without the hook
+            # working unchanged. Persisted under
+            # ``metadata["runtime_native"]`` — the message-granularity fork
+            # seam (docs/design/session-fork.md).
+            consume_anchor = getattr(runtime, "consume_turn_anchor", None)
+            turn_has_fork_anchor = False
+            if callable(consume_anchor):
+                anchor = consume_anchor()
+                if anchor:
+                    message.metadata = {**message.metadata, "runtime_native": dict(anchor)}
+                    turn_has_fork_anchor = True
             # finalize must run BEFORE save_session — it writes session.todos
             # (and message.todos) from the observer's last todo_update payload;
             # saving first would persist a stale snapshot.
@@ -1656,7 +1710,17 @@ class SessionOrchestrator:
             await observer.emit(
                 Event(
                     type="session_update",
-                    data={"status": session.status, "message_id": message.id},
+                    data={
+                        "status": session.status,
+                        "message_id": message.id,
+                        # Whether this message carries a runtime-native fork
+                        # anchor — the wire signal "Fork from here" keys its
+                        # enabled state on (docs/design/session-fork.md §6.5).
+                        # Absent on events recorded before this field existed;
+                        # consumers treat absent as unknown (keep enabled,
+                        # server 409 is the backstop).
+                        "fork_anchor": turn_has_fork_anchor,
+                    },
                 )
             )
             return message

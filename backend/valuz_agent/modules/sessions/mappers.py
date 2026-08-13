@@ -82,6 +82,15 @@ def _worktree_ref(meta: dict[str, object]) -> WorktreeRef | None:
     )
 
 
+def _forked_from_session_id(session: KernelSession) -> str | None:
+    """Kernel-stamped fork provenance — metadata TOP level (not ``valuz``:
+    the kernel owns the stamp, callers cannot spoof it)."""
+    forked_from = (getattr(session, "metadata", None) or {}).get("forked_from")
+    if isinstance(forked_from, dict) and forked_from.get("session_id"):
+        return str(forked_from["session_id"])
+    return None
+
+
 def _session_to_list_item(session: KernelSession) -> SessionListItem:
     meta = _valuz_meta(session)
     settings = getattr(session, "model_settings", None)
@@ -102,6 +111,7 @@ def _session_to_list_item(session: KernelSession) -> SessionListItem:
         effort=effort,
         task_id=str(raw_task_id) if raw_task_id else None,
         worktree=_worktree_ref(meta),
+        forked_from_session_id=_forked_from_session_id(session),
     )
 
 
@@ -165,6 +175,7 @@ def _session_to_detail(session: KernelSession) -> SessionDetail:
         instructions=session.instructions or None,
         agent_slug=meta.get("agent_slug") or None,  # type: ignore[arg-type]
         worktree=_worktree_ref(meta),
+        forked_from_session_id=_forked_from_session_id(session),
     )
 
 

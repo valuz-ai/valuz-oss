@@ -457,6 +457,22 @@ class ImportMessageRequest(BaseModel):
     user_text: str = Field(min_length=1, max_length=500)
 
 
+class ForkSessionRequest(BaseModel):
+    """Fork an owned session into a new one (docs/design/session-fork.md).
+
+    ``message_id`` anchors a message-granularity fork: the runtime-native
+    thread is forked through the message's stored anchor
+    (``messages.metadata["runtime_native"]``) and history up to and
+    including that message is copied. Omitted → whole-session fork at the
+    current tail. Everything else is copied server-side; the kernel stamps
+    ``forked_from`` provenance into the new session's metadata on top of
+    the caller-supplied ``metadata`` (host UX namespace).
+    """
+
+    message_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 # -- Events --
 
 

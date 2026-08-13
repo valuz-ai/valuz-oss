@@ -413,6 +413,34 @@ async def prepare_session_runtime(
     return {"ready": True}
 
 
+class ForkSessionBody(BaseModel):
+    """Body for ``POST /v1/sessions/{id}/fork`` (openapi ``forkSession``)."""
+
+    message_id: str | None = None
+
+
+@router.post("/{session_id}/fork", status_code=201)
+async def fork_session(
+    session_id: str,
+    body: ForkSessionBody | None = None,
+    user_id: str = Depends(get_current_user_id),
+    svc: SessionService = Depends(get_session_service),
+) -> SessionDetail:
+    """Fork a session into a new independent one (docs/design/session-fork.md).
+
+    With ``message_id`` the fork cuts inclusively at that message; without
+    it the whole session forks at its current tail. Synchronous by design
+    (D5): the runtime-native fork runs inside this call, so errors surface
+    here — 409 invalid anchor / turn in flight, 422 runtime unsupported,
+    502 native fork failed (nothing created).
+    """
+    return await svc.fork_session(
+        session_id,
+        message_id=body.message_id if body is not None else None,
+        user_id=user_id,
+    )
+
+
 class QueuedInputCreate(BaseModel):
     prompt: str
     provider_id: str | None = None

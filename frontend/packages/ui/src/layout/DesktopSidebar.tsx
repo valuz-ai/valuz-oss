@@ -41,6 +41,7 @@ import {
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
 import { DeleteConfirmDialog } from "../components/common/DeleteConfirmDialog";
+import { ForkIcon } from "../components/common/ForkIcon";
 import type { NavLinkComponent } from "./AppShell";
 import { useI18n } from "../hooks/use-i18n";
 import { assetUrl } from "@valuz/shared";
@@ -590,6 +591,10 @@ export interface DesktopSidebarRecentItem {
   /** ``true`` when the run is currently in the live ``running`` pool;
    * decorates the row with a brand-tinted pulsing dot. */
   isRunning?: boolean;
+  /** Whether the row's session can be forked (host computes it from
+   * runtime/origin/status — docs/design/session-fork.md). Rows without it
+   * render no Fork entry. */
+  canFork?: boolean;
   /** Optional icon rendered BEFORE the title — multi-target editions pass
    * an execution-origin icon (local/cloud) here. */
   leadingIcon?: ReactNode;
@@ -659,6 +664,9 @@ export interface DesktopSidebarProps {
    * entry that opens a confirm dialog. Same scope as ``onRecentRename``:
    * chats only (no backend ``DELETE /v1/tasks/{id}``). */
   onRecentDelete?: (recentId: string) => void;
+  /** When provided, chat rows whose ``canFork`` is true show a Fork entry
+   * (whole-session fork — docs/design/session-fork.md). */
+  onRecentFork?: (recentId: string) => void;
   /** Whether sidebar is collapsed (controlled externally) */
   collapsed?: boolean;
 }
@@ -685,6 +693,7 @@ export const DesktopSidebar = ({
   onProjectRemove,
   onRecentRename,
   onRecentDelete,
+  onRecentFork,
   collapsed = false,
 }: DesktopSidebarProps) => {
   const { t } = useI18n();
@@ -774,7 +783,7 @@ export const DesktopSidebar = ({
       );
     }
     const showRowMenu =
-      item.kind === "chat" && (onRecentRename || onRecentDelete);
+      item.kind === "chat" && (onRecentRename || onRecentDelete || onRecentFork);
     return (
       <LinkComponent
         key={`run-${item.id}`}
@@ -832,6 +841,12 @@ export const DesktopSidebar = ({
                     >
                       <FilePenLine />
                       {t("sidebar.rename")}
+                    </DropdownMenuItem>
+                  )}
+                  {onRecentFork && item.canFork && (
+                    <DropdownMenuItem onSelect={() => onRecentFork(item.id)}>
+                      <ForkIcon />
+                      {t("sidebar.fork")}
                     </DropdownMenuItem>
                   )}
                   {onRecentDelete && (

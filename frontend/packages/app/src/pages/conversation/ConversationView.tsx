@@ -3,7 +3,7 @@ import { DeleteConfirmDialog, BackgroundTaskStrip } from "@valuz/ui";
 import { useProjectOutlet } from "@valuz/app/layout";
 import { ArtifactSplitPane } from "../../components/ArtifactSplitPane";
 import { useProjectHandoff } from "./useProjectHandoff";
-import { useTitleActions } from "./useTitleActions";
+import { FORKABLE_RUNTIMES, useTitleActions } from "./useTitleActions";
 import { useContextPanel } from "./useContextPanel";
 import {
   useConversationOrchestration,
@@ -144,6 +144,8 @@ function ConversationViewPage(props: ConversationViewProps) {
     setTitleDeleting,
     titleDeleteInFlight,
     handleTitleDeleteConfirm,
+    forkInFlight,
+    handleFork,
   } = useTitleActions({ selectedSessionId: core.selectedSessionId });
 
   // Context panel — the JSX-producing ``contextPanelNode`` memo and the
@@ -215,6 +217,8 @@ function ConversationViewPage(props: ConversationViewProps) {
             headerAgentSlug={core.headerAgentSlug}
             agentNameBySlug={core.agentNameBySlug}
             activeProject={core.activeProject}
+            onFork={() => void handleFork()}
+            forkInFlight={forkInFlight}
           />
 
           <ConversationBody
@@ -250,6 +254,11 @@ function ConversationViewPage(props: ConversationViewProps) {
             hasPendingProjectSend={hasPendingProjectSend}
             startingRuntime={core.startingRuntime}
             emptyStateOverride={props.emptyState}
+            canForkFromTurn={FORKABLE_RUNTIMES.has(
+              core.selectedSession?.runtime_provider ?? "",
+            )}
+            forkInFlight={forkInFlight}
+            onForkFromTurn={(messageId) => void handleFork(messageId)}
           />
 
           <ApprovalTray

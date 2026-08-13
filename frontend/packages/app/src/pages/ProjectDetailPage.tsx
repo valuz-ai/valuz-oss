@@ -96,6 +96,7 @@ const ActivityTabPanel = ({
   onOpenTask,
   onRenameConfirm,
   onDeleteSession,
+  onForkSession,
   hideScopeTag,
   emptyLabel,
 }: {
@@ -110,6 +111,7 @@ const ActivityTabPanel = ({
       onOpenTask={onOpenTask}
       onRenameConfirm={onRenameConfirm}
       onDeleteSession={onDeleteSession}
+      onForkSession={onForkSession}
       hideScopeTag={hideScopeTag}
       emptyLabel={emptyLabel}
     />
@@ -252,6 +254,21 @@ export const ProjectDetailPage = () => {
   const handleDeleteSession = useCallback((sid: string, label: string) => {
     setPendingDelete({ kind: "session", id: sid, name: label });
   }, []);
+  const handleForkSession = useCallback(
+    (sid: string) => {
+      // Whole-session fork (docs/design/session-fork.md, D5: synchronous).
+      sessionsApi
+        .fork(sid)
+        .then((forked) => {
+          toast.success(t("conversation.forked" as Parameters<typeof t>[0]));
+          navigate(`/conversation/${encodeURIComponent(forked.id)}`);
+        })
+        .catch(() =>
+          toast.error(t("conversation.forkFailed" as Parameters<typeof t>[0])),
+        );
+    },
+    [navigate, t],
+  );
   // Project conversations bind to one of the project's configured agents
   // (instead of a raw model). The composer remembers the agent PER MODE —
   // Chat keeps the last chat agent, Task keeps the last Lead — because the
@@ -1733,6 +1750,7 @@ export const ProjectDetailPage = () => {
                       onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
                       onRenameConfirm={handleRenameConfirm}
                       onDeleteSession={handleDeleteSession}
+                      onForkSession={handleForkSession}
                       emptyLabel={t(
                         "project.noSessions" as Parameters<typeof t>[0],
                       )}
@@ -1746,6 +1764,7 @@ export const ProjectDetailPage = () => {
                       onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
                       onRenameConfirm={handleRenameConfirm}
                       onDeleteSession={handleDeleteSession}
+                      onForkSession={handleForkSession}
                       emptyLabel={t(
                         "project.noSessions" as Parameters<typeof t>[0],
                       )}
@@ -1759,6 +1778,7 @@ export const ProjectDetailPage = () => {
                       onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
                       onRenameConfirm={handleRenameConfirm}
                       onDeleteSession={handleDeleteSession}
+                      onForkSession={handleForkSession}
                       emptyLabel={t(
                         "project.noSessions" as Parameters<typeof t>[0],
                       )}
@@ -1772,6 +1792,7 @@ export const ProjectDetailPage = () => {
                       onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
                       onRenameConfirm={handleRenameConfirm}
                       onDeleteSession={handleDeleteSession}
+                      onForkSession={handleForkSession}
                       hideScopeTag
                       emptyLabel={t(
                         "project.noSessions" as Parameters<typeof t>[0],

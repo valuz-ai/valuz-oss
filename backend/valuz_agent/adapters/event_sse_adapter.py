@@ -433,13 +433,14 @@ def _translate_kernel_event(
         # V5+messages: orchestrator's ``session_update`` carries only
         # ``status`` and ``message_id`` now (turn counts and cost moved to
         # the Message row). Preserve ``message_id`` so the frontend can
-        # close out the per-message stream.
-        return "session.update", _with_message_id(
-            {
-                "status": _stringify(data.get("status") or ""),
-            },
-            data,
-        )
+        # close out the per-message stream. ``fork_anchor`` (terminal
+        # frames only) tells the UI whether "Fork from here" has a stored
+        # native anchor for this message; absent = recorded before the
+        # field existed (UI keeps the affordance, server 409 backstops).
+        payload = {"status": _stringify(data.get("status") or "")}
+        if data.get("fork_anchor") is not None:
+            payload["fork_anchor"] = "true" if data["fork_anchor"] else "false"
+        return "session.update", _with_message_id(payload, data)
 
     if kernel_type == "compaction":
         return "session.compaction", _with_message_id(

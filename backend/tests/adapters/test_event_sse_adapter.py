@@ -405,3 +405,26 @@ def test_should_omit_parent_tool_use_id_when_event_is_top_level():
     assert result is not None
     _, payload = result
     assert "parent_tool_use_id" not in payload
+
+
+def test_should_forward_fork_anchor_on_terminal_session_update():
+    # The wire signal "Fork from here" keys on (docs/design/session-fork.md
+    # §6.5). Stringly-typed per the legacy Record<string, string> contract;
+    # absent on legacy events (and on interim status frames) so consumers
+    # treat missing as unknown.
+    event_type, payload = _translate_kernel_event(
+        "session_update", {"status": "idle", "message_id": "msg-1", "fork_anchor": True}
+    )
+    assert event_type == "session.update"
+    assert payload["fork_anchor"] == "true"
+    assert payload["message_id"] == "msg-1"
+
+    _t, no_anchor = _translate_kernel_event(
+        "session_update", {"status": "idle", "message_id": "msg-2", "fork_anchor": False}
+    )
+    assert no_anchor["fork_anchor"] == "false"
+
+    _t, legacy = _translate_kernel_event(
+        "session_update", {"status": "running", "message_id": "msg-3"}
+    )
+    assert "fork_anchor" not in legacy

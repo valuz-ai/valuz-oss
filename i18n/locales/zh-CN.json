@@ -474,7 +474,13 @@
     "worktreeBadgeGone": "该 worktree 已被删除，下次发送消息时会自动重建。",
     "planLabel": "实施计划",
     "enterPlanMode": "进入计划模式",
-    "execSelectProject": "选择项目（可选）"
+    "execSelectProject": "选择项目（可选）",
+    "fork": "Fork 会话",
+    "forkFromHere": "从此处 Fork",
+    "forked": "已 Fork 出新会话",
+    "forkFailed": "Fork 失败,请重试",
+    "forkConflict": "无法从此处 Fork(该消息缺少 Fork 锚点或会话正在运行)",
+    "forkedFrom": "Fork 来源"
   },
   "cron": {
     "actionColumn": "操作",
@@ -1863,7 +1869,8 @@
       "goBack": "后退",
       "goForward": "前进",
       "toggleSidebar": "切换侧栏"
-    }
+    },
+    "fork": "Fork 会话"
   },
   "skill": {
     "addBtn": "添加",

@@ -32,6 +32,7 @@ export function sessionDetailToListItem(detail: SessionDetail): SessionListItem 
     // Carries ``exists`` (liveness) from the detail fetch — the header
     // worktree badge greys out on it.
     worktree: detail.worktree ?? null,
+    forked_from_session_id: detail.forked_from_session_id ?? null,
     updated_at: detail.updated_at,
     total_tokens: detail.total_tokens,
   };

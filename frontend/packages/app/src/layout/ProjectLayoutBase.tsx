@@ -93,6 +93,7 @@ import {
   useProjectExecutionLocation,
 } from "../components/ProjectLocationFields";
 import { OriginIcon } from "../components/ExecutionLocationPicker";
+import { FORKABLE_RUNTIMES } from "../pages/conversation/useTitleActions";
 import { outletTransitionKey } from "./outlet-key";
 import { resolveRightPanelAutoFold } from "./right-panel-autofold";
 import type { ProjectOutletContext } from "./types";
@@ -465,6 +466,16 @@ export function ProjectLayoutBase({
     };
   }, [refreshFinishedRuns]);
 
+  // Client-side session creations that never produce a ``run.finished``
+  // frame (today: fork — the new session is born idle WITH history) nudge
+  // the finished-runs window explicitly; without this the forked chat
+  // waits for the next unrelated turn to appear in the sidebar.
+  useEffect(() => {
+    const onRefresh = () => refreshFinishedRuns();
+    window.addEventListener("valuz-runs-refresh", onRefresh);
+    return () => window.removeEventListener("valuz-runs-refresh", onRefresh);
+  }, [refreshFinishedRuns]);
+
   // Per-project runs for the sidebar accordion. The global finished-runs
   // window above is ONE recency list shared with quick chats, so an install
   // with a few hundred of those pushes every project conversation past its
@@ -535,6 +546,13 @@ export function ProjectLayoutBase({
           : `/conversation/${encodeURIComponent(r.session_id)}`,
       kind: r.source_kind === "task" ? "task" : "chat",
       isRunning: liveSet.has(r.session_id),
+      // Whole-session fork availability (docs/design/session-fork.md D3):
+      // user chats on a fork-wired runtime, not currently running.
+      canFork:
+        r.source_kind !== "task" &&
+        r.origin === "user" &&
+        FORKABLE_RUNTIMES.has(r.runtime ?? "") &&
+        !liveSet.has(r.session_id),
       // Execution origin (multi-target editions; fan-out tags rows) — a
       // leading icon, not a pill, so the title keeps its width.
       leadingIcon: r.exec_origin ? (
@@ -945,6 +963,24 @@ export function ProjectLayoutBase({
                   refreshFinishedRuns();
                 })
                 .catch(() => toast.error(t("sidebar.renameFailed")));
+            }}
+            onRecentFork={(sessionId) => {
+              // Whole-session fork (docs/design/session-fork.md). Synchronous
+              // by design (D5, ~1–2s); success lands in the new conversation.
+              sessionsApi
+                .fork(sessionId)
+                .then((forked) => {
+                  toast.success(
+                    t("conversation.forked" as Parameters<typeof t>[0]),
+                  );
+                  refreshFinishedRuns();
+                  navigate(`/conversation/${forked.id}`);
+                })
+                .catch(() =>
+                  toast.error(
+                    t("conversation.forkFailed" as Parameters<typeof t>[0]),
+                  ),
+                );
             }}
             onRecentDelete={(sessionId) => {
               // Optimistic local removal — the row disappears immediately

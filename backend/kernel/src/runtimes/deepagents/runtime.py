@@ -516,6 +516,17 @@ class DeepAgentsRuntime:
         self._checkpointer_cm: Any | None = None
         self._active_task: asyncio.Task[Any] | None = None
         self._cancelled: bool = False
+        # Native fork anchor for the turn most recently completed:
+        # ``{"provider": "deepagents", "thread_id": ..., "checkpoint_id":
+        # ..., "parent_checkpoint_id": ...}``. ``checkpoint_id`` is the
+        # langgraph checkpoint the turn settled on; ``parent_checkpoint_id``
+        # is the pre-input checkpoint (``None`` on a fresh thread). Set only
+        # on a cleanly-completed graph turn — bare completions have no
+        # checkpoints and cancelled turns have no settled checkpoint.
+        # Read-and-cleared by the orchestrator (``consume_turn_anchor``)
+        # into ``Message.metadata["runtime_native"]`` — the
+        # message-granularity fork seam (docs/design/session-fork.md).
+        self._turn_anchor: dict[str, Any] | None = None
         # One immutable Evidence namespace per user turn, shared by the main
         # agent and every nested subagent.  The graph and its middleware live
         # across turns, so ``run`` resets this object instead of replacing it.
@@ -639,6 +650,64 @@ class DeepAgentsRuntime:
     def update_sink(self, sink: EventSink) -> None:
         self.event_sink = sink
 
+    def consume_turn_anchor(self) -> dict[str, Any] | None:
+        """Return and clear the native anchor captured by the last ``run()``.
+
+        Read-and-clear so a turn that never settles on a checkpoint
+        (bare completion, cancel, graph failure) cannot inherit a stale
+        anchor from the previous message.
+        """
+        anchor, self._turn_anchor = self._turn_anchor, None
+        return anchor
+
+    async def fork_session(
+        self,
+        session: Session,
+        *,
+        source_native_session_id: str,
+        anchor: str | None = None,
+    ) -> str:
+        """Branch a source langgraph thread into this session's thread.
+
+        Copies the source thread's checkpoint rows into a NEW thread keyed
+        by this session's id — so the standard ``thread_id == session.id``
+        binding holds for forks with zero special-casing. ``anchor`` is a
+        turn-end checkpoint id (``runtime_native.checkpoint_id``); the copy
+        walks the ``parent_checkpoint_id`` chain from it, so the new
+        thread's latest checkpoint IS the anchor and later turns are
+        excluded. Tail fork (``anchor=None``) copies the whole thread; a
+        source with no checkpoints (bare completion / never ran) copies
+        zero rows, which is legal there and a ``ValueError`` with an
+        anchor. Pure store re-keying — no graph compile, no model client,
+        and the source thread is never written.
+
+        Only the sqlite backend is wired: the file backend is retired
+        (local and cloud both run sqlite), so fork fails loud there
+        instead of copying a store nothing reads.
+        """
+        if _checkpoint_backend() != "sqlite":
+            raise NotImplementedError(
+                "deepagents fork supports the sqlite checkpoint backend only "
+                "(the file backend is retired)."
+            )
+        from src.runtimes.deepagents.checkpoint_fork import fork_sqlite_thread
+
+        new_thread_id = str(session.id)
+        copied = await fork_sqlite_thread(
+            self.checkpoint_db,
+            source_native_session_id,
+            new_thread_id,
+            anchor_checkpoint_id=anchor,
+        )
+        logger.info(
+            "deepagents fork: copied %d checkpoints from thread %s to %s",
+            copied,
+            source_native_session_id,
+            new_thread_id,
+        )
+        session.runtime_session_id = new_thread_id
+        return new_thread_id
+
     async def prepare(self, session: Session) -> None:
         """DeepAgents has no external CLI cold start to prepare separately."""
         del session
@@ -713,8 +782,10 @@ class DeepAgentsRuntime:
                 langchain_config_overlay(session_id=session.id, user_id=session.user_id)
             )
             known_citation_tool_messages: set[str] = set()
+            start_checkpoint_id: str | None = None
             if not bare:
                 initial_state = await graph.aget_state(stream_config)
+                start_checkpoint_id = _state_checkpoint_id(initial_state)
                 known_citation_tool_messages = {
                     key
                     for key, _tool_name, _model_content, _private_content in (
@@ -750,6 +821,11 @@ class DeepAgentsRuntime:
             # forever should fail visibly, not loop forever.
             max_resume_iters = 32
             saw_model_event = False
+            # The state snapshot the turn settled on — feeds the fork
+            # anchor below. Stays ``None`` for bare completions (no
+            # checkpointer) and for turns cancelled before the first
+            # ``aget_state``.
+            settled_state: Any = None
             for _resume_iter in range(max_resume_iters):
                 if self._cancelled:
                     break
@@ -877,6 +953,7 @@ class DeepAgentsRuntime:
                 # the turn or it paused on an interrupt. Snapshot state to
                 # find out which.
                 state = await graph.aget_state(stream_config)
+                settled_state = state
                 for key, tool_name, model_content, citation_content in _state_citation_artifacts(
                     state
                 ):
@@ -948,6 +1025,14 @@ class DeepAgentsRuntime:
                 )
             else:
                 session.stop_reason = EndTurn()
+                checkpoint_id = _state_checkpoint_id(settled_state)
+                if checkpoint_id:
+                    self._turn_anchor = {
+                        "provider": "deepagents",
+                        "thread_id": str(thread_id),
+                        "checkpoint_id": checkpoint_id,
+                        "parent_checkpoint_id": start_checkpoint_id,
+                    }
 
             session.status = "idle"
             await self._emit_usage_update(usage_totals)
@@ -2251,6 +2336,22 @@ def _output_is_error(output: Any) -> bool:
     if status == "error":
         return True
     return False
+
+
+def _state_checkpoint_id(state: Any) -> str | None:
+    """Extract the langgraph checkpoint id a ``StateSnapshot`` points at.
+
+    ``aget_state`` returns the id under ``config["configurable"]
+    ["checkpoint_id"]``; a fresh thread (no checkpoints yet) has none.
+    """
+    config = getattr(state, "config", None)
+    if not isinstance(config, dict):
+        return None
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return None
+    value = configurable.get("checkpoint_id")
+    return str(value) if value else None
 
 
 def _state_citation_artifacts(state: Any) -> list[tuple[str, str | None, Any, str]]:

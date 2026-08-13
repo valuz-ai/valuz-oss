@@ -130,6 +130,11 @@ export interface ConversationTurn {
    *  label so a system interruption is not misattributed to the user ("用户取消
    *  了当前对话"). Optional: absent is treated as ``false``. */
   interrupted?: boolean;
+  /** Whether this turn's message carries a runtime-native fork anchor
+   *  (terminal ``session.update`` frames stamp it). ``false`` disables
+   *  "Fork from here"; ``undefined`` = recorded before the signal existed —
+   *  keep the affordance, the server 409 backstops. */
+  forkAnchor?: boolean;
   attachments?: ConversationTurnAttachment[];
   /** Unix epoch milliseconds (UTC). */
   userTimestamp?: number;

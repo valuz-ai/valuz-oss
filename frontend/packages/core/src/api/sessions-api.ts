@@ -573,6 +573,32 @@ export const sessionsApi = {
   },
 
   /**
+   * Fork a session into a new independent one (openapi ``forkSession``).
+   * With ``messageId`` the cut is inclusive at that message; without it
+   * the whole session forks at its tail. The source session is never
+   * modified. Synchronous by design — the runtime-native fork runs inside
+   * this call (~1–2s): 409 invalid anchor / turn in flight, 422 runtime
+   * unsupported, 502 native fork failed (nothing created).
+   */
+  async fork(
+    sessionId: string,
+    messageId?: string | null,
+  ): Promise<SessionDetail> {
+    const forked = await fetchJson<SessionDetail>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/fork`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(messageId ? { message_id: messageId } : {}),
+        baseUrl: sessionBase(sessionId),
+        timeoutMs: 120_000,
+      },
+    );
+    invalidateSessionsList();
+    return forked;
+  },
+
+  /**
    * HISTORY read — ``afterSeq`` and every returned item's ``seq`` are in
    * the DURABLE store's seq space (never the kernel's local/live space).
    * Items carry ``event_uid`` for cross-segment dedup against live frames;

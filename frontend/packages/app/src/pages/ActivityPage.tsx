@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import { Clock3, ListChecks, MessageSquare } from "lucide-react";
 import {
   DeleteConfirmDialog,
@@ -340,6 +341,18 @@ export const ActivityPage = () => {
   const openTask = (id: string): void => {
     navigate(`/tasks/${encodeURIComponent(id)}`);
   };
+  const handleForkSession = (id: string): void => {
+    // Whole-session fork (docs/design/session-fork.md, D5: synchronous).
+    sessionsApi
+      .fork(id)
+      .then((forked) => {
+        toast.success(t("conversation.forked" as Parameters<typeof t>[0]));
+        navigate(`/conversation/${encodeURIComponent(forked.id)}`);
+      })
+      .catch(() =>
+        toast.error(t("conversation.forkFailed" as Parameters<typeof t>[0])),
+      );
+  };
   const handleRenameConfirm = (id: string, name: string): void => {
     void (async () => {
       await renameSession(id, name);
@@ -472,6 +485,7 @@ export const ActivityPage = () => {
           onOpenTask={openTask}
           onRenameConfirm={handleRenameConfirm}
           onDeleteSession={(id, title) => setDeletingChat({ id, title })}
+          onForkSession={handleForkSession}
           emptyLabel={t(tk("activity.noHistory"))}
         />
       </section>

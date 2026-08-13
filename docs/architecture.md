@@ -193,8 +193,10 @@ The `(runtime, provider, model)` triple is locked once a session is created; `mo
 
 Host and kernel keep **separate SQLite files** under `~/.valuz-oss/`: the host's
 `valuz.db` (the `valuz_*` business tables) and the kernel's `kernel.db`
-(`sessions` / `messages` / `events`, its langgraph checkpoint tables, and the
-kernel `alembic_version`). The split lets a sandboxed/remote kernel own its file
+(`sessions` / `messages` / `events` and the kernel `alembic_version`; the
+DeepAgents runtime's langgraph checkpoints live in a sibling
+`deepagents_checkpoints.db` — or a file-based checkpoint tree in the cloud
+sandbox — never in `kernel.db`). The split lets a sandboxed/remote kernel own its file
 exclusively and gives the in-process (`make dev`) and sandboxed (`make
 dev-sandbox`) kernels one shared session history. An explicit `database_url`
 (e.g. a shared Postgres) co-locates both layers in one store instead. Both run

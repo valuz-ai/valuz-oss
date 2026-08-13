@@ -71,6 +71,7 @@ from app.schemas import (  # noqa: E402
     EventPayload,
     EventWindowData,
     FinalizeSessionRequest,
+    ForkSessionRequest,
     ImportMessageRequest,
     MessageData,
     SessionData,
@@ -233,6 +234,13 @@ class KernelClient(Protocol):
         session_id: str,
         req: ImportMessageRequest,
     ) -> MessageData: ...
+
+    async def fork_session(
+        self,
+        user_id: str,
+        session_id: str,
+        req: ForkSessionRequest,
+    ) -> SessionData: ...
 
     async def submit_action(
         self, user_id: str, session_id: str, req: SubmitActionRequest
@@ -602,6 +610,20 @@ class InProcessKernelClient:
                 _orchestrator(),
                 user_id,
             )
+        except HTTPException as exc:
+            _raise_mapped(exc)
+        return result["data"]
+
+    async def fork_session(
+        self,
+        user_id: str,
+        session_id: str,
+        req: ForkSessionRequest,
+    ) -> SessionData:
+        from app.routes.sessions import fork_session
+
+        try:
+            result = await fork_session(session_id, req, self._store(), _orchestrator(), user_id)
         except HTTPException as exc:
             _raise_mapped(exc)
         return result["data"]
@@ -1194,6 +1216,22 @@ async def import_message(
     req: ImportMessageRequest,
 ) -> MessageData:
     return await _data_plane().import_message(user_id, session_id, req)
+
+
+async def fork_session(
+    user_id: str,
+    session_id: str,
+    req: ForkSessionRequest,
+) -> SessionData:
+    """Fork a session — a CONTROL-plane op, never served by the durable.
+
+    The kernel route drives the runtime-native fork (``RuntimePort.
+    fork_session``) before any row is written, so it must run where the
+    orchestrator and runtimes live — the source session's execution
+    kernel — exactly like ``prepare_runtime``.
+    """
+    k = await _kernel_for(user_id, await _scope_for(user_id, session_id))
+    return await k.fork_session(user_id, session_id, req)
 
 
 async def latest_message_id(user_id: str, session_id: str) -> str | None:
