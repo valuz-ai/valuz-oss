@@ -319,7 +319,12 @@ class RecoveryService:
         for member_sid, manifest in member_done:
             mailbox_registry.put(
                 lead_session_id,
-                InboxMsg(kind="member_done", from_session=member_sid, payload=manifest),
+                InboxMsg(
+                    kind="member_done",
+                    from_session=member_sid,
+                    origin="recovery-reseed",
+                    payload=manifest,
+                ),
             )
         for member_sid, brief, m_run_dir, m_slug, m_key in resume_members:
             await _evict_runtime(member_sid)
@@ -728,6 +733,7 @@ class RecoveryService:
                 InboxMsg(
                     kind="member_done",
                     from_session=session_id,
+                    origin="member-stopped",
                     payload={
                         "agent": agent_slug,
                         "status": "cancelled",

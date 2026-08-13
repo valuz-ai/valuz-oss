@@ -58,7 +58,7 @@ async def send_to_member(
 
     delivered = mailbox_registry.put(
         to_session_id,
-        InboxMsg(kind="text", text=text, from_session=from_session_id),
+        InboxMsg(kind="text", text=text, from_session=from_session_id, origin="lead-send"),
     )
     if not delivered:
         return {
@@ -172,7 +172,7 @@ async def inject_into_task(
     # strictly worse than LEAD_OFFLINE, which the caller can act on.
     delivered = mailbox_registry.is_owned(lead_session_id) and mailbox_registry.put(
         lead_session_id,
-        InboxMsg(kind="text", text=wrapped, from_session=from_session_id),
+        InboxMsg(kind="text", text=wrapped, from_session=from_session_id, origin="user-inject"),
     )
 
     async with async_unit_of_work() as db:
@@ -246,7 +246,9 @@ async def notify_lead_goal_revised(
     )
     delivered = mailbox_registry.put(
         lead_session_id,
-        InboxMsg(kind="revise_goal", text=wrapped, payload={"goal": new_goal}),
+        InboxMsg(
+            kind="revise_goal", text=wrapped, origin="goal-revised", payload={"goal": new_goal}
+        ),
     )
     return {
         "delivered": delivered,

@@ -443,6 +443,7 @@ class CoordinationService:
             InboxMsg(
                 kind="member_done",
                 from_session=str(entry.get("session_id") or ""),
+                origin="reconcile",
                 payload=entry,
             )
             for entry in collected.values()
@@ -703,6 +704,7 @@ class CoordinationService:
                 InboxMsg(
                     kind="member_done",
                     from_session=session_id,
+                    origin="member-idle",
                     payload=manifest,
                 ),
             )

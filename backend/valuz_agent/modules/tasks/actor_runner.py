@@ -303,6 +303,12 @@ class ActorRunner:
         # Read once: every lead wake-up restates it (see _with_goal_restated).
         task_goal = await self._task_goal(task_id, project_id, user_id) if role == "lead" else ""
         prompt = initial_prompt
+        # Provenance of ``prompt``, logged before every turn. A turn is
+        # otherwise anonymous in the log: when one runs that nobody expected,
+        # the only way to ask WHY was to correlate DB turn rows against log
+        # timestamps by hand. Kept in lockstep with ``prompt`` — every
+        # assignment to one assigns the other.
+        prompt_origin = "initial"
         final_status = "idle"
         turns = 0
         # Did the loop exit because of a ``shutdown`` mailbox message (pause /
@@ -328,6 +334,15 @@ class ActorRunner:
                 if fenced.is_set():
                     exited_on_shutdown = True
                     break
+                logger.info(
+                    "actor loop %s (%s): task %s turn %d ← %s (%d chars)",
+                    session_id,
+                    role,
+                    task_id,
+                    turns + 1,
+                    prompt_origin,
+                    len(prompt),
+                )
                 final_status = await self.run_turn(session_id, prompt, user_id=user_id)
                 turns += 1
 
@@ -498,12 +513,14 @@ class ActorRunner:
                             user_id=user_id,
                         )
                     prompt = self._format_member_done(msg)
+                    prompt_origin = self._origin_label(msg)
                     if role == "lead":
                         prompt = self._with_goal_restated(task_goal, prompt)
                 elif msg.kind == "revise_goal":
                     # The user REPLACED the goal — this text is the new
                     # objective, so it must NOT be prefixed with the old one.
                     prompt = msg.text
+                    prompt_origin = self._origin_label(msg)
                     if role == "lead":
                         task_goal = msg.text
                 else:  # "text" — an inject/follow-up: context, not a new goal
@@ -512,6 +529,7 @@ class ActorRunner:
                         if role == "lead"
                         else msg.text
                     )
+                    prompt_origin = self._origin_label(msg)
         finally:
             if renewer is not None:
                 renewer.cancel()
@@ -523,7 +541,42 @@ class ActorRunner:
             # boot recovery wants. Leave the session ``running`` / the task
             # ``active``; recovery resumes it. (A plain ``if`` — never ``return``
             # from a ``finally``, which would swallow a propagating CancelledError.)
-            if not is_draining():
+            # Do we still own the task? ``finalize_actor`` flips the KERNEL
+            # session status before it looks at ``via_shutdown``, so a fenced
+            # loop finalizing here lands on a session the new driver may be
+            # mid-turn on. ``via_shutdown`` only ever guarded the task-level
+            # auto-finalize; the kernel write was unconditional.
+            #
+            # Asked authoritatively rather than off ``fenced``: the renewer
+            # ticks every ``TASK_LEASE_RENEW_INTERVAL_S``, so a takeover in the
+            # last few seconds has not reached that event yet.
+            #
+            # ONLY a proven loss skips the finalize. If the check itself fails
+            # we cannot prove anything, so the pre-existing behaviour stands —
+            # a transient database error must not start leaving every normal
+            # exit unfinalized, which would hand healthy tasks to the watchdog.
+            still_ours = True
+            if lease is not None:
+                if fenced.is_set():
+                    still_ours = False
+                else:
+                    try:
+                        still_ours = await lease.renew()
+                    except Exception:  # noqa: BLE001
+                        logger.debug(
+                            "actor loop %s: could not confirm the lease before "
+                            "finalize — proceeding as owner",
+                            session_id,
+                        )
+            if not still_ours:
+                logger.warning(
+                    "actor loop %s (%s): task %s was taken over — skipping finalize so "
+                    "the new driver's session is left alone",
+                    session_id,
+                    role,
+                    task_id,
+                )
+            if not is_draining() and still_ours:
                 await finalizer.finalize_actor(
                     session_id=session_id,
                     last_content=prompt,
@@ -542,11 +595,14 @@ class ActorRunner:
             # and this loop's finalize would then overwrite the new driver's
             # state. Skipped when fenced: we no longer hold it (the guard makes
             # it a no-op anyway) and the new driver's lease must not be touched.
-            if lease is not None and not fenced.is_set():
+            if lease is not None and still_ours:
                 # Hand the task back so a peer — or this process after a
                 # restart — picks it up immediately instead of waiting out the
                 # TTL. Best-effort: the lease expires on its own, and a failure
-                # here must not mask the loop's own exit.
+                # here must not mask the loop's own exit. Gated on the same
+                # answer as the finalize: releasing a lease we no longer hold
+                # would be a no-op anyway, but asking once keeps the two
+                # decisions from drifting apart.
                 try:
                     await lease.release()
                 except Exception:  # noqa: BLE001
@@ -738,6 +794,19 @@ class ActorRunner:
             "The goal above is unchanged — it is what you are still driving.\n\n"
             f"{body}"
         )
+
+    @staticmethod
+    def _origin_label(msg: InboxMsg) -> str:
+        """Compact provenance for the per-turn log: ``kind/producer<peer>``.
+
+        ``kind`` alone is not enough to explain a turn — several producers emit
+        ``member_done`` (a live member going idle, the durable reconcile
+        backstop, a cancelled member, recovery re-seeding after a restart), and
+        which one fired is exactly the question asked when an unexpected turn
+        shows up. Untagged producers degrade to the bare kind rather than lying.
+        """
+        label = f"{msg.kind}/{msg.origin}" if msg.origin else msg.kind
+        return f"{label}<{msg.from_session[:8]}>" if msg.from_session else label
 
     @staticmethod
     def _format_member_done(msg: InboxMsg) -> str:
