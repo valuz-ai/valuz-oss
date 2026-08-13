@@ -294,6 +294,108 @@ async def test_wecom_aibot_runner_streams_agent_output_after_dispatch() -> None:
 
 
 @pytest.mark.asyncio
+async def test_wecom_aibot_runner_keeps_every_segment_of_a_multi_step_answer() -> None:
+    """A turn that calls a tool and keeps talking emits one ``assistant_message``
+    per segment. The closing frame must carry the whole answer — the earlier
+    segments were on screen while streaming and may not vanish at the end."""
+    fake_ws = FakeWebSocket(
+        [
+            {
+                "headers": {"req_id": "aibot_subscribe-fixed"},
+                "errcode": 0,
+                "errmsg": "ok",
+            },
+            {
+                "cmd": "aibot_msg_callback",
+                "headers": {"req_id": "req-1"},
+                "body": {
+                    "msgid": "msg-1",
+                    "aibotid": "bot-1",
+                    "chatid": "chat-1",
+                    "chattype": "group",
+                    "from": {"userid": "user-1"},
+                    "msgtype": "text",
+                    "text": {"content": "@RobotA 查一下这个账号"},
+                },
+            },
+        ]
+    )
+
+    async def dispatch(_message: InboundChannelMessage) -> ChannelIngressResult:
+        return ChannelIngressResult(
+            decision=AgentChannelRouteDecision(
+                kind=ChannelRouteDecisionKind.REUSE_SESSION,
+                agent_slug="developer",
+                project_id="project-1",
+                session_id="session-1",
+                reason="existing thread binding",
+            ),
+            session_id="session-1",
+        )
+
+    async def stream_session_events(_user_id: str, _session_id: str):
+        yield SimpleNamespace(type="text_delta", data={"text": "当前可用点数："})
+        yield SimpleNamespace(type="text_delta", data={"text": "30,187"})
+        # The segment seals — its deltas are superseded, not doubled.
+        yield SimpleNamespace(type="assistant_message", data={"text": "当前可用点数：30,187"})
+        yield SimpleNamespace(type="tool_use", data={"id": "toolu-1", "name": "clickhouse"})
+        # A subagent streams onto the same tap; the app shows it inside the
+        # tool card, never in the answer.
+        yield SimpleNamespace(
+            type="text_delta",
+            data={"text": "扫表中", "parent_tool_use_id": "toolu-1"},
+        )
+        yield SimpleNamespace(
+            type="assistant_message",
+            data={"text": "扫表中", "parent_tool_use_id": "toolu-1"},
+        )
+        yield SimpleNamespace(type="text_delta", data={"text": "补一点："})
+        yield SimpleNamespace(type="text_delta", data={"text": "扣点是单条记录扣减。"})
+        yield SimpleNamespace(
+            type="assistant_message", data={"text": "补一点：扣点是单条记录扣减。"}
+        )
+        yield SimpleNamespace(type="session_idle", data={"stop_reason": "end_turn"})
+
+    runner = WeComAIBotLongConnectionRunner(
+        WeComAIBotConfig(
+            channel_instance_id="wecom-aibot-main",
+            owner_user_id="u1",
+            agent_slug="developer",
+            bot_id="bot-1",
+            secret="secret-1",
+        ),
+        dispatch=dispatch,
+        websocket_factory=lambda _url: fake_ws,
+        req_id_factory=lambda prefix: f"{prefix}-fixed",
+        session_event_stream_factory=stream_session_events,
+        heartbeat_interval_s=999,
+    )
+
+    await runner.run_once(asyncio.Event())
+
+    streamed = [
+        frame["body"]["stream"]
+        for frame in fake_ws.sent
+        if frame.get("cmd") == WECOM_AIBOT_RESPOND_MSG_CMD
+    ]
+    whole_answer = "当前可用点数：30,187\n\n补一点：扣点是单条记录扣减。"
+    assert streamed[-1] == {
+        "id": "stream-msg-1",
+        "finish": True,
+        "content": whole_answer,
+    }
+    # The bubble only ever grows: no frame walks the answer backwards.
+    contents = [stream["content"] for stream in streamed[1:]]
+    assert contents == [
+        "当前可用点数：",
+        "当前可用点数：30,187",
+        "当前可用点数：30,187\n\n补一点：",
+        whole_answer,
+        whole_answer,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_wecom_aibot_runner_closes_stream_when_route_has_no_session() -> None:
     fake_ws = FakeWebSocket(
         [

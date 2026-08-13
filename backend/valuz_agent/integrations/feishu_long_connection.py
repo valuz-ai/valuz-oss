@@ -19,6 +19,10 @@ from valuz_agent.modules.channels.adapters import (
 )
 from valuz_agent.modules.channels.config import ChannelConfigError
 from valuz_agent.modules.channels.datastore import AgentChannelBindingDatastore
+from valuz_agent.modules.channels.reply_text import (
+    AssistantReplyText,
+    session_event_type_and_data,
+)
 from valuz_agent.modules.channels.schemas import ChannelRouteDecisionKind
 from valuz_agent.modules.channels.service import ChannelIngressResult
 
@@ -306,7 +310,7 @@ class FeishuLongConnectionRunner:
         )
         try:
             async for event in self._session_event_stream_factory(user_id, session_id):
-                event_type, data = _event_type_and_data(event)
+                event_type, data = session_event_type_and_data(event)
                 logger.debug(
                     "Feishu session event: channel=%s agent=%s session=%s type=%s",
                     self._config.channel_instance_id,
@@ -314,15 +318,7 @@ class FeishuLongConnectionRunner:
                     session_id,
                     event_type,
                 )
-                if event_type == "text_delta":
-                    text = _event_text(data)
-                    if text:
-                        await sink.append(text)
-                    continue
-                if event_type == "assistant_message":
-                    text = _event_text(data)
-                    if text:
-                        await sink.replace(text)
+                if await sink.observe(event_type, data):
                     continue
                 if event_type == "session_error":
                     logger.warning(
@@ -408,20 +404,19 @@ class _StreamingReplySink:
         self._reply_message_id = reply_message_id
         self._card: CardStream | None = None
         self._card_unavailable = False
-        self._accumulated = ""
+        self._answer = AssistantReplyText()
         self._flushed = ""
         self._last_push_at = 0.0
 
-    async def append(self, text: str) -> None:
-        self._accumulated += text
+    async def observe(self, event_type: str, data: dict[str, Any]) -> bool:
+        """Fold one session event in, pushing it out when the answer moved."""
+        if not self._answer.observe(event_type, data):
+            return False
         await self._maybe_flush()
-
-    async def replace(self, text: str) -> None:
-        self._accumulated = text
-        await self._maybe_flush()
+        return True
 
     async def finish(self) -> None:
-        content = self._accumulated.strip()
+        content = self._answer.text.strip()
         if not content:
             # Nothing streamed: a card was never opened, so this is the only
             # message the turn produces.
@@ -437,7 +432,7 @@ class _StreamingReplySink:
         if self._card is not None:
             # Close the card on whatever it managed to stream, then report the
             # failure separately — a half-written card must not keep spinning.
-            await self._push(self._accumulated.strip() or message, final=True)
+            await self._push(self._answer.text.strip() or message, final=True)
             await self._runner._try_send_channel_reply(self._inbound, message)
             return
         await self._runner._patch_or_send_channel_reply(
@@ -447,12 +442,13 @@ class _StreamingReplySink:
         )
 
     async def _maybe_flush(self) -> None:
-        if self._accumulated == self._flushed:
+        content = self._answer.text
+        if content == self._flushed:
             return
         now = time.monotonic()
         if now - self._last_push_at < STREAM_PATCH_MIN_INTERVAL_S:
             return
-        await self._push(self._accumulated, final=False)
+        await self._push(content, final=False)
 
     async def _push(self, content: str, *, final: bool) -> None:
         if not content:
@@ -1299,25 +1295,6 @@ def _new_openapi_client(config: FeishuLongConnectionConfig) -> Any:
 
 def _feishu_text_content(content: str) -> str:
     return json.dumps({"text": content}, ensure_ascii=False)
-
-
-def _event_type_and_data(event: Any) -> tuple[str, dict[str, Any]]:
-    if isinstance(event, dict):
-        event_type = str(event.get("type") or "")
-        data = event.get("data")
-    else:
-        event_type = str(getattr(event, "type", "") or "")
-        data = getattr(event, "data", None)
-    return event_type, data if isinstance(data, dict) else {}
-
-
-def _event_text(data: dict[str, Any]) -> str:
-    text = data.get("text")
-    if text is None:
-        text = data.get("content")
-    if text is None:
-        text = data.get("delta")
-    return str(text or "")
 
 
 def _is_terminal_session_event(event_type: str, data: dict[str, Any]) -> bool:

@@ -31,6 +31,10 @@ from valuz_agent.modules.channels.adapters.wecom_aibot import (
 )
 from valuz_agent.modules.channels.config import ChannelConfigError, load_wecom_aibot_config
 from valuz_agent.modules.channels.datastore import AgentChannelBindingDatastore
+from valuz_agent.modules.channels.reply_text import (
+    AssistantReplyText,
+    session_event_type_and_data,
+)
 from valuz_agent.modules.channels.schemas import ChannelRouteDecisionKind
 from valuz_agent.modules.channels.service import ChannelIngressResult
 
@@ -279,8 +283,7 @@ class WeComAIBotLongConnectionRunner:
             return
 
         user_id = inbound.context.user_id
-        accumulated = ""
-        last_sent = ""
+        answer = AssistantReplyText()
         logger.info(
             "WeCom AIBot streaming session output: channel=%s agent=%s session=%s",
             self._config.channel_instance_id,
@@ -289,7 +292,7 @@ class WeComAIBotLongConnectionRunner:
         )
         try:
             async for event in self._session_event_stream_factory(user_id, session_id):
-                event_type, data = _event_type_and_data(event)
+                event_type, data = session_event_type_and_data(event)
                 logger.debug(
                     "WeCom AIBot session event: channel=%s agent=%s session=%s type=%s",
                     self._config.channel_instance_id,
@@ -297,33 +300,13 @@ class WeComAIBotLongConnectionRunner:
                     session_id,
                     event_type,
                 )
-                if event_type == "text_delta":
-                    text = _event_text(data)
-                    if not text:
-                        continue
-                    accumulated += text
-                    if accumulated != last_sent:
-                        await self._try_send_channel_reply(
-                            websocket,
-                            inbound,
-                            accumulated,
-                            False,
-                        )
-                        last_sent = accumulated
-                    continue
-                if event_type == "assistant_message":
-                    text = _event_text(data)
-                    if not text:
-                        continue
-                    accumulated = text
-                    if accumulated != last_sent:
-                        await self._try_send_channel_reply(
-                            websocket,
-                            inbound,
-                            accumulated,
-                            False,
-                        )
-                        last_sent = accumulated
+                if answer.observe(event_type, data):
+                    await self._try_send_channel_reply(
+                        websocket,
+                        inbound,
+                        answer.text,
+                        False,
+                    )
                     continue
                 if event_type == "session_error":
                     logger.warning(
@@ -343,7 +326,7 @@ class WeComAIBotLongConnectionRunner:
                     await self._try_send_channel_reply(
                         websocket,
                         inbound,
-                        accumulated.strip() or CHANNEL_EMPTY_RESULT_MESSAGE,
+                        answer.text.strip() or CHANNEL_EMPTY_RESULT_MESSAGE,
                         True,
                     )
                     return
@@ -362,8 +345,8 @@ class WeComAIBotLongConnectionRunner:
             )
             return
 
-        if accumulated:
-            await self._try_send_channel_reply(websocket, inbound, accumulated, True)
+        if answer.text:
+            await self._try_send_channel_reply(websocket, inbound, answer.text, True)
 
     async def _heartbeat_loop(self, websocket: WebSocketLike, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
@@ -625,25 +608,6 @@ def _event_type(frame: Frame) -> str:
     if not isinstance(event, dict):
         return ""
     return str(event.get("eventtype") or "")
-
-
-def _event_type_and_data(event: Any) -> tuple[str, dict[str, Any]]:
-    if isinstance(event, dict):
-        event_type = str(event.get("type") or "")
-        data = event.get("data")
-    else:
-        event_type = str(getattr(event, "type", "") or "")
-        data = getattr(event, "data", None)
-    return event_type, data if isinstance(data, dict) else {}
-
-
-def _event_text(data: dict[str, Any]) -> str:
-    text = data.get("text")
-    if text is None:
-        text = data.get("content")
-    if text is None:
-        text = data.get("delta")
-    return str(text or "")
 
 
 def _is_terminal_session_event(event_type: str, data: dict[str, Any]) -> bool:
