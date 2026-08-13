@@ -55,6 +55,7 @@ class TaskService:
     """Owner-scoped task reads + the small intervention writes."""
 
     def __init__(self, db: AsyncSession) -> None:
+        self._db = db
         self._tasks = TaskDatastore(db)
         self._runs = TaskSessionDatastore(db)
         self._events = TaskEventDatastore(db)
@@ -128,19 +129,27 @@ class TaskService:
         Both halves matter: the goal is baked into the lead session at spawn as
         its brief and its goal-mode loop condition, so a bare row update is
         pull-only — a running lead never re-reads it and would keep working
-        toward the old goal. Delivery is best-effort (an offline or finished
-        lead simply isn't woken; the row is updated either way) and the
-        outcome is recorded on the ``goal_revised`` event so the timeline shows
-        whether the lead actually heard it.
+        toward the old goal. The revision is queued for the lead in the SAME
+        transaction as the row update, so the two cannot disagree; it reaches
+        the lead at its next turn boundary from whichever host process drives
+        it. Previously delivery went through an in-process queue and was simply
+        lost whenever this request landed elsewhere.
 
-        Returns whether the running lead was notified.
+        Returns whether the task has a lead to receive it.
         """
         from valuz_agent.modules.tasks import messaging
 
         task.goal = goal
         await self._tasks.update_task(task)
+        # One transaction: the row, the timeline entry and the lead's copy of
+        # the revision. Splitting them is how a task ends up looking redirected
+        # while its lead still pursues the old objective.
         notified = await messaging.notify_lead_goal_revised(
-            task_id=task.id, project_id=task.project_id, new_goal=goal, user_id=user_id
+            self._db,
+            task_id=task.id,
+            project_id=task.project_id,
+            new_goal=goal,
+            user_id=user_id,
         )
         delivered = bool(notified["delivered"])
         await self._events.append_event(

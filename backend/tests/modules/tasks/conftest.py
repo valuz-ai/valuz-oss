@@ -16,11 +16,16 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from valuz_agent.infra.database import Base
+from valuz_agent.infra.execution_lease import ExecutionLeaseRow
 from valuz_agent.modules.agents.models import AgentRow, ProjectMemberRow
 from valuz_agent.modules.notifications.models import NotificationRow
 from valuz_agent.modules.projects.models import ProjectRow
-from valuz_agent.infra.execution_lease import ExecutionLeaseRow
-from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
+from valuz_agent.modules.tasks.models import (
+    TaskEventRow,
+    TaskMailboxRow,
+    TaskRow,
+    TaskSessionRow,
+)
 
 # Every task test that touches the DB wants the same three tables. Creating all
 # of them unconditionally is cheaper than each module deciding, and removes the
@@ -35,6 +40,9 @@ _TASK_TABLES = [
     TaskRow.__table__,
     TaskEventRow.__table__,
     TaskSessionRow.__table__,
+    # The actors' durable inbox. Every loop reads it at each idle tick, so it
+    # is not optional for any test that runs a loop.
+    TaskMailboxRow.__table__,
     ProjectMemberRow.__table__,
     # ``resolve_agent_display_names`` joins membership → library agent to stamp
     # ``agent_name`` into every event payload and plan snapshot.

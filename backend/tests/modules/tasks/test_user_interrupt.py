@@ -28,7 +28,7 @@ from typing import Any
 
 import pytest
 
-from valuz_agent.modules.tasks import planning
+from valuz_agent.modules.tasks import mailbox_store, planning
 from valuz_agent.modules.tasks.actor_runner import (
     ActorRunner,
     _resolve_turn_status,
@@ -310,8 +310,11 @@ async def test_finalize_interrupted_member_records_user_stop(
         # timeline shows a stop, NOT a failure (plus the plan snapshot)
         assert "subtask_stopped" in events
         assert "subtask_failed" not in events
-        # exactly one member_done(cancelled) reached the lead
-        msg = await mailbox_registry.get("lead-1", timeout=0.5)
+        # exactly one member_done(cancelled) reached the lead — through the
+        # durable inbox, since the lead's loop need not share this process
+        drained = await mailbox_store.drain("lead-1")
+        assert len(drained) == 1
+        msg = drained[0]
         assert msg.kind == "member_done"
         assert msg.payload is not None and msg.payload["status"] == "cancelled"
     finally:

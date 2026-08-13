@@ -32,6 +32,7 @@ from valuz_agent.modules.tasks.lease import (
     acquire_task_lease,
 )
 from valuz_agent.modules.tasks.task_state import NON_REVIEWABLE_DONE
+from valuz_agent.modules.tasks import mailbox_store
 from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 from valuz_agent.modules.sessions.pre_turn import always_on_mcp_hook
 from valuz_agent.modules.sessions.turn_driver import _resolve_turn_status
@@ -67,6 +68,11 @@ MAX_IDLE_EXTENSIONS = 6
 # nobody is watching a cursor blink — but far short of the 30-minute idle TTL
 # that a dropped result used to cost.
 LEAD_RECONCILE_SLICE_S = 30.0
+# How often an actor looks in its DURABLE inbox. Far shorter than the reconcile
+# above, because this is one indexed lookup and the thing waiting on the other
+# end may be a person who just typed something. Both roles poll it: a member
+# receives follow-ups and rework the same way a lead receives instructions.
+ACTOR_INBOX_POLL_S = 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -376,9 +382,13 @@ class ActorRunner:
                 # for 30 minutes before the idle-TTL fires _finalize_actor.
                 # NB: must check the mailbox is empty first, else a queued
                 # follow-up / member_done would be dropped.
+                # ``has_pending`` is this PROCESS's queue. A message written
+                # by another process lives in the table, and finalizing here
+                # would end the task with it unread.
                 if (
                     role == "lead"
                     and not mailbox_registry.has_pending(session_id)
+                    and not await mailbox_store.has_pending(session_id)
                     and await coordinator.lead_idle_with_no_pending(
                         task_id, project_id, user_id=user_id, lead_session_id=session_id
                     )
@@ -608,6 +618,28 @@ class ActorRunner:
                 except Exception:  # noqa: BLE001
                     logger.debug("actor loop %s: lease release failed", session_id)
 
+    @staticmethod
+    async def _drain_durable_inbox(session_id: str) -> list[InboxMsg]:
+        """Messages written for this actor by any process. Never raises.
+
+        A failed lookup must not end the wait: the caller is parked between
+        turns, and turning a transient DB error into a timeout would let the
+        idle-TTL finalize a task that is merely waiting.
+        """
+        try:
+            messages = await mailbox_store.drain(session_id)
+        except Exception:  # noqa: BLE001
+            logger.debug("actor loop %s: durable inbox read failed, still waiting", session_id)
+            return []
+        if messages:
+            logger.info(
+                "actor loop %s: %d message(s) from the durable inbox — "
+                "written by another process",
+                session_id,
+                len(messages),
+            )
+        return messages
+
     async def _await_wakeup(
         self,
         *,
@@ -642,21 +674,32 @@ class ActorRunner:
         propagates ``KeyError`` when the box is dropped (ownership moved) —
         both exactly as the plain ``get`` did.
         """
-        if role != "lead":
-            return await mailbox_registry.get(session_id, timeout=ttl)
-
         loop = asyncio.get_running_loop()
         deadline = loop.time() + ttl
+        next_reconcile = loop.time() + LEAD_RECONCILE_SLICE_S
         while True:
             remaining = deadline - loop.time()
             if remaining <= 0:
                 raise TimeoutError
             try:
+                # Still read the in-memory queue: during a rolling deploy an
+                # older process may still be producing into it. Producers moved
+                # to the table first precisely so this side can read both
+                # without a message arriving twice.
                 return await mailbox_registry.get(
-                    session_id, timeout=min(LEAD_RECONCILE_SLICE_S, remaining)
+                    session_id, timeout=min(ACTOR_INBOX_POLL_S, remaining)
                 )
             except TimeoutError:
                 pass
+            durable = await self._drain_durable_inbox(session_id)
+            if durable:
+                for extra in durable[1:]:
+                    mailbox_registry.put(session_id, extra)
+                return durable[0]
+            if role != "lead":
+                # Members have no siblings to reconcile; their own result is
+                # what the lead waits for.
+                continue
             if is_draining():
                 # Teardown has started. The reconcile WRITES (it settles run
                 # rows and flips plan nodes to in_review), and the whole reason
@@ -666,6 +709,12 @@ class ActorRunner:
                 # its own drain check as soon as anything wakes it, and the
                 # process is going away regardless.
                 continue
+            # The member backstop keeps its own, slower cadence: it settles run
+            # rows and flips plan nodes, so unlike the inbox lookup it is
+            # neither cheap nor free of side effects.
+            if loop.time() < next_reconcile:
+                continue
+            next_reconcile = loop.time() + LEAD_RECONCILE_SLICE_S
             try:
                 recovered = await coordinator.reconcile_finished_members(
                     task_id=task_id, project_id=project_id, user_id=user_id

@@ -13,12 +13,12 @@ from types import SimpleNamespace
 import pytest
 
 from valuz_agent.modules.tasks import planning
-from valuz_agent.modules.tasks.manifest import collect_manifest
 from valuz_agent.modules.tasks.mailbox import (
     InboxMsg,
     MailboxRegistry,
     mailbox_registry,
 )
+from valuz_agent.modules.tasks.manifest import collect_manifest
 from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
 from valuz_agent.modules.tasks.resolution import _credential_gap
 

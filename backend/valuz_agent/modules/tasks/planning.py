@@ -30,12 +30,12 @@ from valuz_agent.adapters.agent_resolver import (
 )
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.modules.tasks import mailbox_store
 from valuz_agent.modules.tasks.datastore import (
     TaskDatastore,
     TaskEventDatastore,
     TaskSessionDatastore,
 )
-from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 from valuz_agent.modules.tasks.models import PLAN_SNAPSHOT_EVENT, TaskRow
 from valuz_agent.modules.tasks.outcome import Failure
 from valuz_agent.modules.tasks.plan import PlanError, TaskPlan
@@ -591,20 +591,12 @@ async def review_subtask(
     # decision == "rework": mailbox delivery must run on the event loop
     # (asyncio.Queue is NOT thread-safe), then the DB write reflects it.
 
-    delivered = False
-    # OWNED, not merely registered — an unread box would report the rework
-    # as delivered and then silently swallow it (the member re-dispatches
-    # from the plan node instead).
-    if target_session and mailbox_registry.is_owned(target_session):
-        delivered = mailbox_registry.put(
-            target_session,
-            InboxMsg(
-                kind="text",
-                from_session=lead_session_id,
-                origin="rework",
-                text=f"Your previous attempt was sent back for rework.\n\n{feedback or ''}",
-            ),
-        )
+    # Queued below, inside the same transaction as the plan flip and the
+    # ``subtask_reviewed`` event: a node marked for rework whose member was
+    # never told is a member that sits idle waiting for work already assigned
+    # to it. Asking whether the member's inbox lived in THIS process is what
+    # used to decide that, and it was the wrong question.
+    delivered = bool(target_session)
 
     async with async_unit_of_work() as db:
         task_ds = TaskDatastore(db)
@@ -646,6 +638,18 @@ async def review_subtask(
             return {"error": _RETRY_HINT.format(action="rework", key=key)}
         if persisted is None:
             return {"error": f"no subtask with key {key!r}"}
+        if target_session:
+            await mailbox_store.enqueue(
+                db,
+                session_id=target_session,
+                task_id=task_id,
+                project_id=project_id,
+                user_id=user_id,
+                kind="text",
+                from_session=lead_session_id,
+                origin="rework",
+                text=f"Your previous attempt was sent back for rework.\n\n{feedback or ''}",
+            )
         await event_ds.append_event(
             user_id,
             project_id=project_id,

@@ -42,6 +42,7 @@ from valuz_agent.modules.tasks.events import (
 )
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
 from valuz_agent.modules.tasks.manifest import collect_manifest_safe, last_assistant_text
+from valuz_agent.modules.tasks import mailbox_store
 from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 from valuz_agent.modules.tasks.models import TaskRow
 from valuz_agent.modules.tasks.plan import PlanError, TaskPlan
@@ -558,11 +559,18 @@ class FinalizationService:
                 agent_name=agent_name,
                 subtask_key=key,
             )
-
-        if lead_session_id:
-            mailbox_registry.put(
-                lead_session_id,
-                InboxMsg(
+            # Inside the same transaction as parking the node and recording the
+            # stop: a lead told its member was cancelled while the plan still
+            # says otherwise (or the reverse) is a task that cannot be reasoned
+            # about from the outside.
+            await mailbox_store.cancel_pending(db, session_id=session_id)
+            if lead_session_id:
+                await mailbox_store.enqueue(
+                    db,
+                    session_id=lead_session_id,
+                    task_id=task_id,
+                    project_id=project_id,
+                    user_id=user_id,
                     kind="member_done",
                     from_session=session_id,
                     origin="member-interrupted",
@@ -572,8 +580,7 @@ class FinalizationService:
                         "summary": t("task.reworkUserInterrupted"),
                         "artifacts": [],
                     },
-                ),
-            )
+                )
 
     # ------------------------------------------------------------------
     # finish_task

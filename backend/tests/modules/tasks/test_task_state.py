@@ -7,7 +7,6 @@ import pytest
 from valuz_agent.modules.tasks.task_state import (
     ALLOWED_TRANSITIONS,
     TASK_STATUSES,
-    TERMINAL_STATUSES,
     TaskStateError,
     assert_transition,
     is_valid_status,
