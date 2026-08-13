@@ -44,6 +44,9 @@ ASKS = [
     "来张图",
     "做个界面看看",
     "生成一个页面",
+    "把这段结论做成一张研究卡",
+    "生成一个公司指标卡片",
+    "render this as a research card",
     # 工作台 is the same word class as 仪表盘/看板 — a workbench IS the visual
     # deliverable. The two real-world phrasings that surfaced the gap: the
     # finance desk starter instruction and a user's free-form variant.
@@ -68,6 +71,8 @@ DOES_NOT_ASK = [
     "这个界面怎么用",
     "把表格导出成csv",
     "graphql 怎么配",
+    "银行卡片怎么补办",
+    "总结这段研究",
 ]
 
 

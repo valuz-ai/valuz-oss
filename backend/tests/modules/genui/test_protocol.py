@@ -10,9 +10,10 @@ from valuz_agent.modules.genui.protocol import (
     a2ui_instructions,
     a2ui_message_lines,
     build_a2ui_prompt,
+    component_property_names,
     extract_a2ui_document,
-    registered_data_source_contracts,
-    registered_data_source_tool_guide,
+    registered_component_data_contracts,
+    registered_component_data_tool_guide,
     wrap_generated_ui,
 )
 
@@ -23,6 +24,7 @@ def test_tool_description_states_when_to_call_it() -> None:
     assert "not raw colors, CSS, theme tokens" in TOOL_DESCRIPTION
     assert "exactly one short sentence" in TOOL_DESCRIPTION
     assert "do not recap values" in TOOL_DESCRIPTION
+    assert "do not call generate_ui again" in TOOL_DESCRIPTION
 
 
 def test_prompt_splices_request_data_catalog_and_v091_contract() -> None:
@@ -39,13 +41,13 @@ def test_prompt_splices_request_data_catalog_and_v091_contract() -> None:
     assert "TimeSeriesChart" in prompt
     assert 'not nested under "props"' in prompt
     assert "Do not create placeholder charts" in prompt
-    assert "you MUST bind it" in prompt
-    assert "optional compatible binding seed" in prompt
+    assert "Bound component data is planned and completed by generate_ui" in prompt
+    assert "catalog-typed inline props" in prompt
+    assert "Do not inline current" in prompt
     assert "frozen snapshot" in prompt
-    assert "replacement for a registered live source" in prompt
-    assert "Do not require the calling" in prompt
-    assert "empty one erases every seed and ref" in prompt
-    assert "Declaring a /refs/<slot> entry without binding" in prompt
+    assert "registered live component" in prompt
+    assert "Do not\nauthor source ids, API URLs, dataRef metadata" in prompt
+    assert "Never create\nsurface-global /refs" in prompt
 
 
 def test_prompt_can_send_only_agent_selected_component_schemas() -> None:
@@ -59,6 +61,30 @@ def test_prompt_can_send_only_agent_selected_component_schemas() -> None:
     assert "BarChart(" in prompt
     assert "LineChart(" not in prompt
     assert "DataTable(" not in prompt
+
+
+def test_prompt_keeps_live_execution_details_out_of_the_compiler_plan() -> None:
+    prompt = build_a2ui_prompt(
+        "Use QuoteStrip for the live quote",
+        component_names=["QuoteStrip"],
+        component_data=[
+            {
+                "component": "QuoteStrip",
+                "source": "finance.market.quote",
+                "params": {"symbol": "US:NVDA"},
+                "shape": "FinanceMetricData",
+                "bindings": ("metrics", "source", "asOf"),
+                "refresh_interval": 30,
+            }
+        ],
+    )
+
+    assert "PLANNED BOUND COMPONENTS" in prompt
+    assert '"component": "QuoteStrip"' in prompt
+    assert '"params": {"symbol": "US:NVDA"}' in prompt
+    assert '"bindings": ["metrics", "source", "asOf"]' in prompt
+    assert "finance.market.quote" not in prompt
+    assert "FinanceMetricData" not in prompt
 
 
 def test_prompt_delegates_theme_and_pixels_to_the_host() -> None:
@@ -136,36 +162,67 @@ def test_new_page_prompt_has_no_edit_contract() -> None:
     assert "EDIT CONTRACT" not in prompt
 
 
-def test_registered_data_source_contracts_parse_param_types(monkeypatch) -> None:
+def test_registered_component_data_contracts_parse_param_types(monkeypatch) -> None:
     notes = (
-        "finance.market.kline (params {symbols: comma-separated symbols, "
-        "rangeDays?: 2-3650, normalize?: boolean}, min 300s) -> shape — "
-        "accepted by TimeSeriesChart.\n"
-        "finance.macro.commodities (params {commodity: oil|gold|silver}, min 300s) "
-        "-> shape — accepted by QuoteStrip."
+        'COMPONENT_DATA_CONTRACT {"component":"TimeSeriesChart",'
+        '"source":"finance.market.kline","params":"{symbols: comma-separated symbols, '
+        'rangeDays?: 2-3650, normalize?: boolean}","shape":"FinanceTimeSeriesData",'
+        '"bindings":["data","series"],"fixedProps":{"xKey":"date"},'
+        '"refreshInterval":300}\n'
+        'COMPONENT_DATA_CONTRACT {"component":"MarketOverview",'
+        '"source":"finance.macro.commodities","params":"{commodity: oil|gold|silver}",'
+        '"shape":"FinanceMetricData","bindings":["metrics"],"refreshInterval":300}'
     )
-    monkeypatch.setattr("valuz_agent.modules.genui.protocol.edition_catalog_text", lambda *a, **k: notes)
+    monkeypatch.setattr(
+        "valuz_agent.modules.genui.protocol.edition_catalog_text",
+        lambda *a, **k: notes,
+    )
 
-    contracts = registered_data_source_contracts()
+    contracts = registered_component_data_contracts()
 
-    assert contracts["finance.market.kline"]["required_params"] == ("symbols",)
-    assert contracts["finance.market.kline"]["param_specs"]["rangeDays"] == {
+    assert contracts["TimeSeriesChart"]["required_params"] == ("symbols",)
+    assert contracts["TimeSeriesChart"]["source"] == "finance.market.kline"
+    assert contracts["TimeSeriesChart"]["bindings"] == ("data", "series")
+    assert contracts["TimeSeriesChart"]["fixed_props"] == {"xKey": "date"}
+    assert contracts["TimeSeriesChart"]["param_specs"]["rangeDays"] == {
         "required": False,
         "description": "2-3650",
         "kind": "number",
         "minimum": 2.0,
         "maximum": 3650.0,
     }
-    assert contracts["finance.market.kline"]["param_specs"]["normalize"]["kind"] == "boolean"
-    assert contracts["finance.macro.commodities"]["param_specs"]["commodity"]["enum"] == (
+    assert contracts["TimeSeriesChart"]["param_specs"]["normalize"]["kind"] == "boolean"
+    assert contracts["MarketOverview"]["param_specs"]["commodity"]["enum"] == (
         "oil",
         "gold",
         "silver",
     )
-    guide = registered_data_source_tool_guide()
-    assert "finance.market.kline {symbols: comma-separated symbols" in guide
+    guide = registered_component_data_tool_guide()
+    assert "TimeSeriesChart {symbols: comma-separated symbols" in guide
     assert "rangeDays?: 2-3650" in guide
-    assert "-> TimeSeriesChart" in guide
+    assert "finance.market.kline" not in guide
+    assert "Do not pass source ids" in guide
+
+
+def test_component_property_names_reads_edition_catalog(monkeypatch) -> None:
+    catalog = (
+        "  - QuoteStrip(title, subtitle, source, asOf, basis, metrics) — quote\n"
+        "  - DocumentFeed(title, items, source, asOf) — documents"
+    )
+    monkeypatch.setattr(
+        "valuz_agent.modules.genui.protocol.edition_catalog_text",
+        lambda *a, **k: catalog,
+    )
+
+    assert component_property_names("QuoteStrip") == (
+        "title",
+        "subtitle",
+        "source",
+        "asOf",
+        "basis",
+        "metrics",
+    )
+    assert component_property_names("not valid") == ()
 
 
 def test_wrap_generated_ui_puts_the_stream_in_the_client_envelope() -> None:
@@ -215,7 +272,7 @@ def test_pretty_printed_a2ui_with_a_cut_tail_is_truncated() -> None:
     assert "createSurface" in lines[0]
 
 
-def test_extractor_drops_empty_root_reset_after_live_slots() -> None:
+def test_extractor_drops_empty_root_reset_after_component_data() -> None:
     messages = [
         {"version": "v0.9.1", "createSurface": {"surfaceId": "main"}},
         {
@@ -224,14 +281,6 @@ def test_extractor_drops_empty_root_reset_after_live_slots() -> None:
                 "surfaceId": "main",
                 "path": "/data/quote",
                 "value": {"source": "Reportify", "asOf": "2026-08-12"},
-            },
-        },
-        {
-            "version": "v0.9.1",
-            "updateDataModel": {
-                "surfaceId": "main",
-                "path": "/refs/quote",
-                "value": {"source": "finance.market.quote"},
             },
         },
         {

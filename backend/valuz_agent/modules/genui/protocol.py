@@ -159,62 +159,22 @@ or "apply after confirmation" as instructions to the host, never as content to
 render. Do not add a preview banner or tell the user how to save inside the
 surface.
 
-Live data slots. For persistent or ongoing UI, when the edition catalog names
-a compatible pollable source, you MUST bind it. Do not require the calling
-Agent to query that source merely to manufacture an initial snapshot: the host
-loads every declared ref immediately and updates the bound slot. If compatible
-values are already supplied from the user's research, they MAY seed the slot;
-otherwise omit the seed and let the bound component show its loading/empty
-state until the first host result arrives. Inline values only when no compatible
-registered source exists, the content is narrative/analysis, or the user
-explicitly asks for a frozen snapshot. When editing a current document,
-preserve its existing refs and property bindings unless the user explicitly
-asks to replace them:
+Bound component data is planned and completed by generate_ui. When the prompt
+lists a planned bound component, create exactly one matching component instance
+for each listed item and give it a stable unique id. Do not inline current
+market/document values into its registered data-bearing properties. Do not
+author source ids, API URLs, dataRef metadata, refresh settings, data slots, or
+binding paths: those are reserved host metadata that the tool adds after this
+compiler returns. A component not listed in the bound plan receives its
+catalog-typed inline props. Those values are fixed in this Artifact revision
+and do not refresh; they may be research narrative, a controlled calculation,
+or an explicitly frozen snapshot.
 
-1. Declare its source in the data model; optionally seed the slot only when
-compatible values are already available:
-{"version":"v0.9.1","updateDataModel":{"surfaceId":"s","path":"/refs/quote","value":
-{"source":"<source id>","params":{"symbol":"US:NVDA"},"refresh":{"interval":60}}}}
-{"version":"v0.9.1","updateDataModel":{"surfaceId":"s","path":"/data/quote","value":{"items":[...]}}}
-2. Bind the component property to the slot instead of inlining:
-Bind the property named by the edition source notes to the matching slot path.
-The binding IS the refresh: a property written as {"path": ...} re-renders
-when the host updates the slot, an inlined copy of the same values never
-does. Seeding the slot and then inlining the values anyway produces a board
-that polls but visibly never moves — seed the SLOT, bind the PROPERTY.
-Declaring a /refs/<slot> entry without binding the visible data-bearing
-component to /data/<slot> is invalid. Do not duplicate a bound seed into a
-second inline chart/table for presentation; use the component that accepts the
-source's declared shape, exactly as the edition notes specify.
-
-The slot's shape is NOT yours to design. After every refresh the host
-replaces the slot's whole value with the source's declared shape, exactly
-as the edition notes state it (e.g. a metric source refreshes to
-{"items":[{"label","value","delta?","trend?"}],"source","asOf"}). Seed
-that same shape and bind inside it — items:{"path":"/data/quote/items"} —
-never invent your own slot fields: a binding to an invented field renders
-once from your seed and goes blank on the first refresh.
-
-One slot per source; the slot path and the ref path share the trailing name.
-Never invent a source id: only the ids the edition notes list as pollable
-exist, and anything else leaves the slot permanently stale. refresh.interval
-is seconds and must respect the source's stated minimum. A missing seed is
-valid for a bound live slot; a missing ref is not.
-
-Do not append an empty root data-model update such as path "/" with value {}
-after writing /data/* or /refs/* slots. A root update replaces the ENTIRE data
-model; an empty one erases every seed and ref and leaves all bound properties
-unresolved. Once the requested data slots and components are complete, stop.
-
-When the edition notes list MORE THAN ONE shape for a source, the ref must
-say which one it wants with a "shape" key (e.g. {"source":"...","shape":
-"ChartData","params":{...}}); single-shape sources need no shape key.
-
-A param value may be written as {"$host":"<key>"} instead of a literal when
-the edition notes say the current page provides that key (e.g. a company
-page providing "symbol") — the page then re-binds when its subject changes.
-Only keys the notes name exist; on pages that provide none, always write
-literal params."""
+When editing a current document, preserve existing component dataRef metadata
+and property bindings on components the request does not change. Never create
+surface-global /refs data-model entries. Do not append an empty root data-model
+update after writing /data/* values because path "/" replaces the entire data
+model. Once the requested components are complete, stop."""
 
 
 def _load_component_catalog() -> str:
@@ -262,7 +222,7 @@ def edition_catalog_text(
     *,
     include_notes: bool = True,
     include_notes_without_entries: bool = False,
-    data_source_ids: Sequence[str] | None = None,
+    component_data_names: Sequence[str] | None = None,
 ) -> str:
     """Components registered from outside this repository.
 
@@ -283,7 +243,7 @@ def edition_catalog_text(
         names=names,
         include_notes=include_notes,
         include_notes_without_entries=include_notes_without_entries,
-        note_keys=data_source_ids,
+        note_keys=component_data_names,
     )
 
 
@@ -327,6 +287,33 @@ def component_names_for_scope(
     return tuple(dict.fromkeys(("Stack", *names)))
 
 
+def component_property_names(name: str) -> tuple[str, ...]:
+    """Return generated public properties for one registered component.
+
+    The catalog is the cross-runtime contract shown to the UI compiler. Reuse
+    it for deterministic document completion so the OSS tool can recognize
+    edition properties without hard-coding an edition component list.
+    """
+
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", name):
+        return ()
+    catalogs = (_load_component_catalog(), edition_catalog_text(include_notes=False))
+    for catalog in catalogs:
+        match = re.search(
+            rf"(?m)^\s*-\s*{re.escape(name)}\(([^)]*)\)",
+            catalog,
+        )
+        if match is None:
+            continue
+        properties: list[str] = []
+        for raw in match.group(1).split(","):
+            candidate = raw.strip().split(":", 1)[0].strip().removesuffix("?")
+            if re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", candidate):
+                properties.append(candidate)
+        return tuple(dict.fromkeys(properties))
+    return ()
+
+
 def normalize_component_names(value: object) -> tuple[str, ...]:
     """Model-authored exact candidates, de-duplicated and syntax checked."""
 
@@ -340,108 +327,114 @@ def normalize_component_names(value: object) -> tuple[str, ...]:
     return tuple(dict.fromkeys(names))
 
 
-def registered_data_source_ids() -> tuple[str, ...]:
-    """Source ids advertised by generated edition notes.
-
-    The notes and the runtime source registry are generated from the same
-    edition table. Keeping the tool enum derived from those notes lets the
-    calling Agent choose a real binding without copying the whole component
-    schema into its context.
-    """
-
-    notes = edition_catalog_text(include_notes_without_entries=True)
-    return tuple(
-        dict.fromkeys(
-            re.findall(
-                r"\b([a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+){2,})\s+\(params\s+",
-                notes,
-            )
-        )
-    )
+_COMPONENT_DATA_CONTRACT_PREFIX = "COMPONENT_DATA_CONTRACT "
 
 
-def registered_data_source_contracts() -> dict[str, dict[str, Any]]:
-    """Machine-readable minimum contracts from the generated edition notes.
+def _parse_param_specs(params_doc: str) -> tuple[tuple[str, ...], dict[str, dict[str, Any]]]:
+    """Parse the compact business-param grammar generated by an edition."""
 
-    Edition data bindings are registered beside their component catalog.  The
-    generated note line deliberately has a stable shape::
+    inner = params_doc.strip()
+    if inner.startswith("{") and inner.endswith("}"):
+        inner = inner[1:-1]
+    required: list[str] = []
+    param_specs: dict[str, dict[str, Any]] = {}
+    for raw_field in inner.split(","):
+        name_part, separator, raw_description = raw_field.partition(":")
+        field = name_part.strip()
+        if not separator or not field:
+            continue
+        optional = field.endswith("?")
+        name = field.removesuffix("?")
+        description = raw_description.strip()
+        spec: dict[str, Any] = {
+            "required": not optional,
+            "description": description,
+            "kind": "string",
+        }
+        if description == "boolean":
+            spec["kind"] = "boolean"
+        else:
+            range_match = re.fullmatch(r"(-?\d+(?:\.\d+)?)-(-?\d+(?:\.\d+)?)", description)
+            if range_match:
+                spec.update(
+                    kind="number",
+                    minimum=float(range_match.group(1)),
+                    maximum=float(range_match.group(2)),
+                )
+            elif "|" in description:
+                spec["enum"] = tuple(
+                    value.strip() for value in description.split("|") if value.strip()
+                )
+        param_specs[name] = spec
+        if not optional:
+            required.append(name)
+    return tuple(dict.fromkeys(required)), param_specs
 
-        source.id (params {symbol: prefixed, rangeDays?: ...}, ...) ...
-        accepted by ComponentName.
 
-    ``generate_ui`` needs only a few mechanical facts before it spends a model
-    call: which parameters are required, their primitive wire shape, and which
-    rendered component consumes the source. Keeping those facts derived from
-    the generated asset avoids a second hand-written registry that can drift
-    from the frontend source table.
-    """
+def registered_component_data_contracts() -> dict[str, dict[str, Any]]:
+    """Fixed component → source contracts from generated edition notes."""
 
     notes = edition_catalog_text(include_notes_without_entries=True)
     contracts: dict[str, dict[str, Any]] = {}
-    pattern = re.compile(
-        r"(?m)^\s*([a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+){2,})\s+"
-        r"\(params\s+\{([^}]*)\}.*?accepted by\s+([A-Za-z][A-Za-z0-9]*)\."
-    )
-    for match in pattern.finditer(notes):
-        required: list[str] = []
-        param_specs: dict[str, dict[str, Any]] = {}
-        for raw_field in match.group(2).split(","):
-            name_part, separator, raw_description = raw_field.partition(":")
-            field = name_part.strip()
-            if not separator or not field:
-                continue
-            optional = field.endswith("?")
-            name = field.removesuffix("?")
-            description = raw_description.strip()
-            spec: dict[str, Any] = {
-                "required": not optional,
-                "description": description,
-                "kind": "string",
-            }
-            if description == "boolean":
-                spec["kind"] = "boolean"
-            else:
-                range_match = re.fullmatch(r"(-?\d+(?:\.\d+)?)-(-?\d+(?:\.\d+)?)", description)
-                if range_match:
-                    spec.update(
-                        kind="number",
-                        minimum=float(range_match.group(1)),
-                        maximum=float(range_match.group(2)),
-                    )
-                elif "|" in description:
-                    spec["enum"] = tuple(
-                        value.strip() for value in description.split("|") if value.strip()
-                    )
-            param_specs[name] = spec
-            if not optional:
-                required.append(name)
-        contracts[match.group(1)] = {
-            "required_params": tuple(dict.fromkeys(required)),
-            "accepted_components": (match.group(3),),
+    for raw_line in notes.splitlines():
+        line = raw_line.strip()
+        if not line.startswith(_COMPONENT_DATA_CONTRACT_PREFIX):
+            continue
+        try:
+            payload = json.loads(line.removeprefix(_COMPONENT_DATA_CONTRACT_PREFIX))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        component = str(payload.get("component") or "").strip()
+        source = str(payload.get("source") or "").strip()
+        params_doc = str(payload.get("params") or "{}").strip()
+        bindings = tuple(
+            str(value)
+            for value in (payload.get("bindings") or ())
+            if isinstance(value, str) and value
+        )
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", component) or not source or not bindings:
+            continue
+        required, param_specs = _parse_param_specs(params_doc)
+        fixed_props = payload.get("fixedProps")
+        contracts[component] = {
+            "component": component,
+            "source": source,
+            "required_params": required,
             "param_specs": param_specs,
+            "shape": str(payload.get("shape") or "").strip(),
+            "bindings": bindings,
+            "fixed_props": dict(fixed_props) if isinstance(fixed_props, dict) else {},
+            "refresh_interval": payload.get("refreshInterval"),
         }
     return contracts
 
 
-def registered_data_source_tool_guide() -> str:
-    """Compact live-source menu for the calling Agent's tool description."""
+def registered_component_data_names() -> tuple[str, ...]:
+    return tuple(registered_component_data_contracts())
+
+
+def registered_component_data_tool_guide() -> str:
+    """Compact business-parameter menu for the calling Agent."""
 
     lines: list[str] = []
-    for source_id, contract in registered_data_source_contracts().items():
+    for component, contract in registered_component_data_contracts().items():
         params: list[str] = []
         for name, spec in dict(contract.get("param_specs") or {}).items():
             suffix = "" if spec.get("required") else "?"
             description = str(spec.get("description") or spec.get("kind") or "value")
             params.append(f"{name}{suffix}: {description}")
-        accepted = ", ".join(contract.get("accepted_components") or ())
-        lines.append(f"- {source_id} {{{', '.join(params)}}} -> {accepted}")
+        lines.append(f"- {component} {{{', '.join(params)}}}")
     if not lines:
         return ""
     return (
-        "\nRegistered live sources (exact params and visible consumer):\n"
+        "\nRegistered bound components (pass only exact business params; all other "
+        "catalog components use typed revision-fixed inline props):\n"
         + "\n".join(lines)
-        + '\nOn a Host that provides a param, write the value as '
-        '{"param":{"$host":"param"}}, not a top-level $host key.'
+        + '\nUse component_data entries shaped as {"component":"Name","params":{...}}. '
+        'On a Host that provides a param, write its value as {"$host":"param"}. '
+        "Do not pass source ids, slots, shapes, refresh settings, paths, or URLs."
     )
 
 
@@ -450,7 +443,7 @@ def build_a2ui_catalog(
     component_names: Sequence[str] | None = None,
     *,
     include_edition_data_notes: bool = False,
-    data_source_ids: Sequence[str] | None = None,
+    component_data_names: Sequence[str] | None = None,
 ) -> str:
     """The A2UI catalog for one scope.
 
@@ -475,7 +468,7 @@ def build_a2ui_catalog(
         selection,
         include_notes=include_edition_data_notes or selection is None,
         include_notes_without_entries=include_edition_data_notes,
-        data_source_ids=data_source_ids,
+        component_data_names=component_data_names,
     )
 
     # Take only the generated baseline lines so edition entries stay in their
@@ -555,7 +548,7 @@ def build_a2ui_prompt(
     current_document: str | None = None,
     language_reference: str | None = None,
     component_names: Sequence[str] | None = None,
-    data_sources: Sequence[object] | None = None,
+    component_data: Sequence[object] | None = None,
 ) -> str:
     parts = [
         a2ui_instructions(scope),
@@ -572,12 +565,7 @@ def build_a2ui_prompt(
         build_a2ui_catalog(
             scope,
             component_names,
-            include_edition_data_notes=bool(data_sources),
-            data_source_ids=tuple(
-                str(source.get("source") or "")
-                for source in (data_sources or ())
-                if isinstance(source, dict)
-            ),
+            include_edition_data_notes=False,
         ).strip(),
     ]
     if current_document:
@@ -590,7 +578,7 @@ def build_a2ui_prompt(
                 "",
                 "EDIT CONTRACT:",
                 "Return a complete replacement A2UI document, not a patch. Preserve every current "
-                "component, data binding, and layout choice that the request does not change. "
+                "component, component dataRef metadata, data binding, and layout choice that the request does not change. "
                 "Apply the requested change to this document; replace the whole page only when the "
                 "request explicitly asks for a replacement.",
             ]
@@ -608,21 +596,39 @@ def build_a2ui_prompt(
             ]
         )
     parts.extend(["", "REQUEST:", request.strip()])
-    if data_sources:
+    if component_data:
+        compiler_plan = []
+        for raw in component_data:
+            if not isinstance(raw, dict):
+                continue
+            compiler_plan.append(
+                {
+                    "component": raw.get("component"),
+                    "params": raw.get("params") or {},
+                    "bindings": list(raw.get("bindings") or ()),
+                    **(
+                        {"fixedProps": raw.get("fixed_props")}
+                        if raw.get("fixed_props")
+                        else {}
+                    ),
+                }
+            )
         parts.extend(
             [
                 "",
-                "PLANNED LIVE BINDINGS (declare these refs; do not query them "
-                "outside the generated document merely to create seed values):",
-                json.dumps(list(data_sources), ensure_ascii=False),
+                "PLANNED BOUND COMPONENTS (create one matching component per item; "
+                "do not query or inline their current values):",
+                json.dumps(compiler_plan, ensure_ascii=False),
+                "generate_ui will add the component-owned dataRef, fixed source, "
+                "refresh policy, and /data/<componentId> bindings after compilation. "
+                "Do not author any of those fields yourself.",
             ]
         )
     if data is not None:
         parts.append("")
         parts.append(
-            "EXISTING RESEARCH DATA (use as an optional compatible binding seed or "
-            "as narrative/frozen content; never treat it as a replacement for a "
-            "registered live source):"
+            "EXISTING RESEARCH DATA (use as narrative/frozen content; never treat "
+            "it as a replacement for a registered live component):"
         )
         parts.append(json.dumps(data, ensure_ascii=False))
     return "\n".join(parts)
@@ -722,13 +728,13 @@ def extract_a2ui_document(raw: str) -> str | None:
 
 
 def _without_destructive_trailing_root_reset(lines: list[str]) -> list[str]:
-    """Drop a model's final ``path=/, value={}`` after it populated slots.
+    """Drop a model's final ``path=/, value={}`` after it populated data.
 
     A root data-model update is a full replacement in A2UI. Models sometimes
     finish an otherwise valid live document with an empty root update, as if it
-    were a harmless terminator. It is not: it erases every ``/data/*`` seed and
-    ``/refs/*`` declaration written above it, so all dynamic component props
-    become unresolved and strict nested components can crash the host.
+    were a harmless terminator. It is not: it erases every ``/data/*`` value
+    written above it, so all dynamic component props become unresolved and
+    strict nested components can crash the host.
 
     Narrow by construction: only an *empty* root replacement is removed, only
     when the same surface already received a non-root data-model update, and

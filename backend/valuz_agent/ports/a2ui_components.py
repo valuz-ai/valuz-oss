@@ -299,8 +299,8 @@ class A2UIComponentRegistry:
                 notes_to_include = tuple(
                     note
                     for note in registration.notes
-                    if not _note_source_key(note)
-                    or _note_source_key(note) in selected_note_keys
+                    if not _note_contract_key(note)
+                    or _note_contract_key(note) in selected_note_keys
                 )
             if include_notes and notes_to_include:
                 notes = "\n".join(f"  {note}" for note in notes_to_include)
@@ -315,11 +315,21 @@ class A2UIComponentRegistry:
         self._dropped_at_bind.clear()
 
 
-def _note_source_key(note: str) -> str | None:
-    """The generated source-contract note key, if this is one."""
+def _note_contract_key(note: str) -> str | None:
+    """The component name from one generated component-data contract note."""
 
-    first = note.strip().split(None, 1)[0] if note.strip() else ""
-    return first if first.startswith("finance.") and "." in first[8:] else None
+    prefix = "COMPONENT_DATA_CONTRACT "
+    stripped = note.strip()
+    if not stripped.startswith(prefix):
+        return None
+    try:
+        import json
+
+        payload = json.loads(stripped.removeprefix(prefix))
+    except (json.JSONDecodeError, TypeError):
+        return None
+    component = payload.get("component") if isinstance(payload, dict) else None
+    return component if isinstance(component, str) and component else None
 
 
 __all__ = [
