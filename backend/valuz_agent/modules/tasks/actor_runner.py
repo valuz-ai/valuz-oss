@@ -523,7 +523,42 @@ class ActorRunner:
             # boot recovery wants. Leave the session ``running`` / the task
             # ``active``; recovery resumes it. (A plain ``if`` — never ``return``
             # from a ``finally``, which would swallow a propagating CancelledError.)
-            if not is_draining():
+            # Do we still own the task? ``finalize_actor`` flips the KERNEL
+            # session status before it looks at ``via_shutdown``, so a fenced
+            # loop finalizing here lands on a session the new driver may be
+            # mid-turn on. ``via_shutdown`` only ever guarded the task-level
+            # auto-finalize; the kernel write was unconditional.
+            #
+            # Asked authoritatively rather than off ``fenced``: the renewer
+            # ticks every ``TASK_LEASE_RENEW_INTERVAL_S``, so a takeover in the
+            # last few seconds has not reached that event yet.
+            #
+            # ONLY a proven loss skips the finalize. If the check itself fails
+            # we cannot prove anything, so the pre-existing behaviour stands —
+            # a transient database error must not start leaving every normal
+            # exit unfinalized, which would hand healthy tasks to the watchdog.
+            still_ours = True
+            if lease is not None:
+                if fenced.is_set():
+                    still_ours = False
+                else:
+                    try:
+                        still_ours = await lease.renew()
+                    except Exception:  # noqa: BLE001
+                        logger.debug(
+                            "actor loop %s: could not confirm the lease before "
+                            "finalize — proceeding as owner",
+                            session_id,
+                        )
+            if not still_ours:
+                logger.warning(
+                    "actor loop %s (%s): task %s was taken over — skipping finalize so "
+                    "the new driver's session is left alone",
+                    session_id,
+                    role,
+                    task_id,
+                )
+            if not is_draining() and still_ours:
                 await finalizer.finalize_actor(
                     session_id=session_id,
                     last_content=prompt,
@@ -542,11 +577,14 @@ class ActorRunner:
             # and this loop's finalize would then overwrite the new driver's
             # state. Skipped when fenced: we no longer hold it (the guard makes
             # it a no-op anyway) and the new driver's lease must not be touched.
-            if lease is not None and not fenced.is_set():
+            if lease is not None and still_ours:
                 # Hand the task back so a peer — or this process after a
                 # restart — picks it up immediately instead of waiting out the
                 # TTL. Best-effort: the lease expires on its own, and a failure
-                # here must not mask the loop's own exit.
+                # here must not mask the loop's own exit. Gated on the same
+                # answer as the finalize: releasing a lease we no longer hold
+                # would be a no-op anyway, but asking once keeps the two
+                # decisions from drifting apart.
                 try:
                     await lease.release()
                 except Exception:  # noqa: BLE001

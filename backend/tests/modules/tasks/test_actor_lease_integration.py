@@ -722,3 +722,80 @@ def test_an_unreadable_goal_is_retried_on_the_next_wake_up(db_factory, monkeypat
     assert "<task-goal>THE REAL GOAL</task-goal>" in prompts[1], (
         "the recovered goal must be restated on the wake-up"
     )
+
+
+def test_a_fenced_loop_does_not_finalize_the_new_drivers_session(db_factory) -> None:
+    """`finalize_actor` flips the KERNEL session before it looks at `via_shutdown`.
+
+    So a loop that lost its task still reached in and finalized the session the
+    NEW driver may be mid-turn on: `via_shutdown` only ever guarded the
+    task-level auto-finalize, never the kernel write. A takeover only happens
+    after a 90s expiry, but the evicted loop can be minutes into a turn and only
+    reaches its `finally` afterwards — long after the replacement started.
+    """
+    calls: list[str] = []
+    fake = _Collaborators(calls)
+    runner = ActorRunner(finalizer=fake, coordinator=fake)
+
+    async def _turn(session_id: str, content: str, user_id: str | None = None) -> str:
+        calls.append("turn")
+        # A peer takes the task over while this turn is running: expire our
+        # lease, then let another holder acquire it.
+        db = db_factory()
+        try:
+            db.execute(
+                ExecutionLeaseRow.__table__.update()
+                .where(ExecutionLeaseRow.scope == "task", ExecutionLeaseRow.key == "t1")
+                .values(lease_expires_at=1)
+            )
+            db.commit()
+        finally:
+            db.close()
+        monkey.setattr(lease_mod, "_HOLDER_ID", "peer-proc")
+        await acquire_task_lease(user_id=OWNER, task_id="t1", lead_session_id="lead-s")
+        monkey.setattr(lease_mod, "_HOLDER_ID", "our-proc")
+        return "terminated"  # end the loop so the finally runs now
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(lease_mod, "_HOLDER_ID", "our-proc")
+    runner.run_turn = _turn  # type: ignore[method-assign]
+
+    asyncio.run(_drive(runner))
+    monkey.undo()
+
+    assert calls == ["turn"], (
+        "the turn ran, but finalize must NOT — the task belongs to someone else now. "
+        f"Got: {calls}"
+    )
+    # And the peer's lease is untouched: still held, on the newer token.
+    row = asyncio.run(lease_mod.load_lease_states("task", ["t1"]))["t1"]
+    assert row.state == "held" and row.holder_id == "peer-proc"
+
+
+def test_an_unproven_lease_check_still_finalizes(db_factory, monkeypatch) -> None:
+    """Only a PROVEN loss skips finalize.
+
+    If the confirmation itself fails we cannot prove anything, so the
+    pre-existing behaviour has to stand — otherwise a transient database error
+    would start leaving every normal exit unfinalized, handing healthy tasks to
+    the watchdog.
+    """
+    calls: list[str] = []
+    fake = _Collaborators(calls)
+    runner = ActorRunner(finalizer=fake, coordinator=fake)
+
+    async def _turn(session_id: str, content: str, user_id: str | None = None) -> str:
+        calls.append("turn")
+        return "terminated"
+
+    runner.run_turn = _turn  # type: ignore[method-assign]
+
+    async def _cannot_tell(self):
+        raise RuntimeError("database unreachable")
+
+    monkeypatch.setattr(lease_mod.ExecutionLease, "renew", _cannot_tell)
+    asyncio.run(_drive(runner))
+
+    assert calls == ["turn", "finalize"], (
+        "an unprovable check must not change behaviour"
+    )
