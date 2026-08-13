@@ -2056,6 +2056,7 @@ export type KnownI18nKey =
   | "sidebar.expandPanel"
   | "sidebar.expandShow"
   | "sidebar.fork"
+  | "sidebar.forking"
   | "sidebar.help"
   | "sidebar.home"
   | "sidebar.library"

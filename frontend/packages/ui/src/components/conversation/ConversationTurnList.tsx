@@ -914,6 +914,14 @@ interface TurnRowProps {
    */
   renderTurnActions?: (turn: ConversationTurn) => ReactNode | null;
   /**
+   * External state ``renderTurnActions`` depends on, folded into the memo
+   * comparator. Non-latest rows only re-render when their ``turn`` object
+   * changes, so action-row state living OUTSIDE the turn (e.g. an in-flight
+   * fork's pending spinner — #879) is invisible to them unless the host
+   * changes this value. Any change re-renders every row.
+   */
+  turnActionsKey?: string | null;
+  /**
    * Host control rendered at the START of a turn, before its messages.
    *
    * Separate from ``renderTurnActions`` (which appends to the copy/retry row)
@@ -1402,7 +1410,11 @@ const TurnRow = memo(
   },
   (prev, next) => {
     if (!prev.isLatest && !next.isLatest) {
-      return prev.turn === next.turn && prev.retryCount === next.retryCount;
+      return (
+        prev.turn === next.turn &&
+        prev.retryCount === next.retryCount &&
+        prev.turnActionsKey === next.turnActionsKey
+      );
     }
     return false;
   },
@@ -1429,6 +1441,14 @@ interface ConversationTurnListProps {
   renderToolCall?: (tool: PrototypeToolCall) => ReactNode | null;
   /** See ``TurnRowProps.renderTurnActions``. */
   renderTurnActions?: (turn: ConversationTurn) => ReactNode | null;
+  /**
+   * External state ``renderTurnActions`` depends on, folded into the memo
+   * comparator. Non-latest rows only re-render when their ``turn`` object
+   * changes, so action-row state living OUTSIDE the turn (e.g. an in-flight
+   * fork's pending spinner — #879) is invisible to them unless the host
+   * changes this value. Any change re-renders every row.
+   */
+  turnActionsKey?: string | null;
   /**
    * Host control rendered at the START of a turn, before its messages.
    *
@@ -1488,6 +1508,7 @@ export function ConversationTurnList({
   onVirtualApiReady,
   renderToolCall,
   renderTurnActions,
+  turnActionsKey,
   renderTurnLeading,
   isToolCardFoldable,
   onRevealFile,
@@ -1658,6 +1679,7 @@ export function ConversationTurnList({
                     retryCount={retryCounts?.[turn.id] ?? 0}
                     renderToolCall={renderToolCall}
                     renderTurnActions={renderTurnActions}
+                    turnActionsKey={turnActionsKey}
                     renderTurnLeading={renderTurnLeading}
                     isToolCardFoldable={isToolCardFoldable}
                     onRevealFile={onRevealFile}

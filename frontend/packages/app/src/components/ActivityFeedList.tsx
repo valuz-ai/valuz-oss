@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useTranslation } from "@valuz/core";
 import type { ActivityFeed, ActivityItem } from "@valuz/core";
-import { Badge } from "@valuz/ui";
+import { Badge, cn } from "@valuz/ui";
 import { Clock3, ListChecks, Loader2, MessageSquare } from "lucide-react";
 
 import { BUCKET_KEY, groupByTimeBucket } from "../lib/time-buckets";
@@ -67,6 +67,9 @@ export interface ActivityFeedListProps {
    * rows that are not running; origin gating (automation/task chats) is
    * server-side — a 422 surfaces as the caller's failure toast. */
   onForkSession?: (id: string) => void;
+  /** Session whose fork request is in flight (#879) — that row shows a
+   * spinner and every Fork entry is disabled until the request settles. */
+  forkPendingSessionId?: string | null;
   /** Hide the leading 对话/任务/自动化 chip (the 自动化 tab is already scoped). */
   hideScopeTag?: boolean;
   /** Append the project name after the title — the global 动态 list wants it. */
@@ -81,6 +84,7 @@ export const ActivityFeedList = ({
   onRenameConfirm,
   onDeleteSession,
   onForkSession,
+  forkPendingSessionId,
   hideScopeTag,
   showProjectName,
   emptyLabel,
@@ -200,7 +204,12 @@ export const ActivityFeedList = ({
                 variant={activityStatusVariant(item.status)}
                 className={
                   item.kind === "chat"
-                    ? "transition-opacity group-hover:opacity-0 group-has-[[data-state=open]]:opacity-0"
+                    ? cn(
+                        "transition-opacity group-hover:opacity-0 group-has-[[data-state=open]]:opacity-0",
+                        // The pending spinner paints over this slot — keep
+                        // the status text out of its way (#879).
+                        forkPendingSessionId === item.id && "opacity-0",
+                      )
                     : undefined
                 }
               >
@@ -216,6 +225,8 @@ export const ActivityFeedList = ({
                     ? () => onForkSession(item.id)
                     : undefined
                 }
+                forkPending={forkPendingSessionId === item.id}
+                forkDisabled={forkPendingSessionId != null}
               />
             )}
           </span>

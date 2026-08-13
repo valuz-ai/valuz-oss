@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from "react";
 import { useNavigate } from "react-router-dom";
-import { Settings } from "lucide-react";
+import { Loader2, Settings } from "lucide-react";
 import { useTranslation } from "@valuz/core";
 import type { ConversationTurn } from "@valuz/shared";
 import { Button, ConversationTurnList, EmptyState, ForkIcon } from "@valuz/ui";
@@ -70,6 +70,9 @@ type ConversationBodyProps = {
    *  Absent (embedded hosts) → no fork affordance. */
   canForkFromTurn?: boolean;
   forkInFlight?: boolean;
+  /** Anchor message of an in-flight message-granularity fork — that turn's
+   * hover button swaps to a spinner while the request runs (#879). */
+  forkingMessageId?: string | null;
   onForkFromTurn?: (messageId: string) => void;
 };
 
@@ -117,6 +120,7 @@ export function ConversationBody({
   emptyStateOverride,
   canForkFromTurn,
   forkInFlight,
+  forkingMessageId,
   onForkFromTurn,
 }: ConversationBodyProps) {
   const { t } = useTranslation();
@@ -188,6 +192,13 @@ export function ConversationBody({
               </div>
             ) : null}
             <ConversationTurnList
+              // Non-latest rows are memoized on their ``turn`` object — this
+              // key folds the fork pending state into the comparator so their
+              // action row re-renders (spinner/disabled) while a fork runs
+              // (#879). "session" covers a whole-session (header) fork.
+              turnActionsKey={
+                forkInFlight ? (forkingMessageId ?? "session") : null
+              }
               // Completes the slot added in #744: the prop existed but nothing
               // passed it, so the slot was unreachable. Overlays register
               // under ``conversation.turn.actions``.
@@ -210,7 +221,12 @@ export function ConversationBody({
                       )}
                       className="flex h-7 w-7 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted disabled:cursor-default disabled:opacity-60"
                     >
-                      <ForkIcon className="h-3.5 w-3.5" />
+                      {forkInFlight &&
+                      forkingMessageId === turn.id.slice("turn-".length) ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <ForkIcon className="h-3.5 w-3.5" />
+                      )}
                     </button>
                   ) : null}
                   <SlotRenderer

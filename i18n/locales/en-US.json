@@ -1870,7 +1870,8 @@
       "goForward": "Go forward",
       "toggleSidebar": "Toggle sidebar"
     },
-    "fork": "Fork session"
+    "fork": "Fork session",
+    "forking": "Forking…"
   },
   "skill": {
     "addBtn": "Add",

@@ -1,8 +1,8 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { ApiError, sessionsApi, useTranslation } from "@valuz/core";
-import { t as _t } from "@valuz/shared/i18n";
+import { sessionsApi, useTranslation } from "@valuz/core";
+import { useForkSession } from "../../hooks/use-fork-session";
 
 type TitleActionsParams = {
   selectedSessionId: string | null;
@@ -45,40 +45,14 @@ export function useTitleActions({ selectedSessionId }: TitleActionsParams) {
   const [titleDeleting, setTitleDeleting] = useState(false);
   const [titleDeleteInFlight, setTitleDeleteInFlight] = useState(false);
 
-  const [forkInFlight, setForkInFlight] = useState(false);
-
   // Fork the session — whole-session when ``messageId`` is omitted,
   // through that message (inclusive) otherwise — then jump to the new
-  // conversation. Synchronous by design (docs/design/session-fork.md D5):
-  // the runtime-native fork runs inside the call (~1–2s), so callers
-  // disable their trigger on ``forkInFlight``.
+  // conversation. Pending state, duplicate-click suppression, toasts, and
+  // navigation all live in the shared hook (#879).
+  const { fork, forkInFlight, forkingMessageId } = useForkSession();
   const handleFork = async (messageId?: string) => {
-    if (!selectedSessionId || forkInFlight) return;
-    setForkInFlight(true);
-    try {
-      const forked = await sessionsApi.fork(selectedSessionId, messageId);
-      toast.success(t("conversation.forked" as Parameters<typeof t>[0]));
-      // The fork is born idle (it carries history) but produces no
-      // ``run.finished`` frame — nudge the sidebar's finished-runs window
-      // so the new chat shows up immediately.
-      window.dispatchEvent(new CustomEvent("valuz-runs-refresh"));
-      navigate(`/conversation/${forked.id}`);
-    } catch (cause) {
-      // Prefer a backend-attached i18n key; else map the two actionable
-      // statuses (409 = invalid anchor / turn in flight) to local copy.
-      const msg =
-        cause instanceof ApiError && cause.i18nKey
-          ? _t(
-              cause.i18nKey as Parameters<typeof _t>[0],
-              cause.i18nParams as Parameters<typeof _t>[1],
-            )
-          : cause instanceof ApiError && cause.status === 409
-            ? t("conversation.forkConflict" as Parameters<typeof t>[0])
-            : t("conversation.forkFailed" as Parameters<typeof t>[0]);
-      toast.error(msg);
-    } finally {
-      setForkInFlight(false);
-    }
+    if (!selectedSessionId) return;
+    await fork(selectedSessionId, messageId);
   };
 
   // ``DeleteConfirmDialog``'s onConfirm, moved verbatim from the page's
@@ -112,6 +86,7 @@ export function useTitleActions({ selectedSessionId }: TitleActionsParams) {
     titleDeleteInFlight,
     handleTitleDeleteConfirm,
     forkInFlight,
+    forkingMessageId,
     handleFork,
   };
 }

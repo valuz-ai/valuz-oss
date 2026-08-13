@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { toast } from "sonner";
 import { Clock3, ListChecks, MessageSquare } from "lucide-react";
 import {
   DeleteConfirmDialog,
@@ -27,6 +26,7 @@ import {
   type SessionEventDTO,
 } from "@valuz/shared";
 import { ActivityFeedList } from "@valuz/app/components";
+import { useForkSession } from "../hooks/use-fork-session";
 import { useProjectOutlet } from "@valuz/app/layout";
 import { OriginBadge } from "../components/ExecutionLocationPicker";
 
@@ -341,17 +341,11 @@ export const ActivityPage = () => {
   const openTask = (id: string): void => {
     navigate(`/tasks/${encodeURIComponent(id)}`);
   };
+  // Whole-session fork (docs/design/session-fork.md). Pending state +
+  // duplicate-click suppression live in the shared hook (#879).
+  const { fork: forkSession, forkingSessionId } = useForkSession();
   const handleForkSession = (id: string): void => {
-    // Whole-session fork (docs/design/session-fork.md, D5: synchronous).
-    sessionsApi
-      .fork(id)
-      .then((forked) => {
-        toast.success(t("conversation.forked" as Parameters<typeof t>[0]));
-        navigate(`/conversation/${encodeURIComponent(forked.id)}`);
-      })
-      .catch(() =>
-        toast.error(t("conversation.forkFailed" as Parameters<typeof t>[0])),
-      );
+    void forkSession(id);
   };
   const handleRenameConfirm = (id: string, name: string): void => {
     void (async () => {
@@ -486,6 +480,7 @@ export const ActivityPage = () => {
           onRenameConfirm={handleRenameConfirm}
           onDeleteSession={(id, title) => setDeletingChat({ id, title })}
           onForkSession={handleForkSession}
+          forkPendingSessionId={forkingSessionId}
           emptyLabel={t(tk("activity.noHistory"))}
         />
       </section>
