@@ -65,6 +65,10 @@ class _RecordingCollaborators:
     both protocols and appends to a shared call log.
     """
 
+    async def actor_still_wanted(self, **_kw) -> bool:
+        """Nothing stopped this actor. Overridden where a stop is the point."""
+        return True
+
     def __init__(self, calls: list[str]) -> None:
         self._calls = calls
 

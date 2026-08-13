@@ -1,7 +1,7 @@
 """The dispatch/shutdown race — the module's sharpest concurrency invariant.
 
 ``dispatch_async`` registers a new member; ``finish_task`` /``stop_task`` tell
-every live member to shut down via ``broadcast_shutdown``, which drains the
+every live member to shut down via ``stop_tracking_members``, which drains the
 live-member set in ONE pop. If the loop yields to the event loop between
 "member exists" and "member is registered", a concurrent broadcast sees an
 empty set, the just-spawned member is never told to stop, and it hangs until
@@ -46,21 +46,21 @@ def test_spawn_actor_is_synchronous() -> None:
 
     It registers mailboxes, seeds the live set and starts the loop. Those have
     to land without the event loop getting a turn, or a concurrent
-    ``broadcast_shutdown`` drains the set in between and the member is lost.
+    ``stop_tracking_members`` drains the set in between and the member is lost.
     Sync makes ``await`` a SyntaxError — checked on every edit, not remembered.
     Every launch path (dispatch, kickoff, commit, recovery) goes through it.
     """
     assert not inspect.iscoroutinefunction(launcher.spawn_actor)
 
 
-def test_broadcast_shutdown_is_synchronous() -> None:
-    """``CoordinationService.broadcast_shutdown`` must never become ``async``.
+def test_stop_tracking_members_is_synchronous() -> None:
+    """``CoordinationService.stop_tracking_members`` must never become ``async``.
 
     It pops the whole live set and then delivers to each member. An ``await``
     between the pop and the puts would let a member spawned meanwhile be
     dropped — the same race from the other side.
     """
-    assert not inspect.iscoroutinefunction(CoordinationService.broadcast_shutdown)
+    assert not inspect.iscoroutinefunction(CoordinationService.stop_tracking_members)
 
 
 def test_live_member_registry_is_entirely_synchronous() -> None:
@@ -116,20 +116,23 @@ async def test_shutdown_reaches_a_member_spawned_concurrently() -> None:
         )
 
     async def _shutdown() -> None:
-        coordination.broadcast_shutdown(task_id)
+        coordination.stop_tracking_members(task_id)
 
     try:
         await asyncio.gather(_spawn(), _shutdown())
 
         assert loops == [member], "the member's actor loop must have been started"
-        # Either the broadcast saw the member (shutdown queued) or it ran first
-        # (member still live, nothing drained). Both are consistent; a member
-        # that is live with no way to be told to stop is not.
-        got_shutdown = mailbox_registry.has_pending(member)
-        still_live = registry.has_live_members(task_id)
-        assert got_shutdown or still_live, (
-            "member was neither told to shut down nor left live — it would hang "
-            "until its idle TTL"
+        # The pop is atomic, so the member is either still tracked (the drain
+        # ran first and never saw it) or gone from the registry (the drain saw
+        # it). What must never happen is the set being left half-mutated —
+        # that is what a non-atomic drain would produce, and it is why this
+        # function may not contain an ``await``.
+        #
+        # Whether the member then STOPS is no longer this function's business:
+        # it reads its own parked run row, from whichever process runs it.
+        assert not mailbox_registry.has_pending(member), (
+            "halting a task must queue nothing — a stop that travels as a "
+            "message only reaches members that share this process"
         )
     finally:
         for sid in (lead, member):
@@ -138,10 +141,14 @@ async def test_shutdown_reaches_a_member_spawned_concurrently() -> None:
             t.cancel()
 
 
-async def test_broadcast_drains_every_member_exactly_once() -> None:
-    """The drain is a single pop: each member is told once, and a second
-    broadcast (e.g. stop_task then finish_task) is a no-op rather than a
-    double delivery."""
+async def test_stop_tracking_drains_every_member_exactly_once() -> None:
+    """The drain is a single pop, and a second halt is a no-op.
+
+    ``stop_task`` then ``finish_task`` both run it, so the second must find
+    nothing rather than act twice. When each pop also queued a message, that
+    mattered for delivery; now it matters because a half-mutated set would let
+    a member be dropped from tracking while another was still being added.
+    """
     registry = LiveMemberRegistry()
     coordination = CoordinationService(registry=registry)
     boxes = MailboxRegistry()
@@ -152,14 +159,14 @@ async def test_broadcast_drains_every_member_exactly_once() -> None:
         boxes.register(m)
         mailbox_registry.register(m)
     try:
-        coordination.broadcast_shutdown("t1")
-        assert all(mailbox_registry.has_pending(m) for m in members)
-        assert not registry.has_live_members("t1")
+        coordination.stop_tracking_members("t1")
+        assert not registry.has_live_members("t1"), "every member popped in one go"
+        assert not any(mailbox_registry.has_pending(m) for m in members), (
+            "and nothing queued for any of them"
+        )
 
-        for m in members:
-            assert (await mailbox_registry.get(m, timeout=0.01)).kind == "shutdown"
-        coordination.broadcast_shutdown("t1")  # second halt — nothing to do
-        assert not any(mailbox_registry.has_pending(m) for m in members)
+        coordination.stop_tracking_members("t1")  # second halt — nothing to do
+        assert not registry.has_live_members("t1")
     finally:
         for m in members:
             mailbox_registry.unregister(m)

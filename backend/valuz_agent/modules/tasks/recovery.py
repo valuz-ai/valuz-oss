@@ -45,7 +45,7 @@ from valuz_agent.modules.tasks.lease import (
 )
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
 from valuz_agent.modules.tasks import mailbox_store
-from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
+from valuz_agent.modules.tasks.mailbox import mailbox_registry
 from valuz_agent.modules.tasks.member_state import (
     reconcile,
 )
@@ -504,10 +504,10 @@ class RecoveryService:
             await self._interrupt_kernel_session(sid, user_id=user_id)
         if lead_session_id is not None:
             await self._interrupt_kernel_session(lead_session_id, user_id=user_id)
-        self._coordination.broadcast_shutdown(task_id)
-        if lead_session_id is not None:
-
-            mailbox_registry.put(lead_session_id, InboxMsg(kind="shutdown"))
+        # The lead reads the paused task on its own poll, from whichever
+        # process runs it — which the queued ``shutdown`` this replaced could
+        # only manage when that happened to be this one.
+        self._coordination.stop_tracking_members(task_id)
         return True
 
     async def resume_task(
@@ -722,11 +722,11 @@ class RecoveryService:
                 subtask_key=subtask_key,
             )
 
+        # The interrupt only reaches a member MID-TURN. An idle one, parked
+        # between turns, learns it was cancelled from its own run row on the
+        # next poll — bounded by the inbox poll rather than by its 10-minute
+        # idle TTL, and without depending on which process it runs in.
         await self._interrupt_kernel_session(session_id, user_id=user_id)
-        # The interrupt only reaches a member MID-TURN. An idle member (waiting
-        # on its mailbox between turns) would otherwise sit out its full idle
-        # TTL (10 min) before exiting — and the user already cancelled it.
-        mailbox_registry.put(session_id, InboxMsg(kind="shutdown"))
         self._members.discard_member(task_id, session_id)
         if lead_session_id:
             async with async_unit_of_work() as db:

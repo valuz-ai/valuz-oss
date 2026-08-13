@@ -3,12 +3,12 @@
 await_member_results (in-turn mailbox drain, heartbeat-sliced) · the
 role callbacks the ActorRunner binds as its ``ActorCoordinator``
 (notify_lead_member_idle / lead_idle_with_no_pending / session_still_working)
-· broadcast_shutdown, the atomic halt primitive.
+· stop_tracking_members, which drops a task's members atomically.
 
 Text DELIVERY (send_to_member / inject_into_task / goal revision) lives in
 ``messaging`` — callers import it directly; there is no wrapper here.
 
-CRITICAL invariant: ``broadcast_shutdown`` must stay a plain ``def`` — the
+CRITICAL invariant: ``stop_tracking_members`` must stay a plain ``def`` — the
 single ``drain_members`` pop and the per-member puts may not be separated by
 an ``await``, or a concurrently spawned member is dropped. ``await`` inside a
 sync function is a SyntaxError, so the compiler enforces it (as it does for
@@ -237,6 +237,22 @@ class CoordinationService:
                 # them here is deliberate: the branches below (shutdown, inject,
                 # revision, member_done) then apply unchanged, so this path
                 # cannot drift from the in-process one.
+                if not await self.actor_still_wanted(
+                    session_id=lead_session_id,
+                    role="lead",
+                    task_id=task_id,
+                    project_id=project_id,
+                    user_id=user_id,
+                ):
+                    # The task was paused or finished while we waited. Stop
+                    # collecting and let the turn end; the loop reads the same
+                    # state and leaves.
+                    #
+                    # This used to require seeing a ``shutdown`` message and
+                    # putting it BACK, because the actor loop reads the same
+                    # inbox between turns and would otherwise never see it. A
+                    # fact can be read twice.
+                    break
                 durable = await self._drain_durable_inbox(lead_session_id)
                 if durable:
                     for extra in durable:
@@ -292,18 +308,6 @@ class CoordinationService:
                         break
                 continue
             except KeyError:
-                break
-            if msg.kind == "shutdown":
-                # Put it BACK before leaving. ``await_member_results`` runs
-                # inside the lead's turn and drains the same inbox the actor
-                # loop reads between turns, so consuming a shutdown here would
-                # swallow the only signal that tells the loop to stop — the
-                # lead would finish this turn and keep looping on a task that
-                # ``stop_task`` / ``finish_task`` already halted. (It survived
-                # this long only because ``stop_task`` ALSO interrupts the
-                # kernel turn, which happens to end the loop by another route;
-                # ``finish_task``'s own broadcast had no such backstop.)
-                mailbox_registry.put(lead_session_id, msg)
                 break
             if msg.kind in ("text", "revise_goal"):
                 # VALUZ-CHATPLAN S5: user inject via chat, OR a goal revision
@@ -399,6 +403,44 @@ class CoordinationService:
             out["user_inject"] = user_inject
             out["preempted_by_inject"] = True
         return out
+
+    @staticmethod
+    async def actor_still_wanted(
+        *, session_id: str, role: str, task_id: str, project_id: str, user_id: str
+    ) -> bool:
+        """Does this actor still have work it is supposed to be doing?
+
+        Stopping an actor is a STATE TRANSITION, not a message. ``stop_task``,
+        ``finish_task`` and ``stop_member`` all write durably before anything
+        else — a terminal task status, a parked run row — so the loop can just
+        look, and looking works from any process.
+
+        It used to be told instead, by a ``shutdown`` queued in its inbox. Two
+        different consumers read that inbox (the loop between turns, and
+        ``await_member_results`` inside one), so the message had to be put BACK
+        by whichever one saw it first or the stop was swallowed. And the box is
+        shared across incarnations, so a stop meant for one loop could reach
+        the loop that replaced it. Neither problem exists for a fact you read.
+
+        Errs toward KEEP RUNNING: a failed read is not a stop order, and
+        halting a healthy actor because the database hiccuped would be a worse
+        outcome than one extra turn.
+        """
+        try:
+            async with async_unit_of_work(commit=False) as db:
+                if role == "lead":
+                    task = await TaskDatastore(db).get_task_by_project(
+                        user_id, project_id, task_id
+                    )
+                    # Absent is not halted: a task read that comes back empty
+                    # mid-flight is far more likely to be a scoping mistake
+                    # than a deletion, and the idle TTL bounds us anyway.
+                    return task is None or task.status == "active"
+                run = await TaskSessionDatastore(db).get_run(session_id)
+                return run is None or run.status == "active"
+        except Exception:  # noqa: BLE001
+            logger.debug("could not read stop state for %s — assuming it stands", session_id)
+            return True
 
     async def member_already_settled(
         self, *, task_id: str, project_id: str, member_session_id: str, user_id: str
@@ -834,19 +876,25 @@ class CoordinationService:
     # shutdown broadcast — the atomic shutdown primitive
     # ------------------------------------------------------------------
 
-    def broadcast_shutdown(self, task_id: str) -> None:
-        """Tell every still-running member of a task to finalize after its turn.
+    def stop_tracking_members(self, task_id: str) -> None:
+        """Forget a task's members; each one reads its own stop from the store.
 
-        Public on purpose — finalization and recovery are its callers, and a
-        load-bearing cross-service contract must not hide behind a private
-        name. MUST stay a plain ``def``: the single ``drain_members`` pop and
-        the per-member puts may not be separated by an ``await``, or a
-        concurrently spawned member is dropped (compiler-enforced; pinned by
+        This was ``stop_tracking_members``, and it queued a ``shutdown`` for every
+        member. It could only reach members whose loops happened to live in
+        this process, which is a minority of them once the host runs more than
+        one — so the signal that ends a member was the one thing least able to
+        cross a process boundary.
+
+        Its callers (``stop_task``, ``finish_task``) already write what each
+        member needs to know: the task goes terminal, the run rows are parked.
+        Members read that on their own poll, from wherever they run. All that
+        is left here is dropping the lead's in-process tracking of them.
+
+        MUST stay a plain ``def``: ``drain_members`` pops the set, and letting
+        an ``await`` in would drop a concurrently spawned member (pinned by
         test_spawn_atomicity).
         """
-
-        for member_sid in self._members.drain_members(task_id):
-            mailbox_registry.put(member_sid, InboxMsg(kind="shutdown"))
+        self._members.drain_members(task_id)
 
 
 __all__ = ["CoordinationService"]

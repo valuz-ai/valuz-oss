@@ -56,9 +56,19 @@ def _reset_mailbox():
 class _Collaborators:
     """Fake finalizer + coordinator recording the order seams fire in."""
 
-    def __init__(self, calls: list[str], on_finalize=None) -> None:
+    def __init__(self, calls: list[str], on_finalize=None, *, stops_after=None) -> None:
         self._calls = calls
         self._on_finalize = on_finalize
+        # After this many checks the actor is no longer wanted. That is how a
+        # loop ends now — a state it reads, not a ``shutdown`` queued for it.
+        self._stops_after = stops_after
+        self._wanted_checks = 0
+
+    async def actor_still_wanted(self, **_kw) -> bool:
+        self._wanted_checks += 1
+        if self._stops_after is None:
+            return True
+        return self._wanted_checks <= self._stops_after
 
     async def finalize_actor(self, **kwargs: Any) -> None:
         self._calls.append("finalize")
@@ -532,8 +542,12 @@ def test_the_renewer_keeps_going_when_a_renewal_raises(db_factory) -> None:
     assert ended_cleanly, "the renewer must not propagate the transient error"
 
 
-class _DupThenShutdown(_Collaborators):
-    """Coordinator that reports every member_done as already settled."""
+class _DupThenStopped(_Collaborators):
+    """Reports every member_done as already settled, then stops being wanted.
+
+    The stop used to be a queued ``shutdown``; it is a state read now, so the
+    fake answers the question the loop actually asks.
+    """
 
     def __init__(self, calls: list[str]) -> None:
         super().__init__(calls)
@@ -542,6 +556,11 @@ class _DupThenShutdown(_Collaborators):
     async def member_already_settled(self, *, task_id, project_id, member_session_id, user_id) -> bool:
         self.settled_asked += 1
         return True
+
+    async def actor_still_wanted(self, **_kw) -> bool:
+        # Wanted until the duplicate has been examined; stopped after, which is
+        # how the loop ends now.
+        return self.settled_asked == 0
 
     async def lead_idle_with_no_pending(self, task_id, project_id, user_id, lead_session_id="") -> bool:
         return False  # keep the loop parked on its mailbox
@@ -560,9 +579,9 @@ def test_dropping_a_duplicate_does_not_re_run_the_previous_prompt(db_factory) ->
     from its original goal.
 
     Here the loop must run the kickoff turn, silently drop the duplicate, and
-    then exit on the shutdown — one turn, not two.
+    then leave because the task no longer wants it — one turn, not two.
     """
-    fake = _DupThenShutdown([])
+    fake = _DupThenStopped([])
     runner = ActorRunner(finalizer=fake, coordinator=fake)
     prompts: list[str] = []
 
@@ -574,7 +593,6 @@ def test_dropping_a_duplicate_does_not_re_run_the_previous_prompt(db_factory) ->
 
     mailbox_registry.register("lead-s")
     mailbox_registry.put("lead-s", _member_done("m1", "already reviewed"))
-    mailbox_registry.put("lead-s", InboxMsg(kind="shutdown"))
 
     asyncio.run(_drive(runner))
 
@@ -598,7 +616,7 @@ def test_an_actionable_member_done_still_runs_a_turn(db_factory) -> None:
         async def reconcile_finished_members(self, *, task_id, project_id, user_id) -> list:
             return []
 
-    fake = _NotSettled([])
+    fake = _NotSettled([], stops_after=1)
     runner = ActorRunner(finalizer=fake, coordinator=fake)
     prompts: list[str] = []
 
@@ -615,7 +633,6 @@ def test_an_actionable_member_done_still_runs_a_turn(db_factory) -> None:
     )
     mailbox_registry.register("lead-s")
     mailbox_registry.put("lead-s", _member_done("m1", "please review me"))
-    mailbox_registry.put("lead-s", InboxMsg(kind="shutdown"))
 
     asyncio.run(_drive(runner))
     monkey.undo()
@@ -681,7 +698,7 @@ def test_an_unreadable_goal_is_retried_on_the_next_wake_up(db_factory, monkeypat
         "valuz_agent.modules.tasks.planning.mark_in_review", lambda **kw: asyncio.sleep(0)
     )
 
-    fake = _Wake([])
+    fake = _Wake([], stops_after=1)
     runner = ActorRunner(finalizer=fake, coordinator=fake)
     prompts: list[str] = []
 
@@ -692,7 +709,6 @@ def test_an_unreadable_goal_is_retried_on_the_next_wake_up(db_factory, monkeypat
     runner.run_turn = _turn  # type: ignore[method-assign]
     mailbox_registry.register("lead-s")
     mailbox_registry.put("lead-s", _member_done("m1", "result"))
-    mailbox_registry.put("lead-s", InboxMsg(kind="shutdown"))
 
     asyncio.run(_drive(runner))
 

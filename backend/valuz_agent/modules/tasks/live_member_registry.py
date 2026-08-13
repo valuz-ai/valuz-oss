@@ -13,7 +13,7 @@ Invariant — all methods are PLAIN SYNCHRONOUS (never ``async``). This is
 load-bearing: members are spawned via ``asyncio.create_task`` and must be
 tracked with no ``await`` gap between spawn and registration. An ``await``
 point between the two would let a concurrently-running ``finish_task`` /
-``broadcast_shutdown`` observe the registry mid-mutation and drop a
+``stop_tracking_members`` observe the registry mid-mutation and drop a
 just-spawned member. For the same reason ``drain_members`` snapshots AND clears
 in a single ``pop`` — splitting it into a read followed by a separate clear
 would reopen that race.

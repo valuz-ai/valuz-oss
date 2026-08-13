@@ -9,7 +9,7 @@ These two primitives are now the only spelling.
 
 :func:`create_task_session` — the awaitable half (kernel + index).
 :func:`spawn_actor` — the SYNCHRONOUS half. A concurrent
-``broadcast_shutdown`` drains the live-member set in one pop, so nothing may
+``stop_tracking_members`` drains the live-member set in one pop, so nothing may
 yield between "the member is registered" and "its loop is spawned"; inside a
 plain ``def``, ``await`` is a SyntaxError, so the compiler enforces the rule on
 every edit. Work that must await belongs before the call, not inside it.
