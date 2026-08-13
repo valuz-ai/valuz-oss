@@ -133,11 +133,19 @@ async def test_lead_loop_runs_turns_until_shutdown(db_factory) -> None:
     orch.actor.run_turn = fake_turn  # type: ignore[method-assign]
     orch.finalization.finalize_actor = fake_finalize  # type: ignore[method-assign]
 
-    # Pre-load the inbox: a follow-up, then a shutdown. register() in the loop
-    # is idempotent so these survive.
+    # Pre-load a follow-up; register() in the loop is idempotent so it
+    # survives. The loop then ends because the task stops wanting it — a state
+    # it reads, not a message queued behind the follow-up.
     mailbox_registry.register("lead-1")
     mailbox_registry.put("lead-1", InboxMsg(kind="text", text="follow-up"))
-    mailbox_registry.put("lead-1", InboxMsg(kind="shutdown"))
+
+    wanted = {"n": 0}
+
+    async def _wanted_once(**_kw) -> bool:
+        wanted["n"] += 1
+        return wanted["n"] <= 1
+
+    orch.coordination.actor_still_wanted = _wanted_once  # type: ignore[method-assign]
 
     await asyncio.wait_for(
         orch.actor.run_actor_loop(
@@ -624,17 +632,24 @@ async def test_collect_manifest_attributes_by_mtime(tmp_path: object) -> None:
     assert str(old) in paths_all and str(new) in paths_all
 
 
-def test_broadcast_shutdown_signals_live_members() -> None:
+def test_stop_tracking_drops_the_members_and_queues_nothing() -> None:
+    """Halting a task no longer sends its members anything.
+
+    It used to queue a ``shutdown`` per member, which could only reach the ones
+    whose loops happened to live in this process — so the signal that ends a
+    member was the one least able to cross a process boundary. Each member
+    reads its own parked run row instead, from wherever it runs.
+    """
     orch = TaskOrchestrator()
     orch._members.set_members("t1", {"m1", "m2"})
     mailbox_registry.register("m1")
     mailbox_registry.register("m2")
 
-    orch.coordination.broadcast_shutdown("t1")
+    orch.coordination.stop_tracking_members("t1")
 
-    assert mailbox_registry._boxes["m1"].get_nowait().kind == "shutdown"
-    assert mailbox_registry._boxes["m2"].get_nowait().kind == "shutdown"
-    # Task entry cleared so it cannot be broadcast to twice.
+    assert not mailbox_registry.has_pending("m1")
+    assert not mailbox_registry.has_pending("m2")
+    # Task entry cleared so the same members cannot be dropped twice.
     assert not orch._members.live_members("t1")
 
     mailbox_registry.unregister("m1")
@@ -992,13 +1007,16 @@ async def test_await_members_all_returns_when_all_keys_done(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
-async def test_await_members_puts_shutdown_back_for_the_actor_loop(monkeypatch) -> None:
-    """Regression: a ``shutdown`` must survive being seen by await_members.
+async def test_await_members_stops_when_the_task_stops(monkeypatch) -> None:
+    """A halted task must end the in-turn wait, and leave nothing behind.
 
-    ``await_member_results`` runs INSIDE the lead's turn and drains the very
-    inbox the actor loop reads BETWEEN turns. It used to consume the shutdown
-    and just break, so ``finish_task``/``stop_task``'s broadcast never reached
-    the loop and the lead kept looping on a halted task. It must re-queue it.
+    This wait runs INSIDE the lead's turn and reads the very inbox the actor
+    loop reads BETWEEN turns. When the stop was a queued ``shutdown``, whichever
+    of the two saw it first consumed it — so this function had to put it BACK,
+    or the loop never learned to stop and kept driving a halted task.
+
+    A stop is a state now. Both read it, neither consumes it, and there is
+    nothing to re-queue.
     """
     _patch_await_deps(monkeypatch, {"sA": "A"})
     orch = TaskOrchestrator()
@@ -1007,24 +1025,28 @@ async def test_await_members_puts_shutdown_back_for_the_actor_loop(monkeypatch) 
         return None
 
     monkeypatch.setattr(planning, "mark_in_review", _noop_mark)
-    lead = "lead-await-shutdown"
+
+    async def _not_wanted(**_kw) -> bool:
+        return False
+
+    monkeypatch.setattr(orch.coordination, "actor_still_wanted", _not_wanted)
+
+    lead = "lead-await-stopped"
     mailbox_registry.register(lead)
     try:
-        mailbox_registry.put(lead, InboxMsg(kind="shutdown"))
         res = await orch.coordination.await_member_results(
             lead_session_id=lead,
             project_id="w1",
             task_id="t1",
             keys=["A"],
             mode="all",
-            timeout_s=2,
+            timeout_s=30,
             user_id=LOCAL_USER_ID,
         )
-        # The wait ended immediately with nothing collected...
+        # Ended promptly with nothing collected — the member never reported.
         assert res["collected"] == 0
-        # ...and the shutdown is still queued for the actor loop to act on.
-        assert mailbox_registry.has_pending(lead)
-        assert (await mailbox_registry.get(lead, timeout=0.1)).kind == "shutdown"
+        # And nothing was queued for the loop, which reads the same state.
+        assert not mailbox_registry.has_pending(lead)
     finally:
         mailbox_registry.unregister(lead)
 

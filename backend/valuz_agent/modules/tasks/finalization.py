@@ -43,7 +43,6 @@ from valuz_agent.modules.tasks.events import (
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
 from valuz_agent.modules.tasks.manifest import collect_manifest_safe, last_assistant_text
 from valuz_agent.modules.tasks import mailbox_store
-from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 from valuz_agent.modules.tasks.models import TaskRow
 from valuz_agent.modules.tasks.plan import PlanError, TaskPlan
 
@@ -743,11 +742,10 @@ class FinalizationService:
                 exc_info=True,
             )
 
-        # v2: tell any still-running members to finalize, and break the lead's
-        # own actor loop after this turn (no-op for sync/v1 — no live mailboxes).
-
-        self._coordination.broadcast_shutdown(task_id)
-        mailbox_registry.put(lead_session_id, InboxMsg(kind="shutdown"))
+        # The task is terminal now, which is what every member and the lead's
+        # own loop read to know they are done. This only drops the lead's
+        # in-process tracking of them.
+        self._coordination.stop_tracking_members(task_id)
 
         # Task-worktree teardown (design §5): drop the task's worktree iff
         # it holds no work worth keeping (fail-closed inside). Work left

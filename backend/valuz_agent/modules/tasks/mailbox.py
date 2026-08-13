@@ -36,9 +36,14 @@ logger = logging.getLogger(__name__)
 #                    lead — the goal is baked into the session at spawn)
 #   STRUCTURED REPORT (rendered first): member_done — manifest, via
 #     ActorRunner._format_member_done
-#   CONTROL SIGNAL (no prompt): shutdown — finalize after the current turn
 # Process-local only (in-memory asyncio.Queue per session; never persisted).
-InboxKind = Literal["text", "member_done", "shutdown", "revise_goal"]
+# NO CONTROL SIGNAL. Stopping an actor is a state transition it reads (a
+# terminal task, a parked run row), not a message it is sent: this box is
+# shared across a session's incarnations and read by two different consumers,
+# so a queued stop could be swallowed by the wrong reader or delivered to the
+# loop that replaced its target. Both happened. See
+# docs/design/task-delivery-and-control.md §1.
+InboxKind = Literal["text", "member_done", "revise_goal"]
 
 
 @dataclass(slots=True)

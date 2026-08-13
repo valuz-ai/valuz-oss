@@ -2760,7 +2760,7 @@ def test_finalize_actor_skips_parked_member_run(db_factory, tmp_path, monkeypatc
         db.close()
 
 
-def test_stop_member_wakes_idle_member_with_shutdown(db_factory, tmp_path) -> None:
+def test_stop_member_parks_the_run_the_member_reads(db_factory, tmp_path) -> None:
     """The kernel interrupt only reaches a member MID-TURN. An idle member
     (parked on its mailbox between turns) must still exit immediately on
     stop_member — without the shutdown message it sat out its full 10-minute
@@ -2778,9 +2778,14 @@ def test_stop_member_wakes_idle_member_with_shutdown(db_factory, tmp_path) -> No
     mailbox_registry.register("sB")  # the idle member's live inbox
     try:
         assert asyncio.run(orch.recovery.stop_member("sB", user_id=OWNER)) is True
-        assert mailbox_registry.has_pending("sB"), "idle member must be told to shut down"
-        msg = mailbox_registry._boxes["sB"].get_nowait()
-        assert msg.kind == "shutdown"
+        # The member learns it was cancelled from its OWN run row, which this
+        # call parks. A queued message could only have reached it while its
+        # loop happened to share this process — which is why the stop that
+        # ends a member was the one least able to cross one.
+        assert not mailbox_registry.has_pending("sB"), "a stop is not a message"
+        assert _runs(db_factory)["sB"] == "rejected", (
+            "and the fact it reads must be written before we return"
+        )
     finally:
         mailbox_registry.unregister("lead-s")
         mailbox_registry.unregister("sB")

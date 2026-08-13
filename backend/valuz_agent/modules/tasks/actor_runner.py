@@ -40,6 +40,15 @@ from valuz_agent.modules.sessions.turn_driver import _resolve_turn_status
 logger = logging.getLogger(__name__)
 
 
+class _StoppedExternally(Exception):  # noqa: N818
+    """This actor was stopped by someone else; the terminal state is theirs.
+
+    Raised out of the wait when the durable state says the actor is no longer
+    running — a paused task, a finished one, a cancelled member. It maps onto
+    the loop's existing externally-managed exit, which skips finalize.
+    """
+
+
 # ``member_done`` payload statuses that carry NO reviewable deliverable — the
 # ---------------------------------------------------------------------------
 # v2 actor-loop tuning (M10 附录 B)
@@ -407,6 +416,10 @@ class ActorRunner:
                             coordinator=coordinator,
                             fenced=fenced,
                         )
+                    except _StoppedExternally:
+                        exited_on_shutdown = True
+                        stop = True
+                        break
                     except KeyError:
                         # Our box was dropped externally — ownership moved (a
                         # newer loop claimed the session). Exit as an
@@ -446,10 +459,6 @@ class ActorRunner:
                         stop = True
                         break
 
-                    if msg.kind == "shutdown":
-                        exited_on_shutdown = True
-                        stop = True
-                        break
                     if (
                         msg.kind == "member_done"
                         and role == "lead"
@@ -675,6 +684,25 @@ class ActorRunner:
                 )
             except TimeoutError:
                 pass
+            if not await coordinator.actor_still_wanted(
+                session_id=session_id,
+                role=role,
+                task_id=task_id,
+                project_id=project_id,
+                user_id=user_id,
+            ):
+                # Someone stopped this — the task was paused or finished, or
+                # this member was cancelled. The terminal state is written
+                # already and belongs to whoever wrote it, so leave without
+                # finalizing. This used to arrive as a ``shutdown`` message;
+                # it is a fact to read.
+                logger.info(
+                    "actor loop %s (%s): no longer wanted on task %s — standing down",
+                    session_id,
+                    role,
+                    task_id,
+                )
+                raise _StoppedExternally
             if fenced.is_set():
                 # Our right to run this session was revoked — someone else
                 # holds the lease now. Leave the way a shutdown used to make us
