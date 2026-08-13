@@ -78,7 +78,7 @@ def test_resolve_turn_status_real_errors_still_terminate() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_interrupted_member_breaks_without_per_turn_notify() -> None:
+async def test_interrupted_member_breaks_without_per_turn_notify(db_factory) -> None:
     orch = TaskOrchestrator()
     notified: list[str] = []
     finalized: list[str] = []

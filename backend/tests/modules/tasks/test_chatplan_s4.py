@@ -28,16 +28,10 @@ LOCAL_USER_ID = "local-test-owner"
 
 @pytest.fixture(autouse=True)
 def _reset_mailbox():
-    """Each test starts with an empty mailbox registry.
-
-    Claims too — a leaked claim from a previous test makes a bare ``register``
-    read as a live, owned session.
-    """
+    """Each test starts with an empty mailbox registry."""
     mailbox_registry._boxes.clear()
-    mailbox_registry._claims.clear()
     yield
     mailbox_registry._boxes.clear()
-    mailbox_registry._claims.clear()
 
 
 def _drain(session_id: str = "lead-sess-1"):
@@ -108,7 +102,7 @@ def _seed_task(
 
 def test_inject_into_active_task_with_registered_lead_delivers(db_factory, tmp_path):
     _seed_task(db_factory, tmp_path, status="active")
-    mailbox_registry.claim("lead-sess-1")
+    mailbox_registry.register("lead-sess-1")
     result = asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
@@ -127,7 +121,7 @@ def test_inject_appends_user_inject_event_on_delivery(db_factory, tmp_path):
     _seed_task(db_factory, tmp_path, status="active")
     # CLAIM, not register: a live lead is one whose actor loop owns the box
     # (spawn_actor claims). A merely-registered box has no reader.
-    mailbox_registry.claim("lead-sess-1")
+    mailbox_registry.register("lead-sess-1")
     asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
@@ -179,8 +173,6 @@ def test_an_inject_reaches_a_lead_driven_by_another_process(db_factory, tmp_path
     2-replica x 2-worker deployment. The instruction must arrive regardless.
     """
     _seed_task(db_factory, tmp_path, status="active")
-    assert not mailbox_registry.is_owned("lead-sess-1"), "precondition: lead is elsewhere"
-
     result = asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
@@ -309,7 +301,7 @@ def test_inject_into_completed_task_rejects(db_factory, tmp_path):
     _seed_task(db_factory, tmp_path, status="completed")
     # CLAIM, not register: a live lead is one whose actor loop owns the box
     # (spawn_actor claims). A merely-registered box has no reader.
-    mailbox_registry.claim("lead-sess-1")
+    mailbox_registry.register("lead-sess-1")
     result = asyncio.run(
         messaging.inject_into_task(
             task_id="t1",

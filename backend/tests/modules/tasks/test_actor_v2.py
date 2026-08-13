@@ -154,11 +154,14 @@ async def test_lead_loop_runs_turns_until_shutdown(db_factory) -> None:
     # Turn 1 used the brief; turn 2 used the follow-up; shutdown ended the loop.
     assert prompts == ["initial brief", "follow-up"]
     assert finalized == [("lead-1", "idle")]
-    # Inbox cleaned up.
-    assert mailbox_registry.is_registered("lead-1") is False
+    # The box outlives the loop by design: nothing drops one on the way out
+    # any more. That race — a stale loop's teardown popping the box a resumed
+    # loop was reading — is why the claim token existed, and it went away with
+    # ownership. What matters is that the loop left nothing queued behind it.
+    assert not mailbox_registry.has_pending("lead-1")
 
 
-async def test_member_loop_notifies_lead_and_self_reaps_on_ttl() -> None:
+async def test_member_loop_notifies_lead_and_self_reaps_on_ttl(db_factory) -> None:
     """Member loop notifies its lead after each turn, then reaps on idle TTL."""
     orch = TaskOrchestrator()
     notified: list[tuple[str, str]] = []

@@ -95,35 +95,41 @@ def test_a_box_with_no_reader_is_not_a_live_session() -> None:
     This is the whole bug in one assertion: three subsystems asked
     ``is_registered`` whether the lead loop was alive, and a box pre-seeded for
     a loop that never started answered yes for the life of the process.
+
+    The registry no longer claims to know. Liveness moved out of it entirely —
+    to the execution lease, which is shared state and can therefore answer for
+    every process rather than for this one. All that survives here is the
+    honest, narrow statement ``is_registered`` was always making: a queue
+    exists, and nothing more.
     """
     reg = MailboxRegistry()
     reg.register("s1")
 
     assert reg.is_registered("s1") is True
-    assert reg.is_owned("s1") is False, (
-        "a pre-seeded box has no reader — reporting it as live blinds the "
-        "watchdog that exists to catch exactly this task"
+    assert not hasattr(reg, "is_owned"), (
+        "the registry must not offer a liveness oracle again — a box pre-seeded "
+        "for a loop that never started answered yes for the life of the process, "
+        "and that blinded the watchdog that exists to catch exactly this task"
     )
 
-    token = reg.claim("s1")
-    assert reg.is_owned("s1") is True
-    reg.release("s1", token)
-    assert reg.is_owned("s1") is False
 
+def test_a_box_is_never_reclaimed_and_that_is_fine() -> None:
+    """Nothing drops a box — which is fine, as long as nobody calls it alive.
 
-def test_an_unclaimed_box_stays_unowned_forever() -> None:
-    """Nothing reclaims it — which is fine, as long as nobody calls it alive.
-
-    ``release`` cannot drop a box that was never claimed (the token guard sees
-    no claim and returns), and ``unregister`` has no production caller. The fix
-    is not to reclaim the box but to stop reading its existence as liveness.
+    ``unregister`` has no production caller, so a box outlives every loop that
+    ever read it. That was only a problem while its existence was being read as
+    liveness; the fix was never to reclaim the box but to stop asking it a
+    question it cannot answer.
     """
     reg = MailboxRegistry()
     reg.register("s1")
-    reg.release("s1", 12345)  # a stale token from some other loop
 
     assert reg.is_registered("s1") is True, "still unreclaimed — by design"
-    assert reg.is_owned("s1") is False, "and still, correctly, not alive"
+    assert not hasattr(reg, "release"), (
+        "nothing may drop a box on the way out: that race — a stale loop's "
+        "teardown popping the box a resumed loop was reading — is why the "
+        "claim token existed, and why ownership left this class"
+    )
 
 
 # ---------------------------------------------------------------------------

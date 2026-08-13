@@ -25,6 +25,7 @@ from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.integrations.sandbox_credential_hmac import (
     PerOwnerHmacSandboxCredentialVerifier,
 )
+from valuz_agent.ports.a2ui_components import A2UIComponentRegistry
 from valuz_agent.ports.agent_lifecycle import AgentLifecycleHook, NoopAgentLifecycleHook
 from valuz_agent.ports.automation_runtime import (
     AutomationRuntimePort,
@@ -54,7 +55,6 @@ from valuz_agent.ports.docs_dispatch import (
 from valuz_agent.ports.docs_runtime import DocsRuntimeFactory, default_docs_runtime
 from valuz_agent.ports.document_research import DocumentResearchProviderPort
 from valuz_agent.ports.file_address import FileAddressResolverPort, LocalFileAddressResolver
-from valuz_agent.ports.a2ui_components import A2UIComponentRegistry
 from valuz_agent.ports.instructions import (
     GlobalInstructionsPort,
     OSSGlobalInstructionsProvider,

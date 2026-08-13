@@ -33,6 +33,7 @@ from sqlalchemy import select
 
 from valuz_agent.modules.tasks import messaging, planning
 from valuz_agent.modules.tasks.actor_runner import ActorRunner
+from valuz_agent.modules.tasks.lease import load_actor_lease_states
 from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
@@ -310,9 +311,17 @@ def test_dispatch_report_review_finish_through_the_real_loop(loop_env) -> None:
     runs = _runs(loop_env.db_factory)
     assert runs["mem-1"] == "completed"
     assert runs[LEAD] == "completed"
-    # Both loops released their mailboxes on exit.
-    assert not mailbox_registry.is_registered("mem-1")
-    assert not mailbox_registry.is_registered(LEAD)
+    # Boxes outlive their loops now — nothing drops one on the way out, which
+    # is what made a stale teardown able to pop the box a resumed loop was
+    # reading. What must be true is that both loops left cleanly: nothing
+    # queued, and neither still holds the right to run its session.
+    assert not mailbox_registry.has_pending("mem-1")
+    assert not mailbox_registry.has_pending(LEAD)
+    # Only the LEAD's lease is asserted: this test awaits the lead loop, and
+    # the member's teardown finishes on its own schedule — asserting its
+    # release here would be a race, not a guarantee.
+    held = asyncio.run(load_actor_lease_states([LEAD]))
+    assert held[LEAD].state == "released", "the lead must hand its session back"
 
 
 def test_lead_with_nothing_outstanding_exits_without_waiting(loop_env) -> None:
@@ -388,15 +397,19 @@ def test_shutdown_broadcast_ends_the_member_loop_and_leaves_its_run_parked(
         assert await orch.recovery.stop_task(TASK, PROJECT, user_id=OWNER) is True
 
         # The parked member must exit promptly on the broadcast — no TTL wait.
+        # "Exited" is the lease being handed back: the mailbox is no longer an
+        # ownership record, so its box outlives the loop that read it.
         for _ in range(100):
-            if not mailbox_registry.is_registered("mem-1"):
+            states = await load_actor_lease_states(["mem-1"])
+            if "mem-1" not in states or states["mem-1"].state == "released":
                 break
             await asyncio.sleep(0.02)
 
     asyncio.run(_run())
 
     assert _task_status(loop_env.db_factory) == "paused"
-    assert not mailbox_registry.is_registered("mem-1"), (
+    final = asyncio.run(load_actor_lease_states(["mem-1"]))
+    assert "mem-1" not in final or final["mem-1"].state == "released", (
         "the shutdown broadcast must wake a member parked between turns"
     )
     assert _runs(loop_env.db_factory)["mem-1"] == "paused", (

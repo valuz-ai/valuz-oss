@@ -18,14 +18,15 @@ from sqlalchemy import select
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.infra import execution_lease as lease_mod
 from valuz_agent.modules.tasks.lease import (
-    acquire_task_lease,
-    is_driven_elsewhere,
-    load_task_lease_states,
+    acquire_actor_lease,
+    is_running_elsewhere,
+    load_actor_lease_states,
 )
 from valuz_agent.infra.execution_lease import ExecutionLeaseRow
 
 OWNER = "local-test-owner"
 TASK = "t1"
+LEAD = "lead-s"
 
 
 @pytest.fixture(autouse=True)
@@ -52,15 +53,15 @@ def as_process(monkeypatch):
     return _run
 
 
-def _acquire(session_id: str = "lead-s"):
-    return lambda: acquire_task_lease(user_id=OWNER, task_id=TASK, lead_session_id=session_id)
+def _acquire(session_id: str = LEAD):
+    return lambda: acquire_actor_lease(session_id=session_id, task_id=TASK)
 
 
 def _row(db_factory) -> ExecutionLeaseRow:
     db = db_factory()
     try:
         return (
-            db.execute(select(ExecutionLeaseRow).filter_by(scope="task", key=TASK)).scalars().one()
+            db.execute(select(ExecutionLeaseRow).filter_by(scope="actor", key=LEAD)).scalars().one()
         )
     finally:
         db.close()
@@ -91,7 +92,7 @@ def test_expired_lease_is_taken_over_and_fenced(db_factory, as_process) -> None:
     try:
         db.execute(
             ExecutionLeaseRow.__table__.update()
-            .where(ExecutionLeaseRow.key == TASK)
+            .where(ExecutionLeaseRow.key == LEAD)
             .values(lease_expires_at=now_ms() - 1)
         )
         db.commit()
@@ -150,7 +151,7 @@ def test_renew_extends_the_expiry(db_factory, as_process) -> None:
     try:
         db.execute(
             ExecutionLeaseRow.__table__.update()
-            .where(ExecutionLeaseRow.key == TASK)
+            .where(ExecutionLeaseRow.key == LEAD)
             .values(lease_expires_at=before - 30_000)
         )
         db.commit()
@@ -160,18 +161,18 @@ def test_renew_extends_the_expiry(db_factory, as_process) -> None:
     assert _row(db_factory).lease_expires_at >= before
 
 
-def test_is_driven_elsewhere_ignores_our_own_lease(db_factory, as_process) -> None:
+def test_is_running_elsewhere_ignores_our_own_lease(db_factory, as_process) -> None:
     assert as_process("proc-a", _acquire()) is not None
     # Our own live lease is not "elsewhere" — otherwise boot recovery would
     # refuse to re-drive the tasks this very process is responsible for.
-    assert as_process("proc-a", lambda: is_driven_elsewhere(TASK)) is False
-    assert as_process("proc-b", lambda: is_driven_elsewhere(TASK)) is True
+    assert as_process("proc-a", lambda: is_running_elsewhere(LEAD)) is False
+    assert as_process("proc-b", lambda: is_running_elsewhere(LEAD)) is True
 
 
 def test_absent_lease_is_unknown_not_dead(db_factory, as_process) -> None:
-    states = as_process("proc-a", lambda: load_task_lease_states(["nope"]))
+    states = as_process("proc-a", lambda: load_actor_lease_states(["nope"]))
     assert states == {}
-    assert as_process("proc-a", lambda: is_driven_elsewhere("nope")) is False
+    assert as_process("proc-a", lambda: is_running_elsewhere("nope")) is False
 
 
 # ---------------------------------------------------------------------------

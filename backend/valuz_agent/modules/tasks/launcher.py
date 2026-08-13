@@ -26,7 +26,7 @@ from typing import Any, Literal
 from valuz_agent.adapters import kernel_client
 from valuz_agent.modules.sessions import project_index
 from valuz_agent.modules.tasks.actor_runner import ActorRunner
-from valuz_agent.modules.tasks.lease import TaskLease
+from valuz_agent.modules.tasks.lease import ActorLease
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
 from valuz_agent.modules.tasks.mailbox import mailbox_registry
 from valuz_agent.ports.sandbox_allocator import SandboxScope
@@ -67,7 +67,7 @@ def spawn_actor(
     registry: LiveMemberRegistry | None = None,
     dispatch_epoch: float | None = None,
     lead_session_id: str | None = None,
-    lease: TaskLease | None = None,
+    lease: ActorLease | None = None,
 ) -> None:
     """Register and start one actor loop — ATOMICALLY (plain ``def``, on purpose).
 
@@ -94,12 +94,13 @@ def spawn_actor(
             registry.add_member(task_id, session_id, dispatch_epoch=dispatch_epoch)
         else:
             registry.add_member(task_id, session_id)
-    # Eager CLAIM: the box exists before the loop's first tick (a shutdown
-    # racing ahead is queued, not dropped) AND any stale prior loop's pending
-    # release is invalidated NOW — not at the new loop's first tick — so it
-    # cannot pop the box recovery is about to seed with member_done results.
-    # (run_actor_loop claims again for its own release token.)
-    mailbox_registry.claim(session_id)
+    # The box must exist before the loop's first tick so a message racing
+    # ahead is queued rather than dropped. It used to be CLAIMED here as well,
+    # to invalidate a stale prior loop's pending release before it could pop
+    # the box recovery was about to seed. Ownership is the execution lease's
+    # job now, and nothing releases a box on the way out, so registering is
+    # all that is left to do.
+    mailbox_registry.register(session_id)
     loop_task = asyncio.create_task(
         actor.run_actor_loop(
             session_id=session_id,

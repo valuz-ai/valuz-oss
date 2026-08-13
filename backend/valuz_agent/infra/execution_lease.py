@@ -28,7 +28,7 @@ What a lease is
 ---------------
 One row per ``(scope, key)`` naming its current holder, carrying a TTL the
 holder renews. ``fence_token`` increases on EVERY acquisition, so a holder that
-stalled long enough to lose its lease finds out (:meth:`TaskLease.renew`
+stalled long enough to lose its lease finds out (:meth:`ActorLease.renew`
 returns False) and stands down instead of fighting the process that took over.
 
 Generic on purpose. Tasks are the first consumer (``scope="task"``); the two
