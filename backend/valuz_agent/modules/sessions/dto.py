@@ -83,6 +83,12 @@ class SessionListItem:
     # Worktree the session runs in (creation-time snapshot). Surfaced on the
     # list so the sidebar can render a worktree badge without a second fetch.
     worktree: WorktreeRef | None = None
+    # Fork provenance (docs/design/session-fork.md): the source session this
+    # one was forked from — kernel-stamped ``metadata["forked_from"]``, the
+    # only reliable lineage source (runtime-native lineage is not queryable).
+    # ``None`` for sessions that are not forks. The source may since have
+    # been deleted; the id is a navigation hint, not a guarantee.
+    forked_from_session_id: str | None = None
 
 
 @dataclass

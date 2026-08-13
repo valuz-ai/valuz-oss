@@ -474,7 +474,13 @@
     "worktreeBadgeGone": "Worktree removed — it will be recreated automatically on your next message.",
     "planLabel": "Implementation plan",
     "enterPlanMode": "Entered plan mode",
-    "execSelectProject": "Select a project (optional)"
+    "execSelectProject": "Select a project (optional)",
+    "fork": "Fork session",
+    "forkFromHere": "Fork from here",
+    "forked": "Forked into a new session",
+    "forkFailed": "Fork failed, please retry",
+    "forkConflict": "Cannot fork here (no fork anchor on this message, or the session is running)",
+    "forkedFrom": "Forked from"
   },
   "cron": {
     "actionColumn": "Actions",
@@ -1863,7 +1869,8 @@
       "goBack": "Go back",
       "goForward": "Go forward",
       "toggleSidebar": "Toggle sidebar"
-    }
+    },
+    "fork": "Fork session"
   },
   "skill": {
     "addBtn": "Add",

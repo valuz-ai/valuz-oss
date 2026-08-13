@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -29,6 +30,7 @@ from app.schemas import (
     CreateSessionRequest,
     EventPayload,
     FinalizeSessionRequest,
+    ForkSessionRequest,
     ModelSettingsSchema,
     SubmitActionRequest,
     UpdateSessionRequest,
@@ -82,9 +84,13 @@ from valuz_agent.modules.sessions.dto import (
 )
 from valuz_agent.modules.sessions.errors import (
     BudgetExceeded,
+    ForkRejected,
+    ForkRuntimeFailed,
+    ForkUnsupported,
     QueuedInputNotFound,
     QueueFull,
     SessionConflict,
+    SessionNotFound,
     SessionNotRunnable,
 )
 from valuz_agent.modules.sessions.events import (
@@ -1394,6 +1400,114 @@ class SessionService:
         )
 
         return _session_to_detail(created)
+
+    async def fork_session(
+        self,
+        session_id: str,
+        message_id: str | None = None,
+        user_id: str | None = None,
+    ) -> SessionDetail:
+        """Fork *session_id* into a new independent session.
+
+        Host responsibilities only (docs/design/session-fork.md §6.5):
+        source gating (D3), composing the COMPLETE ``valuz`` metadata for
+        the new session — the kernel inherits nothing implicitly (D2) —
+        codex-app style name numbering (D1), project-index registration
+        and ``SESSION_CREATED``. The kernel route owns the runtime-native
+        fork and the history copy; with ``message_id`` the cut is
+        inclusive at that message, without it the whole session forks at
+        its tail.
+        """
+        if user_id is None:
+            raise ValueError("user_id is required")
+        session = await data_reader().get_session(user_id, session_id)
+        if session is None:
+            raise _kernel_session_not_found(session_id)
+        meta = dict(_valuz_meta(session))
+        # D3 gate: only user-initiated chats fork. Task lead/member and
+        # automation runs are orchestration-owned; bare completions are
+        # ephemeral one-shots with no native thread worth branching.
+        # ("bare_completion" is the kernel-level metadata marker — the
+        # host stamps it at create time, see BARE_COMPLETION_METADATA_KEY.)
+        origin = str(meta.get("origin") or "user")
+        if origin != "user" or (session.metadata or {}).get("bare_completion"):
+            raise ForkUnsupported()
+
+        source_name = str(meta.get("name") or "").strip()
+        if source_name:
+            meta["name"] = await self._numbered_fork_name(
+                source_name,
+                project_id=str(meta.get("project_id") or "") or None,
+                user_id=user_id,
+            )
+        if message_id is not None:
+            # Recents preview should reflect the fork's actual tail — the
+            # anchor turn's user text, not the source's latest.
+            anchor = await kernel_client.get_message(user_id, message_id)
+            if anchor is not None:
+                meta["last_user_message_text"] = anchor.user_message.text
+
+        try:
+            forked = await kernel_client.fork_session(
+                user_id,
+                session_id,
+                ForkSessionRequest(message_id=message_id, metadata={"valuz": meta}),
+            )
+        except kernel_client.KernelSessionNotFoundError as exc:
+            # Session vs anchor-message not-found — the kernel detail says
+            # which; pass it through.
+            raise SessionNotFound(exc.detail) from exc
+        except kernel_client.KernelConflictError as exc:
+            raise ForkRejected(exc.detail) from exc
+        except kernel_client.KernelClientError as exc:
+            if exc.status == 422:
+                raise ForkUnsupported(exc.detail) from exc
+            raise ForkRuntimeFailed(exc.detail) from exc
+
+        project_id = str(meta.get("project_id") or "")
+        if project_id:
+            await project_index.record(
+                project_id,
+                forked.id,
+                kind="chat",
+                origin="user",
+                user_id=user_id,
+            )
+        self._bus.publish(
+            SESSION_CREATED,
+            session_id=forked.id,
+            project_id=project_id,
+        )
+        return _session_to_detail(forked)
+
+    async def _numbered_fork_name(
+        self,
+        source_name: str,
+        *,
+        project_id: str | None,
+        user_id: str | None,
+    ) -> str:
+        """Codex-app style fork naming (D1): ``名字`` → ``名字 (2)`` → ``名字 (3)``.
+
+        The base strips a trailing `` (N)`` so forking a fork keeps one
+        family of numbers. Dedup scope is the source's project session
+        list; on any listing hiccup fall back to `` (2)`` — a duplicate
+        display name is cosmetic, not a correctness problem.
+        """
+        base = re.sub(r"\s\(\d+\)$", "", source_name).strip() or source_name
+        taken: set[int] = set()
+        try:
+            items = await self.list_sessions(project_id=project_id, user_id=user_id)
+        except Exception:  # noqa: BLE001 — naming must never block a fork
+            items = []
+        pattern = re.compile(rf"^{re.escape(base)}(?:\s\((\d+)\))?$")
+        for item in items:
+            if not item.name:
+                continue
+            matched = pattern.match(item.name.strip())
+            if matched:
+                taken.add(int(matched.group(1)) if matched.group(1) else 1)
+        return f"{base} ({max(taken) + 1 if taken else 2})"
 
     async def send_message(
         self,

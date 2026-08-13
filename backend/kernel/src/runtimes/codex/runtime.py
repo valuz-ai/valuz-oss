@@ -53,6 +53,7 @@ from openai_codex.generated.v2_all import (
     AskForApprovalValue,
     SandboxMode,
     TextUserInput,
+    ThreadForkParams,
     ThreadResumeParams,
     ThreadStartParams,
     TurnCompletedNotification,
@@ -178,6 +179,13 @@ class CodexRuntime:
         self._prepare_lock = asyncio.Lock()
         self._background_prepare_tasks: set[asyncio.Task[Any]] = set()
         self._cancelled: bool = False
+        # Native fork anchor for the codex turn most recently started:
+        # ``{"provider": "codex", "thread_id": ..., "turn_id": ...}``. Set
+        # from the ``turn/start`` response, read-and-cleared by the
+        # orchestrator (``consume_turn_anchor``) into
+        # ``Message.metadata["runtime_native"]`` — the message-granularity
+        # fork seam (``thread/fork(lastTurnId)``, docs/design/session-fork.md).
+        self._turn_anchor: dict[str, Any] | None = None
         # Tracks whether this runtime registered a toolkit endpoint so
         # ``close()`` can revoke it without needing the session reference.
         self._registered_session_id: str | None = None
@@ -266,6 +274,16 @@ class CodexRuntime:
     def update_sink(self, sink: EventSink) -> None:
         self.event_sink = sink
 
+    def consume_turn_anchor(self) -> dict[str, Any] | None:
+        """Return and clear the native anchor captured by the last ``run()``.
+
+        Read-and-clear so a turn that never reaches ``turn/start`` (resume
+        failure, egress error) cannot inherit a stale anchor from the
+        previous message.
+        """
+        anchor, self._turn_anchor = self._turn_anchor, None
+        return anchor
+
     async def prepare(self, session: Session) -> None:
         """Warm the Codex app-server and thread without dispatching a turn."""
         task = asyncio.current_task()
@@ -301,6 +319,50 @@ class CodexRuntime:
             await self._ensure_thread(session)
             if not was_ready:
                 await self._emit_turn_phase("runtime_ready")
+
+    async def fork_session(
+        self,
+        session: Session,
+        *,
+        source_native_session_id: str,
+        anchor: str | None = None,
+    ) -> str:
+        """Branch a source codex thread into this session's native thread.
+
+        The third thread-birth verb beside start/resume (codex lifecycle:
+        ``thread/start | thread/resume | thread/fork``). Reuses the
+        ``_prepare`` front half (skills + app-server spawn), then calls
+        ``thread/fork`` directly — NOT ``_ensure_thread``, which would
+        start/resume. ``anchor`` is a turn id; ``lastTurnId`` is inclusive
+        and codex 0.144.4 rejects an in-progress or unknown turn with
+        ``-32600`` (NEVER send ``beforeTurnId`` — this binary silently
+        ignores it and forks the whole thread). The fork reads the source
+        rollout from disk, so the source thread need not be loaded
+        anywhere and is never mutated. Leaves ``self._thread`` on the new
+        thread — the runtime is warm and the first Send resumes it.
+        """
+        async with self._prepare_lock:
+            self._loop = asyncio.get_running_loop()
+            self._materialize_skills(session)
+            await self._ensure_codex(session)
+        assert self._codex is not None
+        common = self._build_thread_kwargs(session)
+        t0 = time.monotonic()
+        forked = await self._codex._client.thread_fork(
+            source_native_session_id,
+            ThreadForkParams(
+                thread_id=source_native_session_id,
+                last_turn_id=anchor,
+                **common,
+            ),
+        )
+        self._thread = AsyncThread(self._codex, forked.thread.id)
+        # Same internal backfill as thread_start — no API write channel.
+        session.runtime_session_id = self._thread.id
+        await self._emit_turn_phase(
+            "thread_init", mode="fork", duration_ms=int((time.monotonic() - t0) * 1000)
+        )
+        return self._thread.id
 
     async def run(self, session: Session, user_message: UserMessage) -> None:
         from datetime import datetime
@@ -410,6 +472,16 @@ class CodexRuntime:
                 TurnStartParams(thread_id=self._thread.id, input=[turn_input], **turn_kwargs),
             )
             self._active_turn = AsyncTurnHandle(self._codex, self._thread.id, turn_resp.turn.id)
+            # Overwrite (never reset at run() entry): if a later turn fails
+            # before ``turn/start`` the previous consume already cleared the
+            # anchor, and a coverage continuation legitimately replaces the
+            # primary turn's anchor with its own — the Message maps to the
+            # LAST codex turn it drove.
+            self._turn_anchor = {
+                "provider": "codex",
+                "thread_id": self._thread.id,
+                "turn_id": turn_resp.turn.id,
+            }
             # Observability: the gap from this row to the first thinking/text
             # delta = codex's pre-sampling pipeline + model TTFT.
             await self._emit_turn_phase(

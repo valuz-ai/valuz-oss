@@ -1,4 +1,10 @@
-from valuz_agent.infra.errors import BadRequestError, ConflictError, NotFoundError
+from valuz_agent.infra.errors import (
+    BadRequestError,
+    ConflictError,
+    NotFoundError,
+    UnprocessableEntityError,
+    ValuzError,
+)
 
 
 class SessionNotFound(NotFoundError):
@@ -34,3 +40,19 @@ class QueueFull(ConflictError):
 class QueuedInputNotFound(NotFoundError):
     error_code = 404_402
     message = "Queued input not found"
+
+
+class ForkUnsupported(UnprocessableEntityError):
+    error_code = 422_401
+    message = "Fork is not supported for this session"
+
+
+class ForkRejected(ConflictError):
+    error_code = 409_403
+    message = "Fork request rejected"
+
+
+class ForkRuntimeFailed(ValuzError):
+    status_code = 502
+    error_code = 502_401
+    message = "Runtime-native fork failed"

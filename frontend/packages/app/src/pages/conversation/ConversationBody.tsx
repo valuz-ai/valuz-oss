@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Settings } from "lucide-react";
 import { useTranslation } from "@valuz/core";
 import type { ConversationTurn } from "@valuz/shared";
-import { Button, ConversationTurnList, EmptyState } from "@valuz/ui";
+import { Button, ConversationTurnList, EmptyState, ForkIcon } from "@valuz/ui";
 import type { usePlatform } from "@valuz/app/platform";
 import type { useCitationDocumentPreview } from "../../components/CitationDocumentPreviewProvider";
 import { shouldShowNoModelEmptyState } from "../conversation-loading";
@@ -63,6 +63,14 @@ type ConversationBodyProps = {
     suggestions?: string[];
     hideMascot?: boolean;
   };
+  /** Message-granularity fork (docs/design/session-fork.md): fork the
+   *  session through the hovered turn, inclusive. Rendered only when the
+   *  session's runtime has a wired native fork (codex today); a stale
+   *  turn without a stored anchor is caught server-side (409 → toast).
+   *  Absent (embedded hosts) → no fork affordance. */
+  canForkFromTurn?: boolean;
+  forkInFlight?: boolean;
+  onForkFromTurn?: (messageId: string) => void;
 };
 
 /**
@@ -107,6 +115,9 @@ export function ConversationBody({
   hasPendingProjectSend,
   startingRuntime,
   emptyStateOverride,
+  canForkFromTurn,
+  forkInFlight,
+  onForkFromTurn,
 }: ConversationBodyProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -181,22 +192,44 @@ export function ConversationBody({
               // passed it, so the slot was unreachable. Overlays register
               // under ``conversation.turn.actions``.
               renderTurnActions={(turn) => (
-                <SlotRenderer
-                  name="conversation.turn.actions"
-                  context={{
-                    turn,
-                    // An action here may switch the page into a mode whose
-                    // per-turn control sits at the TOP of this turn (share
-                    // selection's checkbox lives beside the user message).
-                    // Clicked from the reply footer that control is off-screen
-                    // above, so the host lends the overlay the same scroll it
-                    // uses for a new turn.
-                    scrollToTurn: () =>
-                      scrollToTurnIndex(
-                        effectiveTurns.findIndex((x) => x.id === turn.id),
-                      ),
-                  }}
-                />
+                <>
+                  {canForkFromTurn &&
+                  onForkFromTurn &&
+                  !turn.cancelled &&
+                  !turn.interrupted &&
+                  turn.forkAnchor !== false &&
+                  turn.id.startsWith("turn-") ? (
+                    <button
+                      type="button"
+                      disabled={forkInFlight}
+                      onClick={() =>
+                        onForkFromTurn(turn.id.slice("turn-".length))
+                      }
+                      title={t(
+                        "conversation.forkFromHere" as Parameters<typeof t>[0],
+                      )}
+                      className="flex h-7 w-7 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted disabled:cursor-default disabled:opacity-60"
+                    >
+                      <ForkIcon className="h-3.5 w-3.5" />
+                    </button>
+                  ) : null}
+                  <SlotRenderer
+                    name="conversation.turn.actions"
+                    context={{
+                      turn,
+                      // An action here may switch the page into a mode whose
+                      // per-turn control sits at the TOP of this turn (share
+                      // selection's checkbox lives beside the user message).
+                      // Clicked from the reply footer that control is off-screen
+                      // above, so the host lends the overlay the same scroll it
+                      // uses for a new turn.
+                      scrollToTurn: () =>
+                        scrollToTurnIndex(
+                          effectiveTurns.findIndex((x) => x.id === turn.id),
+                        ),
+                    }}
+                  />
+                </>
               )}
               renderTurnLeading={(turn, role) => (
                 <SlotRenderer

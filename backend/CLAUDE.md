@@ -44,7 +44,9 @@ backend/
 Two SQLite files under `~/.valuz-oss/`: the host's `valuz.db` (the
 `valuz_*`-prefixed business tables + `alembic_version_host`) and the kernel's
 own `kernel.db` (the 3 unprefixed kernel tables `sessions` / `messages` /
-`events`, its langgraph checkpoint tables, and `alembic_version`). The split
+`events` and `alembic_version`; the DeepAgents runtime's langgraph checkpoints
+live in a sibling `deepagents_checkpoints.db` — or a file-based checkpoint tree
+in the cloud sandbox — never in `kernel.db`). The split
 (config `kernel_db_url`, default-on for SQLite) lets a sandboxed/remote kernel
 own its file and gives `make dev` + `make dev-sandbox` one shared history; an
 explicit `database_url` (Postgres) co-locates both instead. `kernel.db` is the

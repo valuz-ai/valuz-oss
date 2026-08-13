@@ -38,6 +38,7 @@ from app.schemas import (  # noqa: E402
     EventPayload,
     EventWindowData,
     FinalizeSessionRequest,
+    ForkSessionRequest,
     ImportMessageRequest,
     MessageData,
     SessionData,
@@ -405,6 +406,20 @@ class HttpKernelClient:
             owner=user_id,
         )
         return MessageData(**result["data"])
+
+    async def fork_session(
+        self,
+        user_id: str,
+        session_id: str,
+        req: ForkSessionRequest,
+    ) -> SessionData:
+        result = await self._request(
+            "POST",
+            f"{self._prefix}/v1/sessions/{session_id}/fork",
+            json_body=req.model_dump(mode="json"),
+            owner=user_id,
+        )
+        return SessionData(**result["data"])
 
     async def submit_action(
         self, user_id: str, session_id: str, req: SubmitActionRequest

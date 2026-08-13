@@ -50,6 +50,32 @@ class RuntimePort(Protocol):
         """
         ...
 
+    async def fork_session(
+        self,
+        session: Session,
+        *,
+        source_native_session_id: str,
+        anchor: str | None = None,
+    ) -> str:
+        """Create *session*'s native thread by branching a source thread.
+
+        The provider-native sibling of start/resume — codex's own lifecycle
+        lists ``thread/start | thread/resume | thread/fork`` as the three
+        ways a thread comes into being, and this port mirrors that
+        (docs/design/session-fork.md). ``source_native_session_id`` is the
+        native id of the thread to branch; ``anchor`` cuts inclusively at a
+        runtime-native point — codex ``turn_id``, Claude transcript
+        ``message_uuid``, deepagents ``checkpoint_id`` — and ``None``
+        branches at the tail.
+
+        Implementations MUST backfill ``session.runtime_session_id`` with
+        the new native id (also returned) and may leave the runtime warm on
+        that thread so the first Send resumes without a cold start. The
+        source thread is never mutated. Runtimes whose native fork is not
+        wired up yet raise ``NotImplementedError``.
+        """
+        ...
+
     async def run(self, session: Session, user_message: UserMessage) -> None:
         """Execute one conversation turn.
 
@@ -71,6 +97,22 @@ class RuntimePort(Protocol):
         ``no_op_tool`` is a runtime-private terminal signal available only
         during this invocation.  Calling it lets a model finish a no-gap pass
         without manufacturing an assistant confirmation message.
+        """
+        ...
+
+    def consume_turn_anchor(self) -> dict[str, Any] | None:
+        """Return and clear the native per-turn fork anchor from the last ``run()``.
+
+        The anchor identifies the runtime-native unit the just-finished
+        kernel Message maps to — codex ``turn_id``, Claude transcript
+        ``message_uuid``, deepagents ``checkpoint_id`` — always with a
+        ``"provider"`` discriminator and the native thread/session id it
+        belongs to. The orchestrator consumes it at message finalize and
+        persists it under ``Message.metadata["runtime_native"]``; that
+        stored value is the seam message-granularity fork resolves
+        against (docs/design/session-fork.md). Read-and-clear semantics:
+        a turn that captured nothing returns ``None`` rather than a
+        stale anchor from an earlier message.
         """
         ...
 

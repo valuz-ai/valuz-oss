@@ -34,6 +34,7 @@ EXPECTED_ROUTES: dict[str, tuple[str, str] | None] = {
     "list_messages": ("GET", "/kernel/v1/sessions/{session_id}/messages"),
     "get_message": ("GET", "/kernel/v1/messages/{message_id}"),
     "import_message": ("POST", "/kernel/v1/sessions/{session_id}/messages/import"),
+    "fork_session": ("POST", "/kernel/v1/sessions/{session_id}/fork"),
     "submit_action": ("POST", "/kernel/v1/sessions/{session_id}/actions"),
     "interrupt": ("POST", "/kernel/v1/sessions/{session_id}/interrupt"),
     "prepare_runtime": ("POST", "/kernel/v1/sessions/{session_id}/prepare"),

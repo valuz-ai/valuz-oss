@@ -14,6 +14,7 @@ export * from "./components/common/ErrorBoundary";
 export * from "./components/common/ActionCardGrid";
 export * from "./components/common/BackLink";
 export * from "./components/common/DeleteConfirmDialog";
+export * from "./components/common/ForkIcon";
 export * from "./components/common/DialogField";
 export * from "./components/common/EmptyState";
 export * from "./components/common/FormDialog";

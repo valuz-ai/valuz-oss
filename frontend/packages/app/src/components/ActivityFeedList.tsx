@@ -63,6 +63,10 @@ export interface ActivityFeedListProps {
   onOpenTask: (id: string) => void;
   onRenameConfirm: (id: string, value: string) => void;
   onDeleteSession: (id: string, title: string) => void;
+  /** Whole-session fork (docs/design/session-fork.md). Rendered on chat
+   * rows that are not running; origin gating (automation/task chats) is
+   * server-side — a 422 surfaces as the caller's failure toast. */
+  onForkSession?: (id: string) => void;
   /** Hide the leading 对话/任务/自动化 chip (the 自动化 tab is already scoped). */
   hideScopeTag?: boolean;
   /** Append the project name after the title — the global 动态 list wants it. */
@@ -76,6 +80,7 @@ export const ActivityFeedList = ({
   onOpenTask,
   onRenameConfirm,
   onDeleteSession,
+  onForkSession,
   hideScopeTag,
   showProjectName,
   emptyLabel,
@@ -206,6 +211,11 @@ export const ActivityFeedList = ({
               <RowActionsMenu
                 onRename={() => setRenamingId(item.id)}
                 onDelete={() => onDeleteSession(item.id, item.title)}
+                onFork={
+                  onForkSession && item.status !== "running"
+                    ? () => onForkSession(item.id)
+                    : undefined
+                }
               />
             )}
           </span>
