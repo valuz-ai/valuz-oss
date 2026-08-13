@@ -35,7 +35,7 @@ export const LineChartApi = {
       showDots: DynamicBooleanSchema.default(false).optional(),
     })
     .strict()
-    .describe("Use for one or more numeric trends across an ordered axis; assign semantic series roles when actuals, estimates, or benchmarks differ."),
+    .describe("Use for one or more numeric trends across an ordered axis. For time-indexed market performance, normalization, or a numeric reference line, use TimeSeriesChart instead. Series entries use label, never name."),
 } satisfies ComponentApi;
 
 export const AreaChartApi = {
@@ -67,13 +67,14 @@ export const HorizontalBarChartApi = {
     .object({
       ...chartCommonProps,
       categoryKey: z.string(),
+      linkKey: z.string().optional(),
       series: z.array(chartSeriesSchema).min(1).max(8),
       stacked: DynamicBooleanSchema.default(false).optional(),
       showAxes: DynamicBooleanSchema.default(true).optional(),
       barRadius: z.number().int().min(0).max(12).default(4).optional(),
     })
     .strict()
-    .describe("Use for ranked or long-labelled categorical comparisons where exact ordering matters."),
+    .describe("Use for ranked or long-labelled categorical comparisons where exact ordering matters. Set linkKey when category labels navigate to the represented entity."),
 } satisfies ComponentApi;
 
 export const PieChartApi = {

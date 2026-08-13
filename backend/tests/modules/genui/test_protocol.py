@@ -8,7 +8,11 @@ from valuz_agent.modules.genui.prompts import TOOL_DESCRIPTION
 from valuz_agent.modules.genui.protocol import (
     OUTPUT_FORMAT,
     a2ui_instructions,
+    a2ui_message_lines,
     build_a2ui_prompt,
+    extract_a2ui_document,
+    registered_data_source_contracts,
+    registered_data_source_tool_guide,
     wrap_generated_ui,
 )
 
@@ -17,6 +21,8 @@ def test_tool_description_states_when_to_call_it() -> None:
     assert "UI" in TOOL_DESCRIPTION and "chart" in TOOL_DESCRIPTION.lower()
     assert "information hierarchy" in TOOL_DESCRIPTION
     assert "not raw colors, CSS, theme tokens" in TOOL_DESCRIPTION
+    assert "exactly one short sentence" in TOOL_DESCRIPTION
+    assert "do not recap values" in TOOL_DESCRIPTION
 
 
 def test_prompt_splices_request_data_catalog_and_v091_contract() -> None:
@@ -34,9 +40,25 @@ def test_prompt_splices_request_data_catalog_and_v091_contract() -> None:
     assert 'not nested under "props"' in prompt
     assert "Do not create placeholder charts" in prompt
     assert "you MUST bind it" in prompt
-    assert "initial seed" in prompt
+    assert "optional compatible binding seed" in prompt
     assert "frozen snapshot" in prompt
-    assert "binding's initial seed" in prompt
+    assert "replacement for a registered live source" in prompt
+    assert "Do not require the calling" in prompt
+    assert "empty one erases every seed and ref" in prompt
+    assert "Declaring a /refs/<slot> entry without binding" in prompt
+
+
+def test_prompt_can_send_only_agent_selected_component_schemas() -> None:
+    prompt = build_a2ui_prompt(
+        "show quarterly sales",
+        component_names=["TextContent", "BarChart"],
+    )
+
+    assert "Stack(" in prompt
+    assert "TextContent(" in prompt
+    assert "BarChart(" in prompt
+    assert "LineChart(" not in prompt
+    assert "DataTable(" not in prompt
 
 
 def test_prompt_delegates_theme_and_pixels_to_the_host() -> None:
@@ -61,8 +83,33 @@ def test_prompt_selects_visuals_by_relationship_and_semantic_role() -> None:
 
 
 def test_session_instruction_and_output_format_name_the_stream() -> None:
-    assert "A2UI v0.9.1" in a2ui_instructions()
+    instructions = a2ui_instructions()
+    assert "A2UI v0.9.1" in instructions
+    assert "request's language" in instructions
+    assert "reasoning or progress" in instructions
+    assert "stop immediately" in instructions
     assert OUTPUT_FORMAT == "A2UI v0.9.1 JSON message stream"
+
+
+def test_prompt_disambiguates_normalized_time_series_from_line_chart() -> None:
+    prompt = build_a2ui_prompt("比较三只股票近一月归一化收益")
+
+    assert "use TimeSeriesChart, not LineChart" in prompt
+    assert 'chart series entries use "label", never "name"' in prompt
+    assert '"referenceValue":100' in prompt
+
+
+def test_prompt_uses_original_user_message_as_output_language_reference() -> None:
+    prompt = build_a2ui_prompt(
+        "Build a semiconductor comparison dashboard",
+        language_reference="请生成半导体公司对比工作台",
+    )
+
+    assert "Agent-authored REQUEST may be a translation" in prompt
+    assert "请生成半导体公司对比工作台" in prompt
+    assert prompt.index("请生成半导体公司对比工作台") < prompt.index(
+        "Build a semiconductor comparison dashboard"
+    )
 
 
 def test_host_edit_prompt_includes_complete_current_document() -> None:
@@ -89,9 +136,147 @@ def test_new_page_prompt_has_no_edit_contract() -> None:
     assert "EDIT CONTRACT" not in prompt
 
 
+def test_registered_data_source_contracts_parse_param_types(monkeypatch) -> None:
+    notes = (
+        "finance.market.kline (params {symbols: comma-separated symbols, "
+        "rangeDays?: 2-3650, normalize?: boolean}, min 300s) -> shape — "
+        "accepted by TimeSeriesChart.\n"
+        "finance.macro.commodities (params {commodity: oil|gold|silver}, min 300s) "
+        "-> shape — accepted by QuoteStrip."
+    )
+    monkeypatch.setattr("valuz_agent.modules.genui.protocol.edition_catalog_text", lambda *a, **k: notes)
+
+    contracts = registered_data_source_contracts()
+
+    assert contracts["finance.market.kline"]["required_params"] == ("symbols",)
+    assert contracts["finance.market.kline"]["param_specs"]["rangeDays"] == {
+        "required": False,
+        "description": "2-3650",
+        "kind": "number",
+        "minimum": 2.0,
+        "maximum": 3650.0,
+    }
+    assert contracts["finance.market.kline"]["param_specs"]["normalize"]["kind"] == "boolean"
+    assert contracts["finance.macro.commodities"]["param_specs"]["commodity"]["enum"] == (
+        "oil",
+        "gold",
+        "silver",
+    )
+    guide = registered_data_source_tool_guide()
+    assert "finance.market.kline {symbols: comma-separated symbols" in guide
+    assert "rangeDays?: 2-3650" in guide
+    assert "-> TimeSeriesChart" in guide
+
+
 def test_wrap_generated_ui_puts_the_stream_in_the_client_envelope() -> None:
     content = '{"version":"v0.9.1","createSurface":{"surfaceId":"s1"}}'
     assert json.loads(wrap_generated_ui(content)) == {
         "protocol": "a2ui-json",
         "content": content,
     }
+
+
+def test_pretty_printed_a2ui_messages_are_complete_not_truncated() -> None:
+    pretty = """{
+  "version": "v0.9.1",
+  "createSurface": {"surfaceId": "main"}
+}
+{
+  "version": "v0.9.1",
+  "updateComponents": {
+    "surfaceId": "main",
+    "components": [{"id": "root", "component": "Stack"}]
+  }
+}"""
+
+    lines, truncated = a2ui_message_lines(pretty)
+
+    assert truncated is False
+    assert len(lines) == 2
+    assert "createSurface" in lines[0]
+    assert "updateComponents" in lines[1]
+    assert extract_a2ui_document(pretty) == "\n".join(lines)
+
+
+def test_pretty_printed_a2ui_with_a_cut_tail_is_truncated() -> None:
+    raw = """{
+  "version": "v0.9.1",
+  "createSurface": {"surfaceId": "main"}
+}
+{
+  "version": "v0.9.1",
+  "updateComponents": {"surfaceId": "main", "components": [
+"""
+
+    lines, truncated = a2ui_message_lines(raw)
+
+    assert truncated is True
+    assert len(lines) == 1
+    assert "createSurface" in lines[0]
+
+
+def test_extractor_drops_empty_root_reset_after_live_slots() -> None:
+    messages = [
+        {"version": "v0.9.1", "createSurface": {"surfaceId": "main"}},
+        {
+            "version": "v0.9.1",
+            "updateDataModel": {
+                "surfaceId": "main",
+                "path": "/data/quote",
+                "value": {"source": "Reportify", "asOf": "2026-08-12"},
+            },
+        },
+        {
+            "version": "v0.9.1",
+            "updateDataModel": {
+                "surfaceId": "main",
+                "path": "/refs/quote",
+                "value": {"source": "finance.market.quote"},
+            },
+        },
+        {
+            "version": "v0.9.1",
+            "updateComponents": {
+                "surfaceId": "main",
+                "components": [{"id": "root", "component": "Stack"}],
+            },
+        },
+        {
+            "version": "v0.9.1",
+            "updateDataModel": {"surfaceId": "main", "path": "/", "value": {}},
+        },
+    ]
+    raw = "\n".join(json.dumps(message) for message in messages)
+    expected = "\n".join(
+        json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+        for message in messages[:-1]
+    )
+
+    assert extract_a2ui_document(raw) == expected
+
+
+def test_extractor_keeps_root_seed_when_it_is_the_data_payload() -> None:
+    messages = [
+        {"version": "v0.9.1", "createSurface": {"surfaceId": "main"}},
+        {
+            "version": "v0.9.1",
+            "updateDataModel": {
+                "surfaceId": "main",
+                "path": "/",
+                "value": {"title": "Market"},
+            },
+        },
+        {
+            "version": "v0.9.1",
+            "updateComponents": {
+                "surfaceId": "main",
+                "components": [{"id": "root", "component": "Stack"}],
+            },
+        },
+    ]
+    raw = "\n".join(json.dumps(message) for message in messages)
+
+    assert extract_a2ui_document(raw) == "\n".join(
+        json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+        for message in messages
+    )

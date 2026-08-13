@@ -171,30 +171,27 @@ def test_no_host_anywhere_is_still_none() -> None:
 
 
 class TestRepeatedDocument:
-    """A turn's canonical text is the join of every model-end segment, so a run
-    that emits the document twice hands back both copies byte for byte."""
+    """A repeated surface declaration is a replacement, not another page."""
 
     def test_stores_a_repeated_document_once(self) -> None:
-        doc = "\n".join(
-            [
-                json.dumps({"version": "v0.9.1", "createSurface": {"surfaceId": "main"}}),
-                json.dumps(
-                    {
-                        "version": "v0.9.1",
-                        "updateComponents": {
-                            "surfaceId": "main",
-                            "components": [{"id": "root", "component": "Stack"}],
-                        },
-                    }
-                ),
-            ]
+        messages = [
+            {"version": "v0.9.1", "createSurface": {"surfaceId": "main"}},
+            {
+                "version": "v0.9.1",
+                "updateComponents": {
+                    "surfaceId": "main",
+                    "components": [{"id": "root", "component": "Stack"}],
+                },
+            },
+        ]
+        doc = "\n".join(json.dumps(message) for message in messages)
+        canonical = "\n".join(
+            json.dumps(message, separators=(",", ":")) for message in messages
         )
 
-        assert extract_a2ui_document(f"{doc}\n{doc}") == doc
+        assert extract_a2ui_document(f"{doc}\n{doc}") == canonical
 
-    def test_keeps_a_second_declaration_that_differs(self) -> None:
-        # Only an exact repeat is dropped; two DIFFERENT versions are a real
-        # restart and picking a winner is not this function's call.
+    def test_keeps_the_final_declaration_when_the_model_revises_it(self) -> None:
         first = json.dumps({"version": "v0.9.1", "createSurface": {"surfaceId": "main"}})
         components = json.dumps(
             {
@@ -216,7 +213,76 @@ class TestRepeatedDocument:
         )
         raw = "\n".join([first, components, first, other])
 
-        assert extract_a2ui_document(raw) == raw
+        expected = "\n".join(
+            json.dumps(json.loads(line), separators=(",", ":"))
+            for line in (first, other)
+        )
+        assert extract_a2ui_document(raw) == expected
+
+    def test_preserves_distinct_surfaces(self) -> None:
+        first = json.dumps(
+            {"version": "v0.9.1", "createSurface": {"surfaceId": "main"}}
+        )
+        second = json.dumps(
+            {"version": "v0.9.1", "createSurface": {"surfaceId": "detail"}}
+        )
+        components = json.dumps(
+            {
+                "version": "v0.9.1",
+                "updateComponents": {
+                    "surfaceId": "detail",
+                    "components": [{"id": "root", "component": "Stack"}],
+                },
+            }
+        )
+
+        expected = "\n".join(
+            json.dumps(json.loads(line), separators=(",", ":"))
+            for line in (first, second, components)
+        )
+        assert extract_a2ui_document("\n".join((first, second, components))) == expected
+
+    def test_revising_a_secondary_surface_does_not_drop_the_main_surface(self) -> None:
+        main = [
+            {"version": "v0.9.1", "createSurface": {"surfaceId": "main"}},
+            {
+                "version": "v0.9.1",
+                "updateComponents": {
+                    "surfaceId": "main",
+                    "components": [{"id": "root", "component": "Stack"}],
+                },
+            },
+        ]
+        old_detail = [
+            {"version": "v0.9.1", "createSurface": {"surfaceId": "detail"}},
+            {
+                "version": "v0.9.1",
+                "updateComponents": {
+                    "surfaceId": "detail",
+                    "components": [
+                        {"id": "root", "component": "TextContent", "text": "old"}
+                    ],
+                },
+            },
+        ]
+        new_detail = [
+            {"version": "v0.9.1", "createSurface": {"surfaceId": "detail"}},
+            {
+                "version": "v0.9.1",
+                "updateComponents": {
+                    "surfaceId": "detail",
+                    "components": [
+                        {"id": "root", "component": "TextContent", "text": "new"}
+                    ],
+                },
+            },
+        ]
+        raw = "\n".join(json.dumps(message) for message in main + old_detail + new_detail)
+        expected = "\n".join(
+            json.dumps(message, separators=(",", ":")) for message in main + new_detail
+        )
+
+        assert extract_a2ui_document(raw) == expected
 
 
 class _FakeArtifactDatastore:
@@ -348,7 +414,7 @@ async def test_hosted_regeneration_appends_to_the_bound_lineage(
     assert seen["scope"] == lineage_scope.scope
     assert seen["scope_cwd"] == lineage_scope.cwd
     request = seen["request"]
-    assert getattr(request, "artifact_id") == "art_A"
+    assert request.artifact_id == "art_A"
     assert "rev_12" in trailer
     assert '"expected_revision_id": "rev_11"' in trailer or "rev_11" in trailer
 
@@ -410,4 +476,4 @@ async def test_unresolvable_lineage_scope_falls_back_to_the_session(
     )
 
     assert seen["scope"] == session_scope.scope
-    assert getattr(seen["request"], "artifact_id") is None
+    assert seen["request"].artifact_id is None

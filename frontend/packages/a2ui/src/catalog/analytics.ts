@@ -16,6 +16,7 @@ const trendSchema = z.enum(["up", "down", "flat"]);
 const metricSchema = z.object({
   label: DynamicStringSchema,
   value: DynamicStringSchema,
+  url: DynamicStringSchema.optional(),
   delta: DynamicStringSchema.optional(),
   trend: trendSchema.optional(),
   description: DynamicStringSchema.optional(),
@@ -44,20 +45,20 @@ const dataColumnSchema = z.object({
 
 export const DataTableApi = {
   name: "DataTable",
-  schema: z.object({ ...commonProps, title: DynamicStringSchema.optional(), description: DynamicStringSchema.optional(), columns: z.array(dataColumnSchema).min(1).max(24), rows: DynamicValueSchema, caption: DynamicStringSchema.optional(), density: z.enum(["compact", "comfortable"]).default("comfortable").optional(), stickyHeader: DynamicBooleanSchema.default(false).optional(), maxHeight: z.number().int().min(120).max(960).optional() }).strict()
-    .describe("Display dense analytical records with explicit formats and stable alignment."),
+  schema: z.object({ ...commonProps, title: DynamicStringSchema.optional(), description: DynamicStringSchema.optional(), columns: z.array(dataColumnSchema).min(1).max(24), rows: DynamicValueSchema, linkKey: z.string().optional(), caption: DynamicStringSchema.optional(), density: z.enum(["compact", "comfortable"]).default("comfortable").optional(), stickyHeader: DynamicBooleanSchema.default(false).optional(), maxHeight: z.number().int().min(120).max(960).optional() }).strict()
+    .describe("Display dense analytical records with explicit formats and stable alignment. Set linkKey when the first visible cell names a navigable entity."),
 } satisfies ComponentApi;
 
 export const ComparisonTableApi = {
   name: "ComparisonTable",
-  schema: z.object({ ...commonProps, title: DynamicStringSchema.optional(), description: DynamicStringSchema.optional(), subjectKey: z.string(), columns: z.array(dataColumnSchema).min(2).max(16), rows: DynamicValueSchema, highlightKey: z.string().optional() }).strict()
-    .describe("Compare peers or alternatives across the same metrics, with an optional highlighted subject."),
+  schema: z.object({ ...commonProps, title: DynamicStringSchema.optional(), description: DynamicStringSchema.optional(), subjectKey: z.string(), columns: z.array(dataColumnSchema).min(2).max(16), rows: DynamicValueSchema, linkKey: z.string().optional(), highlightKey: z.string().optional() }).strict()
+    .describe("Compare peers or alternatives across the same metrics, with an optional highlighted subject. Set linkKey when each subject navigates to its entity page."),
 } satisfies ComponentApi;
 
 export const MatrixTableApi = {
   name: "MatrixTable",
-  schema: z.object({ ...commonProps, title: DynamicStringSchema.optional(), description: DynamicStringSchema.optional(), rowKey: z.string(), columns: z.array(dataColumnSchema).min(2).max(16), rows: DynamicValueSchema, min: DynamicNumberSchema.optional(), max: DynamicNumberSchema.optional(), showValues: DynamicBooleanSchema.default(true).optional() }).strict()
-    .describe("Show a two-dimensional numeric matrix with comparable color intensity and optional values."),
+  schema: z.object({ ...commonProps, title: DynamicStringSchema.optional(), description: DynamicStringSchema.optional(), rowKey: z.string(), columns: z.array(dataColumnSchema).min(2).max(16), rows: DynamicValueSchema, linkKey: z.string().optional(), min: DynamicNumberSchema.optional(), max: DynamicNumberSchema.optional(), showValues: DynamicBooleanSchema.default(true).optional() }).strict()
+    .describe("Show a two-dimensional numeric matrix with comparable color intensity and optional values. Set linkKey when row labels navigate to an entity page."),
 } satisfies ComponentApi;
 
 const descriptionItemSchema = z.object({ label: DynamicStringSchema, value: DynamicStringSchema, description: DynamicStringSchema.optional(), tone: toneSchema }).strict();
@@ -67,7 +68,7 @@ export const DescriptionListApi = {
     .describe("Present compact label-value facts with optional explanatory detail."),
 } satisfies ComponentApi;
 
-const timelineItemSchema = z.object({ time: DynamicStringSchema, title: DynamicStringSchema, description: DynamicStringSchema.optional(), status: z.enum(["past", "current", "future", "warning"]).default("past").optional(), meta: DynamicStringSchema.optional() }).strict();
+const timelineItemSchema = z.object({ time: DynamicStringSchema, title: DynamicStringSchema, url: DynamicStringSchema.optional(), description: DynamicStringSchema.optional(), status: z.enum(["past", "current", "future", "warning"]).default("past").optional(), meta: DynamicStringSchema.optional() }).strict();
 export const TimelineApi = {
   name: "Timeline",
   schema: z.object({ ...commonProps, title: DynamicStringSchema.optional(), items: z.array(timelineItemSchema).min(1).max(40), compact: DynamicBooleanSchema.default(false).optional() }).strict()

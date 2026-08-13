@@ -250,6 +250,12 @@ export function systemClock(): SchedulerClock {
 export function documentVisibilitySource(): VisibilitySource {
   return {
     isVisible: () =>
-      typeof document === "undefined" || document.visibilityState !== "hidden",
+      typeof document === "undefined" ||
+      document.visibilityState !== "hidden" ||
+      // Electron can keep reporting `hidden` for its only BrowserWindow even
+      // after the window is active and its document owns focus. Treat focus as
+      // the stronger signal there; a genuinely background browser tab does
+      // not have document focus, so it still pauses polling.
+      document.hasFocus(),
   };
 }

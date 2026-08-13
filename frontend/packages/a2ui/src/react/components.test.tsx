@@ -96,6 +96,104 @@ describe("Valuz A2UI base components", () => {
     expect(container.querySelector(".recharts-line")).toBeTruthy();
   });
 
+  it("renders a normalized time series when both observations and keys are bound", () => {
+    const processor = createProcessor(
+      [
+        { id: "root", component: "Stack", children: ["chart"] },
+        {
+          id: "chart",
+          component: "TimeSeriesChart",
+          title: "Relative performance",
+          data: { path: "/kline/data" },
+          xKey: "date",
+          series: { path: "/kline/series" },
+          normalize: true,
+          referenceValue: 100,
+          height: 240,
+        },
+      ],
+      {
+        kline: {
+          data: [
+            { date: "D1", NVDA: 100, AMD: 200 },
+            { date: "D2", NVDA: 110, AMD: 190 },
+          ],
+          series: [
+            {
+              key: "NVDA",
+              label: "NVIDIA",
+              url: "/finance/stock/US%3ANVDA",
+            },
+            {
+              key: "AMD",
+              label: "AMD",
+              url: "/finance/stock/US%3AAMD",
+            },
+          ],
+        },
+      },
+    );
+    const surface = processor.model.getSurface("component-test")!;
+    const { container } = render(<ValuzA2UISurface surface={surface} />);
+
+    expect(screen.getByText("NVIDIA")).toBeTruthy();
+    expect(screen.getByText("AMD")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "NVIDIA" }).getAttribute("href"))
+      .toBe("/finance/stock/US%3ANVDA");
+    expect(container.querySelectorAll(".recharts-line")).toHaveLength(2);
+    expect(container.textContent).not.toContain("No numerical data");
+    expect(container.textContent).not.toMatch(/(^|\s)0($|\s)/);
+  });
+
+  it("keeps company and document entity links inside the active app route", () => {
+    window.location.hash = "#/finance/research";
+    const processor = createProcessor(
+      [
+        { id: "root", component: "Stack", children: ["metrics", "table", "timeline"] },
+        {
+          id: "metrics",
+          component: "MetricGroup",
+          metrics: [
+            {
+              label: "NVIDIA",
+              value: "$184.32",
+              url: "/finance/stock/US%3ANVDA",
+            },
+          ],
+        },
+        {
+          id: "table",
+          component: "DataTable",
+          columns: [{ key: "company", label: "Company" }],
+          rows: [{ company: "Broadcom", url: "/finance/stock/US%3AAVGO" }],
+          linkKey: "url",
+        },
+        {
+          id: "timeline",
+          component: "Timeline",
+          items: [
+            {
+              time: "Today",
+              title: "Earnings transcript",
+              url: "?doc=report%2F2026",
+            },
+          ],
+        },
+      ],
+      {},
+    );
+    const surface = processor.model.getSurface("component-test")!;
+    render(<ValuzA2UISurface surface={surface} />);
+
+    expect(screen.getByRole("link", { name: "NVIDIA $184.32" }).getAttribute("href"))
+      .toBe("#/finance/stock/US%3ANVDA");
+    expect(screen.getByRole("link", { name: "Broadcom" }).getAttribute("href"))
+      .toBe("#/finance/stock/US%3AAVGO");
+    expect(
+      screen.getByRole("link", { name: "Earnings transcript" }).getAttribute("href"),
+    ).toBe("#/finance/research?doc=report%2F2026");
+  });
+
   it("renders C1-style area gradients from the selected palette", () => {
     const processor = createProcessor(
       [

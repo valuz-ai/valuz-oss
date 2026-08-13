@@ -6,6 +6,8 @@
 .va2-chart .recharts-default-legend { align-items: center; display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: center; }
 .va2-chart .recharts-legend-item { margin: 0 !important; }
 .va2-chart .recharts-legend-item-text { color: var(--va2-text-body) !important; }
+.va2-chart__legend-link { color: var(--va2-brand-text); font-weight: 600; text-decoration: none; }
+.va2-chart__legend-link:hover { text-decoration: underline; text-underline-offset: 2px; }
 .va2-chart .recharts-tooltip-label { color: var(--va2-text); font-weight: 600; margin-bottom: 4px; }
 .va2-chart .recharts-tooltip-item { padding: 2px 0 !important; }
 .va2-chart .recharts-polar-angle-axis-tick-value { fill: var(--va2-text-body); }

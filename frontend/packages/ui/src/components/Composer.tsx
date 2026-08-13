@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertCircle,
   ArrowUp,
@@ -627,6 +628,8 @@ export const Composer = ({
 
   const [modelOpen, setModelOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
+  const agentRef = useRef<HTMLDivElement>(null);
+  const agentMenuRef = useRef<HTMLDivElement>(null);
   // Drill-in for the per-conversation brain override (agent popover). ``null``
   // shows the agent list + the three override rows; a value shows that field's
   // option list. Reset whenever the popover closes.
@@ -656,13 +659,46 @@ export const Composer = ({
     // Measure to the conversation column's right edge, not the viewport — a
     // right-hand context panel sits beyond it and must not be drawn over, so
     // the nested menus flip left when the panel leaves no room.
-    const main = el.closest("main");
+    const main = agentRef.current?.closest("main");
     const rightEdge = main
       ? main.getBoundingClientRect().right
       : window.innerWidth;
     const roomRight = rightEdge - rect.right;
     setSubmenuSide(roomRight >= needRight ? "right" : "left");
   }, []);
+  const positionAgentPopover = useCallback(
+    (el: HTMLDivElement | null) => {
+      agentMenuRef.current = el;
+      if (!el || !agentRef.current) return;
+
+      const triggerRect = agentRef.current.getBoundingClientRect();
+      const menuWidth = el.offsetWidth || 260;
+      const viewportMargin = 8;
+      const gap = 4;
+      const maxLeft = Math.max(
+        viewportMargin,
+        window.innerWidth - menuWidth - viewportMargin,
+      );
+      const left = Math.min(
+        Math.max(viewportMargin, triggerRect.right - menuWidth),
+        maxLeft,
+      );
+
+      el.style.left = `${left}px`;
+      if (menuDir === "down") {
+        el.style.top = `${triggerRect.bottom + gap}px`;
+        el.style.bottom = "auto";
+      } else {
+        el.style.top = "auto";
+        el.style.bottom = `${Math.max(
+          viewportMargin,
+          window.innerHeight - triggerRect.top + gap,
+        )}px`;
+      }
+      measureAgentPopover(el);
+    },
+    [measureAgentPopover, menuDir],
+  );
   // Lay out a nested flyout (a 三级 runtime/model/effort picker, or the Agent
   // roster): cap its height at a fixed maximum, but snap that cap DOWN to the
   // last whole row so the bottom item is shown in full rather than sliced in
@@ -728,7 +764,6 @@ export const Composer = ({
       setAgentListMenuOpen(false);
     }
   }, [agentOpen]);
-  const agentRef = useRef<HTMLDivElement>(null);
   const [projectOpen, setProjectOpen] = useState(false);
   const projectRef = useRef<HTMLDivElement>(null);
   const [runtimeOpen, setRuntimeOpen] = useState(false);
@@ -1192,13 +1227,37 @@ export const Composer = ({
   useEffect(() => {
     if (!agentOpen) return;
     const handler = (e: MouseEvent) => {
-      if (agentRef.current && !agentRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        !agentRef.current?.contains(target) &&
+        !agentMenuRef.current?.contains(target)
+      ) {
         setAgentOpen(false);
       }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [agentOpen]);
+
+  useEffect(() => {
+    if (!agentOpen) return;
+    let raf = 0;
+    const schedule = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        positionAgentPopover(agentMenuRef.current);
+      });
+    };
+    schedule();
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, true);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("scroll", schedule, true);
+    };
+  }, [agentOpen, positionAgentPopover]);
 
   useEffect(() => {
     if (!projectOpen) return;
@@ -2201,14 +2260,15 @@ export const Composer = ({
                           )}
                         </span>
                       </button>
-                      {agentOpen && canOpen && (
-                        <div
-                          ref={measureAgentPopover}
-                          className={cn(
-                            "absolute right-0 z-50 min-w-[260px] rounded-lg border border-surface-border bg-surface shadow-lg",
-                            menuVClass,
-                          )}
-                        >
+                      {agentOpen &&
+                        canOpen &&
+                        typeof document !== "undefined" &&
+                        createPortal(
+                          <div
+                            ref={positionAgentPopover}
+                            data-slot="composer-agent-menu"
+                            className="fixed z-[100] min-w-[260px] rounded-lg border border-surface-border bg-surface shadow-lg"
+                          >
                           <div
                             className={cn(
                               "p-1",
@@ -2701,8 +2761,9 @@ export const Composer = ({
                                 </button>
                               </div>
                             )}
-                        </div>
-                      )}
+                          </div>,
+                          document.body,
+                        )}
                     </>
                   );
                 })()}

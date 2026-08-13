@@ -77,6 +77,8 @@ export interface ConversationOrchestrationParams {
    *  effect and ``useConversationHistory``'s bootstrap fast-path. */
   promotingSessionIdRef: { current: string | null };
   onSessionPromoted: (newId: string, opts?: { skillCreator?: boolean }) => void;
+  /** Panel-host recovery hook for a persisted session that now returns 404. */
+  onSessionUnavailable?: (sessionId: string) => void;
   /** Chrome-owned in the ``page`` variant (``useProjectOutlet()``); a fixed
    *  default in the ``panel`` variant (no project-layout outlet to read). */
   directoryFieldMode: DirectoryFieldMode;
@@ -128,6 +130,7 @@ export function useConversationOrchestration({
   conversationInstanceKey,
   promotingSessionIdRef,
   onSessionPromoted,
+  onSessionUnavailable,
   directoryFieldMode,
   hostRef,
   createDefaults,
@@ -975,6 +978,7 @@ export function useConversationOrchestration({
   const { refreshEvents, loadOlderTurns, refreshActiveSession, bootstrap } =
     useConversationHistory({
       id,
+      onSessionUnavailable,
       location,
       searchParams,
       panelSetCollapsed,

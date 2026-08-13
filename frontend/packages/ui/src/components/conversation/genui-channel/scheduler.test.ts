@@ -3,11 +3,28 @@ import { describe, expect, it, vi } from "vitest";
 import type { FetchResult } from "./patch";
 import {
   createScheduler,
+  documentVisibilitySource,
   type SchedulerClock,
   type SourceMeta,
   type SourceRegistryLookup,
   type VisibilitySource,
 } from "./scheduler";
+
+describe("documentVisibilitySource", () => {
+  it("treats a focused Electron document as visible when visibilityState is stuck hidden", () => {
+    const visibility = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockReturnValue("hidden");
+    const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+
+    expect(documentVisibilitySource().isVisible()).toBe(true);
+
+    focus.mockReturnValue(false);
+    expect(documentVisibilitySource().isVisible()).toBe(false);
+    visibility.mockRestore();
+    focus.mockRestore();
+  });
+});
 
 /**
  * Fully injectable time/visibility harnesses — no real timers, no

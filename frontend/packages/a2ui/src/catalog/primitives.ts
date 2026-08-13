@@ -4,11 +4,13 @@ import {
   CheckableSchema,
   ChildListSchema,
   ComponentIdSchema,
+  DataBindingSchema,
   DynamicBooleanSchema,
   DynamicNumberSchema,
   DynamicStringListSchema,
   DynamicStringSchema,
   DynamicValueSchema,
+  FunctionCallSchema,
 } from "@a2ui/web_core/v0_9";
 import { z } from "zod";
 
@@ -17,11 +19,13 @@ export {
   CheckableSchema,
   ChildListSchema,
   ComponentIdSchema,
+  DataBindingSchema,
   DynamicBooleanSchema,
   DynamicNumberSchema,
   DynamicStringListSchema,
   DynamicStringSchema,
   DynamicValueSchema,
+  FunctionCallSchema,
 };
 
 export const commonProps = {
@@ -103,6 +107,9 @@ export const chartSeriesSchema = z
   .object({
     key: z.string(),
     label: DynamicStringSchema.optional(),
+    url: DynamicStringSchema.optional().describe(
+      "Optional route for the entity represented by this series.",
+    ),
     role: chartSeriesRoleSchema.optional().describe(
       "Semantic meaning used by the theme to choose color and line treatment. Omit for categorical series.",
     ),
@@ -110,6 +117,17 @@ export const chartSeriesSchema = z
     curve: z.enum(["linear", "monotone", "step"]).default("monotone").optional(),
   })
   .strict();
+
+/**
+ * Chart series may be supplied by a live data slot. Keeping the definition
+ * next to the observations lets a source replace both atomically, so a refresh
+ * cannot leave the chart reading stale field names from the seed payload.
+ */
+export const dynamicChartSeriesSchema = z.union([
+  z.array(chartSeriesSchema).min(1).max(8),
+  DataBindingSchema,
+  FunctionCallSchema,
+]);
 
 export const chartCommonProps = {
   ...commonProps,

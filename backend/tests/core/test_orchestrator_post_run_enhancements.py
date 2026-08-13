@@ -65,6 +65,8 @@ class _RecordingRuntime:
         supports_native_continuation: bool = True,
         evidence_payload: dict[str, object] | None = None,
         coverage_noop: bool = False,
+        called_tool_name: str | None = None,
+        tool_result_is_error: bool = False,
     ) -> None:
         self.sink = sink
         self.fail_continuation = fail_continuation
@@ -76,6 +78,8 @@ class _RecordingRuntime:
         self.supports_native_continuation = supports_native_continuation
         self.evidence_payload = evidence_payload
         self.coverage_noop = coverage_noop
+        self.called_tool_name = called_tool_name
+        self.tool_result_is_error = tool_result_is_error
         self.prompts: list[UserMessage] = []
         self.coverage_tools: list[ToolDef] = []
         self.session_object_ids: list[int] = []
@@ -107,6 +111,28 @@ class _RecordingRuntime:
                         data={
                             "content": json.dumps(self.evidence_payload),
                             "tool_name": "search",
+                        },
+                    )
+                )
+            if self.called_tool_name is not None:
+                tool_use_id = "primary-tool-1"
+                await self.sink.emit(
+                    Event(
+                        type="tool_use",
+                        data={
+                            "id": tool_use_id,
+                            "name": self.called_tool_name,
+                            "input": {},
+                        },
+                    )
+                )
+                await self.sink.emit(
+                    Event(
+                        type="tool_result",
+                        data={
+                            "id": tool_use_id,
+                            "content": "ok",
+                            "is_error": self.tool_result_is_error,
                         },
                     )
                 )
@@ -325,6 +351,177 @@ async def test_task_coverage_is_one_continuation_on_same_runtime_and_thread(
     assert len(coverage_sidecars) == 1
     assert coverage_sidecars[0].data["assistant_segment_index"] == 1
     assert coverage_sidecars[0].data["task_coverage"] == message.metadata["task_coverage"]
+
+
+async def test_successful_generate_ui_skips_task_coverage_for_that_turn(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    session = _session(
+        tmp_path,
+        task_coverage_enabled=True,
+        citation_enabled=True,
+        verification_enabled=True,
+    )
+    store = _FakeStore(session)
+    runtimes: list[_RecordingRuntime] = []
+
+    def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
+        runtime = _RecordingRuntime(
+            args[2],
+            primary_text="The preview is ready.",
+            called_tool_name="generate_ui",
+        )
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
+
+    message = await SessionOrchestrator(store).run_turn(
+        "owner-1",
+        session.id,
+        UserMessage(text="Generate a chart."),
+    )
+
+    assert len(runtimes[0].prompts) == 1
+    assert message.assistant_message == "The preview is ready."
+    assert "task_coverage" not in message.metadata
+    assert "citation_bundle" not in message.metadata
+    assert "claim_audits" not in message.metadata
+    assert not any(
+        event.type == "turn_phase"
+        and event.data.get("phase") == "post_run_verification"
+        for event in store.appended
+    )
+
+
+async def test_namespaced_generate_ui_skips_post_run_checks_for_that_turn(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Claude exposes host MCP tools with a namespace on the wire."""
+
+    session = _session(
+        tmp_path,
+        task_coverage_enabled=True,
+        citation_enabled=True,
+        verification_enabled=True,
+    )
+    store = _FakeStore(session)
+    runtimes: list[_RecordingRuntime] = []
+
+    def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
+        runtime = _RecordingRuntime(
+            args[2],
+            primary_text="The preview is ready.",
+            called_tool_name="mcp__harness__generate_ui",
+        )
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
+
+    message = await SessionOrchestrator(store).run_turn(
+        "owner-1",
+        session.id,
+        UserMessage(text="Generate a chart."),
+    )
+
+    assert len(runtimes[0].prompts) == 1
+    assert "task_coverage" not in message.metadata
+    assert "citation_bundle" not in message.metadata
+    assert "claim_audits" not in message.metadata
+    assert not any(
+        event.type == "turn_phase"
+        and event.data.get("phase") == "post_run_verification"
+        for event in store.appended
+    )
+
+
+async def test_failed_generate_ui_also_skips_post_run_checks_for_that_turn(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    session = _session(
+        tmp_path,
+        task_coverage_enabled=True,
+        citation_enabled=True,
+        verification_enabled=True,
+    )
+    store = _FakeStore(session)
+    runtimes: list[_RecordingRuntime] = []
+
+    def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
+        runtime = _RecordingRuntime(
+            args[2],
+            primary_text="The UI could not be generated.",
+            called_tool_name="mcp__harness__generate_ui",
+            tool_result_is_error=True,
+        )
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
+
+    message = await SessionOrchestrator(store).run_turn(
+        "owner-1",
+        session.id,
+        UserMessage(text="Generate a chart."),
+    )
+
+    assert len(runtimes[0].prompts) == 1
+    assert message.assistant_message == "The UI could not be generated."
+    assert "task_coverage" not in message.metadata
+    assert "citation_bundle" not in message.metadata
+    assert "claim_audits" not in message.metadata
+    assert not any(
+        event.type == "turn_phase"
+        and event.data.get("phase") == "post_run_verification"
+        for event in store.appended
+    )
+
+
+async def test_namespaced_generate_ui_skips_citation_before_early_idle_finalize(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Hosted finance turns already disable Task Coverage before runtime run.
+
+    Their session_idle therefore finalizes sidecars inside the observer.  The
+    attempted tool call has to disable Citation/Audit before that event, not
+    after ``runtime.run`` returns to the outer orchestrator.
+    """
+
+    session = _session(
+        tmp_path,
+        task_coverage_enabled=False,
+        citation_enabled=True,
+        verification_enabled=True,
+    )
+    store = _FakeStore(session)
+
+    def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
+        return _RecordingRuntime(
+            args[2],
+            primary_text="The preview is ready.",
+            called_tool_name="mcp__harness__generate_ui",
+        )
+
+    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
+
+    message = await SessionOrchestrator(store).run_turn(
+        "owner-1",
+        session.id,
+        UserMessage(text="Generate a workspace."),
+    )
+
+    assert "citation_bundle" not in message.metadata
+    assert "claim_audits" not in message.metadata
+    assert not any(
+        event.type == "turn_phase"
+        and event.data.get("phase") == "post_run_verification"
+        for event in store.appended
+    )
 
 
 async def test_citation_audit_emits_post_run_verification_lifecycle_without_coverage(
