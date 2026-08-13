@@ -20,16 +20,55 @@
 import type { ConversationTurn } from "@valuz/shared";
 
 /**
+ * The payload carried by a content block, or the value itself.
+ *
+ * A tool's real result is nested one level down when the kernel wraps it:
+ * ``[{"type": "text", "text": "{\"delivered\": true}"}]``. Callers want the
+ * inner object, so unwrap the first text block that holds JSON.
+ *
+ * A value that is not a content-block envelope comes back untouched — some
+ * tools legitimately return an array, and turning that into its first element
+ * would be a different kind of wrong.
+ */
+function unwrapContentBlocks(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  for (const block of value) {
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string"
+    ) {
+      try {
+        return unwrapContentBlocks(
+          JSON.parse((block as { text: string }).text),
+        );
+      } catch {
+        /* that block is prose, not a payload — keep looking */
+      }
+    }
+  }
+  return value;
+}
+
+/**
  * Best-effort JSON extraction from a kernel tool input/output string.
  *
- * Tool payloads come through the kernel as either raw JSON or a Python-repr
- * content-block blob (``[{'type': 'text', 'text': '{...}'}]``). Try a direct
- * ``JSON.parse`` first, then fall back to scanning for the first balanced
- * ``{"…"}`` object embedded in the string.
+ * Tool payloads come through the kernel as raw JSON, or wrapped in a
+ * content-block envelope — historically a Python repr
+ * (``[{'type': 'text', 'text': '{...}'}]``), nowadays valid JSON
+ * (``[{"type": "text", "text": "{...}"}]``).
+ *
+ * That second form is why the unwrap exists. The Python repr fails
+ * ``JSON.parse`` and fell through to the scanner below, which found the inner
+ * object by accident; the JSON envelope PARSES, so the parse "succeeded" and
+ * handed callers the array. Every field they read off it was ``undefined`` —
+ * an inject that had been delivered rendered as "指令未送达（unknown）",
+ * because `delivered` and `reason` were both missing rather than false.
  */
 export function extractToolOutputJson(output: string): unknown | null {
   try {
-    return JSON.parse(output);
+    return unwrapContentBlocks(JSON.parse(output));
   } catch {
     /* fall through */
   }
