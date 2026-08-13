@@ -11,7 +11,10 @@ import {
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { Skeleton } from "../ui/skeleton";
-import { getGenUIDataHost } from "./genui-channel/host-registry";
+import {
+  getGenUIDataHost,
+  type GenUIComponentDataRef,
+} from "./genui-channel/host-registry";
 import { completeJsonFragment } from "./partial-json";
 
 export interface A2UIRendererProps {
@@ -69,20 +72,45 @@ function parseA2UIMessages(body: string): A2UIMessage[] {
   return messages;
 }
 
-function collectDataRefs(body: string): Map<string, Record<string, unknown>> {
-  const bySurface = new Map<string, Record<string, unknown>>();
+function collectComponentDataRefs(body: string): Map<string, GenUIComponentDataRef[]> {
+  const bySurface = new Map<string, Map<string, GenUIComponentDataRef>>();
   for (const message of parseA2UIMessages(body)) {
-    const update = message.updateDataModel;
-    if (!isRecord(update) || typeof update.surfaceId !== "string" || typeof update.path !== "string") continue;
-    const existing = bySurface.get(update.surfaceId) ?? {};
-    if (update.path === "/refs" && isRecord(update.value)) {
-      bySurface.set(update.surfaceId, { ...existing, ...update.value });
-    } else if (update.path.startsWith("/refs/")) {
-      const slot = update.path.slice(6);
-      if (slot && !slot.includes("/")) bySurface.set(update.surfaceId, { ...existing, [slot]: update.value });
+    const update = message.updateComponents;
+    if (!isRecord(update) || typeof update.surfaceId !== "string" || !Array.isArray(update.components)) continue;
+    const existing = bySurface.get(update.surfaceId) ?? new Map<string, GenUIComponentDataRef>();
+    for (const raw of update.components) {
+      if (
+        !isRecord(raw) ||
+        typeof raw.id !== "string" ||
+        typeof raw.component !== "string" ||
+        !("dataRef" in raw)
+      ) continue;
+      existing.set(raw.id, {
+        componentId: raw.id,
+        component: raw.component,
+        dataRef: raw.dataRef,
+      });
     }
+    if (existing.size) bySurface.set(update.surfaceId, existing);
   }
-  return bySurface;
+  return new Map(
+    Array.from(bySurface, ([surfaceId, refs]) => [surfaceId, Array.from(refs.values())]),
+  );
+}
+
+/** `dataRef` belongs to the Renderer/Host contract, not the visual component
+ * schema. Remove it before validating or processing component props. */
+function withoutComponentDataRefs(messages: A2UIMessage[]): A2UIMessage[] {
+  return messages.map((message) => {
+    const update = message.updateComponents;
+    if (!isRecord(update) || !Array.isArray(update.components)) return message;
+    const components = update.components.map((raw) => {
+      if (!isRecord(raw) || !("dataRef" in raw)) return raw;
+      const { dataRef: _dataRef, ...component } = raw;
+      return component;
+    });
+    return { ...message, updateComponents: { ...update, components } };
+  });
 }
 
 function dropDuplicateCreateSurface(messages: A2UIMessage[]): A2UIMessage[] {
@@ -276,7 +304,9 @@ function buildSurfaces(
     dropDuplicateCreateSurface(parseA2UIMessages(deduped)),
     hasPartialTrailingLine(deduped),
   );
-  const sanitized = withoutInvalidComponents(normalizeWeightedChildren(ready));
+  const sanitized = withoutInvalidComponents(
+    normalizeWeightedChildren(withoutComponentDataRefs(ready)),
+  );
   const messages = [
     ...sanitized.messages,
     ...liveMessages,
@@ -354,10 +384,10 @@ export function A2UIRenderer({ body, status, hostParams }: A2UIRendererProps) {
   useEffect(() => {
     const factory = getGenUIDataHost();
     if (!factory) return;
-    const handles = Array.from(collectDataRefs(body), ([surfaceId, refs]) =>
+    const handles = Array.from(collectComponentDataRefs(body), ([surfaceId, dataRefs]) =>
       factory({
         surfaceId,
-        refs,
+        dataRefs,
         push: (message) => setLiveMessages((previous) => [...previous, message]),
         ...(hostParams ? { host: hostParams } : {}),
       }),

@@ -85,4 +85,5 @@ export type {
   GenUIDataHostFactory,
   GenUIDataHostHandle,
   GenUIDataHostInput,
+  GenUIComponentDataRef,
 } from "./host-registry";

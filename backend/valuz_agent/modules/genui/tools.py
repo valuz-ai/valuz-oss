@@ -35,12 +35,13 @@ from valuz_agent.modules.genui.protocol import (
     a2ui_instructions,
     build_a2ui_prompt,
     component_names_for_scope,
+    component_property_names,
     extract_a2ui_document,
     normalize_component_names,
     normalize_component_scope,
-    registered_data_source_contracts,
-    registered_data_source_ids,
-    registered_data_source_tool_guide,
+    registered_component_data_contracts,
+    registered_component_data_names,
+    registered_component_data_tool_guide,
     wrap_generated_ui,
 )
 from valuz_agent.modules.genui.runner import _make_completer, _resolve_provider_id
@@ -56,6 +57,8 @@ GENERATIVE_UI_TOOL_NAME = "generate_ui"
 _GENERATION_MAX_ATTEMPTS = 2
 _GENERATION_RETRY_DELAY_SECONDS = 0.5
 _CURRENT_DOCUMENT_MAX_BYTES = 4 * 1024 * 1024
+_SUPPORTED_CATALOG_ID = "https://valuz.io/a2ui/catalogs/base/v1"
+_COMPOSITION_COMPONENTS = ("Card", "Grid", "TextContent", "Separator")
 # How many recent turns may carry the visual intent forward. A refinement
 # ("换成柱状图", "把刚才的图加上成交额") rarely restates the request, so a
 # conversation that is plainly about a chart has to keep working without the
@@ -70,7 +73,7 @@ _INTENT_LOOKBACK_TURNS = 5
 
 _GENERATION_RETRY_GUIDANCE = (
     " Correct the generate_ui choices and call generate_ui again. Keep live "
-    "market/document data in data_sources: do not query another tool to inline "
+    "market/document data in component_data: do not query another tool to inline "
     "a static substitute, and do not omit a requested live binding."
 )
 
@@ -90,9 +93,13 @@ _EXPLICIT_VISUAL_REQUEST_RE = re.compile(
     r"|(?:画|绘|绘制|做|出|加|换|来|给|要|用|生成)(?:一)?[个张幅]?图(?!片|标)"
     r"|(?:做|画|生成|创建|制作|设计|构建|搭建|来|给)(?:一)?[个张套]?"
     r"[^，。！？\n]{0,24}(?:界面|页面)"
+    r"|(?:做|生成|创建|制作|设计|构建|加)(?:一)?[个张]?[^，。！？\n]{0,16}"
+    r"(?:研究卡(?:片)?|信息卡(?:片)?|指标卡(?:片)?|KPI\s*卡(?:片)?|组件)"
     r"|交互(?:式)?(?:界面|图)|生成式\s*UI"
     r"|\b(?:dashboard|workbench|workspace|chart|plot|graph|visuali[sz](?:e|ation)|visual|viz"
-    r"|interactive\s+ui|render\s+(?:a\s+)?ui)\b)",
+    r"|interactive\s+ui|render\s+(?:a\s+)?ui|(?:build|create|make|render|turn)\s+"
+    r"(?:(?:this|it)\s+(?:as|into)\s+)?(?:a\s+)?"
+    r"(?:research|information|metric|kpi)\s+card)\b)",
     re.IGNORECASE,
 )
 
@@ -146,12 +153,13 @@ _PARAMS = {
         },
         "data": {
             "type": "object",
+            "additionalProperties": True,
             "description": (
                 "Optional existing research/narrative values. Do not query live "
                 "data merely to fill this field; registered live values belong "
-                "in data_sources and are loaded by the rendered binding."
+                "in component_data and are loaded by the rendered component. Always "
+                "pass a nested JSON object, never a JSON-encoded string."
             ),
-            "additionalProperties": True,
         },
         "components": {
             "type": "string",
@@ -178,24 +186,21 @@ _PARAMS = {
                 "sends only these component schemas to the compiler."
             ),
         },
-        "data_sources": {
+        "component_data": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "slot": {"type": "string"},
-                    "source": {"type": "string"},
+                    "component": {"type": "string"},
                     "params": {"type": "object", "additionalProperties": True},
-                    "shape": {"type": "string"},
-                    "refresh_interval": {"type": "number"},
                 },
-                "required": ["slot", "source", "params"],
+                "required": ["component", "params"],
                 "additionalProperties": False,
             },
             "description": (
-                "Live bindings selected for the UI. Pass source ids and params, "
-                "not pre-fetched values; the A2UI document declares refs and the "
-                "host loads them immediately and keeps them refreshed."
+                "Live components selected for the UI. Pass only a registered "
+                "component name and its business params, never source ids, slots, "
+                "shapes, refresh settings, paths, URLs, or pre-fetched values."
             ),
         },
         "generation_mode": {
@@ -227,6 +232,66 @@ _PARAMS = {
     },
     "required": ["request"],
 }
+
+
+def _component_param_schema(name: str, spec: dict[str, Any]) -> dict[str, Any]:
+    """JSON Schema for one registered business param plus its Host reference.
+
+    The old tool schema declared ``params`` as an arbitrary object and relied
+    on prose for the actual contract.  Tool-calling models could therefore
+    submit plausible but invalid fields and discover them only after a failed
+    call.  The source registry already has the exact primitive contract, so
+    expose it directly to the caller.
+    """
+
+    kind = str(spec.get("kind") or "string")
+    primitive: dict[str, Any] = {"type": kind}
+    if spec.get("enum"):
+        primitive["enum"] = list(spec["enum"])
+    if spec.get("minimum") is not None:
+        primitive["minimum"] = spec["minimum"]
+    if spec.get("maximum") is not None:
+        primitive["maximum"] = spec["maximum"]
+    description = str(spec.get("description") or "").strip()
+    if description:
+        primitive["description"] = description
+
+    host_keys = [name]
+    if name.endswith("s") and "comma-separated" in description:
+        host_keys.append(name.removesuffix("s"))
+    host_ref = {
+        "type": "object",
+        "properties": {"$host": {"type": "string", "enum": host_keys}},
+        "required": ["$host"],
+        "additionalProperties": False,
+    }
+    return {"oneOf": [primitive, host_ref]}
+
+
+def _registered_component_data_item_schemas() -> list[dict[str, Any]]:
+    schemas: list[dict[str, Any]] = []
+    for component, contract in registered_component_data_contracts().items():
+        param_specs = dict(contract.get("param_specs") or {})
+        schemas.append(
+            {
+                "type": "object",
+                "properties": {
+                    "component": {"type": "string", "enum": [component]},
+                    "params": {
+                        "type": "object",
+                        "properties": {
+                            name: _component_param_schema(name, spec)
+                            for name, spec in param_specs.items()
+                        },
+                        "required": list(contract.get("required_params") or ()),
+                        "additionalProperties": False,
+                    },
+                },
+                "required": ["component", "params"],
+                "additionalProperties": False,
+            }
+        )
+    return schemas
 
 
 def _host_from_mapping(raw: object) -> UiArtifactTargetHost | None:
@@ -266,15 +331,15 @@ def _validate_generation_choices(
     *,
     scope: str,
     component_names: object,
-    data_sources: object,
+    component_data: object,
 ) -> tuple[tuple[str, ...], tuple[dict[str, Any], ...], str | None]:
     """Validate model-authored candidates without making semantic choices.
 
     The caller Agent owns the research judgment. This function only guarantees
-    that the compiler receives exact registered component/source identifiers.
+    that live component names and business params match the fixed registry.
     """
 
-    requested_components = normalize_component_names(component_names)
+    requested_components = list(normalize_component_names(component_names))
     allowed_components = frozenset(component_names_for_scope(scope))
     unknown_components = tuple(
         name for name in requested_components if name not in allowed_components
@@ -284,29 +349,78 @@ def _validate_generation_choices(
             "unknown component name(s): " + ", ".join(unknown_components)
         )
 
-    if data_sources is None:
-        return requested_components, (), None
-    if not isinstance(data_sources, list):
-        return (), (), "'data_sources' must be an array"
+    # These are general composition glue, not business-semantic choices. The
+    # compiler routinely needs one heading, card boundary, grid, or separator
+    # around the exact components the Agent selected. Offer the small shared
+    # set up front so a valid page does not need a second Agent/tool round-trip
+    # merely to add a structural name the compiler already chose correctly.
+    if requested_components:
+        requested_components.extend(
+            name
+            for name in _COMPOSITION_COMPONENTS
+            if name in allowed_components and name not in requested_components
+        )
 
-    known_sources = frozenset(registered_data_source_ids())
-    contracts = registered_data_source_contracts()
-    normalized_sources: list[dict[str, Any]] = []
-    for index, raw in enumerate(data_sources):
+    if component_data is None:
+        return tuple(requested_components), (), None
+    if not isinstance(component_data, list):
+        return (), (), "'component_data' must be an array"
+
+    known_bound_components = frozenset(registered_component_data_names())
+    contracts = registered_component_data_contracts()
+    normalized_plans: list[dict[str, Any]] = []
+    for index, raw in enumerate(component_data):
         if not isinstance(raw, dict):
-            return (), (), f"data_sources[{index}] must be an object"
-        slot = str(raw.get("slot") or "").strip()
-        source = str(raw.get("source") or "").strip()
+            return (), (), f"component_data[{index}] must be an object"
+        unknown_fields = tuple(name for name in raw if name not in {"component", "params"})
+        if unknown_fields:
+            return (), (), (
+                f"component_data[{index}] has unsupported field(s): "
+                f"{', '.join(unknown_fields)}; pass only component and params"
+            )
+        component = str(raw.get("component") or "").strip()
         params = raw.get("params")
-        if not slot or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", slot):
-            return (), (), f"data_sources[{index}] has an invalid slot"
-        if source not in known_sources:
-            return (), (), f"data_sources[{index}] uses unknown source '{source}'"
+        if component not in known_bound_components:
+            return (), (), (
+                f"component_data[{index}] uses component '{component}' without "
+                "a registered bound-data contract"
+            )
+        if component not in allowed_components:
+            return (), (), (
+                f"component_data[{index}] component '{component}' is outside "
+                f"the '{scope}' component scope"
+            )
         if not isinstance(params, dict):
-            return (), (), f"data_sources[{index}].params must be an object"
-        contract = contracts.get(source, {})
+            return (), (), f"component_data[{index}].params must be an object"
+        contract = contracts.get(component, {})
         param_specs = dict(contract.get("param_specs") or {})
         normalized_params = dict(params)
+        # Models occasionally pluralize a single-symbol parameter (or the
+        # inverse) even though the registered contract is exact.  Normalize
+        # only the unambiguous one-name alias; this does not invent a source or
+        # change a multi-symbol literal into a single symbol.
+        for name in tuple(normalized_params):
+            if name in param_specs:
+                continue
+            singular = name.removesuffix("s") if name.endswith("s") else None
+            plural = f"{name}s"
+            target = (
+                singular
+                if singular and singular in param_specs
+                else plural
+                if plural in param_specs
+                and "comma-separated"
+                in str(param_specs[plural].get("description") or "")
+                else None
+            )
+            if target and target not in normalized_params:
+                value = normalized_params[name]
+                if not (
+                    target == singular
+                    and isinstance(value, str)
+                    and "," in value
+                ):
+                    normalized_params[target] = normalized_params.pop(name)
         unknown_params = tuple(
             name
             for name in normalized_params
@@ -314,7 +428,7 @@ def _validate_generation_choices(
         )
         if unknown_params:
             return (), (), (
-                f"data_sources[{index}] source '{source}' has unknown param(s): "
+                f"component_data[{index}] component '{component}' has unknown param(s): "
                 f"{', '.join(unknown_params)}; allowed params: "
                 f"{', '.join(param_specs)}"
             )
@@ -336,7 +450,7 @@ def _validate_generation_choices(
                     allowed_host_keys.add(name.removesuffix("s"))
                 if host_key not in allowed_host_keys:
                     return (), (), (
-                        f"data_sources[{index}].params.{name} must reference "
+                        f"component_data[{index}].params.{name} must reference "
                         "one of the compatible host keys: "
                         + ", ".join(f"'{key}'" for key in sorted(allowed_host_keys))
                     )
@@ -348,15 +462,15 @@ def _validate_generation_choices(
                     normalized_params[name] = value
             if kind == "string" and (not isinstance(value, str) or not value.strip()):
                 return (), (), (
-                    f"data_sources[{index}].params.{name} must be a non-empty "
+                    f"component_data[{index}].params.{name} must be a non-empty "
                     f"string ({spec.get('description')})"
                 )
             if kind == "boolean" and not isinstance(value, bool):
-                return (), (), f"data_sources[{index}].params.{name} must be boolean"
+                return (), (), f"component_data[{index}].params.{name} must be boolean"
             if kind == "number" and (
                 not isinstance(value, (int, float)) or isinstance(value, bool)
             ):
-                return (), (), f"data_sources[{index}].params.{name} must be a number"
+                return (), (), f"component_data[{index}].params.{name} must be a number"
             if kind == "number":
                 minimum = spec.get("minimum")
                 maximum = spec.get("maximum")
@@ -364,13 +478,13 @@ def _validate_generation_choices(
                     maximum is not None and value > maximum
                 ):
                     return (), (), (
-                        f"data_sources[{index}].params.{name} must be between "
+                        f"component_data[{index}].params.{name} must be between "
                         f"{minimum:g} and {maximum:g}"
                     )
             enum = tuple(spec.get("enum") or ())
             if enum and value not in enum:
                 return (), (), (
-                    f"data_sources[{index}].params.{name} must be one of: "
+                    f"component_data[{index}].params.{name} must be one of: "
                     f"{', '.join(enum)}"
                 )
         required_params = tuple(contract.get("required_params") or ())
@@ -381,30 +495,22 @@ def _validate_generation_choices(
         )
         if missing_params:
             return (), (), (
-                f"data_sources[{index}] source '{source}' is missing required "
+                f"component_data[{index}] component '{component}' is missing required "
                 f"param(s): {', '.join(missing_params)}"
             )
-        accepted_components = tuple(contract.get("accepted_components") or ())
-        if accepted_components and not any(
-            name in requested_components for name in accepted_components
-        ):
-            return (), (), (
-                f"data_sources[{index}] source '{source}' requires compatible "
-                f"component(s): {', '.join(accepted_components)}"
-            )
+        if component not in requested_components:
+            requested_components.append(component)
         normalized: dict[str, Any] = {
-            "slot": slot,
-            "source": source,
+            "component": component,
+            "source": contract["source"],
             "params": normalized_params,
+            "shape": contract.get("shape") or "",
+            "bindings": tuple(contract.get("bindings") or ()),
+            "fixed_props": dict(contract.get("fixed_props") or {}),
+            "refresh_interval": contract.get("refresh_interval"),
         }
-        shape = str(raw.get("shape") or "").strip()
-        if shape:
-            normalized["shape"] = shape
-        refresh = raw.get("refresh_interval")
-        if isinstance(refresh, (int, float)) and refresh > 0:
-            normalized["refresh_interval"] = refresh
-        normalized_sources.append(normalized)
-    return requested_components, tuple(normalized_sources), None
+        normalized_plans.append(normalized)
+    return tuple(requested_components), tuple(normalized_plans), None
 
 
 def _document_component_names(document: str | None) -> tuple[str, ...]:
@@ -425,11 +531,115 @@ def _document_component_names(document: str | None) -> tuple[str, ...]:
     return tuple(dict.fromkeys(names))
 
 
+def _ensure_planned_component_data_refs(
+    document: str | None,
+    component_data: tuple[dict[str, Any], ...],
+) -> str | None:
+    """Complete component-owned data metadata from the fixed registry plan."""
+
+    if not document or not component_data:
+        return document
+    messages: list[dict[str, Any]] = []
+    for line in document.splitlines():
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            return document
+        if not isinstance(parsed, dict):
+            return document
+        messages.append(parsed)
+
+    components = [
+        component
+        for message in messages
+        if isinstance((update := message.get("updateComponents")), dict)
+        for component in (update.get("components") or ())
+        if isinstance(component, dict)
+    ]
+    claimed_ids: set[str] = set()
+    for plan in component_data:
+        target = str(plan.get("component") or "")
+        candidates = [
+            component
+            for component in components
+            if component.get("component") == target
+            and isinstance(component.get("id"), str)
+            and component["id"] not in claimed_ids
+        ]
+        if not candidates:
+            continue
+        expected_ref = {
+            "source": plan["source"],
+            "params": plan["params"],
+            **({"shape": plan["shape"]} if plan.get("shape") else {}),
+            **(
+                {"refresh": {"interval": plan["refresh_interval"]}}
+                if plan.get("refresh_interval")
+                else {}
+            ),
+        }
+        # During edit, retain instance identity by preferring an exact existing
+        # ref; for new components prefer one without any compiler-authored ref.
+        component = next(
+            (candidate for candidate in candidates if candidate.get("dataRef") == expected_ref),
+            next(
+                (candidate for candidate in candidates if "dataRef" not in candidate),
+                candidates[0],
+            ),
+        )
+        component_id = str(component["id"])
+        claimed_ids.add(component_id)
+        component["dataRef"] = expected_ref
+        declared = frozenset(component_property_names(target))
+        for prop, value in dict(plan.get("fixed_props") or {}).items():
+            if prop in declared:
+                component[prop] = value
+        data_prefix = f"/data/{component_id}"
+        for prop in tuple(plan.get("bindings") or ()):
+            if prop in declared:
+                component[prop] = {"path": f"{data_prefix}/{prop}"}
+    return "\n".join(
+        json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+        for message in messages
+    )
+
+
+def _ensure_supported_catalog_id(document: str | None) -> str | None:
+    """Pin every generated surface to the catalog the renderer registers.
+
+    Edition components extend Valuz's base catalog at runtime; they do not
+    create a second ``finance`` catalog. A compiler occasionally infers a
+    plausible-looking edition URL even though the prompt gives the one valid
+    id. That document passes component validation but the renderer rejects the
+    entire surface. Catalog selection is host plumbing, not an Agent business
+    decision, so canonicalize it deterministically before validation/storage.
+    """
+
+    if not document:
+        return document
+    messages: list[dict[str, Any]] = []
+    for line in document.splitlines():
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            return document
+        if not isinstance(parsed, dict):
+            return document
+        created = parsed.get("createSurface")
+        if isinstance(created, dict):
+            created["catalogId"] = _SUPPORTED_CATALOG_ID
+        messages.append(parsed)
+    return "\n".join(
+        json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+        for message in messages
+    )
+
+
 def _compiled_document_error(
     document: str | None,
     *,
     component_names: tuple[str, ...],
-    data_sources: tuple[dict[str, Any], ...],
+    component_data: tuple[dict[str, Any], ...],
     current_document: str | None,
     generation_mode: str,
 ) -> str | None:
@@ -445,16 +655,27 @@ def _compiled_document_error(
             return "compiler returned invalid A2UI JSONL"
         if isinstance(parsed, dict):
             messages.append(parsed)
-    components = [
-        component
-        for message in messages
-        for component in (message.get("updateComponents") or {}).get("components", ())
-        if isinstance(component, dict)
-    ]
+    components: list[dict[str, Any]] = []
+    for message in messages:
+        update = message.get("updateDataModel")
+        if isinstance(update, dict):
+            path = str(update.get("path") or "")
+            if path == "/refs" or path.startswith("/refs/"):
+                return "surface-global refs are not supported; dataRef belongs to its component"
+        component_update = message.get("updateComponents")
+        if not isinstance(component_update, dict):
+            continue
+        components.extend(
+            component
+            for component in (component_update.get("components") or ())
+            if isinstance(component, dict)
+        )
     actual_names = tuple(
         str(component.get("component") or "") for component in components
     )
-    if "Stack" not in actual_names or not any(component.get("id") == "root" for component in components):
+    if "Stack" not in actual_names or not any(
+        component.get("id") == "root" for component in components
+    ):
         return "compiler omitted the required root Stack"
     allowed_names = frozenset(
         (
@@ -469,58 +690,85 @@ def _compiled_document_error(
     if unexpected_names:
         return "compiler used unselected component(s): " + ", ".join(unexpected_names)
 
-    refs: dict[str, dict[str, Any]] = {}
-    for message in messages:
-        update = message.get("updateDataModel")
-        if not isinstance(update, dict):
-            continue
-        path = str(update.get("path") or "")
-        value = update.get("value")
-        if path.startswith("/refs/") and isinstance(value, dict):
-            refs[path.removeprefix("/refs/")] = value
-
-    planned = {str(source["slot"]): source for source in data_sources}
-    for slot, source in planned.items():
-        actual = refs.get(slot)
-        if actual is None:
-            return f"compiler omitted planned live binding '{slot}'"
-        if actual.get("source") != source.get("source") or actual.get("params") != source.get("params"):
-            return f"compiler changed planned live binding '{slot}'"
-        contract = registered_data_source_contracts().get(str(source.get("source")), {})
-        accepted = frozenset(contract.get("accepted_components") or ())
-        data_prefix = f"/data/{slot}"
-        visible = False
-        for component in components:
-            if component.get("component") not in accepted:
-                continue
-            encoded = json.dumps(component, ensure_ascii=False, separators=(",", ":"))
-            if data_prefix in encoded:
-                visible = True
-                break
-        if accepted and not visible:
-            return (
-                f"planned live binding '{slot}' is not rendered by "
-                f"{', '.join(sorted(accepted))}"
-            )
-
-    if generation_mode != "edit":
-        unexpected_refs = tuple(slot for slot in refs if slot not in planned)
-        if unexpected_refs:
-            return "compiler added unplanned live binding(s): " + ", ".join(unexpected_refs)
-    elif current_document:
-        current_refs: dict[str, dict[str, Any]] = {}
+    contracts = registered_component_data_contracts()
+    current_refs: dict[str, tuple[str, Any]] = {}
+    if generation_mode == "edit" and current_document:
         for line in current_document.splitlines():
             try:
-                update = json.loads(line).get("updateDataModel")
-            except (AttributeError, json.JSONDecodeError):
+                current_message = json.loads(line)
+            except json.JSONDecodeError:
                 continue
-            if isinstance(update, dict):
-                path = str(update.get("path") or "")
-                if path.startswith("/refs/") and isinstance(update.get("value"), dict):
-                    current_refs[path.removeprefix("/refs/")] = update["value"]
-        for slot, value in current_refs.items():
-            if slot not in planned and refs.get(slot) != value:
-                return f"edit removed or changed existing live binding '{slot}'"
+            current_update = current_message.get("updateComponents")
+            if not isinstance(current_update, dict):
+                continue
+            for current in current_update.get("components") or ():
+                if (
+                    isinstance(current, dict)
+                    and isinstance(current.get("id"), str)
+                    and "dataRef" in current
+                ):
+                    current_refs[current["id"]] = (
+                        str(current.get("component") or ""),
+                        current.get("dataRef"),
+                    )
+
+    claimed_ids: set[str] = set()
+    for plan in component_data:
+        target = str(plan.get("component") or "")
+        expected_ref = {
+            "source": plan.get("source"),
+            "params": plan.get("params"),
+            **({"shape": plan["shape"]} if plan.get("shape") else {}),
+            **(
+                {"refresh": {"interval": plan["refresh_interval"]}}
+                if plan.get("refresh_interval")
+                else {}
+            ),
+        }
+        matching = [
+            component
+            for component in components
+            if component.get("component") == target
+            and isinstance(component.get("id"), str)
+            and component["id"] not in claimed_ids
+            and component.get("dataRef") == expected_ref
+        ]
+        if not matching:
+            return f"planned live component '{target}' is missing its canonical dataRef"
+        component = matching[0]
+        component_id = str(component["id"])
+        claimed_ids.add(component_id)
+        data_prefix = f"/data/{component_id}"
+        for prop in tuple(plan.get("bindings") or ()):
+            if component.get(prop) != {"path": f"{data_prefix}/{prop}"}:
+                return f"planned live component '{component_id}' has invalid binding '{prop}'"
+        for prop, value in dict(plan.get("fixed_props") or {}).items():
+            if component.get(prop) != value:
+                return f"planned live component '{component_id}' changed fixed prop '{prop}'"
+
+    for component in components:
+        if "dataRef" not in component:
+            continue
+        component_id = str(component.get("id") or "")
+        component_name = str(component.get("component") or "")
+        ref = component.get("dataRef")
+        contract = contracts.get(component_name)
+        if not isinstance(ref, dict) or contract is None:
+            return f"component '{component_id}' has an unregistered dataRef"
+        if ref.get("source") != contract.get("source"):
+            return f"component '{component_id}' dataRef does not match its fixed source"
+        if component_id in claimed_ids:
+            continue
+        if generation_mode != "edit":
+            return f"component '{component_id}' has an unplanned dataRef"
+        if current_refs.get(component_id) != (component_name, ref):
+            return f"edit added or changed unplanned dataRef on component '{component_id}'"
+
+    if generation_mode == "edit":
+        actual_ids = {str(component.get("id") or "") for component in components}
+        for component_id in current_refs:
+            if component_id not in claimed_ids and component_id not in actual_ids:
+                return f"edit removed existing live component '{component_id}'"
     return None
 
 
@@ -945,6 +1193,19 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
     data = args.get("data")
     if not request or not str(request).strip():
         return ToolResult(content="generate_ui: 'request' is required", is_error=True)
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError:
+            return ToolResult(
+                content="generate_ui: 'data' string must contain a JSON object",
+                is_error=True,
+            )
+        if not isinstance(data, dict):
+            return ToolResult(
+                content="generate_ui: 'data' must be an object",
+                is_error=True,
+            )
 
     # The tool request is authored by the agent and therefore cannot grant its
     # own permission to expand the user's scope. Gate against the persisted
@@ -964,7 +1225,8 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
         return ToolResult(
             content=(
                 "generate_ui: no recent user message asked for a chart, dashboard, "
-                "visualization, or interactive UI. Answer in text instead; only call "
+                "workspace, page, research card, visualization, or interactive UI. "
+                "Answer in text instead; only call "
                 "this tool once the user has asked for one."
             ),
             is_error=True,
@@ -997,10 +1259,10 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
         name in all_names for name in requested_components
     ):
         scope = "all"
-    component_names, data_sources, choice_error = _validate_generation_choices(
+    component_names, component_data, choice_error = _validate_generation_choices(
         scope=scope,
         component_names=args.get("component_names"),
-        data_sources=args.get("data_sources"),
+        component_data=args.get("component_data"),
     )
     if choice_error:
         return ToolResult(
@@ -1028,8 +1290,14 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
     target_host = _parse_target_host(args, source)
     host_context = await _load_host_generation_context(user_id, target_host)
     generation_mode = str(args.get("generation_mode") or "").strip().lower()
+    # A hosted generation is a replacement unless the caller explicitly chose
+    # edit. Feeding an old page into an omitted/default mode makes the compiler
+    # leak unrelated components into a newly requested page, and then forces
+    # repeated calls just to enumerate those accidental components.
+    if target_host is not None and generation_mode != "edit":
+        generation_mode = "replace"
     user_text = _latest_user_text(messages)
-    if generation_mode == "edit" and _STRICT_REPLACE_REQUEST_RE.search(user_text):
+    if _STRICT_REPLACE_REQUEST_RE.search(user_text):
         logger.info(
             "generate_ui: overriding edit to replace for strict user scope session=%s",
             ctx.session_id,
@@ -1072,16 +1340,16 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
         current_document=current_document,
         language_reference=_latest_user_language_reference(messages),
         component_names=component_names,
-        data_sources=data_sources,
+        component_data=component_data,
     )
     logger.info(
         "generate_ui: compile start model=%s lite=%s scope=%s candidates=%d "
-        "sources=%d prompt_chars=%d mode=%s",
+        "live_components=%d prompt_chars=%d mode=%s",
         compiler.model,
         compiler.is_lite,
         scope,
         len(component_names),
-        len(data_sources),
+        len(component_data),
         len(prompt),
         generation_mode or "new",
     )
@@ -1100,13 +1368,18 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
         generated = ""
 
     generated = (generated or "").strip()
-    primary_document = extract_a2ui_document(generated) if generated else None
-    has_generation_plan = bool(component_names or data_sources)
+    primary_document = _ensure_planned_component_data_refs(
+        _ensure_supported_catalog_id(
+            extract_a2ui_document(generated) if generated else None
+        ),
+        component_data,
+    )
+    has_generation_plan = bool(component_names or component_data)
     primary_validation_error = (
         _compiled_document_error(
             primary_document,
             component_names=component_names,
-            data_sources=data_sources,
+            component_data=component_data,
             current_document=current_document,
             generation_mode=generation_mode,
         )
@@ -1161,12 +1434,15 @@ async def _generate_ui_handler(args: dict[str, Any], ctx: ExecContext) -> ToolRe
     # the same surface. None belongs in a bindable version. When extraction
     # succeeds, preview exactly the canonical document that was recorded so
     # the confirmation card can never disagree with the revision it applies.
-    document = extract_a2ui_document(generated)
+    document = _ensure_planned_component_data_refs(
+        _ensure_supported_catalog_id(extract_a2ui_document(generated)),
+        component_data,
+    )
     validation_error = (
         _compiled_document_error(
             document,
             component_names=component_names,
-            data_sources=data_sources,
+            component_data=component_data,
             current_document=current_document,
             generation_mode=generation_mode,
         )
@@ -1223,14 +1499,14 @@ def build_generative_ui_tool_defs() -> tuple[ToolDef, ...]:
     parameters["properties"]["component_names"]["items"]["enum"] = list(
         component_names_for_scope("all")
     )
-    source_ids = registered_data_source_ids()
-    if source_ids:
-        parameters["properties"]["data_sources"]["items"]["properties"][
-            "source"
-        ]["enum"] = list(source_ids)
+    component_schemas = _registered_component_data_item_schemas()
+    if component_schemas:
+        parameters["properties"]["component_data"]["items"] = {
+            "oneOf": component_schemas
+        }
     td = ToolDef(
         name=GENERATIVE_UI_TOOL_NAME,
-        description=TOOL_DESCRIPTION + registered_data_source_tool_guide(),
+        description=TOOL_DESCRIPTION + registered_component_data_tool_guide(),
         parameters=parameters,
         handler=_generate_ui_handler,
         read_only=False,

@@ -40,6 +40,8 @@ export function describeA2UIComponent(component: ComponentApi): string {
     const type =
       name === "palette"
         ? "palette"
+        : name === "tags"
+          ? "array<{label,tone?}>"
         : name === "series"
           ? "array<{key,label?,role?,stack?,curve?}>"
           : typeName(schema);

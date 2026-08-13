@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -28,6 +31,17 @@ describe("A2UI Gallery menu scrolling", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("keeps chart specimens inside the Gallery content track", () => {
+    const stylesheet = readFileSync(resolve(__dirname, "gallery.css"), "utf8");
+
+    expect(stylesheet).toMatch(
+      /\.demo-specimen-list\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s,
+    );
+    expect(stylesheet).toMatch(
+      /\.demo-specimen\s*\{[^}]*max-width:\s*100%[^}]*min-width:\s*0/s,
+    );
   });
 
   it("starts unopened menus at the top and restores each visited menu independently", () => {

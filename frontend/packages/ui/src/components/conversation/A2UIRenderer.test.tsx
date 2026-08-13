@@ -82,18 +82,51 @@ describe("A2UIRenderer", () => {
     expect(screen.getByText("Right")).toBeTruthy();
   });
 
-  it("starts the edition data host for declared refs", () => {
-    let requested = "";
-    registerGenUIDataHost(({ surfaceId }) => {
-      requested = surfaceId;
+  it("extracts component dataRef metadata before rendering and starts the edition host", () => {
+    let requested: unknown;
+    registerGenUIDataHost(({ surfaceId, dataRefs }) => {
+      requested = { surfaceId, dataRefs };
+      return { stop: () => undefined };
+    });
+    const body = [
+      JSON.stringify({ version: "v0.9.1", createSurface: { surfaceId: "s", catalogId: "https://valuz.io/a2ui/catalogs/base/v1" } }),
+      JSON.stringify({
+        version: "v0.9.1",
+        updateComponents: {
+          surfaceId: "s",
+          components: [{
+            id: "root",
+            component: "TextContent",
+            text: "Live",
+            dataRef: { source: "test.text", params: { id: "1" } },
+          }],
+        },
+      }),
+    ].join("\n");
+    render(<A2UIRenderer body={body} />);
+    expect(screen.getByText("Live")).toBeTruthy();
+    expect(requested).toEqual({
+      surfaceId: "s",
+      dataRefs: [{
+        componentId: "root",
+        component: "TextContent",
+        dataRef: { source: "test.text", params: { id: "1" } },
+      }],
+    });
+  });
+
+  it("does not start the edition host for surface-global refs", () => {
+    let calls = 0;
+    registerGenUIDataHost(() => {
+      calls += 1;
       return { stop: () => undefined };
     });
     const body = [
       JSON.stringify({ version: "v0.9.1", createSurface: { surfaceId: "s", catalogId: "https://valuz.io/a2ui/catalogs/base/v1" } }),
       JSON.stringify({ version: "v0.9.1", updateDataModel: { surfaceId: "s", path: "/refs/quote", value: { source: "finance.market.daily" } } }),
-      JSON.stringify({ version: "v0.9.1", updateComponents: { surfaceId: "s", components: [{ id: "root", component: "TextContent", text: "Live" }] } }),
+      JSON.stringify({ version: "v0.9.1", updateComponents: { surfaceId: "s", components: [{ id: "root", component: "TextContent", text: "Static" }] } }),
     ].join("\n");
     render(<A2UIRenderer body={body} />);
-    expect(requested).toBe("s");
+    expect(calls).toBe(0);
   });
 });

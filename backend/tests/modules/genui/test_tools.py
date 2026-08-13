@@ -349,6 +349,40 @@ async def test_handler_passes_data_into_prompt(monkeypatch, patched):
     assert "rows" in seen["prompt"]
 
 
+async def test_handler_normalizes_json_encoded_data_object(monkeypatch, patched):
+    seen = {}
+
+    async def _comp(prompt):
+        seen["prompt"] = prompt
+        return "Table"
+
+    monkeypatch.setattr(t, "_make_completer", lambda **kw: _comp)
+    handler = build_generative_ui_tool_defs()[0].handler
+    result = await handler(
+        {"request": "research card", "data": '{"thesis":"AI demand persists"}'},
+        _ctx(),
+    )
+
+    assert result.is_error is False
+    assert '"thesis": "AI demand persists"' in seen["prompt"]
+
+
+def test_tool_schema_requires_data_object():
+    schema = build_generative_ui_tool_defs()[0].parameters
+
+    assert schema["properties"]["data"]["type"] == "object"
+    assert "oneOf" not in schema["properties"]["data"]
+
+
+async def test_handler_rejects_non_object_json_encoded_data(patched):
+    handler = build_generative_ui_tool_defs()[0].handler
+
+    result = await handler({"request": "research card", "data": "[1,2]"}, _ctx())
+
+    assert result.is_error is True
+    assert "'data' must be an object" in result.content
+
+
 async def test_hosted_edit_passes_the_bound_a2ui_revision_into_prompt(
     monkeypatch, patched
 ):
@@ -392,6 +426,7 @@ async def test_hosted_edit_passes_the_bound_a2ui_revision_into_prompt(
     await handler(
         {
             "request": "change only the chart",
+            "generation_mode": "edit",
             "target_host": {
                 "host_type": host.host_type,
                 "host_id": host.host_id,
@@ -403,6 +438,39 @@ async def test_hosted_edit_passes_the_bound_a2ui_revision_into_prompt(
 
     assert current in seen["prompt"]
     assert seen["delivery"]["host_context"] is context
+
+
+async def test_hosted_default_replaces_without_old_document(monkeypatch, patched):
+    host = t.UiArtifactTargetHost(
+        host_type="finance.research-desk", host_id="desk", slot="main"
+    )
+    context = t._HostGenerationContext(
+        target_host=host,
+        expected_revision_id="rev_5",
+        current_document="OLD COMPLETE DOCUMENT",
+    )
+    seen: dict[str, str] = {}
+
+    async def _load(user_id, target_host):
+        return context
+
+    async def _comp(prompt):
+        seen["prompt"] = prompt
+        return '{"version":"v0.9.1","createSurface":{"surfaceId":"next"}}'
+
+    monkeypatch.setattr(t, "_load_host_generation_context", _load)
+    monkeypatch.setattr(t, "_make_completer", lambda **kwargs: _comp)
+
+    await build_generative_ui_tool_defs()[0].handler(
+        {
+            "request": "build a research card",
+            "target_host": {"host_type": host.host_type, "host_id": host.host_id},
+        },
+        _ctx(),
+    )
+
+    assert "OLD COMPLETE DOCUMENT" not in seen["prompt"]
+    assert "CURRENT HOST DOCUMENT" not in seen["prompt"]
 
 
 async def test_hosted_replace_does_not_send_the_old_document(monkeypatch, patched):
@@ -520,20 +588,71 @@ def test_tool_def_shape():
     assert defs[0].handler is not None
     assert defs[0].parameters["required"] == ["request"]
     assert "component_names" in defs[0].parameters["properties"]
-    assert "data_sources" in defs[0].parameters["properties"]
+    assert "component_data" in defs[0].parameters["properties"]
+    assert "data_sources" not in defs[0].parameters["properties"]
     assert "generation_mode" in defs[0].parameters["properties"]
 
 
-def test_tool_def_advertises_registered_source_contracts(monkeypatch):
+def test_tool_def_advertises_registered_component_contracts(monkeypatch):
     monkeypatch.setattr(
         t,
-        "registered_data_source_tool_guide",
-        lambda: "\nRegistered live sources:\n- finance.market.kline {symbols} -> TimeSeriesChart",
+        "registered_component_data_tool_guide",
+        lambda: "\nRegistered live components:\n- TimeSeriesChart {symbols}",
     )
 
     description = build_generative_ui_tool_defs()[0].description
 
-    assert "finance.market.kline {symbols} -> TimeSeriesChart" in description
+    assert "TimeSeriesChart {symbols}" in description
+
+
+def test_tool_def_exposes_exact_registered_component_param_schema(monkeypatch):
+    monkeypatch.setattr(
+        t,
+        "registered_component_data_contracts",
+        lambda: {
+            "TimeSeriesChart": {
+                "component": "TimeSeriesChart",
+                "source": "finance.market.kline",
+                "required_params": ("symbols",),
+                "param_specs": {
+                    "symbols": {
+                        "kind": "string",
+                        "description": "comma-separated prefixed symbols",
+                    },
+                    "rangeDays": {
+                        "kind": "number",
+                        "minimum": 2,
+                        "maximum": 3650,
+                        "required": False,
+                    },
+                },
+            }
+        },
+    )
+    monkeypatch.setattr(
+        t,
+        "component_property_names",
+        lambda name: ("metrics",) if name == "QuoteStrip" else (),
+    )
+
+    items = build_generative_ui_tool_defs()[0].parameters["properties"][
+        "component_data"
+    ]["items"]
+    variant = items["oneOf"][0]
+    params = variant["properties"]["params"]
+
+    assert variant["properties"]["component"]["enum"] == ["TimeSeriesChart"]
+    assert set(variant["properties"]) == {"component", "params"}
+    assert params["required"] == ["symbols"]
+    assert params["additionalProperties"] is False
+    assert params["properties"]["rangeDays"]["oneOf"][0] == {
+        "type": "number",
+        "minimum": 2,
+        "maximum": 3650,
+    }
+    assert params["properties"]["symbols"]["oneOf"][1]["properties"]["$host"][
+        "enum"
+    ] == ["symbols", "symbol"]
 
 
 async def test_handler_rejects_unknown_component_candidate(patched):
@@ -548,8 +667,34 @@ async def test_handler_rejects_unknown_component_candidate(patched):
 async def test_handler_passes_validated_choices_to_the_compiler(monkeypatch, patched):
     monkeypatch.setattr(
         t,
-        "registered_data_source_ids",
-        lambda: ("finance.market.quote",),
+        "component_names_for_scope",
+        lambda scope="all": ("Stack", "QuoteStrip"),
+    )
+    monkeypatch.setattr(
+        t,
+        "registered_component_data_names",
+        lambda: ("QuoteStrip",),
+    )
+    monkeypatch.setattr(
+        t,
+        "registered_component_data_contracts",
+        lambda: {
+            "QuoteStrip": {
+                "component": "QuoteStrip",
+                "source": "finance.market.quote",
+                "required_params": ("symbol",),
+                "param_specs": {"symbol": {"kind": "string"}},
+                "shape": "FinanceMetricData",
+                "bindings": ("metrics",),
+                "fixed_props": {},
+                "refresh_interval": 60,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        t,
+        "component_property_names",
+        lambda name: ("metrics",) if name == "QuoteStrip" else (),
     )
     seen: dict[str, str] = {}
 
@@ -558,8 +703,7 @@ async def test_handler_passes_validated_choices_to_the_compiler(monkeypatch, pat
         return "\n".join(
             (
                 '{"version":"v0.9.1","createSurface":{"surfaceId":"s"}}',
-                '{"version":"v0.9.1","updateDataModel":{"surfaceId":"s","path":"/refs/quote","value":{"source":"finance.market.quote","params":{"symbol":"US:NVDA"}}}}',
-                '{"version":"v0.9.1","updateComponents":{"surfaceId":"s","components":[{"id":"root","component":"Stack","children":["metrics"]},{"id":"metrics","component":"MetricGroup","metrics":{"path":"/data/quote/metrics"}}]}}',
+                '{"version":"v0.9.1","updateComponents":{"surfaceId":"s","components":[{"id":"root","component":"Stack","children":["quote"]},{"id":"quote","component":"QuoteStrip"}]}}',
             )
         )
 
@@ -567,13 +711,11 @@ async def test_handler_passes_validated_choices_to_the_compiler(monkeypatch, pat
     result = await build_generative_ui_tool_defs()[0].handler(
         {
             "request": "quote strip",
-            "component_names": ["TextContent", "MetricGroup"],
-            "data_sources": [
+            "component_names": ["QuoteStrip"],
+            "component_data": [
                 {
-                    "slot": "quote",
-                    "source": "finance.market.quote",
+                    "component": "QuoteStrip",
                     "params": {"symbol": "US:NVDA"},
-                    "refresh_interval": 60,
                 }
             ],
         },
@@ -581,10 +723,9 @@ async def test_handler_passes_validated_choices_to_the_compiler(monkeypatch, pat
     )
 
     assert result.is_error is False
-    assert "MetricGroup(" in seen["prompt"]
-    assert "LineChart(" not in seen["prompt"]
-    assert "PLANNED LIVE BINDINGS" in seen["prompt"]
-    assert '"source": "finance.market.quote"' in seen["prompt"]
+    assert "PLANNED BOUND COMPONENTS" in seen["prompt"]
+    assert '"component": "QuoteStrip"' in seen["prompt"]
+    assert "finance.market.quote" not in seen["prompt"]
 
 
 async def test_handler_rejects_missing_registered_source_params(monkeypatch, patched):
@@ -595,16 +736,19 @@ async def test_handler_rejects_missing_registered_source_params(monkeypatch, pat
     )
     monkeypatch.setattr(
         t,
-        "registered_data_source_ids",
-        lambda: ("finance.macro.commodities",),
+        "registered_component_data_names",
+        lambda: ("QuoteStrip",),
     )
     monkeypatch.setattr(
         t,
-        "registered_data_source_contracts",
+        "registered_component_data_contracts",
         lambda: {
-            "finance.macro.commodities": {
+            "QuoteStrip": {
+                "component": "QuoteStrip",
+                "source": "finance.macro.commodities",
                 "required_params": ("commodity",),
-                "accepted_components": ("QuoteStrip",),
+                "param_specs": {"commodity": {"kind": "string"}},
+                "bindings": ("metrics",),
             }
         },
     )
@@ -612,10 +756,9 @@ async def test_handler_rejects_missing_registered_source_params(monkeypatch, pat
         {
             "request": "gold chart",
             "component_names": ["QuoteStrip"],
-            "data_sources": [
+            "component_data": [
                 {
-                    "slot": "gold",
-                    "source": "finance.macro.commodities",
+                    "component": "QuoteStrip",
                     "params": {},
                 }
             ],
@@ -627,259 +770,148 @@ async def test_handler_rejects_missing_registered_source_params(monkeypatch, pat
     assert "missing required param(s): commodity" in result.content
 
 
-async def test_handler_rejects_source_without_compatible_component(monkeypatch, patched):
+def _component_contracts():
+    return {
+        "QuoteStrip": {
+            "component": "QuoteStrip",
+            "source": "finance.market.quote",
+            "required_params": ("symbol",),
+            "param_specs": {
+                "symbol": {"kind": "string", "description": "prefixed symbol"}
+            },
+            "shape": "FinanceMetricData",
+            "bindings": ("metrics", "source", "asOf", "basis"),
+            "fixed_props": {},
+            "refresh_interval": 60,
+        },
+        "TimeSeriesChart": {
+            "component": "TimeSeriesChart",
+            "source": "finance.market.kline",
+            "required_params": ("symbols",),
+            "param_specs": {
+                "symbols": {
+                    "kind": "string",
+                    "description": "comma-separated same-market prefixed symbols",
+                },
+                "rangeDays": {"kind": "number", "minimum": 2, "maximum": 3650},
+                "normalize": {"kind": "boolean"},
+            },
+            "shape": "FinanceTimeSeriesData",
+            "bindings": ("data", "series"),
+            "fixed_props": {"xKey": "date"},
+            "refresh_interval": 300,
+        },
+    }
+
+
+def _patch_component_contracts(monkeypatch):
+    contracts = _component_contracts()
+    monkeypatch.setattr(t, "registered_component_data_contracts", lambda: contracts)
+    monkeypatch.setattr(t, "registered_component_data_names", lambda: tuple(contracts))
+
+
+def test_generation_choices_add_bound_component(monkeypatch):
     monkeypatch.setattr(
         t,
         "component_names_for_scope",
         lambda scope="all": ("Stack", "RelativePerformanceChart", "TimeSeriesChart"),
     )
-    monkeypatch.setattr(
-        t,
-        "registered_data_source_ids",
-        lambda: ("finance.market.kline",),
-    )
-    monkeypatch.setattr(
-        t,
-        "registered_data_source_contracts",
-        lambda: {
-            "finance.market.kline": {
-                "required_params": ("symbols",),
-                "accepted_components": ("TimeSeriesChart",),
-            }
-        },
-    )
-    result = await build_generative_ui_tool_defs()[0].handler(
-        {
-            "request": "relative chart",
-            "component_names": ["RelativePerformanceChart"],
-            "data_sources": [
-                {
-                    "slot": "prices",
-                    "source": "finance.market.kline",
-                    "params": {"symbols": "US:NVDA,US:AMD"},
-                }
-            ],
-        },
-        _ctx(),
-    )
-
-    assert result.is_error is True
-    assert "requires compatible component(s): TimeSeriesChart" in result.content
-
-
-def test_generation_choices_normalize_string_lists_and_validate_param_shapes(monkeypatch):
-    monkeypatch.setattr(
-        t,
-        "component_names_for_scope",
-        lambda scope="all": ("Stack", "TimeSeriesChart"),
-    )
-    monkeypatch.setattr(t, "registered_data_source_ids", lambda: ("finance.market.kline",))
-    monkeypatch.setattr(
-        t,
-        "registered_data_source_contracts",
-        lambda: {
-            "finance.market.kline": {
-                "required_params": ("symbols",),
-                "accepted_components": ("TimeSeriesChart",),
-                "param_specs": {
-                    "symbols": {"kind": "string", "description": "comma-separated"},
-                    "rangeDays": {"kind": "number", "minimum": 2, "maximum": 3650},
-                    "normalize": {"kind": "boolean"},
-                },
-            }
-        },
-    )
-
-    components, sources, error = t._validate_generation_choices(
+    _patch_component_contracts(monkeypatch)
+    components, plans, error = t._validate_generation_choices(
         scope="all",
-        component_names=["TimeSeriesChart"],
-        data_sources=[
+        component_names=["RelativePerformanceChart"],
+        component_data=[
             {
-                "slot": "prices",
-                "source": "finance.market.kline",
-                "params": {
-                    "symbols": ["US:NVDA", "US:AMD"],
-                    "rangeDays": 90,
-                    "normalize": True,
-                },
+                "component": "TimeSeriesChart",
+                "params": {"symbols": "US:NVDA,US:AMD"},
             }
         ],
     )
-
     assert error is None
-    assert components == ("TimeSeriesChart",)
-    assert sources[0]["params"] == {
-        "symbols": "US:NVDA,US:AMD",
-        "rangeDays": 90,
-        "normalize": True,
+    assert components == ("RelativePerformanceChart", "TimeSeriesChart")
+    assert plans[0]["source"] == "finance.market.kline"
+
+
+def test_generation_choices_adds_only_available_composition_glue(monkeypatch):
+    monkeypatch.setattr(
+        t,
+        "component_names_for_scope",
+        lambda scope="all": ("Stack", "InsightCard", "Card", "Grid", "TextContent", "Separator"),
+    )
+    components, plans, error = t._validate_generation_choices(
+        scope="all", component_names=["InsightCard"], component_data=None
+    )
+    assert error is None
+    assert components == ("InsightCard", "Card", "Grid", "TextContent", "Separator")
+    assert plans == ()
+
+
+def test_generation_choices_normalize_and_validate_params(monkeypatch):
+    monkeypatch.setattr(
+        t, "component_names_for_scope", lambda scope="all": ("Stack", "TimeSeriesChart")
+    )
+    _patch_component_contracts(monkeypatch)
+    _, plans, error = t._validate_generation_choices(
+        scope="all",
+        component_names=["TimeSeriesChart"],
+        component_data=[{
+            "component": "TimeSeriesChart",
+            "params": {"symbols": ["US:NVDA", "US:AMD"], "rangeDays": 90, "normalize": True},
+        }],
+    )
+    assert error is None
+    assert plans[0]["params"] == {
+        "symbols": "US:NVDA,US:AMD", "rangeDays": 90, "normalize": True
     }
 
 
-def test_generation_choices_accept_nested_host_param_reference(monkeypatch):
+def test_generation_choices_accept_host_refs_and_symbol_alias(monkeypatch):
     monkeypatch.setattr(
-        t,
-        "component_names_for_scope",
-        lambda scope="all": ("Stack", "QuoteStrip"),
+        t, "component_names_for_scope", lambda scope="all": ("Stack", "QuoteStrip", "TimeSeriesChart")
     )
-    monkeypatch.setattr(t, "registered_data_source_ids", lambda: ("finance.market.quote",))
-    monkeypatch.setattr(
-        t,
-        "registered_data_source_contracts",
-        lambda: {
-            "finance.market.quote": {
-                "required_params": ("symbol",),
-                "accepted_components": ("QuoteStrip",),
-                "param_specs": {
-                    "symbol": {"kind": "string", "description": "prefixed symbol"},
-                },
-            }
-        },
-    )
-
-    _, sources, error = t._validate_generation_choices(
+    _patch_component_contracts(monkeypatch)
+    components, plans, error = t._validate_generation_choices(
         scope="all",
-        component_names=["QuoteStrip"],
-        data_sources=[
-            {
-                "slot": "quote",
-                "source": "finance.market.quote",
-                "params": {"symbol": {"$host": "symbol"}},
-            }
-        ],
+        component_names=[],
+        component_data=[{"component": "QuoteStrip", "params": {"symbols": {"$host": "symbol"}}}],
     )
-
     assert error is None
-    assert sources[0]["params"] == {"symbol": {"$host": "symbol"}}
+    assert components == ("QuoteStrip",)
+    assert plans[0]["params"] == {"symbol": {"$host": "symbol"}}
 
-
-def test_generation_choices_reject_unknown_host_param_reference(monkeypatch):
-    monkeypatch.setattr(
-        t,
-        "component_names_for_scope",
-        lambda scope="all": ("Stack", "QuoteStrip"),
-    )
-    monkeypatch.setattr(t, "registered_data_source_ids", lambda: ("finance.market.quote",))
-    monkeypatch.setattr(
-        t,
-        "registered_data_source_contracts",
-        lambda: {
-            "finance.market.quote": {
-                "required_params": ("symbol",),
-                "accepted_components": ("QuoteStrip",),
-                "param_specs": {
-                    "symbol": {"kind": "string", "description": "prefixed symbol"},
-                },
-            }
-        },
-    )
-
-    _, _, error = t._validate_generation_choices(
-        scope="all",
-        component_names=["QuoteStrip"],
-        data_sources=[
-            {
-                "slot": "quote",
-                "source": "finance.market.quote",
-                "params": {"symbol": {"$host": "company_id"}},
-            }
-        ],
-    )
-
-    assert "compatible host keys: 'symbol'" in str(error)
-
-
-def test_generation_choices_allow_singular_company_host_for_symbol_list(monkeypatch):
-    monkeypatch.setattr(
-        t,
-        "component_names_for_scope",
-        lambda scope="all": ("Stack", "TimeSeriesChart"),
-    )
-    monkeypatch.setattr(t, "registered_data_source_ids", lambda: ("finance.market.kline",))
-    monkeypatch.setattr(
-        t,
-        "registered_data_source_contracts",
-        lambda: {
-            "finance.market.kline": {
-                "required_params": ("symbols",),
-                "accepted_components": ("TimeSeriesChart",),
-                "param_specs": {
-                    "symbols": {
-                        "kind": "string",
-                        "description": "comma-separated same-market prefixed symbols",
-                    },
-                    "rangeDays": {"kind": "number", "minimum": 2, "maximum": 3650},
-                },
-            }
-        },
-    )
-
-    _, sources, error = t._validate_generation_choices(
+    _, list_plans, list_error = t._validate_generation_choices(
         scope="all",
         component_names=["TimeSeriesChart"],
-        data_sources=[
-            {
-                "slot": "prices",
-                "source": "finance.market.kline",
-                "params": {
-                    "symbols": {"$host": "symbol"},
-                    "rangeDays": 90,
-                },
-            }
-        ],
+        component_data=[{
+            "component": "TimeSeriesChart",
+            "params": {"symbols": {"$host": "symbol"}, "rangeDays": 90},
+        }],
     )
-
-    assert error is None
-    assert sources[0]["params"] == {
-        "symbols": {"$host": "symbol"},
-        "rangeDays": 90,
-    }
+    assert list_error is None
+    assert list_plans[0]["params"]["symbols"] == {"$host": "symbol"}
 
 
-def test_generation_choices_reject_unknown_and_out_of_range_params(monkeypatch):
+def test_generation_choices_reject_bad_host_unknown_and_range(monkeypatch):
     monkeypatch.setattr(
-        t,
-        "component_names_for_scope",
-        lambda scope="all": ("Stack", "TimeSeriesChart"),
+        t, "component_names_for_scope", lambda scope="all": ("Stack", "QuoteStrip", "TimeSeriesChart")
     )
-    monkeypatch.setattr(t, "registered_data_source_ids", lambda: ("finance.market.kline",))
-    monkeypatch.setattr(
-        t,
-        "registered_data_source_contracts",
-        lambda: {
-            "finance.market.kline": {
-                "required_params": ("symbols",),
-                "accepted_components": ("TimeSeriesChart",),
-                "param_specs": {
-                    "symbols": {"kind": "string", "description": "comma-separated"},
-                    "rangeDays": {"kind": "number", "minimum": 2, "maximum": 3650},
-                },
-            }
-        },
+    _patch_component_contracts(monkeypatch)
+    _, _, host_error = t._validate_generation_choices(
+        scope="all",
+        component_names=["QuoteStrip"],
+        component_data=[{"component": "QuoteStrip", "params": {"symbol": {"$host": "company_id"}}}],
     )
-
     _, _, unknown_error = t._validate_generation_choices(
         scope="all",
         component_names=["TimeSeriesChart"],
-        data_sources=[
-            {
-                "slot": "prices",
-                "source": "finance.market.kline",
-                "params": {"symbols": "US:NVDA", "days": 90},
-            }
-        ],
+        component_data=[{"component": "TimeSeriesChart", "params": {"symbols": "US:NVDA", "days": 90}}],
     )
     _, _, range_error = t._validate_generation_choices(
         scope="all",
         component_names=["TimeSeriesChart"],
-        data_sources=[
-            {
-                "slot": "prices",
-                "source": "finance.market.kline",
-                "params": {"symbols": "US:NVDA", "rangeDays": 1},
-            }
-        ],
+        component_data=[{"component": "TimeSeriesChart", "params": {"symbols": "US:NVDA", "rangeDays": 1}}],
     )
-
+    assert "compatible host keys: 'symbol'" in str(host_error)
     assert "unknown param(s): days" in str(unknown_error)
     assert "between 2 and 3650" in str(range_error)
 
@@ -924,36 +956,178 @@ async def test_handler_widens_component_scope_for_registered_candidates(monkeypa
 def test_compiled_document_validation_rejects_changed_planned_binding(monkeypatch):
     monkeypatch.setattr(
         t,
-        "registered_data_source_contracts",
+        "registered_component_data_contracts",
         lambda: {
-            "finance.market.kline": {
-                "required_params": ("symbols",),
-                "accepted_components": ("TimeSeriesChart",),
+            "TimeSeriesChart": {
+                "source": "finance.market.kline",
+                "bindings": ("data", "series"),
             }
         },
     )
     document = "\n".join(
         (
             '{"version":"v0.9.1","createSurface":{"surfaceId":"main"}}',
-            '{"version":"v0.9.1","updateDataModel":{"surfaceId":"main","path":"/refs/prices","value":{"source":"finance.market.daily","params":{"symbol":"US:NVDA"}}}}',
-            '{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":[{"id":"root","component":"Stack","children":["chart"]},{"id":"chart","component":"TimeSeriesChart","data":{"path":"/data/prices/data"},"series":{"path":"/data/prices/series"},"xKey":"date"}]}}',
+            '{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":[{"id":"root","component":"Stack","children":["chart"]},{"id":"chart","component":"TimeSeriesChart","dataRef":{"source":"finance.market.daily","params":{"symbol":"US:NVDA"}},"data":{"path":"/data/chart/data"},"series":{"path":"/data/chart/series"},"xKey":"date"}]}}',
         )
     )
     error = t._compiled_document_error(
         document,
         component_names=("TimeSeriesChart",),
-        data_sources=(
+        component_data=(
             {
-                "slot": "prices",
+                "component": "TimeSeriesChart",
                 "source": "finance.market.kline",
                 "params": {"symbols": "US:NVDA,US:AMD"},
+                "bindings": ("data", "series"),
             },
         ),
         current_document=None,
         generation_mode="replace",
     )
 
-    assert error == "compiler changed planned live binding 'prices'"
+    assert error == "planned live component 'TimeSeriesChart' is missing its canonical dataRef"
+
+
+def test_ensure_planned_component_data_refs_upserts_validated_plan(monkeypatch):
+    monkeypatch.setattr(
+        t,
+        "registered_component_data_contracts",
+        lambda: {
+            "QuoteStrip": {"source": "finance.market.quote"},
+            "TimeSeriesChart": {"source": "finance.market.kline"},
+        },
+    )
+    monkeypatch.setattr(
+        t,
+        "component_property_names",
+        lambda name: (
+            ("title", "metrics", "source", "asOf", "basis")
+            if name == "QuoteStrip"
+            else ("data", "series", "xKey")
+        ),
+    )
+    document = "\n".join(
+        (
+            '{"version":"v0.9.1","createSurface":{"surfaceId":"main"}}',
+            '{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":[{"id":"root","component":"Stack","children":["quote","chart"]},{"id":"quote","component":"QuoteStrip"},{"id":"chart","component":"TimeSeriesChart"}]}}',
+        )
+    )
+
+    completed = t._ensure_planned_component_data_refs(
+        document,
+        (
+            {
+                "component": "QuoteStrip",
+                "source": "finance.market.quote",
+                "params": {"symbol": {"$host": "symbol"}},
+                "shape": "FinanceMetricData",
+                "bindings": ("metrics", "source", "asOf", "basis"),
+            },
+            {
+                "component": "TimeSeriesChart",
+                "source": "finance.market.kline",
+                "params": {"symbols": {"$host": "symbol"}, "rangeDays": 90},
+                "shape": "FinanceTimeSeriesData",
+                "bindings": ("data", "series"),
+                "fixed_props": {"xKey": "date"},
+                "refresh_interval": 300,
+            },
+        ),
+    )
+
+    messages = [json.loads(line) for line in str(completed).splitlines()]
+    quote = next(
+        component
+        for message in messages
+        for component in (message.get("updateComponents") or {}).get("components", ())
+        if component.get("id") == "quote"
+    )
+    assert quote["dataRef"] == {
+        "source": "finance.market.quote",
+        "params": {"symbol": {"$host": "symbol"}},
+        "shape": "FinanceMetricData",
+    }
+    assert quote["source"] == {"path": "/data/quote/source"}
+    assert quote["asOf"] == {"path": "/data/quote/asOf"}
+    assert quote["basis"] == {"path": "/data/quote/basis"}
+    chart = next(
+        component
+        for message in messages
+        for component in (message.get("updateComponents") or {}).get("components", ())
+        if component.get("id") == "chart"
+    )
+    assert chart["dataRef"]["source"] == "finance.market.kline"
+    assert chart["dataRef"]["refresh"] == {"interval": 300}
+    assert chart["data"] == {"path": "/data/chart/data"}
+    assert chart["xKey"] == "date"
+
+
+def test_planned_component_data_does_not_rewrite_a_different_component(monkeypatch):
+    monkeypatch.setattr(
+        t,
+        "registered_component_data_contracts",
+        lambda: {
+            "QuoteStrip": {"source": "finance.market.quote"},
+        },
+    )
+    monkeypatch.setattr(
+        t,
+        "component_property_names",
+        lambda name: (
+            ("title", "metrics", "source", "asOf", "basis")
+            if name == "QuoteStrip"
+            else ()
+        ),
+    )
+    document = "\n".join(
+        (
+            '{"version":"v0.9.1","createSurface":{"surfaceId":"main"}}',
+            '{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":[{"id":"root","component":"Stack","children":["quote"]},{"id":"quote","component":"SecuritySnapshot","title":{"path":"/data/quote/title"},"metrics":{"path":"/data/quote/metrics"},"items":{"path":"/data/quote/items"}}]}}',
+        )
+    )
+
+    completed = t._ensure_planned_component_data_refs(
+        document,
+        (
+            {
+                "component": "QuoteStrip",
+                "source": "finance.market.quote",
+                "params": {"symbol": {"$host": "symbol"}},
+                "bindings": ("metrics", "source", "asOf", "basis"),
+            },
+        ),
+    )
+
+    messages = [json.loads(line) for line in str(completed).splitlines()]
+    snapshot = next(
+        component
+        for message in messages
+        for component in (message.get("updateComponents") or {}).get("components", ())
+        if component.get("id") == "quote"
+    )
+    assert snapshot == {
+        "id": "quote",
+        "component": "SecuritySnapshot",
+        "title": {"path": "/data/quote/title"},
+        "metrics": {"path": "/data/quote/metrics"},
+        "items": {"path": "/data/quote/items"},
+    }
+
+
+def test_ensure_supported_catalog_id_replaces_hallucinated_edition_catalog():
+    document = "\n".join(
+        (
+            '{"version":"v0.9.1","createSurface":{"surfaceId":"main","catalogId":"https://valuz.io/a2ui/catalogs/finance/v1"}}',
+            '{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":[{"id":"root","component":"Stack","children":[]}]}}',
+        )
+    )
+
+    normalized = t._ensure_supported_catalog_id(document)
+    messages = [json.loads(line) for line in str(normalized).splitlines()]
+
+    assert messages[0]["createSurface"]["catalogId"] == (
+        "https://valuz.io/a2ui/catalogs/base/v1"
+    )
 
 
 async def test_handler_resolves_tool_use_id_and_streams(monkeypatch, patched):

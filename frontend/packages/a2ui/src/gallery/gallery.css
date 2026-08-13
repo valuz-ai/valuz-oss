@@ -244,7 +244,14 @@
 .demo-category-header span,
 .demo-category-header p { color: var(--demo-muted); font-size: 10px; }
 .demo-category-header p { margin: 0; text-align: right; }
-.demo-specimen-list { display: grid; gap: 14px; }
+.demo-specimen-list {
+  display: grid;
+  gap: 14px;
+  /* Grid's implicit auto track otherwise uses the charts' max-content width
+     (up to ~2,000px) and pushes the specimen beyond the AppShell viewport. */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
 
 .demo-palette-showcase {
   background: var(--va2-bg);
@@ -336,6 +343,8 @@
   background: var(--demo-surface);
   border: 1px solid var(--demo-border);
   border-radius: 8px;
+  max-width: 100%;
+  min-width: 0;
   overflow: visible;
 }
 .demo-specimen-header {

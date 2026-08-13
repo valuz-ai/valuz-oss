@@ -9,6 +9,7 @@ import { createValuzMessageProcessor } from "../react/catalog";
 import { valuzBaseComponents } from "../react/catalog";
 import { TimeSeriesChartApi } from "./advanced-charts";
 import { LineChartApi } from "./charts";
+import { TagBlockApi } from "./content";
 import { describeA2UIComponent } from "./describe";
 
 describe("Valuz A2UI base catalog", () => {
@@ -116,6 +117,12 @@ describe("Valuz A2UI base catalog", () => {
     );
     expect(description).toContain("Series entries use label, never name");
     expect(description).not.toContain('palette?: "ocean"|');
+  });
+
+  it("describes TagBlock entries instead of an ambiguous array", () => {
+    const description = describeA2UIComponent(TagBlockApi);
+
+    expect(description).toContain("tags: array<{label,tone?}>");
   });
 
   it("allows a live slot to replace TimeSeriesChart data and series together", () => {
