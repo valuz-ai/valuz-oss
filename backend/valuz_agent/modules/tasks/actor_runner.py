@@ -303,6 +303,12 @@ class ActorRunner:
         # Read once: every lead wake-up restates it (see _with_goal_restated).
         task_goal = await self._task_goal(task_id, project_id, user_id) if role == "lead" else ""
         prompt = initial_prompt
+        # Provenance of ``prompt``, logged before every turn. A turn is
+        # otherwise anonymous in the log: when one runs that nobody expected,
+        # the only way to ask WHY was to correlate DB turn rows against log
+        # timestamps by hand. Kept in lockstep with ``prompt`` — every
+        # assignment to one assigns the other.
+        prompt_origin = "initial"
         final_status = "idle"
         turns = 0
         # Did the loop exit because of a ``shutdown`` mailbox message (pause /
@@ -328,6 +334,15 @@ class ActorRunner:
                 if fenced.is_set():
                     exited_on_shutdown = True
                     break
+                logger.info(
+                    "actor loop %s (%s): task %s turn %d ← %s (%d chars)",
+                    session_id,
+                    role,
+                    task_id,
+                    turns + 1,
+                    prompt_origin,
+                    len(prompt),
+                )
                 final_status = await self.run_turn(session_id, prompt, user_id=user_id)
                 turns += 1
 
@@ -498,12 +513,14 @@ class ActorRunner:
                             user_id=user_id,
                         )
                     prompt = self._format_member_done(msg)
+                    prompt_origin = self._origin_label(msg)
                     if role == "lead":
                         prompt = self._with_goal_restated(task_goal, prompt)
                 elif msg.kind == "revise_goal":
                     # The user REPLACED the goal — this text is the new
                     # objective, so it must NOT be prefixed with the old one.
                     prompt = msg.text
+                    prompt_origin = self._origin_label(msg)
                     if role == "lead":
                         task_goal = msg.text
                 else:  # "text" — an inject/follow-up: context, not a new goal
@@ -512,6 +529,7 @@ class ActorRunner:
                         if role == "lead"
                         else msg.text
                     )
+                    prompt_origin = self._origin_label(msg)
         finally:
             if renewer is not None:
                 renewer.cancel()
@@ -776,6 +794,19 @@ class ActorRunner:
             "The goal above is unchanged — it is what you are still driving.\n\n"
             f"{body}"
         )
+
+    @staticmethod
+    def _origin_label(msg: InboxMsg) -> str:
+        """Compact provenance for the per-turn log: ``kind/producer<peer>``.
+
+        ``kind`` alone is not enough to explain a turn — several producers emit
+        ``member_done`` (a live member going idle, the durable reconcile
+        backstop, a cancelled member, recovery re-seeding after a restart), and
+        which one fired is exactly the question asked when an unexpected turn
+        shows up. Untagged producers degrade to the bare kind rather than lying.
+        """
+        label = f"{msg.kind}/{msg.origin}" if msg.origin else msg.kind
+        return f"{label}<{msg.from_session[:8]}>" if msg.from_session else label
 
     @staticmethod
     def _format_member_done(msg: InboxMsg) -> str:

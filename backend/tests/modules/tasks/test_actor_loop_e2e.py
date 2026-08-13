@@ -32,7 +32,8 @@ import pytest
 from sqlalchemy import select
 
 from valuz_agent.modules.tasks import planning
-from valuz_agent.modules.tasks.mailbox import mailbox_registry
+from valuz_agent.modules.tasks.actor_runner import ActorRunner
+from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
 from valuz_agent.modules.tasks.plan import TaskPlan
@@ -100,7 +101,8 @@ def loop_env(db_factory, tmp_path, monkeypatch):
 
         async def resolve_project_env(self, _db: Any, **_kw: Any) -> TaskProjectEnv:
             return TaskProjectEnv(
-                project_row=SimpleNamespace(id=PROJECT), project_cwd=tmp_path,
+                project_row=SimpleNamespace(id=PROJECT),
+                project_cwd=tmp_path,
                 instructions_md=None,
             )
 
@@ -191,10 +193,7 @@ def _events(db_factory) -> list[str]:
 def _runs(db_factory) -> dict[str, str]:
     db = db_factory()
     try:
-        return {
-            r.session_id: r.status
-            for r in db.execute(select(TaskSessionRow)).scalars()
-        }
+        return {r.session_id: r.status for r in db.execute(select(TaskSessionRow)).scalars()}
     finally:
         db.close()
 
@@ -569,3 +568,107 @@ def test_last_assistant_text_reads_the_tail_not_the_head(monkeypatch) -> None:
     out = asyncio.run(manifest_mod.last_assistant_text(OWNER, "s1"))
     assert out == "newest"
     assert called.get("turn_limit"), "the tail window must be turn-bounded"
+
+
+def test_every_turn_logs_where_its_prompt_came_from(loop_env, caplog) -> None:
+    """Each turn must name its own trigger in the log.
+
+    A turn is otherwise anonymous: the log shows work happening but never why
+    it started. That gap has a cost on record — a regression that re-ran a
+    finished task from its original goal took hours to pin down, because
+    proving WHICH producer woke the lead meant correlating DB turn rows with
+    log timestamps by hand. Several distinct producers emit ``member_done``
+    (a live member going idle, the durable reconcile backstop, a cancelled
+    member, recovery re-seeding after a restart), so the kind alone cannot
+    answer it; the label has to name the producer.
+    """
+    orch, state = loop_env.orch, loop_env.state
+
+    asyncio.run(
+        planning.plan_task(
+            task_id=TASK,
+            project_id=PROJECT,
+            user_id=OWNER,
+            lead_session_id=LEAD,
+            subtasks=[{"key": "a", "title": "A", "agent": "worker"}],
+        )
+    )
+
+    async def _turn_1(_prompt: str) -> str:
+        await orch.dispatcher.dispatch_async(
+            task_id=TASK,
+            project_id=PROJECT,
+            lead_session_id=LEAD,
+            subtask_key="a",
+            user_id=OWNER,
+        )
+        return "idle"
+
+    async def _turn_2(_prompt: str) -> str:
+        await orch.finalization.finish_task(
+            task_id=TASK,
+            project_id=PROJECT,
+            lead_session_id=LEAD,
+            summary="done",
+            status="stopped",
+            user_id=OWNER,
+        )
+        return "idle"
+
+    state.script[LEAD] = [_turn_1, _turn_2]
+
+    async def _run() -> None:
+        await asyncio.wait_for(
+            orch.actor.run_actor_loop(
+                session_id=LEAD,
+                initial_prompt="go",
+                role="lead",
+                task_id=TASK,
+                project_id=PROJECT,
+                idle_ttl=5.0,
+                user_id=OWNER,
+            ),
+            timeout=10,
+        )
+
+    with caplog.at_level("INFO", logger="valuz_agent.modules.tasks.actor_runner"):
+        asyncio.run(_run())
+
+    # Scoped to the LEAD session: the dispatched member runs its own loop and
+    # logs its own turns, which is itself part of the point — every actor is
+    # attributable, so the lines have to be separable per session.
+    origins = [
+        line.split("←", 1)[1].strip()
+        for line in caplog.messages
+        if line.startswith(f"actor loop {LEAD} ") and "←" in line
+    ]
+    assert len(origins) == 2, f"expected one log line per lead turn, got {origins}"
+    assert origins[0].startswith("initial"), (
+        f"turn 1 is the kickoff prompt, not a mailbox wake-up (got {origins[0]})"
+    )
+    # The producer, not just the kind: a live member going idle must not read
+    # the same as the reconcile backstop firing for an already-finished member.
+    assert origins[1].startswith("member_done/member-idle<"), (
+        "turn 2 must name the producer that woke the lead, so an unexpected "
+        f"turn can be traced to its source (got {origins[1]})"
+    )
+
+
+@pytest.mark.parametrize(
+    ("msg", "expected"),
+    [
+        (
+            InboxMsg(kind="text", origin="user-inject", from_session="abcdef123456"),
+            "text/user-inject<abcdef12>",
+        ),
+        (
+            InboxMsg(kind="member_done", origin="reconcile", from_session="ff00"),
+            "member_done/reconcile<ff00>",
+        ),
+        (InboxMsg(kind="revise_goal", origin="goal-revised"), "revise_goal/goal-revised"),
+        # An untagged producer degrades to the bare kind rather than inventing one.
+        (InboxMsg(kind="text", from_session="deadbeefcafe"), "text<deadbeef>"),
+    ],
+)
+def test_origin_label_names_the_producer(msg, expected) -> None:
+    assert ActorRunner._origin_label(msg) == expected

@@ -601,6 +601,7 @@ async def review_subtask(
             InboxMsg(
                 kind="text",
                 from_session=lead_session_id,
+                origin="rework",
                 text=f"Your previous attempt was sent back for rework.\n\n{feedback or ''}",
             ),
         )

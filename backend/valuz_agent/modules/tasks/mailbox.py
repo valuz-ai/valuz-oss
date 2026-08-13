@@ -48,6 +48,11 @@ class InboxMsg:
     kind: InboxKind
     text: str = ""
     from_session: str = ""
+    # Who produced this message, for the loop's per-turn log. Diagnostic ONLY —
+    # nothing branches on it. A turn is otherwise invisible in the log, so when
+    # one appears that nobody expected there is no way to ask where it came
+    # from; that cost hours on a production re-run regression.
+    origin: str = ""
     # ``Mapping`` not ``dict``: ``member_done`` carries a ``MemberManifest``
     # TypedDict, and dict is invariant — a dict[str, Any] annotation would
     # force every producer to erase the type it just built.

@@ -565,6 +565,7 @@ class FinalizationService:
                 InboxMsg(
                     kind="member_done",
                     from_session=session_id,
+                    origin="member-interrupted",
                     payload={
                         "agent": agent_slug,
                         "status": "cancelled",
