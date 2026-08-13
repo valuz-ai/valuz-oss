@@ -1263,3 +1263,64 @@ async def test_inbox_notice_wrapper_leaves_errors_and_plaintext_alone() -> None:
         assert plain.content == "Task closed. Do not continue working."
     finally:
         mailbox_registry.unregister(lead)
+
+
+@pytest.mark.asyncio
+async def test_a_cross_process_inject_preempts_an_in_flight_member_wait(monkeypatch) -> None:
+    """A user instruction must interrupt the lead's wait, from any process.
+
+    This wait runs INSIDE the lead's turn while members run for minutes, and
+    the preempt below it exists so the user does not have to wait them out.
+    That preempt read the in-process queue only. When delivery moved to the
+    durable mailbox the producers stopped writing that queue, so the preempt
+    went quiet: the instruction was accepted, stored, and then sat unread until
+    every member finished — observed on qa at 97 seconds and counting.
+    """
+    _patch_await_deps(monkeypatch, {"sA": "A"})
+    from valuz_agent.modules.tasks import coordination as coord_mod
+
+    lead = "lead-await-durable"
+    drained: list[str] = []
+
+    class _FakeStore:
+        @staticmethod
+        async def drain(session_id: str):
+            # Delivered once, as a real claim would be — a store that kept
+            # handing back the same row would spin the lead.
+            if drained:
+                return []
+            drained.append(session_id)
+            return [
+                InboxMsg(
+                    kind="text",
+                    text="<user-instruction>add the STAR market</user-instruction>",
+                    from_session="chat-sess",
+                    origin="user-inject",
+                )
+            ]
+
+    monkeypatch.setattr(coord_mod, "mailbox_store", _FakeStore)
+    orch = TaskOrchestrator()
+    mailbox_registry.register(lead)
+    try:
+        # Nothing in this process's queue and the member never reports: without
+        # the durable read this call can only end by timing out.
+        res = await orch.coordination.await_member_results(
+            lead_session_id=lead,
+            project_id="w1",
+            task_id="t1",
+            keys=["A"],
+            mode="all",
+            timeout_s=30,
+            user_id=LOCAL_USER_ID,
+        )
+    finally:
+        mailbox_registry.unregister(lead)
+
+    assert drained == [lead], "the durable inbox was never consulted"
+    assert res.get("preempted_by_inject") is True, (
+        "the lead must be released to act on the instruction, not left waiting "
+        "for members that may run for minutes"
+    )
+    assert "add the STAR market" in res["user_inject"]["text"]
+    assert res["collected"] == 0, "the member is still in flight; nothing was collected"

@@ -226,6 +226,22 @@ class CoordinationService:
             try:
                 msg = await mailbox_registry.get(lead_session_id, timeout=slice_timeout)
             except TimeoutError:
+                # Nothing in THIS process's queue — but a user instruction, a
+                # goal revision or a member's report written by another process
+                # lives in the durable inbox, and this wait is exactly where it
+                # matters: the lead is inside a turn, parked on members that may
+                # run for minutes, and the whole point of the preempt below is
+                # to let it react now instead of then.
+                #
+                # Feeding them back through the registry rather than handling
+                # them here is deliberate: the branches below (shutdown, inject,
+                # revision, member_done) then apply unchanged, so this path
+                # cannot drift from the in-process one.
+                durable = await self._drain_durable_inbox(lead_session_id)
+                if durable:
+                    for extra in durable:
+                        mailbox_registry.put(lead_session_id, extra)
+                    continue
                 slices_waited += 1
                 # Let the REAL delivery win the first slice. The backstop reads
                 # durable state, so it sees a member as finished the instant its
@@ -449,6 +465,20 @@ class CoordinationService:
             )
             for entry in collected.values()
         ]
+
+    @staticmethod
+    async def _drain_durable_inbox(session_id: str) -> list[InboxMsg]:
+        """Cross-process messages for this actor. Never raises.
+
+        A failed read must not end the wait: the lead is mid-turn with members
+        in flight, and turning a transient DB error into "no results" would
+        have it conclude the members produced nothing.
+        """
+        try:
+            return await mailbox_store.drain(session_id)
+        except Exception:  # noqa: BLE001
+            logger.debug("durable inbox read failed for %s, still waiting", session_id)
+            return []
 
     async def _heartbeat_pending(
         self,
