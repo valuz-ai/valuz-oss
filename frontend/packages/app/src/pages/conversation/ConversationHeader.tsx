@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   FilePenLine,
+  Loader2,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -245,7 +246,11 @@ export function ConversationHeader({
                         }
                         onSelect={() => onFork()}
                       >
-                        <ForkIcon />
+                        {forkInFlight ? (
+                          <Loader2 className="animate-spin" />
+                        ) : (
+                          <ForkIcon />
+                        )}
                         {t("conversation.fork" as Parameters<typeof t>[0])}
                       </DropdownMenuItem>
                     )}

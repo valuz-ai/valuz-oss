@@ -94,6 +94,7 @@ import {
   useProjectExecutionLocation,
 } from "../components/ProjectLocationFields";
 import { OriginIcon } from "../components/ExecutionLocationPicker";
+import { useForkSession } from "../hooks/use-fork-session";
 import { FORKABLE_RUNTIMES } from "../pages/conversation/useTitleActions";
 import { outletTransitionKey } from "./outlet-key";
 import { resolveRightPanelAutoFold } from "./right-panel-autofold";
@@ -183,6 +184,7 @@ export function ProjectLayoutBase({
   useGlobalShortcuts();
 
   const { t } = useTranslation();
+  const { fork: forkSession, forkingSessionId } = useForkSession();
   const branding = useBranding();
   const navItemsList = useNavItems();
   const navGroupsList = useNavGroups();
@@ -969,24 +971,11 @@ export function ProjectLayoutBase({
                 })
                 .catch(() => toast.error(t("sidebar.renameFailed")));
             }}
-            onRecentFork={(sessionId) => {
-              // Whole-session fork (docs/design/session-fork.md). Synchronous
-              // by design (D5, ~1–2s); success lands in the new conversation.
-              sessionsApi
-                .fork(sessionId)
-                .then((forked) => {
-                  toast.success(
-                    t("conversation.forked" as Parameters<typeof t>[0]),
-                  );
-                  refreshFinishedRuns();
-                  navigate(`/conversation/${forked.id}`);
-                })
-                .catch(() =>
-                  toast.error(
-                    t("conversation.forkFailed" as Parameters<typeof t>[0]),
-                  ),
-                );
-            }}
+            // Whole-session fork (docs/design/session-fork.md). Pending
+            // state + duplicate-click suppression live in the shared hook
+            // (#879); its runs-refresh event re-fetches the finished window.
+            onRecentFork={(sessionId) => void forkSession(sessionId)}
+            recentForkPendingId={forkingSessionId}
             onRecentDelete={(sessionId) => {
               // Optimistic local removal — the row disappears immediately
               // even though the backend round-trip is still in flight.

@@ -13,6 +13,7 @@ import {
   LayoutDashboard,
   Link2,
   ListTodo,
+  Loader2,
   MessageCirclePlus,
   MessageSquare,
   MoreHorizontal,
@@ -671,6 +672,10 @@ export interface DesktopSidebarProps {
   /** When provided, chat rows whose ``canFork`` is true show a Fork entry
    * (whole-session fork — docs/design/session-fork.md). */
   onRecentFork?: (recentId: string) => void;
+  /** Row whose fork request is in flight (forks can take seconds on
+   * remote-kernel deployments — #879). That row's right-edge slot shows a
+   * spinner, and every Fork entry is disabled until the request settles. */
+  recentForkPendingId?: string | null;
   /** Whether sidebar is collapsed (controlled externally) */
   collapsed?: boolean;
 }
@@ -699,6 +704,7 @@ export const DesktopSidebar = ({
   onRecentRename,
   onRecentDelete,
   onRecentFork,
+  recentForkPendingId = null,
   collapsed = false,
 }: DesktopSidebarProps) => {
   const { t } = useI18n();
@@ -789,6 +795,9 @@ export const DesktopSidebar = ({
     }
     const showRowMenu =
       item.kind === "chat" && (onRecentRename || onRecentDelete || onRecentFork);
+    // This row's fork request is in flight — the right-edge slot swaps to a
+    // spinner (replacing the dot / "…" menu) until the request settles.
+    const forkPending = recentForkPendingId === item.id;
     return (
       <LinkComponent
         key={`run-${item.id}`}
@@ -808,9 +817,15 @@ export const DesktopSidebar = ({
       >
         {item.leadingIcon ?? null}
         <span className="min-w-0 flex-1 truncate">{item.title}</span>
-        {(item.isRunning || showRowMenu) && (
+        {(item.isRunning || showRowMenu || forkPending) && (
           <span className="relative flex h-5 w-5 shrink-0 items-center justify-center">
-            {item.isRunning && (
+            {forkPending && (
+              <Loader2
+                aria-label={t("sidebar.forking")}
+                className="h-3.5 w-3.5 animate-spin text-ink-muted"
+              />
+            )}
+            {!forkPending && item.isRunning && (
               <span
                 aria-label={t("sidebar.runningIndicator")}
                 className={cn(
@@ -822,7 +837,7 @@ export const DesktopSidebar = ({
                 )}
               />
             )}
-            {showRowMenu && (
+            {!forkPending && showRowMenu && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
@@ -849,7 +864,10 @@ export const DesktopSidebar = ({
                     </DropdownMenuItem>
                   )}
                   {onRecentFork && item.canFork && (
-                    <DropdownMenuItem onSelect={() => onRecentFork(item.id)}>
+                    <DropdownMenuItem
+                      disabled={recentForkPendingId != null}
+                      onSelect={() => onRecentFork(item.id)}
+                    >
                       <ForkIcon />
                       {t("sidebar.fork")}
                     </DropdownMenuItem>

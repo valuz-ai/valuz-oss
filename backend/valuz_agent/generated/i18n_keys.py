@@ -2062,6 +2062,7 @@ I18nKey = Literal[
     "sidebar.expandPanel",
     "sidebar.expandShow",
     "sidebar.fork",
+    "sidebar.forking",
     "sidebar.help",
     "sidebar.home",
     "sidebar.library",

@@ -1870,7 +1870,8 @@
       "goForward": "前进",
       "toggleSidebar": "切换侧栏"
     },
-    "fork": "Fork 会话"
+    "fork": "Fork 会话",
+    "forking": "Fork 中…"
   },
   "skill": {
     "addBtn": "添加",

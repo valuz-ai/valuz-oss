@@ -71,6 +71,7 @@ import { toFileTree } from "../lib/file-tree";
 import { AttachmentParsingDialog } from "../components/AttachmentParsingDialog";
 import { ArtifactSplitPane } from "../components/ArtifactSplitPane";
 import { useArtifactFile } from "../hooks/use-artifact-file";
+import { useForkSession } from "../hooks/use-fork-session";
 import { toAbsoluteProjectPath } from "../lib/project-paths";
 
 /** Bytes as the rail shows them. Local because the two other copies of this in
@@ -97,6 +98,7 @@ const ActivityTabPanel = ({
   onRenameConfirm,
   onDeleteSession,
   onForkSession,
+  forkPendingSessionId,
   hideScopeTag,
   emptyLabel,
 }: {
@@ -112,6 +114,7 @@ const ActivityTabPanel = ({
       onRenameConfirm={onRenameConfirm}
       onDeleteSession={onDeleteSession}
       onForkSession={onForkSession}
+      forkPendingSessionId={forkPendingSessionId}
       hideScopeTag={hideScopeTag}
       emptyLabel={emptyLabel}
     />
@@ -254,20 +257,12 @@ export const ProjectDetailPage = () => {
   const handleDeleteSession = useCallback((sid: string, label: string) => {
     setPendingDelete({ kind: "session", id: sid, name: label });
   }, []);
+  // Whole-session fork (docs/design/session-fork.md). Pending state +
+  // duplicate-click suppression live in the shared hook (#879).
+  const { fork: forkSession, forkingSessionId } = useForkSession();
   const handleForkSession = useCallback(
-    (sid: string) => {
-      // Whole-session fork (docs/design/session-fork.md, D5: synchronous).
-      sessionsApi
-        .fork(sid)
-        .then((forked) => {
-          toast.success(t("conversation.forked" as Parameters<typeof t>[0]));
-          navigate(`/conversation/${encodeURIComponent(forked.id)}`);
-        })
-        .catch(() =>
-          toast.error(t("conversation.forkFailed" as Parameters<typeof t>[0])),
-        );
-    },
-    [navigate, t],
+    (sid: string) => void forkSession(sid),
+    [forkSession],
   );
   // Project conversations bind to one of the project's configured agents
   // (instead of a raw model). The composer remembers the agent PER MODE —
@@ -1751,6 +1746,7 @@ export const ProjectDetailPage = () => {
                       onRenameConfirm={handleRenameConfirm}
                       onDeleteSession={handleDeleteSession}
                       onForkSession={handleForkSession}
+                      forkPendingSessionId={forkingSessionId}
                       emptyLabel={t(
                         "project.noSessions" as Parameters<typeof t>[0],
                       )}
@@ -1765,6 +1761,7 @@ export const ProjectDetailPage = () => {
                       onRenameConfirm={handleRenameConfirm}
                       onDeleteSession={handleDeleteSession}
                       onForkSession={handleForkSession}
+                      forkPendingSessionId={forkingSessionId}
                       emptyLabel={t(
                         "project.noSessions" as Parameters<typeof t>[0],
                       )}
@@ -1779,6 +1776,7 @@ export const ProjectDetailPage = () => {
                       onRenameConfirm={handleRenameConfirm}
                       onDeleteSession={handleDeleteSession}
                       onForkSession={handleForkSession}
+                      forkPendingSessionId={forkingSessionId}
                       emptyLabel={t(
                         "project.noSessions" as Parameters<typeof t>[0],
                       )}
@@ -1793,6 +1791,7 @@ export const ProjectDetailPage = () => {
                       onRenameConfirm={handleRenameConfirm}
                       onDeleteSession={handleDeleteSession}
                       onForkSession={handleForkSession}
+                      forkPendingSessionId={forkingSessionId}
                       hideScopeTag
                       emptyLabel={t(
                         "project.noSessions" as Parameters<typeof t>[0],

@@ -151,6 +151,7 @@ function ConversationViewPage(props: ConversationViewProps) {
     titleDeleteInFlight,
     handleTitleDeleteConfirm,
     forkInFlight,
+    forkingMessageId,
     handleFork,
   } = useTitleActions({ selectedSessionId: core.selectedSessionId });
 
@@ -264,6 +265,7 @@ function ConversationViewPage(props: ConversationViewProps) {
               core.selectedSession?.runtime_provider ?? "",
             )}
             forkInFlight={forkInFlight}
+            forkingMessageId={forkingMessageId}
             onForkFromTurn={(messageId) => void handleFork(messageId)}
           />
 
