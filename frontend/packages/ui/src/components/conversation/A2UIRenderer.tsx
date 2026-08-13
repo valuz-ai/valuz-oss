@@ -1,5 +1,6 @@
 import {
   createValuzMessageProcessor,
+  effectiveA2UIComponents,
   effectiveA2UIComponentNames,
   getA2UIRegistryVersion,
   subscribeA2UIComponents,
@@ -144,13 +145,123 @@ function withoutUnreadyComponents(messages: A2UIMessage[], trailingIsPartial: bo
         typeof component.component === "string" &&
         (messageIndex !== trailingIndex || known.has(component.component)),
       )
-      .map((component) => {
+      .flatMap((component) => {
         if (!isRecord(component) || !Array.isArray(component.children)) return component;
-        return {
+        const children = component.children.filter(
+          (child) => typeof child !== "string" || declared.has(child),
+        );
+        // The streamed root normally arrives before any child definitions.
+        // Feeding that parent to web-core makes it narrate its internal
+        // "[Loading root...]" placeholder. Hold it until at least one named
+        // child has arrived; the product-level generation skeleton covers the
+        // wait without leaking protocol text.
+        if (trailingIsPartial && component.children.length > 0 && children.length === 0) {
+          return [];
+        }
+        return [{
           ...component,
-          children: component.children.filter((child) => typeof child !== "string" || declared.has(child)),
-        };
+          children,
+        }];
       });
+    return { ...message, updateComponents: { ...update, components } };
+  });
+}
+
+/**
+ * Validate model-authored component props independently before giving the
+ * document to A2UI's all-or-nothing processor. One invalid sibling must not
+ * make an otherwise useful dashboard completely blank. During streaming the
+ * unfinished trailing component is already filtered above; this pass handles
+ * complete but schema-incompatible components (including older revisions).
+ */
+function withoutInvalidComponents(messages: A2UIMessage[]): {
+  messages: A2UIMessage[];
+  rejected: Array<{ id: string; component: string; reason: string }>;
+} {
+  const schemas = new Map(
+    effectiveA2UIComponents().map((implementation) => [
+      implementation.name,
+      implementation.schema,
+    ]),
+  );
+  const rejected: Array<{ id: string; component: string; reason: string }> = [];
+  const rejectedIds = new Set<string>();
+  for (const message of messages) {
+    const update = message.updateComponents;
+    if (!isRecord(update) || !Array.isArray(update.components)) continue;
+    for (const raw of update.components) {
+      if (!isRecord(raw)) continue;
+      const id = typeof raw.id === "string" ? raw.id : "";
+      const component = typeof raw.component === "string" ? raw.component : "";
+      const schema = schemas.get(component);
+      const { id: _id, component: _component, ...props } = raw;
+      const result = schema?.safeParse(props);
+      if (result?.success) continue;
+      rejectedIds.add(id);
+      rejected.push({
+        id,
+        component,
+        reason: result?.error?.issues?.map((issue) =>
+          `${issue.path.join(".") || "props"}: ${issue.message}`,
+        ).join("; ") ?? "component is not registered",
+      });
+    }
+  }
+  if (!rejectedIds.size) return { messages, rejected };
+
+  return {
+    rejected,
+    messages: messages.flatMap((message) => {
+      const update = message.updateComponents;
+      if (!isRecord(update) || !Array.isArray(update.components)) return [message];
+      const components = update.components
+        .filter((raw) => !isRecord(raw) || !rejectedIds.has(String(raw.id ?? "")))
+        .map((raw) => {
+          if (!isRecord(raw) || !Array.isArray(raw.children)) return raw;
+          return {
+            ...raw,
+            children: raw.children.filter(
+              (child) => typeof child !== "string" || !rejectedIds.has(child),
+            ),
+          };
+        });
+      // An empty update still makes the web-core surface point at the missing
+      // first/root id, which renders its internal "[Loading root...]" text and
+      // then disappears on the next byte. Keep that expected streaming gap as
+      // no surface at all; the outer generation skeleton already represents it.
+      return components.length
+        ? [{ ...message, updateComponents: { ...update, components } }]
+        : [];
+    }),
+  };
+}
+
+/** Model compilers sometimes use the protocol's weighted-child notation as
+ * `{id, weight}`. The current web-core validator accepts only child ids; keep
+ * the intended relationship and move the optional weight onto the child. */
+function normalizeWeightedChildren(messages: A2UIMessage[]): A2UIMessage[] {
+  return messages.map((message) => {
+    const update = message.updateComponents;
+    if (!isRecord(update) || !Array.isArray(update.components)) return message;
+    const weights = new Map<string, number>();
+    const components = update.components.map((raw) => {
+      if (!isRecord(raw) || !Array.isArray(raw.children)) return raw;
+      const children = raw.children.flatMap((child) => {
+        if (typeof child === "string") return [child];
+        if (!isRecord(child) || typeof child.id !== "string") return [];
+        if (typeof child.weight === "number" && child.weight > 0) {
+          weights.set(child.id, child.weight);
+        }
+        return [child.id];
+      });
+      return { ...raw, children };
+    }).map((raw) => {
+      if (!isRecord(raw) || typeof raw.id !== "string") return raw;
+      const weight = weights.get(raw.id);
+      return weight === undefined || raw.weight !== undefined
+        ? raw
+        : { ...raw, weight };
+    });
     return { ...message, updateComponents: { ...update, components } };
   });
 }
@@ -158,21 +269,41 @@ function withoutUnreadyComponents(messages: A2UIMessage[], trailingIsPartial: bo
 function buildSurfaces(
   body: string,
   liveMessages: A2UIMessage[] = [],
+  suppressIncompleteWarnings = false,
 ): SurfaceModel<ReactComponentImplementation>[] {
   const deduped = dropRepeatedDocument(body);
+  const ready = withoutUnreadyComponents(
+    dropDuplicateCreateSurface(parseA2UIMessages(deduped)),
+    hasPartialTrailingLine(deduped),
+  );
+  const sanitized = withoutInvalidComponents(normalizeWeightedChildren(ready));
   const messages = [
-    ...withoutUnreadyComponents(
-      dropDuplicateCreateSurface(parseA2UIMessages(deduped)),
-      hasPartialTrailingLine(deduped),
-    ),
+    ...sanitized.messages,
     ...liveMessages,
   ];
   if (!messages.length) return [];
+  const hasComponents = messages.some((message) =>
+    isRecord(message.updateComponents) &&
+    Array.isArray(message.updateComponents.components) &&
+    message.updateComponents.components.length > 0,
+  );
+  if (!hasComponents) return [];
+  if (import.meta.env.DEV && sanitized.rejected.length && !suppressIncompleteWarnings) {
+    console.warn(
+      "[a2ui] skipped invalid component(s)",
+      JSON.stringify(sanitized.rejected),
+    );
+  }
   const processor = createValuzMessageProcessor();
   try {
     processor.processMessages(messages as never);
   } catch (error) {
-    if (import.meta.env.DEV) console.warn("[a2ui] failed to render payload", error);
+    // Streaming JSON is intentionally completed best-effort before all required
+    // fields have arrived. Keep the last good surface without reporting those
+    // expected intermediate validation failures as application warnings.
+    if (import.meta.env.DEV && !suppressIncompleteWarnings) {
+      console.warn("[a2ui] failed to render payload", error);
+    }
     return [];
   }
   return Array.from(processor.model.surfacesMap.values());
@@ -236,7 +367,10 @@ export function A2UIRenderer({ body, status, hostParams }: A2UIRendererProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [body, version, hostParamsKey]);
 
-  const built = useMemo(() => buildSurfaces(body, liveMessages), [body, version, liveMessages]);
+  const built = useMemo(
+    () => buildSurfaces(body, liveMessages, status === "running"),
+    [body, version, liveMessages, status],
+  );
   const lastGood = useRef<{ body: string; surfaces: SurfaceModel<ReactComponentImplementation>[] }>({ body: "", surfaces: [] });
   if (built.length) lastGood.current = { body, surfaces: built };
   const inherits = lastGood.current.surfaces.length > 0 && body.startsWith(lastGood.current.body);

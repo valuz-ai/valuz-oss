@@ -35,6 +35,7 @@ _PROGRESS_INTERVAL_S = 15.0
 Completer = Callable[[str], Awaitable[str]]
 _LOG_PREVIEW_CHARS = 240
 _DIRECT_GENUI_MAX_TOKENS = 16384
+_DIRECT_GENUI_REASONING_EFFORT = "low"
 
 # How many follow-up turns may continue a generation that stopped at the
 # output-token cap before we deliver whatever complete lines we have. A page
@@ -43,16 +44,11 @@ _DIRECT_GENUI_MAX_TOKENS = 16384
 _GENERATION_MAX_CONTINUATIONS = 3
 
 # Ephemeral event type → live event type emitted on the CALLING session.
-# ``text_delta`` is the generated A2UI stream (frontend concatenates it into the
-# tool card's output for progressive <Renderer> paint). ``thinking_delta``
-# rides a SEPARATE type — ``tool.call.output_delta`` is concatenated into the
-# code stream unconditionally, so reasoning text through the same channel
-# would corrupt the render; ``tool.call.thinking_delta`` is ignored by
-# frontends that don't know it, and fills the otherwise-silent reasoning
-# window for ones that do.
+# Only the generated A2UI document is forwarded. The compiler's private
+# reasoning is implementation detail, often uses a provider-selected language,
+# and can be very long; the host already presents localized generation status.
 _FORWARD_TYPES = {
     "text_delta": "tool_output_delta",
-    "thinking_delta": "tool_thinking_delta",
 }
 
 
@@ -80,6 +76,11 @@ def _uses_official_cli_auth(*, runtime_provider: Any, mp: Any) -> bool:
 def _is_deepseek_anthropic_channel(*, model: str, mp: Any) -> bool:
     base_url = str(getattr(mp, "base_url", "") or "").lower()
     return "deepseek" in base_url or model.lower().startswith("deepseek-")
+
+
+def _is_valuz_lite_model(model: str) -> bool:
+    normalized = model.strip().lower()
+    return normalized == "valuz-lite" or normalized.startswith("valuz-lite-")
 
 
 def _with_direct_llm_final_output_requirement(
@@ -140,23 +141,21 @@ def _make_completer(
 
     When ``calling_session_id`` + ``tool_use_id`` are set, the ephemeral
     session's ``text_delta`` stream is forwarded to the CALLING session as
-    ``tool_output_delta`` and its ``thinking_delta`` stream as
-    ``tool_thinking_delta`` (both keyed by ``tool_use_id``) via the existing
+    ``tool_output_delta`` (keyed by ``tool_use_id``) via the existing
     ``kernel_client.emit_live_event`` live-injection channel, so the frontend
-    ``<Renderer isStreaming>`` paints progressively and the reasoning phase is
-    observable instead of a silent wait. ``run_turn`` still returns the full
-    text as the canonical ToolResult. When either is None, behaves as the
-    synchronous (non-streaming) version."""
+    ``<Renderer isStreaming>`` paints progressively. ``run_turn`` still
+    returns the full text as the canonical ToolResult. When either is None,
+    behaves as the synchronous (non-streaming) version."""
 
-    # if not _uses_official_cli_auth(runtime_provider=runtime_provider, mp=mp):
-    #     return _make_direct_llm_completer(
-    #         user_id=user_id,
-    #         model=model,
-    #         mp=mp,
-    #         calling_session_id=calling_session_id,
-    #         tool_use_id=tool_use_id,
-    #         output_format=output_format,
-    #     )
+    if not _uses_official_cli_auth(runtime_provider=runtime_provider, mp=mp):
+        return _make_direct_llm_completer(
+            user_id=user_id,
+            model=model,
+            mp=mp,
+            calling_session_id=calling_session_id,
+            tool_use_id=tool_use_id,
+            output_format=output_format,
+        )
 
     heartbeat = _make_progress_heartbeat(on_progress)
 
@@ -236,7 +235,20 @@ def _make_completer(
         # (``src.core.types.is_bare_completion``): every runtime drops its
         # agentic scaffolding — built-in tools, preset/base system prompts,
         # settings/skills discovery — for this one-shot no-tool session.
-        marker = {"bare_completion": True, "valuz": {"ephemeral_generative_ui": True}}
+        # This session is a constrained document compiler, not a research turn.
+        # Citation projection, semantic/claim audit, and task-coverage review add
+        # no value to an A2UI JSONL stream and may each schedule expensive post-
+        # processing.  Stamp every capability off explicitly: their kernel
+        # defaults are intentionally user-facing and therefore otherwise true.
+        marker = {
+            "bare_completion": True,
+            "valuz": {
+                "ephemeral_generative_ui": True,
+                "citation_enabled": False,
+                "citation_verification_enabled": False,
+                "task_coverage_enabled": False,
+            },
+        }
         req = CreateSessionRequest(
             id=ephem_id,
             agent_config=AgentConfigSchema(
@@ -490,6 +502,11 @@ def _build_direct_chat_model(*, model: str, mp: Any) -> Any:
             kwargs["base_url"] = base_url
         if _is_deepseek_anthropic_channel(model=model, mp=mp):
             kwargs["thinking"] = {"type": "enabled"}
+        elif _is_valuz_lite_model(model):
+            # This is a constrained schema compiler, not a research turn.
+            # Lite may otherwise spend most of its latency before the first
+            # visible document token.
+            kwargs["effort"] = _DIRECT_GENUI_REASONING_EFFORT
         return ChatAnthropic(**kwargs)
 
     if protocol == "gemini":
@@ -508,8 +525,11 @@ def _build_direct_chat_model(*, model: str, mp: Any) -> Any:
     kwargs = {
         "api_key": api_key,
         "model": model,
+        "max_tokens": _DIRECT_GENUI_MAX_TOKENS,
         "stream_usage": True,
     }
+    if _is_valuz_lite_model(model):
+        kwargs["reasoning_effort"] = _DIRECT_GENUI_REASONING_EFFORT
     if base_url is not None:
         kwargs["base_url"] = base_url
     return ChatOpenAI(**kwargs)

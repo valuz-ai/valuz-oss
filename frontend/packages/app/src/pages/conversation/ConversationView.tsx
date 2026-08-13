@@ -33,6 +33,11 @@ export interface ConversationViewProps {
    *  session, so the embedding host can persist the id. Unused by ``page``
    *  (the URL is the persistence). */
   onSessionCreated?: (sessionId: string) => void;
+  /** Embedded hosts may persist a session id beyond the lifetime of the
+   *  backend/database it came from. When that id is confirmed missing (404),
+   *  the panel asks its host to discard the id and falls back to a fresh
+   *  draft. Page routes intentionally keep their explicit not-found state. */
+  onSessionUnavailable?: (sessionId: string) => void;
   /** ``panel``-variant "starter" affordance — fills the composer draft with
    *  this text once, then calls ``onPrefillConsumed``. */
   prefillDraft?: string | null;
@@ -93,6 +98,7 @@ function useOrchestration(
     conversationInstanceKey,
     promotingSessionIdRef,
     onSessionPromoted,
+    onSessionUnavailable: props.onSessionUnavailable,
     directoryFieldMode,
     hostRef: props.hostRef,
     createDefaults: props.createDefaults,

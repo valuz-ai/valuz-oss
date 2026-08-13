@@ -1,5 +1,5 @@
 import { render } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { A2UIRenderer } from "./A2UIRenderer";
 
@@ -166,6 +166,26 @@ describe("A2UI progressive paint", () => {
     expect(
       container.querySelector('[data-slot="a2ui-generation-skeleton"]'),
     ).toBe(null);
+  });
+
+  it("should not log expected validation failures for incomplete streaming JSON", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { rerender } = render(<A2UIRenderer body={ONE_COPY} status="running" />);
+    const breaks = `${ONE_COPY}\n${JSON.stringify({
+      version: "v0.9.1",
+      updateComponents: {
+        surfaceId: "never-created",
+        components: [{ id: "x", component: "TextContent", text: "y" }],
+      },
+    })}`;
+
+    rerender(<A2UIRenderer body={breaks} status="running" />);
+
+    expect(warn).not.toHaveBeenCalledWith(
+      "[a2ui] failed to render payload",
+      expect.anything(),
+    );
+    warn.mockRestore();
   });
 
   it("should let a run that ENDS empty render nothing", () => {

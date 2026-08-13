@@ -550,8 +550,23 @@ class _MessageObserverSink:
             tool_name = event.data.get("name")
             if isinstance(tool_use_id, str) and isinstance(tool_name, str):
                 self._tool_names[tool_use_id] = tool_name
+                # A runtime emits ``session_idle`` before ``run()`` returns.
+                # When task coverage is already disabled, that idle event
+                # finalizes Citation/Audit immediately, so waiting for the
+                # outer orchestrator to inspect ``called_tool`` is too late.
+                # Disable the prose sidecars at the attempted GenUI call — the
+                # user explicitly chose structural output, even if validation
+                # later rejects it.
+                if self._matches_tool_name(tool_name, "generate_ui"):
+                    self.skip_post_run_verification_for_generated_ui()
 
         elif event.type == "tool_result":
+            tool_use_id = event.data.get("id")
+            tool_name = (
+                self._tool_names.get(tool_use_id)
+                if isinstance(tool_use_id, str)
+                else None
+            )
             event = self._register_and_redact_tool_result(event)
 
         elif event.type == "session_idle":
@@ -799,6 +814,39 @@ class _MessageObserverSink:
 
     def mark_task_coverage_unavailable(self, *, reason: str) -> None:
         self.task_coverage = {"status": "unavailable", "reason": reason}
+
+    def called_tool(self, name: str) -> bool:
+        """Whether the primary run attempted a named tool call.
+
+        This intentionally keys off ``tool_use`` rather than ``tool_result``:
+        once GenUI compilation was attempted, neither its structural output nor
+        its failure message benefits from prose coverage/citation post-processing.
+        """
+
+        return any(
+            self._matches_tool_name(tool_name, name)
+            for tool_name in self._tool_names.values()
+        )
+
+    @staticmethod
+    def _matches_tool_name(tool_name: str, name: str) -> bool:
+        return (
+            tool_name == name
+            or tool_name.endswith(f"__{name}")
+            or tool_name.endswith(f"/{name}")
+        )
+
+    def skip_post_run_verification_for_generated_ui(self) -> None:
+        """The A2UI artifact is not a prose research answer.
+
+        A generate_ui attempt returns structural output or a structural
+        validation error. Neither benefits from prose citation projection or
+        claim audit, and the calling Agent's acknowledgement has no evidence
+        value to verify.
+        """
+
+        self._citation_enabled = False
+        self._citation_verification_enabled = False
 
     def mark_task_coverage_no_gap(self) -> None:
         """Record a structured private no-gap result without adding text."""
@@ -1576,7 +1624,21 @@ class SessionOrchestrator:
                 )
             )
             await runtime.run(session, user_message)
-            if task_coverage_enabled and getattr(session.stop_reason, "type", None) == "end_turn":
+            skip_genui_post_run = observer.called_tool("generate_ui")
+            if skip_genui_post_run:
+                observer.skip_post_run_verification_for_generated_ui()
+                logger.info(
+                    "post-run coverage/citation/audit skipped after generate_ui "
+                    "attempt "
+                    "message=%s session=%s",
+                    message.id,
+                    session.id,
+                )
+            if (
+                task_coverage_enabled
+                and not skip_genui_post_run
+                and getattr(session.stop_reason, "type", None) == "end_turn"
+            ):
                 if not bool(getattr(runtime, "supports_native_continuation", False)):
                     observer.mark_task_coverage_unavailable(
                         reason="runtime-native-continuation-unsupported"

@@ -106,6 +106,47 @@ export function asString(value: unknown, fallback = "") {
   return fallback;
 }
 
+export function safeHref(value: unknown): string | undefined {
+  const href = asString(value).trim();
+  return /^(https?:\/\/|\/|\?)/.test(href) ? href : undefined;
+}
+
+/**
+ * Resolve one safe URL for both desktop's HashRouter and WebUI's
+ * BrowserRouter. Query-only links deliberately retain the current host path
+ * and query (for example a finance document adds `doc=` without leaving the
+ * workbench that opened it).
+ */
+export function linkAttributes(value: unknown): {
+  href: string;
+  target?: "_blank";
+  rel?: string;
+} | null {
+  const safe = safeHref(value);
+  if (!safe) return null;
+  if (/^https?:\/\//.test(safe)) {
+    return { href: safe, target: "_blank", rel: "noreferrer" };
+  }
+  if (typeof window === "undefined") return { href: safe };
+
+  const hashRoute = window.location.hash.startsWith("#/");
+  if (safe.startsWith("/")) {
+    return { href: hashRoute ? `#${safe}` : safe };
+  }
+
+  const current = hashRoute
+    ? window.location.hash.slice(1)
+    : `${window.location.pathname}${window.location.search}`;
+  const [pathname, currentQuery = ""] = current.split("?", 2);
+  const params = new URLSearchParams(currentQuery);
+  for (const [key, entry] of new URLSearchParams(safe.slice(1))) {
+    params.set(key, entry);
+  }
+  const query = params.toString();
+  const href = `${pathname || "/"}${query ? `?${query}` : ""}`;
+  return { href: hashRoute ? `#${href}` : href };
+}
+
 export function asBoolean(value: unknown, fallback = false) {
   return typeof value === "boolean" ? value : fallback;
 }

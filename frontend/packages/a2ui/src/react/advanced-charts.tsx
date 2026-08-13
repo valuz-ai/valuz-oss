@@ -6,7 +6,7 @@ import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContai
 
 import { BoxPlotChartApi, BulletChartApi, CalendarHeatmapChartApi, CandlestickChartApi, HistogramChartApi, NetworkGraphApi, RangeChartApi, TimeSeriesChartApi, WaterfallChartApi } from "../catalog";
 import { getDistributedChartColors, resolveChartSeriesVisual, type ChartPaletteName } from "./chart-theme";
-import { accessibilityProps, asRecords, asString, weightStyle } from "./shared";
+import { accessibilityProps, asRecords, asString, linkAttributes, weightStyle } from "./shared";
 
 const axisStyle = { fill: "var(--va2-text-body)", fontSize: 10 };
 const ChartPaletteContext = createContext<ChartPaletteName>("ocean");
@@ -45,17 +45,20 @@ function EmptyPlot() { return <div className="va2-pro-chart__empty">No numerical
 
 export const TimeSeriesChart = createPaletteAwareComponent(TimeSeriesChartApi, ({ props }) => {
   const raw = asRecords(props.data);
-  const paletteColors = getDistributedChartColors(props.palette ?? "ocean", props.series?.length ?? 0);
+  const series = Array.isArray(props.series) ? props.series : [];
+  const paletteColors = getDistributedChartColors(props.palette ?? "ocean", series.length);
   const data = props.normalize ? raw.map((row, index) => {
     const next = { ...row };
-    for (const series of props.series ?? []) {
-      const first = number(raw[0]?.[series.key], 1);
-      next[series.key] = first === 0 ? 0 : (number(row[series.key]) / first) * 100;
+    for (const item of series) {
+      const baseRow = raw.find((candidate) => Number.isFinite(Number(candidate[item.key])));
+      const first = number(baseRow?.[item.key], 0);
+      const current = Number(row[item.key]);
+      next[item.key] = first === 0 || !Number.isFinite(current) ? undefined : (current / first) * 100;
     }
     next.__index = index;
     return next;
   }) : raw;
-  return <Frame title={props.title} description={props.description} height={props.height ?? 300} weight={props.weight} accessibility={props.accessibility}>{data.length === 0 ? <EmptyPlot/> : <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: props.height ?? 300 }}><LineChart data={data} margin={{ top: 10, right: 14, left: -10, bottom: 0 }}><CartesianGrid vertical={false} stroke="var(--va2-chart-grid)" strokeDasharray="3 3"/>{props.showAxes !== false && <XAxis dataKey={props.xKey} axisLine={false} tickLine={false} tick={axisStyle}/>} {props.showAxes !== false && <YAxis axisLine={false} tickLine={false} tick={axisStyle}/>}<Tooltip contentStyle={{ background: "var(--va2-bg)", border: "1px solid var(--va2-border)", borderRadius: "var(--va2-radius-lg)", fontSize: 11 }}/>{props.showLegend !== false && <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }}/>} {typeof props.referenceValue === "number" && <ReferenceLine y={props.referenceValue} stroke="var(--va2-chart-target)" strokeDasharray="2 3"/>}{(props.series ?? []).map((series, index) => { const visual = resolveChartSeriesVisual(series.role, index, paletteColors); return <Line key={series.key} dataKey={series.key} name={asString(series.label, series.key)} type={series.curve ?? "monotone"} stroke={visual.color} strokeDasharray={visual.strokeDasharray} strokeOpacity={visual.strokeOpacity} strokeWidth={2} dot={false} activeDot={{ r: 3 }} isAnimationActive={false}/>; })}</LineChart></ResponsiveContainer>}</Frame>;
+  return <Frame title={props.title} description={props.description} height={props.height ?? 300} weight={props.weight} accessibility={props.accessibility}>{data.length === 0 || series.length === 0 ? <EmptyPlot/> : <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: props.height ?? 300 }}><LineChart data={data} margin={{ top: 10, right: 14, left: -10, bottom: 0 }}><CartesianGrid vertical={false} stroke="var(--va2-chart-grid)" strokeDasharray="3 3"/>{props.showAxes !== false && <XAxis dataKey={props.xKey} axisLine={false} tickLine={false} tick={axisStyle}/>} {props.showAxes !== false && <YAxis domain={["auto", "auto"]} axisLine={false} tickLine={false} tick={axisStyle}/>}<Tooltip contentStyle={{ background: "var(--va2-bg)", border: "1px solid var(--va2-border)", borderRadius: "var(--va2-radius-lg)", fontSize: 11 }}/>{props.showLegend !== false && <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} formatter={(value, entry) => { const dataKey = asString((entry as { dataKey?: unknown }).dataKey, asString(value)); const item = series.find((candidate) => candidate.key === dataKey || asString(candidate.label) === asString(value)); const link = linkAttributes(item?.url); return link ? <a className="va2-chart__legend-link" {...link}>{asString(value)}</a> : asString(value); }}/>} {typeof props.referenceValue === "number" && <ReferenceLine y={props.referenceValue} stroke="var(--va2-chart-target)" strokeDasharray="2 3"/>}{series.map((item, index) => { const visual = resolveChartSeriesVisual(item.role, index, paletteColors); return <Line key={item.key} dataKey={item.key} name={asString(item.label, item.key)} type={item.curve ?? "monotone"} stroke={visual.color} strokeDasharray={visual.strokeDasharray} strokeOpacity={visual.strokeOpacity} strokeWidth={2} dot={false} activeDot={{ r: 3 }} isAnimationActive={false}/>; })}</LineChart></ResponsiveContainer>}</Frame>;
 });
 
 export const CandlestickChart = createPaletteAwareComponent(CandlestickChartApi, ({ props }) => {

@@ -58,7 +58,7 @@ import {
   TreemapChartApi,
 } from "../catalog";
 import { getDistributedChartColors, resolveChartSeriesVisual } from "./chart-theme";
-import { accessibilityProps, asRecords, asString, weightStyle } from "./shared";
+import { accessibilityProps, asRecords, asString, linkAttributes, weightStyle } from "./shared";
 
 const axisStyle = { fill: "var(--va2-text-body)", fontSize: 11 };
 const SINGLE_BAR_MAX_SIZE = 20;
@@ -71,6 +71,40 @@ const tooltipStyle = {
   color: "var(--va2-text)",
   fontSize: 12,
 };
+
+function LinkedCategoryTick({
+  x,
+  y,
+  payload,
+  data,
+  categoryKey,
+  linkKey,
+}: {
+  x?: number;
+  y?: number;
+  payload?: { value?: unknown; index?: number };
+  data: Record<string, unknown>[];
+  categoryKey: string;
+  linkKey: string;
+}) {
+  const row =
+    (typeof payload?.index === "number" ? data[payload.index] : undefined) ??
+    data.find((item) => asString(item[categoryKey]) === asString(payload?.value));
+  const link = linkAttributes(row?.[linkKey]);
+  const text = (
+    <text
+      x={x}
+      y={y}
+      dy={4}
+      fill="var(--va2-text-body)"
+      fontSize={11}
+      textAnchor="end"
+    >
+      {asString(payload?.value)}
+    </text>
+  );
+  return link ? <a {...link}>{text}</a> : text;
+}
 
 interface ChartFrameProps {
   title?: unknown;
@@ -110,8 +144,32 @@ function ChartFrame({
   );
 }
 
-function SeriesLegend({ show }: { show?: boolean }) {
-  return show === false ? null : <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />;
+function SeriesLegend({
+  show,
+  series,
+}: {
+  show?: boolean;
+  series?: ReadonlyArray<{ key: string; label?: unknown; url?: unknown }>;
+}) {
+  if (show === false) return null;
+  return (
+    <Legend
+      iconSize={8}
+      wrapperStyle={{ fontSize: 11 }}
+      formatter={(value, entry) => {
+        const dataKey = asString(
+          (entry as { dataKey?: unknown }).dataKey,
+          asString(value),
+        );
+        const item = series?.find(
+          (candidate) =>
+            candidate.key === dataKey || asString(candidate.label) === asString(value),
+        );
+        const link = linkAttributes(item?.url);
+        return link ? <a className="va2-chart__legend-link" {...link}>{asString(value)}</a> : asString(value);
+      }}
+    />
+  );
 }
 
 function ChartTooltip({ show }: { show?: boolean }) {
@@ -243,7 +301,7 @@ export const LineChart = createComponentImplementation(LineChartApi, ({ props })
           {props.showAxes !== false && <XAxis dataKey={props.xKey} axisLine={false} tick={axisStyle} tickLine={false} />}
           {props.showAxes !== false && <YAxis axisLine={false} tick={axisStyle} tickLine={false} />}
           <ChartTooltip show={props.showTooltip} />
-          <SeriesLegend show={props.showLegend} />
+          <SeriesLegend show={props.showLegend} series={props.series} />
           {(props.series ?? []).map((series, index) => {
             const visual = resolveChartSeriesVisual(series.role, index, paletteColors);
             return <Line
@@ -289,7 +347,7 @@ export const AreaChart = createComponentImplementation(AreaChartApi, ({ props })
           {props.showAxes !== false && <XAxis dataKey={props.xKey} axisLine={false} tick={axisStyle} tickLine={false} />}
           {props.showAxes !== false && <YAxis axisLine={false} tick={axisStyle} tickLine={false} />}
           <ChartTooltip show={props.showTooltip} />
-          <SeriesLegend show={props.showLegend} />
+          <SeriesLegend show={props.showLegend} series={props.series} />
           {(props.series ?? []).map((series, index) => {
             const visual = resolveChartSeriesVisual(series.role, index, paletteColors);
             return (
@@ -328,7 +386,7 @@ export const BarChart = createComponentImplementation(BarChartApi, ({ props }) =
           {props.showAxes !== false && <XAxis dataKey={props.xKey} axisLine={false} tick={axisStyle} tickLine={false} />}
           {props.showAxes !== false && <YAxis axisLine={false} tick={axisStyle} tickLine={false} />}
           <ChartTooltip show={props.showTooltip} />
-          <SeriesLegend show={props.showLegend} />
+          <SeriesLegend show={props.showLegend} series={props.series} />
           {(props.series ?? []).map((series, index) => {
             const visual = resolveChartSeriesVisual(series.role, index, paletteColors);
             const stackId = resolvedStackId(series, props.stacked);
@@ -371,9 +429,9 @@ export const HorizontalBarChart = createComponentImplementation(HorizontalBarCha
         <RechartsBarChart data={data} layout="vertical" margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>
           {props.showGrid !== false && <CartesianGrid stroke="var(--va2-chart-grid)" strokeDasharray="3 3" horizontal={false} />}
           {props.showAxes !== false && <XAxis type="number" axisLine={false} tick={axisStyle} tickLine={false} />}
-          {props.showAxes !== false && <YAxis dataKey={props.categoryKey} type="category" axisLine={false} tick={axisStyle} tickLine={false} width={84} />}
+          {props.showAxes !== false && <YAxis dataKey={props.categoryKey} type="category" axisLine={false} tick={props.linkKey ? <LinkedCategoryTick data={data} categoryKey={props.categoryKey} linkKey={props.linkKey} /> : axisStyle} tickLine={false} width={84} />}
           <ChartTooltip show={props.showTooltip} />
-          <SeriesLegend show={props.showLegend} />
+          <SeriesLegend show={props.showLegend} series={props.series} />
           {(props.series ?? []).map((series, index) => {
             const visual = resolveChartSeriesVisual(series.role, index, paletteColors);
             const stackId = resolvedStackId(series, props.stacked);
@@ -496,7 +554,7 @@ export const ComboChart = createComponentImplementation(ComboChartApi, ({ props 
           {props.showAxes !== false && <YAxis yAxisId="left" axisLine={false} tick={axisStyle} tickLine={false} />}
           {props.showAxes !== false && hasRightAxis && <YAxis yAxisId="right" orientation="right" axisLine={false} tick={axisStyle} tickLine={false} />}
           <ChartTooltip show={props.showTooltip} />
-          <SeriesLegend show={props.showLegend} />
+          <SeriesLegend show={props.showLegend} series={props.series} />
           {(props.series ?? []).map((series, index) => {
             const visual = resolveChartSeriesVisual(series.role, index, paletteColors);
             const yAxisId = series.axis ?? "left";
@@ -655,7 +713,7 @@ export const RadarChart = createComponentImplementation(RadarChartApi, ({ props 
           <PolarAngleAxis dataKey={props.categoryKey} tick={axisStyle} />
           <PolarRadiusAxis domain={[0, props.domainMax ?? "auto"]} tick={false} axisLine={false} />
           <ChartTooltip show={props.showTooltip} />
-          <SeriesLegend show={props.showLegend} />
+          <SeriesLegend show={props.showLegend} series={props.series} />
           {(props.series ?? []).map((series, index) => {
             const visual = resolveChartSeriesVisual(series.role, index, paletteColors);
             return (

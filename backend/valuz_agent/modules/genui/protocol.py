@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from importlib import resources
-from typing import Literal
+from typing import Any, Literal
 
-from valuz_agent.ports.extensions import ext
 from valuz_agent.ports.a2ui_components import A2UIComponentRegistry
+from valuz_agent.ports.extensions import ext
 
 OUTPUT_FORMAT = "A2UI v0.9.1 JSON message stream"
 
@@ -57,7 +58,14 @@ _A2UI_INSTRUCTIONS_BASE = (
     "mobile-first layouts: KPI/detail rows may wrap, charts should occupy a "
     "readable full-width section, and tables may scroll horizontally only when "
     "their columns cannot stay readable. Use only component names and exact "
-    "property shapes from the Valuz A2UI catalog below."
+    "property shapes from the Valuz A2UI catalog below. Emit createSurface and "
+    "a renderable root shell first, then add the requested sections in reading "
+    "order so streaming can paint a useful first screen before the document is "
+    "complete. Write every natural-"
+    "language UI label, explanation, and any visible reasoning or progress in "
+    "the request's language unless the request explicitly asks for another "
+    "language. Once you have emitted a complete page with its root component, "
+    "stop immediately; do not plan, restart, or generate the same page again."
 )
 
 _A2UI_PREFER_EDITION_COMPONENTS = (
@@ -138,23 +146,46 @@ Use flat component ids for layout children:
 {"id":"root","component":"Stack","children":["title","chart"],"direction":"vertical","gap":"md"}
 Do not create placeholder charts or charts with empty series. If supplied data
 does not include chart-ready arrays, show the raw values with {fallbacks}.
+For time-indexed market performance, normalization, or a reference baseline,
+use TimeSeriesChart, not LineChart. Example:
+{"id":"returns","component":"TimeSeriesChart","data":{"path":"/data/returns"},"xKey":"date","series":[{"key":"nvda","label":"NVDA","role":"actual"},{"key":"benchmark","label":"Benchmark","role":"benchmark"}],"normalize":true,"referenceValue":100}
+All chart series entries use "label", never "name".
+
+Generate only the requested surface content. Do not put preview/save/apply
+status, confirmation instructions, or host lifecycle chrome inside the A2UI
+surface; the host renders those controls around the Artifact. Treat phrases in
+the user's request such as "preview first", "let me confirm", "do not save",
+or "apply after confirmation" as instructions to the host, never as content to
+render. Do not add a preview banner or tell the user how to save inside the
+surface.
 
 Live data slots. For persistent or ongoing UI, when the edition catalog names
-a compatible pollable source, you MUST bind it and treat supplied/retrieved
-values as the initial seed. Inline values only when no compatible registered
-source exists, the content is narrative/analysis, or the user explicitly asks
-for a frozen snapshot. When editing a current document, preserve its existing
-refs and property bindings unless the user explicitly asks to replace them:
+a compatible pollable source, you MUST bind it. Do not require the calling
+Agent to query that source merely to manufacture an initial snapshot: the host
+loads every declared ref immediately and updates the bound slot. If compatible
+values are already supplied from the user's research, they MAY seed the slot;
+otherwise omit the seed and let the bound component show its loading/empty
+state until the first host result arrives. Inline values only when no compatible
+registered source exists, the content is narrative/analysis, or the user
+explicitly asks for a frozen snapshot. When editing a current document,
+preserve its existing refs and property bindings unless the user explicitly
+asks to replace them:
 
-1. Seed a slot and declare its source in the data model:
+1. Declare its source in the data model; optionally seed the slot only when
+compatible values are already available:
+{"version":"v0.9.1","updateDataModel":{"surfaceId":"s","path":"/refs/quote","value":
+{"source":"<source id>","params":{"symbol":"US:NVDA"},"refresh":{"interval":60}}}}
 {"version":"v0.9.1","updateDataModel":{"surfaceId":"s","path":"/data/quote","value":{"items":[...]}}}
-{"version":"v0.9.1","updateDataModel":{"surfaceId":"s","path":"/refs/quote","value":{"source":"<source id>","params":{"symbol":"US:NVDA"},"refresh":{"interval":60}}}}
 2. Bind the component property to the slot instead of inlining:
 Bind the property named by the edition source notes to the matching slot path.
 The binding IS the refresh: a property written as {"path": ...} re-renders
 when the host updates the slot, an inlined copy of the same values never
 does. Seeding the slot and then inlining the values anyway produces a board
 that polls but visibly never moves — seed the SLOT, bind the PROPERTY.
+Declaring a /refs/<slot> entry without binding the visible data-bearing
+component to /data/<slot> is invalid. Do not duplicate a bound seed into a
+second inline chart/table for presentation; use the component that accepts the
+source's declared shape, exactly as the edition notes specify.
 
 The slot's shape is NOT yours to design. After every refresh the host
 replaces the slot's whole value with the source's declared shape, exactly
@@ -164,12 +195,16 @@ that same shape and bind inside it — items:{"path":"/data/quote/items"} —
 never invent your own slot fields: a binding to an invented field renders
 once from your seed and goes blank on the first refresh.
 
-Always write the seed value — the binding must render correctly even if the
-host never refreshes it. One slot per source; the slot path and the ref path
-share the trailing name. Never invent a source id: only the ids the edition
-notes list as pollable exist, and anything else leaves the slot permanently
-stale. refresh.interval is seconds and must respect the source's stated
-minimum.
+One slot per source; the slot path and the ref path share the trailing name.
+Never invent a source id: only the ids the edition notes list as pollable
+exist, and anything else leaves the slot permanently stale. refresh.interval
+is seconds and must respect the source's stated minimum. A missing seed is
+valid for a bound live slot; a missing ref is not.
+
+Do not append an empty root data-model update such as path "/" with value {}
+after writing /data/* or /refs/* slots. A root update replaces the ENTIRE data
+model; an empty one erases every seed and ref and leaves all bound properties
+unresolved. Once the requested data slots and components are complete, stop.
 
 When the edition notes list MORE THAN ONE shape for a source, the ref must
 say which one it wants with a "shape" key (e.g. {"source":"...","shape":
@@ -222,7 +257,13 @@ def _component_registry() -> A2UIComponentRegistry:
 A2UI_COMPONENT_CATALOG = _load_component_catalog()
 
 
-def edition_catalog_text() -> str:
+def edition_catalog_text(
+    names: Sequence[str] | None = None,
+    *,
+    include_notes: bool = True,
+    include_notes_without_entries: bool = False,
+    data_source_ids: Sequence[str] | None = None,
+) -> str:
     """Components registered from outside this repository.
 
     The registry behind it is ``ext.a2ui_components``: an edition — a separate
@@ -237,7 +278,13 @@ def edition_catalog_text() -> str:
     behind every edition, forever.
     """
 
-    return _component_registry().catalog_text(baseline=False)
+    return _component_registry().catalog_text(
+        baseline=False,
+        names=names,
+        include_notes=include_notes,
+        include_notes_without_entries=include_notes_without_entries,
+        note_keys=data_source_ids,
+    )
 
 
 def resolve_component_scope(scope: GenUIComponentScope) -> GenUIComponentScope:
@@ -258,17 +305,190 @@ def resolve_component_scope(scope: GenUIComponentScope) -> GenUIComponentScope:
     return scope
 
 
-def build_a2ui_catalog(scope: GenUIComponentScope = "all") -> str:
+def component_names_for_scope(
+    scope: GenUIComponentScope = "all",
+) -> tuple[str, ...]:
+    """All exact component names available to one generation scope."""
+
+    scope = resolve_component_scope(scope)
+    registry = _component_registry()
+    names: list[str] = []
+    if not registry.baseline_suppressed() and scope != "edition":
+        names.extend(
+            re.findall(
+                r"^\s*-\s*([A-Za-z0-9]+)\(",
+                _load_component_catalog(),
+                re.MULTILINE,
+            )
+        )
+    if scope != "atoms":
+        names.extend(registry.registered_names())
+    # Stack is the mandatory root even for an edition-only vocabulary.
+    return tuple(dict.fromkeys(("Stack", *names)))
+
+
+def normalize_component_names(value: object) -> tuple[str, ...]:
+    """Model-authored exact candidates, de-duplicated and syntax checked."""
+
+    if not isinstance(value, (list, tuple)):
+        return ()
+    names: list[str] = []
+    for raw in value:
+        name = str(raw or "").strip()
+        if name and re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", name):
+            names.append(name)
+    return tuple(dict.fromkeys(names))
+
+
+def registered_data_source_ids() -> tuple[str, ...]:
+    """Source ids advertised by generated edition notes.
+
+    The notes and the runtime source registry are generated from the same
+    edition table. Keeping the tool enum derived from those notes lets the
+    calling Agent choose a real binding without copying the whole component
+    schema into its context.
+    """
+
+    notes = edition_catalog_text(include_notes_without_entries=True)
+    return tuple(
+        dict.fromkeys(
+            re.findall(
+                r"\b([a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+){2,})\s+\(params\s+",
+                notes,
+            )
+        )
+    )
+
+
+def registered_data_source_contracts() -> dict[str, dict[str, Any]]:
+    """Machine-readable minimum contracts from the generated edition notes.
+
+    Edition data bindings are registered beside their component catalog.  The
+    generated note line deliberately has a stable shape::
+
+        source.id (params {symbol: prefixed, rangeDays?: ...}, ...) ...
+        accepted by ComponentName.
+
+    ``generate_ui`` needs only a few mechanical facts before it spends a model
+    call: which parameters are required, their primitive wire shape, and which
+    rendered component consumes the source. Keeping those facts derived from
+    the generated asset avoids a second hand-written registry that can drift
+    from the frontend source table.
+    """
+
+    notes = edition_catalog_text(include_notes_without_entries=True)
+    contracts: dict[str, dict[str, Any]] = {}
+    pattern = re.compile(
+        r"(?m)^\s*([a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+){2,})\s+"
+        r"\(params\s+\{([^}]*)\}.*?accepted by\s+([A-Za-z][A-Za-z0-9]*)\."
+    )
+    for match in pattern.finditer(notes):
+        required: list[str] = []
+        param_specs: dict[str, dict[str, Any]] = {}
+        for raw_field in match.group(2).split(","):
+            name_part, separator, raw_description = raw_field.partition(":")
+            field = name_part.strip()
+            if not separator or not field:
+                continue
+            optional = field.endswith("?")
+            name = field.removesuffix("?")
+            description = raw_description.strip()
+            spec: dict[str, Any] = {
+                "required": not optional,
+                "description": description,
+                "kind": "string",
+            }
+            if description == "boolean":
+                spec["kind"] = "boolean"
+            else:
+                range_match = re.fullmatch(r"(-?\d+(?:\.\d+)?)-(-?\d+(?:\.\d+)?)", description)
+                if range_match:
+                    spec.update(
+                        kind="number",
+                        minimum=float(range_match.group(1)),
+                        maximum=float(range_match.group(2)),
+                    )
+                elif "|" in description:
+                    spec["enum"] = tuple(
+                        value.strip() for value in description.split("|") if value.strip()
+                    )
+            param_specs[name] = spec
+            if not optional:
+                required.append(name)
+        contracts[match.group(1)] = {
+            "required_params": tuple(dict.fromkeys(required)),
+            "accepted_components": (match.group(3),),
+            "param_specs": param_specs,
+        }
+    return contracts
+
+
+def registered_data_source_tool_guide() -> str:
+    """Compact live-source menu for the calling Agent's tool description."""
+
+    lines: list[str] = []
+    for source_id, contract in registered_data_source_contracts().items():
+        params: list[str] = []
+        for name, spec in dict(contract.get("param_specs") or {}).items():
+            suffix = "" if spec.get("required") else "?"
+            description = str(spec.get("description") or spec.get("kind") or "value")
+            params.append(f"{name}{suffix}: {description}")
+        accepted = ", ".join(contract.get("accepted_components") or ())
+        lines.append(f"- {source_id} {{{', '.join(params)}}} -> {accepted}")
+    if not lines:
+        return ""
+    return (
+        "\nRegistered live sources (exact params and visible consumer):\n"
+        + "\n".join(lines)
+        + '\nOn a Host that provides a param, write the value as '
+        '{"param":{"$host":"param"}}, not a top-level $host key.'
+    )
+
+
+def build_a2ui_catalog(
+    scope: GenUIComponentScope = "all",
+    component_names: Sequence[str] | None = None,
+    *,
+    include_edition_data_notes: bool = False,
+    data_source_ids: Sequence[str] | None = None,
+) -> str:
     """The A2UI catalog for one scope.
 
     The OSS half is generated from the same strict schemas the renderer uses;
     edition entries are appended by the distribution registry.
     """
 
-    edition = edition_catalog_text()
     scope = resolve_component_scope(scope)
+    requested = tuple(component_names or ())
+    allowed = frozenset(component_names_for_scope(scope))
+    selected = tuple(name for name in requested if name in allowed)
+    # Stack is structural, not a business choice, and every valid surface needs
+    # it. If no requested candidate is valid, widen safely instead of handing
+    # the compiler an unusable empty vocabulary.
+    if requested and selected:
+        selected = tuple(dict.fromkeys(("Stack", *selected)))
+        selection: tuple[str, ...] | None = selected
+    else:
+        selection = None
 
-    own = f"Valuz A2UI component catalog:\n{_load_component_catalog()}\n"
+    edition = edition_catalog_text(
+        selection,
+        include_notes=include_edition_data_notes or selection is None,
+        include_notes_without_entries=include_edition_data_notes,
+        data_source_ids=data_source_ids,
+    )
+
+    # Take only the generated baseline lines so edition entries stay in their
+    # own titled section below.
+    if selection is not None:
+        own_catalog = "\n".join(
+            line
+            for line in _load_component_catalog().splitlines()
+            if any(line.lstrip().startswith(f"- {name}(") for name in selection)
+        )
+    else:
+        own_catalog = _load_component_catalog()
+    own = f"Valuz A2UI component catalog:\n{own_catalog}\n"
     installed = f"{_A2UI_EDITION_HEADING}{edition}\n" if edition else ""
     if _component_registry().baseline_suppressed():
         # An edition holds `replace`: this repository's vocabulary is gone from
@@ -333,23 +553,39 @@ def build_a2ui_prompt(
     data: object | None = None,
     scope: GenUIComponentScope = "all",
     current_document: str | None = None,
+    language_reference: str | None = None,
+    component_names: Sequence[str] | None = None,
+    data_sources: Sequence[object] | None = None,
 ) -> str:
     parts = [
         a2ui_instructions(scope),
         "",
         "A2UI v0.9.1 message contract:",
         '- createSurface: {"version":"v0.9.1","createSurface":{"surfaceId":"main","catalogId":"https://valuz.io/a2ui/catalogs/base/v1"}}',
-        '- updateDataModel: {"version":"v0.9.1","updateDataModel":{"surfaceId":"main","path":"/","value":{...}}}',
-        '- updateComponents: {"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":[...]}}',
-        '- every UI must include a component with id "root"; put the visible tree under root.children.',
+        '- updateDataModel: {"version":"v0.9.1","updateDataModel":'
+        '{"surfaceId":"main","path":"/","value":{...}}}',
+        '- updateComponents: {"version":"v0.9.1","updateComponents":'
+        '{"surfaceId":"main","components":[...]}}',
+        '- every UI must include a component with id "root"; put the visible '
+        'tree under root.children.',
         "",
-        build_a2ui_catalog(scope).strip(),
+        build_a2ui_catalog(
+            scope,
+            component_names,
+            include_edition_data_notes=bool(data_sources),
+            data_source_ids=tuple(
+                str(source.get("source") or "")
+                for source in (data_sources or ())
+                if isinstance(source, dict)
+            ),
+        ).strip(),
     ]
     if current_document:
         parts.extend(
             [
                 "",
-                "CURRENT HOST DOCUMENT (the complete A2UI document currently bound to the target host):",
+                "CURRENT HOST DOCUMENT (the complete A2UI document currently bound "
+                "to the target host):",
                 current_document.strip(),
                 "",
                 "EDIT CONTRACT:",
@@ -359,23 +595,55 @@ def build_a2ui_prompt(
                 "request explicitly asks for a replacement.",
             ]
         )
+    if language_reference:
+        parts.extend(
+            [
+                "",
+                "OUTPUT LANGUAGE:",
+                "Match the language of the user's original message below for every "
+                "natural-language UI label and every visible reasoning or progress "
+                "message. The Agent-authored REQUEST may be a translation or paraphrase "
+                "and must not change the output language.",
+                language_reference.strip(),
+            ]
+        )
     parts.extend(["", "REQUEST:", request.strip()])
+    if data_sources:
+        parts.extend(
+            [
+                "",
+                "PLANNED LIVE BINDINGS (declare these refs; do not query them "
+                "outside the generated document merely to create seed values):",
+                json.dumps(list(data_sources), ensure_ascii=False),
+            ]
+        )
     if data is not None:
         parts.append("")
         parts.append(
-            "DATA (when a compatible registered source exists, use these values as "
-            "that binding's initial seed; otherwise render them directly):"
+            "EXISTING RESEARCH DATA (use as an optional compatible binding seed or "
+            "as narrative/frozen content; never treat it as a replacement for a "
+            "registered live source):"
         )
         parts.append(json.dumps(data, ensure_ascii=False))
     return "\n".join(parts)
 
 
-def wrap_generated_ui(content: str) -> str:
+def wrap_generated_ui(content: str, *, hosted: bool = False) -> str:
     """Wrap the generated stream in the envelope the client dispatches on."""
 
     body = (content or "").strip()
+    payload = {"protocol": "a2ui-json", "content": body}
+    if hosted:
+        # The renderer reads only protocol/content. This field is deliberately
+        # adjacent to the successful result so the calling Agent sees the
+        # post-tool contract after a potentially multi-minute compilation.
+        payload["agent_instruction"] = (
+            "Reply with exactly one short sentence saying the workspace preview "
+            "is ready to inspect. Do not recap values, components, sources, "
+            "bindings, or refresh settings."
+        )
     return json.dumps(
-        {"protocol": "a2ui-json", "content": body},
+        payload,
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -392,27 +660,34 @@ _A2UI_MESSAGE_KEYS = (
 
 
 def a2ui_message_lines(raw: str) -> tuple[list[str], bool]:
-    """The complete JSON message lines in ``raw`` and whether its tail is cut.
+    """The complete JSON messages in ``raw`` and whether its tail is cut.
 
-    A2UI is append-only JSONL, so a generation stopped by an output cap leaves
-    every line complete except a half-written last one. This returns the
-    complete ``{``-opening lines in order and a ``truncated`` flag set when the
-    stream broke mid-line — the two facts a continuation loop needs: what has
-    arrived, and whether to ask the model to keep writing.
+    The wire format is JSONL, but models sometimes pretty-print each top-level
+    message across several lines. Decode top-level objects from the stream
+    rather than assuming one physical line per object; otherwise a complete
+    pretty-printed page looks truncated and the runner asks for three needless
+    continuation turns after the UI is already visible.
     """
+    decoder = json.JSONDecoder()
     lines: list[str] = []
-    truncated = False
-    for raw_line in raw.split("\n"):
-        line = raw_line.strip()
-        if not line.startswith("{"):
-            continue
+    cursor = 0
+    while True:
+        match = re.search(r"(?m)^[ \t]*\{", raw[cursor:])
+        if match is None:
+            return lines, False
+        start = cursor + match.start() + len(match.group(0)) - 1
         try:
-            json.loads(line)
+            message, end = decoder.raw_decode(raw, start)
         except json.JSONDecodeError:
-            truncated = True
-            break
-        lines.append(line)
-    return lines, truncated
+            return lines, True
+        cursor = end
+        if not isinstance(message, dict):
+            continue
+        if not any(key in message for key in _A2UI_MESSAGE_KEYS):
+            continue
+        lines.append(
+            json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+        )
 
 
 def extract_a2ui_document(raw: str) -> str | None:
@@ -436,56 +711,90 @@ def extract_a2ui_document(raw: str) -> str | None:
     """
     if not raw:
         return None
-    kept: list[str] = []
-    saw_components = False
-    for raw_line in raw.split("\n"):
-        line = raw_line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
-            # A ``{``-opening line that will not parse is a TRUNCATED tail:
-            # A2UI is append-only JSONL, so a generation cut off by an output
-            # cap or an aborted stream leaves its last line half-written while
-            # every earlier line is complete. Reject-the-whole-document threw
-            # away a nearly-finished page (blank workbench, no version) for a
-            # single missing closing brace. Instead, stop at the break and
-            # keep the valid prefix — the page renders what completed, minus
-            # the final unfinished section. (A break, not skip-and-continue:
-            # nothing valid follows a truncation in an append-only stream, and
-            # skipping into later lines could stitch across a genuinely
-            # corrupt middle.)
-            break
-        if not isinstance(message, dict):
-            continue
-        if not any(key in message for key in _A2UI_MESSAGE_KEYS):
-            continue
-        if "updateComponents" in message:
-            saw_components = True
-        kept.append(line)
+    kept, _truncated = a2ui_message_lines(raw)
+    saw_components = any("updateComponents" in json.loads(line) for line in kept)
     # Still require a real page: a run truncated BEFORE its first complete
     # ``updateComponents`` has nothing to show and is rejected as before.
     if not saw_components:
         return None
-    return "\n".join(_without_repeated_document(kept))
+    canonical = _latest_surface_declaration(kept)
+    return "\n".join(_without_destructive_trailing_root_reset(canonical))
 
 
-def _without_repeated_document(lines: list[str]) -> list[str]:
-    """Drop a second, identical copy of the document.
+def _without_destructive_trailing_root_reset(lines: list[str]) -> list[str]:
+    """Drop a model's final ``path=/, value={}`` after it populated slots.
 
-    A turn's canonical assistant text is the join of every model-end segment,
-    so a run that emits the document in two segments hands back both — the same
-    page, twice, byte for byte. Storing that doubles every revision and makes
-    the stored document disagree with itself about how many surfaces it has.
+    A root data-model update is a full replacement in A2UI. Models sometimes
+    finish an otherwise valid live document with an empty root update, as if it
+    were a harmless terminator. It is not: it erases every ``/data/*`` seed and
+    ``/refs/*`` declaration written above it, so all dynamic component props
+    become unresolved and strict nested components can crash the host.
 
-    Narrow on purpose: only an exact repeat of the whole line sequence is
-    dropped. A generation that legitimately restarts with DIFFERENT content is
-    left alone — that is a real second declaration, and deciding which of two
-    differing versions wins is not this function's call.
+    Narrow by construction: only an *empty* root replacement is removed, only
+    when the same surface already received a non-root data-model update, and
+    only when no later non-root update repopulates it. A root seed used as the
+    document's actual data payload remains untouched.
     """
-    count = len(lines)
-    if count < 2 or count % 2 != 0:
-        return lines
-    half = count // 2
-    return lines[:half] if lines[:half] == lines[half:] else lines
+
+    messages = [json.loads(line) for line in lines]
+    populated_surfaces: set[str] = set()
+    drop: set[int] = set()
+    for index, message in enumerate(messages):
+        update = message.get("updateDataModel")
+        if not isinstance(update, dict):
+            continue
+        surface_id = update.get("surfaceId")
+        path = update.get("path")
+        if not isinstance(surface_id, str):
+            continue
+        if path != "/":
+            populated_surfaces.add(surface_id)
+            continue
+        if update.get("value") == {} and surface_id in populated_surfaces:
+            drop.add(index)
+            populated_surfaces.discard(surface_id)
+    return [line for index, line in enumerate(lines) if index not in drop]
+
+
+def _latest_surface_declaration(lines: list[str]) -> list[str]:
+    """Keep each surface's final declaration when a model restarts it.
+
+    A runtime can join multiple model-end segments into one assistant message.
+    Models also sometimes review their first page and emit a second, slightly
+    revised full document in the same turn. Both cases produce a second
+    ``createSurface`` for the same surface id. A2UI does not define that as two
+    pages: the later declaration is the model's final replacement.
+
+    Different surface ids are preserved. For every id, messages older than its
+    final ``createSurface`` are discarded while other surfaces remain in their
+    original order. This handles both a whole-document second pass and a model
+    that revises only one surface inside a legitimate multi-surface document.
+    """
+    messages = [json.loads(line) for line in lines]
+    last_declaration: dict[str, int] = {}
+    message_surface_ids: list[str | None] = []
+    for index, message in enumerate(messages):
+        surface_id = _a2ui_surface_id(message)
+        message_surface_ids.append(surface_id)
+        declaration = message.get("createSurface")
+        if surface_id is not None and isinstance(declaration, dict):
+            last_declaration[surface_id] = index
+    return [
+        line
+        for index, (line, surface_id) in enumerate(
+            zip(lines, message_surface_ids, strict=True)
+        )
+        if surface_id is None or index >= last_declaration.get(surface_id, 0)
+    ]
+
+
+def _a2ui_surface_id(message: dict[str, Any]) -> str | None:
+    """Surface id carried by one supported document-state message."""
+    for key in _A2UI_MESSAGE_KEYS:
+        payload = message.get(key)
+        if not isinstance(payload, dict):
+            continue
+        surface_id = payload.get("surfaceId")
+        if isinstance(surface_id, str) and surface_id:
+            return surface_id
+    return None

@@ -9,6 +9,7 @@ from valuz_agent.modules.genui.protocol import (
     build_a2ui_catalog,
     build_a2ui_prompt,
     edition_catalog_text,
+    normalize_component_names,
     normalize_component_scope,
     resolve_component_scope,
 )
@@ -37,6 +38,26 @@ def test_tool_advertises_the_scope_argument() -> None:
     assert "components" not in _PARAMS["required"]
 
 
+def test_exact_component_candidates_are_normalized_and_narrow_the_catalog() -> None:
+    assert normalize_component_names(["BarChart", " BarChart ", "bad-name"]) == (
+        "BarChart",
+    )
+    catalog = build_a2ui_catalog(
+        "atoms",
+        component_names=("TextContent", "BarChart"),
+    )
+    assert "Stack(" in catalog
+    assert "TextContent(" in catalog
+    assert "BarChart(" in catalog
+    assert "LineChart(" not in catalog
+
+
+def test_invalid_candidate_set_widens_instead_of_hiding_the_whole_catalog() -> None:
+    catalog = build_a2ui_catalog("atoms", component_names=("NotRegistered",))
+    assert "MetricGroup(" in catalog
+    assert "TimeSeriesChart(" in catalog
+
+
 def test_base_scope_contains_layout_content_and_analytics() -> None:
     prompt = build_a2ui_prompt("revenue dashboard", None, "atoms")
     for name in ("Stack", "TextContent", "MetricGroup", "TimeSeriesChart"):
@@ -47,7 +68,7 @@ def test_all_is_the_union_of_base_and_edition(monkeypatch) -> None:
     monkeypatch.setattr(
         protocol,
         "edition_catalog_text",
-        lambda: "  - FinanceTile(title: string) — Finance extension.",
+        lambda *args, **kwargs: "  - FinanceTile(title: string) — Finance extension.",
     )
     everything = build_a2ui_catalog("all")
     assert "FinanceTile" in everything

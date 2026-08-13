@@ -37,7 +37,12 @@ export function describeA2UIComponent(component: ComponentApi): string {
     // Palette names and their selection semantics are declared once in the
     // compiler's visualization contract. Repeating all eight enum values on
     // every chart line costs prompt budget without adding local information.
-    const type = name === "palette" ? "palette" : typeName(schema);
+    const type =
+      name === "palette"
+        ? "palette"
+        : name === "series"
+          ? "array<{key,label?,role?,stack?,curve?}>"
+          : typeName(schema);
     return `${name}${optional ? "?" : ""}: ${type}`;
   });
   const description = component.schema.description?.replace(/\s+/g, " ").trim() ?? "";

@@ -1,7 +1,7 @@
 import type { ComponentApi } from "@a2ui/web_core/v0_9";
 import { z } from "zod";
 
-import { DynamicBooleanSchema, DynamicNumberSchema, DynamicStringSchema, DynamicValueSchema, chartCommonProps, chartPaletteSchema, chartSeriesSchema, commonProps } from "./primitives";
+import { DynamicBooleanSchema, DynamicNumberSchema, DynamicStringSchema, DynamicValueSchema, chartCommonProps, chartPaletteSchema, dynamicChartSeriesSchema, commonProps } from "./primitives";
 
 const frameProps = {
   ...commonProps,
@@ -13,8 +13,8 @@ const frameProps = {
 
 export const TimeSeriesChartApi = {
   name: "TimeSeriesChart",
-  schema: z.object({ ...chartCommonProps, xKey: z.string(), series: z.array(chartSeriesSchema).min(1).max(6), showAxes: DynamicBooleanSchema.default(true).optional(), normalize: DynamicBooleanSchema.default(false).optional(), referenceValue: DynamicNumberSchema.optional() }).strict()
-    .describe("Use for time-indexed actual, estimate, or benchmark series; normalize only for relative performance from a common base."),
+  schema: z.object({ ...chartCommonProps, xKey: z.string(), series: dynamicChartSeriesSchema, showAxes: DynamicBooleanSchema.default(true).optional(), normalize: DynamicBooleanSchema.default(false).optional(), referenceValue: DynamicNumberSchema.optional() }).strict()
+    .describe('Use for time-indexed actual, estimate, benchmark, or market-price series. Use this component, not LineChart, for relative performance: set normalize:true and referenceValue:100 when comparing series from a common base. Series entries use {key,label?,role?}; use label, never name. When a live slot provides both data and series, bind both properties to that slot so refreshes cannot change field keys independently.'),
 } satisfies ComponentApi;
 
 export const CandlestickChartApi = {

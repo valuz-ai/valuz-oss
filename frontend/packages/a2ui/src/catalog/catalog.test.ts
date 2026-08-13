@@ -7,6 +7,7 @@ import {
 } from "./index";
 import { createValuzMessageProcessor } from "../react/catalog";
 import { valuzBaseComponents } from "../react/catalog";
+import { TimeSeriesChartApi } from "./advanced-charts";
 import { LineChartApi } from "./charts";
 import { describeA2UIComponent } from "./describe";
 
@@ -110,6 +111,20 @@ describe("Valuz A2UI base catalog", () => {
     const description = describeA2UIComponent(LineChartApi);
 
     expect(description).toContain("palette?: palette");
+    expect(description).toContain(
+      "series: array<{key,label?,role?,stack?,curve?}>",
+    );
+    expect(description).toContain("Series entries use label, never name");
     expect(description).not.toContain('palette?: "ocean"|');
+  });
+
+  it("allows a live slot to replace TimeSeriesChart data and series together", () => {
+    expect(TimeSeriesChartApi.schema.safeParse({
+      data: { path: "/data/kline/data" },
+      xKey: "date",
+      series: { path: "/data/kline/series" },
+      normalize: true,
+      referenceValue: 100,
+    }).success).toBe(true);
   });
 });

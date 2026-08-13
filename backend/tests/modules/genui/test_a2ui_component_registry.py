@@ -41,6 +41,48 @@ def test_registered_components_reach_catalog_per_call() -> None:
     assert "MetricGroup" in catalog
 
 
+def test_selected_catalog_keeps_only_requested_entries_and_registered_notes() -> None:
+    protocol.build_a2ui_catalog("all")
+    _register(notes=("Use a registered finance source.",))
+
+    catalog = protocol.build_a2ui_catalog(
+        "all",
+        component_names=("SecuritySnapshot", "TextContent"),
+        include_edition_data_notes=True,
+    )
+
+    assert "Stack(" in catalog
+    assert "TextContent(" in catalog
+    assert "SecuritySnapshot(" in catalog
+    assert "PriceVolumeChart(" not in catalog
+    assert "MetricGroup(" not in catalog
+    assert "Use a registered finance source" in catalog
+
+
+def test_registered_notes_can_be_filtered_by_selected_source_key() -> None:
+    protocol.build_a2ui_catalog("all")
+    _register(
+        notes=(
+            "Binding-first shared rule.",
+            "finance.market.quote (params {symbol}) → QuoteStrip.",
+            "finance.market.kline (params {symbols}) → TimeSeriesChart.",
+            "Shared closing rule.",
+        )
+    )
+
+    catalog = protocol.build_a2ui_catalog(
+        "all",
+        component_names=("SecuritySnapshot",),
+        include_edition_data_notes=True,
+        data_source_ids=("finance.market.kline",),
+    )
+
+    assert "Binding-first shared rule" in catalog
+    assert "finance.market.kline" in catalog
+    assert "finance.market.quote" not in catalog
+    assert "Shared closing rule" in catalog
+
+
 def test_scope_split_tracks_component_origin() -> None:
     protocol.build_a2ui_catalog("all")
     _register()

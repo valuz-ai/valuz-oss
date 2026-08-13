@@ -234,7 +234,15 @@ class A2UIComponentRegistry:
     def has_registrations(self) -> bool:
         return bool(self._layers)
 
-    def catalog_text(self, *, baseline: bool = True) -> str:
+    def catalog_text(
+        self,
+        *,
+        baseline: bool = True,
+        names: Iterable[str] | None = None,
+        include_notes: bool = True,
+        include_notes_without_entries: bool = False,
+        note_keys: Iterable[str] | None = None,
+    ) -> str:
         """The A2UI catalog: baseline ⧺ registered layers in
         fixed order, each registered layer as its own titled group.
 
@@ -243,17 +251,59 @@ class A2UIComponentRegistry:
         installed *instead of* this repository's own set.
         """
 
+        selected = frozenset(names) if names is not None else None
+        selected_note_keys = (
+            frozenset(note_keys) if note_keys is not None else None
+        )
         parts: list[str] = []
         if baseline and not self.baseline_suppressed() and self._baseline_catalog_text:
-            parts.append(self._baseline_catalog_text)
+            if selected is None:
+                parts.append(self._baseline_catalog_text)
+            else:
+                lines = [
+                    line
+                    for line in self._baseline_catalog_text.splitlines()
+                    if any(
+                        line.lstrip().startswith(f"- {name}(")
+                        for name in selected
+                    )
+                ]
+                if lines:
+                    parts.append("\n".join(lines))
         for layer in _LAYER_ORDER:
             registration = self._layers.get(layer)
             if registration is None:
                 continue
-            lines = "\n".join(line for _, line in registration.entries)
-            section = f"- {registration.group} components:\n{lines}"
-            if registration.notes:
-                notes = "\n".join(f"  {note}" for note in registration.notes)
+            entries = (
+                registration.entries
+                if selected is None
+                else tuple(
+                    (name, line)
+                    for name, line in registration.entries
+                    if name in selected
+                )
+            )
+            if not entries and not (
+                include_notes_without_entries and registration.notes
+            ):
+                continue
+            lines = "\n".join(line for _, line in entries)
+            heading = (
+                f"- {registration.group} components:"
+                if entries
+                else f"- {registration.group} data and composition notes:"
+            )
+            section = f"{heading}\n{lines}" if lines else heading
+            notes_to_include = registration.notes
+            if selected_note_keys is not None:
+                notes_to_include = tuple(
+                    note
+                    for note in registration.notes
+                    if not _note_source_key(note)
+                    or _note_source_key(note) in selected_note_keys
+                )
+            if include_notes and notes_to_include:
+                notes = "\n".join(f"  {note}" for note in notes_to_include)
                 section = f"{section}\n{notes}"
             parts.append(section)
         return "\n".join(parts)
@@ -263,6 +313,13 @@ class A2UIComponentRegistry:
     def reset(self) -> None:
         self._layers.clear()
         self._dropped_at_bind.clear()
+
+
+def _note_source_key(note: str) -> str | None:
+    """The generated source-contract note key, if this is one."""
+
+    first = note.strip().split(None, 1)[0] if note.strip() else ""
+    return first if first.startswith("finance.") and "." in first[8:] else None
 
 
 __all__ = [

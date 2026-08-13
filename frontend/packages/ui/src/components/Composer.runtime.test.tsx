@@ -116,6 +116,51 @@ describe("Composer runtime selector (REP-107)", () => {
   });
 });
 
+describe("Composer agent selector layering", () => {
+  it("renders the agent menu outside clipping panel containers", () => {
+    const { getByTestId } = render(
+      <div data-testid="clipping-panel" style={{ overflow: "hidden" }}>
+        <Composer
+          agents={[
+            {
+              slug: "valurion",
+              name: "小万",
+              runtimeLabel: "Claude Code",
+              modelLabel: "Valuz Pro",
+            },
+          ]}
+          selectedAgentSlug="valurion"
+          allowAgentBrainOverride
+          runtimes={sampleRuntimes}
+          selectedRuntimeId="claude_agent"
+          providers={[
+            {
+              providerId: "valuz",
+              providerName: "Valuz",
+              modelId: "valuz-pro",
+              isDefault: true,
+            },
+          ]}
+          selectedProviderId="valuz"
+          selectedModelId="valuz-pro"
+        />
+      </div>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /小万/ }));
+
+    const agentMenu = document.querySelector(
+      '[data-slot="composer-agent-menu"]',
+    );
+
+    expect(agentMenu).toBeTruthy();
+    expect(getByTestId("clipping-panel").contains(agentMenu!)).toBe(false);
+
+    fireEvent.mouseDown(agentMenu!);
+    expect(document.body.contains(agentMenu!)).toBe(true);
+  });
+});
+
 describe("Composer IME submission guard", () => {
   it("does not send when Enter confirms an active IME composition", () => {
     const onSend = vi.fn();
