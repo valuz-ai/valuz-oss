@@ -17,14 +17,13 @@ import pytest
 import valuz_agent.boot.kernel  # noqa: F401
 from sqlalchemy import select
 
-from valuz_agent.modules.tasks import messaging
+from valuz_agent.infra.db import async_unit_of_work
+from valuz_agent.modules.tasks import mailbox_store, messaging
 from valuz_agent.modules.tasks.mailbox import mailbox_registry
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 
 
 LOCAL_USER_ID = "local-test-owner"
-
-
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +38,11 @@ def _reset_mailbox():
     yield
     mailbox_registry._boxes.clear()
     mailbox_registry._claims.clear()
+
+
+def _drain(session_id: str = "lead-sess-1"):
+    """Consume an actor's durable inbox, as its loop does at each idle tick."""
+    return asyncio.run(mailbox_store.drain(session_id))
 
 
 def _events(db_factory) -> list[TaskEventRow]:
@@ -104,8 +108,6 @@ def _seed_task(
 
 def test_inject_into_active_task_with_registered_lead_delivers(db_factory, tmp_path):
     _seed_task(db_factory, tmp_path, status="active")
-    # CLAIM, not register: a live lead is one whose actor loop owns the box
-    # (spawn_actor claims). A merely-registered box has no reader.
     mailbox_registry.claim("lead-sess-1")
     result = asyncio.run(
         messaging.inject_into_task(
@@ -145,11 +147,8 @@ def test_inject_appends_user_inject_event_on_delivery(db_factory, tmp_path):
     assert user_inject.payload["lead_session_id"] == "lead-sess-1"
 
 
-def test_inject_queues_wrapped_message_in_lead_mailbox(db_factory, tmp_path):
+def test_the_lead_receives_the_wrapped_instruction(db_factory, tmp_path):
     _seed_task(db_factory, tmp_path, status="active")
-    # CLAIM, not register: a live lead is one whose actor loop owns the box
-    # (spawn_actor claims). A merely-registered box has no reader.
-    mailbox_registry.claim("lead-sess-1")
     asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
@@ -159,85 +158,130 @@ def test_inject_queues_wrapped_message_in_lead_mailbox(db_factory, tmp_path):
             user_id=LOCAL_USER_ID,
         )
     )
-    box = mailbox_registry._boxes["lead-sess-1"]
-    assert box.qsize() == 1
-    msg = box.get_nowait()
+    drained = _drain()
+    assert len(drained) == 1
+    msg = drained[0]
     assert msg.kind == "text"
     assert msg.from_session == "chat-session-1"
+    assert msg.origin == "user-inject"
     assert '<user-instruction source="chat">' in msg.text
     assert "please pivot to Q4" in msg.text
-    assert "</user-instruction>" in msg.text
 
 
-# ── lead offline (mailbox unregistered) ─────────────────────────────────
+# -- delivery must not depend on WHICH process took the request ----------
 
 
-def test_inject_into_active_task_with_offline_lead_drops(db_factory, tmp_path):
-    _seed_task(db_factory, tmp_path, status="active")
-    # NOTE: deliberately do NOT register the lead mailbox — simulates a
-    # crashed-and-not-yet-resumed actor loop.
-    result = asyncio.run(
-        messaging.inject_into_task(
-            task_id="t1",
-            project_id="w1",
-            text="hi",
-            from_session_id="chat-session-1",
-            user_id=LOCAL_USER_ID,
-        )
-    )
-    assert result["delivered"] is False
-    assert result["reason"] == "LEAD_OFFLINE"
-    assert result["lead_session_id"] == "lead-sess-1"
+def test_an_inject_reaches_a_lead_driven_by_another_process(db_factory, tmp_path):
+    """The bug the durable mailbox exists for.
 
-
-def test_inject_reports_offline_when_the_box_exists_but_nobody_reads_it(db_factory, tmp_path):
-    """A registered box is not a live lead.
-
-    ``put`` succeeds on any box that exists, and a box can exist with no loop
-    reading it — ``spawn_actor`` pre-registers the lead's inbox before a member
-    starts, and recovery pre-seeds it before the lead does. That reported
-    ``delivered`` and wrote a ``user_inject`` event while the instruction sat
-    in a queue nobody drains: worse than LEAD_OFFLINE, which the caller can act
-    on (``tools/handlers`` revives the task).
+    The lead's actor loop runs in some other host process, so this process's
+    registry knows nothing about it — the state of three requests in four on a
+    2-replica x 2-worker deployment. The instruction must arrive regardless.
     """
     _seed_task(db_factory, tmp_path, status="active")
-    mailbox_registry.register("lead-sess-1")  # a sender pre-seeds it — no reader
+    assert not mailbox_registry.is_owned("lead-sess-1"), "precondition: lead is elsewhere"
 
     result = asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
             project_id="w1",
-            text="hi",
+            text="add the STAR market hot sectors",
             from_session_id="chat-session-1",
             user_id=LOCAL_USER_ID,
         )
     )
 
-    assert result["delivered"] is False
-    assert result["reason"] == "LEAD_OFFLINE"
-    assert mailbox_registry._boxes["lead-sess-1"].qsize() == 0, (
-        "queueing into an unread box is the failure mode, not the fallback"
-    )
-    assert "user_inject" not in [e.type for e in _events(db_factory)]
+    assert result["delivered"] is True, "a lead running elsewhere is not an offline lead"
+    assert result["reason"] is None
+    drained = _drain()
+    assert drained and "add the STAR market hot sectors" in drained[0].text
 
 
-def test_inject_offline_lead_appends_user_inject_dropped_event(db_factory, tmp_path):
+def test_an_instruction_is_delivered_at_most_once(db_factory, tmp_path):
+    """Two loops may read the same pending row; only one may deliver it.
+
+    A superseded loop and its replacement overlap during a handover. Replaying
+    a user instruction is not a small bug — it re-ran an entire finished task
+    in production once already.
+    """
     _seed_task(db_factory, tmp_path, status="active")
     asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
             project_id="w1",
-            text="hi",
+            text="only once please",
             from_session_id="chat-session-1",
             user_id=LOCAL_USER_ID,
         )
     )
-    events = _events(db_factory)
-    types = [e.type for e in events]
-    assert "user_inject_dropped" in types
-    assert "user_inject" not in types
-    dropped = next(e for e in events if e.type == "user_inject_dropped")
-    assert dropped.payload["reason"] == "LEAD_OFFLINE"
+    assert len(_drain()) == 1
+    assert _drain() == [], "the second drain must find nothing left to claim"
+
+
+def test_instructions_arrive_in_the_order_the_user_sent_them(db_factory, tmp_path):
+    _seed_task(db_factory, tmp_path, status="active")
+    for text in ("first", "second", "third"):
+        asyncio.run(
+            messaging.inject_into_task(
+                task_id="t1",
+                project_id="w1",
+                text=text,
+                from_session_id="chat-session-1",
+                user_id=LOCAL_USER_ID,
+            )
+        )
+    drained = _drain()
+    assert len(drained) == 3
+    assert "first" in drained[0].text
+    assert "second" in drained[1].text
+    assert "third" in drained[2].text
+
+
+def test_an_inject_to_an_unstarted_lead_is_held_not_lost(db_factory, tmp_path):
+    """Nothing running anywhere used to look identical to "wrong process".
+
+    Both drew the same refusal. The instruction now waits for whichever loop
+    the watchdog brings up.
+    """
+    _seed_task(db_factory, tmp_path, status="active")
+    result = asyncio.run(
+        messaging.inject_into_task(
+            task_id="t1",
+            project_id="w1",
+            text="waiting for you",
+            from_session_id="chat-session-1",
+            user_id=LOCAL_USER_ID,
+        )
+    )
+    assert result["delivered"] is True
+    assert "user_inject" in [e.type for e in _events(db_factory)]
+    assert "waiting for you" in _drain()[0].text
+
+
+def test_a_control_signal_cannot_be_persisted_as_a_message(db_factory, tmp_path):
+    """The rule the whole design rests on, enforced rather than documented.
+
+    ``shutdown`` is not a message: it revokes one loop incarnation's right to
+    run. Persisting it would replay it to the REPLACEMENT loop and kill it —
+    which is exactly what happened once, and was patched at the producer
+    instead of at the model. The store refuses it outright so the mistake
+    cannot be made quietly again.
+    """
+    _seed_task(db_factory, tmp_path, status="active")
+
+    async def _try() -> None:
+        async with async_unit_of_work() as db:
+            await mailbox_store.enqueue(
+                db,
+                session_id="lead-sess-1",
+                task_id="t1",
+                project_id="w1",
+                user_id=LOCAL_USER_ID,
+                kind="shutdown",
+            )
+
+    with pytest.raises(mailbox_store.ControlSignalNotDeliverableError):
+        asyncio.run(_try())
 
 
 # ── status gate ─────────────────────────────────────────────────────────
@@ -308,7 +352,7 @@ def test_inject_reports_halted_instead_of_reviving(db_factory, tmp_path):
 
 
 def test_inject_handler_revives_halted_task(db_factory, tmp_path, monkeypatch):
-    """"说句话就能继续" — end to end, at the layer that decides it.
+    """ "说句话就能继续" — end to end, at the layer that decides it.
 
     The chat-facing ``inject_into_task`` tool turns the delivery layer's
     TASK_HALTED into a ``resume_task`` carrying the text as the resume
@@ -337,9 +381,7 @@ def test_inject_handler_revives_halted_task(db_factory, tmp_path, monkeypatch):
 
     class _Reader:
         async def get_session(self, _uid, _sid):
-            return SimpleNamespace(
-                id="chat-session-1", project_id="w1", metadata={"valuz": {}}
-            )
+            return SimpleNamespace(id="chat-session-1", project_id="w1", metadata={"valuz": {}})
 
     monkeypatch.setattr(dr_mod, "data_reader", lambda: _Reader())
     monkeypatch.setattr(h_mod, "data_reader", lambda: _Reader())
@@ -354,7 +396,6 @@ def test_inject_handler_revives_halted_task(db_factory, tmp_path, monkeypatch):
     assert not res.is_error
     assert "TASK_RESUMED" in res.content
     assert calls and calls[0]["instruction"] == "继续,并且优先做数据核对"
-
 
 
 # ── no lead run row at all ──────────────────────────────────────────────
@@ -384,7 +425,6 @@ def test_wrapped_envelope_uses_user_instruction_source_chat_tag(db_factory, tmp_
     _seed_task(db_factory, tmp_path, status="active")
     # CLAIM, not register: a live lead is one whose actor loop owns the box
     # (spawn_actor claims). A merely-registered box has no reader.
-    mailbox_registry.claim("lead-sess-1")
     asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
@@ -394,7 +434,7 @@ def test_wrapped_envelope_uses_user_instruction_source_chat_tag(db_factory, tmp_
             user_id=LOCAL_USER_ID,
         )
     )
-    msg = mailbox_registry._boxes["lead-sess-1"].get_nowait()
+    msg = _drain()[0]
     # The raw text is preserved inside the envelope (no escaping shenanigans).
     expected = '<user-instruction source="chat">\nraw user text\n</user-instruction>'
     assert msg.text == expected
@@ -446,9 +486,7 @@ def test_chat_created_task_is_attributed_to_the_user(monkeypatch):
             instructions_md=None,
         )
 
-    monkeypatch.setattr(
-        type(h_mod.task_session_resolver), "resolve_project_env", _fake_env
-    )
+    monkeypatch.setattr(type(h_mod.task_session_resolver), "resolve_project_env", _fake_env)
 
     res = asyncio.run(
         h_mod._create_task_handler(

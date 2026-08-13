@@ -45,6 +45,7 @@ from valuz_agent.modules.tasks.lease import (
     load_task_lease_states,
 )
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
+from valuz_agent.modules.tasks import mailbox_store
 from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 from valuz_agent.modules.tasks.member_state import (
     reconcile,
@@ -317,15 +318,20 @@ class RecoveryService:
         _evict_runtime = evict
         mailbox_registry.register(lead_session_id)
         for member_sid, manifest in member_done:
-            mailbox_registry.put(
-                lead_session_id,
-                InboxMsg(
+            # Durable: a restart re-seeds results for a lead whose loop may
+            # come up in a different process than this one.
+            async with async_unit_of_work() as db:
+                await mailbox_store.enqueue(
+                    db,
+                    session_id=lead_session_id,
+                    task_id=task_id,
+                    project_id=project_id,
+                    user_id=user_id,
                     kind="member_done",
                     from_session=member_sid,
                     origin="recovery-reseed",
-                    payload=manifest,
-                ),
-            )
+                    payload=dict(manifest),
+                )
         for member_sid, brief, m_run_dir, m_slug, m_key in resume_members:
             await _evict_runtime(member_sid)
             resume_prompt = brief or t("task.brief.memberResumeDefault")
@@ -728,9 +734,17 @@ class RecoveryService:
         mailbox_registry.put(session_id, InboxMsg(kind="shutdown"))
         self._members.discard_member(task_id, session_id)
         if lead_session_id:
-            mailbox_registry.put(
-                lead_session_id,
-                InboxMsg(
+            async with async_unit_of_work() as db:
+                # Anything still queued for the member it just stopped would be
+                # read by nobody; cancel it in the same breath as telling the
+                # lead, so the two cannot disagree.
+                await mailbox_store.cancel_pending(db, session_id=session_id)
+                await mailbox_store.enqueue(
+                    db,
+                    session_id=lead_session_id,
+                    task_id=task_id,
+                    project_id=project_id,
+                    user_id=user_id,
                     kind="member_done",
                     from_session=session_id,
                     origin="member-stopped",
@@ -740,8 +754,7 @@ class RecoveryService:
                         "summary": t("task.summaryUserStopped"),
                         "artifacts": [],
                     },
-                ),
-            )
+                )
         return True
 
 

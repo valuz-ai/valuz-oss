@@ -31,12 +31,17 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from valuz_agent.modules.tasks import planning
+from valuz_agent.modules.tasks import messaging, planning
 from valuz_agent.modules.tasks.actor_runner import ActorRunner
 from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
 from valuz_agent.modules.tasks.plan import TaskPlan
+
+# Several tests below park a lead until a member result arrives. Delivery is
+# durable now, so it lands on the loop's inbox poll (ACTOR_INBOX_POLL_S, 5s)
+# rather than instantly through an in-process queue. Their budgets reflect that
+# cadence; R4's notifier is what removes the wait, not a smaller number here.
 
 OWNER = "local-test-owner"
 LEAD = "lead-sess"
@@ -273,7 +278,7 @@ def test_dispatch_report_review_finish_through_the_real_loop(loop_env) -> None:
                 idle_ttl=2.0,
                 user_id=OWNER,
             ),
-            timeout=10,
+            timeout=25,
         )
         # The member loop was spawned by dispatch as a sibling task; give it
         # room to finish so its own finalize lands before we assert.
@@ -448,10 +453,10 @@ def test_member_result_reaches_a_lead_that_is_mid_park(loop_env) -> None:
                 role="lead",
                 task_id=TASK,
                 project_id=PROJECT,
-                idle_ttl=5.0,
+                idle_ttl=12.0,
                 user_id=OWNER,
             ),
-            timeout=10,
+            timeout=25,
         )
 
     asyncio.run(_run())
@@ -518,10 +523,10 @@ def test_lead_wake_up_restates_the_task_goal(loop_env) -> None:
                 role="lead",
                 task_id=TASK,
                 project_id=PROJECT,
-                idle_ttl=5.0,
+                idle_ttl=12.0,
                 user_id=OWNER,
             ),
-            timeout=10,
+            timeout=25,
         )
 
     asyncio.run(_run())
@@ -625,10 +630,10 @@ def test_every_turn_logs_where_its_prompt_came_from(loop_env, caplog) -> None:
                 role="lead",
                 task_id=TASK,
                 project_id=PROJECT,
-                idle_ttl=5.0,
+                idle_ttl=12.0,
                 user_id=OWNER,
             ),
-            timeout=10,
+            timeout=25,
         )
 
     with caplog.at_level("INFO", logger="valuz_agent.modules.tasks.actor_runner"):
@@ -672,3 +677,117 @@ def test_every_turn_logs_where_its_prompt_came_from(loop_env, caplog) -> None:
 )
 def test_origin_label_names_the_producer(msg, expected) -> None:
     assert ActorRunner._origin_label(msg) == expected
+
+
+def test_a_lead_runs_an_instruction_written_by_another_process(loop_env) -> None:
+    """The whole delivery path, through the real loop.
+
+    ``inject_into_task`` is called without touching the mailbox registry — the
+    state of every host process but the one driving the lead. It has to become
+    a turn anyway, with its envelope intact.
+    """
+    orch, state = loop_env.orch, loop_env.state
+    prompts: list[str] = []
+
+    async def _turn_1(_prompt: str) -> str:
+        await messaging.inject_into_task(
+            task_id=TASK,
+            project_id=PROJECT,
+            text="add the STAR market hot sectors",
+            from_session_id="chat-sess",
+            user_id=OWNER,
+        )
+        return "idle"
+
+    async def _turn_2(prompt: str) -> str:
+        prompts.append(prompt)
+        await orch.finalization.finish_task(
+            task_id=TASK,
+            project_id=PROJECT,
+            lead_session_id=LEAD,
+            summary="done",
+            status="stopped",
+            user_id=OWNER,
+        )
+        return "idle"
+
+    state.script[LEAD] = [_turn_1, _turn_2]
+
+    asyncio.run(
+        asyncio.wait_for(
+            orch.actor.run_actor_loop(
+                session_id=LEAD,
+                initial_prompt="go",
+                role="lead",
+                task_id=TASK,
+                project_id=PROJECT,
+                idle_ttl=30.0,
+                user_id=OWNER,
+            ),
+            timeout=20,
+        )
+    )
+
+    assert prompts, "the lead never woke on the injected instruction"
+    assert "add the STAR market hot sectors" in prompts[0]
+    assert '<user-instruction source="chat">' in prompts[0], (
+        "the envelope must survive the durable round trip — it is what marks "
+        "the text as authoritative user intent"
+    )
+
+
+def test_a_lead_does_not_finalize_while_a_message_is_unread(loop_env) -> None:
+    """The early exit has to consult the durable inbox, not just the queue.
+
+    A lead with nothing outstanding finalizes at once rather than parking for
+    its 30-minute TTL. That check read the in-process queue, which cannot see
+    a message another process wrote, so the task would complete with the
+    user's instruction unread.
+    """
+    orch, state = loop_env.orch, loop_env.state
+    seen: list[str] = []
+
+    async def _turn_1(_prompt: str) -> str:
+        # Nothing dispatched: idle with no pending by every in-process measure.
+        await messaging.inject_into_task(
+            task_id=TASK,
+            project_id=PROJECT,
+            text="one more thing",
+            from_session_id="chat-sess",
+            user_id=OWNER,
+        )
+        return "idle"
+
+    async def _turn_2(prompt: str) -> str:
+        seen.append(prompt)
+        await orch.finalization.finish_task(
+            task_id=TASK,
+            project_id=PROJECT,
+            lead_session_id=LEAD,
+            summary="done",
+            status="stopped",
+            user_id=OWNER,
+        )
+        return "idle"
+
+    state.script[LEAD] = [_turn_1, _turn_2]
+
+    asyncio.run(
+        asyncio.wait_for(
+            orch.actor.run_actor_loop(
+                session_id=LEAD,
+                initial_prompt="go",
+                role="lead",
+                task_id=TASK,
+                project_id=PROJECT,
+                idle_ttl=30.0,
+                user_id=OWNER,
+            ),
+            timeout=20,
+        )
+    )
+
+    assert seen, (
+        "the lead finalized with an unread message — the early exit only asked its own process"
+    )
+    assert "one more thing" in seen[0]

@@ -989,6 +989,7 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
 ) -> None:
     from types import SimpleNamespace
 
+    from valuz_agent.modules.tasks import mailbox_store
     from valuz_agent.modules.tasks.mailbox import mailbox_registry
     from valuz_agent.modules.tasks.models import TaskSessionRow
     from valuz_agent.modules.tasks.plan import TaskPlan
@@ -1106,7 +1107,9 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
         assert ("sB", "subtask") in spawned  # resumable member respawned
         assert ("lead-s", "lead") in spawned  # lead re-driven
         assert ("sA", "subtask") not in spawned and ("sC", "subtask") not in spawned
-        assert mailbox_registry.has_pending("lead-s")  # completed A's member_done queued
+        # Recovery re-seeds the completed member's result into the lead's DURABLE
+        # inbox: the lead's loop may come up in a different process than this.
+        assert asyncio.run(mailbox_store.has_pending("lead-s"))
     finally:
         mailbox_registry.unregister("lead-s")
 
@@ -1462,6 +1465,7 @@ def test_resume_task_rejects_abandoned(db_factory, tmp_path) -> None:
 def test_stop_member_rejects_run_reworks_node_and_notifies_lead(
     db_factory, tmp_path, monkeypatch
 ) -> None:
+    from valuz_agent.modules.tasks import mailbox_store
     from valuz_agent.modules.tasks.mailbox import mailbox_registry
     from valuz_agent.modules.tasks.plan import TaskPlan
 
@@ -1482,8 +1486,13 @@ def test_stop_member_rejects_run_reworks_node_and_notifies_lead(
         plan = TaskPlan.from_dict(db_factory().query(TaskRow).filter_by(id="t1").one().plan)
         assert plan.get("B").status == "rework"
         assert "sB" not in orch._members.live_members("t1")
-        assert mailbox_registry.has_pending("lead-s")
-        msg = mailbox_registry._boxes["lead-s"].get_nowait()
+        assert asyncio.run(mailbox_store.has_pending("lead-s"))
+        # The cancellation reaches the lead through its durable inbox: the
+        # lead's loop may well be in another process than the one that served
+        # the stop request.
+        drained = asyncio.run(mailbox_store.drain("lead-s"))
+        assert len(drained) == 1
+        msg = drained[0]
         assert msg.kind == "member_done" and msg.payload["status"] == "cancelled"
     finally:
         mailbox_registry.unregister("lead-s")

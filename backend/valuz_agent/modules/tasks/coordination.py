@@ -37,6 +37,7 @@ from valuz_agent.modules.tasks.datastore import (
     TaskSessionDatastore,
 )
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
+from valuz_agent.modules.tasks import mailbox_store
 from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 from valuz_agent.modules.tasks.member_state import classify_member
 from valuz_agent.modules.tasks.plan import PlanError, TaskPlan
@@ -696,18 +697,26 @@ class CoordinationService:
         # (``_heartbeat_pending`` / ``_probe_pending_members``) filter on
         # ``status == "active"``, so the member read as never-dispatched. The
         # lead then burned its whole await window and eventually parked the task.
-        # Mailbox delivery must run on the event loop (asyncio.Queue is not
-        # thread-safe), which it does — this is a plain call.
+        # It gets its OWN unit of work rather than riding the timeline write
+        # below for exactly that reason. It is not yet joined to the write that
+        # settles this run either — that settle happens in the loop's
+        # ``finally``, and pairing the two is what finally lets
+        # ``reconcile_finished_members`` retire (see R5 in
+        # docs/design/task-delivery-and-control.md). Until then this leg is
+        # durable but not atomic with the fact it reports.
         if lead_session_id:
-            mailbox_registry.put(
-                lead_session_id,
-                InboxMsg(
+            async with async_unit_of_work() as db:
+                await mailbox_store.enqueue(
+                    db,
+                    session_id=lead_session_id,
+                    task_id=task_id,
+                    project_id=project_id,
+                    user_id=user_id,
                     kind="member_done",
                     from_session=session_id,
                     origin="member-idle",
-                    payload=manifest,
-                ),
-            )
+                    payload=dict(manifest),
+                )
 
         # Timeline bookkeeping — on its own unit of work so a failure here costs
         # a row in the log, never the delivery above.
