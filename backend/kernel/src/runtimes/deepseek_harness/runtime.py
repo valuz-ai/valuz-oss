@@ -28,6 +28,7 @@ locks the model for the process lifetime, which matches the kernel's
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -109,6 +110,7 @@ class DeepSeekHarnessRuntime:
         self._launch_spec = launch_spec
         self._client: DshRuntimeClient | None = None
         self._config_path: str | None = None
+        self._composition_fingerprint: str | None = None
         self._native_session_id: str | None = None
         self._process_turns = 0
         self._cancelled = False
@@ -215,6 +217,25 @@ class DeepSeekHarnessRuntime:
         self._cancelled = False
         self._active_task = asyncio.current_task()
         try:
+            # The composition is baked once per subprocess, but the session's
+            # capability state drifts between turns: the host's pre-turn
+            # re-stamp rotates MCP credentials (external connector bearers
+            # expire ~1h; the internal token re-bakes after restarts), and
+            # instructions/skills can converge too. A live process holding a
+            # stale composition would 403 on every MCP call with no
+            # self-healing path — respawn instead; the transcript sidecar
+            # replays context so continuity survives the cold start.
+            if (
+                self._client is not None
+                and self._client.is_running
+                and self._composition_fingerprint != _composition_fingerprint(session)
+            ):
+                logger.info(
+                    "deepseek_harness: session %s capability state drifted — "
+                    "respawning the runtime with a fresh composition",
+                    session.id,
+                )
+                await self.close()
             cold_start = self._client is None or not self._client.is_running
             await self._ensure_process(session)
             assert self._client is not None and self._native_session_id is not None
@@ -394,6 +415,7 @@ class DeepSeekHarnessRuntime:
             skills_root=skills_root,
             model_settings=self.model_settings,
         )
+        self._composition_fingerprint = _composition_fingerprint(session)
 
         env = os.environ.copy()
         env["DSH_CORDIS_CONFIG"] = self._config_path
@@ -510,6 +532,25 @@ class _TurnOutcome:
     def add_usage(self, usage: dict[str, int]) -> None:
         for key, value in usage.items():
             self.usage_totals[key] = self.usage_totals.get(key, 0) + value
+
+
+def _composition_fingerprint(session: Session) -> str:
+    """Stable digest of the session state baked into the Cordis composition.
+
+    Covers exactly what ``build_composition_rows`` reads from the session:
+    instructions (persona), skills, and the full MCP server set including
+    headers — a changed credential must change the digest.
+    """
+    payload = json.dumps(
+        {
+            "instructions": session.instructions,
+            "skills": list(session.skills),
+            "mcp": [asdict(server) for server in session.mcp_servers],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def _is_inbox_receipt(event: dict[str, Any], message_id: str) -> bool:

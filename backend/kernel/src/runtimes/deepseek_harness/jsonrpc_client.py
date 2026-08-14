@@ -32,6 +32,14 @@ logger = logging.getLogger(__name__)
 # consumer blocked on ``get()`` wakes up instead of hanging forever.
 TRANSPORT_CLOSED = object()
 
+# StreamReader line-buffer cap for the subprocess pipes. asyncio's default is
+# 64 KiB and ``readline`` raises ``ValueError`` on any longer line — dsh's
+# NDJSON frames routinely exceed that (a ``request/header`` session event
+# carries the full system prompt + every tool schema), which killed the reader
+# mid-turn and got misdiagnosed as the runtime process exiting. Field failure:
+# "Separator is not found, and chunk exceed the limit" after two tool calls.
+_STREAM_LIMIT = 32 * 1024 * 1024
+
 
 class DshTransportClosedError(RuntimeError):
     """The dsh runtime subprocess exited or closed its stdio pipes.
@@ -95,6 +103,7 @@ class DshRuntimeClient:
             stderr=asyncio.subprocess.PIPE,
             cwd=self.cwd,
             env=self.env,
+            limit=_STREAM_LIMIT,
         )
         self._reader_task = asyncio.create_task(
             self._reader_loop(), name="dsh-runtime-stdout"
@@ -207,7 +216,18 @@ class DshRuntimeClient:
         assert proc is not None and proc.stdout is not None
         try:
             while True:
-                line = await proc.stdout.readline()
+                try:
+                    line = await proc.stdout.readline()
+                except ValueError:
+                    # A frame beyond _STREAM_LIMIT: the stream cannot be
+                    # resynchronized reliably, so treat it as fatal — but with
+                    # an accurate diagnosis instead of "process exited".
+                    logger.error(
+                        "dsh runtime emitted a JSON-RPC frame larger than %d bytes; "
+                        "closing the transport",
+                        _STREAM_LIMIT,
+                    )
+                    break
                 if not line:
                     break
                 text = line.decode("utf-8", errors="replace").strip()
@@ -220,6 +240,10 @@ class DshRuntimeClient:
                     continue
                 if isinstance(message, dict):
                     self._dispatch(message)
+        except Exception:
+            # Keep the task observed (no "exception was never retrieved") and
+            # the diagnosis in the log; the finally still wakes the consumer.
+            logger.exception("dsh runtime reader loop failed")
         finally:
             self._fail_pending(self._closed_error("dsh runtime stdout closed"))
             self.notifications.put_nowait(TRANSPORT_CLOSED)

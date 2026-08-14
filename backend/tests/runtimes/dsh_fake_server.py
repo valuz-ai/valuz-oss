@@ -8,6 +8,9 @@ every scenario:
 * ``FAKE_DSH_MODE=error`` — turn ends ``{kind: error}`` with a provider error
 * ``FAKE_DSH_MODE=hang`` — acknowledges the prompt then never goes idle
   (exercises the kill-based interrupt path)
+* ``FAKE_DSH_MODE=bigframe`` — like ``ok`` but the committed assistant message
+  is a single ~1 MiB NDJSON line (regression: asyncio's default 64 KiB
+  readline limit killed the reader on real dsh ``request/header`` frames)
 """
 
 from __future__ import annotations
@@ -55,19 +58,27 @@ def run_turn(session_id: str, message_id: str, mode: str) -> None:
                 "seq": next(seq),
                 "data": {
                     "turn": 1,
-                    "reason": {"kind": "error", "error": {"message": "no such model", "status": 400}},
+                    "reason": {
+                        "kind": "error",
+                        "error": {"message": "no such model", "status": 400},
+                    },
                 },
             },
         )
         notify("session.status", {"sessionId": session_id, "status": "idle"})
         return
+    answer = "42" if mode != "bigframe" else ("4" + "2" * 1_000_000)
     for delta in ("4", "2"):
         session_event(
             session_id,
             {
                 "type": "assistant/chunk",
                 "seq": next(seq),
-                "data": {"turn": 1, "step": 1, "chunk": {"type": "text-delta", "index": 0, "text": delta}},
+                "data": {
+                    "turn": 1,
+                    "step": 1,
+                    "chunk": {"type": "text-delta", "index": 0, "text": delta},
+                },
             },
         )
     session_event(
@@ -78,12 +89,14 @@ def run_turn(session_id: str, message_id: str, mode: str) -> None:
             "data": {
                 "turn": 1,
                 "step": 1,
-                "message": {"role": "assistant", "content": [{"type": "text", "text": "42"}]},
+                "message": {"role": "assistant", "content": [{"type": "text", "text": answer}]},
                 "usage": {"inputTokens": 10, "outputTokens": 2, "cacheReadTokens": 3},
             },
         },
     )
-    session_event(session_id, {"type": "step/end", "seq": next(seq), "data": {"turn": 1, "step": 1}})
+    session_event(
+        session_id, {"type": "step/end", "seq": next(seq), "data": {"turn": 1, "step": 1}}
+    )
     session_event(
         session_id,
         {"type": "turn/end", "seq": 99, "data": {"turn": 1, "reason": {"kind": "completed"}}},

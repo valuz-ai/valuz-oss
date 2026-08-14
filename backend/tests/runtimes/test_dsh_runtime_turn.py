@@ -111,6 +111,25 @@ async def test_completed_turn_maps_events_and_stop_reason(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_megabyte_frame_survives_the_reader(tmp_path: Path, monkeypatch) -> None:
+    """asyncio's 64 KiB readline default must not apply — real dsh frames
+    (request/header with full prompt + tool schemas) exceed it routinely."""
+    monkeypatch.setenv("FAKE_DSH_MODE", "bigframe")
+    (tmp_path / "ws").mkdir()
+    sink = _CollectSink()
+    runtime = _runtime(tmp_path, sink)
+    session = _session()
+    try:
+        await runtime.run(session, UserMessage(text="hi"))
+    finally:
+        await runtime.close()
+
+    assert isinstance(session.stop_reason, EndTurn)
+    text = next(e.data["text"] for e in sink.events if e.type == "assistant_message")
+    assert len(text) > 1_000_000
+
+
+@pytest.mark.asyncio
 async def test_error_turn_surfaces_session_error(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("FAKE_DSH_MODE", "error")
     (tmp_path / "ws").mkdir()
@@ -181,6 +200,40 @@ async def test_replay_block_prepended_after_process_restart(tmp_path: Path) -> N
         # A fresh process gets a fresh native session id.
         assert session.runtime_session_id != first_native
         await runtime2.close()
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_capability_drift_respawns_the_process(tmp_path: Path) -> None:
+    """A changed MCP credential (pre-turn re-stamp) must reach the live
+    subprocess: the composition fingerprint drifts and the runtime respawns
+    with a fresh composition instead of serving stale headers forever."""
+    from src.core.types import McpHttpServerConfig
+
+    (tmp_path / "ws").mkdir()
+    sink = _CollectSink()
+    runtime = _runtime(tmp_path, sink)
+    session = _session()
+    session.mcp_servers = (
+        McpHttpServerConfig(name="harness", url="http://x/mcp", headers={"X-Valuz-Internal": "t1"}),
+    )
+    try:
+        await runtime.run(session, UserMessage(text="one"))
+        first_native = session.runtime_session_id
+
+        # Same capability state → same process (native continuation).
+        await runtime.run(session, UserMessage(text="two"))
+        assert session.runtime_session_id == first_native
+
+        # Rotated credential → respawn with a fresh composition.
+        session.mcp_servers = (
+            McpHttpServerConfig(
+                name="harness", url="http://x/mcp", headers={"X-Valuz-Internal": "t2"}
+            ),
+        )
+        await runtime.run(session, UserMessage(text="three"))
+        assert session.runtime_session_id != first_native
     finally:
         await runtime.close()
 
