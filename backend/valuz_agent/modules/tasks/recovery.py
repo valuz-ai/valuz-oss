@@ -439,6 +439,19 @@ class RecoveryService:
             ]
             for sid in member_sids:
                 await run_ds.update_run_by_session(session_id=sid, status="paused")
+            # The lead's own run too. Its loop leaves through the
+            # externally-managed exit, which skips finalize by design — the
+            # terminal state belongs to whoever stopped it — so nothing else
+            # ever settles this row. Observed on qa: a task ``stopped`` for
+            # twelve minutes, its lease correctly released, and its lead run
+            # still reading ``active``. Anything judging liveness from the run
+            # index rather than the lease saw a runner that had long since
+            # gone. ``paused`` is the same word the members get, and it is the
+            # resumable one.
+            if lead_session_id and lead_pick is not None and lead_pick.status == "active":
+                await run_ds.update_run_by_session(
+                    session_id=lead_session_id, status="paused"
+                )
             # Park only the running member's node (``in_progress`` = a live
             # member session, the one we're halting) → ``paused`` so the panel
             # stops spinning it. Leave ``in_review`` (member finished, awaiting

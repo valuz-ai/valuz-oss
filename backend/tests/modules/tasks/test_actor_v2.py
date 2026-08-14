@@ -107,7 +107,7 @@ async def test_unregister_drops_inbox() -> None:
     reg = MailboxRegistry()
     reg.register("s1")
     reg.unregister("s1")
-    assert reg.is_registered("s1") is False
+    assert reg.try_get("s1") is None
     with pytest.raises(KeyError):
         await reg.get("s1", timeout=0.01)
 

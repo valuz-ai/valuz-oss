@@ -105,7 +105,7 @@ def test_a_box_with_no_reader_is_not_a_live_session() -> None:
     reg = MailboxRegistry()
     reg.register("s1")
 
-    assert reg.is_registered("s1") is True
+    assert reg.has_pending("s1") is False
     assert not hasattr(reg, "is_owned"), (
         "the registry must not offer a liveness oracle again — a box pre-seeded "
         "for a loop that never started answered yes for the life of the process, "
@@ -113,18 +113,20 @@ def test_a_box_with_no_reader_is_not_a_live_session() -> None:
     )
 
 
-def test_a_box_is_never_reclaimed_and_that_is_fine() -> None:
-    """Nothing drops a box — which is fine, as long as nobody calls it alive.
+def test_a_box_is_reclaimed_by_whoever_still_owns_the_session() -> None:
+    """Boxes are dropped on exit now, and only by the current holder.
 
-    ``unregister`` has no production caller, so a box outlives every loop that
-    ever read it. That was only a problem while its existence was being read as
-    liveness; the fix was never to reclaim the box but to stop asking it a
-    question it cannot answer.
+    Nothing dropped them for a while, so a long-lived process accumulated one
+    queue per session it had ever run. Reclaiming them is safe only because the
+    box is now a local buffer with a single owner and the loop gates the drop
+    on still holding its lease — an ungated drop is the race the claim token
+    used to guard.
     """
     reg = MailboxRegistry()
     reg.register("s1")
+    reg.unregister("s1")
 
-    assert reg.is_registered("s1") is True, "still unreclaimed — by design"
+    assert reg.try_get("s1") is None, "the box is gone, and reading it is not an error"
     assert not hasattr(reg, "release"), (
         "nothing may drop a box on the way out: that race — a stale loop's "
         "teardown popping the box a resumed loop was reading — is why the "

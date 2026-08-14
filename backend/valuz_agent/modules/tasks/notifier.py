@@ -114,6 +114,18 @@ async def ring(session_id: str) -> None:
         logger.debug("notifier ring failed for %s — the poll will cover it", session_id)
 
 
+def forget(session_id: str) -> None:
+    """Drop any bookkeeping for a session nobody will wait on again.
+
+    A no-op for an implementation that keeps none — which the in-process one
+    does not, by construction. It exists so a transport that DOES (a Redis
+    subscription, say) has somewhere to be told.
+    """
+    drop = getattr(_notifier, "forget", None)
+    if drop is not None:
+        drop(session_id)
+
+
 async def wait_for_ring(session_id: str, timeout: float) -> None:
     """Park until someone rings for *session_id*, or *timeout* elapses.
 
@@ -133,6 +145,7 @@ __all__ = [
     "InProcessNotifier",
     "MailboxNotifier",
     "bind_notifier",
+    "forget",
     "ring",
     "wait_for_ring",
 ]

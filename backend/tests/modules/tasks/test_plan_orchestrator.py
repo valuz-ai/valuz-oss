@@ -3147,3 +3147,30 @@ def test_finish_task_parks_members_that_are_still_running(db_factory, tmp_path) 
         "the member must be able to read that it was stopped — it has no other "
         "way to find out"
     )
+
+
+def test_stop_task_parks_the_lead_run_as_well(db_factory, tmp_path) -> None:
+    """A stopped task must not leave a run row claiming its lead is alive.
+
+    The lead's loop leaves through the externally-managed exit, which skips
+    finalize by design — the terminal state belongs to whoever stopped it — so
+    nothing else ever settles this row. Observed on qa: a task `stopped` for
+    twelve minutes, its lease correctly released, its lead run still `active`.
+    Anything reading the run index for liveness rather than the lease saw a
+    runner that had long since gone.
+    """
+    _seed_lead_and_members(
+        db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")]
+    )
+    orch = TaskOrchestrator()
+
+    async def _no_interrupt(_sid: str, user_id: str | None = None) -> None: ...
+
+    orch._recovery._interrupt_kernel_session = _no_interrupt  # type: ignore[method-assign]
+    assert asyncio.run(orch.recovery.stop_task("t1", "w1", user_id=OWNER)) is True
+
+    runs = _runs(db_factory)
+    assert runs["sB"] == "paused", "members were already parked"
+    assert runs["lead-s"] == "paused", (
+        "and the lead must be too — nothing else will ever settle it"
+    )

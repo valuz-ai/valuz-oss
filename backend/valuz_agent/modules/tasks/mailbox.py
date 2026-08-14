@@ -97,15 +97,6 @@ class MailboxRegistry:
         if self._boxes.pop(session_id, None) is not None:
             logger.debug("mailbox: unregistered %s", session_id)
 
-    def is_registered(self, session_id: str) -> bool:
-        """A box EXISTS — messages can be queued. Says nothing about a reader.
-
-        Not a liveness signal: :meth:`register` is non-owning, so a box can
-        outlive (or precede) any actor loop. Use :meth:`is_owned` to ask
-        whether anyone is actually reading.
-        """
-        return session_id in self._boxes
-
     def has_pending(self, session_id: str) -> bool:
         """True if the session has at least one queued message (non-blocking).
 
