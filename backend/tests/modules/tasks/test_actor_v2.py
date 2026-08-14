@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from valuz_agent.modules.tasks import planning
+from valuz_agent.modules.tasks import notifier, planning
 from valuz_agent.modules.tasks.mailbox import (
     InboxMsg,
     MailboxRegistry,
@@ -1349,3 +1349,68 @@ async def test_a_cross_process_inject_preempts_an_in_flight_member_wait(monkeypa
     )
     assert "add the STAR market" in res["user_inject"]["text"]
     assert res["collected"] == 0, "the member is still in flight; nothing was collected"
+
+
+@pytest.mark.asyncio
+async def test_an_inject_mid_turn_is_not_made_to_wait_out_the_slice(monkeypatch) -> None:
+    """The in-turn wait must hear the doorbell, not just its own timeout.
+
+    This wait is where a user injects while members run — the whole reason the
+    preempt below it exists. It used to block on the in-process queue, which no
+    producer writes any more, so a ring landed on nothing and the instruction
+    sat until the 8-second heartbeat slice expired however promptly it was
+    delivered.
+    """
+    _patch_await_deps(monkeypatch, {"sA": "A"})
+    orch = TaskOrchestrator()
+
+    async def _noop_mark(**_kw):
+        return None
+
+    monkeypatch.setattr(planning, "mark_in_review", _noop_mark)
+
+    lead = "lead-await-ring"
+    mailbox_registry.register(lead)
+    # The instruction only becomes visible AFTER the ring — so the wait has to
+    # be woken by the doorbell to see it. Handing it over on the first drain
+    # would let a plain sleep pass this test, which is how the first draft of
+    # it did.
+    rung = {"yes": False}
+
+    async def _visible_once_rung(session_id: str):
+        if not rung["yes"]:
+            return []
+        return [InboxMsg(kind="text", text="pivot now", origin="user-inject")]
+
+    monkeypatch.setattr(orch.coordination, "_drain_durable_inbox", _visible_once_rung)
+
+    try:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+
+        async def _ring_soon() -> None:
+            await asyncio.sleep(0.02)
+            rung["yes"] = True
+            await notifier.ring(lead)
+
+        task = asyncio.create_task(_ring_soon())
+        res = await orch.coordination.await_member_results(
+            lead_session_id=lead,
+            project_id="w1",
+            task_id="t1",
+            keys=["A"],
+            mode="all",
+            timeout_s=30,
+            user_id=LOCAL_USER_ID,
+        )
+        await task
+        elapsed = loop.time() - started
+    finally:
+        mailbox_registry.unregister(lead)
+
+    assert res.get("preempted_by_inject") is True
+    assert "pivot now" in res["user_inject"]["text"]
+    assert elapsed < 4.0, (
+        f"the ring must cut the slice short, not be ignored ({elapsed:.2f}s — the "
+        "heartbeat slice is 8s)"
+    )

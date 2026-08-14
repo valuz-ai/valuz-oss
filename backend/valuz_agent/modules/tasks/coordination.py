@@ -38,7 +38,7 @@ from valuz_agent.modules.tasks.datastore import (
     TaskSessionDatastore,
 )
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
-from valuz_agent.modules.tasks import mailbox_store
+from valuz_agent.modules.tasks import mailbox_store, notifier
 from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 from valuz_agent.modules.tasks.member_state import classify_member
 from valuz_agent.modules.tasks.plan import PlanError, TaskPlan
@@ -224,9 +224,14 @@ class CoordinationService:
             # terminal but whose member_done never reached the mailbox (bad-case
             # #3 online window). Synthesize their result so the lead doesn't hang.
             slice_timeout = min(_HEARTBEAT_S, remaining)
-            try:
-                msg = await mailbox_registry.get(lead_session_id, timeout=slice_timeout)
-            except TimeoutError:
+            # The queue is a local buffer, not a channel — the only thing that
+            # writes it is the drain below, parking extras. Blocking on it was
+            # blocking on something no producer touches, so an inject arriving
+            # mid-turn waited out the full slice however promptly it was rung.
+            # Take what is buffered without waiting; the park at the bottom is
+            # what listens for the doorbell.
+            msg = mailbox_registry.try_get(lead_session_id)
+            if msg is None:
                 # Nothing in THIS process's queue — but a user instruction, a
                 # goal revision or a member's report written by another process
                 # lives in the durable inbox, and this wait is exactly where it
@@ -312,9 +317,11 @@ class CoordinationService:
                         pending_probe = probe
                         awaiting_user_break = True
                         break
+                # Nothing to act on. Park on the doorbell for what used to be
+                # the blocking read's timeout — same cadence, but a ring now
+                # cuts it short instead of being ignored.
+                await notifier.wait_for_ring(lead_session_id, slice_timeout)
                 continue
-            except KeyError:
-                break
             if msg.kind in ("text", "revise_goal"):
                 # VALUZ-CHATPLAN S5: user inject via chat, OR a goal revision
                 # (both are authoritative user intent). Capture + break so the
