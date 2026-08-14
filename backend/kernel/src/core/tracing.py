@@ -58,7 +58,7 @@ _initialized = False
 # absent: it carries the native LangChain callback handler (see module
 # docstring). A NEW runtime that emits the standard events needs only its
 # provider key added here.
-EVENT_TRACED_RUNTIMES = frozenset({"claude_agent", "codex"})
+EVENT_TRACED_RUNTIMES = frozenset({"claude_agent", "codex", "deepseek_harness"})
 
 # Tool outputs can be huge (a build log from codex ``aggregated_output``
 # easily reaches MBs). Cap what we ship per observation field.

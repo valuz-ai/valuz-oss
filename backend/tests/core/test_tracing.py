@@ -154,6 +154,12 @@ def test_deepagents_is_not_event_traced(monkeypatch):
     assert tracing.start_turn_trace(runtime_provider="codex", prompt="p") is not None
 
 
+def test_deepseek_harness_is_event_traced(monkeypatch):
+    """dsh emits the standard cross-runtime events — TurnTrace applies."""
+    _init_active(monkeypatch)
+    assert tracing.start_turn_trace(runtime_provider="deepseek_harness", prompt="p") is not None
+
+
 # ---------------------------------------------------------------------------
 # Attribution + LangChain overlay + shutdown
 # ---------------------------------------------------------------------------
