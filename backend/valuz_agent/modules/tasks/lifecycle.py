@@ -36,7 +36,6 @@ from valuz_agent.modules.tasks.datastore import (
 from valuz_agent.modules.tasks.events import (
     block_task,
 )
-from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
 from valuz_agent.modules.tasks.models import TaskRow, TaskSessionRow
 from valuz_agent.modules.tasks.outcome import Failure
 from valuz_agent.modules.tasks.plan import TaskPlan
@@ -48,18 +47,16 @@ logger = logging.getLogger(__name__)
 class LifecycleService:
     """Task authoring — kickoff / draft / commit / abandon.
 
-    Built once at the composition root with the shared registry, ActorRunner
-    and CoordinationService (terminal writes live in FinalizationService).
+    Built once at the composition root with the ActorRunner and
+    CoordinationService (terminal writes live in FinalizationService).
     """
 
     def __init__(
         self,
         *,
-        registry: LiveMemberRegistry,
         actor_runner: ActorRunner,
         coordination: CoordinationService,
     ) -> None:
-        self._members = registry
         self._actor = actor_runner
         self._coordination = coordination
 

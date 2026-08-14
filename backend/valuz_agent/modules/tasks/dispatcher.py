@@ -3,18 +3,18 @@
 Owns the async member-spawn path (``dispatch_async`` — the only dispatch
 surface since the tool collapse, decision doc §14; the legacy sync
 ``dispatch`` / ``dispatch_batch`` paths are deleted). Owns no task state — it
-receives the shared :class:`LiveMemberRegistry` and the runtime
-:class:`ActorRunner` by constructor injection (the same instances the
-composition root wires into every other task service).
+receives the runtime :class:`ActorRunner` by constructor injection (the same
+instance the composition root wires into every other task service).
 
 Host-knowledge resolution (project cwd, membership, agent config, providers,
 credential pre-flight) lives in ``tasks/resolution.py`` — this module only
 composes the brief, persists the run rows/events and spawns the actor.
 
-CRITICAL invariant (``dispatch_async``): the sync-before-spawn block must run
-``registry.add_member(...) -> asyncio.create_task(run_actor_loop)`` with
-NO ``await`` in between — a racing ``finish_task`` shutdown broadcast that sees
-an empty live set would otherwise drop the just-spawned member.
+Membership needs no in-process bookkeeping: the run row this module writes
+before spawning IS the record that the member is live, and every process reads
+it. There used to be a sync-before-spawn invariant here — register in a
+per-process set, then ``create_task``, with no ``await`` in between, or a
+racing halt would drop the member. The set is gone and so is the race.
 """
 
 # ruff: noqa: I001
@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-import time
 from typing import Any
 
 from valuz_agent.infra.db import async_unit_of_work
@@ -35,7 +34,6 @@ from valuz_agent.modules.tasks.datastore import (
     TaskEventDatastore,
     TaskSessionDatastore,
 )
-from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
 from valuz_agent.modules.tasks.models import TaskSessionRow
 from valuz_agent.modules.tasks.outcome import Failure
 from valuz_agent.modules.tasks.plan import TaskPlan
@@ -52,17 +50,11 @@ logger = logging.getLogger(__name__)
 class DispatcherService:
     """Drives async subtask dispatch (member actor spawn).
 
-    Constructed once at the composition root with the shared registry and the
-    runtime ActorRunner (the same instances every other task service shares).
+    Constructed once at the composition root with the runtime ActorRunner (the
+    same instance every other task service shares).
     """
 
-    def __init__(
-        self,
-        *,
-        registry: LiveMemberRegistry,
-        actor_runner: ActorRunner,
-    ) -> None:
-        self._members = registry
+    def __init__(self, *, actor_runner: ActorRunner) -> None:
         self._actor = actor_runner
 
     # ==================================================================
@@ -242,8 +234,6 @@ class DispatcherService:
             task_id=task_id,
             project_id=project_id,
             user_id=user_id,
-            registry=self._members,
-            dispatch_epoch=time.time(),
             lead_session_id=lead_session_id,
         )
 

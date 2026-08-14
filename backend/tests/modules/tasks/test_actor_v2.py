@@ -594,26 +594,6 @@ async def test_collect_manifest_attributes_by_mtime(tmp_path: object) -> None:
     assert str(old) in paths_all and str(new) in paths_all
 
 
-def test_stop_tracking_drops_the_members_and_queues_nothing(db_factory) -> None:
-    """Halting a task no longer sends its members anything.
-
-    It used to queue a ``shutdown`` per member, which could only reach the ones
-    whose loops happened to live in this process — so the signal that ends a
-    member was the one least able to cross a process boundary. Each member
-    reads its own parked run row instead, from wherever it runs.
-    """
-    orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"m1", "m2"})
-
-    orch.coordination.stop_tracking_members("t1")
-
-    assert not asyncio.run(mailbox_store.has_pending("m1"))
-    assert not asyncio.run(mailbox_store.has_pending("m2"))
-    # Task entry cleared so the same members cannot be dropped twice.
-    assert not orch._members.live_members("t1")
-
-
-
 # ---------------------------------------------------------------------------
 # v3 — create_task launcher (M10 附录 E)
 # ---------------------------------------------------------------------------

@@ -93,3 +93,55 @@ def test_chat_playbook_states_the_routing_once() -> None:
     assert "TASK_RESUMED" in chat
     # The one thing inject genuinely cannot do must still be stated.
     assert "abandoned" in chat
+
+
+@BOTH
+def test_a_playbook_says_it_outranks_what_follows(playbook: str) -> None:
+    """The lead's role must be stated as OVERRIDING, not merely present.
+
+    A task lead's prompt also carries the user's standing instructions, which
+    are written for the agent working alone and routinely describe their own
+    way of planning and delegating. Two plausible sets of rules with no stated
+    precedence is a coin flip, and it came up wrong on qa: the lead planned
+    with the runtime's built-in todo tool and delegated with its built-in
+    subagent tool, so the task closed with an empty plan and no members.
+    """
+    assert "OVERRIDES EVERYTHING BELOW" in playbook
+    assert "built-in todo / Task /" in playbook, (
+        "name the competing tools — 'follow the playbook' does not tell a model "
+        "which of two familiar tools to stop reaching for"
+    )
+
+
+def test_the_lead_role_is_declared_before_the_standing_instructions() -> None:
+    """Order is the mechanism; the override sentence only names it.
+
+    Measured on a real qa lead: 49,939 characters of prompt, of which the
+    user's own global instructions were 39,710 (79.5%) and carried a
+    "## Task Planning" section of their own at 10.2%. The playbook started at
+    82.6%. Whatever the playbook says about precedence, it has to be read
+    before the thing it overrides — so this pins the ordering itself, which is
+    a list literal one edit away from silently reverting.
+    """
+    import inspect
+
+    from valuz_agent.adapters import agent_resolver
+
+    src = inspect.getsource(agent_resolver)
+    body = src[src.index("instructions = assemble_session_instructions") :]
+    body = body[: body.index("ensure_citation_system_policy")]
+
+    def at(tag: str) -> int:
+        i = body.find(f'"{tag}"')
+        assert i != -1, f"{tag} is no longer part of the session instructions"
+        return i
+
+    assert at("task-playbook") < at("global-instructions"), (
+        "the task playbook must be assembled BEFORE the user's standing "
+        "instructions — a lead that meets its role 40k characters in follows "
+        "whatever it read first"
+    )
+    assert at("task-playbook") < at("agent-instructions")
+    assert at("member-roster") < at("task-playbook"), (
+        "the playbook tells the lead its members are listed above"
+    )

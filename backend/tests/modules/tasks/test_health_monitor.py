@@ -132,9 +132,23 @@ def _event_types(db_factory, task_id="t1") -> list[str]:
         db.close()
 
 
-def _monitor() -> TaskHealthMonitor:
+def _monitor(revive: bool = False, attempts: list[str] | None = None) -> TaskHealthMonitor:
+    """A monitor whose adoption attempt is scripted.
+
+    Before blocking a task, the monitor now tries to take it over — boot
+    recovery only runs once and stands down on a lease that has not expired
+    yet, so a task orphaned by a hard kill has no other way back. ``revive``
+    says whether that attempt succeeds; the default (False) is "nobody could
+    adopt it", which is the state every blocking test here is about.
+    """
+
+    async def _recover(task_id: str, _project_id: str, _user_id: str) -> bool:
+        if attempts is not None:
+            attempts.append(task_id)
+        return revive
+
     # confirm_sweeps=2 default; startup_delay irrelevant (we call sweep_once).
-    return TaskHealthMonitor(TaskHealthConfig())
+    return TaskHealthMonitor(TaskHealthConfig(), recover_one=_recover)
 
 
 def test_live_lease_is_healthy(db_factory) -> None:
@@ -376,3 +390,59 @@ def test_blocking_a_task_parks_the_lead_run_it_declared_dead(db_factory) -> None
         assert run.ended_at, "and it must carry an end time"
     finally:
         db.close()
+
+
+def test_an_orphaned_task_is_adopted_instead_of_blocked(db_factory) -> None:
+    """The hard-kill case boot recovery structurally cannot cover.
+
+    ``recover_active_tasks`` runs once, at startup, and stands down on any task
+    whose lead lease is still live. A process killed outright leaves its lease
+    HELD for the rest of its 90s TTL; every fresh process boots inside that
+    window, stands down, and by the time the lease expires the only sweep that
+    would have adopted the task has already run. Observed on qa: a task killed
+    mid-run by an ordinary deploy sat ``active`` behind a lease whose holder pod
+    no longer existed, waiting for a human.
+    """
+    attempts: list[str] = []
+    _seed(db_factory, lease="expired")
+    mon = _monitor(revive=True, attempts=attempts)
+
+    assert asyncio.run(mon.sweep_once()) == []  # suspected
+    assert asyncio.run(mon.sweep_once()) == []  # confirmed → adopted, NOT blocked
+
+    assert attempts == ["t1"], "the watchdog must have tried to take the task over"
+    assert _task_status(db_factory) == "active", (
+        "an adopted task keeps running — blocking it would hand a resumable "
+        "task back to the user for no reason"
+    )
+
+
+def test_a_task_that_cannot_be_adopted_is_still_blocked(db_factory) -> None:
+    """Adoption is an attempt, not a promise: blocking is what happens when it
+    fails (a peer won the lease, the lead run is gone, the respawn threw)."""
+    _seed(db_factory, lease="expired")
+    mon = _monitor(revive=False)
+
+    assert asyncio.run(mon.sweep_once()) == []
+    assert asyncio.run(mon.sweep_once()) == ["t1"]
+    assert _task_status(db_factory) == "blocked"
+
+
+def test_adoption_is_attempted_once_per_task(db_factory) -> None:
+    """A task whose lead dies again immediately must not be respawned forever.
+
+    This is the failure mode a watchdog may not have: revive → die → revive,
+    each round costing a real model turn. One attempt per task per process,
+    then the task is blocked and it becomes the user's call.
+    """
+    attempts: list[str] = []
+    _seed(db_factory, lease="expired")
+    # Adoption "succeeds" every time, but the lease stays dead — exactly what a
+    # lead that respawns and immediately exits again looks like from here.
+    mon = _monitor(revive=True, attempts=attempts)
+
+    for _ in range(6):
+        asyncio.run(mon.sweep_once())
+
+    assert attempts == ["t1"], f"expected exactly one attempt, got {attempts}"
+    assert _task_status(db_factory) == "blocked", "and then it must give up and block"
