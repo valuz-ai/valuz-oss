@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Desktop window controls** — a maximized window on Windows/Linux showed two
+  outward arrows ("enlarge") where Windows draws the restore glyph; the control
+  now draws `ChromeRestore` — a square in the lower-left with a second square's
+  edges behind it (#898 @St0neWan9).
+
 ## [0.4.1] - 2026-08-14
 
 ### Added
