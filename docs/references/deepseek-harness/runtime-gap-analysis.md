@@ -162,6 +162,26 @@ The upstream `deepseek-harness-runtime-bin` wheel (PyPI, macOS arm64 +
 linux x64/arm64, no mac x64 / Windows) remains a later zero-maintenance
 alternative once its closure gains `dsh-mcp-client`.
 
+## Upstream threads (filed 2026-08-14)
+
+The upstream repo accepts feedback via GitHub Discussions only (issues/PRs
+closed on the public mirror). Filed for each wire/closure gap:
+
+- [#1238](https://github.com/deepseek-ai/deepseek-harness/discussions/1238) —
+  `session/cancel` on the SDK wire (deletes our kill-interrupt workaround)
+- [#1239](https://github.com/deepseek-ai/deepseek-harness/discussions/1239) —
+  MCP tool-registration readiness signal (deletes the cold-start grace)
+- [#1240](https://github.com/deepseek-ai/deepseek-harness/discussions/1240) —
+  add `dsh-mcp-client` to the runtime-bin deploy root (makes official
+  wheels usable; our vendored closure becomes optional)
+- [#1241](https://github.com/deepseek-ai/deepseek-harness/discussions/1241) —
+  stderr log exporter for stdout-is-protocol compositions
+- [#1242](https://github.com/deepseek-ai/deepseek-harness/discussions/1242) —
+  npm `latest` dist-tag points at the broken pre-rename wave
+- [#712](https://github.com/deepseek-ai/deepseek-harness/discussions/712)
+  (existing, commented) — persisted-session resume / id collision (deletes
+  the transcript-sidecar replay)
+
 ## Recommended sequence
 
 1. **Spike** (no product surface): async port of `HarnessClient` +
