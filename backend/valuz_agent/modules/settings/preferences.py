@@ -102,7 +102,7 @@ FALLBACK_FONT_SIZE = "default"
 # runtime falls through to its SDK default. ``"off"`` from the legacy
 # 4-value enum is normalized to ``None`` on read for back-compat.
 EFFORT_VALUES = ("low", "medium", "high", "xhigh", "max")
-RUNTIME_VALUES = ("claude_agent", "codex", "deepagents")
+RUNTIME_VALUES = ("claude_agent", "codex", "deepagents", "deepseek_harness")
 
 
 # ── factory defaults (ext.model_defaults) ────────────────────────────

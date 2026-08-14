@@ -83,7 +83,7 @@ def build_user_prompt(message: UserMessage, cwd: str, now: datetime) -> str:
 def wrap_for_mode(
     text: str,
     mode: Literal["default", "plan", "goal"],
-    runtime_provider: Literal["claude_agent", "codex", "deepagents"],
+    runtime_provider: Literal["claude_agent", "codex", "deepagents", "deepseek_harness"],
 ) -> str:
     """Wrap a user message per the session's runtime mode, if needed.
 
@@ -119,7 +119,9 @@ def wrap_for_mode(
     """
     if mode == "default" or text.startswith("/"):
         return text
-    if runtime_provider == "deepagents":
+    if runtime_provider in ("deepagents", "deepseek_harness"):
+        # No native plan/goal primitive on these runtimes (the route already
+        # 400s on non-default; this branch is defensive).
         return text
     if runtime_provider == "claude_agent" and mode == "plan":
         return text

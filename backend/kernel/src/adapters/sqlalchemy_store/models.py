@@ -76,7 +76,7 @@ class SessionModel(Base):
             name="ck_sessions_status",
         ),
         CheckConstraint(
-            "runtime_provider IN ('claude_agent', 'codex', 'deepagents')",
+            "runtime_provider IN ('claude_agent', 'codex', 'deepagents', 'deepseek_harness')",
             name="ck_sessions_runtime_provider",
         ),
         Index("ix_sessions_status", "status"),

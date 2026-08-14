@@ -45,11 +45,16 @@ _ANCHOR_KEY = {
     "codex": "turn_id",
     "claude_agent": "message_uuid",
     "deepagents": "checkpoint_id",
+    # dsh's native fork boundary is the session-event seq (`session.fork
+    # {atSeq}` on its web wire); the adapter stamps it even though
+    # `fork_session` is not wired yet.
+    "deepseek_harness": "seq",
 }
 _THREAD_KEY = {
     "codex": "thread_id",
     "claude_agent": "native_session_id",
     "deepagents": "thread_id",
+    "deepseek_harness": "native_session_id",
 }
 
 

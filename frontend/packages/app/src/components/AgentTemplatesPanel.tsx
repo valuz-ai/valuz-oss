@@ -30,6 +30,7 @@ const RUNTIME_LABEL: Record<string, string> = {
   claude_agent: "Claude Agent",
   codex: "Codex Agent",
   deepagents: "Valuz Agent",
+  deepseek_harness: "DeepSeek Harness",
 };
 
 /** Group templates by scenario, preserving the server's order. */

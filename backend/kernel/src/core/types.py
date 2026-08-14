@@ -239,7 +239,7 @@ StopReason = EndTurn | BudgetExhausted | Error | UserInterrupt
 # -- Session --
 
 
-RuntimeProvider = Literal["claude_agent", "codex", "deepagents"]
+RuntimeProvider = Literal["claude_agent", "codex", "deepagents", "deepseek_harness"]
 
 
 @dataclass

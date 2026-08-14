@@ -15,9 +15,9 @@ from valuz_agent.adapters.runtime_registry import (
 )
 
 
-def test_should_register_three_runtimes() -> None:
+def test_should_register_four_runtimes() -> None:
     ids = {spec.id for spec in list_runtimes()}
-    assert ids == {"claude_agent", "codex", "deepagents"}
+    assert ids == {"claude_agent", "codex", "deepagents", "deepseek_harness"}
 
 
 def test_should_return_claude_agent_display_name() -> None:

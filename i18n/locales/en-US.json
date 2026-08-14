@@ -430,7 +430,7 @@
     "permissionFull": "Full access",
     "permissionFullHint": "Tool calls auto-approved (CI / batch)",
     "permissionFullShort": "Full",
-    "deepAgentsNoAutoReview": "DeepAgents runtime does not support auto_review",
+    "runtimeNoAutoReview": "This runtime does not support auto_review",
     "usedServer": "Used {server}",
     "calledServer": "Called {server} {count} times",
     "requiresShellCommand": "Shell command request",

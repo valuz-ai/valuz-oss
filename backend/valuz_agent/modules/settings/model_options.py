@@ -48,8 +48,9 @@ _SUBSCRIPTION_KINDS: frozenset[str] = frozenset({"claude-subscription", "codex-s
 
 # Preferred runtime when a model can run on more than one. Onboarding's one-click
 # pick uses ``default_runtime``; this order is the tie-break. claude_agent first
-# (richest reasoning), then codex, then the generic deepagents.
-_RUNTIME_PRIORITY: tuple[str, ...] = ("claude_agent", "codex", "deepagents")
+# (richest reasoning), then codex, then the generic deepagents, then the
+# DeepSeek-channel-only deepseek_harness.
+_RUNTIME_PRIORITY: tuple[str, ...] = ("claude_agent", "codex", "deepagents", "deepseek_harness")
 
 # provider_kind → the CLI tool the client probes / launches for login.
 _CLI_TOOL_BY_KIND: dict[str, str] = {
@@ -100,6 +101,14 @@ def runtimes_for(
         protos & set(RUNTIME_REGISTRY["deepagents"].supported_protocols)
     ):
         out.add("deepagents")
+
+    # deepseek_harness: the DeepSeek channel only — the dsh adapter targets
+    # DeepSeek's own endpoint/models, so other OpenAI-compatible channels
+    # don't derive it (a producer can still declare it explicitly).
+    if provider_kind == "deepseek" and (
+        protos & set(RUNTIME_REGISTRY["deepseek_harness"].supported_protocols)
+    ):
+        out.add("deepseek_harness")
 
     return [r for r in _RUNTIME_PRIORITY if r in out]
 

@@ -121,7 +121,7 @@ def _runtimes_available() -> list[str]:
     ``GET /v1/runtimes`` in more detail. Keeping this list minimal here
     avoids duplicating that probe on every status hit.
     """
-    return ["claude_agent", "codex", "deepagents"]
+    return ["claude_agent", "codex", "deepagents", "deepseek_harness"]
 
 
 # ── Public API ─────────────────────────────────────────────────────────

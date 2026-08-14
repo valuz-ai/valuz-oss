@@ -173,7 +173,7 @@ class ModelSettingsSchema(BaseModel):
     max_input_tokens: int | None = None
 
 
-RuntimeProvider = Literal["claude_agent", "codex", "deepagents"]
+RuntimeProvider = Literal["claude_agent", "codex", "deepagents", "deepseek_harness"]
 
 
 # -- Agent snapshot --

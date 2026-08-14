@@ -66,7 +66,7 @@ LIST_MODEL_OPTIONS_TOOL_NAME = "list_model_options"
 DEPLOY_AGENT_TOOL_NAME = "deploy_agent"
 
 # Mirrors the runtimes the agent library accepts (see AgentRow.runtime).
-VALID_RUNTIMES = ("claude_agent", "codex", "deepagents")
+VALID_RUNTIMES = ("claude_agent", "codex", "deepagents", "deepseek_harness")
 # Mirrors kernel EffortLevel / api EffortLevel.
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 # The model the confirm endpoint + frontend fall back to when ``propose_agent``
@@ -104,7 +104,8 @@ PROPOSE_AGENT_DESCRIPTION = (
     "runtimes are available on THIS host and which models are configured — each "
     "model lists the exact runtimes it can run on. The runtime and model you "
     "pass MUST be a real, compatible pair, or this tool rejects it.\n"
-    "- runtime: one of claude_agent | codex | deepagents (default claude_agent). "
+    "- runtime: one of claude_agent | codex | deepagents | deepseek_harness "
+    "(default claude_agent). "
     "codex needs the codex binary installed; the other two are always available.\n"
     "- model: a model id from `list_model_options` whose runtime list includes "
     "the runtime you picked. Do NOT mix a Claude model with the codex runtime "

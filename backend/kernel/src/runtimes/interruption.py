@@ -80,6 +80,10 @@ def is_runtime_interruption(exc: BaseException) -> bool:
         return any(is_runtime_interruption(leaf) for leaf in iter_leaf_exceptions(exc))
     if isinstance(exc, (BrokenPipeError, ConnectionError, EOFError)):
         return True
+    from src.runtimes.deepseek_harness.jsonrpc_client import DshTransportClosedError
+
+    if isinstance(exc, DshTransportClosedError):
+        return True
     try:
         from openai_codex import TransportClosedError
     except Exception:

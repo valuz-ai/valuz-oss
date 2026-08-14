@@ -36,7 +36,8 @@ class SessionModelSelection(BaseModel):
     ``ProviderNotResolvable`` error.
 
     ``runtime_id`` lets the user pin the Runtime Agent that drives the
-    session — ``claude_agent`` / ``codex`` / ``deepagents``. Unknown
+    session — ``claude_agent`` / ``codex`` / ``deepagents`` /
+    ``deepseek_harness``. Unknown
     values bubble up from ``provider_resolver`` as 422. Legacy clients
     that omit it fall through to the provider's ``provider_kind``-derived
     default.

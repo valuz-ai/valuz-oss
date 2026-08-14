@@ -1321,9 +1321,13 @@ class SessionService:
         # tier supports the LLM classifier), so we mirror that 400 here
         # before we even hit the kernel save path.
         effective_permission_mode = _coerce_session_permission_mode(permission_mode)
-        if runtime_provider == "deepagents" and effective_permission_mode == "auto_review":
+        if (
+            runtime_provider in ("deepagents", "deepseek_harness")
+            and effective_permission_mode == "auto_review"
+        ):
             raise SessionNotRunnable(
-                "auto_review is not supported for deepagents runtimes; pick default or full_access"
+                f"auto_review is not supported for {runtime_provider} runtimes; "
+                "pick default or full_access"
             )
 
         # ``effort`` is per-session and live-reconcilable via PATCH
@@ -2225,9 +2229,10 @@ class SessionService:
 
         target = _coerce_session_permission_mode(permission_mode)
         runtime_provider = getattr(session, "runtime_provider", "claude_agent")
-        if runtime_provider == "deepagents" and target == "auto_review":
+        if runtime_provider in ("deepagents", "deepseek_harness") and target == "auto_review":
             raise SessionNotRunnable(
-                "auto_review is not supported for deepagents runtimes; pick default or full_access"
+                f"auto_review is not supported for {runtime_provider} runtimes; "
+                "pick default or full_access"
             )
 
         updated = await kernel_client.update_session(
