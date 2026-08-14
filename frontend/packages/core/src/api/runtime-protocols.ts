@@ -14,7 +14,11 @@
  */
 import type { ApiProtocol } from "./providers-api";
 
-export type RuntimeKey = "claude_agent" | "codex" | "deepagents";
+export type RuntimeKey =
+  | "claude_agent"
+  | "codex"
+  | "deepagents"
+  | "deepseek_harness";
 
 export const ALLOWED_PROTOCOLS_BY_RUNTIME: Record<
   RuntimeKey,
@@ -23,6 +27,7 @@ export const ALLOWED_PROTOCOLS_BY_RUNTIME: Record<
   claude_agent: ["anthropic"] as const,
   codex: ["openai-response"] as const,
   deepagents: ["anthropic", "openai-completion", "gemini"] as const,
+  deepseek_harness: ["openai-completion"] as const,
 } as const;
 
 /**

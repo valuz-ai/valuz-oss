@@ -25,7 +25,12 @@ export const isProviderRuntimeCompatible = (
   runtime: RuntimeId,
 ): boolean => provider.models.some((m) => (m.runtimes ?? []).includes(runtime));
 
-const ALL_RUNTIMES: RuntimeId[] = ["claude_agent", "codex", "deepagents"];
+const ALL_RUNTIMES: RuntimeId[] = [
+  "claude_agent",
+  "codex",
+  "deepagents",
+  "deepseek_harness",
+];
 
 /** Every runtime this provider could plausibly run on — the union of its
  *  models' ``runtimes``. Used by the Settings → Providers list "可用于" badges. */
@@ -36,6 +41,7 @@ export const RUNTIME_DISPLAY_NAME: Record<RuntimeId, string> = {
   claude_agent: "Claude Code",
   codex: "OpenAI Codex",
   deepagents: "Deep Agents",
+  deepseek_harness: "DeepSeek Harness",
 };
 
 /** Whether ``p`` has at least one model that could run on ``runtime``. Kept as a

@@ -430,7 +430,7 @@
     "permissionFull": "完全访问权限",
     "permissionFullHint": "工具调用自动通过 (CI / 批量)",
     "permissionFullShort": "完全",
-    "deepAgentsNoAutoReview": "DeepAgents runtime 暂不支持 auto_review",
+    "runtimeNoAutoReview": "当前 runtime 暂不支持 auto_review",
     "usedServer": "使用了 {server}",
     "calledServer": "调用了 {server} {count} 次",
     "requiresShellCommand": "Shell 命令请求",

@@ -66,7 +66,7 @@ LIST_MODEL_OPTIONS_TOOL_NAME = "list_model_options"
 DEPLOY_AGENT_TOOL_NAME = "deploy_agent"
 
 # Mirrors the runtimes the agent library accepts (see AgentRow.runtime).
-VALID_RUNTIMES = ("claude_agent", "codex", "deepagents")
+VALID_RUNTIMES = ("claude_agent", "codex", "deepagents", "deepseek_harness")
 # Mirrors kernel EffortLevel / api EffortLevel.
 VALID_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 # The model the confirm endpoint + frontend fall back to when ``propose_agent``

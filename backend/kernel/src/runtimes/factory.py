@@ -2,9 +2,10 @@
 
 Dispatch is now an explicit enum chosen by the caller at session creation:
 
-* ``"claude_agent"`` -> ClaudeAgentRuntime
-* ``"codex"``        -> CodexRuntime
-* ``"deepagents"``   -> DeepAgentsRuntime
+* ``"claude_agent"``     -> ClaudeAgentRuntime
+* ``"codex"``            -> CodexRuntime
+* ``"deepagents"``       -> DeepAgentsRuntime
+* ``"deepseek_harness"`` -> DeepSeekHarnessRuntime
 
 ``model`` and ``model_provider`` are optional for the first two — each SDK
 falls back to its ambient credentials. DeepAgents needs an explicit
@@ -45,10 +46,14 @@ from src.runtimes.network_egress import (
 # * ``deepagents`` — three langchain backends:
 #   ``anthropic`` (ChatAnthropic), ``openai_completion`` (ChatOpenAI
 #   chat completions), ``gemini`` (ChatGoogleGenerativeAI).
+# * ``deepseek_harness`` — the dsh DeepSeek adapter speaks an
+#   OpenAI-compatible chat-completions SSE endpoint (``DEEPSEEK_BASE_URL``
+#   overrides the gateway), so only ``openai_completion``.
 ALLOWED_PROTOCOLS_BY_RUNTIME: dict[RuntimeProvider, frozenset[ApiProtocol]] = {
     "claude_agent": frozenset({"anthropic"}),
     "codex": frozenset({"openai_response"}),
     "deepagents": frozenset({"anthropic", "openai_completion", "gemini"}),
+    "deepseek_harness": frozenset({"openai_completion"}),
 }
 
 
@@ -130,6 +135,29 @@ def create_runtime(
             model_provider=session.model_provider,
             model_settings=session.model_settings,
             egress_descriptor=egress_descriptor,
+        )
+
+    if provider == "deepseek_harness":
+        if egress_descriptor is not None:
+            raise ValueError(
+                "deepseek_harness does not support managed egress yet; "
+                "the runtime keeps its existing direct/env-proxy path"
+            )
+        if session.model_provider is None or not session.model.strip():
+            raise ValueError(
+                "DeepSeekHarnessRuntime requires both `model` and `model_provider` "
+                "(the dsh subprocess reads credentials from its environment)."
+            )
+        from src.runtimes.deepseek_harness.runtime import DeepSeekHarnessRuntime
+
+        return DeepSeekHarnessRuntime(
+            config,
+            session.model,
+            event_sink,
+            resolved_toolkit,
+            workspace_root=workspace_root,
+            model_provider=session.model_provider,
+            model_settings=session.model_settings,
         )
 
     if provider == "deepagents":

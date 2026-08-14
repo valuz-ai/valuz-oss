@@ -97,13 +97,14 @@ class TestRuntimesFor:
         # ``model_providers.harness`` block with its base_url + API key.
         assert runtimes_for(["openai-response"], provider_kind="compatible") == ["codex"]
 
-    def test_deepseek_channel_shape_runs_all_three(self) -> None:
+    def test_deepseek_channel_shape_runs_all_four(self) -> None:
         # The unpinned DeepSeek channel derives anthropic + openai-completion
         # + openai-response (the Responses wire is served natively for the
-        # whole lineup), so all three runtimes apply — claude_agent first.
+        # whole lineup), so all four runtimes apply — claude_agent first, and
+        # deepseek_harness derives for the DeepSeek channel only.
         assert runtimes_for(
             ["anthropic", "openai-completion", "openai-response"], provider_kind="deepseek"
-        ) == ["claude_agent", "codex", "deepagents"]
+        ) == ["claude_agent", "codex", "deepagents", "deepseek_harness"]
 
     def test_empty_protocols_is_treated_as_no_restriction(self) -> None:
         # Empty → every protocol; non-subscription system speaks all wires, so

@@ -1349,7 +1349,8 @@ export const Composer = ({
     PERMISSION_LABELS[effectivePermissionMode].label;
   const selectedPermissionShortLabel =
     PERMISSION_LABELS[effectivePermissionMode].shortLabel;
-  const isDeepAgents = selectedRuntimeId === "deepagents";
+  const runtimeLacksAutoReview =
+    selectedRuntimeId === "deepagents" || selectedRuntimeId === "deepseek_harness";
 
   // EFFORT_LABELS — visible labels for the reasoning-budget selector
   // (kernel V5+bba3014 ``ModelSettings.effort``). No "Default" slot:
@@ -1962,7 +1963,7 @@ export const Composer = ({
                       .filter((mode) => PERMISSION_META[mode].visible)
                       .map((mode) => {
                         const selected = effectivePermissionMode === mode;
-                        const disabled = mode === "auto_review" && isDeepAgents;
+                        const disabled = mode === "auto_review" && runtimeLacksAutoReview;
                         const item = PERMISSION_LABELS[mode];
                         const meta = PERMISSION_META[mode];
                         const ItemIcon = meta.icon;
@@ -2010,7 +2011,7 @@ export const Composer = ({
                                   <span className="block">{button}</span>
                                 </TooltipTrigger>
                                 <TooltipContent side="right">
-                                  {t("conversation.deepAgentsNoAutoReview")}
+                                  {t("conversation.runtimeNoAutoReview")}
                                 </TooltipContent>
                               </Tooltip>
                             </TooltipProvider>

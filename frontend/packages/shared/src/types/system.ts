@@ -33,7 +33,11 @@ export interface LogLine {
 
 export type SystemHealthStatus = "running" | "starting" | "degraded";
 
-export type RuntimeId = "claude_agent" | "codex" | "deepagents";
+export type RuntimeId =
+  | "claude_agent"
+  | "codex"
+  | "deepagents"
+  | "deepseek_harness";
 
 export interface SystemStatusResponse {
   status: SystemHealthStatus;

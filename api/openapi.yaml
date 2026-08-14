@@ -5077,7 +5077,7 @@ components:
         name: {type: string}
         description: {type: string, default: ""}
         instructions: {type: string, default: ""}
-        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents]}
+        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents, deepseek_harness]}
         model: {type: string, default: claude-sonnet-4-6}
         skills:
           type: array
@@ -5099,7 +5099,7 @@ components:
         name: {type: string, nullable: true}
         description: {type: string, nullable: true}
         instructions: {type: string, nullable: true}
-        runtime: {type: string, nullable: true, enum: [claude_agent, codex, deepagents]}
+        runtime: {type: string, nullable: true, enum: [claude_agent, codex, deepagents, deepseek_harness]}
         model: {type: string, nullable: true}
         skills:
           type: array
@@ -5179,7 +5179,7 @@ components:
         agent_slug: {type: string, nullable: true}
         name: {type: string}
         instructions: {type: string, default: ""}
-        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents]}
+        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents, deepseek_harness]}
         model: {type: string, default: claude-sonnet-4-6}
         provider_id: {type: string, nullable: true}
         effort: {type: string, nullable: true, enum: [low, medium, high, xhigh, max]}
@@ -5249,7 +5249,7 @@ components:
         name: {type: string}
         instructions: {type: string}
         description: {type: string, default: ""}
-        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents]}
+        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents, deepseek_harness]}
         model: {type: string, default: claude-sonnet-4-6}
         effort: {type: string, nullable: true, enum: [low, medium, high, xhigh, max]}
         skills:
@@ -6392,7 +6392,7 @@ components:
           description: Unix epoch milliseconds (UTC). Format via new Date(ms).
         runtime_provider:
           type: string
-          enum: [claude_agent, codex, deepagents]
+          enum: [claude_agent, codex, deepagents, deepseek_harness]
           default: deepagents
           description: |
             Kernel runtime stamped at session creation. Surfaced so the
@@ -6642,7 +6642,7 @@ components:
       properties:
         id:
           type: string
-          enum: [claude_agent, codex, deepagents]
+          enum: [claude_agent, codex, deepagents, deepseek_harness]
           description: |
             Internal runtime enum — matches kernel
             ``Session.runtime_provider``. Stable wire identifier even
@@ -6663,6 +6663,7 @@ components:
               * claude_agent → [anthropic]
               * codex → [openai-response]
               * deepagents → [anthropic, openai-completion, gemini]
+              * deepseek_harness → [openai-completion]
         requires_binary:
           type: string
           nullable: true
@@ -6788,7 +6789,7 @@ components:
           type: array
           items:
             type: string
-            enum: [claude_agent, codex, deepagents]
+            enum: [claude_agent, codex, deepagents, deepseek_harness]
           description: Runtime ids the host can currently dispatch to.
         warnings:
           type: array
@@ -6825,7 +6826,7 @@ components:
         runtime_id:
           type: string
           nullable: true
-          enum: [claude_agent, codex, deepagents, null]
+          enum: [claude_agent, codex, deepagents, deepseek_harness, null]
           description: |
             Optional explicit Runtime Agent for this session. Allowed
             values match the kernel's ``Session.runtime_provider`` enum.

@@ -51,11 +51,20 @@ def probe_runtime_availability() -> dict[str, dict[str, object]]:
     """Return ``{runtime_id: {"available": bool, "unavailable_reason": str|None}}``.
 
     ``claude_agent`` / ``deepagents`` are pure-Python SDKs → always available.
-    ``codex`` needs its binary (see ``_codex_available``).
+    ``codex`` needs its binary (see ``_codex_available``); ``deepseek_harness``
+    needs a launchable dsh runtime (exe or source checkout — see
+    ``src.runtimes.deepseek_harness.composition``).
     """
+    from src.runtimes.deepseek_harness.composition import launch_unavailable_reason
+
     codex_ok, codex_reason = _codex_available()
+    dsh_reason = launch_unavailable_reason()
     return {
         "claude_agent": {"available": True, "unavailable_reason": None},
         "deepagents": {"available": True, "unavailable_reason": None},
         "codex": {"available": codex_ok, "unavailable_reason": codex_reason},
+        "deepseek_harness": {
+            "available": dsh_reason is None,
+            "unavailable_reason": dsh_reason,
+        },
     }

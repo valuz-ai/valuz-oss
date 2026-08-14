@@ -38,6 +38,11 @@ describe("runtime-compat", () => {
     ]);
   });
 
+  it("surfaces deepseek_harness for a DeepSeek-channel model", () => {
+    const p = ch([["deepagents", "deepseek_harness"]]);
+    expect(compatibleRuntimes(p)).toEqual(["deepagents", "deepseek_harness"]);
+  });
+
   it("tolerates null/empty model runtimes", () => {
     const p = ch([null, []]);
     expect(compatibleRuntimes(p)).toEqual([]);

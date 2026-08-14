@@ -1,0 +1,162 @@
+# DeepSeek Harness × Valuz `RuntimePort` — gap analysis
+
+> Compares the kernel's runtime contract
+> (`backend/kernel/src/core/runtime_port.py`) against what the dsh Python SDK
+> (`0.1.0-rc.5`) offers today. Verified claims come from the runs in
+> [examples/](examples/); see [python-sdk.md](python-sdk.md) for the wire facts.
+
+## Proposed shape
+
+One **runtime subprocess per kernel session**, owned by a new
+`DeepSeekHarnessRuntime` adapter under `kernel/src/runtimes/deepseek_harness/`:
+
+- `initialize(provider, model, maxTokens)` is **per-process** on the dsh wire,
+  which matches our invariant exactly: the `(runtime, provider, model)` triple
+  is locked at session creation and never changes mid-session.
+- The subprocess maps onto the kernel's existing warm-runtime cache: keep it
+  alive between turns (`prepare` = spawn + `initialize`, no model traffic;
+  `close` = `shutdown`), evict = kill.
+- `run()` = the SDK's activity-interval loop: `session/prompt` → stream
+  `session.event` → map to kernel events → `session.status: idle` ends the
+  turn. Use the low-level `HarnessClient` (or an asyncio port of it — the
+  shipped client is synchronous/thread-based and would need `asyncio.to_thread`
+  or a native-async reimplementation; the protocol is trivial NDJSON).
+- Factory/registration touchpoints: `RuntimeProvider` literal + `factory.py`
+  dispatch + `ALLOWED_PROTOCOLS_BY_RUNTIME` (dsh's DeepSeek adapter speaks an
+  OpenAI-compatible chat-completions SSE endpoint — the smoke test drives it
+  with a mock `chat/completions` server — so the natural constraint is
+  `openai_completion`, with `DEEPSEEK_BASE_URL` as the gateway override) +
+  `availability.py` (present only when a runtime binary/checkout is locatable)
+  + api contract `RuntimeProvider` enum.
+- Config injection: generate a per-session `cordis.yml` (or a patch overlay on
+  the bundled default) at session-create time — this is where system prompt,
+  skills roots, MCP servers, compaction thresholds, and tool policy land.
+  `system_prompt_builder` output → agent-spine `persona`; project cwd →
+  `DSH_CWD`; kernel-managed session dir → `DSH_SESSION_ROOT`.
+
+## Contract mapping
+
+| `RuntimePort` member | dsh SDK today | Verdict |
+|---|---|---|
+| `run(session, user_message)` | `session/prompt` + own the interval to `idle` | ✅ clean |
+| `prepare(session)` | spawn subprocess + `initialize` (no model traffic) | ✅ clean, idempotent-safe |
+| `close()` | `shutdown` (flush → dispose → exit 0) | ✅ clean |
+| `update_sink(sink)` | adapter-internal | ✅ n/a |
+| `supports_native_continuation` | **True while the subprocess lives** (live agent per sessionId, verified multi-turn recall); **False across restarts** (id collision on persisted logs, verified) | ⚠️ gap #2 |
+| `interrupt()` | **no wire method** — only subprocess kill (loses the turn tail; JSONL persistence keeps checkpointed events) | ❌ gap #1 |
+| `submit_action(...)` / `requires_action` | **no approval flow on the wire**; tools execute unattended. In-core approval seam + transport server→client requests both exist but are unused | ❌ gap #3 |
+| `fork_session(...)` | `ctx.sessions.fork(source, boundary?)` exists in-core; not on the wire | ❌ gap #4 (`NotImplementedError` initially — the port explicitly allows this) |
+| `consume_turn_anchor()` | event `seq` is a natural anchor (fork-by-boundary in-core takes one); nothing consumable on the wire yet | ⚠️ follows gap #4 |
+| `run_task_coverage(no_op_tool)` | needs per-turn tool injection; dsh tools are cordis-composed, not per-request | ⚠️ needs design (an MCP-exposed no-op tool scoped to the coverage turn is the likely route) |
+| `approval_rule_matcher` | exact-args fallback until approvals exist | ✅ default |
+
+## Event mapping (kernel ← dsh)
+
+| Kernel `OutboundEventType` | dsh source |
+|---|---|
+| `text_delta` | `assistant/chunk {type: text-delta}` |
+| `thinking` / `thinking_delta` | `assistant/chunk` reasoning block-start / `reasoning-delta` |
+| `assistant_message` | `assistant/message` (committed; carries usage + source model) |
+| `tool_use` | `tool/call` (`arguments` is a JSON string — parse before emitting) |
+| `tool_input_delta` | `assistant/chunk {type: tool-call-delta}.argumentsDelta` |
+| `tool_result` | `tool/result` (`content[].type == "tool-result"`, `isError`) |
+| `usage_update` | `assistant/chunk {type: usage}` (+ `request/context.contextWindow` for the denominator) |
+| `session_idle` | `session.status == idle` (whole-agent, not per-turn — correct for our turn boundary) |
+| `session_error` | `turn/end {reason.kind == error}` (carries provider message/code/status) |
+| `compaction` | `compaction/start\|end\|summary\|prune` events (compaction plugin mounted) |
+| `todo_update` | `todo/write` (tool-todo plugin mounted) |
+| `turn_phase` | synthesize: `runtime_init` (spawn+initialize), `dispatch` (`session/prompt` → first chunk) |
+| `mode_changed` / `plan_update` | `plan/mode` event exists; not explored |
+| `requires_action` / `action_resolved` | — blocked on gap #3 |
+| `bg_task_*` / `workflow_progress` | dsh jobs/workflow plugins exist (`job_*` tools, `tool-workflow/*` events); map later if composed |
+
+Subagent lifecycles (`subagent.started`/`.finished` + full descendant event
+streams) have **no kernel equivalent today** — Claude/codex hide sub-agent
+internals. Cheapest v1: fold descendant activity into tool progress on the
+parent (`tool_output_delta` on the `subagent` tool call), keep the lifecycle
+in event metadata.
+
+## The gaps, ranked by integration cost
+
+1. **Interrupt (gap #1) — must solve for v1.** Valuz interrupts sessions
+   routinely (user stop, egress switch, task rework). Workaround: kill the
+   subprocess and mark the turn interrupted (deepagents-style hard stop);
+   persisted checkpoints keep everything up to the last committed event.
+   Proper fix: a `session/cancel` method on the JSON-RPC server — both the ACP
+   server and the Web BFF wire already implement it against the same in-core
+   handle (the web one is literally
+   `agent.cancel({kind: 'user'}, {keepInbox: true})`, verified live: cancel +
+   a queued "continue" prompt resumes the same turn context), so this is a
+   small plugin change (upstreamable).
+2. **Cross-process resume (gap #2) — must solve for v1.** Kernel restarts and
+   runtime-cache eviction are normal here. Workarounds, in order of fidelity:
+   (a) fresh native session id per process + history replay in the first
+   prompt (what deepagents-style fallback continuation does — we already have
+   `build_user_prompt` conventions for it); (b) custom server plugin that
+   `load()`s the persisted log before agent creation — the web wire's
+   `createApiRemoteAgentResolver` (`packages/api/remotes`) already does
+   exactly this (load header + events → recompose the agent) and is the
+   reference to reuse. (b) is the real fix and is upstream-friendly.
+3. **Approvals (gap #3) — acceptable to defer.** v1 ships with
+   `available_decisions = ()` and unattended tools, gated by the session's tool
+   policy (dsh has sandbox/approval-policy plugins for defense in depth; the
+   deployment composes which tools exist at all). The transport already
+   supports server→client requests and the Python client has the responder
+   surface — wiring `ctx.approval` to it is the designed-for extension.
+4. **Fork (gap #4) — defer.** `fork_session` raises `NotImplementedError`
+   (the port sanctions this); event `seq` is the anchor — the web wire's
+   `session.fork {atSeq}` confirms it as the native fork boundary.
+5. **Steering — defer.** The web wire's `session.prompt` distinguishes
+   `mode: "queue" | "steer"` (`agent.followup()` vs `agent.steer()`); the SDK
+   wire's `session/prompt` is queue-only. Our orchestrator doesn't steer
+   mid-turn today.
+
+## Equipment path (tools/skills/MCP)
+
+- **Valuz harness tools** (dispatch / orchestration / memory / toolkit MCP at
+  `/_internal/mcp/toolkit/{base,lead}`): dsh's `dsh-mcp-client` plugin speaks
+  **streamable-http with headers** and registers tools as
+  `mcp__<server>__<tool>` — the exact shape our other runtimes consume. One
+  cordis row per MCP server, generated into the per-session composition by the
+  adapter (from `session.mcp_servers`).
+- **Skills**: dsh discovers filesystem skills from project/user/custom roots.
+  Point the custom roots at our per-session materialized skills dir
+  (`skills_materialize.py` output), disable user-root discovery to avoid
+  leaking `~/.claude/skills` (verified leak in the default composition).
+- **System prompt**: agent-spine `persona` config (env `DSH_SYSTEM_PROMPT` in
+  the examples composition) ← `system_prompt_builder`.
+- **max_input_tokens / compaction**: dsh `compaction-basic`
+  (`thresholdRatio` / `retainRatio` / `maxTokens`) — derive from
+  `ModelSettings.max_input_tokens` like the other three runtimes do.
+
+## Distribution question (flagged, not solved)
+
+The production runtime carrier is a per-platform single-file Node executable
+(~wheel-injected, macOS 14+/arm64, linux x64/arm64 — **no Windows wheel
+today**) built by `scripts/build-exe-for-python-sdk.ts`. Our desktop bundle
+would either vendor that exe per platform (like the codex binary) or run the
+node closure on our packaged Electron-as-node. Upstream is pre-release and
+PyPI publication of `deepseek-harness-sdk` is gated on their private publisher
+repo — pin a commit and build the exe in our CI until they tag.
+
+## Recommended sequence
+
+1. **Spike** (no product surface): async port of `HarnessClient` +
+   `DeepSeekHarnessRuntime` with run/prepare/close + event mapping; kill-based
+   interrupt; fresh-session-per-process with replay continuation; unattended
+   tools via per-session cordis + toolkit MCP rows. This is shippable behind
+   an availability gate.
+   **Landed** (branch `feat/deepseek-harness-runtime`): kernel adapter under
+   `backend/kernel/src/runtimes/deepseek_harness/` (asyncio NDJSON client +
+   event mapper + composition generator + RuntimePort impl), factory /
+   availability / fork-map / route-guard wiring, kernel migration `0004`
+   (CHECK constraint), host registry/resolver/model-options plumbing
+   (`deepseek_harness` derives only for the `deepseek` provider kind),
+   frontend enum/label/auto-review-gate updates, and a fake-server test
+   suite (`backend/tests/runtimes/test_dsh_*`). Dev availability:
+   `VALUZ_DSH_ROOT=<checkout>` (source mode) or `VALUZ_DSH_RUNTIME_BIN=<exe>`.
+2. **Server plugin work** (upstream PRs or a small carried bundle):
+   `session/cancel`, persisted-log resume on first prompt, then approvals over
+   server→client requests. Each one deletes a workaround from step 1.
+3. **Parity extras**: fork by event seq, plan-mode mapping, jobs/workflow
+   surfaces.

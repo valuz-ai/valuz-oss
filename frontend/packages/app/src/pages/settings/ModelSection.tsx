@@ -443,7 +443,7 @@ export const ModelSection = () => {
     base_url?: string;
     default_model?: string;
     protocol?: string;
-    runtime_provider?: "claude_agent" | "codex" | "deepagents";
+    runtime_provider?: "claude_agent" | "codex" | "deepagents" | "deepseek_harness";
     models?: string[];
   }) => {
     await providersApi.create(payload);

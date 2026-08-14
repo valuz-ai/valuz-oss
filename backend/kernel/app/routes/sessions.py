@@ -101,20 +101,24 @@ async def create_session(
     agent = _agent_config_from_schema(body.agent_config)
     validate_registered_tools(list(agent.tools))
 
-    # DeepAgents needs an explicit langchain model client at runtime, so
-    # both ``model`` and ``model_provider`` are required when chosen.
-    # ClaudeAgent / Codex fall back to ambient SDK credentials and accept
-    # both fields empty.
-    if body.runtime_provider == "deepagents":
+    # DeepAgents needs an explicit langchain model client at runtime, and
+    # deepseek_harness passes model + credentials to its subprocess env at
+    # initialize — both ``model`` and ``model_provider`` are required when
+    # either is chosen. ClaudeAgent / Codex fall back to ambient SDK
+    # credentials and accept both fields empty.
+    if body.runtime_provider in ("deepagents", "deepseek_harness"):
         if not body.model.strip():
             raise HTTPException(
                 status_code=400,
-                detail="model is required when runtime_provider is 'deepagents'.",
+                detail=f"model is required when runtime_provider is {body.runtime_provider!r}.",
             )
         if body.model_provider is None:
             raise HTTPException(
                 status_code=400,
-                detail="model_provider is required when runtime_provider is 'deepagents'.",
+                detail=(
+                    "model_provider is required when runtime_provider is "
+                    f"{body.runtime_provider!r}."
+                ),
             )
 
     # ``permission_mode`` is sunk to the session per D9: agent holds the
@@ -123,10 +127,16 @@ async def create_session(
     # ``permission_mode`` is sunk to the session: the embedded snapshot
     # holds the default; the request value wins when provided.
     permission_mode = body.permission_mode or agent.permission_mode
-    if body.runtime_provider == "deepagents" and permission_mode == "auto_review":
+    if (
+        body.runtime_provider in ("deepagents", "deepseek_harness")
+        and permission_mode == "auto_review"
+    ):
         raise HTTPException(
             status_code=400,
-            detail="auto_review is not supported for deepagents; use default or full_access.",
+            detail=(
+                f"auto_review is not supported for {body.runtime_provider}; "
+                "use default or full_access."
+            ),
         )
 
     provider = (
@@ -397,10 +407,16 @@ async def update_session(
     if body.model_settings is not None:
         session.model_settings = _model_settings_from_schema(body.model_settings)
     if body.permission_mode is not None:
-        if session.runtime_provider == "deepagents" and body.permission_mode == "auto_review":
+        if (
+            session.runtime_provider in ("deepagents", "deepseek_harness")
+            and body.permission_mode == "auto_review"
+        ):
             raise HTTPException(
                 status_code=400,
-                detail="auto_review is not supported for deepagents; use default or full_access.",
+                detail=(
+                    f"auto_review is not supported for {session.runtime_provider}; "
+                    "use default or full_access."
+                ),
             )
         session.permission_mode = body.permission_mode
     if body.cwd is not None:
@@ -443,12 +459,12 @@ async def set_session_mode(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if body.mode != "default" and session.runtime_provider == "deepagents":
+    if body.mode != "default" and session.runtime_provider in ("deepagents", "deepseek_harness"):
         raise HTTPException(
             status_code=400,
             detail=(
-                f"mode={body.mode!r} is not supported on deepagents sessions "
-                "(no native plan/goal primitive)."
+                f"mode={body.mode!r} is not supported on {session.runtime_provider} "
+                "sessions (no native plan/goal primitive)."
             ),
         )
 
