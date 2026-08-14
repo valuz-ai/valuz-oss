@@ -80,16 +80,6 @@ function decodeUriToAbsPath(uri: string, tolerant: boolean): string | null {
   } catch {
     return null;
   }
-  // Tolerance has to cut BOTH ways. A model that drops a slash is handled
-  // above (fold the mis-parsed host back on); a model that adds one was not.
-  // ``valuz-file:////data/x`` parses to an empty authority and a pathname of
-  // ``//data/x``, and that extra slash is not cosmetic: every consumer decides
-  // what a path IS by comparing it against the project root, and ``//data/…``
-  // is not under ``/data/…``. Observed live — a lead's report link came back
-  // "outside the project" and the UI refused to open a file sitting exactly
-  // where it said it was. Collapse the run; an absolute POSIX path has no
-  // meaningful leading ``//``.
-  if (tolerant) path = path.replace(/^\/{2,}/, "/");
   if (WIN_DRIVE.test(path)) path = path.slice(1); // /C:/x -> C:/x
   return path || null;
 }
