@@ -22,8 +22,10 @@ import pytest
 
 import valuz_agent.boot.kernel  # noqa: F401
 
+from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra import execution_lease as lease_mod
 from valuz_agent.infra.execution_lease import ExecutionLeaseRow
+from valuz_agent.modules.tasks import mailbox_store
 from valuz_agent.modules.tasks.actor_runner import ActorRunner
 from valuz_agent.modules.tasks.lease import acquire_actor_lease, load_actor_lease_states
 from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
@@ -440,11 +442,25 @@ def test_a_failing_reconcile_does_not_end_the_wait(db_factory) -> None:
 
     async def _drive():
         # A real message still gets through while the backstop is failing.
-        async def _late_put():
+        # It travels the real path — a durable enqueue plus a ring — because
+        # nothing puts into the in-process queue any more: that is a local
+        # buffer for extras the loop itself parked, not a channel.
+        async def _late_delivery():
             await asyncio.sleep(0.05)
-            mailbox_registry.put("lead-s", _member_done("m9", "arrived by mailbox"))
+            async with async_unit_of_work() as db:
+                await mailbox_store.enqueue(
+                    db,
+                    session_id="lead-s",
+                    task_id="t1",
+                    project_id="p1",
+                    user_id=OWNER,
+                    kind="member_done",
+                    from_session="m9",
+                    payload={"summary": "arrived by mailbox"},
+                )
+            await mailbox_store.ring_for("lead-s")
 
-        task = asyncio.create_task(_late_put())
+        task = asyncio.create_task(_late_delivery())
         msg = await runner._await_wakeup(
             session_id="lead-s", role="lead", ttl=5.0, task_id="t1",
             project_id="p1", user_id=OWNER, coordinator=fake,

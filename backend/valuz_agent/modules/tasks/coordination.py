@@ -803,6 +803,7 @@ class CoordinationService:
                     origin="member-idle",
                     payload=dict(manifest),
                 )
+            await mailbox_store.ring_for(lead_session_id)
 
         # Timeline bookkeeping — on its own unit of work so a failure here costs
         # a row in the log, never the delivery above.
