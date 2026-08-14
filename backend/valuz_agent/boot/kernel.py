@@ -111,6 +111,14 @@ def _set_kernel_env() -> None:
             "DEEPAGENTS_CHECKPOINT_ROOT",
             str(os.path.join(os.path.dirname(str(kernel_db_path)), "deepagents-checkpoints")),
         )
+        # DeepSeek Harness transcript sidecars (cross-process continuation
+        # replay) live next to kernel.db too — the runtime's own default is
+        # process-cwd-relative (``./dsh_state``), which would litter whatever
+        # directory the backend was launched from.
+        os.environ.setdefault(
+            "VALUZ_DSH_STATE_DIR",
+            str(kernel_db_path.parent / "dsh-state"),
+        )
     # OSS default (KERNEL_STORE local/unset): the DataService backend is the host
     # sqlite (valuz.db). Inject it as the durable so the kernel dual-writes
     # kernel.db -> valuz.db and reads are served from the DataService.
