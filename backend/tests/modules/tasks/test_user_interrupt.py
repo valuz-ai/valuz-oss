@@ -311,7 +311,7 @@ async def test_finalize_interrupted_member_records_user_stop(
         assert "subtask_failed" not in events
         # exactly one member_done(cancelled) reached the lead — through the
         # durable inbox, since the lead's loop need not share this process
-        drained = await mailbox_store.drain("lead-1")
+        drained = await mailbox_store.drain("lead-1", limit=32)
         assert len(drained) == 1
         msg = drained[0]
         assert msg.kind == "member_done"
@@ -337,7 +337,7 @@ async def test_finalize_interrupted_member_skips_already_recorded_runs(
         assert run_status == parked, "the parked outcome must survive untouched"
         assert node["status"] == "paused"
         assert events == []
-        assert await mailbox_store.drain("lead-1") == [], (
+        assert await mailbox_store.drain("lead-1", limit=32) == [], (
             "an already-parked run must not tell the lead a second time"
         )
     finally:

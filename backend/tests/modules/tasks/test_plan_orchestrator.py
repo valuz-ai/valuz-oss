@@ -1485,7 +1485,7 @@ def test_stop_member_rejects_run_reworks_node_and_notifies_lead(
         # The cancellation reaches the lead through its durable inbox: the
         # lead's loop may well be in another process than the one that served
         # the stop request.
-        drained = asyncio.run(mailbox_store.drain("lead-s"))
+        drained = asyncio.run(mailbox_store.drain("lead-s", limit=32))
         assert len(drained) == 1
         msg = drained[0]
         assert msg.kind == "member_done" and msg.payload["status"] == "cancelled"

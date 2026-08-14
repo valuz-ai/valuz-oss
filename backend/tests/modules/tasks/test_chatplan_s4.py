@@ -31,9 +31,14 @@ def _reset_mailbox():
     yield
 
 
+# These tests assert on the WHOLE queue, so they ask for more than the
+# runtime ever takes. The runtime passes 1 — see mailbox_store.drain.
+_ALL = 32
+
+
 def _drain(session_id: str = "lead-sess-1"):
     """Consume an actor's durable inbox, as its loop does at each idle tick."""
-    return asyncio.run(mailbox_store.drain(session_id))
+    return asyncio.run(mailbox_store.drain(session_id, limit=_ALL))
 
 
 def _events(db_factory) -> list[TaskEventRow]:

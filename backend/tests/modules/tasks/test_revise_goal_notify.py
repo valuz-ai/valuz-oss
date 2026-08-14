@@ -55,7 +55,7 @@ async def test_a_goal_revision_reaches_the_lead_with_its_caveat(db_factory, tmp_
     assert res["lead_session_id"] == "lead-1"
     assert res["reason"] is None
 
-    drained = await mailbox_store.drain("lead-1")
+    drained = await mailbox_store.drain("lead-1", limit=32)
     assert len(drained) == 1
     msg = drained[0]
     assert msg.kind == "revise_goal"
@@ -81,7 +81,7 @@ async def test_a_goal_revision_reaches_a_lead_driven_by_another_process(db_facto
         )
     assert res["delivered"] is True
 
-    drained = await mailbox_store.drain("lead-1")
+    drained = await mailbox_store.drain("lead-1", limit=32)
     assert [m.kind for m in drained] == ["revise_goal"]
     assert "PIVOT" in drained[0].text
 
@@ -107,7 +107,7 @@ async def test_a_revision_is_rolled_back_with_its_transaction(db_factory, tmp_pa
             )
             raise _BoomError
 
-    assert await mailbox_store.drain("lead-1") == []
+    assert await mailbox_store.drain("lead-1", limit=32) == []
 
 
 @pytest.mark.asyncio
