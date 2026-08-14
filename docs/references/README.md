@@ -11,4 +11,10 @@ accordingly. Re-verify before relying on a claim after the upstream moves.
 
 | Directory | System | Status |
 |-----------|--------|--------|
-| [deepseek-harness/](deepseek-harness/README.md) | DeepSeek Harness (`dsh`) — candidate 4th kernel runtime via its Python SDK | Explored 2026-08-13 against `0.1.0-rc.5` |
+| [deepseek-harness/](deepseek-harness/README.md) | DeepSeek Harness (`dsh`) — 4th kernel runtime via its SDK wire | Explored 2026-08-13 (`0.1.0-rc.5`), integrated on `feat/deepseek-harness-runtime` (`0.1.0-rc.6`) |
+
+Cross-cutting guides:
+
+- [runtime-integration-playbook.md](runtime-integration-playbook.md) — how to
+  explore and integrate a new agent runtime (checklists + the field lessons
+  from the dsh integration).
