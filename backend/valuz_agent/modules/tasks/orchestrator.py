@@ -1,6 +1,6 @@
 """TaskOrchestrator — the task subsystem's composition root.
 
-One job: build the shared collaborators (``LiveMemberRegistry``,
+One job: build the shared collaborators (
 ``ActorRunner``) once and wire them into the four services, so every service
 sees the *same* registry and the *same* runner. Callers reach a capability
 through the owning service — ``task_orchestrator.lifecycle.kickoff(...)``,
@@ -38,7 +38,6 @@ from valuz_agent.modules.tasks.coordination import CoordinationService
 from valuz_agent.modules.tasks.dispatcher import DispatcherService
 from valuz_agent.modules.tasks.finalization import FinalizationService
 from valuz_agent.modules.tasks.lifecycle import LifecycleService
-from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
 from valuz_agent.modules.tasks.recovery import RecoveryService
 
 
@@ -48,40 +47,22 @@ logger = logging.getLogger(__name__)
 class TaskOrchestrator:
     """Builds and wires the task services; exposes them read-only."""
 
-    def __init__(
-        self,
-        registry: LiveMemberRegistry | None = None,
-        actor_runner: ActorRunner | None = None,
-    ) -> None:
-        # Shared live-member tracking: task_id → live member session ids (so
-        # finish_task can broadcast shutdown to every still-running member) and
-        # session_id → dispatch-start epoch (manifest attribution under the
-        # shared project cwd). Every service gets THIS instance — see
-        # LiveMemberRegistry for the no-await-between-spawn-and-register
-        # invariant that makes sharing load-bearing.
-        self._members = registry or LiveMemberRegistry()
-
+    def __init__(self, actor_runner: ActorRunner | None = None) -> None:
         # Wiring order is forced by a cycle: the services need the runner as a
         # constructor argument, and the runner needs two of them back. So build
         # the runner first, then the services, then bind (below).
         self._actor = actor_runner or ActorRunner()
-        self._dispatcher = DispatcherService(
-            registry=self._members,
-            actor_runner=self._actor,
-        )
-        self._coordination = CoordinationService(registry=self._members)
+        self._dispatcher = DispatcherService(actor_runner=self._actor)
+        self._coordination = CoordinationService()
         self._lifecycle = LifecycleService(
-            registry=self._members,
             actor_runner=self._actor,
             coordination=self._coordination,
         )
         self._finalization = FinalizationService(
-            registry=self._members,
             actor_runner=self._actor,
             coordination=self._coordination,
         )
         self._recovery = RecoveryService(
-            registry=self._members,
             actor_runner=self._actor,
             coordination=self._coordination,
         )
@@ -91,11 +72,6 @@ class TaskOrchestrator:
         # ActorCoordinator, so mypy checks that the services still satisfy the
         # seam (an untyped handle here previously let delegators rot silently).
         self._actor.bind(finalizer=self._finalization, coordinator=self._coordination)
-
-    @property
-    def members(self) -> LiveMemberRegistry:
-        """The shared live-member registry every service writes through."""
-        return self._members
 
     @property
     def actor(self) -> ActorRunner:

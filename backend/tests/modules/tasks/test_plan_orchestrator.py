@@ -932,10 +932,39 @@ def test_auto_finalize_noop_when_already_finalized(db_factory, tmp_path) -> None
     assert _events(db_factory) == []  # no duplicate terminal event appended
 
 
+def _seed_live_member(db_factory, task_id="t1", session_id="m1", subtask_key="s1") -> None:
+    """One member run row, ``active`` — the shared answer to "a member is running".
+
+    Membership used to be a set on the orchestrator, so a test could declare a
+    live member without one existing. Every process now reads the run rows, so
+    the row IS the declaration.
+    """
+    from valuz_agent.modules.tasks.models import TaskSessionRow
+
+    db = db_factory()
+    try:
+        db.add(
+            TaskSessionRow(
+                user_id=OWNER,
+                project_id="w1",
+                task_id=task_id,
+                session_id=session_id,
+                agent_slug="worker",
+                sequence=99,
+                kind="subtask",
+                subtask_key=subtask_key,
+                status="active",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
 def test_auto_finalize_noop_when_members_in_flight(db_factory, tmp_path) -> None:
     _make_task(db_factory, tmp_path)
     orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"m1"})  # a member is still running
+    _seed_live_member(db_factory)  # a member is still running
     asyncio.run(
         orch.finalization._auto_finalize_lead_task(
             lead_session_id="lead-sess",
@@ -959,7 +988,7 @@ def test_lead_idle_with_no_pending_true_when_clean(db_factory, tmp_path) -> None
 def test_lead_idle_with_no_pending_false_when_member_in_flight(db_factory, tmp_path) -> None:
     _make_task(db_factory, tmp_path)
     orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"m1"})
+    _seed_live_member(db_factory)
     idle = orch.coordination.lead_idle_with_no_pending("t1", "w1", user_id=OWNER)
     assert asyncio.run(idle) is False
 
@@ -1194,7 +1223,6 @@ def test_stop_task_pauses_members_and_cascade_interrupts(db_factory, tmp_path, m
         members=[("A", "backend", "sA", "in_progress"), ("B", "frontend", "sB", "in_progress")],
     )
     orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"sA", "sB"})
     interrupted: list[str] = []
 
     async def _fake_interrupt(sid: str, user_id: str | None = None) -> None:
@@ -1467,7 +1495,6 @@ def test_stop_member_rejects_run_reworks_node_and_notifies_lead(
 
     _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
     orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"sB"})
 
     async def _fake_interrupt(sid: str, user_id: str | None = None) -> None:
         assert user_id == OWNER
@@ -1480,7 +1507,6 @@ def test_stop_member_rejects_run_reworks_node_and_notifies_lead(
         assert runs["sB"] == "rejected"
         plan = TaskPlan.from_dict(db_factory().query(TaskRow).filter_by(id="t1").one().plan)
         assert plan.get("B").status == "rework"
-        assert "sB" not in orch._members.live_members("t1")
         assert asyncio.run(mailbox_store.has_pending("lead-s"))
         # The cancellation reaches the lead through its durable inbox: the
         # lead's loop may well be in another process than the one that served
@@ -1553,7 +1579,6 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
         members=[("A", "backend", "sA", "in_progress"), ("B", "frontend", "sB", "in_progress")],
     )
     orch = tasks_route.task_orchestrator
-    orch._members.set_members("t1", {"sA", "sB"})
 
     interrupted: list[str] = []
     spawned: list[tuple[str, str]] = []
@@ -1611,11 +1636,8 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
         assert ("lead-s", "lead") in spawned
         assert ("sA", "subtask") in spawned and ("sB", "subtask") in spawned
 
-    try:
-        asyncio.run(_run())
-        assert _task_row(db_factory).status == "active"
-    finally:
-        orch._members.set_members("t1", set())
+    asyncio.run(_run())
+    assert _task_row(db_factory).status == "active"
 
 
 def test_pause_distinct_from_stop_and_parks_nodes(db_factory, tmp_path, monkeypatch) -> None:
@@ -1629,7 +1651,6 @@ def test_pause_distinct_from_stop_and_parks_nodes(db_factory, tmp_path, monkeypa
 
     _seed_lead_and_members(db_factory, tmp_path, members=[("A", "backend", "sA", "in_progress")])
     orch = tasks_route.task_orchestrator
-    orch._members.set_members("t1", {"sA"})
 
     async def _noop_interrupt(_sid: str, user_id: str | None = None) -> None:
         assert user_id == OWNER
@@ -1653,10 +1674,7 @@ def test_pause_distinct_from_stop_and_parks_nodes(db_factory, tmp_path, monkeypa
             )
         assert r2.status == "stopped"
 
-    try:
-        asyncio.run(_run())
-    finally:
-        orch._members.set_members("t1", set())
+    asyncio.run(_run())
 
 
 def test_intervene_noop_raises_409_instead_of_false_success(
@@ -2758,7 +2776,6 @@ def test_stop_member_parks_the_run_the_member_reads(db_factory, tmp_path) -> Non
 
     _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
     orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"sB"})
 
     async def _fake_interrupt(sid: str, user_id: str | None = None) -> None: ...
 
@@ -3115,7 +3132,6 @@ def test_finish_task_parks_members_that_are_still_running(db_factory, tmp_path) 
         db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")]
     )
     orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"sB"})
 
     assert _runs(db_factory)["sB"] == "active", "precondition: the member is running"
 

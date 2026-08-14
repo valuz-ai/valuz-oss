@@ -2,17 +2,17 @@
 
 await_member_results (in-turn mailbox drain, heartbeat-sliced) · the
 role callbacks the ActorRunner binds as its ``ActorCoordinator``
-(notify_lead_member_idle / lead_idle_with_no_pending / session_still_working)
-· stop_tracking_members, which drops a task's members atomically.
+(notify_lead_member_idle / lead_idle_with_no_pending / session_still_working).
 
 Text DELIVERY (send_to_member / inject_into_task / goal revision) lives in
 ``messaging`` — callers import it directly; there is no wrapper here.
 
-CRITICAL invariant: ``stop_tracking_members`` must stay a plain ``def`` — the
-single ``drain_members`` pop and the per-member puts may not be separated by
-an ``await``, or a concurrently spawned member is dropped. ``await`` inside a
-sync function is a SyntaxError, so the compiler enforces it (as it does for
-``DispatcherService._spawn_member``, the other half of the race).
+There used to be a ``stop_tracking_members`` here, and a spawn/halt race
+around it: members were tracked in a per-process set, so halting a task had to
+pop that set without an ``await`` in between or a member spawned concurrently
+was dropped. Live membership is now a query over the run rows, which
+``dispatch`` writes before it returns — the set is gone, and with it the race,
+the sync-only invariant, and the halt-time bookkeeping.
 """
 
 # ruff: noqa: I001
@@ -37,7 +37,6 @@ from valuz_agent.modules.tasks.datastore import (
     TaskSessionDatastore,
     pick_lead_run,
 )
-from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
 from valuz_agent.modules.tasks import mailbox_store, member_probe, notifier
 from valuz_agent.modules.tasks.mailbox import InboxMsg
 from valuz_agent.modules.tasks.plan import PlanError, TaskPlan
@@ -72,8 +71,6 @@ _MAX_AWAIT_WINDOW_S = 600.0
 class CoordinationService:
     """Lead ↔ member coordination; the ActorRunner's typed ``ActorCoordinator``."""
 
-    def __init__(self, *, registry: LiveMemberRegistry) -> None:
-        self._members = registry
 
     # ------------------------------------------------------------------
     # await_members (v0.14) — turn-内阻塞收集并行 member 结果
@@ -558,7 +555,12 @@ class CoordinationService:
             agent_slug = run.agent_slug or ""
             run_dir = Path(run.run_dir) if run.run_dir else Path()
 
-        since = self._members.dispatch_started_at(session_id)
+        # The member's own run row IS the dispatch timestamp. It used to come
+        # from a per-process dict, which returned 0.0 on any process that had
+        # not served this member's dispatch — and ``since_epoch=0`` means
+        # "include every file" (manifest.py), so under a shared cwd a member's
+        # artifact list quietly filled up with files it never wrote.
+        since = (run.created_at or 0) / 1000.0
         manifest = await collect_manifest_safe(
             session_id,
             run_dir,
@@ -639,8 +641,9 @@ class CoordinationService:
         included). When none holds, the lead is done — break now so
         ``finalize_actor`` closes the task immediately instead of after 30min.
         """
-        if self._members.has_live_members(task_id):
-            return False  # a member is still running — keep waiting for its result
+        async with async_unit_of_work(commit=False) as db:
+            if await TaskSessionDatastore(db).has_active_members(task_id):
+                return False  # a member is still running — keep waiting for its result
         if lead_session_id and await self._session_has_background_work(lead_session_id):
             # The lead spawned a ``run_in_background`` subagent. Its own turn
             # genuinely ended, but the work has NOT — and when the task finishes
@@ -683,26 +686,6 @@ class CoordinationService:
     # ------------------------------------------------------------------
     # shutdown broadcast — the atomic shutdown primitive
     # ------------------------------------------------------------------
-
-    def stop_tracking_members(self, task_id: str) -> None:
-        """Forget a task's members; each one reads its own stop from the store.
-
-        This was ``stop_tracking_members``, and it queued a ``shutdown`` for every
-        member. It could only reach members whose loops happened to live in
-        this process, which is a minority of them once the host runs more than
-        one — so the signal that ends a member was the one thing least able to
-        cross a process boundary.
-
-        Its callers (``stop_task``, ``finish_task``) already write what each
-        member needs to know: the task goes terminal, the run rows are parked.
-        Members read that on their own poll, from wherever they run. All that
-        is left here is dropping the lead's in-process tracking of them.
-
-        MUST stay a plain ``def``: ``drain_members`` pops the set, and letting
-        an ``await`` in would drop a concurrently spawned member (pinned by
-        test_spawn_atomicity).
-        """
-        self._members.drain_members(task_id)
 
 
 __all__ = ["CoordinationService"]

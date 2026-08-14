@@ -521,21 +521,17 @@ async def test_finish_task_stopped_rejected_while_members_live(
     monkeypatch.setattr(lc_mod, "TaskSessionDatastore", _FakeRunDs)
 
     orch = TaskOrchestrator()
-    orch._members.add_member("t-guard", "mem-live-1")
-    try:
-        res = await orch.finalization.finish_task(
-            task_id="t-guard",
-            project_id="w1",
-            lead_session_id="lead-g",
-            summary="giving up",
-            status="stopped",
-            user_id=LOCAL_USER_ID,
-        )
-        assert res["status"] == "rejected"
-        assert res["live_subtasks"] == ["build"]
-        assert "force=true" in res["error"]
-    finally:
-        orch._members.discard_member("t-guard", "mem-live-1")
+    res = await orch.finalization.finish_task(
+        task_id="t-guard",
+        project_id="w1",
+        lead_session_id="lead-g",
+        summary="giving up",
+        status="stopped",
+        user_id=LOCAL_USER_ID,
+    )
+    assert res["status"] == "rejected"
+    assert res["live_subtasks"] == ["build"]
+    assert "force=true" in res["error"]
 
 
 async def test_finish_task_stopped_force_bypasses_guard(
@@ -599,18 +595,14 @@ async def test_finish_task_stopped_force_bypasses_guard(
     monkeypatch.setattr(lc_mod.kernel_client, "get_session", _no_session)
 
     orch = TaskOrchestrator()
-    orch._members.add_member("t-force", "mem-live-2")
-    try:
-        res = await orch.finalization.finish_task(
-            task_id="t-force",
-            project_id="w1",
-            lead_session_id="lead-f",
-            summary="deliberate stop",
-            status="stopped",
-            force=True,
-            user_id=LOCAL_USER_ID,
-        )
-        assert res == {"ok": True, "status": "stopped"}
-        assert writes == ["stopped"]
-    finally:
-        orch._members.discard_member("t-force", "mem-live-2")
+    res = await orch.finalization.finish_task(
+        task_id="t-force",
+        project_id="w1",
+        lead_session_id="lead-f",
+        summary="deliberate stop",
+        status="stopped",
+        force=True,
+        user_id=LOCAL_USER_ID,
+    )
+    assert res == {"ok": True, "status": "stopped"}
+    assert writes == ["stopped"]
