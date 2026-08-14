@@ -26,9 +26,10 @@ from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra import execution_lease as lease_mod
 from valuz_agent.infra.execution_lease import ExecutionLeaseRow
 from valuz_agent.modules.tasks import mailbox_store
+from .conftest import deliver, deliver_async
 from valuz_agent.modules.tasks.actor_runner import ActorRunner
 from valuz_agent.modules.tasks.lease import acquire_actor_lease, load_actor_lease_states
-from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
+from valuz_agent.modules.tasks.mailbox import InboxMsg
 
 OWNER = "local-test-owner"
 
@@ -46,13 +47,16 @@ def _multi_process_world(monkeypatch):
     monkeypatch.setattr(
         "valuz_agent.infra.execution_lease._exclusive_by_construction", lambda: False
     )
+    # Crash recovery runs on its own slow cadence in production (30s) because
+    # it writes. These tests are about WHETHER it runs, not how often.
+    monkeypatch.setattr(
+        "valuz_agent.modules.tasks.actor_runner.LEAD_RECONCILE_SLICE_S", 0.01
+    )
 
 
 @pytest.fixture(autouse=True)
 def _reset_mailbox():
-    mailbox_registry._boxes.clear()
     yield
-    mailbox_registry._boxes.clear()
 
 
 class _Collaborators:
@@ -187,7 +191,6 @@ def test_a_superseded_loop_puts_nothing_in_the_shared_inbox(db_factory) -> None:
     """
     stale = asyncio.run(acquire_actor_lease(session_id="lead-s", task_id="t1"))
     assert stale is not None
-    mailbox_registry.register("lead-s")
 
     # A newer loop takes the lease — a rapid resume, or a peer process.
     newer = asyncio.run(acquire_actor_lease(session_id="lead-s", task_id="t1"))
@@ -205,7 +208,7 @@ def test_a_superseded_loop_puts_nothing_in_the_shared_inbox(db_factory) -> None:
     asyncio.run(_run_renewer())
 
     assert fenced.is_set(), "the superseded loop must learn it lost the lease"
-    assert not mailbox_registry.has_pending("lead-s"), (
+    assert not asyncio.run(mailbox_store.has_pending("lead-s")), (
         "a revoked runner must not queue anything — the replacement reads this box"
     )
     assert asyncio.run(newer.renew()) is True, "the live runner is untouched"
@@ -296,7 +299,6 @@ def test_a_parked_loop_leaves_on_its_own_when_the_fence_goes_up(db_factory) -> N
     fenced = asyncio.Event()
     fenced.set()
     runner = _runner([])
-    mailbox_registry.register("lead-s")
 
     async def _wait() -> None:
         await runner._await_wakeup(
@@ -313,7 +315,7 @@ def test_a_parked_loop_leaves_on_its_own_when_the_fence_goes_up(db_factory) -> N
     with pytest.raises(KeyError):
         asyncio.run(asyncio.wait_for(_wait(), timeout=15))
 
-    assert not mailbox_registry.has_pending("lead-s"), (
+    assert not asyncio.run(mailbox_store.has_pending("lead-s")), (
         "leaving must not require — or leave behind — a message"
     )
 
@@ -322,17 +324,26 @@ def test_a_parked_loop_leaves_on_its_own_when_the_fence_goes_up(db_factory) -> N
 
 
 class _ReconcilingCoordinator(_Collaborators):
-    """Coordinator whose mailbox never delivers, but whose store knows the truth."""
+    """A coordinator whose store knows what a dead member never got to say.
+
+    Mirrors the real contract: recovery ENQUEUES what it reconstructs and
+    reports a count. It does not hand a batch back — there would be nowhere for
+    the caller to put the ones it cannot use yet.
+    """
 
     def __init__(self, calls: list[str], recovered: list[InboxMsg]) -> None:
         super().__init__(calls)
         self._recovered = recovered
         self.reconciles = 0
 
-    async def recover_crashed_members(self, *, task_id, project_id, user_id) -> list:
+    async def recover_crashed_members(self, *, task_id, project_id, user_id) -> int:
         self.reconciles += 1
         out, self._recovered = self._recovered, []
-        return out
+        for msg in out:
+            await deliver_async(
+                "lead-s", msg, task_id=task_id, project_id=project_id, user_id=user_id
+            )
+        return len(out)
 
 
 def _member_done(session_id: str, summary: str) -> InboxMsg:
@@ -370,7 +381,6 @@ def test_lead_recovers_a_member_result_its_mailbox_never_received(db_factory) ->
 
     monkey = pytest.MonkeyPatch()
     monkey.setattr("valuz_agent.modules.tasks.actor_runner.LEAD_RECONCILE_SLICE_S", 0.01)
-    mailbox_registry.register("lead-s")
     msg = asyncio.run(_drive())
     monkey.undo()
 
@@ -386,7 +396,6 @@ def test_extra_recovered_results_are_queued_not_dropped(db_factory) -> None:
 
     monkey = pytest.MonkeyPatch()
     monkey.setattr("valuz_agent.modules.tasks.actor_runner.LEAD_RECONCILE_SLICE_S", 0.01)
-    mailbox_registry.register("lead-s")
 
     async def _drive():
         first = await runner._await_wakeup(
@@ -413,7 +422,6 @@ def test_members_do_not_reconcile(db_factory) -> None:
     """A subtask actor has no siblings to reconcile — it keeps the plain wait."""
     fake = _ReconcilingCoordinator([], [_member_done("m1", "nope")])
     runner = ActorRunner(finalizer=fake, coordinator=fake)
-    mailbox_registry.register("member-s")
 
     async def _drive():
         with pytest.raises(TimeoutError):
@@ -438,7 +446,6 @@ def test_a_failing_reconcile_does_not_end_the_wait(db_factory) -> None:
     runner = ActorRunner(finalizer=fake, coordinator=fake)
     monkey = pytest.MonkeyPatch()
     monkey.setattr("valuz_agent.modules.tasks.actor_runner.LEAD_RECONCILE_SLICE_S", 0.01)
-    mailbox_registry.register("lead-s")
 
     async def _drive():
         # A real message still gets through while the backstop is failing.
@@ -490,7 +497,6 @@ def test_no_durable_writes_while_draining(db_factory) -> None:
 
     monkey = pytest.MonkeyPatch()
     monkey.setattr("valuz_agent.modules.tasks.actor_runner.LEAD_RECONCILE_SLICE_S", 0.01)
-    mailbox_registry.register("lead-s")
     lifecycle.set_draining()
 
     async def _drive():
@@ -607,8 +613,7 @@ def test_dropping_a_duplicate_does_not_re_run_the_previous_prompt(db_factory) ->
 
     runner.run_turn = _turn  # type: ignore[method-assign]
 
-    mailbox_registry.register("lead-s")
-    mailbox_registry.put("lead-s", _member_done("m1", "already reviewed"))
+    deliver("lead-s", _member_done("m1", "already reviewed"))
 
     asyncio.run(_drive(runner))
 
@@ -647,8 +652,7 @@ def test_an_actionable_member_done_still_runs_a_turn(db_factory) -> None:
         "valuz_agent.modules.tasks.planning.mark_in_review",
         lambda **kw: asyncio.sleep(0),
     )
-    mailbox_registry.register("lead-s")
-    mailbox_registry.put("lead-s", _member_done("m1", "please review me"))
+    deliver("lead-s", _member_done("m1", "please review me"))
 
     asyncio.run(_drive(runner))
     monkey.undo()
@@ -723,8 +727,7 @@ def test_an_unreadable_goal_is_retried_on_the_next_wake_up(db_factory, monkeypat
         return "idle"
 
     runner.run_turn = _turn  # type: ignore[method-assign]
-    mailbox_registry.register("lead-s")
-    mailbox_registry.put("lead-s", _member_done("m1", "result"))
+    deliver("lead-s", _member_done("m1", "result"))
 
     asyncio.run(_drive(runner))
 
@@ -837,7 +840,6 @@ def test_a_draining_loop_does_not_claim_what_it_cannot_deliver(db_factory) -> No
             )
         fake = _Collaborators([])
         runner = ActorRunner(finalizer=fake, coordinator=fake)
-        mailbox_registry.register("lead-s")
         with pytest.raises(TimeoutError):
             await runner._await_wakeup(
                 session_id="lead-s", role="lead", ttl=0.3, task_id="t1",
@@ -854,45 +856,7 @@ def test_a_draining_loop_does_not_claim_what_it_cannot_deliver(db_factory) -> No
     )
 
 
-def test_a_finished_loop_reclaims_its_buffer(db_factory) -> None:
-    """Nothing dropped a box, so a long-lived process grew one per session.
-
-    Reclaiming is safe now only because the box is a local buffer with a single
-    owner — but it is still gated on the lease, because the box is shared by
-    every incarnation of a session and an ungated drop pulls it out from under
-    a replacement. That is the race the claim token used to guard.
-    """
-    calls: list[str] = []
-    asyncio.run(_drive(_runner(calls)))
-
-    assert calls == ["turn", "finalize"], "precondition: a normal, owned exit"
-    assert mailbox_registry.try_get("lead-s") is None
-    assert "lead-s" not in mailbox_registry._boxes, (
-        "a loop that owned its session to the end must take its buffer with it"
-    )
-
-
-def test_a_superseded_loop_leaves_the_replacements_buffer_alone(db_factory) -> None:
-    """The gate, stated as a consequence.
-
-    A loop that lost its lease is not the owner any more. Its buffer belongs to
-    whoever replaced it, and dropping it on the way out would strand messages
-    the replacement had already parked there.
-    """
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(lease_mod, "_HOLDER_ID", "peer-proc")
-    assert asyncio.run(acquire_actor_lease(session_id="lead-s", task_id="t1")) is not None
-    monkey.setattr(lease_mod, "_HOLDER_ID", "our-proc")
-
-    # The replacement's buffer, with something parked in it.
-    mailbox_registry.register("lead-s")
-    mailbox_registry.put("lead-s", _member_done("m1", "for the replacement"))
-
-    calls: list[str] = []
-    asyncio.run(_drive(_runner(calls)))
-    monkey.undo()
-
-    assert calls == [], "precondition: we never ran — a peer holds the session"
-    assert mailbox_registry.try_get("lead-s") is not None, (
-        "a loop that never owned the session must not take the buffer with it"
-    )
+# NOTE: two tests about reclaiming a session's buffer lived here. There is no
+# buffer to reclaim — draining one message at a time removed the leftovers that
+# needed parking, and the per-session queue went with them. The leak they were
+# written to catch cannot recur, because the thing that leaked no longer exists.

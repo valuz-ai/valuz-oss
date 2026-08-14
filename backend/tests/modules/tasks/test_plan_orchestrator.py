@@ -17,6 +17,7 @@ import valuz_agent.boot.kernel  # noqa: F401
 from sqlalchemy import select
 from valuz_agent.adapters import kernel_client as kernel_client_mod
 from valuz_agent.modules.tasks import launcher as launcher_mod
+from valuz_agent.modules.tasks import mailbox_store
 from valuz_agent.modules.tasks import planning
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
@@ -990,7 +991,6 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
     from types import SimpleNamespace
 
     from valuz_agent.modules.tasks import mailbox_store
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
     from valuz_agent.modules.tasks.models import TaskSessionRow
     from valuz_agent.modules.tasks.plan import TaskPlan
 
@@ -1111,7 +1111,7 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
         # inbox: the lead's loop may come up in a different process than this.
         assert asyncio.run(mailbox_store.has_pending("lead-s"))
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -1233,7 +1233,6 @@ def test_resume_task_only_paused_flips_active_and_redrives(
 ) -> None:
     from types import SimpleNamespace
 
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
 
     _seed_lead_and_members(
         db_factory,
@@ -1272,7 +1271,7 @@ def test_resume_task_only_paused_flips_active_and_redrives(
         assert ("lead-s", "lead") in spawned
         assert ("sA", "subtask") in spawned  # paused member resumed
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_resume_task_noop_when_active(db_factory, tmp_path) -> None:
@@ -1386,7 +1385,6 @@ def test_resume_task_with_instruction_embeds_brief_and_logs_event(
     step (":intervene action=resume text=…" / chat inject on a halted task)."""
     from types import SimpleNamespace
 
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
 
     _seed_lead_and_members(
         db_factory, tmp_path, members=[], task_status="stopped", run_status="completed"
@@ -1414,7 +1412,7 @@ def test_resume_task_with_instruction_embeds_brief_and_logs_event(
         payload = _event_payload(db_factory, "user_inject")
         assert payload == {"text": "先核对数据再继续", "via": "resume"}
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_resume_task_accepts_legacy_failed(db_factory, tmp_path, monkeypatch) -> None:
@@ -1424,7 +1422,6 @@ def test_resume_task_accepts_legacy_failed(db_factory, tmp_path, monkeypatch) ->
     resume exactly like blocked (datastore tolerates the unknown source)."""
     from types import SimpleNamespace
 
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
 
     _seed_lead_and_members(
         db_factory, tmp_path, members=[], task_status="failed", run_status="archived"
@@ -1448,7 +1445,7 @@ def test_resume_task_accepts_legacy_failed(db_factory, tmp_path, monkeypatch) ->
         assert _task_row(db_factory).status == "active"
         assert ("lead-s", "lead") in spawned
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_resume_task_rejects_abandoned(db_factory, tmp_path) -> None:
@@ -1466,7 +1463,6 @@ def test_stop_member_rejects_run_reworks_node_and_notifies_lead(
     db_factory, tmp_path, monkeypatch
 ) -> None:
     from valuz_agent.modules.tasks import mailbox_store
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
     from valuz_agent.modules.tasks.plan import TaskPlan
 
     _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
@@ -1478,7 +1474,6 @@ def test_stop_member_rejects_run_reworks_node_and_notifies_lead(
         pass
 
     orch._recovery._interrupt_kernel_session = _fake_interrupt  # type: ignore[method-assign]
-    mailbox_registry.register("lead-s")
     try:
         assert asyncio.run(orch.recovery.stop_member("sB", user_id=OWNER)) is True
         runs = _runs(db_factory)
@@ -1495,7 +1490,7 @@ def test_stop_member_rejects_run_reworks_node_and_notifies_lead(
         msg = drained[0]
         assert msg.kind == "member_done" and msg.payload["status"] == "cancelled"
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_heartbeat_pending_synthesizes_terminal_completed(
@@ -1550,7 +1545,6 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
 
     from valuz_agent.api.routes import tasks as tasks_route
     from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
     from valuz_agent.modules.tasks.plan import TaskPlan
 
     _seed_lead_and_members(
@@ -1621,7 +1615,6 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
         asyncio.run(_run())
         assert _task_row(db_factory).status == "active"
     finally:
-        mailbox_registry.unregister("lead-s")
         orch._members.set_members("t1", set())
 
 
@@ -1632,7 +1625,6 @@ def test_pause_distinct_from_stop_and_parks_nodes(db_factory, tmp_path, monkeypa
     (``in_progress`` → ``paused``) so the right-rail panel stops spinning."""
     from valuz_agent.api.routes import tasks as tasks_route
     from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
     from valuz_agent.modules.tasks.plan import TaskPlan
 
     _seed_lead_and_members(db_factory, tmp_path, members=[("A", "backend", "sA", "in_progress")])
@@ -1664,7 +1656,6 @@ def test_pause_distinct_from_stop_and_parks_nodes(db_factory, tmp_path, monkeypa
     try:
         asyncio.run(_run())
     finally:
-        mailbox_registry.unregister("lead-s")
         orch._members.set_members("t1", set())
 
 
@@ -1684,7 +1675,6 @@ def test_intervene_noop_raises_409_instead_of_false_success(
 
     from valuz_agent.api.routes import tasks as tasks_route
     from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
 
     _seed_lead_and_members(db_factory, tmp_path, members=[], task_status="active")
     orch = tasks_route.task_orchestrator
@@ -1723,7 +1713,7 @@ def test_intervene_noop_raises_409_instead_of_false_success(
     try:
         asyncio.run(_run())
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_resume_evicts_kernel_runtime_before_respawn(db_factory, tmp_path, monkeypatch) -> None:
@@ -1738,7 +1728,6 @@ def test_resume_evicts_kernel_runtime_before_respawn(db_factory, tmp_path, monke
 
     import app.dependencies as appdeps
 
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
 
     _seed_lead_and_members(
         db_factory,
@@ -1782,7 +1771,7 @@ def test_resume_evicts_kernel_runtime_before_respawn(db_factory, tmp_path, monke
         assert "lead-s" in evicted and "sA" in evicted  # both evicted on resume
         assert "lead-s" in spawned and "sA" in spawned
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_lead_shutdown_exit_skips_auto_finalize(monkeypatch) -> None:
@@ -2765,7 +2754,7 @@ def test_stop_member_parks_the_run_the_member_reads(db_factory, tmp_path) -> Non
     (parked on its mailbox between turns) must still exit immediately on
     stop_member — without the shutdown message it sat out its full 10-minute
     idle TTL after the user already cancelled it."""
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
+    from valuz_agent.modules.tasks import mailbox_store
 
     _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
     orch = TaskOrchestrator()
@@ -2774,21 +2763,18 @@ def test_stop_member_parks_the_run_the_member_reads(db_factory, tmp_path) -> Non
     async def _fake_interrupt(sid: str, user_id: str | None = None) -> None: ...
 
     orch._recovery._interrupt_kernel_session = _fake_interrupt  # type: ignore[method-assign]
-    mailbox_registry.register("lead-s")
-    mailbox_registry.register("sB")  # the idle member's live inbox
     try:
         assert asyncio.run(orch.recovery.stop_member("sB", user_id=OWNER)) is True
         # The member learns it was cancelled from its OWN run row, which this
         # call parks. A queued message could only have reached it while its
         # loop happened to share this process — which is why the stop that
         # ends a member was the one least able to cross one.
-        assert not mailbox_registry.has_pending("sB"), "a stop is not a message"
+        assert not asyncio.run(mailbox_store.has_pending("sB")), "a stop is not a message"
         assert _runs(db_factory)["sB"] == "rejected", (
             "and the fact it reads must be written before we return"
         )
     finally:
-        mailbox_registry.unregister("lead-s")
-        mailbox_registry.unregister("sB")
+        pass
 
 
 def test_review_refuses_never_dispatched_node(db_factory, tmp_path) -> None:
@@ -2923,14 +2909,16 @@ def test_recover_crashed_members_resolves_pending_from_the_store(
     )
     orch = TaskOrchestrator()
 
-    msgs = asyncio.run(
+    recovered = asyncio.run(
         orch.coordination.recover_crashed_members(
             task_id="t1", project_id="w1", user_id=OWNER
         )
     )
+    assert recovered == 1, "one member had died; the other is still running"
 
-    # The finished member comes back as a normal member_done, so the loop keeps
-    # ONE formatting path whether a result arrived by mailbox or by reconcile.
+    # It ENQUEUES rather than returning a batch, so the result travels the same
+    # path as every other message and there is nothing for a caller to park.
+    msgs = asyncio.run(mailbox_store.drain("lead-s", limit=10))
     assert [m.kind for m in msgs] == ["member_done"]
     assert msgs[0].from_session == "sB"
     assert msgs[0].payload["status"] == "completed"

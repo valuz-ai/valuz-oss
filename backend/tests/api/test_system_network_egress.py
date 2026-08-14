@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import pytest
-import valuz_agent.boot.kernel  # noqa: F401 - installs kernel src/app paths
 from fastapi import HTTPException
 
+import valuz_agent.boot.kernel  # noqa: F401 - installs kernel src/app paths
 from valuz_agent.api.routes.system import (
     NetworkEgressReconfigureRequest,
     reconfigure_network_egress,

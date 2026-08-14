@@ -9,7 +9,6 @@ import pytest
 
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.tasks import mailbox_store, messaging
-from valuz_agent.modules.tasks.mailbox import mailbox_registry
 from valuz_agent.modules.tasks.models import TaskSessionRow
 
 LOCAL_USER_ID = "local-test-owner"
@@ -17,9 +16,7 @@ LOCAL_USER_ID = "local-test-owner"
 
 @pytest.fixture(autouse=True)
 def _reset_mailbox():
-    mailbox_registry._boxes.clear()
     yield
-    mailbox_registry._boxes.clear()
 
 
 def _seed_lead(db_factory, tmp_path, *, lead_session_id="lead-1"):

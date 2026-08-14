@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 
-from valuz_agent.modules.tasks.mailbox import MailboxRegistry
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 from valuz_agent.modules.tasks.plan import TaskPlan
 from valuz_agent.modules.tasks.purge import purge_project_tasks, purge_tasks
@@ -87,58 +86,6 @@ def _counts(db_factory, task_id: str) -> tuple[int, int, int]:
 # ---------------------------------------------------------------------------
 # The liveness oracle
 # ---------------------------------------------------------------------------
-
-
-def test_a_box_with_no_reader_is_not_a_live_session() -> None:
-    """``register`` is non-owning, so "a box exists" cannot mean "someone reads it".
-
-    This is the whole bug in one assertion: three subsystems asked
-    ``is_registered`` whether the lead loop was alive, and a box pre-seeded for
-    a loop that never started answered yes for the life of the process.
-
-    The registry no longer claims to know. Liveness moved out of it entirely —
-    to the execution lease, which is shared state and can therefore answer for
-    every process rather than for this one. All that survives here is the
-    honest, narrow statement ``is_registered`` was always making: a queue
-    exists, and nothing more.
-    """
-    reg = MailboxRegistry()
-    reg.register("s1")
-
-    assert reg.has_pending("s1") is False
-    assert not hasattr(reg, "is_owned"), (
-        "the registry must not offer a liveness oracle again — a box pre-seeded "
-        "for a loop that never started answered yes for the life of the process, "
-        "and that blinded the watchdog that exists to catch exactly this task"
-    )
-
-
-def test_a_box_is_reclaimed_by_whoever_still_owns_the_session() -> None:
-    """Boxes are dropped on exit now, and only by the current holder.
-
-    Nothing dropped them for a while, so a long-lived process accumulated one
-    queue per session it had ever run. Reclaiming them is safe only because the
-    box is now a local buffer with a single owner and the loop gates the drop
-    on still holding its lease — an ungated drop is the race the claim token
-    used to guard.
-    """
-    reg = MailboxRegistry()
-    reg.register("s1")
-    reg.unregister("s1")
-
-    assert reg.try_get("s1") is None, "the box is gone, and reading it is not an error"
-    assert not hasattr(reg, "release"), (
-        "nothing may drop a box on the way out: that race — a stale loop's "
-        "teardown popping the box a resumed loop was reading — is why the "
-        "claim token existed, and why ownership left this class"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Purge
-# ---------------------------------------------------------------------------
-
-
 def test_purge_removes_the_task_and_everything_indexed_under_it(db_factory) -> None:
     _seed(db_factory, task_id="t-purge")
     assert _counts(db_factory, "t-purge") == (1, 1, 1)

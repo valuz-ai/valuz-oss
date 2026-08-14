@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from valuz_agent.modules.channels.resolver import CHAT_PROJECT_SENTINEL
 from valuz_agent.modules.channels import (
     AgentChannelResolver,
     AgentPlacement,
@@ -9,6 +8,7 @@ from valuz_agent.modules.channels import (
     ChannelRouteKey,
     ChannelThreadBinding,
 )
+from valuz_agent.modules.channels.resolver import CHAT_PROJECT_SENTINEL
 
 
 def _placement(

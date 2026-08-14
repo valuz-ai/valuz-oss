@@ -28,7 +28,7 @@ from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.tasks import messaging, plan_commands, planning
 from valuz_agent.modules.tasks import service as task_service
 from valuz_agent.modules.tasks.datastore import TaskDatastore
-from valuz_agent.modules.tasks.mailbox import mailbox_registry
+from valuz_agent.modules.tasks import mailbox_store
 from valuz_agent.modules.tasks.outcome import Failure
 from valuz_agent.modules.tasks.plan import TaskPlan
 from valuz_agent.modules.tasks.resolution import task_session_resolver
@@ -276,7 +276,11 @@ def _with_inbox_notice(handler: ToolHandler) -> ToolHandler:
             if result.is_error:
                 return result
 
-            if not mailbox_registry.has_pending(ctx.session_id):
+            # Asked of the table. This used to consult a per-process queue,
+            # which could not see anything another process had written — so the
+            # hint appeared only when the sender happened to share a host
+            # process with the agent being hinted.
+            if not await mailbox_store.has_pending(ctx.session_id):
                 return result
             try:
                 payload = _json.loads(result.content)

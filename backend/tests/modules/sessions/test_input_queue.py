@@ -11,8 +11,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from valuz_agent.infra.database import Base
-from valuz_agent.infra.execution_lease import ExecutionLeaseRow
 from valuz_agent.infra.db import async_unit_of_work
+from valuz_agent.infra.execution_lease import ExecutionLeaseRow
 from valuz_agent.modules.sessions import project_index
 from valuz_agent.modules.sessions.datastore import SessionDatastore
 from valuz_agent.modules.sessions.models import (

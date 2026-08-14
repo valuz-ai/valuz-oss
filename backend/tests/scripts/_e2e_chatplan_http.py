@@ -376,7 +376,6 @@ async def _make_task_active_with_mailbox(
         TaskDatastore,
         TaskSessionDatastore,
     )
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
     from valuz_agent.modules.tasks.models import TaskRow, TaskSessionRow
 
     lead_session_id = f"lead-{uuid.uuid4().hex[:8]}"
@@ -420,7 +419,6 @@ async def _make_task_active_with_mailbox(
         await run_ds.create_run(lead_run)
 
     # Mailbox is per-event-loop; register here.
-    mailbox_registry.register(lead_session_id)
 
 
 if __name__ == "__main__":

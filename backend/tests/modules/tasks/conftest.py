@@ -86,3 +86,61 @@ def db_factory(tmp_path, monkeypatch):
         async_sessionmaker(bind=async_engine, expire_on_commit=False),
     )
     return sessionmaker(bind=sync_engine, expire_on_commit=False)
+
+
+# ---------------------------------------------------------------------------
+# Delivery, for tests
+# ---------------------------------------------------------------------------
+
+
+async def deliver_async(
+    session_id, msg, *, task_id="t1", project_id="w1", user_id="local-test-owner"
+):
+    """Put a message where an actor will actually find it.
+
+    Tests used to call ``mailbox_registry.put``, which is gone along with the
+    registry: messages live in ``valuz_task_mailbox`` and waking is a separate,
+    payload-free ring. Writing to a process-local queue would now be simulating
+    a path production does not have.
+    """
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.tasks import mailbox_store
+
+    async with async_unit_of_work() as db:
+        await mailbox_store.enqueue(
+            db,
+            session_id=session_id,
+            task_id=task_id,
+            project_id=project_id,
+            user_id=user_id,
+            kind=msg.kind,
+            text=msg.text,
+            from_session=msg.from_session,
+            origin=msg.origin,
+            payload=dict(msg.payload or {}),
+        )
+    await mailbox_store.ring_for(session_id)
+
+
+def deliver(session_id, msg, **kw):
+    """``deliver_async`` for a test that is not already on an event loop."""
+    import asyncio
+
+    asyncio.run(deliver_async(session_id, msg, **kw))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_notifier():
+    """A ring remembered by one test must not wake the next one's wait.
+
+    The notifier is a module-level singleton and remembers rings that arrived
+    with nobody parked — deliberately, so a ring landing between a check and a
+    park is not lost. Across tests that is just leakage, and it showed up as an
+    order-dependent failure: a stale ring made a later wait return instantly,
+    the loop took an extra slice, and a backstop fired that the test was
+    asserting stayed out.
+    """
+    from valuz_agent.modules.tasks import notifier as _notifier_mod
+
+    _notifier_mod.bind_notifier(_notifier_mod.InProcessNotifier())
+    yield

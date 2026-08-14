@@ -31,10 +31,10 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from valuz_agent.modules.tasks import messaging, planning
+from valuz_agent.modules.tasks import mailbox_store, messaging, planning
 from valuz_agent.modules.tasks.actor_runner import ActorRunner
 from valuz_agent.modules.tasks.lease import load_actor_lease_states
-from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
+from valuz_agent.modules.tasks.mailbox import InboxMsg
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
 from valuz_agent.modules.tasks.plan import TaskPlan
@@ -164,9 +164,8 @@ def loop_env(db_factory, tmp_path, monkeypatch):
 
     monkeypatch.setattr(type(orch.actor), "run_turn", _scripted_turn)
     yield SimpleNamespace(orch=orch, state=state, tmp_path=tmp_path, db_factory=db_factory)
-
-    for sid in [LEAD, *state.members]:
-        mailbox_registry.unregister(sid)
+    # No teardown: each test gets its own tmp database, and there is no longer
+    # a process-wide queue registry to unwind.
 
 
 def _plan(db_factory) -> TaskPlan:
@@ -315,8 +314,8 @@ def test_dispatch_report_review_finish_through_the_real_loop(loop_env) -> None:
     # is what made a stale teardown able to pop the box a resumed loop was
     # reading. What must be true is that both loops left cleanly: nothing
     # queued, and neither still holds the right to run its session.
-    assert not mailbox_registry.has_pending("mem-1")
-    assert not mailbox_registry.has_pending(LEAD)
+    assert not asyncio.run(mailbox_store.has_pending("mem-1"))
+    assert not asyncio.run(mailbox_store.has_pending(LEAD))
     # Only the LEAD's lease is asserted: this test awaits the lead loop, and
     # the member's teardown finishes on its own schedule — asserting its
     # release here would be a race, not a guarantee.

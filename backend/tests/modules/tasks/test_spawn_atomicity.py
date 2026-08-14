@@ -26,12 +26,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 
-from valuz_agent.modules.tasks import launcher
+from valuz_agent.modules.tasks import launcher, mailbox_store
 from valuz_agent.modules.tasks.actor_runner import ActorRunner
 from valuz_agent.modules.tasks.coordination import CoordinationService
 from valuz_agent.modules.tasks.dispatcher import DispatcherService
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
-from valuz_agent.modules.tasks.mailbox import MailboxRegistry, mailbox_registry
 
 LOCAL_USER_ID = "local-test-owner"
 
@@ -75,7 +74,7 @@ def test_live_member_registry_is_entirely_synchronous() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_shutdown_reaches_a_member_spawned_concurrently() -> None:
+async def test_shutdown_reaches_a_member_spawned_concurrently(db_factory) -> None:
     """A member spawned while a shutdown broadcast is in flight still gets it.
 
     Both operations run as concurrent tasks against the same registry. Because
@@ -130,43 +129,39 @@ async def test_shutdown_reaches_a_member_spawned_concurrently() -> None:
         #
         # Whether the member then STOPS is no longer this function's business:
         # it reads its own parked run row, from whichever process runs it.
-        assert not mailbox_registry.has_pending(member), (
+        assert not await mailbox_store.has_pending(member), (
             "halting a task must queue nothing — a stop that travels as a "
             "message only reaches members that share this process"
         )
     finally:
         for sid in (lead, member):
-            mailbox_registry.unregister(sid)
+            pass
         for t in [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]:
             t.cancel()
 
 
-async def test_stop_tracking_drains_every_member_exactly_once() -> None:
+async def test_stop_tracking_drains_every_member_exactly_once(db_factory) -> None:
     """The drain is a single pop, and a second halt is a no-op.
 
     ``stop_task`` then ``finish_task`` both run it, so the second must find
-    nothing rather than act twice. When each pop also queued a message, that
+    nothing rather than act twice. When each pop also queued a message that
     mattered for delivery; now it matters because a half-mutated set would let
     a member be dropped from tracking while another was still being added.
     """
     registry = LiveMemberRegistry()
     coordination = CoordinationService(registry=registry)
-    boxes = MailboxRegistry()
 
     members = [f"m{i}" for i in range(4)]
     for m in members:
         registry.add_member("t1", m)
-        boxes.register(m)
-        mailbox_registry.register(m)
-    try:
-        coordination.stop_tracking_members("t1")
-        assert not registry.has_live_members("t1"), "every member popped in one go"
-        assert not any(mailbox_registry.has_pending(m) for m in members), (
-            "and nothing queued for any of them"
+
+    coordination.stop_tracking_members("t1")
+    assert not registry.has_live_members("t1"), "every member popped in one go"
+    for m in members:
+        assert not await mailbox_store.has_pending(m), (
+            "halting a task queues nothing — a stop that travels as a message "
+            "only reaches members sharing this process"
         )
 
-        coordination.stop_tracking_members("t1")  # second halt — nothing to do
-        assert not registry.has_live_members("t1")
-    finally:
-        for m in members:
-            mailbox_registry.unregister(m)
+    coordination.stop_tracking_members("t1")  # second halt — nothing to do
+    assert not registry.has_live_members("t1")

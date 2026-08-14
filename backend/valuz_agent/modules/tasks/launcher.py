@@ -28,7 +28,6 @@ from valuz_agent.modules.sessions import project_index
 from valuz_agent.modules.tasks.actor_runner import ActorRunner
 from valuz_agent.modules.tasks.lease import ActorLease
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
-from valuz_agent.modules.tasks.mailbox import mailbox_registry
 from valuz_agent.ports.sandbox_allocator import SandboxScope
 
 logger = logging.getLogger(__name__)
@@ -87,8 +86,6 @@ def spawn_actor(
     again would bump the fence and evict the very caller that spawned it.
     Everyone else passes None and the loop acquires for itself.
     """
-    if lead_session_id:
-        mailbox_registry.register(lead_session_id)
     if registry is not None:
         if dispatch_epoch is not None:
             registry.add_member(task_id, session_id, dispatch_epoch=dispatch_epoch)
@@ -100,7 +97,6 @@ def spawn_actor(
     # the box recovery was about to seed. Ownership is the execution lease's
     # job now, and nothing releases a box on the way out, so registering is
     # all that is left to do.
-    mailbox_registry.register(session_id)
     loop_task = asyncio.create_task(
         actor.run_actor_loop(
             session_id=session_id,

@@ -33,10 +33,12 @@ from valuz_agent.modules.tasks.actor_runner import (
     ActorRunner,
     _resolve_turn_status,
 )
-from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
+from valuz_agent.modules.tasks.mailbox import InboxMsg
 from valuz_agent.modules.tasks.member_state import classify_member
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
+
+from .conftest import deliver_async
 
 LOCAL_USER_ID = "local-test-owner"
 
@@ -162,8 +164,7 @@ async def test_lead_loop_member_done_cancelled_skips_mark_in_review(
     orch.finalization.finalize_actor = fake_finalize  # type: ignore[method-assign]
     monkeypatch.setattr(planning, "mark_in_review", fake_mark)
 
-    mailbox_registry.register("lead-int-1")
-    mailbox_registry.put(
+    await deliver_async(
         "lead-int-1",
         InboxMsg(
             kind="member_done",
@@ -171,11 +172,10 @@ async def test_lead_loop_member_done_cancelled_skips_mark_in_review(
             payload={"status": "cancelled", "summary": "用户中断了该子任务"},
         ),
     )
-    mailbox_registry.put(
+    await deliver_async(
         "lead-int-1",
         InboxMsg(kind="member_done", from_session="mem-ok", payload={"status": "idle"}),
     )
-    mailbox_registry.put("lead-int-1", InboxMsg(kind="shutdown"))
 
     await asyncio.wait_for(
         orch.actor.run_actor_loop(
@@ -294,7 +294,6 @@ async def test_finalize_interrupted_member_records_user_stop(
     _seed_interrupted_member(db_factory, run_status="active", node_status="in_progress")
 
     orch = TaskOrchestrator()
-    mailbox_registry.register("lead-1")
     try:
         await orch.finalization._finalize_interrupted_member(
             session_id="mem-1", task_id="t1", project_id="w1", user_id=LOCAL_USER_ID
@@ -318,7 +317,7 @@ async def test_finalize_interrupted_member_records_user_stop(
         assert msg.kind == "member_done"
         assert msg.payload is not None and msg.payload["status"] == "cancelled"
     finally:
-        mailbox_registry.unregister("lead-1")
+        pass
 
 
 @pytest.mark.parametrize("parked", ["rejected", "paused"])
@@ -330,7 +329,6 @@ async def test_finalize_interrupted_member_skips_already_recorded_runs(
     _seed_interrupted_member(db_factory, run_status=parked, node_status="paused")
 
     orch = TaskOrchestrator()
-    mailbox_registry.register("lead-1")
     try:
         await orch.finalization._finalize_interrupted_member(
             session_id="mem-1", task_id="t1", project_id="w1", user_id=LOCAL_USER_ID
@@ -339,10 +337,11 @@ async def test_finalize_interrupted_member_skips_already_recorded_runs(
         assert run_status == parked, "the parked outcome must survive untouched"
         assert node["status"] == "paused"
         assert events == []
-        with pytest.raises(asyncio.TimeoutError):
-            await mailbox_registry.get("lead-1", timeout=0.05)
+        assert await mailbox_store.drain("lead-1") == [], (
+            "an already-parked run must not tell the lead a second time"
+        )
     finally:
-        mailbox_registry.unregister("lead-1")
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +421,6 @@ async def test_await_timeout_reports_running_member_liveness(
 
     orch = TaskOrchestrator()
     lead = "lead-live-1"
-    mailbox_registry.register(lead)
     try:
         res = await orch.coordination.await_member_results(
             lead_session_id=lead,
@@ -439,7 +437,7 @@ async def test_await_timeout_reports_running_member_liveness(
         assert status["B"]["state"] == "running"
         assert "ALIVE" in res["hint"]
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
 
 async def test_await_breaks_early_when_all_pending_awaiting_user(
@@ -462,7 +460,6 @@ async def test_await_breaks_early_when_all_pending_awaiting_user(
 
     orch = TaskOrchestrator()
     lead = "lead-ask-1"
-    mailbox_registry.register(lead)
     try:
         loop = asyncio.get_running_loop()
         start = loop.time()
@@ -487,7 +484,7 @@ async def test_await_breaks_early_when_all_pending_awaiting_user(
         assert "deploy" in entry["question"]
         assert "decision inbox" in res["hint"]
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
 
 # ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ def _retained(n: InProcessNotifier) -> int:
     process. Sum every dict it owns instead, so the invariant survives a
     rewrite of the thing it constrains.
     """
-    return sum(len(v) for v in vars(n).values() if isinstance(v, dict))
+    return sum(len(v) for v in vars(n).values() if isinstance(v, (dict, set)))
 
 
 def test_a_ring_wakes_a_waiter_early() -> None:
@@ -83,10 +83,42 @@ def test_nothing_accumulates_after_a_timeout() -> None:
     assert _retained(n) == 0, "a timed-out waiter must clean up after itself too"
 
 
-def test_a_ring_with_nobody_waiting_stores_nothing() -> None:
-    """Rings are fire-and-forget; a stored one would fire the NEXT wait instantly."""
+def test_a_ring_with_nobody_waiting_is_remembered_once() -> None:
+    """A ring that lands between a check and a park must not be lost.
+
+    The caller reads its state BEFORE it parks, so there is a gap. A ring
+    arriving in it used to vanish and the message waited out a full poll —
+    which is the delay a doorbell exists to remove. Remembering it is safe only
+    because the signal carries nothing: the cost of one spurious wake is one
+    more look at a table.
+
+    Remembered ONCE, though — it is a wake-up, not a queue.
+    """
     n = InProcessNotifier()
     asyncio.run(n.notify("s1"))
+
+    async def _two_waits() -> tuple[float, float]:
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        await n.wait("s1", timeout=5.0)
+        t1 = loop.time()
+        await n.wait("s1", timeout=0.05)
+        return t1 - t0, loop.time() - t1
+
+    first, second = asyncio.run(_two_waits())
+    assert first < 1.0, "the remembered ring must satisfy the next wait"
+    assert second >= 0.04, "and only that one — a doorbell is not a queue"
+    assert _retained(n) == 0, "nothing left behind either way"
+
+
+def test_forget_drops_a_remembered_ring() -> None:
+    """Nothing else expires it, so a session rung and never waited on would
+    keep an entry for the life of the process — the shape of the leak this
+    whole module replaced."""
+    n = InProcessNotifier()
+    asyncio.run(n.notify("s1"))
+    assert _retained(n) == 1
+    n.forget("s1")
     assert _retained(n) == 0
 
 

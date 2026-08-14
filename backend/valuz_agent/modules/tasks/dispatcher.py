@@ -12,8 +12,7 @@ credential pre-flight) lives in ``tasks/resolution.py`` — this module only
 composes the brief, persists the run rows/events and spawns the actor.
 
 CRITICAL invariant (``dispatch_async``): the sync-before-spawn block must run
-``mailbox_registry.register(lead) -> registry.add_member(...) ->
-mailbox_registry.register(member) -> asyncio.create_task(run_actor_loop)`` with
+``registry.add_member(...) -> asyncio.create_task(run_actor_loop)`` with
 NO ``await`` in between — a racing ``finish_task`` shutdown broadcast that sees
 an empty live set would otherwise drop the just-spawned member.
 """
