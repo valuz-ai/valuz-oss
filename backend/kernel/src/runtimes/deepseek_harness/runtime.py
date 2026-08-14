@@ -593,16 +593,18 @@ def _stop_reason_from_turn_end(reason: dict[str, Any] | None) -> StopReason:
 def _usage_payload(totals: dict[str, int], model: str) -> dict[str, Any]:
     """Normalize summed dsh usage to the cross-runtime flat fields.
 
-    dsh reports cached input as a subset of ``inputTokens`` and its
-    ``outputTokens`` already include reasoning (DeepSeek ``completion_tokens``
-    semantics), so: uncached input = input - cache_read; output stays as-is;
-    the reasoning bucket rides only the per-model breakdown.
+    dsh's TokenUsage convention is DISJOINT counts (llm-deepseek
+    ``mapUsage``): ``inputTokens`` is already the UNCACHED prompt portion
+    (``prompt_tokens - cached``), ``cacheReadTokens`` the cached portion, and
+    ``outputTokens`` the full ``completion_tokens`` (reasoning is a detail
+    sub-bucket). The flat fields therefore pass through unchanged — an
+    earlier subset-style ``input - cache_read`` re-subtraction here clamped
+    cached turns to input 0 / "100% hit rate" in the UI.
     """
-    cache_read = totals.get("cache_read_tokens", 0)
     flat = {
-        "input_tokens": max(0, totals.get("input_tokens", 0) - cache_read),
+        "input_tokens": totals.get("input_tokens", 0),
         "output_tokens": totals.get("output_tokens", 0),
-        "cache_read_tokens": cache_read,
+        "cache_read_tokens": totals.get("cache_read_tokens", 0),
         "cache_write_tokens": 0,
     }
     return {

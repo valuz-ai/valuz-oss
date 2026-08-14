@@ -91,8 +91,8 @@ async def test_completed_turn_maps_events_and_stop_reason(tmp_path: Path) -> Non
     assert idle.data["stop_reason"] == {"type": "end_turn"}
 
     usage = next(e for e in sink.events if e.type == "usage_update")
-    # 10 input − 3 cached = 7 uncached; output stays inclusive of reasoning.
-    assert usage.data["input_tokens"] == 7
+    # dsh counts are disjoint already: inputTokens IS the uncached portion.
+    assert usage.data["input_tokens"] == 10
     assert usage.data["output_tokens"] == 2
     assert usage.data["cache_read_tokens"] == 3
     assert "deepseek-v4-flash" in usage.data["model_usage"]

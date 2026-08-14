@@ -179,9 +179,11 @@ def extract_step_usage(event: dict[str, Any]) -> dict[str, int] | None:
     """Per-step usage from an ``assistant/message`` event's ``data.usage``.
 
     dsh reports ``{inputTokens, outputTokens, cacheReadTokens,
-    reasoningTokens}`` per committed step message; cached input is a subset of
-    ``inputTokens`` (codex-style), and ``outputTokens`` already includes
-    reasoning (DeepSeek's ``completion_tokens`` semantics).
+    reasoningTokens}`` per committed step message. The counts are DISJOINT
+    (llm-deepseek ``mapUsage``): ``inputTokens`` is the uncached prompt
+    portion only, ``cacheReadTokens`` the cached portion, and
+    ``outputTokens`` the full ``completion_tokens`` with reasoning as a
+    detail sub-bucket.
     """
     if event.get("type") != "assistant/message":
         return None
