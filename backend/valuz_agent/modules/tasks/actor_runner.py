@@ -609,6 +609,17 @@ class ActorRunner:
                     await lease.release()
                 except Exception:  # noqa: BLE001
                     logger.debug("actor loop %s: lease release failed", session_id)
+                # Drop the buffer too. Nothing did, so a long-lived process
+                # accumulated one queue per session it ever ran, forever.
+                #
+                # Gated on the SAME answer as the lease release, and that gate
+                # is the whole reason this is safe to do at all: the box is
+                # shared by every incarnation of a session, so a superseded
+                # loop dropping it on the way out would pull it from under its
+                # replacement — the race the claim token used to guard. Only
+                # the current holder cleans up.
+                mailbox_registry.unregister(session_id)
+                notifier.forget(session_id)
 
     @staticmethod
     async def _drain_durable_inbox(session_id: str) -> list[InboxMsg]:

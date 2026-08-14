@@ -852,3 +852,47 @@ def test_a_draining_loop_does_not_claim_what_it_cannot_deliver(db_factory) -> No
         "the instruction must still be pending for whoever comes up after the "
         "deploy — a claimed one is unrecoverable"
     )
+
+
+def test_a_finished_loop_reclaims_its_buffer(db_factory) -> None:
+    """Nothing dropped a box, so a long-lived process grew one per session.
+
+    Reclaiming is safe now only because the box is a local buffer with a single
+    owner — but it is still gated on the lease, because the box is shared by
+    every incarnation of a session and an ungated drop pulls it out from under
+    a replacement. That is the race the claim token used to guard.
+    """
+    calls: list[str] = []
+    asyncio.run(_drive(_runner(calls)))
+
+    assert calls == ["turn", "finalize"], "precondition: a normal, owned exit"
+    assert mailbox_registry.try_get("lead-s") is None
+    assert "lead-s" not in mailbox_registry._boxes, (
+        "a loop that owned its session to the end must take its buffer with it"
+    )
+
+
+def test_a_superseded_loop_leaves_the_replacements_buffer_alone(db_factory) -> None:
+    """The gate, stated as a consequence.
+
+    A loop that lost its lease is not the owner any more. Its buffer belongs to
+    whoever replaced it, and dropping it on the way out would strand messages
+    the replacement had already parked there.
+    """
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(lease_mod, "_HOLDER_ID", "peer-proc")
+    assert asyncio.run(acquire_actor_lease(session_id="lead-s", task_id="t1")) is not None
+    monkey.setattr(lease_mod, "_HOLDER_ID", "our-proc")
+
+    # The replacement's buffer, with something parked in it.
+    mailbox_registry.register("lead-s")
+    mailbox_registry.put("lead-s", _member_done("m1", "for the replacement"))
+
+    calls: list[str] = []
+    asyncio.run(_drive(_runner(calls)))
+    monkey.undo()
+
+    assert calls == [], "precondition: we never ran — a peer holds the session"
+    assert mailbox_registry.try_get("lead-s") is not None, (
+        "a loop that never owned the session must not take the buffer with it"
+    )
