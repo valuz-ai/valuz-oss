@@ -226,7 +226,7 @@
   width: 100%;
 }
 .demo-nav button:hover { background: var(--demo-soft); color: var(--demo-text); }
-.demo-nav button.is-active { background: var(--demo-soft); color: var(--demo-text); }
+.demo-nav button.is-active { background: var(--brand-100); color: var(--brand-700); }
 .demo-nav small { font-size: 10px; margin-left: auto; }
 
 .demo-content { min-width: 0; }

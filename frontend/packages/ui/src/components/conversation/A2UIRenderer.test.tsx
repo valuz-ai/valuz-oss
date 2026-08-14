@@ -82,7 +82,7 @@ describe("A2UIRenderer", () => {
     expect(screen.getByText("Right")).toBeTruthy();
   });
 
-  it("extracts component dataRef metadata before rendering and starts the edition host", () => {
+  it("extracts a component's named data input before rendering and starts the edition host", () => {
     let requested: unknown;
     registerGenUIDataHost(({ surfaceId, dataRefs }) => {
       requested = { surfaceId, dataRefs };
@@ -98,7 +98,7 @@ describe("A2UIRenderer", () => {
             id: "root",
             component: "TextContent",
             text: "Live",
-            dataRef: { source: "test.text", params: { id: "1" } },
+            dataRefs: { main: { source: "test.text", params: { id: "1" } } },
           }],
         },
       }),
@@ -110,8 +110,53 @@ describe("A2UIRenderer", () => {
       dataRefs: [{
         componentId: "root",
         component: "TextContent",
-        dataRef: { source: "test.text", params: { id: "1" } },
+        inputKey: "main",
+        ref: { source: "test.text", params: { id: "1" } },
       }],
+    });
+  });
+
+  it("extracts every named input from component-owned dataRefs", () => {
+    let requested: unknown;
+    registerGenUIDataHost(({ surfaceId, dataRefs }) => {
+      requested = { surfaceId, dataRefs };
+      return { stop: () => undefined };
+    });
+    const body = [
+      JSON.stringify({ version: "v0.9.1", createSurface: { surfaceId: "s", catalogId: "https://valuz.io/a2ui/catalogs/base/v1" } }),
+      JSON.stringify({
+        version: "v0.9.1",
+        updateComponents: {
+          surfaceId: "s",
+          components: [{
+            id: "company",
+            component: "CompanyResearchOverview",
+            title: "Company",
+            dataRefs: {
+              quote: { source: "finance.market.quote", params: { symbol: "US:NVDA" } },
+              documents: { source: "finance.company.docs", params: { symbol: "US:NVDA" } },
+            },
+          }],
+        },
+      }),
+    ].join("\n");
+    render(<A2UIRenderer body={body} />);
+    expect(requested).toEqual({
+      surfaceId: "s",
+      dataRefs: [
+        {
+          componentId: "company",
+          component: "CompanyResearchOverview",
+          inputKey: "quote",
+          ref: { source: "finance.market.quote", params: { symbol: "US:NVDA" } },
+        },
+        {
+          componentId: "company",
+          component: "CompanyResearchOverview",
+          inputKey: "documents",
+          ref: { source: "finance.company.docs", params: { symbol: "US:NVDA" } },
+        },
+      ],
     });
   });
 

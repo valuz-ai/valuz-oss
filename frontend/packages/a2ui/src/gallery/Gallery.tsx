@@ -38,6 +38,8 @@ import "./gallery.css";
 const DEFAULT_CATEGORY: GalleryCategoryId = "layout";
 const BASE_KEY_PREFIX = "base/";
 const EXTENSION_KEY_PREFIX = "extension/";
+const EMBEDDED_SELECTION_STATE_KEY = "__valuzA2uiGallerySelection";
+const EMBEDDED_SCROLL_STATE_KEY = "__valuzA2uiGalleryScroll";
 
 interface A2UIGalleryProps {
   /** Fill an AppShell content region instead of owning the browser viewport. */
@@ -196,6 +198,40 @@ function keyFromHash(): string {
   return baseKey(DEFAULT_CATEGORY);
 }
 
+function embeddedKeyFromHistory(): string {
+  if (typeof window === "undefined") return baseKey(DEFAULT_CATEGORY);
+  const candidate = window.history.state?.[EMBEDDED_SELECTION_STATE_KEY];
+  return typeof candidate === "string" && (
+    candidate.startsWith(BASE_KEY_PREFIX) ||
+    candidate.startsWith(EXTENSION_KEY_PREFIX)
+  )
+    ? candidate
+    : baseKey(DEFAULT_CATEGORY);
+}
+
+function embeddedScrollFromHistory(key: string): number {
+  if (typeof window === "undefined") return 0;
+  const positions = window.history.state?.[EMBEDDED_SCROLL_STATE_KEY];
+  const value = positions && typeof positions === "object"
+    ? (positions as Record<string, unknown>)[key]
+    : undefined;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : 0;
+}
+
+function rememberEmbeddedScroll(key: string, top: number): void {
+  const state = window.history.state ?? {};
+  const previous = state[EMBEDDED_SCROLL_STATE_KEY];
+  const positions = previous && typeof previous === "object"
+    ? previous as Record<string, unknown>
+    : {};
+  window.history.replaceState({
+    ...state,
+    [EMBEDDED_SCROLL_STATE_KEY]: { ...positions, [key]: top },
+  }, "");
+}
+
 function propNames(name: string): string[] {
   const api = API_BY_NAME.get(name);
   const shape = api?.schema.shape;
@@ -299,9 +335,17 @@ export function A2UIGallery({ embedded = false }: A2UIGalleryProps) {
   const [theme, setTheme] = useState<A2UIGalleryTheme>("light");
   const [narrow, setNarrow] = useState(false);
   const [query, setQuery] = useState("");
-  const [selectedKey, setSelectedKey] = useState(keyFromHash);
+  // Embedded Gallery lives inside the host application's router. Its category
+  // selection is entry-local UI state and must not replace the host route
+  // hash. Keeping it in history state restores the same category after a
+  // component opens a routed document and the user closes it again.
+  const [selectedKey, setSelectedKey] = useState(() => (
+    embedded ? embeddedKeyFromHistory() : keyFromHash()
+  ));
   const contentRef = useRef<HTMLElement>(null);
-  const menuScrollPositions = useRef(new Map<string, number>());
+  const menuScrollPositions = useRef(new Map<string, number>([
+    [selectedKey, embedded ? embeddedScrollFromHistory(selectedKey) : 0],
+  ]));
   const restoringMenuScroll = useRef(false);
   const normalizedQuery = query.trim().toLowerCase();
 
@@ -310,8 +354,10 @@ export function A2UIGallery({ embedded = false }: A2UIGalleryProps) {
   }, [embedded]);
 
   const rememberCurrentMenuScroll = useCallback((): void => {
-    menuScrollPositions.current.set(selectedKey, currentScrollTop());
-  }, [currentScrollTop, selectedKey]);
+    const top = currentScrollTop();
+    menuScrollPositions.current.set(selectedKey, top);
+    if (embedded) rememberEmbeddedScroll(selectedKey, top);
+  }, [currentScrollTop, embedded, selectedKey]);
 
   const changeSelectedKey = useCallback((nextKey: string): void => {
     if (nextKey === selectedKey) return;
@@ -321,10 +367,11 @@ export function A2UIGallery({ embedded = false }: A2UIGalleryProps) {
   }, [rememberCurrentMenuScroll, selectedKey]);
 
   useEffect(() => {
+    if (embedded) return;
     const handleHashChange = () => changeSelectedKey(keyFromHash());
     window.addEventListener("hashchange", handleHashChange);
     return () => window.removeEventListener("hashchange", handleHashChange);
-  }, [changeSelectedKey]);
+  }, [changeSelectedKey, embedded]);
 
   useLayoutEffect(() => {
     const top = menuScrollPositions.current.get(selectedKey) ?? 0;
@@ -341,6 +388,23 @@ export function A2UIGallery({ embedded = false }: A2UIGalleryProps) {
       restoringMenuScroll.current = false;
     });
     return () => window.cancelAnimationFrame(frame);
+  }, [embedded, selectedKey]);
+
+  useEffect(() => {
+    if (!embedded) return;
+    const content = contentRef.current;
+    if (!content) return;
+    // Layout refs may already be cleared by the time route unmount cleanup
+    // runs. Capture the viewport before an internal link starts navigation.
+    const rememberBeforeNavigation = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element) || !target.closest("a[href]")) return;
+      const top = content.scrollTop;
+      menuScrollPositions.current.set(selectedKey, top);
+      rememberEmbeddedScroll(selectedKey, top);
+    };
+    content.addEventListener("click", rememberBeforeNavigation, true);
+    return () => content.removeEventListener("click", rememberBeforeNavigation, true);
   }, [embedded, selectedKey]);
 
   useEffect(() => {
@@ -411,7 +475,17 @@ export function A2UIGallery({ embedded = false }: A2UIGalleryProps) {
   function select(nextKey: string, hash: string) {
     changeSelectedKey(nextKey);
     setQuery("");
-    window.history.replaceState(null, "", `#${encodeURI(hash)}`);
+    if (embedded) {
+      window.history.replaceState(
+        {
+          ...(window.history.state ?? {}),
+          [EMBEDDED_SELECTION_STATE_KEY]: nextKey,
+        },
+        "",
+      );
+    } else {
+      window.history.replaceState(null, "", `#${encodeURI(hash)}`);
+    }
   }
 
   const ExtensionView = selectedExtension?.section.View ?? null;
@@ -529,10 +603,9 @@ export function A2UIGallery({ embedded = false }: A2UIGalleryProps) {
             className="demo-content"
             onScroll={(event) => {
               if (!restoringMenuScroll.current) {
-                menuScrollPositions.current.set(
-                  selectedKey,
-                  event.currentTarget.scrollTop,
-                );
+                const top = event.currentTarget.scrollTop;
+                menuScrollPositions.current.set(selectedKey, top);
+                if (embedded) rememberEmbeddedScroll(selectedKey, top);
               }
             }}
             ref={contentRef}

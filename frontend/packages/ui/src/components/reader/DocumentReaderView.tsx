@@ -10,6 +10,7 @@ import {
   BookOpen,
   Download,
   ExternalLink,
+  Globe,
   Loader2,
   PanelRightClose,
   PanelRightOpen,
@@ -26,6 +27,12 @@ import type {
   ArtifactDescriptor,
   ArtifactPreviewKind,
 } from "../artifacts/artifact-viewer.types";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "../ui/tooltip";
 import { ChunksRenderer } from "./ChunksRenderer";
 import { HtmlDocumentRenderer } from "./HtmlDocumentRenderer";
 import { PdfDocumentRenderer } from "./PdfDocumentRenderer";
@@ -224,7 +231,45 @@ export function DocumentReaderView({
       );
     }
     if (doc.render.kind === "chunks") {
-      return <ChunksRenderer chunks={doc.render.chunks} location={location} />;
+      return (
+        <>
+          <ChunksRenderer chunks={doc.render.chunks} location={location} />
+          {doc.originalUrl ? (
+            <div className="mx-auto w-full max-w-[760px] px-8 pb-8">
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <a
+                      href={doc.originalUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="group inline-flex items-center gap-1.5 text-sm font-medium text-primary no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                    >
+                      <Globe
+                        className="-ml-px h-3.5 w-3.5 shrink-0"
+                        aria-hidden="true"
+                      />
+                      <span className="border-b border-dotted border-transparent leading-5 group-hover:border-current group-focus-visible:border-current">
+                        {t("ui.reader.originalLink" as Parameters<typeof t>[0])}
+                      </span>
+                    </a>
+                  </TooltipTrigger>
+                  <TooltipContent
+                    data-original-link-tooltip
+                    side="bottom"
+                    align="start"
+                    alignOffset={0}
+                    sideOffset={6}
+                    className="w-[min(360px,calc(100vw-32px))] rounded-lg border border-surface-border bg-surface px-3 py-2.5 text-left text-xs font-normal text-ink-body shadow-xl [overflow-wrap:anywhere]"
+                  >
+                    {doc.originalUrl}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+          ) : null}
+        </>
+      );
     }
     if (doc.render.kind === "html") {
       return (

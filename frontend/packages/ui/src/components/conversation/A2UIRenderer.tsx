@@ -79,17 +79,18 @@ function collectComponentDataRefs(body: string): Map<string, GenUIComponentDataR
     if (!isRecord(update) || typeof update.surfaceId !== "string" || !Array.isArray(update.components)) continue;
     const existing = bySurface.get(update.surfaceId) ?? new Map<string, GenUIComponentDataRef>();
     for (const raw of update.components) {
-      if (
-        !isRecord(raw) ||
-        typeof raw.id !== "string" ||
-        typeof raw.component !== "string" ||
-        !("dataRef" in raw)
-      ) continue;
-      existing.set(raw.id, {
-        componentId: raw.id,
-        component: raw.component,
-        dataRef: raw.dataRef,
-      });
+      if (!isRecord(raw) || typeof raw.id !== "string" || typeof raw.component !== "string") continue;
+      if (isRecord(raw.dataRefs)) {
+        for (const [inputKey, ref] of Object.entries(raw.dataRefs)) {
+          if (!inputKey) continue;
+          existing.set(`${raw.id}:${inputKey}`, {
+            componentId: raw.id,
+            component: raw.component,
+            inputKey,
+            ref,
+          });
+        }
+      }
     }
     if (existing.size) bySurface.set(update.surfaceId, existing);
   }
@@ -98,15 +99,15 @@ function collectComponentDataRefs(body: string): Map<string, GenUIComponentDataR
   );
 }
 
-/** `dataRef` belongs to the Renderer/Host contract, not the visual component
- * schema. Remove it before validating or processing component props. */
+/** Data refs belong to the Renderer/Host contract, not the visual component
+ * schema. Remove them before validating or processing component props. */
 function withoutComponentDataRefs(messages: A2UIMessage[]): A2UIMessage[] {
   return messages.map((message) => {
     const update = message.updateComponents;
     if (!isRecord(update) || !Array.isArray(update.components)) return message;
     const components = update.components.map((raw) => {
-      if (!isRecord(raw) || !("dataRef" in raw)) return raw;
-      const { dataRef: _dataRef, ...component } = raw;
+      if (!isRecord(raw) || !("dataRefs" in raw)) return raw;
+      const { dataRefs: _dataRefs, ...component } = raw;
       return component;
     });
     return { ...message, updateComponents: { ...update, components } };

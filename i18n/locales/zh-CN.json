@@ -1179,6 +1179,11 @@
     }
   },
   "settings": {
+    "group": {
+      "personal": "个人设置",
+      "runtime": "运行工具",
+      "system": "系统"
+    },
     "browser": {
       "statusLabel": "浏览器",
       "connected": "已连接",
@@ -1711,7 +1716,7 @@
         "label": "连接器"
       },
       "model": {
-        "desc": "LLM 服务商与 Key",
+        "desc": "模型服务商、运行时与默认配置",
         "label": "模型"
       },
       "parsing": {
@@ -1719,7 +1724,7 @@
         "label": "文档解析"
       },
       "general": {
-        "desc": "外观、快捷键",
+        "desc": "主题、字号、语言与快捷键",
         "label": "通用"
       },
       "memory": {
@@ -1727,7 +1732,7 @@
         "label": "记忆"
       },
       "personalization": {
-        "desc": "引用、核查与记忆",
+        "desc": "对话偏好、引用核查与记忆",
         "label": "个性化"
       },
       "browser": {
@@ -2274,6 +2279,7 @@
       "loadingPdf": "正在加载 PDF",
       "nextPage": "下一页",
       "openOriginal": "打开原文",
+      "originalLink": "原文链接",
       "pageNumber": "页码",
       "pdfFallback": "PDF.js 加载失败，已降级为仅定位页码的预览。",
       "pdfPageText": "第 {page} 页文本",

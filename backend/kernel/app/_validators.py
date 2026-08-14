@@ -84,6 +84,7 @@ def validate_mcp_servers(servers: list[McpServerConfigSchema]) -> list[McpServer
                     url=cfg.url,
                     transport=cfg.transport,
                     headers=dict(cfg.headers),
+                    tool_timeout_sec=cfg.tool_timeout_sec,
                 )
             )
     return out

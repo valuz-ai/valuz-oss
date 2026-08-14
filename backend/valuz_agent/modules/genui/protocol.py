@@ -159,18 +159,18 @@ or "apply after confirmation" as instructions to the host, never as content to
 render. Do not add a preview banner or tell the user how to save inside the
 surface.
 
-Bound component data is planned and completed by generate_ui. When the prompt
-lists a planned bound component, create exactly one matching component instance
+Query component data is planned and completed by generate_ui. When the prompt
+lists a planned query component, create exactly one matching component instance
 for each listed item and give it a stable unique id. Do not inline current
 market/document values into its registered data-bearing properties. Do not
-author source ids, API URLs, dataRef metadata, refresh settings, data slots, or
+author source ids, API URLs, dataRefs metadata, refresh settings, data slots, or
 binding paths: those are reserved host metadata that the tool adds after this
-compiler returns. A component not listed in the bound plan receives its
+compiler returns. A component not listed in the query plan receives its
 catalog-typed inline props. Those values are fixed in this Artifact revision
 and do not refresh; they may be research narrative, a controlled calculation,
 or an explicitly frozen snapshot.
 
-When editing a current document, preserve existing component dataRef metadata
+When editing a current document, preserve existing component dataRefs metadata
 and property bindings on components the request does not change. Never create
 surface-global /refs data-model entries. Do not append an empty root data-model
 update after writing /data/* values because path "/" replaces the entire data
@@ -372,7 +372,12 @@ def _parse_param_specs(params_doc: str) -> tuple[tuple[str, ...], dict[str, dict
 
 
 def registered_component_data_contracts() -> dict[str, dict[str, Any]]:
-    """Fixed component → source contracts from generated edition notes."""
+    """Fixed component → named-input contracts from generated edition notes.
+
+    A component may combine several sources. The edition owns every input's
+    source, shape, bindings and parameter projection; the Agent still supplies
+    one component-level business-parameter object.
+    """
 
     notes = edition_catalog_text(include_notes_without_entries=True)
     contracts: dict[str, dict[str, Any]] = {}
@@ -387,26 +392,58 @@ def registered_component_data_contracts() -> dict[str, dict[str, Any]]:
         if not isinstance(payload, dict):
             continue
         component = str(payload.get("component") or "").strip()
-        source = str(payload.get("source") or "").strip()
         params_doc = str(payload.get("params") or "{}").strip()
-        bindings = tuple(
-            str(value)
-            for value in (payload.get("bindings") or ())
-            if isinstance(value, str) and value
-        )
-        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", component) or not source or not bindings:
+        raw_inputs = payload.get("inputs")
+        if not isinstance(raw_inputs, list):
+            continue
+        inputs: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        for raw_input in raw_inputs:
+            if not isinstance(raw_input, dict):
+                continue
+            key = str(raw_input.get("key") or "").strip()
+            source = str(raw_input.get("source") or "").strip()
+            raw_bindings = raw_input.get("bindings")
+            bindings = (
+                {
+                    str(prop): str(field)
+                    for prop, field in raw_bindings.items()
+                    if isinstance(prop, str) and prop and isinstance(field, str) and field
+                }
+                if isinstance(raw_bindings, dict)
+                else {}
+            )
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", key) or key in seen_keys:
+                continue
+            if not source or not bindings:
+                continue
+            seen_keys.add(key)
+            fixed_params = raw_input.get("fixedParams")
+            param_map = raw_input.get("paramMap")
+            inputs.append({
+                "key": key,
+                "source": source,
+                "shape": str(raw_input.get("shape") or "").strip(),
+                "bindings": bindings,
+                "fixed_params": dict(fixed_params) if isinstance(fixed_params, dict) else {},
+                "param_map": {
+                    str(source_name): str(component_name)
+                    for source_name, component_name in param_map.items()
+                    if isinstance(source_name, str) and source_name
+                    and isinstance(component_name, str) and component_name
+                } if isinstance(param_map, dict) else {},
+                "refresh_interval": raw_input.get("refreshInterval"),
+            })
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", component) or not inputs:
             continue
         required, param_specs = _parse_param_specs(params_doc)
         fixed_props = payload.get("fixedProps")
         contracts[component] = {
             "component": component,
-            "source": source,
             "required_params": required,
             "param_specs": param_specs,
-            "shape": str(payload.get("shape") or "").strip(),
-            "bindings": bindings,
+            "inputs": tuple(inputs),
             "fixed_props": dict(fixed_props) if isinstance(fixed_props, dict) else {},
-            "refresh_interval": payload.get("refreshInterval"),
         }
     return contracts
 
@@ -429,12 +466,15 @@ def registered_component_data_tool_guide() -> str:
     if not lines:
         return ""
     return (
-        "\nRegistered bound components (pass only exact business params; all other "
+        "\nRegistered query components (one component may combine several fixed named "
+        "data inputs; pass only exact component-level business params; all other "
         "catalog components use typed revision-fixed inline props):\n"
         + "\n".join(lines)
         + '\nUse component_data entries shaped as {"component":"Name","params":{...}}. '
         'On a Host that provides a param, write its value as {"$host":"param"}. '
-        "Do not pass source ids, slots, shapes, refresh settings, paths, or URLs."
+        "The registry projects those params into every required input and loads them "
+        "in parallel. Do not pass source ids, input keys, slots, shapes, refresh "
+        "settings, paths, or URLs."
     )
 
 
@@ -578,7 +618,8 @@ def build_a2ui_prompt(
                 "",
                 "EDIT CONTRACT:",
                 "Return a complete replacement A2UI document, not a patch. Preserve every current "
-                "component, component dataRef metadata, data binding, and layout choice that the request does not change. "
+                "component, component dataRefs metadata, data binding, and layout choice "
+                "that the request does not change. "
                 "Apply the requested change to this document; replace the whole page only when the "
                 "request explicitly asks for a replacement.",
             ]
@@ -605,7 +646,13 @@ def build_a2ui_prompt(
                 {
                     "component": raw.get("component"),
                     "params": raw.get("params") or {},
-                    "bindings": list(raw.get("bindings") or ()),
+                    "inputs": [
+                        {
+                            "key": input_contract.get("key"),
+                            "bindings": dict(input_contract.get("bindings") or {}),
+                        }
+                        for input_contract in (raw.get("inputs") or ())
+                    ],
                     **(
                         {"fixedProps": raw.get("fixed_props")}
                         if raw.get("fixed_props")
@@ -616,11 +663,12 @@ def build_a2ui_prompt(
         parts.extend(
             [
                 "",
-                "PLANNED BOUND COMPONENTS (create one matching component per item; "
+                "PLANNED QUERY COMPONENTS (create one matching component per item; "
                 "do not query or inline their current values):",
                 json.dumps(compiler_plan, ensure_ascii=False),
-                "generate_ui will add the component-owned dataRef, fixed source, "
-                "refresh policy, and /data/<componentId> bindings after compilation. "
+                "generate_ui will add the component-owned named dataRefs, fixed "
+                "sources, refresh policies, and /data/<componentId>/<inputKey> "
+                "bindings after compilation. "
                 "Do not author any of those fields yourself.",
             ]
         )
@@ -628,7 +676,7 @@ def build_a2ui_prompt(
         parts.append("")
         parts.append(
             "EXISTING RESEARCH DATA (use as narrative/frozen content; never treat "
-            "it as a replacement for a registered live component):"
+            "it as a replacement for a registered query component):"
         )
         parts.append(json.dumps(data, ensure_ascii=False))
     return "\n".join(parts)

@@ -60,6 +60,23 @@ async def test_should_treat_authorization_case_insensitively() -> None:
     assert headers == {"authorization": "Bearer sk-123"}
 
 
+async def test_reportify_connectors_should_use_shared_600_second_timeout() -> None:
+    for module in ("search", "stock", "following"):
+        row = _FakeRow(url=f"https://mcp.reportify.cn/{module}/mcp")
+
+        cfgs = await _build_http_config(row, None)  # type: ignore[arg-type]
+
+        assert cfgs is not None and len(cfgs) == 1
+        assert cfgs[0].tool_timeout_sec == 600.0
+
+
+async def test_non_reportify_connector_should_keep_runtime_default_timeout() -> None:
+    cfgs = await _build_http_config(_FakeRow(), None)  # type: ignore[arg-type]
+
+    assert cfgs is not None and len(cfgs) == 1
+    assert cfgs[0].tool_timeout_sec is None
+
+
 async def test_oauth_token_refresh_goes_through_extension_port() -> None:
     calls: list[dict[str, object]] = []
 

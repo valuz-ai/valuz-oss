@@ -597,7 +597,7 @@ def test_tool_def_advertises_registered_component_contracts(monkeypatch):
     monkeypatch.setattr(
         t,
         "registered_component_data_tool_guide",
-        lambda: "\nRegistered live components:\n- TimeSeriesChart {symbols}",
+        lambda: "\nRegistered query components:\n- TimeSeriesChart {symbols}",
     )
 
     description = build_generative_ui_tool_defs()[0].description
@@ -681,13 +681,18 @@ async def test_handler_passes_validated_choices_to_the_compiler(monkeypatch, pat
         lambda: {
             "QuoteStrip": {
                 "component": "QuoteStrip",
-                "source": "finance.market.quote",
                 "required_params": ("symbol",),
                 "param_specs": {"symbol": {"kind": "string"}},
-                "shape": "FinanceMetricData",
-                "bindings": ("metrics",),
+                "inputs": ({
+                    "key": "main",
+                    "source": "finance.market.quote",
+                    "shape": "FinanceMetricData",
+                    "bindings": {"metrics": "metrics"},
+                    "fixed_params": {},
+                    "param_map": {},
+                    "refresh_interval": 60,
+                },),
                 "fixed_props": {},
-                "refresh_interval": 60,
             }
         },
     )
@@ -723,7 +728,7 @@ async def test_handler_passes_validated_choices_to_the_compiler(monkeypatch, pat
     )
 
     assert result.is_error is False
-    assert "PLANNED BOUND COMPONENTS" in seen["prompt"]
+    assert "PLANNED QUERY COMPONENTS" in seen["prompt"]
     assert '"component": "QuoteStrip"' in seen["prompt"]
     assert "finance.market.quote" not in seen["prompt"]
 
@@ -745,10 +750,15 @@ async def test_handler_rejects_missing_registered_source_params(monkeypatch, pat
         lambda: {
             "QuoteStrip": {
                 "component": "QuoteStrip",
-                "source": "finance.macro.commodities",
                 "required_params": ("commodity",),
                 "param_specs": {"commodity": {"kind": "string"}},
-                "bindings": ("metrics",),
+                "inputs": ({
+                    "key": "main",
+                    "source": "finance.macro.commodities",
+                    "bindings": {"metrics": "metrics"},
+                    "fixed_params": {},
+                    "param_map": {},
+                },),
             }
         },
     )
@@ -774,19 +784,28 @@ def _component_contracts():
     return {
         "QuoteStrip": {
             "component": "QuoteStrip",
-            "source": "finance.market.quote",
             "required_params": ("symbol",),
             "param_specs": {
                 "symbol": {"kind": "string", "description": "prefixed symbol"}
             },
-            "shape": "FinanceMetricData",
-            "bindings": ("metrics", "source", "asOf", "basis"),
+            "inputs": ({
+                "key": "main",
+                "source": "finance.market.quote",
+                "shape": "FinanceMetricData",
+                "bindings": {
+                    "metrics": "metrics",
+                    "source": "source",
+                    "asOf": "asOf",
+                    "basis": "basis",
+                },
+                "fixed_params": {},
+                "param_map": {},
+                "refresh_interval": 60,
+            },),
             "fixed_props": {},
-            "refresh_interval": 60,
         },
         "TimeSeriesChart": {
             "component": "TimeSeriesChart",
-            "source": "finance.market.kline",
             "required_params": ("symbols",),
             "param_specs": {
                 "symbols": {
@@ -796,10 +815,53 @@ def _component_contracts():
                 "rangeDays": {"kind": "number", "minimum": 2, "maximum": 3650},
                 "normalize": {"kind": "boolean"},
             },
-            "shape": "FinanceTimeSeriesData",
-            "bindings": ("data", "series"),
+            "inputs": ({
+                "key": "main",
+                "source": "finance.market.kline",
+                "shape": "FinanceTimeSeriesData",
+                "bindings": {"data": "data", "series": "series"},
+                "fixed_params": {},
+                "param_map": {},
+                "refresh_interval": 300,
+            },),
             "fixed_props": {"xKey": "date"},
-            "refresh_interval": 300,
+        },
+        "CompanyResearchOverview": {
+            "component": "CompanyResearchOverview",
+            "required_params": ("symbol",),
+            "param_specs": {
+                "symbol": {"kind": "string", "description": "prefixed symbol"}
+            },
+            "inputs": (
+                {
+                    "key": "quote",
+                    "source": "finance.market.quote",
+                    "shape": "FinanceMetricData",
+                    "bindings": {"quoteMetrics": "metrics"},
+                    "fixed_params": {},
+                    "param_map": {"symbol": "symbol"},
+                    "refresh_interval": 30,
+                },
+                {
+                    "key": "financials",
+                    "source": "finance.financials.income",
+                    "shape": "FinanceTrendData",
+                    "bindings": {"financialItems": "items"},
+                    "fixed_params": {"metric": "revenue", "period": "annual"},
+                    "param_map": {},
+                    "refresh_interval": 300,
+                },
+                {
+                    "key": "documents",
+                    "source": "finance.company.docs",
+                    "shape": "FinanceDocumentData",
+                    "bindings": {"documentItems": "items"},
+                    "fixed_params": {},
+                    "param_map": {"symbol": "symbol"},
+                    "refresh_interval": 60,
+                },
+            ),
+            "fixed_props": {},
         },
     }
 
@@ -829,7 +891,39 @@ def test_generation_choices_add_bound_component(monkeypatch):
     )
     assert error is None
     assert components == ("RelativePerformanceChart", "TimeSeriesChart")
-    assert plans[0]["source"] == "finance.market.kline"
+    assert plans[0]["inputs"][0]["source"] == "finance.market.kline"
+    assert plans[0]["inputs"][0]["params"] == {
+        "symbols": "US:NVDA,US:AMD"
+    }
+
+
+def test_generation_choices_projects_one_business_param_into_multiple_named_inputs(monkeypatch):
+    monkeypatch.setattr(
+        t,
+        "component_names_for_scope",
+        lambda scope="all": ("Stack", "CompanyResearchOverview"),
+    )
+    _patch_component_contracts(monkeypatch)
+
+    components, plans, error = t._validate_generation_choices(
+        scope="all",
+        component_names=["CompanyResearchOverview"],
+        component_data=[{
+            "component": "CompanyResearchOverview",
+            "params": {"symbol": "US:NVDA"},
+        }],
+    )
+
+    assert error is None
+    assert components == ("CompanyResearchOverview",)
+    assert [value["key"] for value in plans[0]["inputs"]] == [
+        "quote", "financials", "documents"
+    ]
+    assert [value["params"] for value in plans[0]["inputs"]] == [
+        {"symbol": "US:NVDA"},
+        {"symbol": "US:NVDA", "metric": "revenue", "period": "annual"},
+        {"symbol": "US:NVDA"},
+    ]
 
 
 def test_generation_choices_adds_only_available_composition_glue(monkeypatch):
@@ -867,7 +961,9 @@ def test_generation_choices_normalize_and_validate_params(monkeypatch):
 
 def test_generation_choices_accept_host_refs_and_symbol_alias(monkeypatch):
     monkeypatch.setattr(
-        t, "component_names_for_scope", lambda scope="all": ("Stack", "QuoteStrip", "TimeSeriesChart")
+        t,
+        "component_names_for_scope",
+        lambda scope="all": ("Stack", "QuoteStrip", "TimeSeriesChart"),
     )
     _patch_component_contracts(monkeypatch)
     components, plans, error = t._validate_generation_choices(
@@ -893,7 +989,9 @@ def test_generation_choices_accept_host_refs_and_symbol_alias(monkeypatch):
 
 def test_generation_choices_reject_bad_host_unknown_and_range(monkeypatch):
     monkeypatch.setattr(
-        t, "component_names_for_scope", lambda scope="all": ("Stack", "QuoteStrip", "TimeSeriesChart")
+        t,
+        "component_names_for_scope",
+        lambda scope="all": ("Stack", "QuoteStrip", "TimeSeriesChart"),
     )
     _patch_component_contracts(monkeypatch)
     _, _, host_error = t._validate_generation_choices(
@@ -904,12 +1002,18 @@ def test_generation_choices_reject_bad_host_unknown_and_range(monkeypatch):
     _, _, unknown_error = t._validate_generation_choices(
         scope="all",
         component_names=["TimeSeriesChart"],
-        component_data=[{"component": "TimeSeriesChart", "params": {"symbols": "US:NVDA", "days": 90}}],
+        component_data=[{
+            "component": "TimeSeriesChart",
+            "params": {"symbols": "US:NVDA", "days": 90},
+        }],
     )
     _, _, range_error = t._validate_generation_choices(
         scope="all",
         component_names=["TimeSeriesChart"],
-        component_data=[{"component": "TimeSeriesChart", "params": {"symbols": "US:NVDA", "rangeDays": 1}}],
+        component_data=[{
+            "component": "TimeSeriesChart",
+            "params": {"symbols": "US:NVDA", "rangeDays": 1},
+        }],
     )
     assert "compatible host keys: 'symbol'" in str(host_error)
     assert "unknown param(s): days" in str(unknown_error)
@@ -959,15 +1063,18 @@ def test_compiled_document_validation_rejects_changed_planned_binding(monkeypatc
         "registered_component_data_contracts",
         lambda: {
             "TimeSeriesChart": {
-                "source": "finance.market.kline",
-                "bindings": ("data", "series"),
+                "inputs": ({
+                    "key": "main",
+                    "source": "finance.market.kline",
+                    "bindings": {"data": "data", "series": "series"},
+                },),
             }
         },
     )
     document = "\n".join(
         (
             '{"version":"v0.9.1","createSurface":{"surfaceId":"main"}}',
-            '{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":[{"id":"root","component":"Stack","children":["chart"]},{"id":"chart","component":"TimeSeriesChart","dataRef":{"source":"finance.market.daily","params":{"symbol":"US:NVDA"}},"data":{"path":"/data/chart/data"},"series":{"path":"/data/chart/series"},"xKey":"date"}]}}',
+            '{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":[{"id":"root","component":"Stack","children":["chart"]},{"id":"chart","component":"TimeSeriesChart","dataRefs":{"main":{"source":"finance.market.daily","params":{"symbol":"US:NVDA"}}},"data":{"path":"/data/chart/main/data"},"series":{"path":"/data/chart/main/series"},"xKey":"date"}]}}',
         )
     )
     error = t._compiled_document_error(
@@ -976,27 +1083,23 @@ def test_compiled_document_validation_rejects_changed_planned_binding(monkeypatc
         component_data=(
             {
                 "component": "TimeSeriesChart",
-                "source": "finance.market.kline",
                 "params": {"symbols": "US:NVDA,US:AMD"},
-                "bindings": ("data", "series"),
+                "inputs": ({
+                    "key": "main",
+                    "source": "finance.market.kline",
+                    "params": {"symbols": "US:NVDA,US:AMD"},
+                    "bindings": {"data": "data", "series": "series"},
+                },),
             },
         ),
         current_document=None,
         generation_mode="replace",
     )
 
-    assert error == "planned live component 'TimeSeriesChart' is missing its canonical dataRef"
+    assert error == "planned query component 'TimeSeriesChart' is missing its canonical dataRefs"
 
 
 def test_ensure_planned_component_data_refs_upserts_validated_plan(monkeypatch):
-    monkeypatch.setattr(
-        t,
-        "registered_component_data_contracts",
-        lambda: {
-            "QuoteStrip": {"source": "finance.market.quote"},
-            "TimeSeriesChart": {"source": "finance.market.kline"},
-        },
-    )
     monkeypatch.setattr(
         t,
         "component_property_names",
@@ -1018,19 +1121,32 @@ def test_ensure_planned_component_data_refs_upserts_validated_plan(monkeypatch):
         (
             {
                 "component": "QuoteStrip",
-                "source": "finance.market.quote",
                 "params": {"symbol": {"$host": "symbol"}},
-                "shape": "FinanceMetricData",
-                "bindings": ("metrics", "source", "asOf", "basis"),
+                "inputs": ({
+                    "key": "main",
+                    "source": "finance.market.quote",
+                    "params": {"symbol": {"$host": "symbol"}},
+                    "shape": "FinanceMetricData",
+                    "bindings": {
+                        "metrics": "metrics",
+                        "source": "source",
+                        "asOf": "asOf",
+                        "basis": "basis",
+                    },
+                },),
             },
             {
                 "component": "TimeSeriesChart",
-                "source": "finance.market.kline",
                 "params": {"symbols": {"$host": "symbol"}, "rangeDays": 90},
-                "shape": "FinanceTimeSeriesData",
-                "bindings": ("data", "series"),
+                "inputs": ({
+                    "key": "main",
+                    "source": "finance.market.kline",
+                    "params": {"symbols": {"$host": "symbol"}, "rangeDays": 90},
+                    "shape": "FinanceTimeSeriesData",
+                    "bindings": {"data": "data", "series": "series"},
+                    "refresh_interval": 300,
+                },),
                 "fixed_props": {"xKey": "date"},
-                "refresh_interval": 300,
             },
         ),
     )
@@ -1042,24 +1158,72 @@ def test_ensure_planned_component_data_refs_upserts_validated_plan(monkeypatch):
         for component in (message.get("updateComponents") or {}).get("components", ())
         if component.get("id") == "quote"
     )
-    assert quote["dataRef"] == {
-        "source": "finance.market.quote",
-        "params": {"symbol": {"$host": "symbol"}},
-        "shape": "FinanceMetricData",
+    assert quote["dataRefs"] == {
+        "main": {
+            "source": "finance.market.quote",
+            "params": {"symbol": {"$host": "symbol"}},
+            "shape": "FinanceMetricData",
+        }
     }
-    assert quote["source"] == {"path": "/data/quote/source"}
-    assert quote["asOf"] == {"path": "/data/quote/asOf"}
-    assert quote["basis"] == {"path": "/data/quote/basis"}
+    assert quote["source"] == {"path": "/data/quote/main/source"}
+    assert quote["asOf"] == {"path": "/data/quote/main/asOf"}
+    assert quote["basis"] == {"path": "/data/quote/main/basis"}
     chart = next(
         component
         for message in messages
         for component in (message.get("updateComponents") or {}).get("components", ())
         if component.get("id") == "chart"
     )
-    assert chart["dataRef"]["source"] == "finance.market.kline"
-    assert chart["dataRef"]["refresh"] == {"interval": 300}
-    assert chart["data"] == {"path": "/data/chart/data"}
+    assert chart["dataRefs"]["main"]["source"] == "finance.market.kline"
+    assert chart["dataRefs"]["main"]["refresh"] == {"interval": 300}
+    assert chart["data"] == {"path": "/data/chart/main/data"}
     assert chart["xKey"] == "date"
+
+
+def test_ensure_planned_component_data_refs_writes_every_named_input(monkeypatch):
+    monkeypatch.setattr(
+        t,
+        "component_property_names",
+        lambda name: (
+            "title", "quoteMetrics", "financialItems", "documentItems"
+        ) if name == "CompanyResearchOverview" else (),
+    )
+    document = "\n".join((
+        '{"version":"v0.9.1","createSurface":{"surfaceId":"main"}}',
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":['
+        '{"id":"company","component":"CompanyResearchOverview","title":"NVIDIA"}]}}',
+    ))
+    plan = _component_contracts()["CompanyResearchOverview"]
+    completed = t._ensure_planned_component_data_refs(
+        document,
+        ({
+            "component": "CompanyResearchOverview",
+            "params": {"symbol": "US:NVDA"},
+            "inputs": tuple({
+                **value,
+                "params": {
+                    **value["fixed_params"],
+                    **{
+                        source_name: "US:NVDA"
+                        for source_name in value["param_map"]
+                    },
+                },
+            } for value in plan["inputs"]),
+            "fixed_props": {},
+        },),
+    )
+
+    messages = [json.loads(line) for line in str(completed).splitlines()]
+    company = next(
+        component
+        for message in messages
+        for component in (message.get("updateComponents") or {}).get("components", ())
+        if component.get("id") == "company"
+    )
+    assert set(company["dataRefs"]) == {"quote", "financials", "documents"}
+    assert company["quoteMetrics"] == {"path": "/data/company/quote/metrics"}
+    assert company["financialItems"] == {"path": "/data/company/financials/items"}
+    assert company["documentItems"] == {"path": "/data/company/documents/items"}
 
 
 def test_planned_component_data_does_not_rewrite_a_different_component(monkeypatch):

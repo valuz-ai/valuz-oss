@@ -1413,6 +1413,16 @@ describe("MarkdownContent citations", () => {
     const openSource = screen.getByRole("button", {
       name: /(?:view original|查看原文)/i,
     });
+    const openSourceLabel = openSource.querySelector("span");
+    expect(openSource.classList.contains("group")).toBe(true);
+    expect(openSource.classList.contains("hover:underline")).toBe(false);
+    expect(openSourceLabel?.classList.contains("border-dotted")).toBe(true);
+    expect(openSourceLabel?.classList.contains("border-transparent")).toBe(
+      true,
+    );
+    expect(
+      openSourceLabel?.classList.contains("group-hover:border-current"),
+    ).toBe(true);
     fireEvent.blur(pill, { relatedTarget: openSource });
     fireEvent.focus(openSource);
     fireEvent.click(openSource);

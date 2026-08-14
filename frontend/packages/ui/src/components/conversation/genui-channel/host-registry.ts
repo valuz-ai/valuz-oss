@@ -3,10 +3,10 @@
  * declares component-owned data refs and *where* pushed updates go; only an
  * edition knows how to fetch a source. An edition registers one factory at
  * boot — the same moment it registers its blocks — and the renderer calls it
- * per surface that carries component `dataRef` metadata.
+ * per surface that carries component `dataRefs` metadata.
  *
  * The factory returns null to decline (no refs it recognises), or a handle
- * whose `stop()` the renderer calls on unmount. Each `dataRef` is handed over
+ * whose `stop()` the renderer calls on unmount. Each named input is handed over
  * unparsed with its owning component identity; the registry contract lives in
  * the edition and the OSS renderer has no opinion about its source grammar.
  */
@@ -18,7 +18,9 @@ export interface GenUIDataHostHandle {
 export interface GenUIComponentDataRef {
   componentId: string;
   component: string;
-  dataRef: unknown;
+  /** Developer-declared input name inside the persisted component dataRefs. */
+  inputKey: string;
+  ref: unknown;
 }
 
 export interface GenUIDataHostInput {

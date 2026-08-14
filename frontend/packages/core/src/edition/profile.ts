@@ -53,6 +53,15 @@ export interface SettingsSectionModule {
   description: string;
   /** Icon identifier — mapped to Lucide component in SettingsPage */
   icon?: string;
+  /**
+   * Optional sidebar group. Groups are rendered in first-appearance order, so
+   * an edition can add a section without changing a central settings enum.
+   * ``label`` is an i18n key, consistent with the section label/description.
+   */
+  group?: {
+    id: string;
+    label: string;
+  };
   /** Optional content component for overlay/plugin sections. Built-in tabs use dedicated rendering. */
   component?: ComponentType;
   edition: Edition;
