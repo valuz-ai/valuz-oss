@@ -7,6 +7,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-14
+
+### Added
+
+- **DeepSeek Harness (dsh) — a fourth kernel runtime** — the harness joins Claude
+  Agent, Codex Agent and Valuz Agent as a selectable runtime (#894 @jiaoqsh), and
+  its turns are traced into Langfuse like the others (#895 @jiaoqsh).
+- **Unified desktop model network egress** — an Electron-main egress manager gives
+  supported model clients the desktop's proxy/PAC routing through loopback model
+  ingress, without touching tool shells, MCP servers or browser traffic; Settings
+  offers Valuz-managed vs. model-client-managed connections with live status and
+  redacted diagnostics (#833 @zhourongyu).
+- **Session and message fork** — fork a session or an individual message across all
+  three runtimes (#871 @jiaoqsh), with pending state and duplicate-click
+  suppression on every fork entry point (#881 @jiaoqsh).
+- **Docker self-hosting stack for OSS** — run the workstation headless from
+  compose (#862 @St0neWan9).
+- **Optional Langfuse tracing for agent turns** (#834 @jiaoqsh), plus a tracing
+  extra and `.env` loading in the dev launcher (#836 @jiaoqsh).
+- **A pluggable knowledge base** — `DocsRuntimePort` is genuinely swappable
+  (#843), with a KB root resolver extension point and a knowledge-base kind
+  column (#844), pre-authorized cross-owner scope injection for `search_docs`
+  (#845), a bindable document-retrieval runtime (#851), and reindex dispatch plus
+  shared-scope contribution seams (#852 @Ready22Race).
+- **A2UI standalone theme-aware component system** (#858 @St0neWan9), normalized
+  component data contracts (#883 @St0neWan9), and a round of GenUI runtime and
+  research-reading UX refinements (#896 @St0neWan9).
+- **GenUI generation past the output-token cap** — a capped generation continues
+  and the parts are merged (#816 @St0neWan9), with A2UI generation and rendering
+  hardened overall (#870 @St0neWan9).
+- **GenUI blocks aligned with OpenUI semantics** — chart series palette tokens
+  that end multi-series colour collision (#846), bar charts, `AspectRatio` and
+  `VisualFirstCard` (#848), and surfaces, hovers and chart chrome (#853
+  @hanjixin). The A2UI renderer stack is now lazy-loaded, cutting the main bundle
+  by 43% (#850 @hanjixin).
+- **Citation & evidence** — search retrieval metadata is validated (#814), an
+  anchor-verified claim normalizer supports bounded partials (#817), and
+  substantive search summaries register as derived evidence (#819 @St0neWan9).
+- **Durable task actor delivery** — actor messages survive a process boundary
+  (#875), and a doorbell wakes parked actors while `finish_task` parks its
+  members (#884 @Ready22Race).
+- **v10 resource control seams** for runtime control (#798 @homeant).
+- **Codex for every DeepSeek model** — the per-model allowlist is retired
+  (#873 @jiaoqsh).
+- **Host extension surface** — a project add-menu slot (#864 @hanjixin),
+  conversation turn/title slots that get the scroll their mode needs (#837
+  @St0neWan9), and `session_id` threaded into `_kernel_for` so task session ids
+  reach kernel metadata (#859 @Ready22Race).
+
+### Changed
+
+- **Task coordination reworked around state instead of messages** — one lease per
+  actor, and stopping stops being a message (#878); stopping becomes a state the
+  actor reads (#882); `MailboxRegistry` is retired in favour of one message per
+  drain with no buffer (#888); member probing is split out of coordination and
+  the lead run parks on block (#889); the mailbox drain batch size is a required
+  argument (#890); and membership is a query, orphans get adopted, and the lead
+  reads its role first (#891 @Ready22Race).
+
+### Fixed
+
+- **Tasks** — a cross-process execution lease ensures exactly one process drives a
+  task (#863) and the lease renewer is hardened while draining (#865); the lead no
+  longer burns a model turn on a member it already handled (#867), "keep waiting"
+  no longer re-runs the last prompt (#868), a session you no longer drive is not
+  finalized (#872), the in-turn preempt and wait read the durable inbox and hear
+  the doorbell (#876, #885), and buffer reclamation, a stopped lead's run row and
+  a drifting deadline are corrected (#869, #886 @Ready22Race). The task detail
+  page got its scroll back (#866 @Ready22Race).
+- **Citations** — unsourced statements are marked instead of dropped (#818); a
+  half-written binding no longer flashes `[blocked]` (#821); a document chunk may
+  supersede its own provider summary (#822); unknowns are no longer reported as
+  defects (#823); collection addresses and markers stay out of the reader's way
+  (#824) and every marker lands on the statement it belongs to (#825); audit
+  coverage and post-run verification are preserved (#828); precise evidence is
+  preferred without truncation (#829); proven numeric conflicts are corrected
+  (#830); sidecars are reconciled at turn completion (#815); and evidence audit
+  and presentation improved overall (#835 @St0neWan9).
+- **GenUI** — generation `max_tokens` plus an env-tunable harness tool timeout
+  (#812), and a truncated generation's valid prefix is salvaged rather than
+  discarded (#813 @St0neWan9).
+- **Conversation** — the closing bubble carries the whole answer instead of its
+  last segment (#874 @St0neWan9), the tool-output content block is unwrapped
+  before being read (#877), the title slot receives the whole loaded transcript
+  (#854), an edition can declare where its single backend runs (#849
+  @Ready22Race), and share sits with the actions while the token readout trails
+  them (#832 @St0neWan9).
+- **Files & prompts** — a `valuz-file` ref with a surplus slash no longer resolves
+  outside its own project (#892), and the file link is taught once, correctly,
+  reverting the parser guesswork (#893 @Ready22Race).
+- The runs sidebar's project window is scoped with a `project_id` filter
+  (#831 @St0neWan9).
+- Skill discovery works again under DeepAgents `virtual_mode` (#826
+  @Ready22Race), and cloud skill discovery is isolated from the host home
+  directory (#860 @homeant).
+- The document owner is threaded into the `ASYNC_POLL` enqueue (#842
+  @Ready22Race), and edition always-on MCP servers mount under every
+  `api_prefix` (#855 @Ready22Race).
+- The renderer build gets a raised Node heap (#811 @St0neWan9), `@a2ui/react`
+  declares the React floor it actually requires (#820 @St0neWan9), and conflict
+  markers committed into `files-api.ts` are removed (#887 @Ready22Race).
+
+### Docs & Chore
+
+- The release process now requires maintainer confirmation of the version number
+  before tagging (#810 @St0neWan9).
+- GenUI block styling/interaction standards, a component template and a CSS audit
+  guard are codified (#857 @hanjixin).
+- Test coverage for the full kernel summarization offload path (#827) and the
+  docs offload guard's `doc_paths` fake (#847 @Ready22Race).
+- Regenerated i18n key types so the checked-in types match the locale files.
+
 ## [0.4.0] - 2026-08-08
 
 ### Added
