@@ -80,6 +80,17 @@ DSH_PROVIDER_ROUTE = "deepseek-official"
 STATE_DIR_ENV = "VALUZ_DSH_STATE_DIR"
 DEFAULT_STATE_DIR = "./dsh_state"
 
+# Cold-start grace before the first prompt of a process whose composition
+# mounts MCP servers. dsh registers MCP tools asynchronously after boot and
+# the SDK wire has no readiness signal, so a prompt dispatched immediately
+# after spawn assembles its tool schemas before the HTTP handshake +
+# tools/list finish — the model's first turn then simply lacks every
+# ``mcp__*`` tool (observed on the fast vendored carrier; the slower
+# source-mode tsx boot masked it). Bounded and cancellable; sessions
+# without MCP servers skip it entirely.
+MCP_READY_GRACE_ENV = "VALUZ_DSH_MCP_READY_GRACE_SEC"
+DEFAULT_MCP_READY_GRACE_SEC = 3.0
+
 # Transcript-replay caps: newest entries win, oldest are dropped first.
 _REPLAY_MAX_ENTRIES = 40
 _REPLAY_MAX_CHARS = 60_000
@@ -423,6 +434,7 @@ class DeepSeekHarnessRuntime:
         self._composition_fingerprint = _composition_fingerprint(session)
 
         env = os.environ.copy()
+        env.update(launch.env)
         env["DSH_CORDIS_CONFIG"] = self._config_path
         env["DSH_CWD"] = self.workspace_root
         if self.model_provider is not None:
@@ -444,6 +456,13 @@ class DeepSeekHarnessRuntime:
             await client.close()
             raise
         self._client = client
+        if session.mcp_servers:
+            try:
+                grace = float(os.environ.get(MCP_READY_GRACE_ENV, DEFAULT_MCP_READY_GRACE_SEC))
+            except ValueError:
+                grace = DEFAULT_MCP_READY_GRACE_SEC
+            if grace > 0:
+                await asyncio.sleep(grace)
         self._process_turns = 0
         # Fresh native session per process: the SDK server cannot rehydrate a
         # persisted id ("id collision"), so each process gets a new thread and

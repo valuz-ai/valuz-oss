@@ -129,15 +129,38 @@ in event metadata.
   (`thresholdRatio` / `retainRatio` / `maxTokens`) — derive from
   `ModelSettings.max_input_tokens` like the other three runtimes do.
 
-## Distribution question (flagged, not solved)
+## Distribution — solved: vendored npm closure
 
-The production runtime carrier is a per-platform single-file Node executable
-(~wheel-injected, macOS 14+/arm64, linux x64/arm64 — **no Windows wheel
-today**) built by `scripts/build-exe-for-python-sdk.ts`. Our desktop bundle
-would either vendor that exe per platform (like the codex binary) or run the
-node closure on our packaged Electron-as-node. Upstream is pre-release and
-PyPI publication of `deepseek-harness-sdk` is gated on their private publisher
-repo — pin a commit and build the exe in our CI until they tag.
+**Landed** (`backend/vendor/dsh-runtime/`): Valuz owns its own deploy-root
+manifest — the dsh plugin packages are published on npm (pin the coherent
+`0.1.0-rc.x` wave; the `latest` dist-tag points at a stale wave whose
+`dsh-bash-env` peer was renamed away, so never resolve by tag). Only pins +
+lockfile are committed; `npm ci` fetches the tree at build
+(`scripts/vendor-dsh-runtime.sh`), `build-desktop.sh` stages it into
+`libexec/dsh-runtime`, and the packaged app runs `packaged-bin.js` under its
+own Electron binary as plain Node (`VALUZ_DSH_RUNTIME_ENTRY` +
+`VALUZ_NODE_PATH` + `VALUZ_NODE_IS_ELECTRON=1` — the chrome-devtools-mcp
+pattern; Electron 36's embedded Node 22.19.0 exactly meets dsh's `^22.19`
+floor, watch that coupling on Electron upgrades). Because we own the
+manifest, the closure includes `dsh-mcp-client` (which the upstream
+runtime-bin closure lacks) — `packaged-bin` resolves bare plugins from its
+own installed tree, so the composition file lives in a temp dir.
+
+Launch resolution: `VALUZ_DSH_RUNTIME_BIN` (exe override) →
+`VALUZ_DSH_RUNTIME_ENTRY` (staged closure) → dev auto-detect of
+`backend/vendor/dsh-runtime` → `VALUZ_DSH_ROOT` (source checkout,
+contributor carrier).
+
+One behavior the fast carrier exposed: dsh registers MCP tools
+asynchronously with no wire readiness signal, so a prompt fired right after
+spawn assembles its schemas before `tools/list` lands — the first turn
+lacks every `mcp__*` tool. The adapter waits a bounded cold-start grace
+(`VALUZ_DSH_MCP_READY_GRACE_SEC`, default 3s, only when the session carries
+MCP servers); a wire-level readiness signal is upstream work.
+
+The upstream `deepseek-harness-runtime-bin` wheel (PyPI, macOS arm64 +
+linux x64/arm64, no mac x64 / Windows) remains a later zero-maintenance
+alternative once its closure gains `dsh-mcp-client`.
 
 ## Recommended sequence
 

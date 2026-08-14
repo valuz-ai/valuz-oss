@@ -67,7 +67,43 @@ def _runtime(
 @pytest.fixture(autouse=True)
 def _fake_mode_env(monkeypatch):
     monkeypatch.setenv("FAKE_DSH_MODE", "ok")
+    # Tests with MCP rows must not pay the cold-start readiness grace.
+    monkeypatch.setenv("VALUZ_DSH_MCP_READY_GRACE_SEC", "0")
     yield
+
+
+@pytest.mark.asyncio
+async def test_mcp_sessions_get_a_cold_start_grace(tmp_path: Path, monkeypatch) -> None:
+    """A composition with MCP rows waits for tool registration before the
+    first prompt; sessions without MCP servers skip the grace entirely."""
+    from src.core.types import McpHttpServerConfig
+
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setenv("VALUZ_DSH_MCP_READY_GRACE_SEC", "1.5")
+    monkeypatch.setattr("src.runtimes.deepseek_harness.runtime.asyncio.sleep", fake_sleep)
+    (tmp_path / "ws").mkdir()
+    sink = _CollectSink()
+    runtime = _runtime(tmp_path, sink)
+    session = _session()
+    session.mcp_servers = (McpHttpServerConfig(name="harness", url="http://x/mcp"),)
+    try:
+        await runtime.run(session, UserMessage(text="hi"))
+        assert 1.5 in slept
+        await runtime.close()
+
+        slept.clear()
+        sink2 = _CollectSink()
+        runtime2 = _runtime(tmp_path, sink2)
+        no_mcp = _session(session_id="s-no-mcp")
+        await runtime2.run(no_mcp, UserMessage(text="hi"))
+        assert 1.5 not in slept
+        await runtime2.close()
+    finally:
+        await runtime.close()
 
 
 @pytest.mark.asyncio

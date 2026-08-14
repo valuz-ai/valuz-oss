@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from src.core.agent_config import AgentConfig
 from src.core.types import (
     McpHttpServerConfig,
@@ -13,15 +14,34 @@ from src.core.types import (
     Session,
 )
 from src.runtimes.availability import probe_runtime_availability
+from src.runtimes.deepseek_harness import composition
 from src.runtimes.deepseek_harness.composition import (
     DSH_ROOT_ENV,
     DSH_RUNTIME_BIN_ENV,
+    DSH_RUNTIME_ENTRY_ENV,
+    NODE_IS_ELECTRON_ENV,
+    NODE_PATH_ENV,
     build_composition_rows,
     cleanup_composition,
     launch_unavailable_reason,
     resolve_launch,
     write_composition,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_launch_env(monkeypatch, tmp_path: Path):
+    """Neutralize every launch channel so each test opts in explicitly.
+
+    The dev checkout carries an installed vendor tree at
+    ``backend/vendor/dsh-runtime``, which would otherwise make the
+    auto-detect tier fire in every test on a provisioned machine.
+    """
+    for env in (DSH_RUNTIME_BIN_ENV, DSH_RUNTIME_ENTRY_ENV, DSH_ROOT_ENV,
+                NODE_PATH_ENV, NODE_IS_ELECTRON_ENV):
+        monkeypatch.delenv(env, raising=False)
+    monkeypatch.setattr(composition, "_VENDOR_DIR", tmp_path / "no-vendor")
+    yield
 
 
 def _session(**overrides) -> Session:
@@ -107,9 +127,7 @@ class TestCompositionRows:
 
 
 class TestLaunchResolution:
-    def test_unavailable_without_env(self, monkeypatch) -> None:
-        monkeypatch.delenv(DSH_RUNTIME_BIN_ENV, raising=False)
-        monkeypatch.delenv(DSH_ROOT_ENV, raising=False)
+    def test_unavailable_without_any_channel(self) -> None:
         assert resolve_launch() is None
         reason = launch_unavailable_reason()
         assert reason is not None and DSH_RUNTIME_BIN_ENV in reason
@@ -127,9 +145,49 @@ class TestLaunchResolution:
         assert resolve_launch() is None
         assert "not executable" in (launch_unavailable_reason() or "")
 
-    def test_availability_probe_reports_deepseek_harness(self, monkeypatch) -> None:
-        monkeypatch.delenv(DSH_RUNTIME_BIN_ENV, raising=False)
-        monkeypatch.delenv(DSH_ROOT_ENV, raising=False)
+    def test_entry_env_runs_on_node(self, monkeypatch, tmp_path: Path) -> None:
+        entry = tmp_path / "packaged-bin.js"
+        entry.write_text("// bin")
+        monkeypatch.setenv(DSH_RUNTIME_ENTRY_ENV, str(entry))
+        launch = resolve_launch()
+        assert launch is not None
+        assert launch.argv[1] == str(entry)
+        assert launch.argv[0].endswith("node")
+        assert launch.env == {}
+        assert launch_unavailable_reason() is None
+
+    def test_entry_with_electron_as_node(self, monkeypatch, tmp_path: Path) -> None:
+        entry = tmp_path / "packaged-bin.js"
+        entry.write_text("// bin")
+        electron = tmp_path / "Electron"
+        electron.write_text("bin")
+        monkeypatch.setenv(DSH_RUNTIME_ENTRY_ENV, str(entry))
+        monkeypatch.setenv(NODE_PATH_ENV, str(electron))
+        monkeypatch.setenv(NODE_IS_ELECTRON_ENV, "1")
+        launch = resolve_launch()
+        assert launch is not None
+        assert launch.argv == (str(electron), str(entry))
+        assert launch.env == {"ELECTRON_RUN_AS_NODE": "1"}
+
+    def test_vendored_tree_autodetect(self, monkeypatch, tmp_path: Path) -> None:
+        vendor = tmp_path / "vendor"
+        entry = (
+            vendor / "node_modules" / "@deepseek-ai" / "dsh-sdk-jsonrpc-demo"
+            / "lib" / "packaged-bin.js"
+        )
+        entry.parent.mkdir(parents=True)
+        entry.write_text("// bin")
+        monkeypatch.setattr(composition, "_VENDOR_DIR", vendor)
+        launch = resolve_launch()
+        assert launch is not None and launch.argv[1] == str(entry)
+        # Explicit exe override still wins over the vendored tree.
+        exe = tmp_path / "dsh-jsonrpc-agent"
+        exe.write_text("#!/bin/sh\n")
+        monkeypatch.setenv(DSH_RUNTIME_BIN_ENV, str(exe))
+        launch = resolve_launch()
+        assert launch is not None and launch.argv == (str(exe),)
+
+    def test_availability_probe_reports_deepseek_harness(self) -> None:
         out = probe_runtime_availability()
         assert out["deepseek_harness"]["available"] is False
         assert out["deepseek_harness"]["unavailable_reason"]
