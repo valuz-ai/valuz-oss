@@ -233,7 +233,16 @@ async def test_capability_drift_respawns_the_process(tmp_path: Path) -> None:
             ),
         )
         await runtime.run(session, UserMessage(text="three"))
-        assert session.runtime_session_id != first_native
+        second_native = session.runtime_session_id
+        assert second_native != first_native
+
+        # Live-reconciled effort (PATCH /effort mutates session.model_settings
+        # between turns) must reach the subprocess too.
+        from src.core.types import ModelSettings
+
+        session.model_settings = ModelSettings(effort="low")
+        await runtime.run(session, UserMessage(text="four"))
+        assert session.runtime_session_id != second_native
     finally:
         await runtime.close()
 

@@ -408,12 +408,17 @@ class DeepSeekHarnessRuntime:
         if session.skills:
             skills_root = prepare_codex_skills(self.workspace_root, session.skills)
 
+        # The session's model_settings is the live value (PATCH /effort
+        # mutates it between turns — codex reads it per turn the same way);
+        # the constructor snapshot is only the fallback for callers that
+        # never round-trip the session.
+        model_settings = session.model_settings or self.model_settings
         self._config_path = write_composition(
             session,
             config_parent_dir=launch.config_parent_dir,
             workspace_root=self.workspace_root,
             skills_root=skills_root,
-            model_settings=self.model_settings,
+            model_settings=model_settings,
         )
         self._composition_fingerprint = _composition_fingerprint(session)
 
@@ -427,9 +432,7 @@ class DeepSeekHarnessRuntime:
 
         client = DshRuntimeClient(launch.argv, cwd=launch.cwd, env=env)
         await client.start()
-        max_tokens = (
-            self.model_settings.max_tokens if self.model_settings is not None else None
-        )
+        max_tokens = model_settings.max_tokens if model_settings is not None else None
         try:
             await client.initialize(
                 cwd=self.workspace_root or os.getcwd(),
@@ -535,17 +538,23 @@ class _TurnOutcome:
 
 
 def _composition_fingerprint(session: Session) -> str:
-    """Stable digest of the session state baked into the Cordis composition.
+    """Stable digest of the session state baked into the subprocess.
 
-    Covers exactly what ``build_composition_rows`` reads from the session:
-    instructions (persona), skills, and the full MCP server set including
-    headers — a changed credential must change the digest.
+    Covers what ``build_composition_rows`` and ``initialize`` read from the
+    session: instructions (persona), skills, the full MCP server set
+    including headers — a changed credential must change the digest — and
+    ``model_settings`` (effort lands in the llm adapter row, max_tokens in
+    ``initialize``), so a live-reconciled PATCH ``/effort`` reaches the
+    runtime on the next turn instead of staying baked forever.
     """
     payload = json.dumps(
         {
             "instructions": session.instructions,
             "skills": list(session.skills),
             "mcp": [asdict(server) for server in session.mcp_servers],
+            "model_settings": (
+                asdict(session.model_settings) if session.model_settings is not None else None
+            ),
         },
         ensure_ascii=False,
         sort_keys=True,
