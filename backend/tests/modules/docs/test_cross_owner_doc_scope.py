@@ -19,10 +19,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from valuz_agent.infra.database import Base
+from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.modules.docs.datastore import DocumentDatastore
 from valuz_agent.modules.docs.models import DocumentRecordRow, KnowledgeBaseRow
 from valuz_agent.modules.docs.service import DocumentLibraryService
-from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.ports.docs_runtime import DocsHealthSnapshot, SearchResult
 
 OWNER = "user-owner"

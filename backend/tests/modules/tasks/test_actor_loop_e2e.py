@@ -164,9 +164,8 @@ def loop_env(db_factory, tmp_path, monkeypatch):
 
     monkeypatch.setattr(type(orch.actor), "run_turn", _scripted_turn)
     yield SimpleNamespace(orch=orch, state=state, tmp_path=tmp_path, db_factory=db_factory)
-
-    for sid in [LEAD, *state.members]:
-        pass
+    # No teardown: each test gets its own tmp database, and there is no longer
+    # a process-wide queue registry to unwind.
 
 
 def _plan(db_factory) -> TaskPlan:

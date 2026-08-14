@@ -176,7 +176,6 @@ async def test_lead_loop_member_done_cancelled_skips_mark_in_review(
         "lead-int-1",
         InboxMsg(kind="member_done", from_session="mem-ok", payload={"status": "idle"}),
     )
-    await deliver_async("lead-int-1", InboxMsg(kind="shutdown"))
 
     await asyncio.wait_for(
         orch.actor.run_actor_loop(
@@ -338,8 +337,9 @@ async def test_finalize_interrupted_member_skips_already_recorded_runs(
         assert run_status == parked, "the parked outcome must survive untouched"
         assert node["status"] == "paused"
         assert events == []
-        with pytest.raises(asyncio.TimeoutError):
-            await mailbox_store.drain("lead-1")
+        assert await mailbox_store.drain("lead-1") == [], (
+            "an already-parked run must not tell the lead a second time"
+        )
     finally:
         pass
 

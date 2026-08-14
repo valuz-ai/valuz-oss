@@ -17,6 +17,7 @@ import valuz_agent.boot.kernel  # noqa: F401
 from sqlalchemy import select
 from valuz_agent.adapters import kernel_client as kernel_client_mod
 from valuz_agent.modules.tasks import launcher as launcher_mod
+from valuz_agent.modules.tasks import mailbox_store
 from valuz_agent.modules.tasks import planning
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
@@ -2908,14 +2909,16 @@ def test_recover_crashed_members_resolves_pending_from_the_store(
     )
     orch = TaskOrchestrator()
 
-    msgs = asyncio.run(
+    recovered = asyncio.run(
         orch.coordination.recover_crashed_members(
             task_id="t1", project_id="w1", user_id=OWNER
         )
     )
+    assert recovered == 1, "one member had died; the other is still running"
 
-    # The finished member comes back as a normal member_done, so the loop keeps
-    # ONE formatting path whether a result arrived by mailbox or by reconcile.
+    # It ENQUEUES rather than returning a batch, so the result travels the same
+    # path as every other message and there is nothing for a caller to park.
+    msgs = asyncio.run(mailbox_store.drain("lead-s", limit=10))
     assert [m.kind for m in msgs] == ["member_done"]
     assert msgs[0].from_session == "sB"
     assert msgs[0].payload["status"] == "completed"

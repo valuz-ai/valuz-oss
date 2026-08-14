@@ -9,7 +9,6 @@ stays hidden, and only genuine user-facing supplement text passes through.
 from __future__ import annotations
 
 import pytest
-
 from src.core.events import Event
 from src.core.orchestrator import _TaskCoverageProtocolSink
 from src.core.task_coverage_continuation import TASK_COVERAGE_NOOP_TOOL_NAME

@@ -727,7 +727,7 @@ class ActorRunner:
                         task_id=task_id, project_id=project_id, user_id=user_id
                     )
                 except Exception:  # noqa: BLE001 — a failed backstop must not end the wait
-                    logger.debug(
+                    logger.exception(
                         "actor loop %s: crash recovery failed, still waiting", session_id
                     )
                     recovered = 0

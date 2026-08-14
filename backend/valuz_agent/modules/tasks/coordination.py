@@ -553,7 +553,11 @@ class CoordinationService:
         have it conclude the members produced nothing.
         """
         try:
-            return await mailbox_store.drain(session_id)
+            # ONE. The caller uses ``durable[0]`` and has nowhere to put the
+            # rest — claiming a batch would mark them consumed and then drop
+            # them on the floor. (It did, briefly: two member results arrived,
+            # one was collected.)
+            return await mailbox_store.drain(session_id, limit=1)
         except Exception:  # noqa: BLE001
             logger.debug("durable inbox read failed for %s, still waiting", session_id)
             return []

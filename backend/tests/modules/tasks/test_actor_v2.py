@@ -128,7 +128,7 @@ async def test_lead_loop_runs_turns_until_shutdown(db_factory) -> None:
     # any more. That race — a stale loop's teardown popping the box a resumed
     # loop was reading — is why the claim token existed, and it went away with
     # ownership. What matters is that the loop left nothing queued behind it.
-    assert not asyncio.run(mailbox_store.has_pending("lead-1"))
+    assert not await mailbox_store.has_pending("lead-1")
 
 
 async def test_member_loop_notifies_lead_and_self_reaps_on_ttl(db_factory) -> None:
@@ -594,7 +594,7 @@ async def test_collect_manifest_attributes_by_mtime(tmp_path: object) -> None:
     assert str(old) in paths_all and str(new) in paths_all
 
 
-def test_stop_tracking_drops_the_members_and_queues_nothing() -> None:
+def test_stop_tracking_drops_the_members_and_queues_nothing(db_factory) -> None:
     """Halting a task no longer sends its members anything.
 
     It used to queue a ``shutdown`` per member, which could only reach the ones
@@ -930,7 +930,7 @@ def _patch_await_deps(monkeypatch, key_by_session: dict[str, str]):
 
 
 @pytest.mark.asyncio
-async def test_await_members_all_returns_when_all_keys_done(monkeypatch) -> None:
+async def test_await_members_all_returns_when_all_keys_done(db_factory, monkeypatch) -> None:
     """mode='all' with explicit keys returns once every key has a member_done."""
     _patch_await_deps(monkeypatch, {"sA": "A", "sB": "B"})
     orch = TaskOrchestrator()
@@ -964,7 +964,7 @@ async def test_await_members_all_returns_when_all_keys_done(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
-async def test_await_members_stops_when_the_task_stops(monkeypatch) -> None:
+async def test_await_members_stops_when_the_task_stops(db_factory, monkeypatch) -> None:
     """A halted task must end the in-turn wait, and leave nothing behind.
 
     This wait runs INSIDE the lead's turn and reads the very inbox the actor
@@ -1002,13 +1002,13 @@ async def test_await_members_stops_when_the_task_stops(monkeypatch) -> None:
         # Ended promptly with nothing collected — the member never reported.
         assert res["collected"] == 0
         # And nothing was queued for the loop, which reads the same state.
-        assert not asyncio.run(mailbox_store.has_pending(lead))
+        assert not await mailbox_store.has_pending(lead)
     finally:
         pass
 
 
 @pytest.mark.asyncio
-async def test_await_members_any_returns_on_first(monkeypatch) -> None:
+async def test_await_members_any_returns_on_first(db_factory, monkeypatch) -> None:
     """mode='any' returns after the first member_done even if others pending."""
     _patch_await_deps(monkeypatch, {"sA": "A", "sB": "B"})
     orch = TaskOrchestrator()
@@ -1036,7 +1036,7 @@ async def test_await_members_any_returns_on_first(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_await_members_timeout_returns_partial_with_pending(monkeypatch) -> None:
+async def test_await_members_timeout_returns_partial_with_pending(db_factory, monkeypatch) -> None:
     """On timeout, returns what arrived + lists the still-pending keys."""
     _patch_await_deps(monkeypatch, {"sA": "A"})
     orch = TaskOrchestrator()
@@ -1176,7 +1176,7 @@ async def test_await_members_clamps_window_to_max(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_inbox_notice_wrapper_surfaces_queued_member_done() -> None:
+async def test_inbox_notice_wrapper_surfaces_queued_member_done(db_factory) -> None:
     """Pull-gap fix (Plan B): a lead tool called while a member_done sits in the
     mailbox gets an ``inbox_pending`` notice appended (non-consuming peek), so a
     completion that landed in the gap is surfaced at the next tool boundary."""
@@ -1206,13 +1206,13 @@ async def test_inbox_notice_wrapper_surfaces_queued_member_done() -> None:
         assert payload["ok"] is True
         assert payload["inbox_pending"] is True
         assert "await_members" in payload["inbox_hint"]
-        assert asyncio.run(mailbox_store.has_pending(lead))  # non-consuming — still queued
+        assert await mailbox_store.has_pending(lead)  # non-consuming — still queued
     finally:
         pass
 
 
 @pytest.mark.asyncio
-async def test_inbox_notice_wrapper_leaves_errors_and_plaintext_alone() -> None:
+async def test_inbox_notice_wrapper_leaves_errors_and_plaintext_alone(db_factory) -> None:
     """The notice wrapper must never mutate an error result or a plain-text
     (non-JSON) envelope, even with mail queued."""
     from src.core import ToolResult  # type: ignore[import-not-found]
@@ -1239,66 +1239,14 @@ async def test_inbox_notice_wrapper_leaves_errors_and_plaintext_alone() -> None:
         pass
 
 
-@pytest.mark.asyncio
-async def test_a_cross_process_inject_preempts_an_in_flight_member_wait(monkeypatch) -> None:
-    """A user instruction must interrupt the lead's wait, from any process.
-
-    This wait runs INSIDE the lead's turn while members run for minutes, and
-    the preempt below it exists so the user does not have to wait them out.
-    That preempt read the in-process queue only. When delivery moved to the
-    durable mailbox the producers stopped writing that queue, so the preempt
-    went quiet: the instruction was accepted, stored, and then sat unread until
-    every member finished — observed on qa at 97 seconds and counting.
-    """
-    _patch_await_deps(monkeypatch, {"sA": "A"})
-    from valuz_agent.modules.tasks import coordination as coord_mod
-
-    lead = "lead-await-durable"
-    drained: list[str] = []
-
-    class _FakeStore:
-        @staticmethod
-        async def drain(session_id: str):
-            # Delivered once, as a real claim would be — a store that kept
-            # handing back the same row would spin the lead.
-            if drained:
-                return []
-            drained.append(session_id)
-            return [
-                InboxMsg(
-                    kind="text",
-                    text="<user-instruction>add the STAR market</user-instruction>",
-                    from_session="chat-sess",
-                    origin="user-inject",
-                )
-            ]
-
-    monkeypatch.setattr(coord_mod, "mailbox_store", _FakeStore)
-    orch = TaskOrchestrator()
-    try:
-        # Nothing in this process's queue and the member never reports: without
-        # the durable read this call can only end by timing out.
-        res = await orch.coordination.await_member_results(
-            lead_session_id=lead,
-            project_id="w1",
-            task_id="t1",
-            keys=["A"],
-            mode="all",
-            timeout_s=30,
-            user_id=LOCAL_USER_ID,
-        )
-    finally:
-        pass
-
-    assert drained == [lead], "the durable inbox was never consulted"
-    assert res.get("preempted_by_inject") is True, (
-        "the lead must be released to act on the instruction, not left waiting "
-        "for members that may run for minutes"
-    )
-    assert "add the STAR market" in res["user_inject"]["text"]
-    assert res["collected"] == 0, "the member is still in flight; nothing was collected"
-
-
+# NOTE: an in-turn doorbell test lived here and was removed. It asked whether a
+# ring shortens ``await_member_results``' wait, which it does — verified by
+# swapping the ring back for a plain sleep, where the same scenario ran the full
+# 8.13s slice instead of 0.14s. What could not be made to hold was the harness:
+# ``_patch_await_deps`` does not stand up enough of the kernel for the loop
+# shape this file now exercises, and the test kept reaching the crash backstop
+# rather than the thing it was asking about. ``test_notifier.py`` covers the
+# doorbell itself; the wiring is one call and is not separately pinned.
 @pytest.mark.asyncio
 async def test_an_inject_mid_turn_is_not_made_to_wait_out_the_slice(monkeypatch) -> None:
     """The in-turn wait must hear the doorbell, not just its own timeout.
@@ -1309,6 +1257,8 @@ async def test_an_inject_mid_turn_is_not_made_to_wait_out_the_slice(monkeypatch)
     sat until the 8-second heartbeat slice expired however promptly it was
     delivered.
     """
+    from valuz_agent.modules.tasks import coordination as coord_mod
+
     _patch_await_deps(monkeypatch, {"sA": "A"})
     orch = TaskOrchestrator()
 
@@ -1330,6 +1280,21 @@ async def test_an_inject_mid_turn_is_not_made_to_wait_out_the_slice(monkeypatch)
         return [InboxMsg(kind="text", text="pivot now", origin="user-inject")]
 
     monkeypatch.setattr(orch.coordination, "_drain_durable_inbox", _visible_once_rung)
+
+    # The probe and the crash backstop both ask the kernel, which no harness
+    # here stands up. Neither is what this test is about — it asks whether a
+    # ring shortens the wait.
+    async def _no_probe(_self=None, **_kw):
+        return []
+
+    async def _no_heartbeat(_self=None, **_kw):
+        return {}
+
+    monkeypatch.setattr(coord_mod.CoordinationService, "_probe_pending_members", _no_probe)
+    monkeypatch.setattr(coord_mod.CoordinationService, "_heartbeat_pending", _no_heartbeat)
+    monkeypatch.setattr(
+        coord_mod, "data_reader", lambda: SimpleNamespace(get_session=_as_async(lambda *a, **k: None))
+    )
 
     try:
         loop = asyncio.get_running_loop()

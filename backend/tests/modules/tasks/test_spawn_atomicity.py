@@ -74,7 +74,7 @@ def test_live_member_registry_is_entirely_synchronous() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_shutdown_reaches_a_member_spawned_concurrently() -> None:
+async def test_shutdown_reaches_a_member_spawned_concurrently(db_factory) -> None:
     """A member spawned while a shutdown broadcast is in flight still gets it.
 
     Both operations run as concurrent tasks against the same registry. Because
@@ -129,7 +129,7 @@ async def test_shutdown_reaches_a_member_spawned_concurrently() -> None:
         #
         # Whether the member then STOPS is no longer this function's business:
         # it reads its own parked run row, from whichever process runs it.
-        assert not asyncio.run(mailbox_store.has_pending(member)), (
+        assert not await mailbox_store.has_pending(member), (
             "halting a task must queue nothing — a stop that travels as a "
             "message only reaches members that share this process"
         )
@@ -140,11 +140,11 @@ async def test_shutdown_reaches_a_member_spawned_concurrently() -> None:
             t.cancel()
 
 
-async def test_stop_tracking_drains_every_member_exactly_once() -> None:
+async def test_stop_tracking_drains_every_member_exactly_once(db_factory) -> None:
     """The drain is a single pop, and a second halt is a no-op.
 
     ``stop_task`` then ``finish_task`` both run it, so the second must find
-    nothing rather than act twice. When each pop also queued a message, that
+    nothing rather than act twice. When each pop also queued a message that
     mattered for delivery; now it matters because a half-mutated set would let
     a member be dropped from tracking while another was still being added.
     """
@@ -154,16 +154,14 @@ async def test_stop_tracking_drains_every_member_exactly_once() -> None:
     members = [f"m{i}" for i in range(4)]
     for m in members:
         registry.add_member("t1", m)
-        boxes.register(m)
-    try:
-        coordination.stop_tracking_members("t1")
-        assert not registry.has_live_members("t1"), "every member popped in one go"
-        assert not any(asyncio.run(mailbox_store.has_pending(m)) for m in members), (
-            "and nothing queued for any of them"
+
+    coordination.stop_tracking_members("t1")
+    assert not registry.has_live_members("t1"), "every member popped in one go"
+    for m in members:
+        assert not await mailbox_store.has_pending(m), (
+            "halting a task queues nothing — a stop that travels as a message "
+            "only reaches members sharing this process"
         )
 
-        coordination.stop_tracking_members("t1")  # second halt — nothing to do
-        assert not registry.has_live_members("t1")
-    finally:
-        for m in members:
-            pass
+    coordination.stop_tracking_members("t1")  # second halt — nothing to do
+    assert not registry.has_live_members("t1")

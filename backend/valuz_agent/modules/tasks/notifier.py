@@ -70,13 +70,38 @@ class InProcessNotifier:
 
     def __init__(self) -> None:
         self._waiters: dict[str, set[asyncio.Future[None]]] = {}
+        # Rings that arrived with nobody parked yet. A caller checks its state
+        # BEFORE it parks, so a ring landing in that gap would otherwise be
+        # lost and the message would wait out a full poll — which is what a
+        # doorbell exists to avoid. Remembering it is safe precisely because
+        # the signal carries nothing: the worst a spurious wake costs is one
+        # more look at a table that turns out to be empty.
+        self._missed: set[str] = set()
 
     async def notify(self, session_id: str) -> None:
-        for fut in self._waiters.pop(session_id, set()):
+        waiters = self._waiters.pop(session_id, set())
+        if not waiters:
+            self._missed.add(session_id)
+            return
+        for fut in waiters:
             if not fut.done():
                 fut.set_result(None)
 
+    def forget(self, session_id: str) -> None:
+        """Drop everything held for a session nobody will wait on again.
+
+        The missed-ring memory is per-session and nothing else expires it, so
+        a session rung once and never waited on would keep an entry for the
+        life of the process — the same shape as the queue registry this
+        replaced. The actor loop calls this on its way out.
+        """
+        self._waiters.pop(session_id, None)
+        self._missed.discard(session_id)
+
     async def wait(self, session_id: str, timeout: float) -> None:
+        if session_id in self._missed:
+            self._missed.discard(session_id)
+            return
         fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._waiters.setdefault(session_id, set()).add(fut)
         try:
