@@ -181,6 +181,15 @@ closed on the public mirror). Filed for each wire/closure gap:
 - [#712](https://github.com/deepseek-ai/deepseek-harness/discussions/712)
   (existing, commented) — persisted-session resume / id collision (deletes
   the transcript-sidecar replay)
+- [#1007](https://github.com/deepseek-ai/deepseek-harness/discussions/1007)
+  (existing, commented) — `dsh-plugin-langfuse`, a community
+  session-telemetry backend exporting the ledger as OTel **trace** trees to
+  Langfuse (the official backend is OTLP logs, which Langfuse cannot
+  ingest). Same `0.1.0-rc.6` wave as our vendored closure — one manifest
+  line to evaluate. Our comment asks for host-trace correlation /
+  parent-context nesting and +1s the multi-sink seam evolution; this is the
+  research path for full-fidelity dsh telemetry in Langfuse alongside the
+  kernel's turn-skeleton traces (`EVENT_TRACED_RUNTIMES`).
 
 ## Recommended sequence
 
