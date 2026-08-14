@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
-from typing import Annotated
+from typing import Annotated, Any
 
 from app.config import AppConfig
 from fastapi import Header, HTTPException
@@ -233,11 +233,67 @@ async def _ensure_durable_schema(engine: AsyncEngine) -> None:
 
     Idempotent (``create_all`` is checkfirst): ``sessions`` / ``messages`` /
     ``events``, ready to receive the RuntimeStore's dual-writes.
+
+    ``create_all`` never ALTERs an existing table, so schema evolution of the
+    durable copy needs its own reconcile step: kernel alembic migrates only
+    the kernel's local database, and a durable seeded before a constraint
+    change keeps the old DDL forever — a mirror write the local store accepts
+    is then silently rejected here (best-effort mirror), and every host read
+    of that row 404s. ``_reconcile_sessions_runtime_check`` repairs the one
+    known drift of that kind in place.
     """
     from src.adapters.sqlalchemy_store.models import Base
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    async with engine.begin() as conn:
+        await conn.run_sync(_reconcile_sessions_runtime_check)
+
+
+# The current runtime_provider CHECK body — keep in sync with
+# ``src.adapters.sqlalchemy_store.models`` and the latest kernel alembic
+# revision that touches ``ck_sessions_runtime_provider`` (0004).
+_SESSIONS_RUNTIME_CHECK = (
+    "runtime_provider IN ('claude_agent', 'codex', 'deepagents', 'deepseek_harness')"
+)
+
+
+def _reconcile_sessions_runtime_check(conn: Any) -> None:
+    """Widen a stale ``ck_sessions_runtime_provider`` on the durable in place.
+
+    A durable created before kernel revision 0004 still carries the
+    three-value constraint and rejects ``deepseek_harness`` mirror writes.
+    Detection reads the live constraint via the SQLAlchemy inspector;
+    the rebuild reuses alembic's batch machinery (SQLite: copy-and-swap;
+    Postgres: plain ALTERs) — the same proven path the 0004 migration runs
+    on the kernel-local database. No-op when the constraint is current or
+    absent (pre-CHECK schemas never enforced the enum).
+    """
+    import sqlalchemy as sa
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    inspector = sa.inspect(conn)
+    if "sessions" not in inspector.get_table_names():
+        return
+    try:
+        checks = inspector.get_check_constraints("sessions")
+    except NotImplementedError:  # dialect without check reflection — leave as-is
+        return
+    current = next(
+        (c for c in checks if c.get("name") == "ck_sessions_runtime_provider"), None
+    )
+    if current is None or "deepseek_harness" in str(current.get("sqltext", "")):
+        return
+    logger.info(
+        "durable sessions CHECK predates deepseek_harness — rebuilding constraint in place"
+    )
+    ops = Operations(MigrationContext.configure(conn))
+    with ops.batch_alter_table("sessions") as batch:
+        batch.drop_constraint("ck_sessions_runtime_provider", type_="check")
+        batch.create_check_constraint(
+            "ck_sessions_runtime_provider", sa.text(_SESSIONS_RUNTIME_CHECK)
+        )
 
 
 def _build_durable_store(config: AppConfig) -> StorePort | None:
