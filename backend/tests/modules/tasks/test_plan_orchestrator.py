@@ -17,7 +17,7 @@ import valuz_agent.boot.kernel  # noqa: F401
 from sqlalchemy import select
 from valuz_agent.adapters import kernel_client as kernel_client_mod
 from valuz_agent.modules.tasks import launcher as launcher_mod
-from valuz_agent.modules.tasks import mailbox_store
+from valuz_agent.modules.tasks import mailbox_store, member_probe
 from valuz_agent.modules.tasks import planning
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
@@ -1116,7 +1116,7 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
 
 # ---------------------------------------------------------------------------
 # S4 — Layer 2: user stop / resume (stop_task / resume_task / stop_member)
-# S3 — online heartbeat (_heartbeat_pending)
+# S3 — online heartbeat (member_probe.heartbeat_pending)
 # ---------------------------------------------------------------------------
 
 
@@ -1522,7 +1522,7 @@ def test_heartbeat_pending_synthesizes_terminal_completed(
     orch = TaskOrchestrator()
 
     out = asyncio.run(
-        orch.coordination._heartbeat_pending(
+        member_probe.heartbeat_pending(
             task_id="t1", project_id="w1", pending_keys={"B", "C"}, user_id=OWNER
         )
     )
@@ -3048,13 +3048,13 @@ def test_the_backstop_lets_the_real_delivery_win_the_first_slice(
 
     orch = TaskOrchestrator()
     hits: list[int] = []
-    real = orch.coordination._heartbeat_pending
+    real = member_probe.heartbeat_pending
 
     async def _counting(**kw):
         hits.append(1)
         return await real(**kw)
 
-    orch.coordination._heartbeat_pending = _counting  # type: ignore[method-assign]
+    monkeypatch.setattr(member_probe, "heartbeat_pending", _counting)
 
     # A window of exactly one slice: the backstop must stay out of it.
     asyncio.run(

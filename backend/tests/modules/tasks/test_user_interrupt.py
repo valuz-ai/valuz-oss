@@ -352,6 +352,7 @@ async def test_finalize_interrupted_member_skips_already_recorded_runs(
 def _patch_await_deps(monkeypatch: pytest.MonkeyPatch, key_by_session: dict[str, str]) -> None:
     """Same seams as test_actor_v2._patch_await_deps (coordination module)."""
     from valuz_agent.modules.tasks import coordination as coord_mod
+    from valuz_agent.modules.tasks import member_probe as probe_mod
 
     class _FakeRunDs:
         def __init__(self, _db):
@@ -384,13 +385,17 @@ def _patch_await_deps(monkeypatch: pytest.MonkeyPatch, key_by_session: dict[str,
     async def _fake_uow(*_a, **_k):
         yield SimpleNamespace()
 
-    monkeypatch.setattr(coord_mod, "async_unit_of_work", _fake_uow)
-    monkeypatch.setattr(coord_mod, "TaskSessionDatastore", _FakeRunDs)
-    monkeypatch.setattr(coord_mod, "TaskDatastore", _FakeTaskDs)
+    # Both modules: ``await_member_results`` reads through coordination, and
+    # the crash backstop it calls reads through member_probe. Each imported
+    # these names itself, so patching one leaves the other on the real DB.
+    for mod in (coord_mod, probe_mod):
+        monkeypatch.setattr(mod, "async_unit_of_work", _fake_uow)
+        monkeypatch.setattr(mod, "TaskSessionDatastore", _FakeRunDs)
+        monkeypatch.setattr(mod, "TaskDatastore", _FakeTaskDs)
 
 
 def _patch_kernel_running(monkeypatch: pytest.MonkeyPatch) -> None:
-    from valuz_agent.modules.tasks import coordination as coord_mod
+    from valuz_agent.modules.tasks import member_probe as probe_mod
 
     def _reader():
         async def _get_session(_uid, _sid):
@@ -398,7 +403,7 @@ def _patch_kernel_running(monkeypatch: pytest.MonkeyPatch) -> None:
 
         return SimpleNamespace(get_session=_get_session)
 
-    monkeypatch.setattr(coord_mod, "data_reader", _reader)
+    monkeypatch.setattr(probe_mod, "data_reader", _reader)
 
 
 async def test_await_timeout_reports_running_member_liveness(
@@ -409,6 +414,7 @@ async def test_await_timeout_reports_running_member_liveness(
     _patch_await_deps(monkeypatch, {"sB": "B"})
     _patch_kernel_running(monkeypatch)
     from valuz_agent.modules.tasks import coordination as coord_mod
+    from valuz_agent.modules.tasks import member_probe as probe_mod
 
     monkeypatch.setattr(coord_mod, "_HEARTBEAT_S", 0.05)
 
@@ -416,7 +422,7 @@ async def test_await_timeout_reports_running_member_liveness(
         return {}
 
     monkeypatch.setattr(
-        coord_mod.CoordinationService, "_pending_asks_by_session", staticmethod(_no_asks)
+        probe_mod, "_pending_asks_by_session", (_no_asks)
     )
 
     orch = TaskOrchestrator()
@@ -448,6 +454,7 @@ async def test_await_breaks_early_when_all_pending_awaiting_user(
     _patch_await_deps(monkeypatch, {"sB": "B"})
     _patch_kernel_running(monkeypatch)
     from valuz_agent.modules.tasks import coordination as coord_mod
+    from valuz_agent.modules.tasks import member_probe as probe_mod
 
     monkeypatch.setattr(coord_mod, "_HEARTBEAT_S", 0.05)
 
@@ -455,7 +462,7 @@ async def test_await_breaks_early_when_all_pending_awaiting_user(
         return {"sB": "which environment should I deploy to?"}
 
     monkeypatch.setattr(
-        coord_mod.CoordinationService, "_pending_asks_by_session", staticmethod(_asks)
+        probe_mod, "_pending_asks_by_session", (_asks)
     )
 
     orch = TaskOrchestrator()

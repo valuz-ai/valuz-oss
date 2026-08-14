@@ -25,7 +25,12 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.infra.db import async_unit_of_work
-from valuz_agent.modules.tasks.datastore import TaskDatastore, TaskEventDatastore
+from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.modules.tasks.datastore import (
+    TaskDatastore,
+    TaskEventDatastore,
+    TaskSessionDatastore,
+)
 from valuz_agent.modules.tasks.models import TaskEventRow
 
 logger = logging.getLogger(__name__)
@@ -138,6 +143,14 @@ async def block_task(
     notification is part of the transition — a blocked task nobody is told
     about is a task that silently stops. ``reason`` is the human line, folded
     into both the notification and the event payload so they cannot disagree.
+
+    It also parks the lead's run row, which no other terminal transition
+    leaves behind: ``stop_task`` and ``finish_task`` both settle it, and a
+    lead's loop exits a halted task WITHOUT finalizing (the terminal state
+    belongs to whoever halted it), so nothing else ever would. A task that is
+    blocked because its lead is gone should not have a run row still claiming
+    that lead is running — that is the exact reading the watchdog exists to
+    correct.
     """
     from valuz_agent.modules.notifications.projectors import (
         record_task_failure_notification,
@@ -156,6 +169,12 @@ async def block_task(
     )
     if event is None:  # lost the terminal race — winner owns the notification
         return None
+    # Park the lead's run: nothing else will. Only if it is still ``active`` —
+    # a lead that settled its own run on the way out already told the truth.
+    if session_id:
+        await TaskSessionDatastore(db).update_run_by_session(
+            session_id=session_id, status="paused", ended_at=now_ms()
+        )
     await record_task_failure_notification(
         task_id=task_id,
         project_id=project_id,

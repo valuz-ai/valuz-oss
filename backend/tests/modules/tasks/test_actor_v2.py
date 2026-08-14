@@ -884,13 +884,15 @@ def test_build_member_session_carries_effort_for_deepagents(
 def _patch_await_deps(monkeypatch, key_by_session: dict[str, str]):
     """Stub the DB touches in await_member_results: get_run + _mark_in_review.
 
-    ``await_member_results`` / ``_heartbeat_pending`` live in
+    ``await_member_results`` lives in ``coordination`` and the member
+    probes it leans on live in ``member_probe``;
     ``tasks/coordination.py`` (ADR-023 Step 3b); the orchestrator delegates to
     it, so stub the coordination module's DB seams.
     """
     from contextlib import asynccontextmanager
 
     from valuz_agent.modules.tasks import coordination as coord_mod
+    from valuz_agent.modules.tasks import member_probe as probe_mod
 
     class _FakeRunDs:
         def __init__(self, _db):
@@ -924,9 +926,13 @@ def _patch_await_deps(monkeypatch, key_by_session: dict[str, str]):
     async def _fake_uow(*_a, **_k):
         yield SimpleNamespace()
 
-    monkeypatch.setattr(coord_mod, "async_unit_of_work", _fake_uow)
-    monkeypatch.setattr(coord_mod, "TaskSessionDatastore", _FakeRunDs)
-    monkeypatch.setattr(coord_mod, "TaskDatastore", _FakeTaskDs)
+    # Both modules: ``await_member_results`` reads through coordination, and
+    # the crash backstop it calls reads through member_probe. Each imported
+    # these names itself, so patching one leaves the other on the real DB.
+    for mod in (coord_mod, probe_mod):
+        monkeypatch.setattr(mod, "async_unit_of_work", _fake_uow)
+        monkeypatch.setattr(mod, "TaskSessionDatastore", _FakeRunDs)
+        monkeypatch.setattr(mod, "TaskDatastore", _FakeTaskDs)
 
 
 @pytest.mark.asyncio
@@ -1106,14 +1112,14 @@ async def test_await_members_any_running_pending_gets_keep_waiting_hint(monkeypa
     ``timed_out`` (which is only set for mode='all'). Previously the hint was
     gated on ``timed_out`` and never fired here, so the lead got a bare
     ``pending:[k] state:running`` and went silent instead of re-awaiting."""
-    from valuz_agent.modules.tasks import coordination as coord_mod
+    from valuz_agent.modules.tasks import member_probe as probe_mod
 
     _patch_await_deps(monkeypatch, {"sA": "A"})
 
     async def _get_session(_uid, _sid):
         return SimpleNamespace(status="running")  # member genuinely in flight
 
-    monkeypatch.setattr(coord_mod, "data_reader", lambda: SimpleNamespace(get_session=_get_session))
+    monkeypatch.setattr(probe_mod, "data_reader", lambda: SimpleNamespace(get_session=_get_session))
     orch = TaskOrchestrator()
     lead = "lead-await-running"
     try:
@@ -1146,6 +1152,7 @@ async def test_await_members_clamps_window_to_max(monkeypatch) -> None:
     transport failure. Proven by shrinking the window and passing a huge
     timeout_s: the call must return in ~the window, not in ~9999s."""
     from valuz_agent.modules.tasks import coordination as coord_mod
+    from valuz_agent.modules.tasks import member_probe as probe_mod
 
     _patch_await_deps(monkeypatch, {"sA": "A"})
     monkeypatch.setattr(coord_mod, "_MAX_AWAIT_WINDOW_S", 0.2)  # tiny cap for the test
@@ -1153,7 +1160,7 @@ async def test_await_members_clamps_window_to_max(monkeypatch) -> None:
     async def _get_session(_uid, _sid):
         return SimpleNamespace(status="running")
 
-    monkeypatch.setattr(coord_mod, "data_reader", lambda: SimpleNamespace(get_session=_get_session))
+    monkeypatch.setattr(probe_mod, "data_reader", lambda: SimpleNamespace(get_session=_get_session))
     orch = TaskOrchestrator()
     lead = "lead-await-clamp"
     try:
@@ -1257,7 +1264,7 @@ async def test_an_inject_mid_turn_is_not_made_to_wait_out_the_slice(monkeypatch)
     sat until the 8-second heartbeat slice expired however promptly it was
     delivered.
     """
-    from valuz_agent.modules.tasks import coordination as coord_mod
+    from valuz_agent.modules.tasks import member_probe as probe_mod
 
     _patch_await_deps(monkeypatch, {"sA": "A"})
     orch = TaskOrchestrator()
@@ -1290,10 +1297,12 @@ async def test_an_inject_mid_turn_is_not_made_to_wait_out_the_slice(monkeypatch)
     async def _no_heartbeat(_self=None, **_kw):
         return {}
 
-    monkeypatch.setattr(coord_mod.CoordinationService, "_probe_pending_members", _no_probe)
-    monkeypatch.setattr(coord_mod.CoordinationService, "_heartbeat_pending", _no_heartbeat)
+    monkeypatch.setattr(probe_mod, "probe_pending_members", _no_probe)
+    monkeypatch.setattr(probe_mod, "heartbeat_pending", _no_heartbeat)
     monkeypatch.setattr(
-        coord_mod, "data_reader", lambda: SimpleNamespace(get_session=_as_async(lambda *a, **k: None))
+        probe_mod,
+        "data_reader",
+        lambda: SimpleNamespace(get_session=_as_async(lambda *a, **k: None)),
     )
 
     try:
