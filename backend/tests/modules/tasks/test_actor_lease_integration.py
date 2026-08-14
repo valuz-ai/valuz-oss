@@ -860,3 +860,27 @@ def test_a_draining_loop_does_not_claim_what_it_cannot_deliver(db_factory) -> No
 # buffer to reclaim — draining one message at a time removed the leftovers that
 # needed parking, and the per-session queue went with them. The leak they were
 # written to catch cannot recur, because the thing that leaked no longer exists.
+
+
+def test_drain_refuses_to_pick_a_batch_size_for_you() -> None:
+    """``limit`` must stay required — a default is how the buffer comes back.
+
+    A claimed row is ``consumed`` in the table but lives only in the claimer's
+    memory, so anything taken beyond what the caller acts on right now needs
+    parking somewhere. That somewhere was a module-level dict keyed by session:
+    nothing emptied it, and it died with the process, taking the messages with
+    it. Both runtime callers pass ``1``. If someone gives this a default, the
+    next ``drain(session_id)`` silently claims a batch again — so the signature
+    itself is the guard, and this test is what notices when it stops being one.
+    """
+    import inspect
+
+    limit = inspect.signature(mailbox_store.drain).parameters["limit"]
+    assert limit.default is inspect.Parameter.empty, (
+        "mailbox_store.drain grew a default batch size — a caller that takes "
+        "more than it acts on has to buffer the rest, which is the bug this "
+        "table replaced"
+    )
+    assert limit.kind is inspect.Parameter.KEYWORD_ONLY, (
+        "keep it keyword-only so the batch size is named at every call site"
+    )

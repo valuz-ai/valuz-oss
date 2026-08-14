@@ -45,11 +45,6 @@ logger = logging.getLogger(__name__)
 # Kinds that may be persisted. ``shutdown`` is absent on purpose — see above.
 DELIVERABLE_KINDS = frozenset({"text", "member_done", "revise_goal"})
 
-# Enough to clear a burst of instructions in one tick without handing a loop an
-# unbounded batch to replay.
-DRAIN_LIMIT = 32
-
-
 class ControlSignalNotDeliverableError(ValueError):
     """Raised when something tries to persist a control signal as a message.
 
@@ -138,11 +133,24 @@ async def has_pending(session_id: str) -> bool:
     return found is not None
 
 
-async def drain(session_id: str, *, limit: int = DRAIN_LIMIT) -> list[InboxMsg]:
-    """Claim every pending message for *session_id*, oldest first.
+async def drain(session_id: str, *, limit: int) -> list[InboxMsg]:
+    """Claim up to *limit* pending messages for *session_id*, oldest first.
 
     Call this only from the loop that drives the session: a claimed row is out
     of the queue, so whoever claims it is committed to acting on it.
+
+    ``limit`` has no default ON PURPOSE, and both callers in the runtime pass
+    ``1``. A claimed row is ``consumed`` in the table but only exists in the
+    claimer's memory, so anything taken beyond what the caller acts on RIGHT
+    NOW has to be parked somewhere — and that somewhere was a module-level dict
+    keyed by session, which nothing emptied and which died with the process,
+    taking the messages with it. Taking one at a time costs one extra indexed
+    round trip per message and buys back the property this table exists for:
+    a message survives the death of whoever was about to handle it.
+
+    Callers do not lose throughput by taking one: both wait loops re-drain at
+    the top of the next iteration, before they park. A default here would be an
+    invitation to write ``drain(session_id)`` and reintroduce the buffer.
     """
     async with async_unit_of_work(commit=False) as db:
         rows = (
@@ -213,7 +221,6 @@ async def cancel_pending(db: AsyncSession, *, session_id: str) -> int:
 __all__ = [
     "DELIVERABLE_KINDS",
     "ring_for",
-    "DRAIN_LIMIT",
     "ControlSignalNotDeliverableError",
     "cancel_pending",
     "drain",
