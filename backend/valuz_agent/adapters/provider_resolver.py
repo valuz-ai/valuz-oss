@@ -370,7 +370,8 @@ async def resolve_runtime_provider(
     Resolution order (highest priority first):
 
     1. ``request_runtime_id`` — user-supplied via the session-creation API.
-       Must be one of ``claude_agent`` / ``codex`` / ``deepagents``;
+       Must be one of ``claude_agent`` / ``codex`` / ``deepagents`` /
+       ``deepseek_harness``;
        otherwise raises ``ProviderNotResolvable``. This is the path the
        picker in the UI uses to override provider defaults.
     2. ``derive_runtime_provider(provider_kind)`` — built-in providers are

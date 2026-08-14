@@ -1,7 +1,8 @@
 """Runtime Agent metadata + availability checks.
 
 The kernel exposes three runtimes via ``Session.runtime_provider``:
-``claude_agent`` / ``codex`` / ``deepagents``. Valuz lets the user pick
+``claude_agent`` / ``codex`` / ``deepagents`` / ``deepseek_harness``.
+Valuz lets the user pick
 which one drives a new session at creation time. This module is the
 single source of truth for:
 
