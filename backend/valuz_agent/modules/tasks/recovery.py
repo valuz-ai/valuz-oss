@@ -45,7 +45,6 @@ from valuz_agent.modules.tasks.lease import (
 )
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
 from valuz_agent.modules.tasks import mailbox_store
-from valuz_agent.modules.tasks.mailbox import mailbox_registry
 from valuz_agent.modules.tasks.member_state import (
     reconcile,
 )
@@ -311,7 +310,6 @@ class RecoveryService:
         lead with a reconcile brief.
         """
         _evict_runtime = evict
-        mailbox_registry.register(lead_session_id)
         for member_sid, manifest in member_done:
             # Durable: a restart re-seeds results for a lead whose loop may
             # come up in a different process than this one.

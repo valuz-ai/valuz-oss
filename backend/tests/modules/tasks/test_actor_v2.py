@@ -12,15 +12,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from valuz_agent.modules.tasks import notifier, planning
-from valuz_agent.modules.tasks.mailbox import (
-    InboxMsg,
-    MailboxRegistry,
-    mailbox_registry,
-)
+from valuz_agent.modules.tasks import mailbox_store, notifier, planning
+from valuz_agent.modules.tasks.mailbox import InboxMsg
 from valuz_agent.modules.tasks.manifest import collect_manifest
 from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
 from valuz_agent.modules.tasks.resolution import _credential_gap
+
+from .conftest import deliver_async
 
 LOCAL_USER_ID = "local-test-owner"
 
@@ -78,41 +76,6 @@ def _as_async(fn):
 
 
 # ---------------------------------------------------------------------------
-# MailboxRegistry
-# ---------------------------------------------------------------------------
-
-
-async def test_put_get_roundtrip_delivers_message() -> None:
-    reg = MailboxRegistry()
-    reg.register("s1")
-    assert reg.put("s1", InboxMsg(kind="text", text="hello")) is True
-    msg = await reg.get("s1", timeout=1.0)
-    assert msg.kind == "text"
-    assert msg.text == "hello"
-
-
-async def test_put_to_unregistered_session_is_noop() -> None:
-    reg = MailboxRegistry()
-    assert reg.put("ghost", InboxMsg(kind="text", text="x")) is False
-
-
-async def test_get_times_out_when_no_message() -> None:
-    reg = MailboxRegistry()
-    reg.register("s1")
-    with pytest.raises(asyncio.TimeoutError):
-        await reg.get("s1", timeout=0.05)
-
-
-async def test_unregister_drops_inbox() -> None:
-    reg = MailboxRegistry()
-    reg.register("s1")
-    reg.unregister("s1")
-    assert reg.try_get("s1") is None
-    with pytest.raises(KeyError):
-        await reg.get("s1", timeout=0.01)
-
-
-# ---------------------------------------------------------------------------
 # Actor loop control flow (turn runner + finalizer stubbed)
 # ---------------------------------------------------------------------------
 
@@ -136,8 +99,7 @@ async def test_lead_loop_runs_turns_until_shutdown(db_factory) -> None:
     # Pre-load a follow-up; register() in the loop is idempotent so it
     # survives. The loop then ends because the task stops wanting it — a state
     # it reads, not a message queued behind the follow-up.
-    mailbox_registry.register("lead-1")
-    mailbox_registry.put("lead-1", InboxMsg(kind="text", text="follow-up"))
+    await deliver_async("lead-1", InboxMsg(kind="text", text="follow-up"))
 
     wanted = {"n": 0}
 
@@ -166,7 +128,7 @@ async def test_lead_loop_runs_turns_until_shutdown(db_factory) -> None:
     # any more. That race — a stale loop's teardown popping the box a resumed
     # loop was reading — is why the claim token existed, and it went away with
     # ownership. What matters is that the loop left nothing queued behind it.
-    assert not mailbox_registry.has_pending("lead-1")
+    assert not asyncio.run(mailbox_store.has_pending("lead-1"))
 
 
 async def test_member_loop_notifies_lead_and_self_reaps_on_ttl(db_factory) -> None:
@@ -642,18 +604,14 @@ def test_stop_tracking_drops_the_members_and_queues_nothing() -> None:
     """
     orch = TaskOrchestrator()
     orch._members.set_members("t1", {"m1", "m2"})
-    mailbox_registry.register("m1")
-    mailbox_registry.register("m2")
 
     orch.coordination.stop_tracking_members("t1")
 
-    assert not mailbox_registry.has_pending("m1")
-    assert not mailbox_registry.has_pending("m2")
+    assert not asyncio.run(mailbox_store.has_pending("m1"))
+    assert not asyncio.run(mailbox_store.has_pending("m2"))
     # Task entry cleared so the same members cannot be dropped twice.
     assert not orch._members.live_members("t1")
 
-    mailbox_registry.unregister("m1")
-    mailbox_registry.unregister("m2")
 
 
 # ---------------------------------------------------------------------------
@@ -982,12 +940,11 @@ async def test_await_members_all_returns_when_all_keys_done(monkeypatch) -> None
 
     monkeypatch.setattr(planning, "mark_in_review", _noop_mark)
     lead = "lead-await-1"
-    mailbox_registry.register(lead)
     try:
-        mailbox_registry.put(
+        await deliver_async(
             lead, InboxMsg(kind="member_done", from_session="sA", payload={"summary": "a"})
         )
-        mailbox_registry.put(
+        await deliver_async(
             lead, InboxMsg(kind="member_done", from_session="sB", payload={"summary": "b"})
         )
         res = await orch.coordination.await_member_results(
@@ -1003,7 +960,7 @@ async def test_await_members_all_returns_when_all_keys_done(monkeypatch) -> None
         assert res["pending"] == []
         assert {r["subtask_key"] for r in res["results"]} == {"A", "B"}
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
 
 @pytest.mark.asyncio
@@ -1032,7 +989,6 @@ async def test_await_members_stops_when_the_task_stops(monkeypatch) -> None:
     monkeypatch.setattr(orch.coordination, "actor_still_wanted", _not_wanted)
 
     lead = "lead-await-stopped"
-    mailbox_registry.register(lead)
     try:
         res = await orch.coordination.await_member_results(
             lead_session_id=lead,
@@ -1046,9 +1002,9 @@ async def test_await_members_stops_when_the_task_stops(monkeypatch) -> None:
         # Ended promptly with nothing collected — the member never reported.
         assert res["collected"] == 0
         # And nothing was queued for the loop, which reads the same state.
-        assert not mailbox_registry.has_pending(lead)
+        assert not asyncio.run(mailbox_store.has_pending(lead))
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
 
 @pytest.mark.asyncio
@@ -1062,9 +1018,8 @@ async def test_await_members_any_returns_on_first(monkeypatch) -> None:
 
     monkeypatch.setattr(planning, "mark_in_review", _noop_mark)
     lead = "lead-await-2"
-    mailbox_registry.register(lead)
     try:
-        mailbox_registry.put(lead, InboxMsg(kind="member_done", from_session="sA", payload={}))
+        await deliver_async(lead, InboxMsg(kind="member_done", from_session="sA", payload={}))
         res = await orch.coordination.await_member_results(
             lead_session_id=lead,
             project_id="w1",
@@ -1077,7 +1032,7 @@ async def test_await_members_any_returns_on_first(monkeypatch) -> None:
         assert res["collected"] == 1
         assert res["results"][0]["subtask_key"] == "A"
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
 
 @pytest.mark.asyncio
@@ -1091,9 +1046,8 @@ async def test_await_members_timeout_returns_partial_with_pending(monkeypatch) -
 
     monkeypatch.setattr(planning, "mark_in_review", _noop_mark)
     lead = "lead-await-3"
-    mailbox_registry.register(lead)
     try:
-        mailbox_registry.put(lead, InboxMsg(kind="member_done", from_session="sA", payload={}))
+        await deliver_async(lead, InboxMsg(kind="member_done", from_session="sA", payload={}))
         res = await orch.coordination.await_member_results(
             lead_session_id=lead,
             project_id="w1",
@@ -1107,7 +1061,7 @@ async def test_await_members_timeout_returns_partial_with_pending(monkeypatch) -
         assert res["pending"] == ["B"]
         assert res["timed_out"] is True
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
 
 @pytest.mark.asyncio
@@ -1123,7 +1077,6 @@ async def test_await_members_no_dispatched_returns_immediately(monkeypatch) -> N
 
     monkeypatch.setattr(planning, "mark_in_review", _noop_mark)
     lead = "lead-await-guard"
-    mailbox_registry.register(lead)
     try:
         loop = asyncio.get_running_loop()
         start = loop.time()
@@ -1143,7 +1096,7 @@ async def test_await_members_no_dispatched_returns_immediately(monkeypatch) -> N
         assert res["pending"] == ["dev"]
         assert res["timed_out"] is False
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
 
 @pytest.mark.asyncio
@@ -1163,7 +1116,6 @@ async def test_await_members_any_running_pending_gets_keep_waiting_hint(monkeypa
     monkeypatch.setattr(coord_mod, "data_reader", lambda: SimpleNamespace(get_session=_get_session))
     orch = TaskOrchestrator()
     lead = "lead-await-running"
-    mailbox_registry.register(lead)
     try:
         # No member_done queued → the member is still running when the short
         # window closes.
@@ -1183,7 +1135,7 @@ async def test_await_members_any_running_pending_gets_keep_waiting_hint(monkeypa
         assert [p["state"] for p in res["pending_status"]] == ["running"]
         assert "await_members again" in res["hint"]
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
 
 @pytest.mark.asyncio
@@ -1204,7 +1156,6 @@ async def test_await_members_clamps_window_to_max(monkeypatch) -> None:
     monkeypatch.setattr(coord_mod, "data_reader", lambda: SimpleNamespace(get_session=_get_session))
     orch = TaskOrchestrator()
     lead = "lead-await-clamp"
-    mailbox_registry.register(lead)
     try:
         loop = asyncio.get_running_loop()
         start = loop.time()
@@ -1221,7 +1172,7 @@ async def test_await_members_clamps_window_to_max(monkeypatch) -> None:
         assert elapsed < 1.0  # clamped to the 0.2s window, NOT 9999s
         assert res["pending"] == ["A"]
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
 
 @pytest.mark.asyncio
@@ -1242,7 +1193,6 @@ async def test_inbox_notice_wrapper_surfaces_queued_member_done() -> None:
     lead = "lead-inbox-notice"
     ctx = SimpleNamespace(session_id=lead, user_id=LOCAL_USER_ID)
 
-    mailbox_registry.register(lead)
     try:
         # Empty inbox → notice absent, envelope untouched.
         empty = await wrapped({}, ctx)
@@ -1250,15 +1200,15 @@ async def test_inbox_notice_wrapper_surfaces_queued_member_done() -> None:
 
         # A queued member_done → notice appended, but the message is NOT consumed
         # (peek-only: it must still be there for await_members to collect).
-        mailbox_registry.put(lead, InboxMsg(kind="member_done", from_session="sA", payload={}))
+        await deliver_async(lead, InboxMsg(kind="member_done", from_session="sA", payload={}))
         got = await wrapped({}, ctx)
         payload = json.loads(got.content)
         assert payload["ok"] is True
         assert payload["inbox_pending"] is True
         assert "await_members" in payload["inbox_hint"]
-        assert mailbox_registry.has_pending(lead)  # non-consuming — still queued
+        assert asyncio.run(mailbox_store.has_pending(lead))  # non-consuming — still queued
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
 
 @pytest.mark.asyncio
@@ -1271,8 +1221,7 @@ async def test_inbox_notice_wrapper_leaves_errors_and_plaintext_alone() -> None:
 
     lead = "lead-inbox-passthrough"
     ctx = SimpleNamespace(session_id=lead, user_id=LOCAL_USER_ID)
-    mailbox_registry.register(lead)
-    mailbox_registry.put(lead, InboxMsg(kind="member_done", from_session="sA", payload={}))
+    await deliver_async(lead, InboxMsg(kind="member_done", from_session="sA", payload={}))
     try:
 
         async def _err(_args, _ctx):
@@ -1287,7 +1236,7 @@ async def test_inbox_notice_wrapper_leaves_errors_and_plaintext_alone() -> None:
         plain = await _with_inbox_notice(_plain)({}, ctx)
         assert plain.content == "Task closed. Do not continue working."
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
 
 @pytest.mark.asyncio
@@ -1326,7 +1275,6 @@ async def test_a_cross_process_inject_preempts_an_in_flight_member_wait(monkeypa
 
     monkeypatch.setattr(coord_mod, "mailbox_store", _FakeStore)
     orch = TaskOrchestrator()
-    mailbox_registry.register(lead)
     try:
         # Nothing in this process's queue and the member never reports: without
         # the durable read this call can only end by timing out.
@@ -1340,7 +1288,7 @@ async def test_a_cross_process_inject_preempts_an_in_flight_member_wait(monkeypa
             user_id=LOCAL_USER_ID,
         )
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
     assert drained == [lead], "the durable inbox was never consulted"
     assert res.get("preempted_by_inject") is True, (
@@ -1370,7 +1318,6 @@ async def test_an_inject_mid_turn_is_not_made_to_wait_out_the_slice(monkeypatch)
     monkeypatch.setattr(planning, "mark_in_review", _noop_mark)
 
     lead = "lead-await-ring"
-    mailbox_registry.register(lead)
     # The instruction only becomes visible AFTER the ring — so the wait has to
     # be woken by the doorbell to see it. Handing it over on the first drain
     # would let a plain sleep pass this test, which is how the first draft of
@@ -1406,7 +1353,7 @@ async def test_an_inject_mid_turn_is_not_made_to_wait_out_the_slice(monkeypatch)
         await task
         elapsed = loop.time() - started
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
     assert res.get("preempted_by_inject") is True
     assert "pivot now" in res["user_inject"]["text"]

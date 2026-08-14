@@ -36,10 +36,11 @@ from valuz_agent.modules.tasks.datastore import (
     TaskDatastore,
     TaskEventDatastore,
     TaskSessionDatastore,
+    pick_lead_run,
 )
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
 from valuz_agent.modules.tasks import mailbox_store, notifier
-from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
+from valuz_agent.modules.tasks.mailbox import InboxMsg
 from valuz_agent.modules.tasks.member_state import classify_member
 from valuz_agent.modules.tasks.plan import PlanError, TaskPlan
 
@@ -131,7 +132,6 @@ class CoordinationService:
         # instead of raising KeyError (which would return empty instantly and
         # make the lead think members are stuck). ``dispatch`` already
         # registers it; this is belt-and-suspenders. Idempotent.
-        mailbox_registry.register(lead_session_id)
 
         # Load the plan + the set of subtask keys that currently have a
         # dispatched, in-flight member (an "active" subtask run). We need both to
@@ -224,51 +224,37 @@ class CoordinationService:
             # terminal but whose member_done never reached the mailbox (bad-case
             # #3 online window). Synthesize their result so the lead doesn't hang.
             slice_timeout = min(_HEARTBEAT_S, remaining)
-            # The queue is a local buffer, not a channel — the only thing that
-            # writes it is the drain below, parking extras. Blocking on it was
-            # blocking on something no producer touches, so an inject arriving
-            # mid-turn waited out the full slice however promptly it was rung.
-            # Take what is buffered without waiting; the park at the bottom is
-            # what listens for the doorbell.
-            msg = mailbox_registry.try_get(lead_session_id)
-            if msg is None:
-                # Nothing in THIS process's queue — but a user instruction, a
-                # goal revision or a member's report written by another process
-                # lives in the durable inbox, and this wait is exactly where it
-                # matters: the lead is inside a turn, parked on members that may
-                # run for minutes, and the whole point of the preempt below is
-                # to let it react now instead of then.
+            # A user instruction, a goal revision or a member's report — from
+            # whichever process wrote it. This wait is where it matters most:
+            # the lead is inside a turn, parked on members that may run for
+            # minutes, and the preempt below exists so it can react now.
+            if not await self.actor_still_wanted(
+                session_id=lead_session_id,
+                role="lead",
+                task_id=task_id,
+                project_id=project_id,
+                user_id=user_id,
+            ):
+                # The task was paused or finished while we waited. Stop
+                # collecting and let the turn end; the loop reads the same
+                # state and leaves.
                 #
-                # Feeding them back through the registry rather than handling
-                # them here is deliberate: the branches below (shutdown, inject,
-                # revision, member_done) then apply unchanged, so this path
-                # cannot drift from the in-process one.
-                if not await self.actor_still_wanted(
-                    session_id=lead_session_id,
-                    role="lead",
-                    task_id=task_id,
-                    project_id=project_id,
-                    user_id=user_id,
-                ):
-                    # The task was paused or finished while we waited. Stop
-                    # collecting and let the turn end; the loop reads the same
-                    # state and leaves.
-                    #
-                    # This used to require seeing a ``shutdown`` message and
-                    # putting it BACK, because the actor loop reads the same
-                    # inbox between turns and would otherwise never see it. A
-                    # fact can be read twice.
-                    break
-                # Same rule as the between-turns wait: never claim what a
-                # shutdown will discard. The drain marks rows ``consumed``, and
-                # a turn being torn down cannot act on what it took.
-                durable = (
-                    [] if is_draining() else await self._drain_durable_inbox(lead_session_id)
-                )
-                if durable:
-                    for extra in durable:
-                        mailbox_registry.put(lead_session_id, extra)
-                    continue
+                # This used to require seeing a ``shutdown`` message and
+                # putting it BACK, because the actor loop reads the same
+                # inbox between turns and would otherwise never see it. A
+                # fact can be read twice.
+                break
+            # Same rule as the between-turns wait: never claim what a
+            # shutdown will discard. The drain marks rows ``consumed``, and
+            # a turn being torn down cannot act on what it took.
+            durable = (
+                [] if is_draining() else await self._drain_durable_inbox(lead_session_id)
+            )
+            # Exactly one, and handled below. Draining a batch meant parking
+            # the rest somewhere between iterations, and that somewhere was a
+            # module-level dict keyed by session that nothing ever emptied.
+            msg = durable[0] if durable else None
+            if msg is None:
                 slices_waited += 1
                 # Let the REAL delivery win the first slice. The backstop reads
                 # durable state, so it sees a member as finished the instant its
@@ -490,7 +476,7 @@ class CoordinationService:
 
     async def recover_crashed_members(
         self, *, task_id: str, project_id: str, user_id: str
-    ) -> list[InboxMsg]:
+    ) -> int:
         """Members whose process died before they could record finishing.
 
         **This is crash recovery, not a delivery backstop — do not delete it.**
@@ -512,8 +498,15 @@ class CoordinationService:
         Without it, a lead waits out its full idle TTL on a member that will
         never speak again.
 
-        It still returns ``member_done`` messages so the loop keeps one
-        formatting path whether a result arrived by mailbox or by recovery.
+        Results are ENQUEUED, not returned. Recovery reconstructs facts, and a
+        fact goes in the mailbox like any other — so the loop keeps one
+        formatting path, one delivery path, and no way to be handed a batch it
+        must find somewhere to park. It also brings this in line with the rule
+        the rest of the module follows: the enqueue rides the same transaction
+        as the run row and plan node it settles, so there is no window where a
+        member has been marked finished but nobody has been told.
+
+        Returns how many it recovered, for the log.
         """
         async with async_unit_of_work(commit=False) as db:
             row = await TaskDatastore(db).get_task_by_project(user_id, project_id, task_id)
@@ -525,15 +518,31 @@ class CoordinationService:
         collected = await self._heartbeat_pending(
             task_id=task_id, project_id=project_id, pending_keys=pending, user_id=user_id
         )
-        return [
-            InboxMsg(
-                kind="member_done",
-                from_session=str(entry.get("session_id") or ""),
-                origin="reconcile",
-                payload=entry,
-            )
-            for entry in collected.values()
-        ]
+        if not collected:
+            return 0
+        lead = pick_lead_run(await self._runs(user_id, task_id))
+        if lead is None:
+            return 0
+        async with async_unit_of_work() as db:
+            for entry in collected.values():
+                await mailbox_store.enqueue(
+                    db,
+                    session_id=lead.session_id,
+                    task_id=task_id,
+                    project_id=project_id,
+                    user_id=user_id,
+                    kind="member_done",
+                    from_session=str(entry.get("session_id") or ""),
+                    origin="reconcile",
+                    payload=dict(entry),
+                )
+        await mailbox_store.ring_for(lead.session_id)
+        return len(collected)
+
+    @staticmethod
+    async def _runs(user_id: str, task_id: str):
+        async with async_unit_of_work(commit=False) as db:
+            return await TaskSessionDatastore(db).list_runs(user_id, task_id)
 
     @staticmethod
     async def _drain_durable_inbox(session_id: str) -> list[InboxMsg]:

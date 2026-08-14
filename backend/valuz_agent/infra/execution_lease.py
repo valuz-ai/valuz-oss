@@ -7,7 +7,7 @@ while the work itself lives in a database any number of host processes may
 share — ``uvicorn --workers N``, or several replicas behind one service.
 Nothing reconciled those two facts, and each subsystem broke differently:
 
-- **Tasks.** ``TaskHealthMonitor`` asked ``mailbox_registry.is_owned()``, true
+- **Tasks.** ``TaskHealthMonitor`` asked a per-process mailbox registry, true
   only for loops in the ASKING process, so a lead running in a sibling process
   read as dead and the watchdog flipped a healthy task to
   ``blocked(reason="lead_dead")`` mid-run. And ``recover_active_tasks``

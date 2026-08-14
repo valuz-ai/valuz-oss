@@ -26,12 +26,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 
-from valuz_agent.modules.tasks import launcher
+from valuz_agent.modules.tasks import launcher, mailbox_store
 from valuz_agent.modules.tasks.actor_runner import ActorRunner
 from valuz_agent.modules.tasks.coordination import CoordinationService
 from valuz_agent.modules.tasks.dispatcher import DispatcherService
 from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
-from valuz_agent.modules.tasks.mailbox import MailboxRegistry, mailbox_registry
 
 LOCAL_USER_ID = "local-test-owner"
 
@@ -130,13 +129,13 @@ async def test_shutdown_reaches_a_member_spawned_concurrently() -> None:
         #
         # Whether the member then STOPS is no longer this function's business:
         # it reads its own parked run row, from whichever process runs it.
-        assert not mailbox_registry.has_pending(member), (
+        assert not asyncio.run(mailbox_store.has_pending(member)), (
             "halting a task must queue nothing — a stop that travels as a "
             "message only reaches members that share this process"
         )
     finally:
         for sid in (lead, member):
-            mailbox_registry.unregister(sid)
+            pass
         for t in [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]:
             t.cancel()
 
@@ -151,17 +150,15 @@ async def test_stop_tracking_drains_every_member_exactly_once() -> None:
     """
     registry = LiveMemberRegistry()
     coordination = CoordinationService(registry=registry)
-    boxes = MailboxRegistry()
 
     members = [f"m{i}" for i in range(4)]
     for m in members:
         registry.add_member("t1", m)
         boxes.register(m)
-        mailbox_registry.register(m)
     try:
         coordination.stop_tracking_members("t1")
         assert not registry.has_live_members("t1"), "every member popped in one go"
-        assert not any(mailbox_registry.has_pending(m) for m in members), (
+        assert not any(asyncio.run(mailbox_store.has_pending(m)) for m in members), (
             "and nothing queued for any of them"
         )
 
@@ -169,4 +166,4 @@ async def test_stop_tracking_drains_every_member_exactly_once() -> None:
         assert not registry.has_live_members("t1")
     finally:
         for m in members:
-            mailbox_registry.unregister(m)
+            pass

@@ -19,7 +19,6 @@ from sqlalchemy import select
 
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.tasks import mailbox_store, messaging
-from valuz_agent.modules.tasks.mailbox import mailbox_registry
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 
 
@@ -29,9 +28,7 @@ LOCAL_USER_ID = "local-test-owner"
 @pytest.fixture(autouse=True)
 def _reset_mailbox():
     """Each test starts with an empty mailbox registry."""
-    mailbox_registry._boxes.clear()
     yield
-    mailbox_registry._boxes.clear()
 
 
 def _drain(session_id: str = "lead-sess-1"):
@@ -102,7 +99,6 @@ def _seed_task(
 
 def test_inject_into_active_task_with_registered_lead_delivers(db_factory, tmp_path):
     _seed_task(db_factory, tmp_path, status="active")
-    mailbox_registry.register("lead-sess-1")
     result = asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
@@ -121,7 +117,6 @@ def test_inject_appends_user_inject_event_on_delivery(db_factory, tmp_path):
     _seed_task(db_factory, tmp_path, status="active")
     # CLAIM, not register: a live lead is one whose actor loop owns the box
     # (spawn_actor claims). A merely-registered box has no reader.
-    mailbox_registry.register("lead-sess-1")
     asyncio.run(
         messaging.inject_into_task(
             task_id="t1",
@@ -301,7 +296,6 @@ def test_inject_into_completed_task_rejects(db_factory, tmp_path):
     _seed_task(db_factory, tmp_path, status="completed")
     # CLAIM, not register: a live lead is one whose actor loop owns the box
     # (spawn_actor claims). A merely-registered box has no reader.
-    mailbox_registry.register("lead-sess-1")
     result = asyncio.run(
         messaging.inject_into_task(
             task_id="t1",

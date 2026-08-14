@@ -33,7 +33,7 @@ from valuz_agent.modules.tasks.lease import (
 )
 from valuz_agent.modules.tasks.task_state import NON_REVIEWABLE_DONE
 from valuz_agent.modules.tasks import mailbox_store, notifier
-from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
+from valuz_agent.modules.tasks.mailbox import InboxMsg
 from valuz_agent.modules.sessions.pre_turn import always_on_mcp_hook
 from valuz_agent.modules.sessions.turn_driver import _resolve_turn_status
 
@@ -273,12 +273,6 @@ class ActorRunner:
         # member's loop is every bit as capable of being resumed twice, and it
         # is the only thing that can say whether a member session is live —
         # which used to be a question about one process's memory.
-        # The in-process queue is still the fast path (and, during a rolling
-        # deploy, the only path an older peer writes to), so the box has to
-        # exist before the first ``get`` — ``claim`` used to do this as a side
-        # effect, and removing it without this line made every loop exit on its
-        # first wait with "ownership moved".
-        mailbox_registry.register(session_id)
         fenced = asyncio.Event()
         renewer: asyncio.Task[None] | None = None
         if lease is None:
@@ -374,12 +368,11 @@ class ActorRunner:
                 # for 30 minutes before the idle-TTL fires _finalize_actor.
                 # NB: must check the mailbox is empty first, else a queued
                 # follow-up / member_done would be dropped.
-                # ``has_pending`` is this PROCESS's queue. A message written
-                # by another process lives in the table, and finalizing here
-                # would end the task with it unread.
+                # Asked of the TABLE, which is where messages live. This
+                # used to also consult a per-process queue, which could not see
+                # anything another process wrote.
                 if (
                     role == "lead"
-                    and not mailbox_registry.has_pending(session_id)
                     and not await mailbox_store.has_pending(session_id)
                     and await coordinator.lead_idle_with_no_pending(
                         task_id, project_id, user_id=user_id, lead_session_id=session_id
@@ -609,16 +602,6 @@ class ActorRunner:
                     await lease.release()
                 except Exception:  # noqa: BLE001
                     logger.debug("actor loop %s: lease release failed", session_id)
-                # Drop the buffer too. Nothing did, so a long-lived process
-                # accumulated one queue per session it ever ran, forever.
-                #
-                # Gated on the SAME answer as the lease release, and that gate
-                # is the whole reason this is safe to do at all: the box is
-                # shared by every incarnation of a session, so a superseded
-                # loop dropping it on the way out would pull it from under its
-                # replacement — the race the claim token used to guard. Only
-                # the current holder cleans up.
-                mailbox_registry.unregister(session_id)
                 notifier.forget(session_id)
 
     @staticmethod
@@ -630,7 +613,10 @@ class ActorRunner:
         idle-TTL finalize a task that is merely waiting.
         """
         try:
-            messages = await mailbox_store.drain(session_id)
+            # ONE. Never claim more than the caller can hand over: leftovers
+            # need somewhere to live between iterations, and that somewhere was
+            # a module-level dict keyed by session which nothing ever emptied.
+            messages = await mailbox_store.drain(session_id, limit=1)
         except Exception:  # noqa: BLE001
             logger.debug("actor loop %s: durable inbox read failed, still waiting", session_id)
             return []
@@ -685,13 +671,6 @@ class ActorRunner:
             remaining = deadline - loop.time()
             if remaining <= 0:
                 raise TimeoutError
-            # The queue is a LOCAL BUFFER now, not a channel: the only thing
-            # that puts into it is this loop, parking the extras a single drain
-            # returned. Checked without blocking so the wait below is purely
-            # the doorbell.
-            buffered = mailbox_registry.try_get(session_id)
-            if buffered is not None:
-                return buffered
             if not await coordinator.actor_still_wanted(
                 session_id=session_id,
                 role=role,
@@ -727,8 +706,6 @@ class ActorRunner:
                 [] if is_draining() else await self._drain_durable_inbox(session_id)
             )
             if durable:
-                for extra in durable[1:]:
-                    mailbox_registry.put(session_id, extra)
                 return durable[0]
             # Everything below only applies to a lead, and only settles a
             # member that crashed — so it is the last thing tried, and reaching
@@ -753,17 +730,17 @@ class ActorRunner:
                     logger.debug(
                         "actor loop %s: crash recovery failed, still waiting", session_id
                     )
-                    recovered = []
+                    recovered = 0
                 if recovered:
                     logger.info(
                         "actor loop %s (lead): %d member(s) recovered — their processes "
                         "died before recording that they finished",
                         session_id,
-                        len(recovered),
+                        recovered,
                     )
-                    for extra in recovered[1:]:
-                        mailbox_registry.put(session_id, extra)
-                    return recovered[0]
+                    # It enqueued them; the next pass drains one, like any
+                    # other message. Nothing is handed back for us to park.
+                    continue
 
             # Nothing to act on. Park until someone rings or the poll expires —
             # the single blocking point in this loop, which is what keeps a

@@ -22,7 +22,6 @@ from valuz_agent.modules.tasks.recovery import (
     TaskHealthMonitor,
 )
 from valuz_agent.infra.time_utils import now_ms
-from valuz_agent.modules.tasks.mailbox import mailbox_registry
 from valuz_agent.infra.execution_lease import ExecutionLeaseRow
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 
@@ -35,9 +34,7 @@ PEER = "peer-host:999:deadbeef"
 
 @pytest.fixture(autouse=True)
 def _reset_mailbox():
-    mailbox_registry._boxes.clear()
     yield
-    mailbox_registry._boxes.clear()
 
 
 def _seed(
