@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.execution_lease import holder_id
 from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.modules.tasks import notifier
 from valuz_agent.modules.tasks.mailbox import InboxMsg
 from valuz_agent.modules.tasks.models import TaskMailboxRow
 
@@ -105,6 +106,17 @@ async def enqueue(
     db.add(row)
     await db.flush()
     return row
+
+
+async def ring_for(session_id: str) -> None:
+    """Wake whoever runs *session_id*, AFTER the enqueue has committed.
+
+    Separate from ``enqueue`` on purpose: enqueue runs inside the caller's
+    transaction, and ringing from in there would wake a reader that then finds
+    nothing — the row is not visible until commit. Callers ring once their unit
+    of work closes.
+    """
+    await notifier.ring(session_id)
 
 
 async def has_pending(session_id: str) -> bool:
@@ -200,6 +212,7 @@ async def cancel_pending(db: AsyncSession, *, session_id: str) -> int:
 
 __all__ = [
     "DELIVERABLE_KINDS",
+    "ring_for",
     "DRAIN_LIMIT",
     "ControlSignalNotDeliverableError",
     "cancel_pending",

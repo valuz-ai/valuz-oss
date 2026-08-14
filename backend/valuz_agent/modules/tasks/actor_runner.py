@@ -32,7 +32,7 @@ from valuz_agent.modules.tasks.lease import (
     acquire_actor_lease,
 )
 from valuz_agent.modules.tasks.task_state import NON_REVIEWABLE_DONE
-from valuz_agent.modules.tasks import mailbox_store
+from valuz_agent.modules.tasks import mailbox_store, notifier
 from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 from valuz_agent.modules.sessions.pre_turn import always_on_mcp_hook
 from valuz_agent.modules.sessions.turn_driver import _resolve_turn_status
@@ -125,7 +125,7 @@ class ActorCoordinator(Protocol):
         """Has this member's work already been dealt with (or the task ended)?"""
         ...
 
-    async def reconcile_finished_members(
+    async def recover_crashed_members(
         self, *, task_id: str, project_id: str, user_id: str
     ) -> list[InboxMsg]:
         """Members that finished without their ``member_done`` reaching us."""
@@ -674,16 +674,13 @@ class ActorRunner:
             remaining = deadline - loop.time()
             if remaining <= 0:
                 raise TimeoutError
-            try:
-                # Still read the in-memory queue: during a rolling deploy an
-                # older process may still be producing into it. Producers moved
-                # to the table first precisely so this side can read both
-                # without a message arriving twice.
-                return await mailbox_registry.get(
-                    session_id, timeout=min(ACTOR_INBOX_POLL_S, remaining)
-                )
-            except TimeoutError:
-                pass
+            # The queue is a LOCAL BUFFER now, not a channel: the only thing
+            # that puts into it is this loop, parking the extras a single drain
+            # returned. Checked without blocking so the wait below is purely
+            # the doorbell.
+            buffered = mailbox_registry.try_get(session_id)
+            if buffered is not None:
+                return buffered
             if not await coordinator.actor_still_wanted(
                 session_id=session_id,
                 role=role,
@@ -714,45 +711,56 @@ class ActorRunner:
                 for extra in durable[1:]:
                     mailbox_registry.put(session_id, extra)
                 return durable[0]
-            if role != "lead":
-                # Members have no siblings to reconcile; their own result is
-                # what the lead waits for.
-                continue
-            if is_draining():
-                # Teardown has started. The reconcile WRITES (it settles run
-                # rows and flips plan nodes to in_review), and the whole reason
-                # the loop skips its finalize while draining is that a terminal
-                # write here fights the boot recovery that is meant to resume
-                # this task. Keep waiting quietly instead: the loop breaks on
-                # its own drain check as soon as anything wakes it, and the
-                # process is going away regardless.
-                continue
-            # The member backstop keeps its own, slower cadence: it settles run
-            # rows and flips plan nodes, so unlike the inbox lookup it is
-            # neither cheap nor free of side effects.
-            if loop.time() < next_reconcile:
-                continue
-            next_reconcile = loop.time() + LEAD_RECONCILE_SLICE_S
-            try:
-                recovered = await coordinator.reconcile_finished_members(
-                    task_id=task_id, project_id=project_id, user_id=user_id
-                )
-            except Exception:  # noqa: BLE001 — a failed backstop must not end the wait
-                logger.debug("actor loop %s: member reconcile failed, still waiting", session_id)
-                continue
-            if not recovered:
-                continue
-            logger.info(
-                "actor loop %s (lead): %d member result(s) recovered from durable state "
-                "— their member_done never reached this process",
-                session_id,
-                len(recovered),
-            )
-            # Queue the rest so the loop consumes them on its next passes, in
-            # the same order and through the same path as mailbox arrivals.
-            for extra in recovered[1:]:
-                mailbox_registry.put(session_id, extra)
-            return recovered[0]
+            # Everything below only applies to a lead, and only settles a
+            # member that crashed — so it is the last thing tried, and reaching
+            # the end of the body means "nothing to act on, park".
+            if (
+                role == "lead"
+                # Teardown has started. Recovery WRITES (it settles run rows and
+                # flips plan nodes), and the reason the loop skips its finalize
+                # while draining is that a terminal write here fights the boot
+                # recovery meant to resume this task.
+                and not is_draining()
+                # Its own, slower cadence: unlike the inbox lookup it is neither
+                # cheap nor free of side effects.
+                and loop.time() >= next_reconcile
+            ):
+                next_reconcile = loop.time() + LEAD_RECONCILE_SLICE_S
+                try:
+                    recovered = await coordinator.recover_crashed_members(
+                        task_id=task_id, project_id=project_id, user_id=user_id
+                    )
+                except Exception:  # noqa: BLE001 — a failed backstop must not end the wait
+                    logger.debug(
+                        "actor loop %s: crash recovery failed, still waiting", session_id
+                    )
+                    recovered = []
+                if recovered:
+                    logger.info(
+                        "actor loop %s (lead): %d member(s) recovered — their processes "
+                        "died before recording that they finished",
+                        session_id,
+                        len(recovered),
+                    )
+                    for extra in recovered[1:]:
+                        mailbox_registry.put(session_id, extra)
+                    return recovered[0]
+
+            # Nothing to act on. Park until someone rings or the poll expires —
+            # the single blocking point in this loop, which is what keeps a
+            # body with several early exits from spinning.
+            await self._park(session_id, min(ACTOR_INBOX_POLL_S, remaining))
+
+    @staticmethod
+    async def _park(session_id: str, seconds: float) -> None:
+        """Sleep until someone rings for this session, or *seconds* elapse.
+
+        The ring is an optimisation, never a dependency: everything the caller
+        needs is durable, and it re-reads it either way. A notifier that loses
+        signals, duplicates them, or dies entirely costs latency and nothing
+        else — which is why the transport is allowed to be best-effort.
+        """
+        await notifier.wait_for_ring(session_id, seconds)
 
     @staticmethod
     async def _renew_lease(lease: ActorLease, session_id: str, fenced: asyncio.Event) -> None:

@@ -2884,7 +2884,7 @@ def test_modify_plan_cannot_stamp_failed(db_factory, tmp_path) -> None:
     assert "error" in res and "illegal subtask transition" in res["error"]
 
 
-def test_reconcile_finished_members_resolves_pending_from_the_store(
+def test_recover_crashed_members_resolves_pending_from_the_store(
     db_factory, tmp_path, monkeypatch
 ) -> None:
     """The between-turns backstop, end to end against the real store.
@@ -2924,7 +2924,7 @@ def test_reconcile_finished_members_resolves_pending_from_the_store(
     orch = TaskOrchestrator()
 
     msgs = asyncio.run(
-        orch.coordination.reconcile_finished_members(
+        orch.coordination.recover_crashed_members(
             task_id="t1", project_id="w1", user_id=OWNER
         )
     )
@@ -2938,7 +2938,7 @@ def test_reconcile_finished_members_resolves_pending_from_the_store(
     assert all(m.from_session != "sC" for m in msgs)
 
 
-def test_reconcile_finished_members_is_quiet_when_nothing_is_pending(
+def test_recover_crashed_members_is_quiet_when_nothing_is_pending(
     db_factory, tmp_path, monkeypatch
 ) -> None:
     """A lead parked with no in-flight member must not pay for a kernel probe."""
@@ -2957,7 +2957,7 @@ def test_reconcile_finished_members_is_quiet_when_nothing_is_pending(
     orch = TaskOrchestrator()
 
     msgs = asyncio.run(
-        orch.coordination.reconcile_finished_members(
+        orch.coordination.recover_crashed_members(
             task_id="t1", project_id="w1", user_id=OWNER
         )
     )
@@ -3109,3 +3109,41 @@ def test_the_backstop_still_fires_for_a_member_that_never_delivers(
         )
     )
     assert out.get("collected"), "a member that never delivers must still be caught"
+
+
+def test_finish_task_parks_members_that_are_still_running(db_factory, tmp_path) -> None:
+    """A task cannot end while leaving its members running.
+
+    A member reads its OWN run row to know it was stopped, and finish_task
+    settles only the lead's. Without parking them here,
+    ``finish_task(stopped, force=True)`` — the one path that deliberately ends
+    a task while members are live — would leave every one of them running
+    until its idle TTL.
+
+    It used to queue a ``shutdown`` per member, which reached only the ones
+    whose loops shared the process that ran finish_task.
+    """
+    _seed_lead_and_members(
+        db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")]
+    )
+    orch = TaskOrchestrator()
+    orch._members.set_members("t1", {"sB"})
+
+    assert _runs(db_factory)["sB"] == "active", "precondition: the member is running"
+
+    asyncio.run(
+        orch.finalization.finish_task(
+            task_id="t1",
+            project_id="w1",
+            lead_session_id="lead-s",
+            summary="done enough",
+            status="stopped",
+            force=True,
+            user_id=OWNER,
+        )
+    )
+
+    assert _runs(db_factory)["sB"] == "paused", (
+        "the member must be able to read that it was stopped — it has no other "
+        "way to find out"
+    )

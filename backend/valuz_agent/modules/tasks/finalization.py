@@ -742,9 +742,25 @@ class FinalizationService:
                 exc_info=True,
             )
 
-        # The task is terminal now, which is what every member and the lead's
-        # own loop read to know they are done. This only drops the lead's
-        # in-process tracking of them.
+        # Park any member still marked active. A member reads its OWN run row
+        # to know it was stopped, and ``finish_task`` settles only the lead's —
+        # so without this, ``finish_task(stopped, force=True)``, the one path
+        # that ends a task while members are deliberately still running, would
+        # leave them running until their idle TTL.
+        #
+        # It used to be a ``shutdown`` queued per member, which reached only the
+        # ones sharing this process. Writing the state reaches all of them.
+        async with async_unit_of_work() as db:
+            run_ds = TaskSessionDatastore(db)
+            for run in await run_ds.list_runs(user_id, task_id):
+                if run.kind == "subtask" and run.status == "active":
+                    await run_ds.update_run_by_session(
+                        session_id=run.session_id, status="paused", ended_at=now_ms()
+                    )
+                    await mailbox_store.cancel_pending(db, session_id=run.session_id)
+
+        # The task is terminal now, which is what the lead's own loop reads to
+        # know it is done. This only drops the lead's in-process tracking.
         self._coordination.stop_tracking_members(task_id)
 
         # Task-worktree teardown (design §5): drop the task's worktree iff

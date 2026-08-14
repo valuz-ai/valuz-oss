@@ -110,6 +110,7 @@ async def send_to_member(
             from_session=from_session_id,
             origin="lead-send",
         )
+    await mailbox_store.ring_for(to_session_id)
     return {"delivered": True, "session_id": to_session_id}
 
 
@@ -211,6 +212,7 @@ async def inject_into_task(
             from_session=from_session_id,
             origin="user-inject",
         )
+    await mailbox_store.ring_for(lead_session_id)
 
     return {
         "delivered": True,

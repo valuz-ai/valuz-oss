@@ -125,6 +125,18 @@ class MailboxRegistry:
         box.put_nowait(msg)
         return True
 
+    def try_get(self, session_id: str) -> InboxMsg | None:
+        """Take a buffered message if one is there, without waiting.
+
+        ``get(timeout=0)`` cannot serve this: ``asyncio.wait_for`` treats a
+        non-positive timeout as "cancel immediately" and raises even when an
+        item is available.
+        """
+        box = self._boxes.get(session_id)
+        if box is None or box.empty():
+            return None
+        return box.get_nowait()
+
     async def get(self, session_id: str, timeout: float | None = None) -> InboxMsg:
         """Await the next message for a session.
 
