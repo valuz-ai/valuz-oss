@@ -809,3 +809,46 @@ def test_an_unproven_lease_check_still_finalizes(db_factory, monkeypatch) -> Non
     assert calls == ["turn", "finalize"], (
         "an unprovable check must not change behaviour"
     )
+
+
+def test_a_draining_loop_does_not_claim_what_it_cannot_deliver(db_factory) -> None:
+    """Claiming during shutdown loses the message outright.
+
+    The drain flips rows to ``consumed``, and the outer loop breaks on
+    ``is_draining`` before it can run a turn — so anything taken here is taken
+    and thrown away. Nothing re-creates it: crash recovery only re-synthesises
+    MEMBER results from run rows, so a user instruction claimed this way is
+    gone for good. And it fires precisely during deploys.
+    """
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr("valuz_agent.modules.tasks.actor_runner.is_draining", lambda: True)
+
+    async def _run() -> None:
+        async with async_unit_of_work() as db:
+            await mailbox_store.enqueue(
+                db,
+                session_id="lead-s",
+                task_id="t1",
+                project_id="p1",
+                user_id=OWNER,
+                kind="text",
+                text="do not eat me",
+                origin="user-inject",
+            )
+        fake = _Collaborators([])
+        runner = ActorRunner(finalizer=fake, coordinator=fake)
+        mailbox_registry.register("lead-s")
+        with pytest.raises(TimeoutError):
+            await runner._await_wakeup(
+                session_id="lead-s", role="lead", ttl=0.3, task_id="t1",
+                project_id="p1", user_id=OWNER, coordinator=fake,
+                fenced=asyncio.Event(),
+            )
+
+    asyncio.run(_run())
+    monkey.undo()
+
+    assert asyncio.run(mailbox_store.has_pending("lead-s")), (
+        "the instruction must still be pending for whoever comes up after the "
+        "deploy — a claimed one is unrecoverable"
+    )

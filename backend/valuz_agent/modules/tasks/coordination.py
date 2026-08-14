@@ -27,6 +27,7 @@ from valuz_agent.adapters import kernel_client
 from valuz_agent.adapters.agent_resolver import resolve_agent_display_name
 from valuz_agent.adapters.data_reader import data_reader
 from valuz_agent.infra.db import async_unit_of_work
+from valuz_agent.infra.lifecycle import is_draining
 from valuz_agent.modules.tasks import planning
 from valuz_agent.modules.tasks.manifest import collect_manifest_safe
 from valuz_agent.modules.tasks.task_state import NON_REVIEWABLE_DONE
@@ -253,7 +254,12 @@ class CoordinationService:
                     # inbox between turns and would otherwise never see it. A
                     # fact can be read twice.
                     break
-                durable = await self._drain_durable_inbox(lead_session_id)
+                # Same rule as the between-turns wait: never claim what a
+                # shutdown will discard. The drain marks rows ``consumed``, and
+                # a turn being torn down cannot act on what it took.
+                durable = (
+                    [] if is_draining() else await self._drain_durable_inbox(lead_session_id)
+                )
                 if durable:
                     for extra in durable:
                         mailbox_registry.put(lead_session_id, extra)
