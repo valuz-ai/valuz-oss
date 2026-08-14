@@ -1,5 +1,32 @@
 import type { CSSProperties } from "react";
-import { Minus, Square, Maximize2, X } from "lucide-react";
+import { Minus, Square, X } from "lucide-react";
+
+/**
+ * Windows "restore down" glyph (Segoe Fluent ``ChromeRestore``): a square in
+ * the lower-left with the top and right edges of a second square showing
+ * behind it.  lucide ships no equivalent — its ``Copy`` is the same
+ * construction mirrored (front square lower-*right*), which reads as the
+ * wrong window, and ``Maximize2``'s outward arrows say "enlarge" on a window
+ * that is already maximized.  Drawn to lucide's own conventions (24×24 box,
+ * ``currentColor``, stroke width inherited) so it sits with ``Minus`` /
+ * ``Square`` / ``X`` in the same control strip.
+ */
+const RestoreIcon = ({ className }: { className?: string }) => (
+  <svg
+    className={className}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+    focusable="false"
+  >
+    <rect x="3" y="8" width="13" height="13" rx="2" />
+    <path d="M8 8V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3" />
+  </svg>
+);
 
 /**
  * Window control buttons (minimize, maximize/restore, close) for the
@@ -54,7 +81,7 @@ export const WindowControls = ({
       style={noDragStyle}
     >
       {isMaximized ? (
-        <Maximize2 className="h-[14px] w-[14px]" strokeWidth={2} />
+        <RestoreIcon className="h-[14px] w-[14px]" />
       ) : (
         <Square className="h-[14px] w-[14px]" strokeWidth={2} />
       )}
