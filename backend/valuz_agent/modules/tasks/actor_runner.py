@@ -125,7 +125,7 @@ class ActorCoordinator(Protocol):
         """Has this member's work already been dealt with (or the task ended)?"""
         ...
 
-    async def reconcile_finished_members(
+    async def recover_crashed_members(
         self, *, task_id: str, project_id: str, user_id: str
     ) -> list[InboxMsg]:
         """Members that finished without their ``member_done`` reaching us."""
@@ -734,7 +734,7 @@ class ActorRunner:
                 continue
             next_reconcile = loop.time() + LEAD_RECONCILE_SLICE_S
             try:
-                recovered = await coordinator.reconcile_finished_members(
+                recovered = await coordinator.recover_crashed_members(
                     task_id=task_id, project_id=project_id, user_id=user_id
                 )
             except Exception:  # noqa: BLE001 — a failed backstop must not end the wait

@@ -85,7 +85,7 @@ class _RecordingCollaborators:
     ) -> bool:
         return True
 
-    async def reconcile_finished_members(self, *, task_id, project_id, user_id) -> list:
+    async def recover_crashed_members(self, *, task_id, project_id, user_id) -> list:
         return []
 
     async def session_still_working(self, session_id: str) -> bool:
@@ -190,7 +190,7 @@ class _BgAwareCollaborators(_RecordingCollaborators):
         # lead did NOT take the fast exit and parked on its mailbox instead.
         return False
 
-    async def reconcile_finished_members(self, *, task_id, project_id, user_id) -> list:
+    async def recover_crashed_members(self, *, task_id, project_id, user_id) -> list:
         # Nothing recoverable — this fixture is about the idle-TTL probe, and a
         # reconcile that invented results would mask what it is measuring.
         return []

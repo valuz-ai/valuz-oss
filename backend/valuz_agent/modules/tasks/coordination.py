@@ -475,18 +475,32 @@ class CoordinationService:
             return False
         return node.status in ("done", "failed")
 
-    async def reconcile_finished_members(
+    async def recover_crashed_members(
         self, *, task_id: str, project_id: str, user_id: str
     ) -> list[InboxMsg]:
-        """Members that finished but whose ``member_done`` never arrived here.
+        """Members whose process died before they could record finishing.
 
-        Same backstop as ``_heartbeat_pending``, exposed for the BETWEEN-turns
-        wait. Inside a turn the lead already re-reads durable state every few
-        seconds; parked on its mailbox it used to read nothing at all, so a
-        result posted into another process's queue was simply never seen.
+        **This is crash recovery, not a delivery backstop — do not delete it.**
 
-        Returns ready-to-consume ``member_done`` messages, so the loop keeps one
-        formatting path whether a result arrived by mailbox or by reconcile.
+        It was written when the mailbox was in-process and a result could be
+        posted into a queue nobody read; the durable mailbox
+        (``mailbox_store``) took that job over, and it is tempting to conclude
+        this became redundant. It did not, and an earlier design note of ours
+        said otherwise and was wrong.
+
+        What it covers is a case no delivery mechanism can: the member's loop
+        never ran its ``finalize_actor`` at all — pod evicted, process killed,
+        unhandled exception — so it left NOTHING behind. There is no fact to
+        have enqueued atomically with, because the fact was never written. The
+        only witness is the kernel session, which lives outside these tables;
+        ``_heartbeat_pending`` reads it, writes the run row and plan node the
+        dead member owed, and reports the result the lead is waiting on.
+
+        Without it, a lead waits out its full idle TTL on a member that will
+        never speak again.
+
+        It still returns ``member_done`` messages so the loop keeps one
+        formatting path whether a result arrived by mailbox or by recovery.
         """
         async with async_unit_of_work(commit=False) as db:
             row = await TaskDatastore(db).get_task_by_project(user_id, project_id, task_id)
@@ -773,7 +787,7 @@ class CoordinationService:
         # below for exactly that reason. It is not yet joined to the write that
         # settles this run either — that settle happens in the loop's
         # ``finally``, and pairing the two is what finally lets
-        # ``reconcile_finished_members`` retire (see R5 in
+        # ``recover_crashed_members`` retire (see R5 in
         # docs/design/task-delivery-and-control.md). Until then this leg is
         # durable but not atomic with the fact it reports.
         if lead_session_id:

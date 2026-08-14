@@ -83,7 +83,7 @@ class _Collaborators:
     ) -> bool:
         return True
 
-    async def reconcile_finished_members(self, *, task_id, project_id, user_id) -> list:
+    async def recover_crashed_members(self, *, task_id, project_id, user_id) -> list:
         return []
 
     async def session_still_working(self, session_id) -> bool:
@@ -327,7 +327,7 @@ class _ReconcilingCoordinator(_Collaborators):
         self._recovered = recovered
         self.reconciles = 0
 
-    async def reconcile_finished_members(self, *, task_id, project_id, user_id) -> list:
+    async def recover_crashed_members(self, *, task_id, project_id, user_id) -> list:
         self.reconciles += 1
         out, self._recovered = self._recovered, []
         return out
@@ -429,7 +429,7 @@ def test_a_failing_reconcile_does_not_end_the_wait(db_factory) -> None:
     """The backstop is best-effort: a broken read must not look like a timeout."""
 
     class _Broken(_Collaborators):
-        async def reconcile_finished_members(self, *, task_id, project_id, user_id) -> list:
+        async def recover_crashed_members(self, *, task_id, project_id, user_id) -> list:
             raise RuntimeError("store unreachable")
 
     fake = _Broken([])
@@ -461,7 +461,7 @@ def test_a_failing_reconcile_does_not_end_the_wait(db_factory) -> None:
 def test_no_durable_writes_while_draining(db_factory) -> None:
     """The backstop must go quiet at teardown.
 
-    ``reconcile_finished_members`` WRITES — it settles run rows and flips plan
+    ``recover_crashed_members`` WRITES — it settles run rows and flips plan
     nodes to ``in_review``. The loop already skips its whole finalize while
     draining, for the reason the drain comment gives: a terminal write here
     fights the boot recovery that is meant to resume the task. A parked lead
@@ -565,7 +565,7 @@ class _DupThenStopped(_Collaborators):
     async def lead_idle_with_no_pending(self, task_id, project_id, user_id, lead_session_id="") -> bool:
         return False  # keep the loop parked on its mailbox
 
-    async def reconcile_finished_members(self, *, task_id, project_id, user_id) -> list:
+    async def recover_crashed_members(self, *, task_id, project_id, user_id) -> list:
         return []
 
 
@@ -613,7 +613,7 @@ def test_an_actionable_member_done_still_runs_a_turn(db_factory) -> None:
         async def lead_idle_with_no_pending(self, task_id, project_id, user_id, lead_session_id="") -> bool:
             return False
 
-        async def reconcile_finished_members(self, *, task_id, project_id, user_id) -> list:
+        async def recover_crashed_members(self, *, task_id, project_id, user_id) -> list:
             return []
 
     fake = _NotSettled([], stops_after=1)
@@ -684,7 +684,7 @@ def test_an_unreadable_goal_is_retried_on_the_next_wake_up(db_factory, monkeypat
         async def lead_idle_with_no_pending(self, task_id, project_id, user_id, lead_session_id="") -> bool:
             return False
 
-        async def reconcile_finished_members(self, *, task_id, project_id, user_id) -> list:
+        async def recover_crashed_members(self, *, task_id, project_id, user_id) -> list:
             return []
 
     reads: list[int] = []
