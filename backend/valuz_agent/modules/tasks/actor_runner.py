@@ -768,7 +768,14 @@ class ActorRunner:
             # Nothing to act on. Park until someone rings or the poll expires —
             # the single blocking point in this loop, which is what keeps a
             # body with several early exits from spinning.
-            await self._park(session_id, min(ACTOR_INBOX_POLL_S, remaining))
+            # Recomputed, not reused: ``remaining`` was measured before three
+            # awaited round trips, and parking on a stale deadline overshoots
+            # the idle TTL by however long those took — precisely under the
+            # load where a bounded TTL matters.
+            left = deadline - loop.time()
+            if left <= 0:
+                raise TimeoutError
+            await self._park(session_id, min(ACTOR_INBOX_POLL_S, left))
 
     @staticmethod
     async def _park(session_id: str, seconds: float) -> None:
