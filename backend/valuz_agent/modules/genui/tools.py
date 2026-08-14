@@ -336,7 +336,7 @@ def _validate_generation_choices(
     """Validate model-authored candidates without making semantic choices.
 
     The caller Agent owns the research judgment. This function only guarantees
-    that live component names and business params match the fixed registry.
+    that query component names and business params match the fixed registry.
     """
 
     requested_components = list(normalize_component_names(component_names))
@@ -366,7 +366,7 @@ def _validate_generation_choices(
     if not isinstance(component_data, list):
         return (), (), "'component_data' must be an array"
 
-    known_bound_components = frozenset(registered_component_data_names())
+    known_query_components = frozenset(registered_component_data_names())
     contracts = registered_component_data_contracts()
     normalized_plans: list[dict[str, Any]] = []
     for index, raw in enumerate(component_data):
@@ -380,7 +380,7 @@ def _validate_generation_choices(
             )
         component = str(raw.get("component") or "").strip()
         params = raw.get("params")
-        if component not in known_bound_components:
+        if component not in known_query_components:
             return (), (), (
                 f"component_data[{index}] uses component '{component}' without "
                 "a registered bound-data contract"
@@ -502,12 +502,31 @@ def _validate_generation_choices(
             requested_components.append(component)
         normalized: dict[str, Any] = {
             "component": component,
-            "source": contract["source"],
             "params": normalized_params,
-            "shape": contract.get("shape") or "",
-            "bindings": tuple(contract.get("bindings") or ()),
+            "inputs": tuple(
+                {
+                    **input_contract,
+                    "params": {
+                        **(
+                            normalized_params
+                            if not input_contract.get("param_map")
+                            else {}
+                        ),
+                        **{
+                            source_name: normalized_params[component_name]
+                            for source_name, component_name in dict(
+                                input_contract.get("param_map") or {}
+                            ).items()
+                            if component_name in normalized_params
+                        },
+                        # Developer-owned constants are authoritative even if
+                        # a future component param happens to reuse the name.
+                        **dict(input_contract.get("fixed_params") or {}),
+                    },
+                }
+                for input_contract in (contract.get("inputs") or ())
+            ),
             "fixed_props": dict(contract.get("fixed_props") or {}),
-            "refresh_interval": contract.get("refresh_interval"),
         }
         normalized_plans.append(normalized)
     return tuple(requested_components), tuple(normalized_plans), None
@@ -568,36 +587,41 @@ def _ensure_planned_component_data_refs(
         ]
         if not candidates:
             continue
-        expected_ref = {
-            "source": plan["source"],
-            "params": plan["params"],
-            **({"shape": plan["shape"]} if plan.get("shape") else {}),
-            **(
-                {"refresh": {"interval": plan["refresh_interval"]}}
-                if plan.get("refresh_interval")
-                else {}
-            ),
+        expected_refs = {
+            str(input_contract["key"]): {
+                "source": input_contract["source"],
+                "params": input_contract.get("params") or {},
+                **({"shape": input_contract["shape"]} if input_contract.get("shape") else {}),
+                **(
+                    {"refresh": {"interval": input_contract["refresh_interval"]}}
+                    if input_contract.get("refresh_interval")
+                    else {}
+                ),
+            }
+            for input_contract in (plan.get("inputs") or ())
         }
         # During edit, retain instance identity by preferring an exact existing
         # ref; for new components prefer one without any compiler-authored ref.
         component = next(
-            (candidate for candidate in candidates if candidate.get("dataRef") == expected_ref),
+            (candidate for candidate in candidates if candidate.get("dataRefs") == expected_refs),
             next(
-                (candidate for candidate in candidates if "dataRef" not in candidate),
+                (candidate for candidate in candidates if "dataRefs" not in candidate),
                 candidates[0],
             ),
         )
         component_id = str(component["id"])
         claimed_ids.add(component_id)
-        component["dataRef"] = expected_ref
+        component["dataRefs"] = expected_refs
         declared = frozenset(component_property_names(target))
         for prop, value in dict(plan.get("fixed_props") or {}).items():
             if prop in declared:
                 component[prop] = value
-        data_prefix = f"/data/{component_id}"
-        for prop in tuple(plan.get("bindings") or ()):
-            if prop in declared:
-                component[prop] = {"path": f"{data_prefix}/{prop}"}
+        for input_contract in (plan.get("inputs") or ()):
+            input_key = str(input_contract.get("key") or "")
+            data_prefix = f"/data/{component_id}/{input_key}"
+            for prop, field in dict(input_contract.get("bindings") or {}).items():
+                if prop in declared:
+                    component[prop] = {"path": f"{data_prefix}/{field}"}
     return "\n".join(
         json.dumps(message, ensure_ascii=False, separators=(",", ":"))
         for message in messages
@@ -705,25 +729,28 @@ def _compiled_document_error(
                 if (
                     isinstance(current, dict)
                     and isinstance(current.get("id"), str)
-                    and "dataRef" in current
+                    and "dataRefs" in current
                 ):
                     current_refs[current["id"]] = (
                         str(current.get("component") or ""),
-                        current.get("dataRef"),
+                        current.get("dataRefs"),
                     )
 
     claimed_ids: set[str] = set()
     for plan in component_data:
         target = str(plan.get("component") or "")
-        expected_ref = {
-            "source": plan.get("source"),
-            "params": plan.get("params"),
-            **({"shape": plan["shape"]} if plan.get("shape") else {}),
-            **(
-                {"refresh": {"interval": plan["refresh_interval"]}}
-                if plan.get("refresh_interval")
-                else {}
-            ),
+        expected_refs = {
+            str(input_contract["key"]): {
+                "source": input_contract.get("source"),
+                "params": input_contract.get("params") or {},
+                **({"shape": input_contract["shape"]} if input_contract.get("shape") else {}),
+                **(
+                    {"refresh": {"interval": input_contract["refresh_interval"]}}
+                    if input_contract.get("refresh_interval")
+                    else {}
+                ),
+            }
+            for input_contract in (plan.get("inputs") or ())
         }
         matching = [
             component
@@ -731,44 +758,58 @@ def _compiled_document_error(
             if component.get("component") == target
             and isinstance(component.get("id"), str)
             and component["id"] not in claimed_ids
-            and component.get("dataRef") == expected_ref
+            and component.get("dataRefs") == expected_refs
         ]
         if not matching:
-            return f"planned live component '{target}' is missing its canonical dataRef"
+            return f"planned query component '{target}' is missing its canonical dataRefs"
         component = matching[0]
         component_id = str(component["id"])
         claimed_ids.add(component_id)
-        data_prefix = f"/data/{component_id}"
-        for prop in tuple(plan.get("bindings") or ()):
-            if component.get(prop) != {"path": f"{data_prefix}/{prop}"}:
-                return f"planned live component '{component_id}' has invalid binding '{prop}'"
+        for input_contract in (plan.get("inputs") or ()):
+            input_key = str(input_contract.get("key") or "")
+            data_prefix = f"/data/{component_id}/{input_key}"
+            for prop, field in dict(input_contract.get("bindings") or {}).items():
+                if component.get(prop) != {"path": f"{data_prefix}/{field}"}:
+                    return f"planned query component '{component_id}' has invalid binding '{prop}'"
         for prop, value in dict(plan.get("fixed_props") or {}).items():
             if component.get(prop) != value:
-                return f"planned live component '{component_id}' changed fixed prop '{prop}'"
+                return f"planned query component '{component_id}' changed fixed prop '{prop}'"
 
     for component in components:
-        if "dataRef" not in component:
+        if "dataRef" in component:
+            component_id = component.get("id") or ""
+            return f"component '{component_id}' uses the unsupported single dataRef form"
+        if "dataRefs" not in component:
             continue
         component_id = str(component.get("id") or "")
         component_name = str(component.get("component") or "")
-        ref = component.get("dataRef")
+        refs = component.get("dataRefs")
         contract = contracts.get(component_name)
-        if not isinstance(ref, dict) or contract is None:
-            return f"component '{component_id}' has an unregistered dataRef"
-        if ref.get("source") != contract.get("source"):
-            return f"component '{component_id}' dataRef does not match its fixed source"
+        if not isinstance(refs, dict) or contract is None:
+            return f"component '{component_id}' has unregistered dataRefs"
+        canonical_inputs = {
+            str(value.get("key")): str(value.get("source"))
+            for value in (contract.get("inputs") or ())
+        }
+        actual_inputs = {
+            str(key): str(value.get("source"))
+            for key, value in refs.items()
+            if isinstance(value, dict)
+        }
+        if actual_inputs != canonical_inputs:
+            return f"component '{component_id}' dataRefs do not match its fixed inputs"
         if component_id in claimed_ids:
             continue
         if generation_mode != "edit":
-            return f"component '{component_id}' has an unplanned dataRef"
-        if current_refs.get(component_id) != (component_name, ref):
-            return f"edit added or changed unplanned dataRef on component '{component_id}'"
+            return f"component '{component_id}' has unplanned dataRefs"
+        if current_refs.get(component_id) != (component_name, refs):
+            return f"edit added or changed unplanned dataRefs on component '{component_id}'"
 
     if generation_mode == "edit":
         actual_ids = {str(component.get("id") or "") for component in components}
         for component_id in current_refs:
             if component_id not in claimed_ids and component_id not in actual_ids:
-                return f"edit removed existing live component '{component_id}'"
+                return f"edit removed existing query component '{component_id}'"
     return None
 
 

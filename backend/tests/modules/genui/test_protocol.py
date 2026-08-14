@@ -41,12 +41,12 @@ def test_prompt_splices_request_data_catalog_and_v091_contract() -> None:
     assert "TimeSeriesChart" in prompt
     assert 'not nested under "props"' in prompt
     assert "Do not create placeholder charts" in prompt
-    assert "Bound component data is planned and completed by generate_ui" in prompt
+    assert "Query component data is planned and completed by generate_ui" in prompt
     assert "catalog-typed inline props" in prompt
     assert "Do not inline current" in prompt
     assert "frozen snapshot" in prompt
-    assert "registered live component" in prompt
-    assert "Do not\nauthor source ids, API URLs, dataRef metadata" in prompt
+    assert "registered query component" in prompt
+    assert "Do not\nauthor source ids, API URLs, dataRefs metadata" in prompt
     assert "Never create\nsurface-global /refs" in prompt
 
 
@@ -70,19 +70,23 @@ def test_prompt_keeps_live_execution_details_out_of_the_compiler_plan() -> None:
         component_data=[
             {
                 "component": "QuoteStrip",
-                "source": "finance.market.quote",
                 "params": {"symbol": "US:NVDA"},
-                "shape": "FinanceMetricData",
-                "bindings": ("metrics", "source", "asOf"),
-                "refresh_interval": 30,
+                "inputs": ({
+                    "key": "main",
+                    "source": "finance.market.quote",
+                    "shape": "FinanceMetricData",
+                    "bindings": {"metrics": "metrics", "source": "source", "asOf": "asOf"},
+                    "refresh_interval": 30,
+                },),
             }
         ],
     )
 
-    assert "PLANNED BOUND COMPONENTS" in prompt
+    assert "PLANNED QUERY COMPONENTS" in prompt
     assert '"component": "QuoteStrip"' in prompt
     assert '"params": {"symbol": "US:NVDA"}' in prompt
-    assert '"bindings": ["metrics", "source", "asOf"]' in prompt
+    assert '"key": "main"' in prompt
+    assert '"bindings": {"metrics": "metrics", "source": "source", "asOf": "asOf"}' in prompt
     assert "finance.market.quote" not in prompt
     assert "FinanceMetricData" not in prompt
 
@@ -165,13 +169,21 @@ def test_new_page_prompt_has_no_edit_contract() -> None:
 def test_registered_component_data_contracts_parse_param_types(monkeypatch) -> None:
     notes = (
         'COMPONENT_DATA_CONTRACT {"component":"TimeSeriesChart",'
-        '"source":"finance.market.kline","params":"{symbols: comma-separated symbols, '
-        'rangeDays?: 2-3650, normalize?: boolean}","shape":"FinanceTimeSeriesData",'
-        '"bindings":["data","series"],"fixedProps":{"xKey":"date"},'
-        '"refreshInterval":300}\n'
+        '"params":"{symbols: comma-separated symbols, rangeDays?: 2-3650, normalize?: boolean}",'
+        '"inputs":[{"key":"prices","source":"finance.market.kline",'
+        '"shape":"FinanceTimeSeriesData","bindings":{"data":"data","series":"series"},'
+        '"paramMap":{"symbols":"symbols"},"refreshInterval":300}],'
+        '"fixedProps":{"xKey":"date"}}\n'
         'COMPONENT_DATA_CONTRACT {"component":"MarketOverview",'
-        '"source":"finance.macro.commodities","params":"{commodity: oil|gold|silver}",'
-        '"shape":"FinanceMetricData","bindings":["metrics"],"refreshInterval":300}'
+        '"params":"{commodity: oil|gold|silver}","inputs":[{"key":"main",'
+        '"source":"finance.macro.commodities","shape":"FinanceMetricData",'
+        '"bindings":{"metrics":"metrics"},"refreshInterval":300}]}\n'
+        'COMPONENT_DATA_CONTRACT {"component":"CompanyResearchOverview",'
+        '"params":"{symbol: prefixed}","inputs":['
+        '{"key":"quote","source":"finance.market.quote","shape":"FinanceMetricData",'
+        '"bindings":{"quoteMetrics":"metrics"},"paramMap":{"symbol":"symbol"}},'
+        '{"key":"documents","source":"finance.company.docs","shape":"FinanceDocumentData",'
+        '"bindings":{"documentItems":"items"},"paramMap":{"symbol":"symbol"}}]}'
     )
     monkeypatch.setattr(
         "valuz_agent.modules.genui.protocol.edition_catalog_text",
@@ -181,8 +193,14 @@ def test_registered_component_data_contracts_parse_param_types(monkeypatch) -> N
     contracts = registered_component_data_contracts()
 
     assert contracts["TimeSeriesChart"]["required_params"] == ("symbols",)
-    assert contracts["TimeSeriesChart"]["source"] == "finance.market.kline"
-    assert contracts["TimeSeriesChart"]["bindings"] == ("data", "series")
+    assert contracts["TimeSeriesChart"]["inputs"][0]["key"] == "prices"
+    assert contracts["TimeSeriesChart"]["inputs"][0]["source"] == "finance.market.kline"
+    assert contracts["TimeSeriesChart"]["inputs"][0]["bindings"] == {
+        "data": "data", "series": "series"
+    }
+    assert contracts["TimeSeriesChart"]["inputs"][0]["param_map"] == {
+        "symbols": "symbols"
+    }
     assert contracts["TimeSeriesChart"]["fixed_props"] == {"xKey": "date"}
     assert contracts["TimeSeriesChart"]["param_specs"]["rangeDays"] == {
         "required": False,
@@ -197,9 +215,16 @@ def test_registered_component_data_contracts_parse_param_types(monkeypatch) -> N
         "gold",
         "silver",
     )
+    assert [
+        value["key"] for value in contracts["CompanyResearchOverview"]["inputs"]
+    ] == ["quote", "documents"]
+    assert contracts["CompanyResearchOverview"]["inputs"][1]["param_map"] == {
+        "symbol": "symbol"
+    }
     guide = registered_component_data_tool_guide()
     assert "TimeSeriesChart {symbols: comma-separated symbols" in guide
     assert "rangeDays?: 2-3650" in guide
+    assert "CompanyResearchOverview {symbol: prefixed}" in guide
     assert "finance.market.kline" not in guide
     assert "Do not pass source ids" in guide
 

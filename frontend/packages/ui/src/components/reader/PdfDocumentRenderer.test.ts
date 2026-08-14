@@ -3,6 +3,7 @@ import {
   canUseNormalizedPdfRects,
   locatePdfTextItemIndexes,
   mapNormalizedPdfRects,
+  padPdfHighlightRects,
 } from "./PdfDocumentRenderer";
 
 describe("PDF citation geometry", () => {
@@ -34,6 +35,24 @@ describe("PDF citation geometry", () => {
         800,
       ),
     ).toEqual([]);
+  });
+
+  it("adds the same padding as HTML and clamps it to the page", () => {
+    expect(
+      padPdfHighlightRects(
+        [
+          { left: 100, top: 160, width: 400, height: 24 },
+          { left: 0, top: 0, width: 10, height: 10 },
+          { left: 990, top: 790, width: 10, height: 10 },
+        ],
+        1000,
+        800,
+      ),
+    ).toEqual([
+      { left: 96, top: 157, width: 408, height: 30 },
+      { left: 0, top: 0, width: 14, height: 13 },
+      { left: 986, top: 787, width: 14, height: 13 },
+    ]);
   });
 
   it("falls back to text when document or viewer rotation differs", () => {

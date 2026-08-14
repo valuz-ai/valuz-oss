@@ -85,6 +85,57 @@ describe("DocumentReaderView", () => {
     expect(header?.classList.contains("border-surface-border")).toBe(true);
   });
 
+  it("renders the original source link after a chunk document body", async () => {
+    const user = userEvent.setup();
+    render(<DocumentReaderView doc={CHUNKS} />);
+
+    const link = screen.getByRole("link", { name: "原文链接" });
+    expect(link.getAttribute("href")).toBe("https://example.com/original");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.querySelector("svg")).toBeTruthy();
+    expect(link.parentElement?.classList.contains("px-8")).toBe(true);
+    const label = screen.getByText("原文链接");
+    expect(label.classList.contains("border-dotted")).toBe(true);
+    expect(label.classList.contains("border-transparent")).toBe(true);
+    expect(label.classList.contains("group-hover:border-current")).toBe(true);
+    expect(link.compareDocumentPosition(screen.getByText("Revenue grew."))).toBe(
+      Node.DOCUMENT_POSITION_PRECEDING,
+    );
+
+    await user.hover(link);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain(
+      "https://example.com/original",
+    );
+    const tooltipSurface = document.querySelector<HTMLElement>(
+      "[data-original-link-tooltip]",
+    );
+    expect(tooltipSurface).toBeTruthy();
+    expect(tooltipSurface?.classList.contains("bg-surface")).toBe(true);
+    expect(tooltipSurface?.classList.contains("border-surface-border")).toBe(
+      true,
+    );
+    expect(tooltipSurface?.classList.contains("shadow-xl")).toBe(true);
+    expect(
+      tooltipSurface?.classList.contains(
+        "w-[min(360px,calc(100vw-32px))]",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not render an original source footer without an original URL", () => {
+    render(
+      <DocumentReaderView
+        doc={{
+          ...CHUNKS,
+          originalUrl: undefined,
+        }}
+      />,
+    );
+
+    expect(screen.queryByRole("link", { name: "原文链接" })).toBeNull();
+  });
+
   it("anchors every chunk so hosts can deep-link to a block", () => {
     const { container } = render(<DocumentReaderView doc={CHUNKS} />);
 

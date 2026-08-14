@@ -1168,10 +1168,12 @@ function CitationHoverCard({
         >
           <button
             type="button"
-            className="inline-flex items-center gap-1 rounded-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            className="group inline-flex items-center gap-1 rounded-sm font-medium text-primary no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             onClick={openSource}
           >
-            {openActionLabel}
+            <span className="border-b border-dotted border-transparent leading-5 group-hover:border-current group-focus-visible:border-current">
+              {openActionLabel}
+            </span>
             <ExternalLink className="h-3 w-3" aria-hidden="true" />
           </button>
         </div>

@@ -66,7 +66,38 @@ describe("A2UI Gallery menu scrolling", () => {
 
     first.unmount();
     const reloaded = render(<A2UIGallery embedded />);
-    expect(reloaded.container.querySelector(".demo-content")).toHaveProperty("scrollTop", 0);
+    expect(reloaded.container.querySelector(".demo-content")).toHaveProperty("scrollTop", 160);
+  });
+
+  it("keeps the host route and restores its category when an embedded Gallery remounts", () => {
+    window.history.replaceState(null, "", "#/developer/components");
+    const first = render(<A2UIGallery embedded />);
+
+    fireEvent.click(screen.getByRole("button", { name: /内容与数据/ }));
+
+    expect(window.location.hash).toBe("#/developer/components");
+    expect(
+      screen.getByRole("button", { name: /内容与数据/ }).getAttribute("aria-current"),
+    ).toBe("true");
+    const firstContent = first.container.querySelector<HTMLElement>(".demo-content");
+    expect(firstContent).not.toBeNull();
+    firstContent!.scrollTop = 260;
+    const documentLink = document.createElement("a");
+    documentLink.href = "#/finance/doc/doc-1";
+    documentLink.addEventListener("click", (event) => event.preventDefault());
+    firstContent!.append(documentLink);
+    fireEvent.click(documentLink);
+
+    first.unmount();
+    const restored = render(<A2UIGallery embedded />);
+    expect(window.location.hash).toBe("#/developer/components");
+    expect(
+      screen.getByRole("button", { name: /内容与数据/ }).getAttribute("aria-current"),
+    ).toBe("true");
+    expect(restored.container.querySelector(".demo-content")).toHaveProperty(
+      "scrollTop",
+      260,
+    );
   });
 
   it("shows all eight chart palettes at the top of the chart gallery", () => {

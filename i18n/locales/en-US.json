@@ -1179,6 +1179,11 @@
     }
   },
   "settings": {
+    "group": {
+      "personal": "Personal Settings",
+      "runtime": "Runtime & Tools",
+      "system": "System"
+    },
     "browser": {
       "statusLabel": "Browser",
       "connected": "Connected",
@@ -1711,7 +1716,7 @@
         "label": "Connectors"
       },
       "model": {
-        "desc": "LLM providers & keys",
+        "desc": "Model providers, runtimes, and defaults",
         "label": "Models"
       },
       "parsing": {
@@ -1719,7 +1724,7 @@
         "label": "Document Parsing"
       },
       "general": {
-        "desc": "Appearance & shortcuts",
+        "desc": "Theme, type size, language, and shortcuts",
         "label": "General"
       },
       "memory": {
@@ -1727,8 +1732,8 @@
         "label": "Memory"
       },
       "personalization": {
-        "desc": "Citations, verification, and memory",
-        "label": "Personalization"
+        "desc": "Conversation preferences, verification, and memory",
+        "label": "Conversation & Memory"
       },
       "browser": {
         "desc": "Connect and manage the controlled browser",
@@ -2274,6 +2279,7 @@
       "loadingPdf": "Loading PDF",
       "nextPage": "Next page",
       "openOriginal": "Open original",
+      "originalLink": "Original link",
       "pageNumber": "Page number",
       "pdfFallback": "PDF.js failed; using page-only preview.",
       "pdfPageText": "Page {page} text",

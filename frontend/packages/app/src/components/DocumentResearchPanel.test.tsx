@@ -116,6 +116,54 @@ describe("DocumentResearchPanel", () => {
     );
   });
 
+  it("renders an unavailable provider summary as an empty state without leaking its code", async () => {
+    vi.spyOn(documentResearchApi, "getSummary").mockResolvedValue(null);
+    vi.spyOn(documentResearchApi, "generateSummary").mockResolvedValue({
+      ...SUMMARY,
+      status: "failed",
+      content: "",
+      citation_bundle: { version: 1, citations: [] },
+      research_session_id: null,
+      message_id: null,
+      error_message: "provider_summary_unavailable",
+    });
+
+    render(<DocumentResearchPanel document={DOCUMENT} />);
+
+    expect(await screen.findByText("No cited summary yet")).toBeTruthy();
+    expect(screen.queryByText("provider_summary_unavailable")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("shows a stable degraded notice instead of citation validation codes", async () => {
+    vi.spyOn(documentResearchApi, "getSummary").mockResolvedValue({
+      ...SUMMARY,
+      status: "degraded",
+      error_message: "citation_integrity_not_passed",
+    });
+
+    render(<DocumentResearchPanel document={DOCUMENT} />);
+
+    expect(
+      await screen.findByText(
+        "Some summary claims could not be fully verified.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("citation_integrity_not_passed")).toBeNull();
+  });
+
+  it("does not expose provider request errors in the summary panel", async () => {
+    vi.spyOn(documentResearchApi, "getSummary").mockRejectedValue(
+      new Error("reportify_summary_http_500"),
+    );
+
+    render(<DocumentResearchPanel document={DOCUMENT} />);
+
+    expect(await screen.findByText("Something went wrong")).toBeTruthy();
+    expect(screen.queryByText("reportify_summary_http_500")).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
   it("generates a missing summary and opens its canonical citation", async () => {
     vi.spyOn(documentResearchApi, "getSummary").mockResolvedValue(null);
     vi.spyOn(documentResearchApi, "generateSummary").mockResolvedValue(SUMMARY);
