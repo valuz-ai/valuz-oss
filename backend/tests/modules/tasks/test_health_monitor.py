@@ -346,3 +346,33 @@ def test_active_lead_bindings_is_one_query_and_skips_rejected_leads(db_factory) 
         "a rejected lead row must never be handed to the watchdog — it would "
         "flip a healthy task to blocked via a mailbox that never registers"
     )
+
+
+def test_blocking_a_task_parks_the_lead_run_it_declared_dead(db_factory) -> None:
+    """No terminal transition may leave a run row claiming its lead is running.
+
+    ``stop_task`` and ``finish_task`` both settle it. Blocking did not — and a
+    lead's loop leaves a halted task WITHOUT finalizing, because the terminal
+    state belongs to whoever halted it, so nothing else ever would. A task
+    blocked precisely BECAUSE its lead is gone, still indexed as having a
+    running lead, is the reading the watchdog exists to correct.
+    """
+    _seed(db_factory, lease="expired")
+    mon = _monitor()
+
+    assert asyncio.run(mon.sweep_once()) == []  # suspected
+    assert asyncio.run(mon.sweep_once()) == ["t1"]  # confirmed → blocked
+    assert _task_status(db_factory) == "blocked"
+
+    db = db_factory()
+    try:
+        run = (
+            db.execute(select(TaskSessionRow).filter_by(session_id="lead-s")).scalars().first()
+        )
+        assert run is not None and run.status == "paused", (
+            "the lead run must not still read 'active' on a task blocked for "
+            f"having no lead (got {run.status if run else None})"
+        )
+        assert run.ended_at, "and it must carry an end time"
+    finally:
+        db.close()
