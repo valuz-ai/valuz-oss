@@ -706,7 +706,15 @@ class ActorRunner:
                 # leave, but WITHOUT a message: a stop that travels as a queued
                 # message can be read by the loop that replaced us.
                 raise KeyError(session_id)
-            durable = await self._drain_durable_inbox(session_id)
+            # NOT while draining. The drain CLAIMS — it flips rows to
+            # ``consumed`` — and the outer loop breaks on ``is_draining`` before
+            # it can run a turn, so anything taken here is taken and thrown
+            # away. Nothing re-creates a user instruction: crash recovery only
+            # re-synthesises member results from run rows. Leave it pending for
+            # whoever comes up after the deploy.
+            durable = (
+                [] if is_draining() else await self._drain_durable_inbox(session_id)
+            )
             if durable:
                 for extra in durable[1:]:
                     mailbox_registry.put(session_id, extra)
