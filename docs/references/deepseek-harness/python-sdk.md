@@ -174,6 +174,16 @@ marked `ignorable` — the vocabulary is versioned by `SESSION_FORMAT_VERSION`
   session-tree filter keeps ancestry for the lifetime of the process.
 - **stderr** is captured by the SDK (last 400 lines) and attached to timeout /
   transport-closed diagnostics.
+- **Frame sizes**: single NDJSON frames routinely exceed 64 KiB — a
+  ``request/header`` event carries the full system prompt plus every tool
+  schema. Any client reading the stream with a line-length cap (e.g. Python
+  asyncio's 64 KiB ``readline`` default) dies mid-turn on real sessions;
+  size the reader in megabytes (field failure: our kernel adapter needed a
+  32 MiB limit).
+- **Compositions without a logger plugin are silent**: MCP connect failures
+  and other plugin diagnostics go to the dsh logger seam — with no logger
+  row mounted, they vanish (stdout is protocol-only; stderr stays empty).
+  Mount a stderr logger when debugging a composition.
 
 ## The two alternative surfaces
 
