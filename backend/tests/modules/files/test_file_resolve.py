@@ -175,22 +175,3 @@ class TestResolveOne:
         d = await _resolve_one(ref, "u", [tmp_path.resolve()])
         assert d.error == "not_found" and not d.exists
         assert not d.capabilities.can_download
-
-
-def test_parse_tolerates_a_surplus_slash() -> None:
-    """A model that ADDS a slash must resolve to the same path as one that
-    drops one — mirrors ``file-uri.ts``.
-
-    Observed on qa: a lead linked its report as ``valuz-file:////data/…``. The
-    surplus slash survives into the path, and every consumer decides what a
-    path is by comparing it against a root — ``//data/x`` is not under
-    ``/data``, so the file was reported as outside its own project.
-    """
-    canonical = "/data/x/report.html"
-    for ref in (
-        "valuz-file://data/x/report.html",
-        "valuz-file:///data/x/report.html",
-        "valuz-file:////data/x/report.html",
-        "valuz-file://///data/x/report.html",
-    ):
-        assert parse_valuz_file_uri(ref) == canonical, ref

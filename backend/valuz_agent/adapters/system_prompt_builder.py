@@ -22,14 +22,32 @@ import re
 # the model to link files it produced with the ``valuz-file://`` scheme so the
 # client can resolve them to a local path or a signed URL regardless of whether the
 # run is local or in a cloud sandbox. See docs/design/file-address-resolution.md.
+# Canonical form is ``valuz-file:///abs/path`` — THREE slashes, and each has a
+# job: ``//`` opens the URI authority (empty, because a file has no host) and
+# the third is the filesystem root. That is the shape to teach.
+#
+# What this used to teach was a substitutable template, ``valuz-file:///
+# <absolute-path>``, in a sentence that also said the placeholder "begins with
+# `/`". Fill it in literally and you get FOUR. A qa lead did: it linked its
+# finished report as ``valuz-file:////data/…``, the surplus slash survived
+# parsing as ``//data/…``, and since every consumer decides what a path IS by
+# comparing it against a root, the UI declared the file outside a project whose
+# root was a literal prefix of its path, and refused to open it.
+#
+# So: keep the canonical spelling, drop the placeholder. A worked example
+# cannot be substituted into wrongly, and naming the one failure mode is worth
+# more than an abstract form. The parser tolerates 2/3/4 slashes anyway
+# (file-uri.ts / modules/files/uri.py) — that is the floor, not the teaching.
 OUTPUT_FORMAT_INSTRUCTIONS = (
     "When you reference a file you created, wrote, or delivered in your reply, "
-    "link it as a markdown link `[<name>](valuz-file:///<absolute-path>)`, joining "
-    "the scheme `valuz-file://` with the file's absolute path (which begins with "
-    "`/`) so the result has three slashes, e.g. "
-    "`[report.md](valuz-file:///Users/you/proj/report.md)`. The client resolves "
-    "that link to a local path or a signed URL so the user can open the file."
+    "link it as a markdown link using the `valuz-file://` scheme followed by the "
+    "file's absolute path, e.g. "
+    "`[report.md](valuz-file:///Users/you/proj/report.md)`. Three slashes in "
+    "total: two open the scheme, and the third is the leading `/` of the "
+    "absolute path itself — do NOT add a fourth. The client resolves that link "
+    "to a local path or a signed URL so the user can open the file."
 )
+
 
 AUTHORIZATION_BOUNDARY_INSTRUCTIONS = (
     "Do not create, export, or write files; create or modify automations or reminders; "

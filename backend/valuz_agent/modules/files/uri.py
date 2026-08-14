@@ -20,28 +20,19 @@ _WIN_DRIVE = re.compile(r"^/[A-Za-z]:[\\/]")
 def parse_valuz_file_uri(ref: str) -> str:
     """Extract the absolute path from a ``valuz-file://<abs>`` URI.
 
-    Canonical form is three-slash (empty authority). Producers miscount that
-    separator in BOTH directions and both are **tolerated**:
-
-    * two slashes (``valuz-file://Users/…``) — the first path segment was
-      mis-parsed as the host, so the authority is folded back onto the path;
-    * four or more (``valuz-file:////data/…``) — the authority is empty and the
-      surplus lands in the path, giving ``//data/…``. That extra slash is not
-      cosmetic: consumers decide what a path IS by comparing it against a root,
-      and ``//data/x`` is not under ``/data``. Observed live — a task lead
-      linked its finished report this way and the UI called the file "outside
-      the project" and refused to open it.
-
-    Both spellings therefore resolve to the same absolute path. Raises
-    ``ValueError`` only for a wrong scheme or an empty path. Does not touch the
-    filesystem or validate ownership.
+    Canonical form is three-slash (empty authority). A two-slash ref
+    (``valuz-file://Users/…``) — whose producer dropped the authority separator,
+    so the first path segment was mis-parsed as the host — is **tolerated**: the
+    authority is folded back onto the front of the path, so ``//abs`` and
+    ``///abs`` resolve to the same absolute path. Raises ``ValueError`` only for a
+    wrong scheme or an empty path. Does not touch the filesystem or validate
+    ownership.
     """
     parts = urlsplit(ref.strip())
     if parts.scheme != SCHEME:
         raise ValueError(f"not a {SCHEME}:// uri")
     raw = f"/{parts.netloc}{parts.path}" if parts.netloc else parts.path
     path = unquote(raw)
-    path = re.sub(r"^/{2,}", "/", path)
     if _WIN_DRIVE.match(path):
         path = path[1:]  # /C:/x -> C:/x
     if not path:

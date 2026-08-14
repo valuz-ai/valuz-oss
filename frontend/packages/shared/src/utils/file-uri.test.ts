@@ -48,36 +48,10 @@ describe("file-uri codec", () => {
     });
   });
 
-  describe("valuz-file:// is TOLERANT (models miscount slashes both ways)", () => {
+  describe("valuz-file:// is TOLERANT (models may drop a slash)", () => {
     it("folds a two-slash host back so //abs === ///abs", () => {
       expect(parseFileRef("valuz-file://Users/u/a.md")).toBe("/Users/u/a.md");
       expect(parseFileRef("valuz-file:///Users/u/a.md")).toBe("/Users/u/a.md");
-    });
-
-    it("collapses an EXTRA slash — the four-slash form a lead actually emitted", () => {
-      // Observed on qa: a task lead linked its finished report as
-      // ``valuz-file:////data/…``. That parses to an empty authority and a
-      // pathname of ``//data/…``, and the doubled slash is not cosmetic —
-      // every consumer decides what a path is by comparing it against the
-      // project root, and ``//data/x`` is not under ``/data``. The UI told the
-      // user the file was outside the project and refused to open a report
-      // sitting exactly where the link said.
-      expect(parseFileRef("valuz-file:////data/x/report.html")).toBe(
-        "/data/x/report.html",
-      );
-      expect(parseFileRef("valuz-file://///data/x/report.html")).toBe(
-        "/data/x/report.html",
-      );
-    });
-
-    it("all slash counts agree on one path", () => {
-      const paths = [
-        "valuz-file://data/x/a.md",
-        "valuz-file:///data/x/a.md",
-        "valuz-file:////data/x/a.md",
-      ].map(parseFileRef);
-      expect(new Set(paths).size).toBe(1);
-      expect(paths[0]).toBe("/data/x/a.md");
     });
   });
 
