@@ -831,11 +831,6 @@ export function ArtifactViewerShell({
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.key === "Escape" && onClose) {
-      event.preventDefault();
-      onClose();
-      return;
-    }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "r") {
       if (!onReload) return;
       event.preventDefault();

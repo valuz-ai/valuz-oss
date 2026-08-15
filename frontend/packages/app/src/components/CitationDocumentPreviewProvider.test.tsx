@@ -364,7 +364,17 @@ describe("citation document preview helpers", () => {
     expect(screen.getByRole("tab", { name: "摘要" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "问答" })).toBeTruthy();
 
-    fireEvent.click(screen.getByText("dismiss document"));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    const apple = /^(darwin|mac|iphone|ipad|ipod)/i.test(
+      navigator.platform || navigator.userAgent,
+    );
+    fireEvent.keyDown(window, {
+      key: "w",
+      metaKey: apple,
+      ctrlKey: !apple,
+    });
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
     });
