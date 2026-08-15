@@ -4,6 +4,13 @@ export type { UseKbDocTreeResult } from "./use-kb-doc-tree";
 export { useForkSession } from "./use-fork-session";
 export { useLeadFollowUpChat } from "./use-lead-follow-up-chat";
 export type { LeadFollowUpChat } from "./use-lead-follow-up-chat";
+export {
+  isPreviewCloseShortcut,
+  usePreviewCloseShortcut,
+} from "./use-preview-close-shortcut";
+export type {
+  UsePreviewCloseShortcutOptions,
+} from "./use-preview-close-shortcut";
 export { useAskUserQuestionCards } from "./use-ask-user-question-cards";
 export { useSkillSubmissionCards } from "./use-skill-submission-cards";
 export {

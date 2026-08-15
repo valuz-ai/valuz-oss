@@ -33,6 +33,7 @@ import {
 import DOMPurify from "dompurify";
 
 import { usePlatform } from "../platform";
+import { usePreviewCloseShortcut } from "../hooks/use-preview-close-shortcut";
 import { DocumentResearchPanel } from "./DocumentResearchPanel";
 
 interface CitationOpenTarget {
@@ -524,15 +525,12 @@ export function CitationDocumentPreviewProvider({
     void load(target, controller.signal);
   }, [load, target]);
 
+  const previewOpen = Boolean(target || directDocumentOpen);
+  usePreviewCloseShortcut({ active: previewOpen, onClose: closeCitation });
+
   useEffect(() => {
-    if (!target && !directDocumentOpen) return;
-    dialogRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeCitation();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeCitation, directDocumentOpen, target]);
+    if (previewOpen) dialogRef.current?.focus();
+  }, [previewOpen]);
 
   const context = useMemo(
     () => ({
@@ -543,8 +541,6 @@ export function CitationDocumentPreviewProvider({
     }),
     [closeCitation, dismissDocument, openCitation, openDocument],
   );
-  const previewOpen = Boolean(target || directDocumentOpen);
-
   useLayoutEffect(() => {
     if (!previewOpen) {
       setPreviewBox(null);

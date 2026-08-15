@@ -10,6 +10,7 @@ import {
 } from "@valuz/ui";
 
 import type { UseArtifactFileResult } from "../hooks/use-artifact-file";
+import { usePreviewCloseShortcut } from "../hooks/use-preview-close-shortcut";
 
 /** Panel ids for the content ↔ artifact-preview split. */
 const CONTENT_PANEL_ID = "content";
@@ -91,6 +92,12 @@ export function ArtifactSplitPane({
   }, []);
 
   const open = tabs.length > 0 && splitFits;
+  usePreviewCloseShortcut({
+    active: open && activePath !== null,
+    onClose: () => {
+      if (activePath) closeTab(activePath);
+    },
+  });
 
   // Force the even split on every open. The Group remembers each panel's size
   // by id across mount/unmount, so the artifact panel's `defaultSize` only
