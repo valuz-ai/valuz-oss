@@ -29,8 +29,18 @@ def _group_for(source: str, auth_type: str) -> str:
     return "api_key"
 
 
-def _m(mid: str, label: str | None = None, runtimes: tuple[str, ...] | None = None) -> LLMModel:
-    return LLMModel(id=mid, label=label, runtimes=runtimes)
+def _m(
+    mid: str,
+    label: str | None = None,
+    runtimes: tuple[str, ...] | None = None,
+    selection_hint: str | None = None,
+) -> LLMModel:
+    return LLMModel(
+        id=mid,
+        label=label,
+        runtimes=runtimes,
+        selection_hint=selection_hint,
+    )
 
 
 def _pin(
@@ -120,6 +130,19 @@ class TestRuntimesFor:
 
 
 class TestBuildModelOptions:
+    def test_preserves_picker_only_selection_hint(self) -> None:
+        system = _pin(
+            source="system",
+            provider_kind="system",
+            auth_type="oauth",
+            models=[_m("valuz-pro", "Valuz Pro", selection_hint="2×")],
+        )
+
+        model = build_model_options([system], _NO_DEFAULT).groups[0].providers[0].models[0]
+
+        assert model.label == "Valuz Pro"
+        assert model.selection_hint == "2×"
+
     def test_derives_runtimes_from_compatible(self) -> None:
         """An anthropic channel: models leave runtimes None → derived from the
         channel's compatible_protocols."""

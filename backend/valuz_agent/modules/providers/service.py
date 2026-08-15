@@ -708,10 +708,17 @@ def _resolve_models(row: ProviderRow) -> list[LLMModel]:
                 continue
             raw_label = item.get("label") or item.get("display_name")
             label = raw_label if isinstance(raw_label, str) and raw_label.strip() else None
+            raw_selection_hint = item.get("selection_hint")
+            selection_hint = (
+                raw_selection_hint
+                if isinstance(raw_selection_hint, str) and raw_selection_hint.strip()
+                else None
+            )
             models.append(
                 LLMModel(
                     id=mid,
                     label=label or fallback_labels.get(mid),
+                    selection_hint=selection_hint,
                     max_input_tokens=_coerce_max_input_tokens(item.get("max_input_tokens")),
                 )
             )
@@ -760,6 +767,7 @@ def _models_with_runtimes(row: ProviderRow, compatible: list[str]) -> list[LLMMo
         LLMModel(
             id=m.id,
             label=m.label,
+            selection_hint=m.selection_hint,
             runtimes=(m.runtimes if m.runtimes is not None else ch_runtimes),
             max_input_tokens=m.max_input_tokens,
         )
@@ -789,6 +797,7 @@ def _stamp_contributed_runtimes(ch: LLMChannel) -> LLMChannel:
         else LLMModel(
             id=m.id,
             label=m.label,
+            selection_hint=m.selection_hint,
             runtimes=ch_runtimes,
             max_input_tokens=m.max_input_tokens,
         )

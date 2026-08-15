@@ -284,6 +284,21 @@ describe("useComposerProviders", () => {
     expect(result.current.map((m) => m.providerId)).toEqual(["ch-on"]);
   });
 
+  it("passes picker-only selection hints without changing model ids", () => {
+    const models = mdl(["valuz-pro"], ANTHROPIC);
+    models[0] = { ...models[0], selection_hint: "2×" };
+    const providers = [
+      provider({ id: "valuz", name: "Valuz", source: "system", models }),
+    ];
+
+    const { result } = renderHook(() => useComposerProviders(providers));
+
+    expect(result.current[0]).toMatchObject({
+      modelId: "valuz-pro",
+      selectionHint: "2×",
+    });
+  });
+
   it("drops credential-less api_key providers", () => {
     const providers = [
       provider({

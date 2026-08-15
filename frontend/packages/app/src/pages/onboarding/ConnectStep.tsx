@@ -27,7 +27,7 @@ import {
 } from "@valuz/core";
 import { useCapabilities, useTranslation } from "@valuz/core";
 import { t as _t } from "@valuz/shared/i18n";
-import { modelLabel } from "@valuz/shared";
+import { modelLabel, modelSelectionLabel } from "@valuz/shared";
 import { Check, Loader2, Lock, Plus } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -495,7 +495,10 @@ const OptionCard = ({
                       raw id — fall back to the static brand catalog (e.g.
                       ``claude-sonnet-4-6`` → "Sonnet 4.6"), same as the Composer's
                       AgentModelPicker. */}
-                  {m.label !== m.model_id ? m.label : modelLabel(m.model_id)}
+                  {modelSelectionLabel(
+                    m.label !== m.model_id ? m.label : modelLabel(m.model_id),
+                    m.selection_hint,
+                  )}
                 </SelectItem>
               ))}
             </SelectContent>

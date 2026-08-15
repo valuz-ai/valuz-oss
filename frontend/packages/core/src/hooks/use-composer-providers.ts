@@ -139,6 +139,7 @@ export const useComposerProviders = (
               providerId: c.id,
               providerName: c.name,
               modelId: m.id,
+              selectionHint: m.selection_hint,
               isDefault: c.is_default && m.id === c.default_model,
               source: c.source,
             })),

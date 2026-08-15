@@ -98,6 +98,8 @@ export interface ModelOption {
    *  from the card's ``provider_id`` when same-named system descriptors merge. */
   provider_id: string;
   label: string;
+  /** Optional suffix rendered only while choosing a model. */
+  selection_hint?: string | null;
   /** Every runtime this model can run on, priority-ordered. */
   runtimes: RuntimeId[];
   /** Preferred runtime for a one-click pick (= ``runtimes[0]``). */

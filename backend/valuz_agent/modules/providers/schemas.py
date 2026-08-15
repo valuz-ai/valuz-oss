@@ -27,6 +27,9 @@ class LLMModel:
         id: Wire id; rides the request ``model`` field as-is.
         label: Display name; ``None`` → the frontend falls back to
             ``modelLabel(id)``.
+        selection_hint: Optional, presentation-only suffix rendered by model
+            pickers (for example ``"1.5×"``). It is deliberately separate
+            from ``label`` so readonly model names stay stable and clean.
         runtimes: The runtimes this model can drive (``claude_agent`` / ``codex``
             / ``deepagents``), declared by the producing side. ``None`` → "not
             declared": the consumer derives them from the channel's
@@ -49,6 +52,7 @@ class LLMModel:
 
     id: str
     label: str | None = None
+    selection_hint: str | None = None
     runtimes: tuple[str, ...] | None = None
     max_input_tokens: int | None = None
 

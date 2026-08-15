@@ -95,9 +95,13 @@ def _contributed(compatible: str, models: list[LLMModel]) -> LLMChannel:
 
 
 def test_stamp_contributed_fills_none_runtimes() -> None:
-    ch = _contributed("openai-completion", [LLMModel(id="glm", label=None)])
+    ch = _contributed(
+        "openai-completion",
+        [LLMModel(id="glm", label=None, selection_hint="1.5×")],
+    )
     out = _stamp_contributed_runtimes(ch)
     assert tuple(out.models[0].runtimes or ()) == ("deepagents",)
+    assert out.models[0].selection_hint == "1.5×"
 
 
 def test_stamp_contributed_openai_response_gets_codex() -> None:

@@ -126,6 +126,9 @@ class ModelOption(BaseModel):
     # Display label, disambiguated within its provider (so two genuinely
     # different models that share a name don't read identically).
     label: str
+    # Presentation-only suffix shown by model pickers, never part of the model
+    # label persisted or rendered by readonly surfaces.
+    selection_hint: str | None = None
     # Every runtime this model can run on (priority-ordered).
     runtimes: list[str]
     # Preferred runtime for a one-click pick. Always ``runtimes[0]``.
@@ -244,6 +247,7 @@ def _build_raw_provider(
                 model_id=m.id,
                 provider_id=p.id,
                 label=m.label or m.id,
+                selection_hint=m.selection_hint,
                 runtimes=runtimes,
                 default_runtime=runtimes[0],
                 is_current_default=(p.id == current.provider_id and m.id == current.model),
