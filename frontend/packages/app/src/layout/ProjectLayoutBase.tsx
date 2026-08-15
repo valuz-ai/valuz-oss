@@ -7,7 +7,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, matchPath, useLocation, useNavigate } from "react-router-dom";
 import { initI18n } from "@valuz/shared/i18n";
 import {
   applyBrandColors,
@@ -96,7 +96,7 @@ import {
 import { OriginIcon } from "../components/ExecutionLocationPicker";
 import { useForkSession } from "../hooks/use-fork-session";
 import { FORKABLE_RUNTIMES } from "../pages/conversation/useTitleActions";
-import { outletTransitionKey } from "./outlet-key";
+import { PreservedRouteOutlet } from "./PreservedRouteOutlet";
 import { resolveRightPanelAutoFold } from "./right-panel-autofold";
 import type { ProjectOutletContext } from "./types";
 
@@ -189,6 +189,16 @@ export function ProjectLayoutBase({
   const navItemsList = useNavItems();
   const navGroupsList = useNavGroups();
   const desktopRoutes = useRegistryStore((state) => state.desktopRoutes);
+  const routeIsOverlay = useMemo(
+    () =>
+      desktopRoutes.some(
+        (route) =>
+          route.layout === "project" &&
+          route.presentation === "overlay" &&
+          matchPath({ path: route.path, end: true }, location.pathname),
+      ),
+    [desktopRoutes, location.pathname],
+  );
   const hasProjectAddMenuItems = useRegistryStore(
     (state) =>
       (state.slots["sidebar.projects.add.menu-items"]?.length ?? 0) > 0,
@@ -1083,14 +1093,11 @@ export function ProjectLayoutBase({
             : null
         }
       >
-        <div
-          // Keyed so a page change replays the enter animation — except
-          // within the conversation family, which transitions in place
-          // (see ``outletTransitionKey``).
-          key={outletTransitionKey(location.pathname)}
-          className="h-full min-h-0 animate-page-enter"
-        >
-          <Outlet context={outletContext} />
+        <div className="relative h-full min-h-0">
+          <PreservedRouteOutlet
+            context={outletContext}
+            overlay={routeIsOverlay}
+          />
         </div>
       </AppShell>
       <AppToaster />
