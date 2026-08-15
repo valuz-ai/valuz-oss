@@ -50,6 +50,8 @@ export interface LLMModel {
   id: string;
   /** Display name; ``null`` → fall back to ``modelLabel(id)``. */
   label: string | null;
+  /** Optional suffix rendered only by model pickers (for example ``1.5×``). */
+  selection_hint?: string | null;
   /** Runtimes this model can drive (``claude_agent`` / ``codex`` /
    *  ``deepagents``), declared by the producing side. ``null`` → not declared:
    *  derived from the channel's ``compatible_protocols`` + ``provider_kind``. */

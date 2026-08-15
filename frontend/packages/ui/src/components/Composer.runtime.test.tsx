@@ -18,6 +18,27 @@ const sampleRuntimes: RuntimeSelectorItem[] = [
 ];
 
 describe("Composer runtime selector (REP-107)", () => {
+  it("shows provider selection hints in the model picker trigger", () => {
+    render(
+      <Composer
+        providers={[
+          {
+            providerId: "valuz",
+            providerName: "Valuz",
+            modelId: "gpt-5.9",
+            selectionHint: "2×",
+            isDefault: true,
+            source: "system",
+          },
+        ]}
+        selectedProviderId="valuz"
+        selectedModelId="gpt-5.9"
+      />,
+    );
+
+    expect(screen.getByText("GPT 5.9 · 2×")).toBeTruthy();
+  });
+
   it("does not render the runtime trigger when runtimes prop is empty", () => {
     render(<Composer runtimes={[]} />);
     expect(

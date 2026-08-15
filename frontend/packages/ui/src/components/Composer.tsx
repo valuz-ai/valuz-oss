@@ -123,7 +123,11 @@ const EFFORT_ORDER: readonly EffortLevel[] = [
 ] as const;
 
 const EFFORT_FALLBACK: EffortLevel = "high";
-import { MAX_SESSION_ATTACHMENTS, modelLabel } from "@valuz/shared";
+import {
+  MAX_SESSION_ATTACHMENTS,
+  modelLabel,
+  modelSelectionLabel,
+} from "@valuz/shared";
 import {
   Tooltip,
   TooltipContent,
@@ -218,6 +222,7 @@ export interface ModelSelectorItem {
   providerId: string;
   providerName: string;
   modelId: string;
+  selectionHint?: string | null;
   isDefault: boolean;
   source?: string;
 }
@@ -1402,25 +1407,28 @@ export const Composer = ({
               c.modelId === selectedModelId,
           );
           if (!m) return null;
-          return m.source === "managed"
-            ? m.providerName
-            : modelLabel(m.modelId);
+          return modelSelectionLabel(
+            m.source === "managed" ? m.providerName : modelLabel(m.modelId),
+            m.selectionHint,
+          );
         })()
       : null) ??
     (() => {
       const d = providers.find((c) => c.isDefault);
       return d
-        ? d.source === "managed"
-          ? d.providerName
-          : modelLabel(d.modelId)
+        ? modelSelectionLabel(
+            d.source === "managed" ? d.providerName : modelLabel(d.modelId),
+            d.selectionHint,
+          )
         : null;
     })() ??
     (() => {
       const f = providers[0];
       return f
-        ? f.source === "managed"
-          ? f.providerName
-          : modelLabel(f.modelId)
+        ? modelSelectionLabel(
+            f.source === "managed" ? f.providerName : modelLabel(f.modelId),
+            f.selectionHint,
+          )
         : null;
     })() ??
     "Model";
@@ -2698,7 +2706,10 @@ export const Composer = ({
                                                     }}
                                                   >
                                                     <span className="truncate text-ink-heading">
-                                                      {modelLabel(m.modelId)}
+                                                      {modelSelectionLabel(
+                                                        modelLabel(m.modelId),
+                                                        m.selectionHint,
+                                                      )}
                                                     </span>
                                                     {sel && (
                                                       <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
@@ -2993,9 +3004,12 @@ export const Composer = ({
                                     >
                                       <span className="flex min-w-0 flex-1 items-center">
                                         <span className="truncate">
-                                          {item.source === "managed"
-                                            ? item.providerName
-                                            : modelLabel(item.modelId)}
+                                          {modelSelectionLabel(
+                                            item.source === "managed"
+                                              ? item.providerName
+                                              : modelLabel(item.modelId),
+                                            item.selectionHint,
+                                          )}
                                         </span>
                                         {item.isDefault && (
                                           <span className="ml-1 shrink-0 rounded bg-brand/10 px-1 text-2xs text-brand">

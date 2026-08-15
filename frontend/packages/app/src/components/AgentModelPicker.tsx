@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from "@valuz/ui";
 import { useI18n } from "@valuz/ui";
-import { modelLabel } from "@valuz/shared";
+import { modelLabel, modelSelectionLabel } from "@valuz/shared";
 
 export interface AgentModelSelection {
   runtime: string;
@@ -161,7 +161,7 @@ export const AgentModelPicker = ({
               key={COMPOSITE(m.providerId, m.modelId)}
               value={COMPOSITE(m.providerId, m.modelId)}
             >
-              {modelLabel(m.modelId)}
+              {modelSelectionLabel(modelLabel(m.modelId), m.selectionHint)}
             </SelectItem>
           ))}
         </SelectGroup>
@@ -200,7 +200,10 @@ export const AgentModelPicker = ({
       <SelectTrigger size="sm" className="h-8 w-[200px] text-xs">
         {selectedRow ? (
           <span className="truncate text-ink-heading">
-            {modelLabel(selectedRow.modelId)}
+            {modelSelectionLabel(
+              modelLabel(selectedRow.modelId),
+              selectedRow.selectionHint,
+            )}
           </span>
         ) : (
           <SelectValue

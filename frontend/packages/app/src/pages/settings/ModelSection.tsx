@@ -29,7 +29,7 @@ import {
   type CliLoginStatus,
 } from "@valuz/app/components";
 import { usePlatform } from "@valuz/app/platform";
-import { modelLabel } from "@valuz/shared";
+import { modelLabel, modelSelectionLabel } from "@valuz/shared";
 import {
   providersApi,
   runtimesApi,
@@ -584,8 +584,10 @@ export const ModelSection = () => {
                   // Server label wins when it's a real display name; subscription
                   // / built-in rows have none (``m.label`` === raw id) → fall back
                   // to the static brand catalog, same as the Composer picker.
-                  itemLabel:
+                  itemLabel: modelSelectionLabel(
                     m.label !== m.model_id ? m.label : modelLabel(m.model_id),
+                    m.selection_hint,
+                  ),
                 }));
                 allOptions.push(...groupOptions);
                 groups.push({
