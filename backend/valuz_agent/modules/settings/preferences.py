@@ -439,7 +439,7 @@ async def get_conversation_task_coverage_enabled(
     return await _read_bool(
         db,
         KEY_CONVERSATION_TASK_COVERAGE_ENABLED,
-        True,
+        False,
         user_id=user_id,
     )
 

@@ -16,7 +16,7 @@ import valuz_agent.boot.kernel  # noqa: F401 — sets sys.path for ``src`` / ``a
 
 from src.core.agent_config import AgentConfig
 from src.core.events import Event
-from src.core.orchestrator import SessionOrchestrator
+from src.core.orchestrator import SessionOrchestrator, _session_task_coverage_enabled
 from src.core.task_coverage_continuation import TASK_COVERAGE_NOOP_TOOL_NAME
 from src.core.tools import ToolDef
 from src.core.types import BudgetExhausted, EndTurn, Error, Session, UserMessage
@@ -66,6 +66,7 @@ class _RecordingRuntime:
         evidence_payload: dict[str, object] | None = None,
         coverage_noop: bool = False,
         called_tool_name: str | None = None,
+        called_tool_external: bool | None = None,
         tool_result_is_error: bool = False,
     ) -> None:
         self.sink = sink
@@ -79,6 +80,7 @@ class _RecordingRuntime:
         self.evidence_payload = evidence_payload
         self.coverage_noop = coverage_noop
         self.called_tool_name = called_tool_name
+        self.called_tool_external = called_tool_external
         self.tool_result_is_error = tool_result_is_error
         self.prompts: list[UserMessage] = []
         self.coverage_tools: list[ToolDef] = []
@@ -123,6 +125,11 @@ class _RecordingRuntime:
                             "id": tool_use_id,
                             "name": self.called_tool_name,
                             "input": {},
+                            **(
+                                {"external": self.called_tool_external}
+                                if self.called_tool_external is not None
+                                else {}
+                            ),
                         },
                     )
                 )
@@ -251,6 +258,18 @@ def _session(
     )
 
 
+def test_task_coverage_defaults_disabled_for_unstamped_session(tmp_path) -> None:
+    session = Session(
+        id="sess-legacy-without-task-coverage-setting",
+        agent_config=AgentConfig(id="agent-1", name="tester"),
+        cwd=str(tmp_path),
+        user_id="owner-1",
+        metadata={},
+    )
+
+    assert _session_task_coverage_enabled(session) is False
+
+
 async def test_primary_prompt_is_not_rewritten_or_short_circuited_by_host(
     tmp_path,
     monkeypatch,
@@ -260,7 +279,10 @@ async def test_primary_prompt_is_not_rewritten_or_short_circuited_by_host(
     runtimes: list[_RecordingRuntime] = []
 
     def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
-        runtime = _RecordingRuntime(args[2])
+        runtime = _RecordingRuntime(
+            args[2],
+            called_tool_name="valuz_docs/document_search",
+        )
         runtimes.append(runtime)
         return runtime
 
@@ -292,7 +314,10 @@ async def test_task_coverage_is_one_continuation_on_same_runtime_and_thread(
     runtimes: list[_RecordingRuntime] = []
 
     def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
-        runtime = _RecordingRuntime(args[2])
+        runtime = _RecordingRuntime(
+            args[2],
+            called_tool_name="mcp__valuz_docs__document_search",
+        )
         runtimes.append(runtime)
         return runtime
 
@@ -351,6 +376,74 @@ async def test_task_coverage_is_one_continuation_on_same_runtime_and_thread(
     assert len(coverage_sidecars) == 1
     assert coverage_sidecars[0].data["assistant_segment_index"] == 1
     assert coverage_sidecars[0].data["task_coverage"] == message.metadata["task_coverage"]
+
+
+async def test_post_run_checks_skip_when_primary_uses_only_internal_tools(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    session = _session(
+        tmp_path,
+        task_coverage_enabled=True,
+        citation_enabled=False,
+        verification_enabled=True,
+    )
+    store = _FakeStore(session)
+    runtimes: list[_RecordingRuntime] = []
+
+    def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
+        runtime = _RecordingRuntime(
+            args[2],
+            called_tool_name="mcp__harness__deliver_artifacts",
+            evidence_payload=_text_evidence(),
+        )
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
+
+    message = await SessionOrchestrator(store).run_turn(
+        "owner-1",
+        session.id,
+        UserMessage(text="Create a local artifact and answer briefly."),
+    )
+
+    assert len(runtimes[0].prompts) == 1
+    assert "task_coverage" not in message.metadata
+    assert "claim_audits" not in message.metadata
+    assert not any(
+        event.type == "turn_phase"
+        and event.data.get("phase") == "post_run_verification"
+        for event in store.appended
+    )
+
+
+async def test_post_run_checks_run_for_bare_external_connector_tool(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    session = _session(tmp_path, task_coverage_enabled=True)
+    store = _FakeStore(session)
+    runtimes: list[_RecordingRuntime] = []
+
+    def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
+        runtime = _RecordingRuntime(
+            args[2],
+            called_tool_name="search_documents",
+            called_tool_external=True,
+        )
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
+
+    await SessionOrchestrator(store).run_turn(
+        "owner-1",
+        session.id,
+        UserMessage(text="Search the connector and summarize the result."),
+    )
+
+    assert len(runtimes[0].prompts) == 2
 
 
 async def test_successful_generate_ui_skips_task_coverage_for_that_turn(
@@ -518,8 +611,7 @@ async def test_namespaced_generate_ui_skips_citation_before_early_idle_finalize(
     assert "citation_bundle" not in message.metadata
     assert "claim_audits" not in message.metadata
     assert not any(
-        event.type == "turn_phase"
-        and event.data.get("phase") == "post_run_verification"
+        event.type == "turn_phase" and event.data.get("phase") == "post_run_verification"
         for event in store.appended
     )
 
@@ -537,7 +629,10 @@ async def test_citation_audit_emits_post_run_verification_lifecycle_without_cove
     store = _FakeStore(session)
 
     def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
-        return _RecordingRuntime(args[2])
+        return _RecordingRuntime(
+            args[2],
+            called_tool_name="mcp__valuz_docs__document_search",
+        )
 
     monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
 
@@ -584,7 +679,11 @@ async def test_task_coverage_continuation_receives_static_layer_guidance_only(
     runtimes: list[_RecordingRuntime] = []
 
     def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
-        runtime = _RecordingRuntime(args[2], silent_continuation=True)
+        runtime = _RecordingRuntime(
+            args[2],
+            silent_continuation=True,
+            called_tool_name="mcp__valuz_docs__document_search",
+        )
         runtimes.append(runtime)
         return runtime
 
@@ -614,6 +713,7 @@ async def test_task_coverage_skips_runtime_without_native_continuation(
         runtime = _RecordingRuntime(
             args[2],
             supports_native_continuation=False,
+            called_tool_name="mcp__valuz_docs__document_search",
         )
         runtime_holder.append(runtime)
         return runtime
@@ -668,7 +768,11 @@ async def test_task_coverage_may_finish_silently_without_host_confirmation(
     runtime_holder: list[_RecordingRuntime] = []
 
     def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
-        runtime = _RecordingRuntime(args[2], silent_continuation=True)
+        runtime = _RecordingRuntime(
+            args[2],
+            silent_continuation=True,
+            called_tool_name="mcp__valuz_docs__document_search",
+        )
         runtime_holder.append(runtime)
         return runtime
 
@@ -709,7 +813,11 @@ async def test_task_coverage_no_gap_uses_private_runtime_noop_without_assistant_
     runtime_holder: list[_RecordingRuntime] = []
 
     def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
-        runtime = _RecordingRuntime(args[2], coverage_noop=True)
+        runtime = _RecordingRuntime(
+            args[2],
+            coverage_noop=True,
+            called_tool_name="mcp__valuz_docs__document_search",
+        )
         runtime_holder.append(runtime)
         return runtime
 
@@ -862,7 +970,11 @@ async def test_failed_task_coverage_preserves_primary_output(
     runtime_holder: list[_RecordingRuntime] = []
 
     def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
-        runtime = _RecordingRuntime(args[2], fail_continuation=True)
+        runtime = _RecordingRuntime(
+            args[2],
+            fail_continuation=True,
+            called_tool_name="mcp__valuz_docs__document_search",
+        )
         runtime_holder.append(runtime)
         return runtime
 
@@ -890,7 +1002,11 @@ async def test_task_coverage_exception_preserves_and_finalizes_primary_output(
     runtime_holder: list[_RecordingRuntime] = []
 
     def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
-        runtime = _RecordingRuntime(args[2], raise_continuation=True)
+        runtime = _RecordingRuntime(
+            args[2],
+            raise_continuation=True,
+            called_tool_name="mcp__valuz_docs__document_search",
+        )
         runtime_holder.append(runtime)
         return runtime
 
@@ -1098,6 +1214,7 @@ async def test_audit_only_registers_evidence_without_public_citation_projection(
             args[2],
             primary_text=original,
             evidence_payload=_text_evidence(),
+            called_tool_name="mcp__valuz_docs__document_search",
         )
 
     monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)

@@ -120,7 +120,7 @@ export const MemorySection = () => {
   const verificationOn =
     preferences?.conversation_verification_enabled ?? false;
   const taskCoverageOn =
-    preferences?.conversation_task_coverage_enabled ?? true;
+    preferences?.conversation_task_coverage_enabled ?? false;
 
   return (
     <SettingsSection
