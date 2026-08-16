@@ -108,4 +108,46 @@ describe("NetworkSection mode switching", () => {
       ),
     ).toBe(true);
   });
+
+  it("does not poll a desktop host with an incompatible egress contract", async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === "desktop_get_capabilities") {
+        return {
+          schemaVersion: 1,
+          networkEgress: {
+            available: true,
+            contractVersion: 2,
+            policy: {
+              defaultMode: "auto",
+              allowedModes: ["off", "auto"],
+              userConfigurable: true,
+            },
+          },
+        };
+      }
+      throw new Error(`Unexpected network IPC call: ${channel}`);
+    });
+    Object.defineProperty(window, "valuzDesktop", {
+      configurable: true,
+      value: { invoke, on: vi.fn(), off: vi.fn() },
+    });
+
+    render(<NetworkSection />);
+
+    expect(
+      await screen.findByText("settings.network.canaryDisabled"),
+    ).toBeTruthy();
+    expect(invoke).toHaveBeenCalledWith("desktop_get_capabilities");
+    expect(
+      invoke.mock.calls.every(
+        ([channel]) => channel === "desktop_get_capabilities",
+      ),
+    ).toBe(true);
+  });
+
+  it("renders an honest desktop-only fallback in WebUI", () => {
+    render(<NetworkSection />);
+
+    expect(screen.getByText("settings.network.desktopOnly")).toBeTruthy();
+  });
 });

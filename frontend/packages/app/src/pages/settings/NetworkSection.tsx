@@ -12,6 +12,7 @@ import {
 import { useRunningRuns, useTranslation } from "@valuz/core";
 import {
   DESKTOP_CAPABILITIES_CHANNEL,
+  NETWORK_EGRESS_CONTRACT_VERSION,
   NETWORK_EGRESS_CHANNELS,
   NETWORK_EGRESS_EVENTS,
   type DesktopCapabilities,
@@ -117,9 +118,23 @@ export const NetworkSection = () => {
           DESKTOP_CAPABILITIES_CHANNEL,
         );
         if (disposed) return;
-        setCapability(capabilities.networkEgress);
+        const networkEgress = capabilities?.networkEgress;
+        if (
+          capabilities?.schemaVersion !== 1 ||
+          networkEgress?.contractVersion !== NETWORK_EGRESS_CONTRACT_VERSION
+        ) {
+          // A host that speaks another capability contract is unsupported,
+          // not partially compatible. Never probe handlers whose payloads may
+          // have changed; show the same honest downgrade as an older host with
+          // no capability endpoint.
+          setCapability(null);
+          setCapabilityChecked(true);
+          setLoading(false);
+          return;
+        }
+        setCapability(networkEgress);
         setCapabilityChecked(true);
-        if (!capabilities.networkEgress.available) {
+        if (!networkEgress.available) {
           setLoading(false);
           return;
         }
