@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 MarketplaceItemType = Literal["skill", "agent_template", "agent_team_template", "connector"]
-MarketplaceSource = Literal["skillhub", "valuz_official", "modelscope"]
+MarketplaceSource = Literal["skillhub", "valuz_official", "modelscope", "redskill"]
 MarketplaceBadge = Literal[
     "free_install",
     "requires_api_key",

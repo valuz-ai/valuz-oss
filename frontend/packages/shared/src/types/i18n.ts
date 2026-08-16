@@ -1071,6 +1071,7 @@ export type KnownI18nKey =
   | "marketplace.skillsShelfTitle"
   | "marketplace.skillsSuffix"
   | "marketplace.sourceModelScope"
+  | "marketplace.sourceRedskill"
   | "marketplace.sourceSkillhub"
   | "marketplace.sourceValuzOfficial"
   | "marketplace.subtitle"

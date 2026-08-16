@@ -13,7 +13,7 @@ const fetchJson = createFetchJson(() => _apiBase);
 /** Mirrors ``api/openapi.yaml`` → Marketplace* schemas (hand-synced). */
 export type MarketplaceItemType =
   "skill" | "agent_template" | "agent_team_template" | "connector";
-export type MarketplaceSource = "skillhub" | "valuz_official" | "modelscope";
+export type MarketplaceSource = "skillhub" | "valuz_official" | "modelscope" | "redskill";
 export type MarketplaceBadge =
   | "free_install"
   | "requires_api_key"

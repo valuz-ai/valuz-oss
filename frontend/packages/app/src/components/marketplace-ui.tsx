@@ -98,6 +98,7 @@ const SOURCE_LABEL_KEYS: Record<MarketplaceSource, string> = {
   skillhub: "marketplace.sourceSkillhub",
   valuz_official: "marketplace.sourceValuzOfficial",
   modelscope: "marketplace.sourceModelScope",
+  redskill: "marketplace.sourceRedskill",
 };
 
 // One neutral look for every source — per-source colors made the cards read
