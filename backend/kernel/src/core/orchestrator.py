@@ -409,9 +409,9 @@ def _session_task_coverage_enabled(session: Session) -> bool:
     metadata = session.metadata if isinstance(session.metadata, dict) else {}
     valuz = metadata.get("valuz")
     if not isinstance(valuz, dict):
-        return True
+        return False
     value = valuz.get("task_coverage_enabled")
-    return value if isinstance(value, bool) else True
+    return value if isinstance(value, bool) else False
 
 
 def _session_task_coverage_policy(session: Session) -> dict[str, Any] | None:
@@ -488,7 +488,7 @@ class _MessageObserverSink:
         citation_verification_enabled: bool = True,
         semantic_verifier: SemanticVerifierPort | None = None,
         claim_normalizer: ClaimNormalizerPort | None = None,
-        task_coverage_enabled: bool = True,
+        task_coverage_enabled: bool = False,
     ) -> None:
         self._inner = inner
         self._message_id = message_id
@@ -517,6 +517,7 @@ class _MessageObserverSink:
         self._post_run_verification_completed = False
 
         self._tool_names: dict[str, str] = {}
+        self._external_tool_called = False
         self._evidence_registry = EvidenceRegistry(
             allowed_document_ids=allowed_document_ids,
         )
@@ -550,6 +551,8 @@ class _MessageObserverSink:
             tool_name = event.data.get("name")
             if isinstance(tool_use_id, str) and isinstance(tool_name, str):
                 self._tool_names[tool_use_id] = tool_name
+                if self._tool_event_is_external(event.data, tool_name):
+                    self._external_tool_called = True
                 # A runtime emits ``session_idle`` before ``run()`` returns.
                 # When task coverage is already disabled, that idle event
                 # finalizes Citation/Audit immediately, so waiting for the
@@ -570,6 +573,13 @@ class _MessageObserverSink:
             event = self._register_and_redact_tool_result(event)
 
         elif event.type == "session_idle":
+            # Citation verification and Task Coverage are useful only after
+            # the primary turn brought external information into the answer.
+            # A session may expose host tools through MCP as an implementation
+            # detail; those local tools must not trigger expensive post-run
+            # model passes.
+            if not self._external_tool_called:
+                self._citation_verification_enabled = False
             raw_turns = event.data.get("num_turns")
             if isinstance(raw_turns, int) and raw_turns > 0:
                 self.num_turns += raw_turns
@@ -827,6 +837,44 @@ class _MessageObserverSink:
             self._matches_tool_name(tool_name, name)
             for tool_name in self._tool_names.values()
         )
+
+    def called_external_tool(self) -> bool:
+        """Whether the primary run attempted an external data/tool call."""
+
+        return self._external_tool_called
+
+    @staticmethod
+    def _tool_event_is_external(data: dict[str, Any], tool_name: str) -> bool:
+        """Classify a canonical ``tool_use`` event at the kernel boundary.
+
+        Runtimes that lose MCP server names (currently DeepAgents) stamp the
+        explicit boolean. Claude/DeepSeek names MCP tools
+        ``mcp__<server>__<tool>`` and Codex uses ``<server>/<tool>``; the
+        harness servers are local implementation details while every other
+        session-configured MCP is external. Runtime-native web search/fetch
+        also imports external information even though it is not MCP.
+        """
+
+        explicit = data.get("external")
+        if isinstance(explicit, bool):
+            return explicit
+
+        if tool_name.casefold() in {
+            "web_search",
+            "websearch",
+            "web_fetch",
+            "webfetch",
+        }:
+            return True
+
+        internal_servers = {"harness", "harness_toolkit"}
+        if tool_name.startswith("mcp__"):
+            parts = tool_name.split("__", 2)
+            return len(parts) >= 3 and parts[1] not in internal_servers
+        if "/" in tool_name:
+            server_name = tool_name.split("/", 1)[0]
+            return server_name not in internal_servers
+        return False
 
     @staticmethod
     def _matches_tool_name(tool_name: str, name: str) -> bool:
@@ -1676,6 +1724,7 @@ class SessionOrchestrator:
             if (
                 task_coverage_enabled
                 and not skip_genui_post_run
+                and observer.called_external_tool()
                 and getattr(session.stop_reason, "type", None) == "end_turn"
             ):
                 if not bool(getattr(runtime, "supports_native_continuation", False)):

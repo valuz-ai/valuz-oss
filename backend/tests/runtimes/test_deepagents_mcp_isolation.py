@@ -112,6 +112,24 @@ async def test_should_drop_only_the_failing_server_and_keep_the_rest(fake_client
     assert tools == ["tool-c"]
 
 
+async def test_should_track_external_mcp_tools_but_exclude_host_harness(fake_client) -> None:
+    session = _session(_http("harness"), _http("valuz_docs"), _http("third_party"))
+    harness_tool = SimpleNamespace(name="deliver_artifacts")
+    valuz_tool = SimpleNamespace(name="document_search")
+    connector_tool = SimpleNamespace(name="search_records")
+    fake_client.behaviors = {
+        "harness": [harness_tool],
+        "valuz_docs": [valuz_tool],
+        "third_party": [connector_tool],
+    }
+    runtime = _runtime()
+
+    tools = await runtime._build_mcp_tools(session)
+
+    assert tools == [harness_tool, valuz_tool, connector_tool]
+    assert runtime._external_mcp_tool_names == {"document_search", "search_records"}
+
+
 async def test_should_return_empty_when_every_server_fails(fake_client) -> None:
     session = _session(_http("dead-1"), _http("dead-2"))
     fake_client.behaviors = {

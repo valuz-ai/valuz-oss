@@ -69,6 +69,19 @@ def _evidence_payload() -> str:
     )
 
 
+async def _mark_external_document_tool_called(observer: _MessageObserverSink) -> None:
+    await observer.emit(
+        Event(
+            type="tool_use",
+            data={
+                "id": "external-document-tool",
+                "name": "mcp__valuz_docs__document_search",
+                "input": {},
+            },
+        )
+    )
+
+
 async def test_interrupted_turn_persists_partial_assistant_before_idle() -> None:
     sink, observer = _observer()
 
@@ -147,6 +160,7 @@ async def test_each_runtime_assistant_is_published_before_its_sidecar() -> None:
 
 async def test_auto_binding_stays_in_sidecar_and_never_rewrites_runtime_message() -> None:
     sink, observer = _observer(citation_enabled=True, verification_enabled=True)
+    await _mark_external_document_tool_called(observer)
     await observer.emit(
         Event(
             type="citation_evidence",
@@ -172,6 +186,7 @@ async def test_auto_binding_stays_in_sidecar_and_never_rewrites_runtime_message(
 
 async def test_final_recap_reuses_verified_binding_from_prior_assistant_message() -> None:
     sink, observer = _observer(citation_enabled=True, verification_enabled=True)
+    await _mark_external_document_tool_called(observer)
     handle = "ev_msft_q3_throughput_12345678"
     await observer.emit(
         Event(
@@ -254,6 +269,7 @@ async def test_final_recap_reuses_materialized_collection_binding_from_prior_mes
         verification_enabled=True,
         citation_quality_policy=policy,
     )
+    await _mark_external_document_tool_called(observer)
     data = {
         "items": [
             {

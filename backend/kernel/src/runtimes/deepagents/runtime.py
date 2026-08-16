@@ -546,9 +546,11 @@ class DeepAgentsRuntime:
         # change ``interrupt_on`` for an already-built graph (cold-reload
         # semantics, mirrors Claude/Codex). ``_mcp_tool_names`` is the
         # set tracked at graph construction so subject classification can
-        # tell MCP-origin tools from harness/built-in ones (langchain-mcp
-        # tool names don't carry server prefixes — membership is the only
-        # signal we have).
+        # tell MCP-origin tools from runtime built-ins. The separate
+        # ``_external_mcp_tool_names`` set excludes the host harness so the
+        # orchestrator only gates post-run checks on external information.
+        # langchain-mcp tool names don't carry server prefixes, so membership
+        # is the only signal available at event-emission time.
         # 3-tuple: ``(decision, message, modified_input)``. The 3rd slot
         # is set only when ``decision == "approve_with_changes"`` —
         # ``submit_action``'s validator pair guarantees it; carries the
@@ -582,6 +584,7 @@ class DeepAgentsRuntime:
         self._applied_effort: str | None = None
         self._applied_citation_mode: bool | None = None
         self._mcp_tool_names: set[str] = set()
+        self._external_mcp_tool_names: set[str] = set()
         # Per-session callable injected by the orchestrator via
         # ``set_session_rule_finder``. Closes over (session_id, cache,
         # this runtime's matcher) so this runtime can check the kernel
@@ -909,6 +912,11 @@ class DeepAgentsRuntime:
                                         "id": run_id,
                                         "name": tool_name,
                                         "input": _jsonify(data.get("input", {}) or {}),
+                                        **(
+                                            {"external": True}
+                                            if tool_name in self._external_mcp_tool_names
+                                            else {}
+                                        ),
                                     },
                                 )
                             )
@@ -1906,6 +1914,7 @@ class DeepAgentsRuntime:
         uses ``http`` — translate here. Returns an empty list when no MCP
         servers are configured or the adapter is unavailable.
         """
+        self._external_mcp_tool_names = set()
         if not session.mcp_servers:
             return []
         try:
@@ -2001,6 +2010,7 @@ class DeepAgentsRuntime:
             return_exceptions=True,
         )
         tools: list[Any] = []
+        external_tool_names: set[str] = set()
         for name, result in zip(names, results, strict=True):
             if isinstance(result, asyncio.CancelledError):
                 raise result
@@ -2008,6 +2018,11 @@ class DeepAgentsRuntime:
                 logger.warning("mcp server %r unavailable — skipping its tools: %s", name, result)
                 continue
             tools.extend(result)
+            if name not in {"harness", "harness_toolkit"}:
+                external_tool_names.update(
+                    tool.name for tool in result if isinstance(getattr(tool, "name", None), str)
+                )
+        self._external_mcp_tool_names = external_tool_names
         return tools
 
     # -- Tool conversion --
