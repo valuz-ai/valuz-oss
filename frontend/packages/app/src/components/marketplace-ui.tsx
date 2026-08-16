@@ -15,6 +15,7 @@ import {
   Mic,
   PenLine,
   Plug,
+  Puzzle,
   Search,
   Sparkles,
   Table2,
@@ -37,6 +38,7 @@ const NAMED_ICONS: Record<string, LucideIcon> = {
   users: Users,
   sparkles: Sparkles,
   plug: Plug,
+  puzzle: Puzzle,
 };
 
 export function marketplaceIcon(name?: string | null): LucideIcon {
@@ -99,6 +101,7 @@ const SOURCE_LABEL_KEYS: Record<MarketplaceSource, string> = {
   valuz_official: "marketplace.sourceValuzOfficial",
   modelscope: "marketplace.sourceModelScope",
   redskill: "marketplace.sourceRedskill",
+  pluginmarket: "marketplace.sourcePluginMarket",
 };
 
 // One neutral look for every source — per-source colors made the cards read

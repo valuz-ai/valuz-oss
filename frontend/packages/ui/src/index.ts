@@ -22,6 +22,7 @@ export * from "./components/common/FormField";
 export * from "./components/common/IconBox";
 export * from "./components/common/PageHeader";
 export * from "./components/common/PageLoader";
+export * from "./components/common/PluginBadge";
 export * from "./components/common/PermissionRequestDialog";
 export * from "./components/common/SearchInput";
 export * from "./components/common/SettingsNav";
