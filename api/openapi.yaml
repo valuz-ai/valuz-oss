@@ -3765,7 +3765,8 @@ paths:
         - in: query
           name: source
           required: false
-          schema: {type: string, enum: [skillhub, valuz_official, modelscope, redskill, pluginmarket]}
+          description: "Open string — the index decides which sources exist (known today: skillhub, valuz_official, modelscope, redskill, plugin). Unknown values match nothing."
+          schema: {type: string, maxLength: 64}
         - in: query
           name: composition
           required: false
@@ -5046,7 +5047,7 @@ components:
           enum: [skill, agent_template, agent_team_template, connector, plugin]
         source:
           type: string
-          enum: [skillhub, valuz_official, modelscope, redskill, pluginmarket]
+          description: "Open string, NOT an enum: where the item comes from is data the index grows over time (known today: skillhub, valuz_official, modelscope, redskill, plugin — `plugin` marks members extracted from a plugin package). Clients MUST render unknown sources with a generic label; a closed enum here once broke every old client the moment a new source shipped."
         source_ref: {type: string, description: "SkillHub slug / template id / pack id / plugin name."}
         title: {type: string}
         subtitle: {type: string, nullable: true, description: "Agent role line; null for skills."}
@@ -5059,6 +5060,7 @@ components:
           items: {type: string}
         badges:
           type: array
+          description: "Clients drop badge values they do not know; the index may add badges without a client release."
           items: {$ref: "#/components/schemas/MarketplaceBadge"}
         stats:
           $ref: "#/components/schemas/MarketplaceStats"

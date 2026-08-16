@@ -1115,7 +1115,7 @@ I18nKey = Literal[
     "marketplace.skillsSubtabSuites",
     "marketplace.skillsSuffix",
     "marketplace.sourceModelScope",
-    "marketplace.sourcePluginMarket",
+    "marketplace.sourcePlugin",
     "marketplace.sourceRedskill",
     "marketplace.sourceSkillhub",
     "marketplace.sourceValuzOfficial",

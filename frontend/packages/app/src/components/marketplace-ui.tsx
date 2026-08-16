@@ -21,7 +21,7 @@ import {
   Table2,
   Users,
 } from "lucide-react";
-import type { MarketplaceBadge, MarketplaceSource } from "@valuz/core";
+import type { MarketplaceBadge, MarketplaceKnownSource, MarketplaceSource } from "@valuz/core";
 import { useTranslation } from "@valuz/core";
 import { Badge } from "@valuz/ui";
 
@@ -83,35 +83,50 @@ const BADGE_LABEL_KEYS: Record<MarketplaceBadge, string> = {
   locked: "marketplace.badgeLocked",
 };
 
+const NEUTRAL_BADGE_STYLE = { bg: "var(--surface-soft)", fg: "var(--ink-meta)" };
+
+/** `brand-new-store` → "Brand new store" — last-resort label for a wire value
+ *  this build has no translation for. */
+export function humanizeWireValue(value: string): string {
+  const words = value.replace(/[_-]+/g, " ").trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : value;
+}
+
 export function MarketplaceBadgePill({ badge }: { badge: MarketplaceBadge }) {
   const { t } = useTranslation();
-  const style = BADGE_STYLES[badge];
+  // The backend already drops badges it does not know, but stay defensive:
+  // an unknown badge gets the neutral look + a humanized label, never a crash.
+  const style = BADGE_STYLES[badge] ?? NEUTRAL_BADGE_STYLE;
+  const key = BADGE_LABEL_KEYS[badge];
   return (
     <span
       className="inline-flex items-center rounded border border-surface-border px-1.5 py-0.5 text-[10px] font-medium"
       style={{ background: style.bg, color: style.fg }}
     >
-      {t(BADGE_LABEL_KEYS[badge] as Parameters<typeof t>[0])}
+      {key ? t(key as Parameters<typeof t>[0]) : humanizeWireValue(badge)}
     </span>
   );
 }
 
-const SOURCE_LABEL_KEYS: Record<MarketplaceSource, string> = {
+const SOURCE_LABEL_KEYS: Record<MarketplaceKnownSource, string> = {
   skillhub: "marketplace.sourceSkillhub",
   valuz_official: "marketplace.sourceValuzOfficial",
   modelscope: "marketplace.sourceModelScope",
   redskill: "marketplace.sourceRedskill",
-  pluginmarket: "marketplace.sourcePluginMarket",
+  plugin: "marketplace.sourcePlugin",
 };
 
 // One neutral look for every source — per-source colors made the cards read
 // inconsistently across tabs. Uses the Badge primitive (metaNeutral) so the
 // pill follows the design-system sizing/rounding/background tokens.
+// ``source`` is an open string: a source this build has no label for (the
+// index added one after this release) falls back to a humanized wire value.
 export function MarketplaceSourcePill({ source }: { source: MarketplaceSource }) {
   const { t } = useTranslation();
+  const key = (SOURCE_LABEL_KEYS as Record<string, string | undefined>)[source];
   return (
     <Badge variant="metaNeutral">
-      {t(SOURCE_LABEL_KEYS[source] as Parameters<typeof t>[0])}
+      {key ? t(key as Parameters<typeof t>[0]) : humanizeWireValue(source)}
     </Badge>
   );
 }

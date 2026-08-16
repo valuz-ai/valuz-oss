@@ -260,6 +260,67 @@ async def test_list_items_recomputes_installed_for_skills(env):  # type: ignore[
 
 
 @pytest.mark.asyncio
+async def test_list_items_accepts_sources_this_build_never_heard_of(env):  # type: ignore[no-untyped-def]
+    """``source`` is data the index grows over time — a new upstream store must
+    not need a client release. The whole page used to 500 on one such row."""
+    env.index.items_payload = {
+        "items": [
+            _item("market:skill:a", type_="skill", source_ref="a", source="skillhub"),
+            _item("market:skill:b", type_="skill", source_ref="b", source="brand-new-store"),
+        ],
+        "total": 2,
+        "page": 1,
+        "page_size": 30,
+        "degraded": False,
+    }
+    out = await env.svc.list_items(USER, type_="skill")
+    assert [i.source for i in out.items] == ["skillhub", "brand-new-store"]
+
+
+@pytest.mark.asyncio
+async def test_list_items_skips_rows_this_build_cannot_render(env):  # type: ignore[no-untyped-def]
+    """New item kinds / install targets reach the index before every client
+    has updated: an old build drops those rows and keeps the page (and the
+    index's ``total``) instead of failing the request."""
+    env.index.items_payload = {
+        "items": [
+            _item("market:skill:a", type_="skill", source_ref="a"),
+            _item("market:hologram:x", type_="hologram", source_ref="x"),
+            _item("market:skill:c", type_="skill", source_ref="c", install_target="warp_core"),
+            "not-even-an-object",
+            _item("market:skill:d", type_="skill", source_ref="d"),
+        ],
+        "total": 5,
+        "page": 1,
+        "page_size": 30,
+        "degraded": False,
+    }
+    out = await env.svc.list_items(USER, type_="skill")
+    assert [i.source_ref for i in out.items] == ["a", "d"]
+    assert out.total == 5 and out.degraded is False
+
+
+@pytest.mark.asyncio
+async def test_list_items_drops_unknown_badges_keeps_item(env):  # type: ignore[no-untyped-def]
+    env.index.items_payload = {
+        "items": [
+            _item(
+                "market:skill:a",
+                type_="skill",
+                source_ref="a",
+                badges=["free_install", "shiny-new-badge", "verified"],
+            ),
+        ],
+        "total": 1,
+        "page": 1,
+        "page_size": 30,
+        "degraded": False,
+    }
+    out = await env.svc.list_items(USER, type_="skill")
+    assert out.items[0].badges == ["free_install", "verified"]
+
+
+@pytest.mark.asyncio
 async def test_list_items_installed_skill_row_must_exist_on_disk(env, tmp_path):  # type: ignore[no-untyped-def]
     env.index.items_payload = {
         "items": [
@@ -858,7 +919,7 @@ async def test_list_items_recomputes_installed_for_plugins(plugin_env):  # type:
                 "market:plugin:godot-mcp",
                 type_="plugin",
                 source_ref="godot-mcp",
-                source="pluginmarket",
+                source="plugin",
                 install_target="plugin_library",
                 skill_count=25,
                 connector_count=1,
@@ -873,7 +934,7 @@ async def test_list_items_recomputes_installed_for_plugins(plugin_env):  # type:
     out = await plugin_env.svc.list_items(USER, type_="plugin", composition="skills_only")
     flags = {i.source_ref: i.installed for i in out.items}
     assert flags == {"equity-research": True, "godot-mcp": False}
-    assert out.items[1].source == "pluginmarket"
+    assert out.items[1].source == "plugin"
     assert out.items[1].connector_count == 1 and out.items[1].composition == "with_connectors"
     (call,) = plugin_env.index.list_calls
     assert call["type_"] == "plugin" and call["composition"] == "skills_only"

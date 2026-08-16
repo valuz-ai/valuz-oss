@@ -194,7 +194,7 @@ class MarketplaceService:
             return MarketplaceItemList(
                 items=[], total=0, page=page, page_size=page_size, degraded=True
             )
-        result = MarketplaceItemList.model_validate(payload)
+        result = MarketplaceItemList.from_index_payload(payload)
         installed_refs = await self._installed_refs(user_id, type_)
         for item in result.items:
             item.installed = self._recompute_installed(item, installed_refs)
