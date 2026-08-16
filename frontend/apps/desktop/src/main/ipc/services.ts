@@ -8,7 +8,12 @@ import type {
   RuntimePhaseRecord,
 } from '@valuz/desktop-network-egress/contracts'
 import { DEFAULT_NETWORK_EGRESS_POLICY } from '@valuz/desktop-network-egress/contracts'
-import { createNetworkEgressIpcHandlers } from '@valuz/desktop-network-egress/main'
+import {
+  createNetworkEgressIpcHandlers,
+  interruptActiveModelRuns,
+  probeActiveModelRuns,
+  reconfigureRuntimeEgress,
+} from '@valuz/desktop-network-egress/main'
 import type { NetworkEgressPolicy } from '@valuz/desktop-network-egress/contracts'
 import { createServiceManager, type DesktopServiceManager } from '../services/mod'
 import { cleanStaleUpdateCache } from '../update-cache'
@@ -43,8 +48,12 @@ export interface DesktopRuntime {
 
 type DesktopEventEmitter = (eventName: string, payload: unknown) => void
 
-type ActiveRunsProbe = (port: number) => Promise<string[]>
-type ActiveRunsInterrupt = (port: number, sessionIds: string[]) => Promise<void>
+type ActiveRunsProbe = (port: number, token: string) => Promise<string[]>
+type ActiveRunsInterrupt = (
+  port: number,
+  token: string,
+  sessionIds: string[],
+) => Promise<void>
 type EgressRuntimeReconfigure = (
   port: number,
   token: string,
@@ -52,103 +61,11 @@ type EgressRuntimeReconfigure = (
   requiredUnavailable: boolean,
 ) => Promise<void>
 
-const probeActiveRuns: ActiveRunsProbe = async (port) => {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 1_500)
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/v1/runs?status=running`, {
-      signal: controller.signal,
-    })
-    if (!response.ok) return []
-    const payload = (await response.json()) as {
-      runs?: Array<{ session_id?: unknown }>
-    }
-    if (!Array.isArray(payload.runs)) return []
-    return payload.runs.flatMap((run) =>
-      typeof run.session_id === 'string' ? [run.session_id] : [],
-    )
-  } catch {
-    // If the backend is already unavailable, switching network ownership may
-    // be the recovery action that brings it back. Do not strand the user by
-    // treating an unreachable activity probe as an active task.
-    return []
-  } finally {
-    clearTimeout(timeout)
-  }
-}
-
-const interruptActiveRuns: ActiveRunsInterrupt = async (port, sessionIds) => {
-  await Promise.all(
-    sessionIds.map(async (sessionId) => {
-      const controller = new AbortController()
-      // Runtime interruption can legitimately take close to a minute while a
-      // model client unwinds. Give the backend enough time to finalize the
-      // session as idle before rebuilding it under the new network owner.
-      const timeout = setTimeout(() => controller.abort(), 70_000)
-      try {
-        const response = await fetch(
-          `http://127.0.0.1:${port}/v1/sessions/${encodeURIComponent(sessionId)}/interrupt`,
-          { method: 'POST', signal: controller.signal },
-        )
-        if (!response.ok) {
-          throw new Error(`interrupt_failed_${response.status}`)
-        }
-      } finally {
-        clearTimeout(timeout)
-      }
-    }),
-  )
-}
-
-const reconfigureRuntimeEgress: EgressRuntimeReconfigure = async (
-  port,
-  token,
-  bootstrap,
-  requiredUnavailable,
-) => {
-  const controller = new AbortController()
-  // Rebuilding the most-recent Codex runtime can include its one-time cold
-  // start. Keep the control request bounded but longer than a normal API call.
-  const timeout = setTimeout(() => controller.abort(), 120_000)
-  try {
-    const body = JSON.stringify({
-      bootstrap,
-      required_unavailable: requiredUnavailable,
-      prewarm_limit: 1,
-    })
-    const activeDrainDeadline = Date.now() + 5_000
-    while (true) {
-      const response = await fetch(
-        `http://127.0.0.1:${port}/v1/system/network-egress`,
-        {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            'x-valuz-desktop-token': token,
-          },
-          body,
-          signal: controller.signal,
-        },
-      )
-      if (response.ok) return
-      // The interrupt response can win a short race with the kernel turn's
-      // final cleanup. Let that task drain before falling back to a restart.
-      if (response.status === 409 && Date.now() < activeDrainDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, 100))
-        continue
-      }
-      throw new Error(`egress_runtime_reconfigure_failed_${response.status}`)
-    }
-  } finally {
-    clearTimeout(timeout)
-  }
-}
-
 export const createDesktopRuntime = (
   manager: DesktopServiceManager,
   emitEvent: DesktopEventEmitter = () => undefined,
-  activeRunsProbe: ActiveRunsProbe = probeActiveRuns,
-  activeRunsInterrupt: ActiveRunsInterrupt = interruptActiveRuns,
+  activeRunsProbe: ActiveRunsProbe = probeActiveModelRuns,
+  activeRunsInterrupt: ActiveRunsInterrupt = interruptActiveModelRuns,
   egressRuntimeReconfigure: EgressRuntimeReconfigure = reconfigureRuntimeEgress,
 ): DesktopRuntime => {
   const restartService = async (serviceName: string) => {
@@ -240,13 +157,14 @@ export const createDesktopRuntime = (
       if (crossesOwnershipBoundary) {
         const server = manager.getAgentServerInfo()
         if (server.status === 'running') {
-          const activeSessionIds = await activeRunsProbe(server.port)
+          const desktopToken = manager.getDesktopControlToken()
+          const activeSessionIds = await activeRunsProbe(server.port, desktopToken)
           if (activeSessionIds.length > 0) {
             if (!options?.interruptActiveRuns) {
               throw new Error('egress_mode_change_blocked_by_active_runs')
             }
             try {
-              await activeRunsInterrupt(server.port, activeSessionIds)
+              await activeRunsInterrupt(server.port, desktopToken, activeSessionIds)
             } catch {
               throw new Error('egress_mode_change_interrupt_failed')
             }
@@ -288,7 +206,18 @@ export const createDesktopRuntime = (
               // configuration and must never become the fail-loud marker.
               status.enabled && status.mode !== 'off' && !status.started,
             )
-          } catch {
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              error.message === 'egress_runtime_reconfigure_busy'
+            ) {
+              // A new/unwinding task won the race after confirmation. The
+              // backend kept its previous network owner (409), so roll the
+              // Electron owner and persisted choice back transactionally.
+              status = await manager.setEgressMode(previous)
+              emitEvent('egress-status-changed', status)
+              throw new Error('egress_mode_change_blocked_by_active_runs')
+            }
             // Fail safe and preserve compatibility with a backend from before
             // live reconfiguration. The normal same-version path never
             // restarts the service.

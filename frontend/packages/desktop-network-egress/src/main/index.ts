@@ -21,3 +21,8 @@ export {
   desktopCapabilities,
 } from "./ipc-handlers";
 export type { NetworkEgressRuntime } from "./ipc-handlers";
+export {
+  interruptActiveModelRuns,
+  probeActiveModelRuns,
+  reconfigureRuntimeEgress,
+} from "./desktop-control-client";
