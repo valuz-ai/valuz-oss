@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Agents page default view** — the view switcher lists "All agents" first
+  and opens on it by default; "By project" is the second tab (#906 @St0neWan9).
+
 ### Fixed
 
 - **Desktop close shortcut** — with no preview open, Ctrl+W on Windows/Linux
