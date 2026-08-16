@@ -1,7 +1,7 @@
 import type {
   EgressConnectionOutcome,
   EgressSnapshot,
-} from "./types";
+} from "../contracts";
 
 export const DEFAULT_CONNECT_DEGRADED_MS = 5_000;
 

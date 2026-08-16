@@ -1,6 +1,6 @@
 import { isIP } from "node:net";
 import { parsePacResult } from "./pac-result";
-import type { EgressMode, EgressResolution, EgressRoute } from "./types";
+import type { EgressMode, EgressResolution, EgressRoute } from "../contracts";
 
 export const DEFAULT_RESOLUTION_TTL_MS = 30_000;
 

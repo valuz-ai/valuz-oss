@@ -1,13 +1,11 @@
 import { app, session } from "electron";
 import {
   EgressManager,
+  readPersistedEgressMode,
   resolveEgressFrontendsEnabled,
   resolveInitialEgressMode,
-} from "../network/egress-manager";
-import {
-  readPersistedEgressMode,
   writePersistedEgressMode,
-} from "../network/mode-store";
+} from "@valuz/desktop-network-egress/main";
 import { createServiceManager } from "../services/mod";
 import { getMainWindow } from "../windows";
 import { createDesktopRuntime } from "./services";
@@ -30,10 +28,10 @@ export const getDesktopRuntime = () => {
     // canary is enabled, Electron owns the source backend like a sidecar.
     const managedDevMode = !app.isPackaged && frontendsEnabled;
     const egressManager = new EgressManager({
-      mode: resolveInitialEgressMode(
-        process.env,
-        readPersistedEgressMode(userDataDir),
-      ),
+      mode: resolveInitialEgressMode({
+        env: process.env,
+        persistedMode: readPersistedEgressMode(userDataDir),
+      }),
       env: process.env,
       resolveSystemProxy: (targetUrl) =>
         session.defaultSession.resolveProxy(targetUrl),

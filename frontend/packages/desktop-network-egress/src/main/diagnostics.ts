@@ -1,4 +1,4 @@
-import type { EgressDiagnosticEvent } from "./types";
+import type { EgressDiagnosticEvent } from "../contracts";
 
 export const DEFAULT_DIAGNOSTIC_MAX_ENTRIES = 500;
 export const DEFAULT_DIAGNOSTIC_MAX_AGE_MS = 30 * 60 * 1000;

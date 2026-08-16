@@ -23,6 +23,20 @@ describe("NetworkSection mode switching", () => {
 
   it("lets the user confirm interruption before switching an active task", async () => {
     const invoke = vi.fn(async (channel: string) => {
+      if (channel === "desktop_get_capabilities") {
+        return {
+          schemaVersion: 1,
+          networkEgress: {
+            available: true,
+            contractVersion: 1,
+            policy: {
+              defaultMode: "auto",
+              allowedModes: ["off", "auto"],
+              userConfigurable: true,
+            },
+          },
+        };
+      }
       if (channel === "egress_get_status") {
         return {
           mode: "off",
@@ -70,5 +84,28 @@ describe("NetworkSection mode switching", () => {
         interruptActiveRuns: true,
       });
     });
+  });
+
+  it("does not poll unsupported desktop hosts", async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      void channel;
+      throw new Error("No handler registered for desktop_get_capabilities");
+    });
+    Object.defineProperty(window, "valuzDesktop", {
+      configurable: true,
+      value: { invoke, on: vi.fn(), off: vi.fn() },
+    });
+
+    render(<NetworkSection />);
+
+    expect(
+      await screen.findByText("settings.network.canaryDisabled"),
+    ).toBeTruthy();
+    expect(invoke).toHaveBeenCalledWith("desktop_get_capabilities");
+    expect(
+      invoke.mock.calls.every(
+        ([channel]) => channel === "desktop_get_capabilities",
+      ),
+    ).toBe(true);
   });
 });

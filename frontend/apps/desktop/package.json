@@ -25,6 +25,7 @@
     "@fontsource/newsreader": "5.2.10",
     "@fontsource/noto-serif-sc": "5.2.8",
     "@valuz/core": "workspace:*",
+    "@valuz/desktop-network-egress": "workspace:*",
     "@valuz/parser-plugins": "workspace:*",
     "@valuz/shared": "workspace:*",
     "@valuz/ui": "workspace:*",

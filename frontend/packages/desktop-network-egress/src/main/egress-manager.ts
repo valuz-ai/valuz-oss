@@ -34,7 +34,7 @@ import type {
   EgressResolution,
   EgressRuntime,
   EgressSnapshot,
-} from "./types";
+} from "../contracts";
 import { UpstreamConnector } from "./upstream-connector";
 
 const PROXY_ENV_KEYS = [
@@ -58,15 +58,6 @@ export const captureProxyEnvironment = (
   }
   return snapshot;
 };
-
-export const resolveInitialEgressMode = (
-  env: NodeJS.ProcessEnv,
-  persistedMode: EgressMode = "off",
-): EgressMode =>
-  env.VALUZ_EGRESS_MODE?.trim().toLowerCase() === "off" ||
-  persistedMode === "off"
-    ? "off"
-    : "auto";
 
 export const resolveEgressFrontendsEnabled = (
   env: NodeJS.ProcessEnv,

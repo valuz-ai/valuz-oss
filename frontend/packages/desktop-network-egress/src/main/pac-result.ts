@@ -1,4 +1,4 @@
-import type { EgressRoute, PacParseResult } from "./types";
+import type { EgressRoute, PacParseResult } from "../contracts";
 
 const proxyEndpointUrl = (
   scheme: "http" | "socks5",

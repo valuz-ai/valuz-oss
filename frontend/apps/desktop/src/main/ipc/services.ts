@@ -1,12 +1,15 @@
 import type { ServiceDescriptor } from '@valuz/core'
 import type {
+  EgressBootstrap,
   EgressDiagnosticEvent,
   EgressManagerStatus,
   EgressMode,
   EgressSnapshot,
-} from '../network/types'
-import type { RuntimePhaseRecord } from '../network/control-server'
-import type { EgressBootstrap } from '../network/control-server'
+  RuntimePhaseRecord,
+} from '@valuz/desktop-network-egress/contracts'
+import { DEFAULT_NETWORK_EGRESS_POLICY } from '@valuz/desktop-network-egress/contracts'
+import { createNetworkEgressIpcHandlers } from '@valuz/desktop-network-egress/main'
+import type { NetworkEgressPolicy } from '@valuz/desktop-network-egress/contracts'
 import { createServiceManager, type DesktopServiceManager } from '../services/mod'
 import { cleanStaleUpdateCache } from '../update-cache'
 
@@ -301,7 +304,10 @@ export const createDesktopRuntime = (
 
 export const createDesktopRuntimeForTest = () => createDesktopRuntime(createServiceManager())
 
-export const serviceHandlers = (runtime: DesktopRuntime) => ({
+export const serviceHandlers = (
+  runtime: DesktopRuntime,
+  networkEgressPolicy: NetworkEgressPolicy = DEFAULT_NETWORK_EGRESS_POLICY,
+) => ({
   get_services_status: () => runtime.getServicesStatus(),
   start_all_services: () => runtime.startAllServices(),
   stop_all_services: () => runtime.stopAllServices(),
@@ -316,21 +322,5 @@ export const serviceHandlers = (runtime: DesktopRuntime) => ({
     runtime.registerServiceDescriptor(payload?.descriptor as ServiceDescriptor),
   unregister_service_descriptor: (_: unknown, payload?: { name?: string }) =>
     runtime.unregisterServiceDescriptor(payload?.name ?? ''),
-  egress_get_diagnostics: () => runtime.getEgressDiagnostics(),
-  egress_get_snapshots: () => runtime.getEgressSnapshots(),
-  egress_get_mode: () => runtime.getEgressMode(),
-  egress_get_status: () => runtime.getEgressStatus(),
-  egress_get_runtime_phases: () => runtime.getEgressRuntimePhases(),
-  egress_set_mode: (
-    _: unknown,
-    payload?: { mode?: EgressMode; interruptActiveRuns?: boolean },
-  ) => {
-    const mode = payload?.mode
-    if (mode !== 'auto' && mode !== 'direct' && mode !== 'off') {
-      throw new Error('invalid_egress_mode')
-    }
-    return runtime.setEgressMode(mode, {
-      interruptActiveRuns: payload?.interruptActiveRuns === true,
-    })
-  },
+  ...createNetworkEgressIpcHandlers(runtime, networkEgressPolicy),
 })

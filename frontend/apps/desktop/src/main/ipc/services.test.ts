@@ -1,8 +1,27 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createDesktopRuntime } from './services'
+import {
+  DESKTOP_CAPABILITIES_CHANNEL,
+  NETWORK_EGRESS_CHANNELS,
+} from '@valuz/desktop-network-egress/contracts'
+import {
+  createDesktopRuntime,
+  createDesktopRuntimeForTest,
+  serviceHandlers,
+} from './services'
 import { DescriptorRegistry } from '../services/descriptors'
 
 describe('createDesktopRuntimeForTest', () => {
+  it('registers the complete versioned network egress IPC surface', () => {
+    const handlers = serviceHandlers(createDesktopRuntimeForTest())
+
+    expect(Object.keys(handlers)).toEqual(
+      expect.arrayContaining([
+        DESKTOP_CAPABILITIES_CHANNEL,
+        ...Object.values(NETWORK_EGRESS_CHANNELS),
+      ]),
+    )
+  })
+
   it('starts required services and returns the updated snapshot', async () => {
     const runtime = createDesktopRuntime({
       descriptors: new DescriptorRegistry([]),

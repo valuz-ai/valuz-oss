@@ -1,7 +1,7 @@
 import { isIP, connect as netConnect, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import { connect as tlsConnect, type TLSSocket } from "node:tls";
-import type { EgressResolution, EgressRoute } from "./types";
+import type { EgressResolution, EgressRoute } from "../contracts";
 
 export const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 export const DEFAULT_CIRCUIT_BREAKER_MS = 5_000;
