@@ -100,12 +100,3 @@ export function modelLabel(id: string | null | undefined): string {
   if (dyn) return dyn;
   return prettifyKnownFamily(id) ?? id;
 }
-
-/** Add provider-owned metadata only on a model-selection surface. */
-export function modelSelectionLabel(
-  label: string,
-  selectionHint: string | null | undefined,
-): string {
-  const hint = selectionHint?.trim();
-  return hint ? `${label} · ${hint}` : label;
-}

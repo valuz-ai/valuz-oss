@@ -18,7 +18,7 @@ const sampleRuntimes: RuntimeSelectorItem[] = [
 ];
 
 describe("Composer runtime selector (REP-107)", () => {
-  it("shows provider selection hints in the model picker trigger", () => {
+  it("keeps provider selection hints on the option rows, not the collapsed trigger", () => {
     render(
       <Composer
         providers={[
@@ -36,7 +36,17 @@ describe("Composer runtime selector (REP-107)", () => {
       />,
     );
 
-    expect(screen.getByText("GPT 5.9 · 2×")).toBeTruthy();
+    // Collapsed: the trigger reads as the plain model name, no hint.
+    expect(screen.getByText("GPT 5.9")).toBeTruthy();
+    expect(screen.queryByText("2×")).toBeNull();
+
+    // Open the model list: the option row shows the name plus the hint in
+    // its own right-aligned column (not glued into the label), and the
+    // trigger itself is unchanged.
+    fireEvent.click(screen.getByText("GPT 5.9"));
+    expect(screen.getAllByText("GPT 5.9")).toHaveLength(2);
+    expect(screen.getByText("2×")).toBeTruthy();
+    expect(screen.queryByText("GPT 5.9 · 2×")).toBeNull();
   });
 
   it("does not render the runtime trigger when runtimes prop is empty", () => {

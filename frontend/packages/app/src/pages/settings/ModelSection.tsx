@@ -20,6 +20,7 @@ import {
   SettingsSection,
   cn,
   IconBox,
+  ModelSelectionHint,
 } from "@valuz/ui";
 import { useCapabilities, useTranslation } from "@valuz/core";
 import { assetUrl } from "@valuz/shared";
@@ -29,7 +30,7 @@ import {
   type CliLoginStatus,
 } from "@valuz/app/components";
 import { usePlatform } from "@valuz/app/platform";
-import { modelLabel, modelSelectionLabel } from "@valuz/shared";
+import { modelLabel } from "@valuz/shared";
 import {
   providersApi,
   runtimesApi,
@@ -557,6 +558,9 @@ export const ModelSection = () => {
               providerName: string;
               modelId: string;
               itemLabel: string;
+              // Picker-only hint (e.g. points multiplier); rendered as a
+              // right-aligned cell on the option rows, never on the trigger.
+              selectionHint: string | null | undefined;
             };
             const runtime = modelDefaults.default_runtime;
             const allOptions: ModelOpt[] = [];
@@ -584,10 +588,9 @@ export const ModelSection = () => {
                   // Server label wins when it's a real display name; subscription
                   // / built-in rows have none (``m.label`` === raw id) → fall back
                   // to the static brand catalog, same as the Composer picker.
-                  itemLabel: modelSelectionLabel(
+                  itemLabel:
                     m.label !== m.model_id ? m.label : modelLabel(m.model_id),
-                    m.selection_hint,
-                  ),
+                  selectionHint: m.selection_hint,
                 }));
                 allOptions.push(...groupOptions);
                 groups.push({
@@ -704,7 +707,10 @@ export const ModelSection = () => {
                             </SelectLabel>
                             {g.options.map((o) => (
                               <SelectItem key={o.key} value={o.key}>
-                                {o.itemLabel}
+                                <span className="min-w-0 flex-1 truncate">
+                                  {o.itemLabel}
+                                </span>
+                                <ModelSelectionHint hint={o.selectionHint} />
                               </SelectItem>
                             ))}
                           </SelectGroup>

@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   _clearDynamicModelLabels,
   modelLabel,
-  modelSelectionLabel,
   registerDynamicModelLabels,
 } from "./model-labels";
 
@@ -43,13 +42,5 @@ describe("modelLabel resolution tiers", () => {
     expect(modelLabel(null)).toBe("");
     expect(modelLabel(undefined)).toBe("");
     expect(modelLabel("")).toBe("");
-  });
-});
-
-describe("modelSelectionLabel", () => {
-  it("keeps picker-only metadata out of the base label", () => {
-    expect(modelSelectionLabel("Valuz Pro", "2×")).toBe("Valuz Pro · 2×");
-    expect(modelSelectionLabel("Valuz Pro", null)).toBe("Valuz Pro");
-    expect(modelLabel("sys-reportify-pro")).toBe("sys-reportify-pro");
   });
 });
