@@ -123,17 +123,14 @@ const EFFORT_ORDER: readonly EffortLevel[] = [
 ] as const;
 
 const EFFORT_FALLBACK: EffortLevel = "high";
-import {
-  MAX_SESSION_ATTACHMENTS,
-  modelLabel,
-  modelSelectionLabel,
-} from "@valuz/shared";
+import { MAX_SESSION_ATTACHMENTS, modelLabel } from "@valuz/shared";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "./ui/tooltip";
+import { ModelSelectionHint } from "./shared/ModelSelectionHint";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1398,6 +1395,11 @@ export const Composer = ({
   // pair so the trigger reads sensibly. The host is expected to settle
   // selectedProviderId/selectedModelId to a real value before the user
   // sends a turn — there is no "send with no model" path anymore.
+  //
+  // The collapsed trigger (and every other "current selection" readout that
+  // reuses this label) shows the plain model name. Provider selection hints
+  // such as a points multiplier are only rendered next to each option inside
+  // the open list, where the user is actually comparing models.
   const selectedModelLabel =
     (selectedModelId
       ? (() => {
@@ -1407,28 +1409,25 @@ export const Composer = ({
               c.modelId === selectedModelId,
           );
           if (!m) return null;
-          return modelSelectionLabel(
-            m.source === "managed" ? m.providerName : modelLabel(m.modelId),
-            m.selectionHint,
-          );
+          return m.source === "managed"
+            ? m.providerName
+            : modelLabel(m.modelId);
         })()
       : null) ??
     (() => {
       const d = providers.find((c) => c.isDefault);
       return d
-        ? modelSelectionLabel(
-            d.source === "managed" ? d.providerName : modelLabel(d.modelId),
-            d.selectionHint,
-          )
+        ? d.source === "managed"
+          ? d.providerName
+          : modelLabel(d.modelId)
         : null;
     })() ??
     (() => {
       const f = providers[0];
       return f
-        ? modelSelectionLabel(
-            f.source === "managed" ? f.providerName : modelLabel(f.modelId),
-            f.selectionHint,
-          )
+        ? f.source === "managed"
+          ? f.providerName
+          : modelLabel(f.modelId)
         : null;
     })() ??
     "Model";
@@ -2705,15 +2704,21 @@ export const Composer = ({
                                                       setAgentSubmenu(null);
                                                     }}
                                                   >
-                                                    <span className="truncate text-ink-heading">
-                                                      {modelSelectionLabel(
-                                                        modelLabel(m.modelId),
-                                                        m.selectionHint,
+                                                    <span className="min-w-0 flex-1 truncate text-ink-heading">
+                                                      {modelLabel(m.modelId)}
+                                                    </span>
+                                                    {/* Hint (e.g. points multiplier) sits in
+                                                        its own right-aligned column, and the
+                                                        check slot is always reserved so the
+                                                        numbers line up across rows. */}
+                                                    <ModelSelectionHint
+                                                      hint={m.selectionHint}
+                                                    />
+                                                    <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                                                      {sel && (
+                                                        <Check className="h-3.5 w-3.5 text-ink-heading" />
                                                       )}
                                                     </span>
-                                                    {sel && (
-                                                      <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
-                                                    )}
                                                   </button>
                                                 );
                                               })}
@@ -3004,12 +3009,9 @@ export const Composer = ({
                                     >
                                       <span className="flex min-w-0 flex-1 items-center">
                                         <span className="truncate">
-                                          {modelSelectionLabel(
-                                            item.source === "managed"
-                                              ? item.providerName
-                                              : modelLabel(item.modelId),
-                                            item.selectionHint,
-                                          )}
+                                          {item.source === "managed"
+                                            ? item.providerName
+                                            : modelLabel(item.modelId)}
                                         </span>
                                         {item.isDefault && (
                                           <span className="ml-1 shrink-0 rounded bg-brand/10 px-1 text-2xs text-brand">
@@ -3017,9 +3019,19 @@ export const Composer = ({
                                           </span>
                                         )}
                                       </span>
-                                      {selected && (
-                                        <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
-                                      )}
+                                      {/* Hint (e.g. points multiplier) is a
+                                          right-aligned column of its own; the
+                                          check slot is always reserved so the
+                                          numbers line up whether or not a row
+                                          is selected. */}
+                                      <ModelSelectionHint
+                                        hint={item.selectionHint}
+                                      />
+                                      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                                        {selected && (
+                                          <Check className="h-3.5 w-3.5 text-ink-heading" />
+                                        )}
+                                      </span>
                                     </button>
                                   );
                                 })(),

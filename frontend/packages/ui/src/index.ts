@@ -35,6 +35,7 @@ export * from "./components/common/LogViewer";
 export * from "./components/common/OfflineBanner";
 export * from "./components/common/ServiceDashboard";
 export * from "./components/shared/CategorizedList";
+export * from "./components/shared/ModelSelectionHint";
 export * from "./components/conversation/AssistantMessage";
 export * from "./components/conversation/AttachmentMenu";
 export * from "./components/conversation/ConversationHeader";

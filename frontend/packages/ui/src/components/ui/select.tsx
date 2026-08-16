@@ -111,7 +111,7 @@ function SelectItem({
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        "relative flex w-full cursor-default items-center gap-2 rounded-sm py-1.5 pr-8 pl-2 text-sm text-ink-label outline-hidden select-none hover:bg-[color:var(--fg-1)] hover:text-ink-heading focus:bg-[color:var(--fg-1)] focus:text-ink-heading data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[disabled]:text-ink-meta [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-ink-heading *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
+        "relative flex w-full cursor-default items-center gap-2 rounded-sm py-1.5 pr-8 pl-2 text-sm text-ink-label outline-hidden select-none hover:bg-[color:var(--fg-1)] hover:text-ink-heading focus:bg-[color:var(--fg-1)] focus:text-ink-heading data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[disabled]:text-ink-meta [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-ink-heading *:[span]:last:flex *:[span]:last:min-w-0 *:[span]:last:flex-1 *:[span]:last:items-center *:[span]:last:gap-2",
         className
       )}
       {...props}

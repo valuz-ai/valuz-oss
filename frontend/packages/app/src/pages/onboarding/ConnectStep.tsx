@@ -14,6 +14,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  ModelSelectionHint,
   type ProviderOption,
 } from "@valuz/ui";
 import {
@@ -27,7 +28,7 @@ import {
 } from "@valuz/core";
 import { useCapabilities, useTranslation } from "@valuz/core";
 import { t as _t } from "@valuz/shared/i18n";
-import { modelLabel, modelSelectionLabel } from "@valuz/shared";
+import { modelLabel } from "@valuz/shared";
 import { Check, Loader2, Lock, Plus } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -476,11 +477,22 @@ const OptionCard = ({
             disabled={busy}
           >
             <SelectTrigger className="w-full text-xs">
-              <SelectValue
-                placeholder={t(
-                  "onboarding.pickModelHint" as Parameters<typeof t>[0],
-                )}
-              />
+              {currentModel ? (
+                // Collapsed trigger: plain name only. ``SelectValue`` would
+                // mirror the option row (including its hint cell), and the
+                // hint belongs to the open list.
+                <span className="truncate text-ink-heading">
+                  {currentModel.label !== currentModel.model_id
+                    ? currentModel.label
+                    : modelLabel(currentModel.model_id)}
+                </span>
+              ) : (
+                <SelectValue
+                  placeholder={t(
+                    "onboarding.pickModelHint" as Parameters<typeof t>[0],
+                  )}
+                />
+              )}
             </SelectTrigger>
             <SelectContent>
               {models.map((m) => (
@@ -495,10 +507,10 @@ const OptionCard = ({
                       raw id — fall back to the static brand catalog (e.g.
                       ``claude-sonnet-4-6`` → "Sonnet 4.6"), same as the Composer's
                       AgentModelPicker. */}
-                  {modelSelectionLabel(
-                    m.label !== m.model_id ? m.label : modelLabel(m.model_id),
-                    m.selection_hint,
-                  )}
+                  <span className="min-w-0 flex-1 truncate">
+                    {m.label !== m.model_id ? m.label : modelLabel(m.model_id)}
+                  </span>
+                  <ModelSelectionHint hint={m.selection_hint} />
                 </SelectItem>
               ))}
             </SelectContent>
