@@ -35,6 +35,7 @@ from valuz_agent.api.routes.notifications import router as notifications_router
 from valuz_agent.api.routes.onboarding import router as onboarding_router
 from valuz_agent.api.routes.parser import settings_router as parser_settings_router
 from valuz_agent.api.routes.parser import system_router as parser_system_router
+from valuz_agent.api.routes.plugins import router as plugins_router
 from valuz_agent.api.routes.projects import router as projects_router
 from valuz_agent.api.routes.providers import router as providers_router
 from valuz_agent.api.routes.resources import router as resources_router
@@ -174,6 +175,7 @@ def create_app(
     api.include_router(agents_router)
     api.include_router(agent_templates_router)
     api.include_router(marketplace_router)
+    api.include_router(plugins_router)
     api.include_router(tasks_router)
     api.include_router(analytics_router)
     api.include_router(resources_router)

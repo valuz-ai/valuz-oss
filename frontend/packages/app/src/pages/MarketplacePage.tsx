@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Bot, CloudOff, Plug, Sparkles, Store, Zap } from "lucide-react";
-import { BackLink, Button, SearchInput, cn } from "@valuz/ui";
-import type { MarketplaceCategory, MarketplaceItem } from "@valuz/core";
+import { Bot, CloudOff, Plug, Puzzle, Sparkles, Store, Zap } from "lucide-react";
+import { BackLink, Button, SearchInput, SegmentedControl, cn } from "@valuz/ui";
+import type {
+  MarketplaceCategory,
+  MarketplaceItem,
+  MarketplacePluginComposition,
+} from "@valuz/core";
 import { marketplaceApi, useTranslation } from "@valuz/core";
 import { useProjectOutlet } from "@valuz/app/layout";
 import { MarketplaceImportDialog } from "../components/MarketplaceImportDialog";
 import { MarketplaceConnectorDialog } from "../components/MarketplaceConnectorDialog";
+import { MarketplacePluginDialog } from "../components/plugins/MarketplacePluginDialog";
 import {
   MarketplaceBadgePill,
   MarketplaceSourcePill,
@@ -15,13 +20,32 @@ import {
   tintFor,
 } from "../components/marketplace-ui";
 
-type MarketTab = "agents" | "skills" | "connectors";
+export type MarketTab = "agents" | "skills" | "plugins" | "connectors";
+
+const MARKET_TABS: readonly MarketTab[] = [
+  "agents",
+  "skills",
+  "plugins",
+  "connectors",
+];
+
+const isMarketTab = (value: string | null): value is MarketTab =>
+  value !== null && (MARKET_TABS as readonly string[]).includes(value);
+
+/** Header sub-tabs (D7): agents 单智能体 → 团队; skills 技能 → 套件;
+ * plugins 全部 → 技能套件 → 含连接器. */
+type AgentsSubtab = "single" | "teams";
+type SkillsSubtab = "skills" | "suites";
+type PluginFilter = "all" | MarketplacePluginComposition;
 
 const SKILL_PAGE_SIZE = 30;
 const CONNECTOR_PAGE_SIZE = 20;
+const PLUGIN_PAGE_SIZE = 30;
 
-/** Full-screen marketplace — two tabs (Agents / Skills) per the product
- * prototype (docs/plans/2026-07-07-skillhub-marketplace-product-prototype.md).
+/** Full-screen marketplace — four tabs (Agents / Skills / Plugins /
+ * Connectors) per the product prototype
+ * (docs/plans/2026-07-07-skillhub-marketplace-product-prototype.md) and the
+ * Agent Plugins design (docs/cloud-marketplace/design/agent-plugins-support.md).
  * All data comes from the market index (Valuz cloud) via the backend. */
 export function MarketplacePage() {
   const { t } = useTranslation();
@@ -41,13 +65,11 @@ export function MarketplacePage() {
   );
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get("tab");
-  const tab: MarketTab =
-    requestedTab === "skills" || requestedTab === "connectors"
-      ? requestedTab
-      : "agents";
+  const tab: MarketTab = isMarketTab(requestedTab) ? requestedTab : "agents";
   const [queries, setQueries] = useState<Record<MarketTab, string>>({
     agents: "",
     skills: "",
+    plugins: "",
     connectors: "",
   });
   const [debouncedQueries, setDebouncedQueries] = useState<
@@ -55,6 +77,7 @@ export function MarketplacePage() {
   >({
     agents: "",
     skills: "",
+    plugins: "",
     connectors: "",
   });
   const query = queries[tab];
@@ -70,7 +93,9 @@ export function MarketplacePage() {
         ? "/agents"
         : from === "connectors"
           ? "/connectors"
-          : null;
+          : from === "plugins"
+            ? "/plugins"
+            : null;
   const backLabel =
     from === "skills"
       ? tr("marketplace.backToSkills")
@@ -78,7 +103,9 @@ export function MarketplacePage() {
         ? tr("marketplace.backToAgents")
         : from === "connectors"
           ? tr("marketplace.backToConnectors")
-          : null;
+          : from === "plugins"
+            ? tr("marketplace.backToPlugins")
+            : null;
   const setTab = (next: MarketTab) => {
     const params = new URLSearchParams(searchParams);
     params.set("tab", next);
@@ -99,10 +126,17 @@ export function MarketplacePage() {
     null,
   );
   const [connectorOpen, setConnectorOpen] = useState(false);
+  const [pluginItem, setPluginItem] = useState<MarketplaceItem | null>(null);
+  const [pluginOpen, setPluginOpen] = useState(false);
   const openItem = (item: MarketplaceItem) => {
     if (item.type === "connector") {
       setConnectorItem(item);
       setConnectorOpen(true);
+      return;
+    }
+    if (item.type === "plugin") {
+      setPluginItem(item);
+      setPluginOpen(true);
       return;
     }
     setDialogItem(item);
@@ -176,17 +210,21 @@ export function MarketplacePage() {
                 ? tr("marketplace.searchAgents")
                 : tab === "skills"
                   ? tr("marketplace.searchSkills")
-                  : tr("marketplace.searchConnectors")
+                  : tab === "plugins"
+                    ? tr("marketplace.searchPlugins")
+                    : tr("marketplace.searchConnectors")
             }
             className="w-[250px]"
           />
         </div>
         {/* tabs */}
-        <div className="mt-3 flex gap-5">
-          {(["agents", "skills", "connectors"] as const).map((key) => (
+        <div className="mt-3 flex gap-5" role="tablist">
+          {MARKET_TABS.map((key) => (
             <button
               key={key}
               type="button"
+              role="tab"
+              aria-selected={tab === key}
               onClick={() => setTab(key)}
               className={cn(
                 "relative px-1 py-2 text-sm",
@@ -199,7 +237,9 @@ export function MarketplacePage() {
                 ? tr("marketplace.tabAgents")
                 : key === "skills"
                   ? tr("marketplace.tabSkills")
-                  : tr("marketplace.tabConnectors")}
+                  : key === "plugins"
+                    ? tr("marketplace.tabPlugins")
+                    : tr("marketplace.tabConnectors")}
               <span
                 className={cn(
                   "absolute inset-x-0 -bottom-px h-0.5 rounded-full",
@@ -225,6 +265,13 @@ export function MarketplacePage() {
           onOpen={openItem}
           withInstalled={withInstalled}
         />
+      ) : tab === "plugins" ? (
+        <PluginsTab
+          q={debouncedQuery}
+          tr={tr}
+          onOpen={openItem}
+          withInstalled={withInstalled}
+        />
       ) : (
         <ConnectorsTab
           q={debouncedQuery}
@@ -245,6 +292,12 @@ export function MarketplacePage() {
         open={connectorOpen}
         onOpenChange={setConnectorOpen}
         onConnected={markInstalled}
+      />
+      <MarketplacePluginDialog
+        item={pluginItem}
+        open={pluginOpen}
+        onOpenChange={setPluginOpen}
+        onInstalled={markInstalled}
       />
     </div>
   );
@@ -317,6 +370,28 @@ function TemplateCard({
 
 /* ── shared bits ─────────────────────────────────────────────── */
 
+/** Compact list-header switcher (D7) — the same SegmentedControl the
+ * library pages use, sized to sit on the section-head row. */
+function SubtabBar<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: readonly { value: T; label: string }[];
+  onChange: (value: T) => void;
+}) {
+  return (
+    <SegmentedControl
+      value={value}
+      options={options}
+      onValueChange={onChange}
+      className="mb-3 h-8 w-fit"
+      buttonClassName="px-3"
+    />
+  );
+}
+
 function SectionHead({
   icon,
   title,
@@ -386,6 +461,7 @@ function ItemIcon({
 /* ── Agents tab ──────────────────────────────────────────────── */
 
 function AgentsTab({ q, tr, onOpen, withInstalled }: TabProps) {
+  const [subtab, setSubtab] = useState<AgentsSubtab>("single");
   const [teams, setTeams] = useState<MarketplaceItem[]>([]);
   const [templates, setTemplates] = useState<MarketplaceItem[]>([]);
   const [categories, setCategories] = useState<MarketplaceCategory[]>([]);
@@ -448,9 +524,19 @@ function AgentsTab({ q, tr, onOpen, withInstalled }: TabProps) {
         ))}
       </div>
 
-      {/* content */}
+      {/* content — one list at a time, switched by the header sub-tabs
+          (D7: 单智能体 first, 团队 second) instead of the old stacked
+          sections where the lower one was easy to miss. */}
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-7 pt-4">
-        {teamItems.length > 0 && (
+        <SubtabBar<AgentsSubtab>
+          value={subtab}
+          onChange={setSubtab}
+          options={[
+            { value: "single", label: tr("marketplace.agentsSubtabSingle") },
+            { value: "teams", label: tr("marketplace.agentsSubtabTeams") },
+          ]}
+        />
+        {subtab === "teams" ? (
           <section className="mb-7">
             <SectionHead
               icon={<Sparkles className="h-[15px] w-[15px] text-brand" />}
@@ -463,8 +549,7 @@ function AgentsTab({ q, tr, onOpen, withInstalled }: TabProps) {
               ))}
             </div>
           </section>
-        )}
-        {templateItems.length > 0 && (
+        ) : (
           <section className="mb-7">
             <SectionHead
               icon={<Bot className="h-[15px] w-[15px] text-brand" />}
@@ -570,6 +655,9 @@ function TeamCard({
 /* ── Skills tab ──────────────────────────────────────────────── */
 
 function SkillsTab({ q, tr, onOpen, withInstalled }: TabProps) {
+  // 技能 | 套件 (D2/D7): 套件 = ``type=plugin&composition=skills_only`` — the
+  // same rows the Plugins tab shows under 技能套件, surfaced here as well.
+  const [subtab, setSubtab] = useState<SkillsSubtab>("skills");
   const [categories, setCategories] = useState<MarketplaceCategory[]>([]);
   const [category, setCategory] = useState<string | null>(null);
   const [items, setItems] = useState<MarketplaceItem[]>([]);
@@ -580,14 +668,28 @@ function SkillsTab({ q, tr, onOpen, withInstalled }: TabProps) {
   const requestSeq = useRef(0);
 
   useEffect(() => {
+    let cancelled = false;
     marketplaceApi
-      .categories("skill")
+      .categories(subtab === "suites" ? "plugin" : "skill")
       .then((res) => {
+        if (cancelled) return;
         setCategories(res.categories);
         if (res.degraded) setDegraded(true);
       })
-      .catch(() => setCategories([]));
-  }, []);
+      .catch(() => {
+        if (!cancelled) setCategories([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [subtab]);
+
+  const switchSubtab = (next: SkillsSubtab) => {
+    if (next === subtab) return;
+    setSubtab(next);
+    // Category keys differ between the skill and plugin catalogs.
+    setCategory(null);
+  };
 
   const load = useCallback(
     (nextPage: number, append: boolean) => {
@@ -595,7 +697,9 @@ function SkillsTab({ q, tr, onOpen, withInstalled }: TabProps) {
       setLoading(true);
       marketplaceApi
         .list({
-          type: "skill",
+          ...(subtab === "suites"
+            ? { type: "plugin" as const, composition: "skills_only" as const }
+            : { type: "skill" as const }),
           category: category ?? undefined,
           q: q || undefined,
           page: nextPage,
@@ -619,7 +723,7 @@ function SkillsTab({ q, tr, onOpen, withInstalled }: TabProps) {
           if (seq === requestSeq.current) setLoading(false);
         });
     },
-    [category, q],
+    [category, q, subtab],
   );
 
   useEffect(() => {
@@ -657,26 +761,52 @@ function SkillsTab({ q, tr, onOpen, withInstalled }: TabProps) {
       {/* content */}
       <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-7 pt-4">
         {degraded && <DegradedNotice tr={tr} />}
+        <SubtabBar<SkillsSubtab>
+          value={subtab}
+          onChange={switchSubtab}
+          options={[
+            { value: "skills", label: tr("marketplace.skillsSubtabSkills") },
+            { value: "suites", label: tr("marketplace.skillsSubtabSuites") },
+          ]}
+        />
         <SectionHead
-          icon={<Zap className="h-[15px] w-[15px] text-brand" />}
+          icon={
+            subtab === "suites" ? (
+              <Puzzle className="h-[15px] w-[15px] text-brand" />
+            ) : (
+              <Zap className="h-[15px] w-[15px] text-brand" />
+            )
+          }
           title={
             q
               ? tr("marketplace.searchResultsTitle")
-              : tr("marketplace.skillsShelfTitle")
+              : subtab === "suites"
+                ? tr("marketplace.suitesShelfTitle")
+                : tr("marketplace.skillsShelfTitle")
           }
           count={tr("marketplace.countTotal", { count: total })}
         />
         {
           <>
             <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3">
-              {visible.map((skill) => (
-                <SkillMarketCard
-                  key={skill.id}
-                  skill={skill}
-                  tr={tr}
-                  onOpen={onOpen}
-                />
-              ))}
+              {visible.map((entry) =>
+                entry.type === "plugin" ? (
+                  <PluginMarketCard
+                    key={entry.id}
+                    plugin={entry}
+                    tr={tr}
+                    onOpen={onOpen}
+                    suite
+                  />
+                ) : (
+                  <SkillMarketCard
+                    key={entry.id}
+                    skill={entry}
+                    tr={tr}
+                    onOpen={onOpen}
+                  />
+                ),
+              )}
             </div>
             {hasMore && (
               <div className="mt-5 flex justify-center">
@@ -696,6 +826,231 @@ function SkillsTab({ q, tr, onOpen, withInstalled }: TabProps) {
         }
       </div>
     </div>
+  );
+}
+
+/* ── Plugins tab ─────────────────────────────────────────────── */
+
+const PLUGIN_FILTERS: readonly PluginFilter[] = [
+  "all",
+  "skills_only",
+  "with_connectors",
+];
+
+function PluginsTab({ q, tr, onOpen, withInstalled }: TabProps) {
+  // 全部 | 技能套件 | 含连接器 (D3/D7) — a derived-composition filter over the
+  // one ``plugin`` item type; 全部 is the default.
+  const [filter, setFilter] = useState<PluginFilter>("all");
+  const [categories, setCategories] = useState<MarketplaceCategory[]>([]);
+  const [category, setCategory] = useState<string | null>(null);
+  const [items, setItems] = useState<MarketplaceItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [degraded, setDegraded] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const requestSeq = useRef(0);
+
+  useEffect(() => {
+    marketplaceApi
+      .categories("plugin")
+      .then((res) => {
+        setCategories(res.categories);
+        if (res.degraded) setDegraded(true);
+      })
+      .catch(() => setCategories([]));
+  }, []);
+
+  const load = useCallback(
+    (nextPage: number, append: boolean) => {
+      const seq = (requestSeq.current += 1);
+      setLoading(true);
+      marketplaceApi
+        .list({
+          type: "plugin",
+          composition: filter === "all" ? undefined : filter,
+          category: category ?? undefined,
+          q: q || undefined,
+          page: nextPage,
+          page_size: PLUGIN_PAGE_SIZE,
+        })
+        .then((res) => {
+          if (seq !== requestSeq.current) return;
+          setItems((prev) => (append ? [...prev, ...res.items] : res.items));
+          setTotal(res.total);
+          setDegraded(res.degraded);
+          setPage(nextPage);
+        })
+        .catch(() => {
+          if (seq !== requestSeq.current) return;
+          if (!append) {
+            setItems([]);
+            setTotal(0);
+          }
+        })
+        .finally(() => {
+          if (seq === requestSeq.current) setLoading(false);
+        });
+    },
+    [category, filter, q],
+  );
+
+  useEffect(() => {
+    load(1, false);
+  }, [load]);
+
+  const visible = withInstalled(items);
+  const hasMore =
+    !degraded && items.length < total && items.length >= PLUGIN_PAGE_SIZE;
+
+  const filterLabel = (key: PluginFilter) =>
+    key === "all"
+      ? tr("marketplace.pluginFilterAll")
+      : key === "skills_only"
+        ? tr("marketplace.pluginFilterSkillSuites")
+        : tr("marketplace.pluginFilterWithConnectors");
+
+  return (
+    <div className="flex min-h-0 flex-1">
+      {/* category rail */}
+      <div className="w-[190px] flex-none overflow-y-auto border-r border-surface-border px-2.5 py-4">
+        <div className="px-2 pb-1.5 font-mono text-[11px] uppercase tracking-wider text-ink-meta">
+          {tr("marketplace.categories")}
+        </div>
+        <RailItem
+          label={tr("marketplace.filterAll")}
+          count={null}
+          active={category === null}
+          onClick={() => setCategory(null)}
+        />
+        {categories.map((c) => (
+          <RailItem
+            key={c.key}
+            label={c.label}
+            count={c.count ?? null}
+            active={category === c.key}
+            onClick={() => setCategory(c.key)}
+          />
+        ))}
+      </div>
+
+      {/* content */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-7 pt-4">
+        {degraded && <DegradedNotice tr={tr} />}
+        <SubtabBar<PluginFilter>
+          value={filter}
+          onChange={setFilter}
+          options={PLUGIN_FILTERS.map((key) => ({
+            value: key,
+            label: filterLabel(key),
+          }))}
+        />
+        <SectionHead
+          icon={<Puzzle className="h-[15px] w-[15px] text-brand" />}
+          title={
+            q
+              ? tr("marketplace.searchResultsTitle")
+              : tr("marketplace.pluginsShelfTitle")
+          }
+          count={tr("marketplace.countTotal", { count: total })}
+        />
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3">
+          {visible.map((plugin) => (
+            <PluginMarketCard
+              key={plugin.id}
+              plugin={plugin}
+              tr={tr}
+              onOpen={onOpen}
+            />
+          ))}
+        </div>
+        {hasMore ? (
+          <div className="mt-5 flex justify-center">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={loading}
+              onClick={() => load(page + 1, true)}
+            >
+              {loading ? tr("marketplace.loading") : tr("marketplace.loadMore")}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function PluginMarketCard({
+  plugin,
+  tr,
+  onOpen,
+  suite = false,
+}: {
+  plugin: MarketplaceItem;
+  tr: Tr;
+  onOpen: (item: MarketplaceItem) => void;
+  /** Skills-tab 套件 view: the row shows only the skill count (§6.2). */
+  suite?: boolean;
+}) {
+  const skills = plugin.skill_count ?? 0;
+  const connectors = plugin.connector_count ?? 0;
+  const composition =
+    plugin.composition ?? (connectors > 0 ? "with_connectors" : "skills_only");
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(plugin)}
+      data-testid="plugin-market-card"
+      className="flex min-h-[150px] w-full flex-col rounded-xl border border-surface-border bg-surface p-3.5 text-left transition hover:-translate-y-px hover:shadow-md"
+    >
+      <div className="mb-2 flex items-start gap-2.5">
+        <ItemIcon item={plugin} size="md" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-semibold tracking-tight text-ink-heading">
+            {plugin.title}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <MarketplaceSourcePill source={plugin.source} />
+            <span className="truncate text-2xs text-ink-meta">
+              {composition === "with_connectors"
+                ? tr("marketplace.compositionWithConnectors")
+                : tr("marketplace.compositionSkillsOnly")}
+            </span>
+            {plugin.category_label ? (
+              <span className="truncate text-2xs text-ink-meta">
+                {plugin.category_label}
+              </span>
+            ) : null}
+          </div>
+        </div>
+        {plugin.installed ? (
+          <span className="rounded bg-surface-soft px-1.5 py-0.5 text-micro font-medium text-ink-meta">
+            {tr("marketplace.installed")}
+          </span>
+        ) : null}
+      </div>
+      <div className="mb-2 text-xs text-ink-body">
+        {suite
+          ? tr("marketplace.pluginSkillCount", { count: skills })
+          : tr("marketplace.pluginMembers", { skills, connectors })}
+      </div>
+      <div className="mb-2.5 line-clamp-2 min-h-9 text-xs leading-relaxed text-ink-body">
+        {plugin.description}
+      </div>
+      <div className="mt-auto flex items-center justify-between border-t border-surface-border pt-2.5">
+        <span className="font-mono text-2xs tabular-nums text-ink-body">
+          {plugin.version ? `v${plugin.version}` : ""}
+        </span>
+        <span
+          className={cn(
+            "text-xs font-medium",
+            plugin.installed ? "text-ink-meta" : "text-brand",
+          )}
+        >
+          {plugin.installed ? tr("marketplace.added") : tr("marketplace.add")}
+        </span>
+      </div>
+    </button>
   );
 }
 

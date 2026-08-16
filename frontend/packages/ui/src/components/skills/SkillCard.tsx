@@ -3,6 +3,7 @@ import { Lock } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { useI18n } from "../../hooks/use-i18n";
 import { Badge } from "../ui/badge";
+import { PluginBadge, type PluginBadgeInfo } from "../common/PluginBadge";
 import { Card } from "../ui/card";
 import { CardContent } from "../ui/card";
 import { getSkillIconStyle } from "./skill-icon-style";
@@ -48,6 +49,9 @@ export interface SkillCardProps {
    * keep their current visuals.
    */
   originBadge?: SkillOriginBadge;
+  /** Plugin ownership chip ("插件：X +n") — omitted when the skill belongs to
+   * no plugin (D6). */
+  pluginBadge?: PluginBadgeInfo | null;
   active?: boolean;
   onClick?: () => void;
   /** Optional action slot rendered at the trailing edge of the card row. */
@@ -71,6 +75,7 @@ const ORIGIN_BADGE_TONE: Record<
 export const SkillCard = ({
   skill,
   originBadge,
+  pluginBadge,
   active,
   onClick,
   actions,
@@ -147,6 +152,9 @@ export const SkillCard = ({
               >
                 v{skill.versionNumber}
               </Badge>
+            ) : null}
+            {pluginBadge ? (
+              <PluginBadge name={pluginBadge.name} more={pluginBadge.more} />
             ) : null}
           </div>
           <div className="mb-2 truncate font-mono text-2xs text-ink-meta">
