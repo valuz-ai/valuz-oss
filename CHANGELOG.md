@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reusable desktop network egress capability** — the Electron-owned egress
+  manager now exposes versioned renderer/main contracts, edition policy
+  injection and capability negotiation so overlay desktops can reuse the same
+  network path without copying the runtime (#909 @zhourongyu).
 - **RedSkill marketplace source** — `MarketplaceSource` accepts `redskill` (the
   Xiaohongshu RedSkill store the commercial control plane now ingests) and the
   market card's source pill labels it (#907 @St0neWan9).
