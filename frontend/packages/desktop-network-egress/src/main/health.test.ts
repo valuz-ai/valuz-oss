@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyConnectionOutcome } from "./health";
-import type { EgressSnapshot } from "./types";
+import type { EgressSnapshot } from "../contracts";
 
 const baseSnapshot = (): EgressSnapshot => ({
   connectionAttemptId: "attempt-1",

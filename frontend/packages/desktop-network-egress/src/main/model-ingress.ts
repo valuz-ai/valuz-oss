@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   createServer,
   request as httpRequest,
@@ -11,14 +11,15 @@ import type { Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import type { OutboundResolver } from "./outbound-resolver";
 import { createPreconnectedHttpAgent } from "./preconnected-http";
-import type { EgressRequestEvent, EgressRuntime } from "./types";
+import type { EgressRequestEvent, EgressRuntime } from "../contracts";
 import {
   EgressConnectError,
   UpstreamConnector,
   type UpstreamConnection,
 } from "./upstream-connector";
 
-export const DEFAULT_FORWARD_PROXY_TTL_MS = 12 * 60 * 60 * 1000;
+export const DEFAULT_INGRESS_REGISTRATION_TTL_MS = 12 * 60 * 60 * 1000;
+const CLIENT_PREFIX = "/_valuz/egress/";
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -32,31 +33,35 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade",
 ]);
 
-export interface ForwardProxyRegistration {
+export interface ModelIngressRegistration {
   clientId: string;
-  runtime: Extract<EgressRuntime, "deepagents" | "provider_test">;
+  runtime: Extract<EgressRuntime, "codex" | "claude">;
+  upstreamBaseUrl: string;
+  supportsWebSocket: boolean;
   ttlMs?: number;
 }
 
-export interface ForwardProxyDescriptor {
-  kind: "forward_proxy";
-  proxyUrl: string;
+export interface ModelIngressDescriptor {
+  kind: "model_ingress";
+  baseUrl: string;
   clientId: string;
+  expiresAt: number;
+  supportsWebSocket: boolean;
+}
+
+interface StoredRegistration {
+  token: string;
+  clientId: string;
+  runtime: Extract<EgressRuntime, "codex" | "claude">;
+  upstream: URL;
+  supportsWebSocket: boolean;
   expiresAt: number;
 }
 
-interface StoredCapability {
-  username: string;
-  secret: string;
-  clientId: string;
-  runtime: Extract<EgressRuntime, "deepagents" | "provider_test">;
-  expiresAt: number;
-}
-
-export interface ForwardProxyConnectionEvent {
+export interface ModelIngressConnectionEvent {
   connectionAttemptId: string;
   startedAt: number;
-  registration: Pick<StoredCapability, "clientId" | "runtime">;
+  registration: Pick<StoredRegistration, "clientId" | "runtime">;
   targetOrigin: string;
   resolutionMs: number;
   connection?: Pick<
@@ -66,13 +71,13 @@ export interface ForwardProxyConnectionEvent {
   errorCode?: string;
 }
 
-export interface ForwardProxyOptions {
+export interface ModelIngressOptions {
   resolver: Pick<OutboundResolver, "resolve"> &
     Partial<Pick<OutboundResolver, "invalidate">>;
   connector?: UpstreamConnector;
   mode?: "auto" | "direct";
   now?: () => number;
-  onConnection?: (event: ForwardProxyConnectionEvent) => void;
+  onConnection?: (event: ModelIngressConnectionEvent) => void;
   onRequest?: (event: EgressRequestEvent) => void;
 }
 
@@ -85,6 +90,7 @@ interface ConnectedAttempt {
 const filteredHeaders = (
   headers: IncomingHttpHeaders,
   host: string,
+  upgrade = false,
 ): IncomingHttpHeaders => {
   const output: IncomingHttpHeaders = { host };
   const blocked = new Set(HOP_BY_HOP_HEADERS);
@@ -101,29 +107,11 @@ const filteredHeaders = (
     if (lower === "host" || blocked.has(lower)) continue;
     output[lower] = value;
   }
-  return output;
-};
-
-const safeEqual = (actual: string, expected: string): boolean => {
-  const actualBytes = Buffer.from(actual);
-  const expectedBytes = Buffer.from(expected);
-  return (
-    actualBytes.length === expectedBytes.length &&
-    timingSafeEqual(actualBytes, expectedBytes)
-  );
-};
-
-const parseBasic = (header: string | undefined): [string, string] | null => {
-  if (!header?.startsWith("Basic ")) return null;
-  try {
-    const decoded = Buffer.from(header.slice(6), "base64").toString();
-    const separator = decoded.indexOf(":");
-    return separator < 0
-      ? null
-      : [decoded.slice(0, separator), decoded.slice(separator + 1)];
-  } catch {
-    return null;
+  if (upgrade) {
+    output.connection = "Upgrade";
+    output.upgrade = headers.upgrade;
   }
+  return output;
 };
 
 const stableErrorCode = (error: unknown): string => {
@@ -131,28 +119,34 @@ const stableErrorCode = (error: unknown): string => {
   if (typeof error === "object" && error !== null && "code" in error) {
     return String(error.code).toLowerCase();
   }
-  return "forward_proxy_failed";
+  return "model_ingress_failed";
+};
+
+const pathWithinBase = (pathname: string, basePathname: string): boolean => {
+  const base = basePathname.replace(/\/+$/, "") || "/";
+  return base === "/" || pathname === base || pathname.startsWith(`${base}/`);
 };
 
 /**
- * Authenticated loopback forward proxy for explicit model transports only.
- * Its URL is a runtime capability, never a process-wide proxy setting.
+ * Loopback-only, body-opaque model relay. A random path capability selects a
+ * control-channel registration; requests cannot provide or override the real
+ * upstream origin. The relay does not follow redirects or retry requests.
  */
-export class ForwardProxy {
+export class ModelIngress {
   private readonly resolver: Pick<OutboundResolver, "resolve"> &
     Partial<Pick<OutboundResolver, "invalidate">>;
   private readonly connector: UpstreamConnector;
   private readonly now: () => number;
-  private readonly onConnection?: ForwardProxyOptions["onConnection"];
-  private readonly onRequest?: ForwardProxyOptions["onRequest"];
-  private readonly capabilities = new Map<string, StoredCapability>();
+  private readonly onConnection?: ModelIngressOptions["onConnection"];
+  private readonly onRequest?: ModelIngressOptions["onRequest"];
+  private mode: "auto" | "direct";
+  private readonly registrations = new Map<string, StoredRegistration>();
   private readonly acceptedSockets = new Set<Socket>();
   private readonly upstreamSockets = new Set<Socket>();
-  private mode: "auto" | "direct";
   private server: Server | null = null;
   private port: number | null = null;
 
-  constructor(options: ForwardProxyOptions) {
+  constructor(options: ModelIngressOptions) {
     this.resolver = options.resolver;
     this.connector = options.connector ?? new UpstreamConnector();
     this.mode = options.mode ?? "auto";
@@ -166,8 +160,8 @@ export class ForwardProxy {
     const server = createServer((request, response) => {
       void this.handleHttp(request, response);
     });
-    server.on("connect", (request, socket, head) => {
-      void this.handleConnect(request, socket, head);
+    server.on("upgrade", (request, socket, head) => {
+      void this.handleUpgrade(request, socket, head);
     });
     server.on("connection", (socket) => {
       this.acceptedSockets.add(socket);
@@ -189,7 +183,7 @@ export class ForwardProxy {
     const address = server.address();
     if (!address || typeof address === "string") {
       server.close();
-      throw new Error("forward_proxy_missing_loopback_address");
+      throw new Error("model_ingress_missing_loopback_address");
     }
     this.server = server;
     this.port = address.port;
@@ -199,12 +193,12 @@ export class ForwardProxy {
     const server = this.server;
     this.server = null;
     this.port = null;
-    this.capabilities.clear();
+    this.registrations.clear();
+    if (!server) return;
     for (const socket of this.acceptedSockets) socket.destroy();
     this.acceptedSockets.clear();
     for (const socket of this.upstreamSockets) socket.destroy();
     this.upstreamSockets.clear();
-    if (!server) return;
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(resolve, 250);
       timeout.unref();
@@ -224,68 +218,93 @@ export class ForwardProxy {
     this.mode = mode;
   }
 
-  register(input: ForwardProxyRegistration): ForwardProxyDescriptor {
+  register(input: ModelIngressRegistration): ModelIngressDescriptor {
     if (!this.server || this.port === null) {
-      throw new Error("forward_proxy_not_started");
+      throw new Error("model_ingress_not_started");
     }
-    const username = randomBytes(18).toString("base64url");
-    const secret = randomBytes(32).toString("base64url");
-    const expiresAt = this.now() + Math.max(1, input.ttlMs ?? DEFAULT_FORWARD_PROXY_TTL_MS);
-    this.capabilities.set(username, {
-      username,
-      secret,
+    const upstream = new URL(input.upstreamBaseUrl);
+    if (
+      !["http:", "https:"].includes(upstream.protocol) ||
+      upstream.username ||
+      upstream.password ||
+      upstream.search ||
+      upstream.hash
+    ) {
+      throw new Error("invalid_model_ingress_upstream");
+    }
+    if (this.connector.isProtectedTarget(upstream)) {
+      throw new Error("model_ingress_proxy_loop_detected");
+    }
+    const token = randomBytes(32).toString("base64url");
+    const expiresAt = this.now() + Math.max(1, input.ttlMs ?? DEFAULT_INGRESS_REGISTRATION_TTL_MS);
+    const registration: StoredRegistration = {
+      token,
       clientId: input.clientId,
       runtime: input.runtime,
+      upstream,
+      supportsWebSocket: input.supportsWebSocket,
       expiresAt,
-    });
+    };
+    this.registrations.set(token, registration);
+    const basePath = upstream.pathname === "/" ? "" : upstream.pathname.replace(/\/+$/, "");
     return {
-      kind: "forward_proxy",
-      proxyUrl: `http://${username}:${secret}@127.0.0.1:${this.port}`,
+      kind: "model_ingress",
+      baseUrl: `http://127.0.0.1:${this.port}${CLIENT_PREFIX}${token}${basePath}`,
       clientId: input.clientId,
       expiresAt,
+      supportsWebSocket: input.supportsWebSocket,
     };
   }
 
   revoke(clientId: string): void {
-    for (const [username, capability] of this.capabilities) {
-      if (capability.clientId === clientId) this.capabilities.delete(username);
+    for (const [token, registration] of this.registrations) {
+      if (registration.clientId === clientId) this.registrations.delete(token);
     }
   }
 
   revokeAll(): void {
-    this.capabilities.clear();
+    this.registrations.clear();
   }
 
   renew(clientId: string, expiresAt: number): void {
-    for (const capability of this.capabilities.values()) {
-      if (capability.clientId === clientId) capability.expiresAt = expiresAt;
+    for (const registration of this.registrations.values()) {
+      if (registration.clientId === clientId) registration.expiresAt = expiresAt;
     }
   }
 
-  private authenticate(request: IncomingMessage): StoredCapability | null {
-    const credentials = parseBasic(request.headers["proxy-authorization"]);
-    if (!credentials) return null;
-    const capability = this.capabilities.get(credentials[0]);
-    if (!capability || capability.expiresAt <= this.now()) {
-      if (capability) this.capabilities.delete(capability.username);
+  private registrationForRequest(rawUrl: string | undefined): {
+    registration: StoredRegistration;
+    target: URL;
+  } | null {
+    if (!rawUrl || /^https?:\/\//i.test(rawUrl)) return null;
+    const match = new RegExp(`^${CLIENT_PREFIX}([A-Za-z0-9_-]{43})(/.*)?$`).exec(rawUrl);
+    if (!match) return null;
+    const registration = this.registrations.get(match[1]);
+    if (!registration || registration.expiresAt <= this.now()) {
+      if (registration) this.registrations.delete(registration.token);
       return null;
     }
-    return safeEqual(credentials[1], capability.secret) ? capability : null;
+    const suffix = match[2] || "/";
+    const target = new URL(suffix, registration.upstream.origin);
+    if (
+      target.origin !== registration.upstream.origin ||
+      !pathWithinBase(target.pathname, registration.upstream.pathname)
+    ) {
+      return null;
+    }
+    return { registration, target };
   }
 
   private async connect(
-    capability: StoredCapability,
+    registration: StoredRegistration,
     target: URL,
-    tlsToTarget?: boolean,
   ): Promise<ConnectedAttempt> {
     const connectionAttemptId = randomUUID();
     const resolveStarted = this.now();
     try {
       const resolution = await this.resolver.resolve(target.href, this.mode);
       const resolutionMs = Math.max(0, this.now() - resolveStarted);
-      const connection = await this.connector.connect(target, resolution, {
-        tlsToTarget,
-      });
+      const connection = await this.connector.connect(target, resolution);
       this.upstreamSockets.add(connection.socket);
       connection.socket.once("close", () =>
         this.upstreamSockets.delete(connection.socket),
@@ -293,20 +312,20 @@ export class ForwardProxy {
       this.onConnection?.({
         connectionAttemptId,
         startedAt: resolveStarted,
-        registration: capability,
+        registration,
         targetOrigin: target.origin,
         resolutionMs,
         connection,
       });
       return { connectionAttemptId, startedAt: resolveStarted, connection };
     } catch (error) {
-      // Re-evaluate PAC/system proxy state on the next attempt instead of
-      // retaining a route that has just failed to connect.
+      // A failed proxy candidate often means the system proxy/PAC selection
+      // just changed. Do not pin that stale resolution for the full cache TTL.
       this.resolver.invalidate?.(target.origin);
       this.onConnection?.({
         connectionAttemptId,
         startedAt: resolveStarted,
-        registration: capability,
+        registration,
         targetOrigin: target.origin,
         resolutionMs: Math.max(0, this.now() - resolveStarted),
         errorCode: stableErrorCode(error),
@@ -315,26 +334,13 @@ export class ForwardProxy {
     }
   }
 
-  private deny(response: ServerResponse): void {
-    response.writeHead(407, { "proxy-authenticate": 'Basic realm="Valuz Egress"' });
-    response.end();
-  }
-
   private async handleHttp(
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
-    const capability = this.authenticate(request);
-    if (!capability) {
-      this.deny(response);
-      return;
-    }
-    let target: URL;
-    try {
-      target = new URL(request.url ?? "");
-      if (!["http:", "https:"].includes(target.protocol)) throw new Error("scheme");
-    } catch {
-      response.writeHead(400).end();
+    const resolved = this.registrationForRequest(request.url);
+    if (!resolved) {
+      response.writeHead(404).end();
       return;
     }
     let downstreamCancelled = false;
@@ -348,7 +354,7 @@ export class ForwardProxy {
       if (!response.writableEnded) cancelDownstream();
     });
     try {
-      const attempt = await this.connect(capability, target);
+      const attempt = await this.connect(resolved.registration, resolved.target);
       const { connection } = attempt;
       let statusCode: number | undefined;
       let terminal = false;
@@ -359,9 +365,9 @@ export class ForwardProxy {
         this.onRequest?.({
           connectionAttemptId: attempt.connectionAttemptId,
           startedAt: attempt.startedAt,
-          clientId: capability.clientId,
-          runtime: capability.runtime,
-          targetOrigin: target.origin,
+          clientId: resolved.registration.clientId,
+          runtime: resolved.registration.runtime,
+          targetOrigin: resolved.target.origin,
           phase,
           elapsedMs: Math.max(0, this.now() - attempt.startedAt),
           connectMs: connection.connectMs,
@@ -386,20 +392,54 @@ export class ForwardProxy {
         connection.socket.destroy();
         return;
       }
+      const headers = filteredHeaders(request.headers, resolved.target.host);
       const agent = createPreconnectedHttpAgent(connection.socket);
       const upstreamRequest = httpRequest({
         method: request.method,
-        host: target.hostname,
-        port: target.port || (target.protocol === "https:" ? 443 : 80),
-        path: `${target.pathname}${target.search}`,
-        headers: filteredHeaders(request.headers, target.host),
+        host: resolved.target.hostname,
+        port:
+          resolved.target.port ||
+          (resolved.target.protocol === "https:" ? 443 : 80),
+        path: `${resolved.target.pathname}${resolved.target.search}`,
+        headers,
         agent,
       });
       activeRequest = upstreamRequest;
       upstreamRequest.once("response", (upstreamResponse) => {
-        const headers = filteredHeaders(upstreamResponse.headers, "");
-        delete headers.host;
+        const responseHeaders = filteredHeaders(upstreamResponse.headers, "");
+        delete responseHeaders.host;
         statusCode = upstreamResponse.statusCode ?? 502;
+        const location = upstreamResponse.headers.location;
+        if (
+          location &&
+          (upstreamResponse.statusCode ?? 0) >= 300 &&
+          (upstreamResponse.statusCode ?? 0) < 400
+        ) {
+          let redirect: URL;
+          try {
+            redirect = new URL(location, resolved.target);
+          } catch {
+            finish("failed", "model_ingress_invalid_redirect");
+            upstreamResponse.destroy();
+            response.writeHead(502).end();
+            agent.destroy();
+            return;
+          }
+          if (
+            redirect.origin !== resolved.registration.upstream.origin ||
+            !pathWithinBase(
+              redirect.pathname,
+              resolved.registration.upstream.pathname,
+            )
+          ) {
+            finish("failed", "model_ingress_cross_origin_redirect");
+            upstreamResponse.destroy();
+            response.writeHead(502).end();
+            agent.destroy();
+            return;
+          }
+          responseHeaders.location = `${CLIENT_PREFIX}${resolved.registration.token}${redirect.pathname}${redirect.search}${redirect.hash}`;
+        }
         emitRequest("headers_received");
         upstreamResponse.once("data", () => emitRequest("first_byte"));
         const abortResponse = (errorCode: string) => {
@@ -414,7 +454,7 @@ export class ForwardProxy {
         upstreamResponse.once("error", (error) =>
           abortResponse(stableErrorCode(error)),
         );
-        response.writeHead(statusCode, headers);
+        response.writeHead(statusCode, responseHeaders);
         upstreamResponse.pipe(response);
         upstreamResponse.once("end", () => {
           finish("completed");
@@ -441,24 +481,14 @@ export class ForwardProxy {
     }
   }
 
-  private async handleConnect(
+  private async handleUpgrade(
     request: IncomingMessage,
     clientSocket: Duplex,
     head: Buffer,
   ): Promise<void> {
-    const capability = this.authenticate(request);
-    if (!capability) {
-      clientSocket.end(
-        'HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="Valuz Egress"\r\nConnection: close\r\n\r\n',
-      );
-      return;
-    }
-    let target: URL;
-    try {
-      if (!request.url || !/^[^/\s]+:\d+$/.test(request.url)) throw new Error("authority");
-      target = new URL(`https://${request.url}`);
-    } catch {
-      clientSocket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+    const resolved = this.registrationForRequest(request.url);
+    if (!resolved || !resolved.registration.supportsWebSocket) {
+      clientSocket.end("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
       return;
     }
     let clientCancelled = false;
@@ -466,7 +496,7 @@ export class ForwardProxy {
       clientCancelled = true;
     });
     try {
-      const attempt = await this.connect(capability, target, false);
+      const attempt = await this.connect(resolved.registration, resolved.target);
       const { connection } = attempt;
       let terminal = false;
       let sawUpstreamData = false;
@@ -477,9 +507,9 @@ export class ForwardProxy {
         this.onRequest?.({
           connectionAttemptId: attempt.connectionAttemptId,
           startedAt: attempt.startedAt,
-          clientId: capability.clientId,
-          runtime: capability.runtime,
-          targetOrigin: target.origin,
+          clientId: resolved.registration.clientId,
+          runtime: resolved.registration.runtime,
+          targetOrigin: resolved.target.origin,
           phase,
           elapsedMs: Math.max(0, this.now() - attempt.startedAt),
           connectMs: connection.connectMs,
@@ -503,11 +533,23 @@ export class ForwardProxy {
         connection.socket.destroy();
         return;
       }
+      const headers = filteredHeaders(request.headers, resolved.target.host, true);
+      const lines = [
+        `${request.method ?? "GET"} ${resolved.target.pathname}${resolved.target.search} HTTP/${request.httpVersion}`,
+        ...Object.entries(headers).flatMap(([name, value]) => {
+          if (value === undefined) return [];
+          return Array.isArray(value)
+            ? value.map((item) => `${name}: ${item}`)
+            : [`${name}: ${value}`];
+        }),
+        "",
+        "",
+      ];
       connection.socket.once("data", () => {
         sawUpstreamData = true;
         emitRequest("first_byte");
       });
-      clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      connection.socket.write(lines.join("\r\n"));
       if (head.length > 0) connection.socket.write(head);
       clientSocket.pipe(connection.socket).pipe(clientSocket);
       const destroyBoth = () => {

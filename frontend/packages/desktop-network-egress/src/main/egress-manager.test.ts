@@ -5,8 +5,8 @@ import {
   captureProxyEnvironment,
   EgressManager,
   resolveEgressFrontendsEnabled,
-  resolveInitialEgressMode,
 } from "./egress-manager";
+import { resolveInitialEgressMode } from "./policy";
 
 describe("egress diagnostics", () => {
   it("redacts credentials and every URL component after host/port", () => {
@@ -68,9 +68,16 @@ describe("EgressManager shadow mode", () => {
   });
 
   it("only accepts off as the emergency environment override", () => {
-    expect(resolveInitialEgressMode({ VALUZ_EGRESS_MODE: " off " })).toBe("off");
     expect(
-      resolveInitialEgressMode({ VALUZ_EGRESS_MODE: "direct" }, "auto"),
+      resolveInitialEgressMode({
+        env: { VALUZ_EGRESS_MODE: " off " },
+      }),
+    ).toBe("off");
+    expect(
+      resolveInitialEgressMode({
+        env: { VALUZ_EGRESS_MODE: "direct" },
+        persistedMode: "auto",
+      }),
     ).toBe("auto");
   });
 
@@ -86,8 +93,10 @@ describe("EgressManager shadow mode", () => {
   });
 
   it("starts new installations in model-client-managed mode", () => {
-    expect(resolveInitialEgressMode({})).toBe("off");
-    expect(resolveInitialEgressMode({}, "auto")).toBe("auto");
+    expect(resolveInitialEgressMode({ env: {} })).toBe("off");
+    expect(
+      resolveInitialEgressMode({ env: {}, persistedMode: "auto" }),
+    ).toBe("auto");
   });
 
   it("does not resolve or emit diagnostics while off", async () => {

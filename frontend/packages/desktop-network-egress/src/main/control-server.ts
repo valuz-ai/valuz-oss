@@ -14,46 +14,19 @@ import type {
   ModelIngressDescriptor,
   ModelIngressRegistration,
 } from "./model-ingress";
+import type {
+  EgressBootstrap,
+  RuntimePhasePayload,
+} from "../contracts";
+
+export type {
+  EgressBootstrap,
+  RuntimePhasePayload,
+  RuntimePhaseRecord,
+} from "../contracts";
 
 const MAX_CONTROL_BODY_BYTES = 32 * 1024;
 export const DEFAULT_BOOTSTRAP_TTL_MS = 12 * 60 * 60 * 1000;
-
-export interface EgressBootstrap {
-  mode: "auto" | "direct";
-  controlEndpoint: string;
-  bootstrapToken: string;
-  expiresAt: number;
-}
-
-export interface RuntimePhasePayload {
-  turnAttemptId: string;
-  clientId: string;
-  phase:
-    | "runtime_init_started"
-    | "runtime_init"
-    | "thread_init_started"
-    | "thread_init"
-    | "dispatch_started"
-    | "dispatch"
-    | "model_first_event"
-    | "runtime_ready"
-    | "runtime_prepare_failed"
-    | "turn_complete"
-    | "interrupted";
-  monotonicMs: number;
-}
-
-/**
- * Electron stamps control-plane receipt time because Python's monotonic clock
- * and Node's performance clock do not share an origin. `observedAt` is the
- * cross-process timeline value; `monotonicMs` remains useful only for ordering
- * phases emitted by the same backend process.
- */
-export interface RuntimePhaseRecord extends RuntimePhasePayload {
-  observedAt: number;
-  runtime?: string;
-  targetOrigin?: string;
-}
 
 export interface EgressControlServerOptions {
   mode: "auto" | "direct";

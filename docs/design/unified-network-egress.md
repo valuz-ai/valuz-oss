@@ -1,6 +1,6 @@
 # 统一网络出口管理 — 设计
 
-> 状态：**Implemented canary / Revision 5**（2026-08-11）。本文是 Valuz 统一网络出口能力的单一设计来源；桌面能力与设置入口默认可用，但新安装默认由模型客户端管理，用户需在设置页主动启用 Valuz 管理。
+> 状态：**Implemented canary / Revision 6**（2026-08-17）。本文是 Valuz 统一网络出口能力的单一设计来源；OSS 新安装默认由模型客户端管理，宿主 edition 可通过受校验的策略选择不同默认值与允许模式。
 >
 > 取向一句话：**桌面端由 Electron 提供统一的路由解析与上游连接内核；Codex/Claude 通过各自的模型 `base_url` 接入仅监听 loopback 的薄模型入口，DeepAgents/Provider Test 通过显式 HTTP transport 接入正向出口，两类前端共享原始代理环境变量、系统代理/PAC 与直连决策，同时禁止把 Valuz 新增的标准代理变量扩散到 agent shell、MCP 或整个 sidecar。**
 
@@ -217,14 +217,17 @@ Cindy 已用 Codex `model_provider.base_url` 和 Claude `ANTHROPIC_BASE_URL` 把
 | `direct` | 仍经过 Egress Manager，但强制直接连接目标 | 不出现在普通设置页；仅保留内部 IPC/开发诊断能力，未来若提供自动化故障定位需另行设计可理解的结果反馈 |
 | `off` | 不启动/不接入 Egress Manager，不注入任何新描述符，保持当前版本网络行为 | 主模式“模型客户端自行管理”，以及 `VALUZ_EGRESS_MODE=off` |
 
-`off` 是工程逃生通道，不是日常网络偏好。优先级为：
+`off` 是工程逃生通道，不是日常网络偏好。跨 edition 的启动优先级为：
 
 ```text
 VALUZ_EGRESS_MODE=off（紧急覆盖）
-  > 本机“模型客户端自行管理”设置
-  > 本次运行的临时 direct 选择
-  > 默认 auto
+  > 管理员 lockedMode（首期只预留契约）
+  > 本机已保存且仍被 edition 允许的用户选择
+  > edition policy.defaultMode
+  > OSS fail-safe off
 ```
+
+内部诊断态 `direct` 不持久化为用户策略；旧版本保存的 `direct` 在读取时归一为 `auto`。OSS policy 默认 `off`，商业 Team/Finance 宿主可以默认 `auto`，同时都保留用户切回 `off` 的能力。
 
 在 `auto/direct` 与 `off` 之间切换需要撤销并重建相关 runtime 的网络描述符，但同版本正常路径不重启 backend。设置页根据全局 running-runs 状态提示运行任务数量；用户点击切换时，若有前台 turn 或后台任务，必须明确确认“中断任务并继续”。确认后 Electron 主进程先调用各 session 的 interrupt 接口并等待它们完成 idle 收敛，再修改模式、落盘，并调用只监听 loopback、由随机桌面令牌鉴权的控制接口替换 backend 内存中的 egress registry；用户取消则不得改变任何状态。backend 会拒绝仍有活动 runtime 的替换请求，主进程允许短暂等待 turn 清理完成；只有旧版本或不健康的 backend 不支持动态控制时才回退为进程重启。不得自动重放已经发送的请求。界面将设置分组命名为“连接方式”，只提供“Valuz 统一管理（推荐）/ 模型客户端自行管理”两个中性选项，不使用 `auto/off`、“旧版”或“兼容模式”等技术实现或价值判断术语；常驻文案只解释线路选择方和监控差异，重建连接及中断风险在真正切换时提示。
 
@@ -263,20 +266,25 @@ flowchart LR
 
 ### 4.1 组件
 
-建议新增：
+桌面网络实现位于可被不同发行版 Electron 宿主直接复用的窄 capability 包中：
 
 ```text
-frontend/apps/desktop/src/main/network/
-├── egress-manager.ts       # 生命周期、状态、runtime client 注册与描述符
-├── outbound-resolver.ts    # env / system PAC / policy 决策
-├── pac-result.ts           # Chromium PAC 结果解析与候选链
-├── model-ingress.ts        # Codex/Claude HTTP/SSE/WSS 薄反向入口
-├── forward-proxy.ts        # HTTP forward + CONNECT server
-├── upstream-connector.ts   # DIRECT / HTTP PROXY / SOCKS5 建连
-├── diagnostics.ts          # 脱敏快照、计数器、状态事件
-├── types.ts
-└── *.test.ts
+frontend/packages/desktop-network-egress/
+├── src/contracts.ts        # 版本化 IPC、状态与 edition policy 契约（renderer-safe）
+└── src/main/
+    ├── egress-manager.ts       # 生命周期、状态、runtime client 注册与描述符
+    ├── outbound-resolver.ts    # env / system PAC / policy 决策
+    ├── pac-result.ts           # Chromium PAC 结果解析与候选链
+    ├── model-ingress.ts        # Codex/Claude HTTP/SSE/WSS 薄反向入口
+    ├── forward-proxy.ts        # HTTP forward + CONNECT server
+    ├── upstream-connector.ts   # DIRECT / HTTP PROXY / SOCKS5 建连
+    ├── diagnostics.ts          # 脱敏快照、计数器、状态事件
+    ├── ipc-handlers.ts         # 能力协商与统一 IPC handlers
+    ├── policy.ts               # policy 校验与启动模式解析
+    └── *.test.ts
 ```
+
+该包只抽取统一出口能力及其契约，不抽取完整 `desktop-runtime`。各发行版仍拥有自己的 Electron 启动、鉴权、backend 参数、数据目录、更新器和打包配置。宿主通过 `NetworkEgressPolicy` 注入 edition 默认值；非法策略 fail-safe 为 OSS 的 `off` 默认。renderer 必须先调用 `desktop_get_capabilities` 协商能力，旧宿主或 WebUI 不得继续轮询不存在的 egress IPC。
 
 Backend 建议新增：
 
@@ -842,10 +850,11 @@ Egress Manager 在内存维护同时受“最大条数”和“最大时间窗�
 
 | 层 | 文件/模块 | 变更 |
 |---|---|---|
+| Network egress capability | `frontend/packages/desktop-network-egress/` | 版本化 contracts/main 入口、共享 manager/代理实现、能力协商 IPC、edition policy 校验与持久化优先级；不包含发行版鉴权、数据目录或打包逻辑 |
 | Electron bootstrap | `frontend/apps/desktop/src/main/ipc/desktop.ts` | app ready 后、sidecar 前解析 `auto/direct/off`；按模式启动/停止 Egress Manager |
 | Desktop service manager | `frontend/apps/desktop/src/main/services/mod.ts` | 持有 bootstrap capability、desktop control token 与 manager 健康；按模式编排 sidecar 生命周期 |
 | Sidecar spawn | `frontend/apps/desktop/src/main/services/sidecar.ts` | 通过 stdin 建立一次性 desktop control envelope；禁止把 secret 或全局 `HTTP(S)_PROXY` 写入 env |
-| Desktop IPC | `frontend/apps/desktop/src/main/ipc/` + preload channels | 暴露脱敏状态与自动轮询；权威复核运行任务并按确认标记先 interrupt，再通过 loopback 控制接口动态替换 egress；旧 backend 才回退重启 |
+| Desktop IPC | capability `ipc-handlers.ts` + host preload channels | 先暴露 `desktop_get_capabilities`，再暴露脱敏状态与自动轮询；权威复核运行任务并按确认标记先 interrupt，再通过 loopback 控制接口动态替换 egress；旧 backend 才回退重启 |
 | Desktop settings/diagnostics UI | 现有 desktop settings/help surface | 主设置只展示“Valuz 管理 / 模型客户端自行连接”；不暴露 direct；运行任务时提供中断确认；监控区展示实时状态和脱敏诊断复制 |
 | Backend desktop control | `backend/valuz_agent/api/routes/system.py` | token 鉴权、拒绝活动 runtime、替换 registry、最多预热一个最近 session；仅监听既有 loopback backend |
 | Kernel egress registry | `backend/kernel/src/runtimes/network_egress.py` | 内存消费/替换 bootstrap；按 runtime 注册真实上游并申请 `model_ingress`/`forward_proxy`；上报 allowlist runtime phase；清理普通子进程 env |

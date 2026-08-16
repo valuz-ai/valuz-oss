@@ -1,7 +1,7 @@
 import { createServer, type Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { UpstreamConnector } from "./upstream-connector";
-import type { EgressResolution } from "./types";
+import type { EgressResolution } from "../contracts";
 
 const servers: ReturnType<typeof createServer>[] = [];
 

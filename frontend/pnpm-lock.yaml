@@ -83,6 +83,9 @@ importers:
       '@valuz/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@valuz/desktop-network-egress':
+        specifier: workspace:*
+        version: link:../../packages/desktop-network-egress
       '@valuz/parser-plugins':
         specifier: workspace:*
         version: link:../../packages/parser-plugins
@@ -213,6 +216,9 @@ importers:
       '@valuz/core':
         specifier: workspace:*
         version: link:../core
+      '@valuz/desktop-network-egress':
+        specifier: workspace:*
+        version: link:../desktop-network-egress
       '@valuz/shared':
         specifier: workspace:*
         version: link:../shared
@@ -256,6 +262,8 @@ importers:
       sonner:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+
+  packages/desktop-network-egress: {}
 
   packages/parser-plugins:
     dependencies:

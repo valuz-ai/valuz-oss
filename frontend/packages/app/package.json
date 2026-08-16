@@ -26,6 +26,7 @@
   "dependencies": {
     "@valuz/a2ui": "workspace:*",
     "@valuz/core": "workspace:*",
+    "@valuz/desktop-network-egress": "workspace:*",
     "@valuz/shared": "workspace:*",
     "@valuz/ui": "workspace:*",
     "dompurify": "^3.4.1",

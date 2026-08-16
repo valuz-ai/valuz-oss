@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { EgressBootstrap } from "../network/control-server";
+import type { EgressBootstrap } from "@valuz/desktop-network-egress/contracts";
 
 // Vite bundles the Electron main process as ESM (vite.main.config.ts
 // formats:['es']), so the CommonJS ``__dirname`` global is undefined at

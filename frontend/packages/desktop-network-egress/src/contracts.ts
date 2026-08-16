@@ -1,4 +1,43 @@
 export type EgressMode = "auto" | "direct" | "off";
+export type PublicEgressMode = Exclude<EgressMode, "direct">;
+
+export const NETWORK_EGRESS_CONTRACT_VERSION = 1 as const;
+export const DESKTOP_CAPABILITIES_CHANNEL = "desktop_get_capabilities";
+export const NETWORK_EGRESS_CHANNELS = {
+  getDiagnostics: "egress_get_diagnostics",
+  getSnapshots: "egress_get_snapshots",
+  getMode: "egress_get_mode",
+  getStatus: "egress_get_status",
+  getRuntimePhases: "egress_get_runtime_phases",
+  setMode: "egress_set_mode",
+} as const;
+export const NETWORK_EGRESS_EVENTS = {
+  statusChanged: "egress-status-changed",
+} as const;
+
+export interface NetworkEgressPolicy {
+  defaultMode: PublicEgressMode;
+  allowedModes: readonly PublicEgressMode[];
+  userConfigurable: boolean;
+  lockedMode?: PublicEgressMode;
+}
+
+export const DEFAULT_NETWORK_EGRESS_POLICY: NetworkEgressPolicy = Object.freeze({
+  defaultMode: "off",
+  allowedModes: Object.freeze(["off", "auto"] as const),
+  userConfigurable: true,
+});
+
+export interface NetworkEgressCapability {
+  available: boolean;
+  contractVersion: typeof NETWORK_EGRESS_CONTRACT_VERSION;
+  policy: NetworkEgressPolicy;
+}
+
+export interface DesktopCapabilities {
+  schemaVersion: 1;
+  networkEgress: NetworkEgressCapability;
+}
 
 export interface EgressManagerStatus {
   mode: EgressMode;
@@ -143,4 +182,41 @@ export interface EgressConnectionOutcome {
   fallbackCount?: number;
   reconnectCount?: number;
   errorCode?: string;
+}
+
+export interface EgressBootstrap {
+  mode: "auto" | "direct";
+  controlEndpoint: string;
+  bootstrapToken: string;
+  expiresAt: number;
+}
+
+export interface RuntimePhasePayload {
+  turnAttemptId: string;
+  clientId: string;
+  phase:
+    | "runtime_init_started"
+    | "runtime_init"
+    | "thread_init_started"
+    | "thread_init"
+    | "dispatch_started"
+    | "dispatch"
+    | "model_first_event"
+    | "runtime_ready"
+    | "runtime_prepare_failed"
+    | "turn_complete"
+    | "interrupted";
+  monotonicMs: number;
+}
+
+/**
+ * Electron stamps control-plane receipt time because Python's monotonic clock
+ * and Node's performance clock do not share an origin. `observedAt` is the
+ * cross-process timeline value; `monotonicMs` remains useful only for ordering
+ * phases emitted by the same backend process.
+ */
+export interface RuntimePhaseRecord extends RuntimePhasePayload {
+  observedAt: number;
+  runtime?: string;
+  targetOrigin?: string;
 }

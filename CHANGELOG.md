@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reusable desktop network egress capability** — the Electron-owned egress
+  manager now exposes versioned renderer/main contracts, edition policy
+  injection and capability negotiation so overlay desktops can reuse the same
+  network path without copying the runtime (#909 @zhourongyu).
 - **Agent Plugins** — plugins are a first-class install unit per the Agent
   Plugins 1.0.0 spec (`plugin.json` + `skills/` + optional `mcp.json`): a
   skills-only plugin is a "skill suite", one with MCP servers a "plugin with
