@@ -48,6 +48,7 @@ import { useProjectOutlet } from "@valuz/app/layout";
 import { SkillAddDialog, SkillEditDialog } from "@valuz/app/components";
 import { useTranslation } from "@valuz/core";
 import { isCloudOnlyResource } from "./agent-list-state";
+import { usePluginMemberships } from "../components/plugins/use-plugin-memberships";
 
 type AddSkillDialogMode = "link" | "upload";
 type ResourceRefreshEvent = CustomEvent<{ resourceType?: string }>;
@@ -445,9 +446,19 @@ export const SkillsPage = () => {
   }, [filteredSkills, categories]);
   const currentSkill =
     skills.find(
-      (s) => s.id === activeSkillId && !isCloudOnlyResource(s),
+      (s) =>
+        (s.id === activeSkillId ||
+          (!!activeSkillId && !!s.slug && s.slug === activeSkillId)) &&
+        !isCloudOnlyResource(s),
     ) ?? firstVisibleSkill;
   const effectiveActiveId = currentSkill?.id ?? null;
+
+  // Plugin ownership badges (D6): one batched lookup per catalog load.
+  const skillSlugs = useMemo(
+    () => skills.map((s) => s.slug ?? s.name),
+    [skills],
+  );
+  const pluginBadgeFor = usePluginMemberships("skill", skillSlugs);
 
   const { canDelete: canDeleteSkill } = useResourceGuard({
     source: currentSkill?.source,
@@ -744,6 +755,7 @@ export const SkillsPage = () => {
                   <SkillCard
                     skill={toCardSkill(skill)}
                     originBadge={badgeForCategory(categoryId, skill, t)}
+                    pluginBadge={pluginBadgeFor(skill.slug ?? skill.name)}
                     active={!cloudOnly && isSelected}
                     onClick={() => {
                       if (!cloudOnly) setActiveSkillId(skill.id);

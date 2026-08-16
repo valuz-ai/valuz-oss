@@ -1,6 +1,7 @@
 import { type KeyboardEvent, type ReactNode } from "react";
 import { cn } from "../../lib/cn";
 import { Badge } from "../ui/badge";
+import { PluginBadge, type PluginBadgeInfo } from "../common/PluginBadge";
 import { StatusPill } from "../common/StatusPill";
 import { ConnectorIcon } from "./ConnectorIcon";
 
@@ -17,6 +18,9 @@ export interface ConnectorListItemProps {
   status?: string | null;
   /** Localized label for the status pill (callers own the i18n). */
   statusLabel?: string | null;
+  /** Plugin ownership chip ("插件：X +n") — omitted when the connector
+   * belongs to no plugin (D6). */
+  pluginBadge?: PluginBadgeInfo | null;
   active?: boolean;
   onClick?: () => void;
   /** Optional action slot rendered at the trailing edge of the list item. */
@@ -31,6 +35,7 @@ export const ConnectorListItem = ({
   badge,
   status,
   statusLabel,
+  pluginBadge,
   active,
   onClick,
   actions,
@@ -62,6 +67,13 @@ export const ConnectorListItem = ({
       <span className="min-w-0 flex-1 truncate text-sm text-ink-heading">
         {name}
       </span>
+      {pluginBadge ? (
+        <PluginBadge
+          name={pluginBadge.name}
+          more={pluginBadge.more}
+          className="shrink-0"
+        />
+      ) : null}
       {status && statusLabel ? (
         <StatusPill
           status={status}

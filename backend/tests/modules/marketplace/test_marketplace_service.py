@@ -809,3 +809,133 @@ async def test_install_unknown_ids_raise_not_found(env):  # type: ignore[no-unty
     ):
         with pytest.raises(MarketplaceItemNotFound):
             await env.svc.install(USER, bad)
+
+
+# ---------------------------------------------------------------------------
+# Plugins (``market:plugin:*``) — delegated to the plugin installer
+# ---------------------------------------------------------------------------
+
+
+class FakePluginService:
+    def __init__(self) -> None:
+        self.names: set[str] = set()
+        self.calls: list[dict[str, Any]] = []
+        self.status = "installed"
+
+    async def list_plugins(self, user_id: str) -> list[SimpleNamespace]:
+        return [SimpleNamespace(name=n) for n in self.names]
+
+    async def install(self, user_id: str, **kwargs: Any) -> SimpleNamespace:
+        self.calls.append({"user_id": user_id, **kwargs})
+        name = str(kwargs["market_item_id"]).rsplit(":", 1)[-1]
+        self.names.add(name)
+        return SimpleNamespace(plugin=SimpleNamespace(name=name), status=self.status)
+
+
+@pytest.fixture()
+def plugin_env(env):  # type: ignore[no-untyped-def]
+    plugins = FakePluginService()
+    env.svc._plugins = plugins  # noqa: SLF001
+    env.plugins = plugins
+    return env
+
+
+@pytest.mark.asyncio
+async def test_list_items_recomputes_installed_for_plugins(plugin_env):  # type: ignore[no-untyped-def]
+    plugin_env.plugins.names = {"equity-research"}
+    plugin_env.index.items_payload = {
+        "items": [
+            _item(
+                "market:plugin:equity-research",
+                type_="plugin",
+                source_ref="equity-research",
+                install_target="plugin_library",
+                skill_count=9,
+                connector_count=0,
+                composition="skills_only",
+            ),
+            _item(
+                "market:plugin:godot-mcp",
+                type_="plugin",
+                source_ref="godot-mcp",
+                source="pluginmarket",
+                install_target="plugin_library",
+                skill_count=25,
+                connector_count=1,
+                composition="with_connectors",
+            ),
+        ],
+        "total": 2,
+        "page": 1,
+        "page_size": 30,
+        "degraded": False,
+    }
+    out = await plugin_env.svc.list_items(USER, type_="plugin", composition="skills_only")
+    flags = {i.source_ref: i.installed for i in out.items}
+    assert flags == {"equity-research": True, "godot-mcp": False}
+    assert out.items[1].source == "pluginmarket"
+    assert out.items[1].connector_count == 1 and out.items[1].composition == "with_connectors"
+    (call,) = plugin_env.index.list_calls
+    assert call["type_"] == "plugin" and call["composition"] == "skills_only"
+
+
+@pytest.mark.asyncio
+async def test_get_plugin_item_detail_carries_manifest_and_members(plugin_env):  # type: ignore[no-untyped-def]
+    plugin_env.index.details["market:plugin:equity-research"] = _item(
+        "market:plugin:equity-research",
+        type_="plugin",
+        source_ref="equity-research",
+        install_target="plugin_library",
+        composition="skills_only",
+        plugin_manifest={
+            "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+            "name": "equity-research",
+            "version": "1.0.0",
+        },
+        members=[
+            {
+                "kind": "skill",
+                "slug": "earnings-analysis",
+                "name": "earnings-analysis",
+                "path": "skills/earnings-analysis",
+            },
+            {"kind": "connector", "slug": "data-api", "name": "data-api", "meta_version": None},
+        ],
+        install_manifest={"download_url": "https://cdn.example.com/equity-research.zip"},
+    )
+    detail = await plugin_env.svc.get_item(USER, "market:plugin:equity-research")
+    assert (
+        detail.plugin_manifest is not None and detail.plugin_manifest["name"] == "equity-research"
+    )
+    assert detail.members is not None
+    assert [(m.kind, m.slug) for m in detail.members] == [  # type: ignore[union-attr]
+        ("skill", "earnings-analysis"),
+        ("connector", "data-api"),
+    ]
+    assert detail.installed is False
+    plugin_env.plugins.names = {"equity-research"}
+    assert (await plugin_env.svc.get_item(USER, "market:plugin:equity-research")).installed is True
+
+
+@pytest.mark.asyncio
+async def test_install_market_plugin_delegates_to_plugin_installer(plugin_env):  # type: ignore[no-untyped-def]
+    out = await plugin_env.svc.install(USER, "market:plugin:equity-research")
+    assert out.status == "installed" and out.installed_ref == "equity-research"
+    assert out.item_id == "market:plugin:equity-research"
+    (call,) = plugin_env.plugins.calls
+    assert call["market_item_id"] == "market:plugin:equity-research"
+    assert call["on_conflict"] == "skip"
+    plugin_env.plugins.status = "already_installed"
+    assert (
+        await plugin_env.svc.install(USER, "market:plugin:equity-research")
+    ).status == "already_installed"
+    plugin_env.plugins.status = "updated"
+    assert (
+        await plugin_env.svc.install(USER, "market:plugin:equity-research")
+    ).status == "installed"
+
+
+@pytest.mark.asyncio
+async def test_install_market_plugin_without_installer_is_not_found(env):  # type: ignore[no-untyped-def]
+    with pytest.raises(MarketplaceItemNotFound):
+        await env.svc.install(USER, "market:plugin:x")

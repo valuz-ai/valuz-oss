@@ -1,7 +1,8 @@
 """Marketplace install provenance — ``marketplace_install`` table.
 
 Records what a user installed from the market index: the item id, its type,
-the resulting local reference (skill slug / agent slug / team pack id), the
+the resulting local reference (skill slug / agent slug / team pack id / plugin
+name), the
 item's version at install time, and (for skills) a content hash of the
 installed file tree. Phase 1 (this module) is **write-only** — installs
 call :meth:`MarketplaceInstallStore.record`, and resource-deletion hooks in
@@ -24,7 +25,9 @@ from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin, Us
 
 logger = logging.getLogger(__name__)
 
-MarketplaceInstallType = Literal["skill", "agent_template", "agent_team_template", "connector"]
+MarketplaceInstallType = Literal[
+    "skill", "agent_template", "agent_team_template", "connector", "plugin"
+]
 
 
 class MarketplaceInstallRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):

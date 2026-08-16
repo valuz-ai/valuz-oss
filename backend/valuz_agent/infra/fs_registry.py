@@ -628,6 +628,42 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    # ---- FS-16 — Agent Plugins (docs: agent-plugins-support design) ----
+    #
+    #   plugins/<name>/        → PLUGIN_ROOT (the installed package, replaced on update)
+    #   plugins-data/<name>/   → PLUGIN_DATA (client-managed persistent state — MUST
+    #                            survive updates; spec §9.1)
+    #
+    # ``name`` is a spec-conformant plugin name (lowercase a-z0-9.-, no "..") and
+    # therefore a single safe path segment; the guard below is defensive.
+
+    @staticmethod
+    def _plugin_segment(name: str) -> str:
+        if not name or "/" in name or "\\" in name or name in (".", "..") or ".." in name:
+            raise ValueError(f"invalid plugin name: {name!r}")
+        return name
+
+    def plugins_root(self, user_id: str) -> Path:
+        path = self.data_dir(user_id) / "plugins"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def plugin_root(self, user_id: str, name: str) -> Path:
+        """PLUGIN_ROOT for one installed plugin (NOT created — the installer
+        materializes it atomically)."""
+        return self.plugins_root(user_id) / self._plugin_segment(name)
+
+    def plugins_data_root(self, user_id: str) -> Path:
+        path = self.data_dir(user_id) / "plugins-data"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def plugin_data_dir(self, user_id: str, name: str) -> Path:
+        """PLUGIN_DATA for one installed plugin (created, writable)."""
+        path = self.plugins_data_root(user_id) / self._plugin_segment(name)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     # ---- FS-15 — local backup (docs/design/client-local-backup.md) ----
     #
     # The backup destination is user-configurable (a preference); this method

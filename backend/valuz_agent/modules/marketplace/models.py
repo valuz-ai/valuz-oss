@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-MarketplaceItemType = Literal["skill", "agent_template", "agent_team_template", "connector"]
-MarketplaceSource = Literal["skillhub", "valuz_official", "modelscope", "redskill"]
+MarketplaceItemType = Literal[
+    "skill", "agent_template", "agent_team_template", "connector", "plugin"
+]
+MarketplaceSource = Literal["skillhub", "valuz_official", "modelscope", "redskill", "pluginmarket"]
+# Derived from a plugin's components — never authored: ``skills_only`` (a "skill
+# suite") vs ``with_connectors`` (declares ``mcp.json`` servers).
+MarketplacePluginComposition = Literal["skills_only", "with_connectors"]
 MarketplaceBadge = Literal[
     "free_install",
     "requires_api_key",
@@ -19,7 +25,11 @@ MarketplaceBadge = Literal[
     "locked",
 ]
 MarketplaceInstallTarget = Literal[
-    "skill_library", "agent_library", "agent_library_project", "connector_library"
+    "skill_library",
+    "agent_library",
+    "agent_library_project",
+    "connector_library",
+    "plugin_library",
 ]
 ConnectorRequirementKind = Literal["required", "optional", "api_key", "cost"]
 MarketplaceConnectorFieldTarget = Literal["env", "header", "param"]
@@ -38,6 +48,19 @@ class MarketplaceTeamMember(BaseModel):
     role: str
     lead: bool = False
     skill_count: int | None = None
+
+
+class MarketplacePluginMember(BaseModel):
+    """One member of a ``plugin`` item (detail only) — a skill or an MCP
+    server / connector the plugin declares. ``path`` is the member's location
+    inside the package (``skills/<slug>`` / ``mcp.json#<name>``)."""
+
+    kind: Literal["skill", "connector"]
+    slug: str
+    name: str
+    description: str | None = None
+    meta_version: str | None = None
+    path: str | None = None
 
 
 class MarketplaceConnectorRequirement(BaseModel):
@@ -129,7 +152,12 @@ class MarketplaceItem(BaseModel):
     version: str | None = None
     runtime: str | None = None
     skill_count: int | None = None
-    members: list[MarketplaceTeamMember] | None = None
+    # ``plugin`` items only — component counts + derived composition.
+    connector_count: int | None = None
+    composition: MarketplacePluginComposition | None = None
+    # Team cards carry the member-agent roster; plugin DETAILS carry the
+    # skill / connector member list (same field, discriminated by shape).
+    members: Sequence[MarketplaceTeamMember | MarketplacePluginMember] | None = None
     install_target: MarketplaceInstallTarget
     installed: bool = False
     locked: bool = False
@@ -149,11 +177,15 @@ class MarketplaceItemDetail(MarketplaceItem):
     security: MarketplaceSecurityReport | None = None
     evaluation: MarketplaceEvaluationReport | None = None
     connector_config: MarketplaceConnectorConfig | None = None
+    # ``plugin`` items — the package's ``plugin.json`` object (Agent Plugins
+    # 1.0.0 manifest) as published by the index.
+    plugin_manifest: dict[str, Any] | None = None
     # Opaque, type-varies-by-``type`` install payload from the market index:
     # skill → {download_url, sha256?, size_bytes?}; agent_template →
     # an AgentTemplateDef-shaped object; agent_team_template → a pack
     # manifest object (skill deps rewritten to {slug, source:"url",
-    # download_url}). Never produced locally — only the index sets it.
+    # download_url}); plugin → {download_url, sha256?, size_bytes?} of the
+    # Agent Plugins layout zip. Never produced locally — only the index sets it.
     install_manifest: dict[str, Any] | None = None
 
 

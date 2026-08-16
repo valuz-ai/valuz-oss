@@ -13,6 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manager now exposes versioned renderer/main contracts, edition policy
   injection and capability negotiation so overlay desktops can reuse the same
   network path without copying the runtime (#909 @zhourongyu).
+- **Agent Plugins** — plugins are a first-class install unit per the Agent
+  Plugins 1.0.0 spec (`plugin.json` + `skills/` + optional `mcp.json`): a
+  skills-only plugin is a "skill suite", one with MCP servers a "plugin with
+  connectors". New `/v1/plugins` API (preview / install from zip, directory,
+  URL or market item / enable / disable / update / reference-counted uninstall /
+  export / memberships), `.claude-plugin` / `.codebuddy-plugin` compat readers
+  that materialize the normalized layout, marketplace item type `plugin`
+  (`market:plugin:<slug>`, `composition` filter, source `pluginmarket`), the
+  `/plugins` library page, market tabs (agents 单智能体|团队, skills 技能|套件,
+  plugins 全部|技能套件|含连接器) and plugin badges on skill / connector cards
+  (#908 @St0neWan9).
 - **RedSkill marketplace source** — `MarketplaceSource` accepts `redskill` (the
   Xiaohongshu RedSkill store the commercial control plane now ingests) and the
   market card's source pill labels it (#907 @St0neWan9).

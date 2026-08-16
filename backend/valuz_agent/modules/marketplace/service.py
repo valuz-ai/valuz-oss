@@ -18,6 +18,10 @@ index, the PRIMARY marketplace data source (see
 - ``market:connector:*`` items are never installed through this service —
   the frontend reads ``connector_config`` off the item detail and calls
   ``POST /v1/connectors`` directly (unchanged, pre-existing mechanism).
+- ``market:plugin:*`` items (Agent Plugins packages) delegate to
+  :class:`~valuz_agent.modules.plugins.service.PluginService`, which downloads
+  the zip through the item's ``install_manifest.download_url``, installs the
+  plugin + its member skills / connectors and records the provenance row.
 
 Index outages must never blank the marketplace: list/category reads degrade
 to empty results with ``degraded: true``; detail/install reads raise
@@ -69,6 +73,7 @@ from valuz_agent.modules.skills.service import SkillLibraryService
 
 if TYPE_CHECKING:
     from valuz_agent.modules.connectors.service import ConnectorService
+    from valuz_agent.modules.plugins.service import PluginService
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +106,7 @@ class MarketplaceService:
         pack_service: AgentPackService,
         installs: MarketplaceInstallStore,
         connector_service: ConnectorService | None = None,
+        plugin_service: PluginService | None = None,
     ) -> None:
         self._index = index
         self._skills = skill_service
@@ -108,6 +114,7 @@ class MarketplaceService:
         self._packs = pack_service
         self._installs = installs
         self._connectors = connector_service
+        self._plugins = plugin_service
 
     # ------------------------------------------------------------------
     # Categories
@@ -157,6 +164,7 @@ class MarketplaceService:
         q: str | None = None,
         page: int = 1,
         page_size: int = 30,
+        composition: str | None = None,
     ) -> MarketplaceItemList:
         try:
             payload = await self._index.list_items(
@@ -168,6 +176,7 @@ class MarketplaceService:
                 page=page,
                 page_size=page_size,
                 locale=get_locale(),
+                composition=composition,
             )
         except MarketIndexUnavailableError:
             fallback = await self._fallback_list_items(
@@ -303,6 +312,10 @@ class MarketplaceService:
             if self._connectors is None:
                 return set()
             return {view.slug for view in await self._connectors.list_connectors(user_id)}
+        if type_ == "plugin":
+            if self._plugins is None:
+                return set()
+            return {view.name for view in await self._plugins.list_plugins(user_id)}
         return set()
 
     @staticmethod
@@ -366,6 +379,8 @@ class MarketplaceService:
                 model=model,
                 effort=effort,
             )
+        if ns == "market" and kind == "plugin":
+            return await self._install_plugin(user_id, item_id)
         if settings.marketplace_direct_fallback:
             if ns == "skillhub" and kind == "skill":
                 return await self._install_skillhub_skill_fallback(user_id, item_id, ref)
@@ -636,6 +651,26 @@ class MarketplaceService:
         return (
             MarketplaceInstallResult(item_id=item_id, status="installed", installed_ref=view.slug),
             getattr(view, "content_hash", None),
+        )
+
+    # -- plugins ----------------------------------------------------------------
+
+    async def _install_plugin(self, user_id: str, item_id: str) -> MarketplaceInstallResult:
+        """``market:plugin:<slug>`` — the plugin installer downloads the Agent
+        Plugins zip through the item's ``install_manifest.download_url``,
+        installs the package + members (default conflict policy ``skip``: an
+        already-present member with different content is linked and flagged,
+        never silently overwritten) and records the provenance row itself."""
+        if self._plugins is None:
+            raise MarketplaceItemNotFound(f"Plugin installs are not available: {item_id}")
+        result = await self._plugins.install(user_id, market_item_id=item_id, on_conflict="skip")
+        logger.info(
+            "marketplace installed plugin %s as %s (%s)", item_id, result.plugin.name, result.status
+        )
+        return MarketplaceInstallResult(
+            item_id=item_id,
+            status="already_installed" if result.status == "already_installed" else "installed",
+            installed_ref=result.plugin.name,
         )
 
     # -- agent templates ------------------------------------------------------

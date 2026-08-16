@@ -22,6 +22,7 @@ export type { ConversationViewVariant } from "./conversation/useConversationRout
 export { OnboardingFlow } from "./onboarding";
 export { KnowledgePage } from "./KnowledgePage";
 export { MarketplacePage } from "./MarketplacePage";
+export { PluginsPage } from "./PluginsPage";
 export { ProjectDetailPage } from "./ProjectDetailPage";
 export { SettingsPage } from "./SettingsPage";
 export { SkillsPage } from "./SkillsPage";

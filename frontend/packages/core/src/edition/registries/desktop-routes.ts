@@ -110,6 +110,16 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
     edition: "personal",
   },
   {
+    id: "plugins",
+    path: "/plugins",
+    label: "plugin.title",
+    description:
+      "Installed Agent Plugins (skill suites and skills + connectors bundles).",
+    layout: "project",
+    showInNav: false,
+    edition: "personal",
+  },
+  {
     id: "settings",
     path: "/settings",
     label: "Settings",

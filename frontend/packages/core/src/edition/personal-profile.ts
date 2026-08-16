@@ -82,6 +82,14 @@ const personalNavItems: NavItemModule[] = [
     edition: "personal",
   },
   {
+    id: "plugins",
+    label: "plugin.title",
+    href: "/plugins",
+    position: "bottom",
+    navGroup: "library",
+    edition: "personal",
+  },
+  {
     id: "knowledge",
     label: "nav.knowledge",
     href: "/knowledge",
