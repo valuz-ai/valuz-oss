@@ -117,7 +117,7 @@ export const AgentsPage = () => {
   const [activeProjectMemberKey, setActiveProjectMemberKey] = useState<
     string | null
   >(null);
-  const [listView, setListView] = useState<AgentListView>("project");
+  const [listView, setListView] = useState<AgentListView>("all");
   const [collapsedProjectGroups, setCollapsedProjectGroups] = useState<
     Set<string>
   >(new Set());
@@ -534,20 +534,20 @@ export const AgentsPage = () => {
               }}
               options={[
                 {
-                  value: "project",
-                  label: t(
-                    "agent.viewByProject" as Parameters<typeof t>[0],
-                    "按项目",
-                  ),
-                  icon: Folder,
-                },
-                {
                   value: "all",
                   label: t(
                     "agent.viewAll" as Parameters<typeof t>[0],
                     "全部 Agent",
                   ),
                   icon: Bot,
+                },
+                {
+                  value: "project",
+                  label: t(
+                    "agent.viewByProject" as Parameters<typeof t>[0],
+                    "按项目",
+                  ),
+                  icon: Folder,
                 },
               ]}
               className="mb-4 h-9"
