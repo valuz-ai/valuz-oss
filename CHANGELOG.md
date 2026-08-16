@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Desktop close shortcut** — with no preview open, Ctrl+W on Windows/Linux
+  fell through to closing the only window and quit the app; it is now a no-op
+  there, while macOS keeps Cmd+W's window-close meaning and an open preview
+  still closes first everywhere (#904 @St0neWan9).
 - **Desktop window controls** — a maximized window on Windows/Linux showed two
   outward arrows ("enlarge") where Windows draws the restore glyph; the control
   now draws `ChromeRestore` — a square in the lower-left with a second square's
