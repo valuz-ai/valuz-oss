@@ -97,7 +97,7 @@ describe("preview close shortcut", () => {
     expect(closeBackground).toHaveBeenCalledOnce();
   });
 
-  it("handles Electron's native close request before closing the window", () => {
+  function installDesktopBridge(platform: string) {
     let nativeClose: ((payload: unknown) => void) | undefined;
     const invoke = vi.fn(async () => undefined);
     const on = vi.fn((event: string, handler: (payload: unknown) => void) => {
@@ -108,23 +108,49 @@ describe("preview close shortcut", () => {
     Object.defineProperty(window, "valuzDesktop", {
       configurable: true,
       value: {
-        runtime: { platform: "darwin" },
+        runtime: { platform },
         invoke,
         on,
         off,
       },
     });
+    return { invoke, requestClose: () => nativeClose?.(undefined) };
+  }
+
+  it("handles Electron's native close request before closing the window", () => {
+    const { invoke, requestClose } = installDesktopBridge("darwin");
     const closePreview = vi.fn();
     const { rerender } = render(
       <Preview active onClose={closePreview} />,
     );
 
-    nativeClose?.(undefined);
+    requestClose();
     expect(closePreview).toHaveBeenCalledOnce();
     expect(invoke).not.toHaveBeenCalled();
 
+    // macOS: Cmd+W with nothing to close keeps its window-close meaning.
     rerender(<Preview active={false} onClose={closePreview} />);
-    nativeClose?.(undefined);
+    requestClose();
     expect(invoke).toHaveBeenCalledWith("window_close");
   });
+
+  it.each(["win32", "linux"])(
+    "keeps the app alive when nothing is open to close on %s",
+    (platform) => {
+      const { invoke, requestClose } = installDesktopBridge(platform);
+      const closePreview = vi.fn();
+      const { rerender } = render(
+        <Preview active onClose={closePreview} />,
+      );
+
+      requestClose();
+      expect(closePreview).toHaveBeenCalledOnce();
+
+      // Closing the only window quits the app here, which Ctrl+W must not do.
+      rerender(<Preview active={false} onClose={closePreview} />);
+      requestClose();
+      expect(closePreview).toHaveBeenCalledOnce();
+      expect(invoke).not.toHaveBeenCalled();
+    },
+  );
 });
