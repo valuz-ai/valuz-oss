@@ -4,9 +4,8 @@ import type {
   EgressManagerStatus,
   EgressMode,
   EgressSnapshot,
-} from '../network/types'
-import type { RuntimePhaseRecord } from '../network/control-server'
-import type { EgressBootstrap } from '../network/control-server'
+} from '@valuz/desktop-network'
+import type { EgressBootstrap, RuntimePhaseRecord } from '@valuz/desktop-network'
 import { createServiceManager, type DesktopServiceManager } from '../services/mod'
 import { cleanStaleUpdateCache } from '../update-cache'
 

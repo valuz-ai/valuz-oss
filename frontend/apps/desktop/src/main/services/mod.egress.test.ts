@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { EgressBootstrap } from "../network/control-server";
-import type { EgressManagerStatus } from "../network/types";
+import type {
+  EgressBootstrap,
+  EgressManagerStatus,
+} from "@valuz/desktop-network";
 import { createServiceManager } from "./mod";
 
 const mocks = vi.hoisted(() => ({

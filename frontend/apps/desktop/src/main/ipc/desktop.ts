@@ -1,13 +1,11 @@
 import { app, session } from "electron";
 import {
   EgressManager,
+  readPersistedEgressMode,
   resolveEgressFrontendsEnabled,
   resolveInitialEgressMode,
-} from "../network/egress-manager";
-import {
-  readPersistedEgressMode,
   writePersistedEgressMode,
-} from "../network/mode-store";
+} from "@valuz/desktop-network";
 import { createServiceManager } from "../services/mod";
 import { getMainWindow } from "../windows";
 import { createDesktopRuntime } from "./services";

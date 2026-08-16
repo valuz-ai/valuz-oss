@@ -83,6 +83,9 @@ importers:
       '@valuz/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@valuz/desktop-network':
+        specifier: workspace:*
+        version: link:../../packages/desktop-network
       '@valuz/parser-plugins':
         specifier: workspace:*
         version: link:../../packages/parser-plugins
@@ -256,6 +259,8 @@ importers:
       sonner:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+
+  packages/desktop-network: {}
 
   packages/parser-plugins:
     dependencies:

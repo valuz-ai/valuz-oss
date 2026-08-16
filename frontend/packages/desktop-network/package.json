@@ -1,0 +1,17 @@
+{
+  "name": "@valuz/desktop-network",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Electron main-process unified network egress: outbound resolver, upstream connector, forward proxy, loopback model ingress, control server and diagnostics. Pure Node, no Electron import — consumable by any desktop shell that manages the valuz backend as a sidecar.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --passWithNoTests --config ../../vitest.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src --ext .ts",
+    "clean": "rm -rf dist"
+  }
+}

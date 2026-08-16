@@ -22,6 +22,7 @@
       "@valuz/core/types": ["./packages/core/src/types.ts"],
       "@valuz/core/config/features": ["./packages/core/src/config/features.ts"],
       "@valuz/parser-plugins": ["./packages/parser-plugins/src/index.ts"],
+      "@valuz/desktop-network": ["./packages/desktop-network/src/index.ts"],
       "@valuz/ui": ["./packages/ui/src/index.ts"],
       "@valuz/a2ui": ["./packages/a2ui/src/index.ts"],
       "@valuz/a2ui/catalog": ["./packages/a2ui/src/catalog/index.ts"],

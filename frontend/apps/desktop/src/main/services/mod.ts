@@ -6,15 +6,15 @@ import {
   type ServiceStatusType,
 } from "@valuz/shared";
 import type { ServiceDescriptor } from "@valuz/core";
-import type { EgressManager } from "../network/egress-manager";
-import type { RuntimePhaseRecord } from "../network/control-server";
-import type { EgressBootstrap } from "../network/control-server";
 import type {
+  EgressBootstrap,
   EgressDiagnosticEvent,
+  EgressManager,
   EgressManagerStatus,
   EgressMode,
   EgressSnapshot,
-} from "../network/types";
+  RuntimePhaseRecord,
+} from "@valuz/desktop-network";
 import { DescriptorRegistry, personalDescriptors } from "./descriptors";
 import {
   reclaimStaleSidecar,

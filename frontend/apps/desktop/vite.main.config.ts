@@ -13,6 +13,7 @@ export default defineConfig({
       '@valuz/shared': path.resolve(__dirname, '../../packages/shared/src'),
       '@valuz/core': path.resolve(__dirname, '../../packages/core/src'),
       '@valuz/ui': path.resolve(__dirname, '../../packages/ui/src'),
+      '@valuz/desktop-network': path.resolve(__dirname, '../../packages/desktop-network/src'),
     },
   },
   build: {
