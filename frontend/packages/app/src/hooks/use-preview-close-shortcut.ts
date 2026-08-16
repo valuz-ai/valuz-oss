@@ -33,6 +33,10 @@ function runtimePlatform(): string {
   );
 }
 
+function isApplePlatform(platform: string): boolean {
+  return /^(darwin|mac|iphone|ipad|ipod)/i.test(platform);
+}
+
 export function isPreviewCloseShortcut(
   event: Pick<
     KeyboardEvent,
@@ -48,8 +52,7 @@ export function isPreviewCloseShortcut(
   ) {
     return false;
   }
-  const apple = /^(darwin|mac|iphone|ipad|ipod)/i.test(platform);
-  return apple
+  return isApplePlatform(platform)
     ? event.metaKey && !event.ctrlKey
     : event.ctrlKey && !event.metaKey;
 }
@@ -84,6 +87,11 @@ function handleDesktopCloseRequest(): void {
     registration.handler.current();
     return;
   }
+  // With nothing to close, only macOS keeps the platform meaning of Cmd+W —
+  // closing the window leaves the app running in the Dock. On Windows/Linux the
+  // main window *is* the app: closing it quits (`window-all-closed`), which is
+  // Alt+F4 territory, not what Ctrl+W means there. Stay a no-op instead.
+  if (!isApplePlatform(runtimePlatform())) return;
   const closeWindow = desktopBridge()?.invoke?.("window_close");
   void closeWindow?.catch(() => undefined);
 }
@@ -112,6 +120,8 @@ export interface UsePreviewCloseShortcutOptions {
  * Registers the platform-standard close shortcut for the active preview.
  * Registrations form a stack so a document dialog opened above an artifact
  * pane closes first. Escape is intentionally not a preview-close shortcut.
+ * With no preview open, the desktop shortcut falls through to closing the
+ * window on macOS only; Windows/Linux keep the app alive and do nothing.
  */
 export function usePreviewCloseShortcut({
   active,
