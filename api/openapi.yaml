@@ -1516,6 +1516,63 @@ paths:
         "409":
           description: A model runtime is still active
 
+  /v1/system/network-egress/activity:
+    get:
+      summary: Inspect active model runs for a desktop ownership change
+      operationId: getDesktopNetworkEgressActivity
+      tags: [system]
+      description: |
+        Loopback desktop-control endpoint. Reads only the process-local runtime
+        registry; it never queries owner-scoped user data and is authorized by
+        the memory-only desktop capability delivered over sidecar stdin.
+      parameters:
+        - name: X-Valuz-Desktop-Token
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Active model session ids in this backend process
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DesktopNetworkEgressActivityResponse"
+        "401":
+          description: Desktop control capability missing or invalid
+
+  /v1/system/network-egress/interrupt:
+    post:
+      summary: Interrupt confirmed active model runs before changing ownership
+      operationId: interruptDesktopNetworkEgressActivity
+      tags: [system]
+      description: |
+        Loopback desktop-control endpoint. Interrupts only session ids that are
+        currently active in this backend process. The caller must first obtain
+        explicit user confirmation; this endpoint performs no implicit broad
+        cancellation.
+      parameters:
+        - name: X-Valuz-Desktop-Token
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DesktopNetworkEgressInterruptRequest"
+      responses:
+        "200":
+          description: Per-session interruption outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DesktopNetworkEgressInterruptResponse"
+        "401":
+          description: Desktop control capability missing or invalid
+
   # ── Browser (managed chrome-devtools daemon; Settings panel) ──────────
 
   /v1/browser/status:
@@ -7207,6 +7264,44 @@ components:
             type: string
         prewarm_failed_session_ids:
           type: array
+          items:
+            type: string
+
+    DesktopNetworkEgressActivityResponse:
+      type: object
+      required: [active_session_ids]
+      properties:
+        active_session_ids:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+
+    DesktopNetworkEgressInterruptRequest:
+      type: object
+      required: [session_ids]
+      properties:
+        session_ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+
+    DesktopNetworkEgressInterruptResponse:
+      type: object
+      required: [interrupted_session_ids, inactive_session_ids]
+      properties:
+        interrupted_session_ids:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+        inactive_session_ids:
+          type: array
+          uniqueItems: true
           items:
             type: string
 

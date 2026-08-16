@@ -292,7 +292,11 @@ describe('createDesktopRuntimeForTest', () => {
     await expect(
       runtime.setEgressMode('off', { interruptActiveRuns: true }),
     ).resolves.toMatchObject({ mode: 'off' })
-    expect(interrupt).toHaveBeenCalledWith(19100, ['session-a', 'session-b'])
+    expect(interrupt).toHaveBeenCalledWith(
+      19100,
+      'desktop-control-token',
+      ['session-a', 'session-b'],
+    )
     expect(interrupt.mock.invocationCallOrder[0]).toBeLessThan(
       setEgressMode.mock.invocationCallOrder[0],
     )
@@ -303,5 +307,81 @@ describe('createDesktopRuntimeForTest', () => {
       false,
     )
     expect(restartService).not.toHaveBeenCalled()
+  })
+
+  it('rolls the owner choice back instead of restarting when a new task wins the race', async () => {
+    let mode: 'auto' | 'direct' | 'off' = 'auto'
+    const runningService = {
+      name: 'agent-server',
+      status: 'running' as const,
+      port: 19100,
+      pid: 123,
+      detail: 'Ready',
+    }
+    const setEgressMode = vi.fn(async (nextMode: typeof mode) => {
+      mode = nextMode
+      return {
+        mode,
+        enabled: true,
+        started: mode !== 'off',
+        emergencyOverride: false,
+        snapshotCount: 0,
+        diagnosticEventCount: 0,
+      }
+    })
+    const restartService = vi.fn(async () => [runningService])
+    const emitEvent = vi.fn()
+    const runtime = createDesktopRuntime(
+      {
+        descriptors: new DescriptorRegistry([]),
+        startAllServices: async () => [],
+        stopAllServices: async () => [],
+        restartService,
+        getLogs: () => [],
+        getAgentServerInfo: () => ({
+          port: 19100,
+          status: 'running',
+          token: 'test-token',
+        }),
+        getDesktopControlToken: () => 'desktop-control-token',
+        getShellStatus: () => ({ ready: true }),
+        getAllStatus: () => [runningService],
+        registerDescriptor: (descriptor) => descriptor,
+        unregisterDescriptor: () => true,
+        getEgressDiagnostics: () => [],
+        getEgressSnapshots: () => [],
+        getEgressMode: () => mode,
+        getEgressStatus: () => ({
+          mode,
+          enabled: true,
+          started: mode !== 'off',
+          emergencyOverride: false,
+          snapshotCount: 0,
+          diagnosticEventCount: 0,
+        }),
+        getEgressRuntimePhases: () => [],
+        setEgressMode,
+      },
+      emitEvent,
+      async () => [],
+      undefined,
+      async () => {
+        throw new Error('egress_runtime_reconfigure_busy')
+      },
+    )
+
+    await expect(runtime.setEgressMode('off')).rejects.toThrow(
+      'egress_mode_change_blocked_by_active_runs',
+    )
+    expect(setEgressMode.mock.calls.map(([nextMode]) => nextMode)).toEqual([
+      'off',
+      'auto',
+    ])
+    expect(mode).toBe('auto')
+    expect(restartService).not.toHaveBeenCalled()
+    expect(emitEvent).toHaveBeenLastCalledWith(
+      'egress-status-changed',
+      expect.objectContaining({ mode: 'auto' }),
+    )
   })
 })

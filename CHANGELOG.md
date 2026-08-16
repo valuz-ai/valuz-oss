@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Safe desktop network ownership changes** — activity checks and confirmed
+  interrupts now use the memory-only desktop control capability instead of
+  owner-scoped user APIs, and a late task race rolls the selected mode back
+  instead of restarting an active backend.
 - **Desktop close shortcut** — with no preview open, Ctrl+W on Windows/Linux
   fell through to closing the only window and quit the app; it is now a no-op
   there, while macOS keeps Cmd+W's window-close meaning and an open preview
