@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **RedSkill marketplace source** — `MarketplaceSource` accepts `redskill` (the
+  Xiaohongshu RedSkill store the commercial control plane now ingests) and the
+  market card's source pill labels it (#907 @St0neWan9).
+
 ### Changed
 
 - **Agents page default view** — the view switcher lists "All agents" first

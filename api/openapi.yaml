@@ -3708,7 +3708,7 @@ paths:
         - in: query
           name: source
           required: false
-          schema: {type: string, enum: [skillhub, valuz_official, modelscope]}
+          schema: {type: string, enum: [skillhub, valuz_official, modelscope, redskill]}
         - in: query
           name: q
           required: false
@@ -4677,7 +4677,7 @@ components:
           enum: [skill, agent_template, agent_team_template, connector]
         source:
           type: string
-          enum: [skillhub, valuz_official, modelscope]
+          enum: [skillhub, valuz_official, modelscope, redskill]
         source_ref: {type: string, description: "SkillHub slug / template id / pack id."}
         title: {type: string}
         subtitle: {type: string, nullable: true, description: "Agent role line; null for skills."}
