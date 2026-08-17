@@ -1505,6 +1505,7 @@ _CODEX_MCP_SECRET_ENV_PREFIX = "VALUZ_CODEX_MCP_SECRET_"
 _CODEX_OPENAI_API_KEY = "OPENAI_API_KEY"
 _CODEX_SHELL_APPLY_SECRET_FILTERS = "shell_environment_policy.ignore_default_excludes=false"
 _CODEX_SHELL_CORE_INHERIT = 'shell_environment_policy.inherit="core"'
+_CODEX_DISABLE_LOGIN_SHELL = "allow_login_shell=false"
 _CODEX_MCP_UNSAFE_PARENT_ENV_NAMES = frozenset(
     {
         "ALL_PROXY",
@@ -1605,21 +1606,22 @@ def _externalize_mcp_secrets(
         # tool can still inherit the full app-server environment.  MCP header
         # values have to live in that parent environment for
         # ``env_http_headers`` to resolve them, so make shell inheritance
-        # fail-closed at the stronger ``core`` baseline.  This keeps HOME,
-        # PATH, and the other portable process essentials while excluding
-        # Valuz's generated header variables and explicit stdio secrets.
+        # fail-closed at the ``core`` baseline and disable login-shell startup.
+        # The latter is required because a login-shell snapshot can restore
+        # app-server variables after the environment policy has filtered them.
+        # This keeps HOME, PATH, and the other portable process essentials
+        # without loading profile state back into the model shell.
         for policy in (
             _CODEX_SHELL_APPLY_SECRET_FILTERS,
             _CODEX_SHELL_CORE_INHERIT,
+            _CODEX_DISABLE_LOGIN_SHELL,
         ):
             if policy not in overrides:
                 add.append(policy)
         # ``env_http_headers`` / ``env_vars`` are explicit references, and
-        # codex-cli keeps referenced values available even under ``core``
-        # inheritance.  A keyed exclude is the final authority: current
-        # 0.144.4 applies it to the model-facing shell after resolving MCP
-        # references.  Emit one exact-name rule per credential so unrelated
-        # user environment remains untouched.
+        # codex-cli can keep referenced values available under ``core`` when
+        # a login-shell snapshot is allowed to rehydrate its parent state.
+        # Exact filters plus disabled login-shell startup close both paths.
         for env_name in secret_env:
             policy = (
                 f"shell_environment_policy.filters.{_toml_key(env_name)}="
@@ -1859,14 +1861,16 @@ def _build_config_overrides(
         # Every custom provider path puts an API key in the app-server parent
         # environment (HARNESS_CODEX_PROVIDER_API_KEY or OPENAI_API_KEY).
         # codex-cli 0.144.4's model ``shell`` path does not reliably honor the
-        # automatic name filter, so use the same fail-closed core boundary and
-        # exact keyed exclusion as MCP secrets.  Avoid changing native ChatGPT
-        # subscription sessions, which carry no provider credential in the
-        # process env.
+        # automatic name filter, so use the same core boundary, login-shell
+        # block, and exact keyed exclusion as MCP secrets.  Avoid changing
+        # native ChatGPT subscription sessions, which carry no provider
+        # credential in the process env.
         if _CODEX_SHELL_APPLY_SECRET_FILTERS not in overrides:
             overrides.append(_CODEX_SHELL_APPLY_SECRET_FILTERS)
         if _CODEX_SHELL_CORE_INHERIT not in overrides:
             overrides.append(_CODEX_SHELL_CORE_INHERIT)
+        if _CODEX_DISABLE_LOGIN_SHELL not in overrides:
+            overrides.append(_CODEX_DISABLE_LOGIN_SHELL)
         provider_env_key = (
             _HARNESS_PROVIDER_ENV_KEY
             if effective_base_url is not None
@@ -1905,8 +1909,9 @@ def _build_codex_env(
     ``mcp_secret_env`` carries values referenced by secret-free MCP
     ``env_http_headers`` / ``env_vars`` config entries. Generated HTTP-header
     names contain ``SECRET`` for defense in depth.  The generated config also
-    constrains model shell tools to Codex's ``core`` inheritance baseline and
-    adds an exact keyed exclusion for every credential.  codex-cli 0.144.4
+    constrains model shell tools to Codex's ``core`` inheritance baseline,
+    disables login-shell profile restoration, and adds an exact keyed
+    exclusion for every credential.  codex-cli 0.144.4
     does not reliably apply its automatic name filter on that execution path,
     and MCP environment references are otherwise retained after the core
     baseline.  Stdio variables remain explicitly available to their MCP
