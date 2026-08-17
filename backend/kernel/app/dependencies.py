@@ -41,6 +41,36 @@ _runtime_store: RuntimeStore | None = None
 # ``get_owner_id`` keeps using the trusted ``X-Valuz-Owner-Id`` header. A SaaS
 # overlay binds a real verifier via ``set_token_verifier``.
 _token_verifier: TokenVerifier = NullTokenVerifier()
+# The DataService bearer — the ONE config value that expires while the process
+# runs (a short-lived JWT), so it is held here rather than read off the frozen
+# ``AppConfig`` snapshot the store was built from. See ``set_data_api_token``.
+_data_api_token: str = ""
+
+
+def set_data_api_token(token: str) -> None:
+    """Rotate the DataService credential in place — no restart, no rebuild.
+
+    Every other value in ``AppConfig`` is fixed for the life of the process;
+    this one is a JWT that EXPIRES. Once it does, the sandbox's dual-write to
+    the host 401s, and because the local sqlite is the runtime authority
+    nothing surfaces to the user while the durable mirror silently stops.
+
+    Restarting to pick up a new one is not an acceptable answer: the kernel
+    owns the in-flight turn and the ``run_in_background`` processes hanging off
+    it, so a restart is user-visible data loss. Replacing the whole sandbox is
+    worse — it is a cold boot, and where the runtime databases live on a
+    per-scope shared mount it also puts two kernels on one database.
+
+    The credential is therefore a rotatable value with a single writer here and
+    a single reader in ``_build_durable_store``'s hook, which resolves it per
+    request. Rotation is a pointer swap: in-flight requests keep the token they
+    already read, the next one uses the new one. Deliberately NOT plumbed
+    through ``AppConfig`` — rebuilding that snapshot would hand every other
+    component a new object while they hold captured copies of the old one,
+    which is a half-applied config, not a credential refresh.
+    """
+    global _data_api_token  # noqa: PLW0603 — module-level rotatable, by design
+    _data_api_token = token
 
 
 async def _session_semantic_verifier_factory(
@@ -280,14 +310,10 @@ def _reconcile_sessions_runtime_check(conn: Any) -> None:
         checks = inspector.get_check_constraints("sessions")
     except NotImplementedError:  # dialect without check reflection — leave as-is
         return
-    current = next(
-        (c for c in checks if c.get("name") == "ck_sessions_runtime_provider"), None
-    )
+    current = next((c for c in checks if c.get("name") == "ck_sessions_runtime_provider"), None)
     if current is None or "deepseek_harness" in str(current.get("sqltext", "")):
         return
-    logger.info(
-        "durable sessions CHECK predates deepseek_harness — rebuilding constraint in place"
-    )
+    logger.info("durable sessions CHECK predates deepseek_harness — rebuilding constraint in place")
     ops = Operations(MigrationContext.configure(conn))
     with ops.batch_alter_table("sessions") as batch:
         batch.drop_constraint("ck_sessions_runtime_provider", type_="check")
@@ -331,12 +357,14 @@ def _build_durable_store(config: AppConfig) -> StorePort | None:
     if not config.data_api_url:
         raise RuntimeError("KERNEL_STORE=remote requires VALUZ_DATA_API_URL")
     _ensure_remote_backend(config.data_api_kind)
-    token = config.data_api_token or ""
+    set_data_api_token(config.data_api_token or "")
 
     async def _access_token() -> str:
-        # Static token from env for now; a refresh hook (re-mint short-lived
-        # JWT from the host) plugs in here later.
-        return token
+        # Resolved at CALL time, never captured. ``RemoteStoreHttp`` asks this
+        # hook on every request, so reading the live value here is the whole
+        # mechanism behind :func:`set_data_api_token` — see its docstring for
+        # why a restart is not an acceptable way to pick up a new credential.
+        return _data_api_token
 
     return build_remote_store(
         kind=config.data_api_kind,

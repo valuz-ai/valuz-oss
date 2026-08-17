@@ -129,3 +129,12 @@ from app import sandbox_control  # noqa: E402
 
 if sandbox_control.should_mount():
     app.include_router(sandbox_control.router)
+
+# Credential refresh — only when a host manages this kernel's env through the
+# config gate. The DataService bearer expires while the process runs, and a
+# restart to pick up a new one would take the in-flight turn (and its
+# background tasks) with it.
+from app import credential_control  # noqa: E402
+
+if credential_control.should_mount():
+    app.include_router(credential_control.router)

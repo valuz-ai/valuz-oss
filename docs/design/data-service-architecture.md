@@ -147,6 +147,16 @@ sync `TokenVerifier` adapter for standalone OSS callers. Consequences:
 - A **sandbox holds only a short-lived credential** + the DataService URL. It never
   receives a DB DSN, driver, or PG credential — the credential lives only on the
   host (the DataService's backend config).
+- Short-lived means it **expires while the kernel runs**, so it is rotatable in
+  place: `RemoteStore` resolves the bearer through a per-call `access_token`
+  hook, `dependencies.set_data_api_token` swaps the value behind it, and
+  `POST /internal/credentials/refresh` lets the host trigger that from outside
+  (the host writes the new value into the config-gate file first, so a later
+  restart still comes up current). Rotation must NOT be done by restarting the
+  kernel or replacing the sandbox: the kernel owns the in-flight turn and the
+  `run_in_background` processes hanging off it. The refresh applies an
+  allowlist — a blanket re-read would give the process a fresh `os.environ`
+  while every other component still holds what it captured at startup.
 - Owner isolation is **app-layer by construction**: every `StorePort` method
   requires the owner, and the DataService routes inject it only from the
   verified token. There is deliberately no DB-level RLS — the host data plane
