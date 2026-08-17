@@ -33,6 +33,7 @@ import {
   type RunSummary,
   useDegradedListTargets,
   getExecutionTargets,
+  recordEntityOrigin,
 } from "@valuz/core";
 import {
   AppShell,
@@ -693,11 +694,25 @@ export function ProjectLayoutBase({
   };
 
   const handleSelectDirectory = async () => {
-    const path = await platform.selectDirectory();
-    if (path) {
-      setNewRootPath(path);
+    const picked = await execLocation.selectDirectory();
+    if (!picked) return;
+    if (picked.existingProjectId) {
+      // The chosen directory is already a project on that target — open it
+      // instead of asking the backend for a duplicate binding (409).
+      const target = execLocation.effectiveTarget;
+      if (target) recordEntityOrigin(picked.existingProjectId, target.id);
+      setNewName("");
+      setNewRootPath("");
       setCreateError("");
+      memberPicker.reset();
+      execLocation.reset();
+      setCreateOpen(false);
+      await fetchProjects();
+      navigate(`/projects/${picked.existingProjectId}`);
+      return;
     }
+    setNewRootPath(picked.path);
+    setCreateError("");
   };
 
   // Multi-target degraded mode: one side of the list fan-out failing means

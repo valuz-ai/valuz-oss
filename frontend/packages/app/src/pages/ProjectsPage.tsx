@@ -21,11 +21,11 @@ import { toast } from "sonner";
 import { FolderKanban, MoreVertical, Plus, Upload } from "lucide-react";
 import {
   projectsApi,
+  recordEntityOrigin,
   useProjectStore,
   useTranslation,
   type ProjectListItem,
 } from "@valuz/core";
-import { usePlatform } from "@valuz/app/platform";
 import { useProjectOutlet } from "@valuz/app/layout";
 import type { DirectoryFieldMode } from "../layout";
 import { useAgentDeployPicker } from "../components/agent-deploy-picker";
@@ -45,7 +45,6 @@ export const ProjectsPage = ({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { selectDirectory } = usePlatform();
   const { setHeader, setHeaderClassName } = useProjectOutlet();
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -143,11 +142,23 @@ export const ProjectsPage = ({
   }, [pageHeader, setHeader, setHeaderClassName]);
 
   const handleSelectDirectory = async () => {
-    const path = await selectDirectory();
-    if (path) {
-      setNewRootPath(path);
+    const picked = await execLocation.selectDirectory();
+    if (!picked) return;
+    if (picked.existingProjectId) {
+      // Already a project on that target — open it rather than create a
+      // duplicate binding (the backend answers 409 for that).
+      const target = execLocation.effectiveTarget;
+      if (target) recordEntityOrigin(picked.existingProjectId, target.id);
+      setCreateOpen(false);
+      setNewName("");
+      setNewRootPath("");
       setCreateError("");
+      execLocation.reset();
+      navigate(`/projects/${picked.existingProjectId}`);
+      return;
     }
+    setNewRootPath(picked.path);
+    setCreateError("");
   };
 
   const handleCreate = async () => {

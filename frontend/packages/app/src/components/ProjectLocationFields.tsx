@@ -13,6 +13,13 @@
  * no ``root_path`` (the backend allocates a managed cwd), and a locally
  * picked folder is streamed up via the multipart
  * ``POST /v1/projects/{id}/files`` endpoint in batches.
+ *
+ * A remote target that can browse ITS OWN filesystem (a remote desktop
+ * reached through the relay) provides ``ExecutionTarget.selectDirectory``;
+ * the dialogs then keep the directory field and call that chooser instead of
+ * the platform's native picker, and the project binds a directory on the
+ * remote machine. When the chooser reports the directory is already a project
+ * there, the dialog opens that project instead of creating a duplicate.
  */
 
 import { useCallback, useState } from "react";
@@ -20,13 +27,16 @@ import {
   getDefaultExecutionTarget,
   projectsApi,
   recordEntityOrigin,
+  targetUsesManagedCwd,
   useExecutionTargets,
   useTranslation,
   type ExecutionTarget,
+  type ExecutionTargetDirectory,
   type ProjectDetail,
 } from "@valuz/core";
 import { Button } from "@valuz/ui";
 import { FolderUp, X } from "lucide-react";
+import { usePlatform } from "../platform";
 import { ExecutionLocationPicker } from "./ExecutionLocationPicker";
 
 type TK = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
@@ -73,8 +83,17 @@ export interface ProjectExecutionLocation {
   setTargetId: (id: string) => void;
   /** The target creation will use (undefined on single-target builds). */
   effectiveTarget: ExecutionTarget | undefined;
-  /** True when the chosen target is remote → managed cwd + upload flow. */
+  /**
+   * True when creation must use the managed cwd + upload flow: the target
+   * is remote and offers no directory chooser of its own.
+   */
   isRemoteTarget: boolean;
+  /**
+   * Pick a directory FOR the effective target: its own chooser when it has
+   * one (remote desktop), else the platform's native picker. ``null`` when
+   * cancelled / unavailable.
+   */
+  selectDirectory: () => Promise<ExecutionTargetDirectory | null>;
   /** Files picked for the remote initial-content upload (post-filter). */
   initialFiles: File[];
   pickInitialFolder: () => void;
@@ -96,6 +115,7 @@ export interface ProjectExecutionLocation {
 
 export function useProjectExecutionLocation(): ProjectExecutionLocation {
   const { t } = useTranslation();
+  const platform = usePlatform();
   const targets = useExecutionTargets();
   const [targetId, setTargetId] = useState<string | null>(null);
   const [initialFiles, setInitialFiles] = useState<File[]>([]);
@@ -106,7 +126,14 @@ export function useProjectExecutionLocation(): ProjectExecutionLocation {
       ? undefined
       : (targets.find((target) => target.id === targetId) ??
         getDefaultExecutionTarget());
-  const isRemoteTarget = effectiveTarget?.remote === true;
+  const isRemoteTarget = targetUsesManagedCwd(effectiveTarget);
+
+  const selectDirectory = useCallback(async () => {
+    const own = effectiveTarget?.selectDirectory;
+    if (own) return await own();
+    const path = await platform.selectDirectory();
+    return path ? { path } : null;
+  }, [effectiveTarget, platform]);
 
   const pickInitialFolder = useCallback(() => {
     const input = document.createElement("input");
@@ -143,7 +170,7 @@ export function useProjectExecutionLocation(): ProjectExecutionLocation {
   const createProjectAt = useCallback(
     async (payload: { name: string; root_path?: string }) => {
       const target = effectiveTarget;
-      const body = target?.remote === true ? { name: payload.name } : payload;
+      const body = targetUsesManagedCwd(target) ? { name: payload.name } : payload;
       const created = await projectsApi.create(
         body,
         target ? { baseUrl: target.baseUrl } : undefined,
@@ -187,6 +214,7 @@ export function useProjectExecutionLocation(): ProjectExecutionLocation {
     setTargetId,
     effectiveTarget,
     isRemoteTarget,
+    selectDirectory,
     initialFiles,
     pickInitialFolder,
     clearInitialFiles,

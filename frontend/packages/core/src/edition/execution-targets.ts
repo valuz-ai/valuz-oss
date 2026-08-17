@@ -52,6 +52,37 @@ export interface ExecutionTarget {
   remote?: boolean;
   /** Glyph override; inferred from ``id`` when omitted. */
   icon?: ExecutionTargetIcon;
+  /**
+   * Edition-provided directory chooser for a target whose filesystem is NOT
+   * this machine's but can still be browsed (a remote desktop reached
+   * through the relay). When set, the create-project / create-KB dialogs
+   * show their normal directory field and call this instead of the
+   * platform's native picker; ``remote`` then no longer forces the managed
+   * cwd + upload flow (see {@link targetUsesManagedCwd}). Resolves to
+   * ``null`` when the user cancels.
+   */
+  selectDirectory?: () => Promise<ExecutionTargetDirectory | null>;
+}
+
+/**
+ * Result of {@link ExecutionTarget.selectDirectory}. When the picked
+ * directory is already bound to a project on that target, the edition
+ * reports it so the dialog can open that project instead of creating a
+ * duplicate (the backend rejects a second binding of the same root with 409).
+ */
+export interface ExecutionTargetDirectory {
+  path: string;
+  existingProjectId?: string;
+  existingProjectName?: string;
+}
+
+/**
+ * True when creating on ``target`` must use the managed-cwd + initial-upload
+ * flow: the backend is remote AND cannot offer its own directory chooser.
+ * ``undefined`` (single-target builds) → false.
+ */
+export function targetUsesManagedCwd(target: ExecutionTarget | null | undefined): boolean {
+  return target?.remote === true && typeof target.selectDirectory !== "function";
 }
 
 /**

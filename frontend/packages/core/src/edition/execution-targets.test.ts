@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import {
   executionTargetIconKind,
+  targetUsesManagedCwd,
   getDefaultExecutionTarget,
   getDefaultRuntimeLocation,
   getExecutionTargets,
@@ -110,5 +111,28 @@ describe("executionTargetIconKind", () => {
         icon: "cloud",
       }),
     ).toBe("cloud");
+  });
+});
+
+describe("targetUsesManagedCwd", () => {
+  it("should be false for local / undefined targets", () => {
+    expect(targetUsesManagedCwd(undefined)).toBe(false);
+    expect(targetUsesManagedCwd(LOCAL)).toBe(false);
+  });
+
+  it("should be true for a remote target without its own directory chooser", () => {
+    expect(targetUsesManagedCwd({ ...CLOUD, remote: true })).toBe(true);
+  });
+
+  it("should be false for a remote target that can browse its own filesystem", () => {
+    expect(
+      targetUsesManagedCwd({
+        id: "device:x",
+        labelKey: "k",
+        baseUrl: "http://relay/x",
+        remote: true,
+        selectDirectory: async () => ({ path: "/Users/me/proj" }),
+      }),
+    ).toBe(false);
   });
 });

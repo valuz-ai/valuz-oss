@@ -14,6 +14,7 @@ import {
 import { DirectoryPicker } from "@valuz/ui";
 import {
   getDefaultExecutionTarget,
+  targetUsesManagedCwd,
   useExecutionTargets,
   useTranslation,
 } from "@valuz/core";
@@ -60,9 +61,17 @@ export const CreateKbDialog = ({
       ? undefined
       : (targets.find((tt) => tt.id === targetId) ??
         getDefaultExecutionTarget());
-  const isRemoteTarget = effectiveTarget?.remote === true;
+  // A remote target that can browse its own filesystem (remote desktop)
+  // keeps the directory field and uses its chooser; a plain remote (cloud)
+  // target stays managed.
+  const isRemoteTarget = targetUsesManagedCwd(effectiveTarget);
   const propManaged = directoryFieldMode === "managed";
   const effectiveManaged = propManaged || isRemoteTarget;
+  const pickDirectory = async (): Promise<string | null> => {
+    const own = effectiveTarget?.selectDirectory;
+    if (own) return (await own())?.path ?? null;
+    return await selectDirectory();
+  };
 
   const [name, setName] = useState("");
   const [rootPath, setRootPath] = useState("");
@@ -142,7 +151,7 @@ export const CreateKbDialog = ({
                   "knowledge.selectDir" as Parameters<typeof t>[0],
                 )}
                 onBrowse={async () => {
-                  const dir = await selectDirectory();
+                  const dir = await pickDirectory();
                   if (dir) setRootPath(dir);
                 }}
               />
