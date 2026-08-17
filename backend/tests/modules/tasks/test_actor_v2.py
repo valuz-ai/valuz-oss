@@ -1275,7 +1275,7 @@ async def test_an_inject_mid_turn_is_not_made_to_wait_out_the_slice(monkeypatch)
         return []
 
     async def _no_heartbeat(_self=None, **_kw):
-        return {}
+        return probe_mod.HeartbeatOutcome()
 
     monkeypatch.setattr(probe_mod, "probe_pending_members", _no_probe)
     monkeypatch.setattr(probe_mod, "heartbeat_pending", _no_heartbeat)

@@ -1553,8 +1553,11 @@ def test_heartbeat_pending_synthesizes_terminal_completed(
         )
     )
 
-    assert set(out.keys()) == {"B"}  # only the terminal member synthesized
-    assert out["B"]["status"] == "completed"
+    assert set(out.settled) == {"B"}  # only the terminal member synthesized
+    assert out.settled["B"]["status"] == "completed"
+    # Reported separately from what it acted on, so a caller can grant a grace
+    # period per member: C is still running, so it is not terminal either.
+    assert out.terminal == {"B"}
     runs = _runs(db_factory)
     assert runs["sB"] == "completed"
     plan = TaskPlan.from_dict(db_factory().query(TaskRow).filter_by(id="t1").one().plan)
@@ -3033,17 +3036,20 @@ def test_an_unknown_member_is_never_swallowed(db_factory, tmp_path) -> None:
     )
 
 
-def test_the_backstop_lets_the_real_delivery_win_the_first_slice(
+def test_the_backstop_does_not_settle_a_member_it_just_saw_stop(
     db_factory, tmp_path, monkeypatch
 ) -> None:
-    """Regression for the wasted turns: the backstop must not race the member.
+    """The backstop must not race the member's own report.
 
     It reads durable state, so it sees a member as finished the moment its
     kernel session goes terminal — while that member is still inside
     ``notify_lead_member_idle`` collecting a manifest off the filesystem.
     Synthesizing there strands the real ``member_done`` in a mailbox nobody
-    drains. One slice of grace hands the race to the real path; a member that
-    truly died without delivering is still caught, one slice later.
+    drains, and hands the lead a worse result: measured in production, the
+    backstop's manifest carried 29 and 31 artifacts, including files written on
+    three earlier days and the other members' output.
+
+    So it OBSERVES on the first pass and may only SETTLE on a later one.
     """
     from types import SimpleNamespace
 
@@ -3064,24 +3070,143 @@ def test_the_backstop_lets_the_real_delivery_win_the_first_slice(
     monkeypatch.setattr("valuz_agent.modules.tasks.coordination._HEARTBEAT_S", 0.01)
 
     orch = TaskOrchestrator()
-    hits: list[int] = []
+    settled: list[str] = []
     real = member_probe.heartbeat_pending
 
-    async def _counting(**kw):
-        hits.append(1)
-        return await real(**kw)
+    async def _watching(**kw):
+        outcome = await real(**kw)
+        settled.extend(outcome.settled)
+        return outcome
 
-    monkeypatch.setattr(member_probe, "heartbeat_pending", _counting)
+    monkeypatch.setattr(member_probe, "heartbeat_pending", _watching)
 
-    # A window of exactly one slice: the backstop must stay out of it.
+    # A window of exactly one pass: it may look, it may not act.
     asyncio.run(
         orch.coordination.await_member_results(
             lead_session_id="lead-s", project_id="w1", task_id="t1",
             timeout_s=0.01, user_id=OWNER,
         )
     )
-    assert hits == [], "the first slice belongs to the real delivery"
+    assert settled == [], "the first pass that sees a member stop belongs to its own report"
+    assert _runs(db_factory)["sB"] == "active", "and nothing may be written for it yet"
 
+
+def test_the_backstop_attributes_only_what_the_member_wrote(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """The backstop must bound artifacts by the member's own run row.
+
+    Under a shared project cwd, artifacts are attributed by mtime, and
+    ``since_epoch=0`` means "every file here is yours". The delivery path has
+    always passed the member's dispatch time; this path omitted it, and it is
+    the path that usually wins the race — so the wrong manifest was the common
+    one. Production, one task: two members came back with 29 and 31 artifacts,
+    including reports written on three earlier days and each other's output.
+    """
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    monkeypatch.setattr(
+        kernel_client_mod,
+        "get_session",
+        _as_async(
+            lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+        ),
+    )
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    seen: dict[str, float] = {}
+
+    async def _capture(_sid, _run_dir, _status, *, since_epoch=0.0, **_kw):
+        seen["since_epoch"] = since_epoch
+        return {"status": "completed", "summary": "ok", "artifacts": []}
+
+    monkeypatch.setattr(manifest_mod, "collect_manifest", _capture)
+
+    asyncio.run(
+        member_probe.heartbeat_pending(
+            task_id="t1", project_id="w1", pending_keys={"B"}, user_id=OWNER
+        )
+    )
+
+    run_created_ms = next(
+        r.created_at
+        for r in db_factory().query(TaskSessionRow).filter_by(task_id="t1", session_id="sB")
+    )
+    assert seen.get("since_epoch") == pytest.approx(run_created_ms / 1000.0), (
+        "artifacts must be bounded by the member's own run row, not by 0 — "
+        f"got {seen.get('since_epoch')!r}"
+    )
+
+
+def test_the_grace_is_per_member_not_per_wait(db_factory, tmp_path, monkeypatch) -> None:
+    """A lead already deep in a wait must still give a NEW member its grace.
+
+    This is the one the old spelling got wrong, and it is the common case. The
+    grace used to be "the first slice of this ``await_members`` call", so a lead
+    that dispatched three members and waited three minutes had burned it ~25
+    slices before the first member even finished — and the backstop then won
+    every race. Production, 3 members: 2 were settled by the backstop 1.7s and
+    2.6s after finishing, their own reports arriving later and being dropped as
+    duplicates.
+
+    Here ``B`` is already finished (so passes accumulate against it) while ``C``
+    only stops later. ``C`` must still get a pass of grace of its own.
+    """
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(
+        db_factory,
+        tmp_path,
+        members=[("B", "frontend", "sB", "in_progress"), ("C", "qa", "sC", "in_progress")],
+    )
+    stopped: set[str] = {"sB"}  # B is done from the start; C stops on demand
+
+    def _session(_uid, sid):
+        if sid in stopped:
+            return SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+        return SimpleNamespace(status="running", stop_reason=None)
+
+    monkeypatch.setattr(kernel_client_mod, "get_session", _as_async(_session))
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    monkeypatch.setattr(
+        manifest_mod, "collect_manifest",
+        _as_async(lambda *a, **k: {"status": "completed", "summary": "ok"}),
+    )
+
+    passes = 0
+    real = member_probe.heartbeat_pending
+    settled_when: dict[str, int] = {}
+
+    async def _watching(**kw):
+        nonlocal passes
+        passes += 1
+        if passes == 3:
+            stopped.add("sC")  # C finishes deep into the wait
+        outcome = await real(**kw)
+        for key in outcome.settled:
+            settled_when.setdefault(key, passes)
+        return outcome
+
+    monkeypatch.setattr(member_probe, "heartbeat_pending", _watching)
+    monkeypatch.setattr("valuz_agent.modules.tasks.coordination._HEARTBEAT_S", 0.01)
+
+    orch = TaskOrchestrator()
+    asyncio.run(
+        orch.coordination.await_member_results(
+            lead_session_id="lead-s", project_id="w1", task_id="t1",
+            mode="all", timeout_s=0.4, user_id=OWNER,
+        )
+    )
+
+    assert settled_when.get("B") == 2, (
+        f"B stopped before pass 1, so it is settled on pass 2 (got {settled_when})"
+    )
+    assert settled_when.get("C", 0) >= 4, (
+        "C only stopped during pass 3, so pass 3 may observe it and pass 4 settle it — "
+        f"a wait already 3 passes deep must not skip C's grace (got {settled_when})"
+    )
 
 
 def test_the_backstop_still_fires_for_a_member_that_never_delivers(

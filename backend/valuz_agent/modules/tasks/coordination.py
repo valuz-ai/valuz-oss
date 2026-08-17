@@ -184,6 +184,11 @@ class CoordinationService:
         awaiting_user_break = False
         pending_probe: list[dict[str, Any]] = []
         slices_waited = 0
+        # Keys whose kernel session was already seen stopped in an EARLIER
+        # slice. Loop-local on purpose: it is one wait's bookkeeping, and the
+        # last thing this module needs is another dict that outlives what it
+        # describes.
+        seen_terminal: set[str] = set()
 
         while True:
             if mode == "all" and target and target.issubset(collected.keys()):
@@ -230,32 +235,41 @@ class CoordinationService:
             msg = durable[0] if durable else None
             if msg is None:
                 slices_waited += 1
-                # Let the REAL delivery win the first slice. The backstop reads
-                # durable state, so it sees a member as finished the instant its
-                # kernel session goes terminal — while that member is still
-                # inside ``notify_lead_member_idle`` collecting its manifest,
-                # which scans the run directory and is not fast. Synthesizing
-                # there does not just duplicate work: the lead reviews the
-                # synthesized result and moves on, and the real ``member_done``
-                # then lands in a mailbox nobody is draining. It sits there until
-                # the turn ends and wakes the lead for a member it already
-                # handled — an extra model turn per member, on a task that is
-                # often already complete. Measured on qa: 2 members, 2 wasted
-                # turns, both after ``task_completed``.
+                # Let the REAL delivery win. The backstop reads durable state,
+                # so it sees a member as finished the instant its kernel session
+                # goes terminal — while that member is still inside
+                # ``notify_lead_member_idle`` scanning its run directory.
+                # Synthesizing there does not just duplicate work: the lead
+                # reviews the synthesized result and moves on, and the real
+                # ``member_done`` lands in a mailbox nobody is draining.
                 #
-                # One slice of grace covers manifest collection in the normal
-                # case. A member that genuinely died without delivering is still
-                # caught, just one slice later — which is what a backstop is for.
-                if slices_waited > 1:
-                    pending_now = (target - set(collected.keys())) if target else set()
-                    collected.update(
-                        await member_probe.heartbeat_pending(
-                            task_id=task_id,
-                            project_id=project_id,
-                            pending_keys=pending_now,
-                            user_id=user_id,
-                        )
+                # The grace for that is now counted PER MEMBER — one slice from
+                # the pass that first sees a given key stop. It used to be one
+                # slice from the start of the whole wait, which is not the same
+                # thing at all: a lead that dispatches and then waits minutes
+                # has burned the grace ~25 slices before its first member even
+                # finishes, so the backstop won every race. Measured in
+                # production: 2 of 3 members settled by the backstop 1.7s and
+                # 2.6s after finishing, their own reports arriving later and
+                # dropped as duplicates — with WORSE data, because the backstop
+                # attributed 29 and 31 artifacts to them (files from three
+                # earlier days, and each other's output).
+                #
+                # A member that genuinely died without delivering is still
+                # caught, one slice after it stops — which is what a backstop
+                # is for.
+                pending_now = (target - set(collected.keys())) if target else set()
+                if pending_now:
+                    beat = await member_probe.heartbeat_pending(
+                        task_id=task_id,
+                        project_id=project_id,
+                        pending_keys=pending_now,
+                        user_id=user_id,
+                        # Only settle what we already saw stop LAST time round.
+                        settle_keys=pending_now & seen_terminal,
                     )
+                    collected.update(beat.settled)
+                    seen_terminal |= beat.terminal
                 # Parked-member probe: a member sitting on an AskUserQuestion
                 # keeps its kernel session ``running``, so from here it is
                 # indistinguishable from a long tool call — unless we ask the
@@ -489,9 +503,15 @@ class CoordinationService:
         pending = {n.key for n in TaskPlan.from_dict(row.plan).nodes if n.status == "in_progress"}
         if not pending:
             return []
-        collected = await member_probe.heartbeat_pending(
-            task_id=task_id, project_id=project_id, pending_keys=pending, user_id=user_id
-        )
+        # No ``settle_keys`` here: between turns there is no in-turn delivery to
+        # lose a race to, and a member that crashed without reporting is exactly
+        # what this call exists to find. The in-turn wait is the one that has to
+        # hold back.
+        collected = (
+            await member_probe.heartbeat_pending(
+                task_id=task_id, project_id=project_id, pending_keys=pending, user_id=user_id
+            )
+        ).settled
         if not collected:
             return 0
         lead = pick_lead_run(await self._runs(user_id, task_id))
