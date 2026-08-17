@@ -111,7 +111,9 @@ export const AgentsPage = () => {
   const navigate = useNavigate();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
-  const [projectMembers, setProjectMembers] = useState<ProjectAgentMember[]>([]);
+  const [projectMembers, setProjectMembers] = useState<ProjectAgentMember[]>(
+    [],
+  );
   const [loading, setLoading] = useState(true);
   const [activeSlug, setActiveSlug] = useState<string | null>(null);
   const [activeProjectMemberKey, setActiveProjectMemberKey] = useState<
@@ -173,7 +175,9 @@ export const AgentsPage = () => {
         agentsApi.listAgents(),
         projectsApi.list(),
       ]);
-      const projectRows = projectRes.projects.filter((w) => w.kind === "project");
+      const projectRows = projectRes.projects.filter(
+        (w) => w.kind === "project",
+      );
       const agentsBySlug = new Map(agentRes.agents.map((a) => [a.slug, a]));
       const memberResults = await Promise.all(
         projectRows.map(async (project) => {
@@ -291,9 +295,7 @@ export const AgentsPage = () => {
   // selection if it still exists, otherwise fall back to the first agent in
   // the active tab (then any agent at all).
   const currentAgent =
-    localAgents.find((a) => a.slug === activeSlug) ??
-    localAgents[0] ??
-    null;
+    localAgents.find((a) => a.slug === activeSlug) ?? localAgents[0] ?? null;
   const effectiveActiveSlug = currentAgent?.slug ?? null;
   const effectiveProjectMemberKey =
     activeProjectMemberKey ??
@@ -441,14 +443,7 @@ export const AgentsPage = () => {
         </div>
       );
     },
-    [
-      agentIcons,
-      checked,
-      deploymentCountBySlug,
-      openCopy,
-      selecting,
-      t,
-    ],
+    [agentIcons, checked, deploymentCountBySlug, openCopy, selecting, t],
   );
 
   /* -- Render -- */
@@ -456,11 +451,13 @@ export const AgentsPage = () => {
   return (
     <div className="relative flex h-full flex-col">
       {/* Page header -- title left, count badge + add button right. */}
-      <header className="flex h-12 shrink-0 items-center gap-2 px-5">
-        <span className="shrink-0 whitespace-nowrap text-base font-semibold text-ink-heading">
-          {t("agent.title")}
-        </span>
-        <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
+      <header className="flex shrink-0 items-center justify-between gap-4 h-15 px-5">
+        <div className="flex min-w-0 flex-col justify-center">
+          <span className="text-base font-semibold leading-5 text-ink-heading">
+            {t("agent.title")}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-brand transition-colors hover:bg-brand-light/60 hover:text-brand"
@@ -511,7 +508,9 @@ export const AgentsPage = () => {
                 <Plus className="h-4 w-4" />
                 {t("agent.createAgent" as Parameters<typeof t>[0])}
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => importInputRef.current?.click()}>
+              <DropdownMenuItem
+                onSelect={() => importInputRef.current?.click()}
+              >
                 <Download className="h-4 w-4" />
                 {t("agent.pack.import" as Parameters<typeof t>[0])}
               </DropdownMenuItem>
@@ -726,9 +725,7 @@ export const AgentsPage = () => {
             {visibleAgents.length <= AGENT_MARKETPLACE_GUIDE_MAX_COUNT && (
               <button
                 type="button"
-                onClick={() =>
-                  navigate("/marketplace?tab=agents&from=agents")
-                }
+                onClick={() => navigate("/marketplace?tab=agents&from=agents")}
                 className="mt-5 flex w-full items-center gap-2 border-t border-surface-border px-1 pt-4 text-left text-xs font-medium text-ink-body transition-colors hover:text-brand"
               >
                 <Store className="h-4 w-4 shrink-0 text-brand" />
@@ -791,7 +788,9 @@ export const AgentsPage = () => {
               type="button"
               onClick={toggleSelecting}
               className="flex h-6 w-6 items-center justify-center rounded-md text-ink-meta transition-colors hover:bg-surface-soft hover:text-ink-body"
-              aria-label={t("agent.pack.cancelSelect" as Parameters<typeof t>[0])}
+              aria-label={t(
+                "agent.pack.cancelSelect" as Parameters<typeof t>[0],
+              )}
             >
               <X className="h-3.5 w-3.5" />
             </button>

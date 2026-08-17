@@ -1,13 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { initI18n } from "@valuz/shared/i18n";
 import { pluginsApi } from "@valuz/core";
 import type { AgentPluginView } from "@valuz/core";
 import { PluginsPage } from "./PluginsPage";
-
-let latestRightPanel: ReactNode | null = null;
 
 vi.mock("react-router-dom", async () => {
   const actual =
@@ -17,9 +14,7 @@ vi.mock("react-router-dom", async () => {
   return {
     ...actual,
     useOutletContext: () => ({
-      setRightPanel: (node: ReactNode | null) => {
-        latestRightPanel = node;
-      },
+      setRightPanel: vi.fn(),
       setHeader: vi.fn(),
       setHeaderClassName: vi.fn(),
       setHideHeader: vi.fn(),
@@ -76,7 +71,6 @@ const plugin = (overrides: Partial<AgentPluginView>): AgentPluginView => ({
 });
 
 function renderPage() {
-  latestRightPanel = null;
   return render(
     <MemoryRouter initialEntries={["/plugins"]}>
       <PluginsPage />
@@ -103,7 +97,7 @@ describe("PluginsPage", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("lists installed plugins with version, composition and member counts, and hands the detail to the right panel", async () => {
+  it("lists installed plugins with version + composition and renders the selected detail inline", async () => {
     vi.spyOn(pluginsApi, "list").mockResolvedValue({
       items: [
         plugin({}),
@@ -125,20 +119,18 @@ describe("PluginsPage", () => {
     const cards = await screen.findAllByTestId("plugin-list-card");
     expect(cards).toHaveLength(2);
     expect(cards[0].textContent).toContain("equity-research");
-    expect(cards[0].textContent).toContain("v1.2.0");
+    // The compact row mirrors ConnectorListItem density: name + composition
+    // chip + switch. The version lives in the detail panel, not the row.
     expect(cards[0].textContent).toContain("含连接器");
-    expect(cards[0].textContent).toContain("1 技能 · 1 连接器");
     expect(cards[1].textContent).toContain("writing-kit");
     expect(cards[1].textContent).toContain("技能套件");
-    expect(cards[1].textContent).toContain("4 技能 · 0 连接器");
-    // First plugin is selected by default → its detail panel is mounted.
+    // First plugin is selected by default → its detail renders inline in the
+    // page (no longer pushed into the shared right panel).
     await waitFor(() => {
-      expect(latestRightPanel).not.toBeNull();
+      expect(document.body.textContent).toContain("Comps");
     });
-    const { container } = render(<>{latestRightPanel}</>);
-    expect(container.textContent).toContain("Comps");
-    expect(container.textContent).toContain("Valuz Stock");
-    expect(container.textContent).toContain("MIT");
+    expect(document.body.textContent).toContain("Valuz Stock");
+    expect(document.body.textContent).toContain("MIT");
   });
 
   it("toggles a plugin off through the list switch", async () => {
@@ -147,12 +139,16 @@ describe("PluginsPage", () => {
       .spyOn(pluginsApi, "disable")
       .mockResolvedValue(plugin({ enabled: false }));
     renderPage();
-    const toggle = await screen.findByRole("switch", { name: "停用" });
-    fireEvent.click(toggle);
+    // Two switches now carry the enable label (compact list row + inline
+    // detail panel); the list row is the first.
+    const toggles = await screen.findAllByRole("switch", { name: "停用" });
+    fireEvent.click(toggles[0]);
     await waitFor(() => {
       expect(disableSpy).toHaveBeenCalledWith("p1");
     });
-    expect(await screen.findByRole("switch", { name: "启用" })).toBeTruthy();
+    expect(
+      (await screen.findAllByRole("switch", { name: "启用" }))[0],
+    ).toBeTruthy();
   });
 
   it("filters the list by the search box", async () => {
@@ -171,6 +167,10 @@ describe("PluginsPage", () => {
     await waitFor(() => {
       expect(screen.getAllByTestId("plugin-list-card")).toHaveLength(1);
     });
-    expect(screen.getByText("writing-kit")).toBeTruthy();
+    // The name now shows in both the list row and the inline detail, so assert
+    // it via the single remaining list card rather than a document-wide query.
+    expect(screen.getByTestId("plugin-list-card").textContent).toContain(
+      "writing-kit",
+    );
   });
 });

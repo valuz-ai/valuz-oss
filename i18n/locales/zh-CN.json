@@ -3112,5 +3112,14 @@
     "loadMore": "加载更多",
     "kindCompleted": "已完成",
     "notifCompletedTitle": "任务已完成：{task}"
+  },
+  "resource": {
+    "title": "资源",
+    "tabPlugin": "插件",
+    "tabSkill": "技能",
+    "tabConnector": "连接器",
+    "comingSoon": "即将接入",
+    "comingSoonDesc": "该资源类型将在后续步骤接入本页面。",
+    "emptyDetail": "从左侧选择一项查看详情"
   }
 }

@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { Package, Plus, Puzzle, Search, Store } from "lucide-react";
+import {
+  FileText,
+  Link2,
+  Package,
+  Plus,
+  Puzzle,
+  Search,
+  Sparkles,
+  Store,
+  Upload,
+} from "lucide-react";
 import {
   Badge,
   Button,
-  Card,
-  CardContent,
   DeleteConfirmDialog,
   Dialog,
   DialogContent,
@@ -14,6 +22,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   EmptyState,
   PageLoader,
   Switch,
@@ -25,16 +37,13 @@ import type {
   AgentPluginUninstallResult,
   AgentPluginView,
 } from "@valuz/core";
-import {
-  ApiError,
-  pluginsApi,
-  usePanelStore,
-  useTranslation,
-} from "@valuz/core";
+import { ApiError, pluginsApi, useTranslation } from "@valuz/core";
 import { useProjectOutlet } from "@valuz/app/layout";
 import { PluginConflictDialog } from "../components/plugins/PluginConflictDialog";
 import { PluginDetailPanel } from "../components/plugins/PluginDetailPanel";
 import { PluginInstallDialog } from "../components/plugins/PluginInstallDialog";
+import { SkillsPane, type SkillAddMode } from "./SkillsPane";
+import { ConnectorsPane, type ConnectorAddModeOrNull } from "./ConnectorsPane";
 import type { PluginMemberRow } from "../components/plugins/PluginMembersList";
 import { PLUGIN_COMPOSITION_LABEL_KEYS } from "../components/plugins/plugin-format";
 import { downloadBlob } from "../components/pack-filename";
@@ -42,11 +51,22 @@ import { tintFor } from "../components/marketplace-ui";
 
 type Busy = "update" | "uninstall" | "export" | "toggle" | null;
 
+/** The three resource kinds this page hosts. Plugin is wired; skill and
+ *  connector are folded in over the next steps (their libraries stay put). */
+type ResourceType = "plugin" | "skill" | "connector";
+
+const RESOURCE_TABS: { id: ResourceType; labelKey: string }[] = [
+  { id: "plugin", labelKey: "resource.tabPlugin" },
+  { id: "skill", labelKey: "resource.tabSkill" },
+  { id: "connector", labelKey: "resource.tabConnector" },
+];
+
 /**
- * Installed Agent Plugins library — narrow list on the left (name, version,
- * composition, member counts, plugin-level switch), detail in the project's
- * right panel (manifest, members, update / export / uninstall). Mirrors the
- * Skills / Connectors library layout.
+ * Resource center — one self-contained page (no global right panel, no
+ * inverted 345/aside split): a full-width header switches between plugin /
+ * skill / connector, and the list + detail below switch with it. Mirrors the
+ * Knowledge Base's "wide main owns its own layout" shape. Step 1 wires the
+ * plugin kind; skill and connector are folded into the same shell next.
  */
 export const PluginsPage = () => {
   const { t } = useTranslation();
@@ -58,9 +78,9 @@ export const PluginsPage = () => {
     setAsideClassName,
     setMainClassName,
   } = useProjectOutlet();
-  const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
   const [searchParams] = useSearchParams();
 
+  const [resourceType, setResourceType] = useState<ResourceType>("plugin");
   const [plugins, setPlugins] = useState<AgentPluginView[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeId, setActiveId] = useState<string | null>(() =>
@@ -69,6 +89,11 @@ export const PluginsPage = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
+  // Add affordances for the skill / connector panes, driven from the
+  // shared header dropdowns (null = closed).
+  const [skillAddMode, setSkillAddMode] = useState<SkillAddMode>(null);
+  const [connectorAddMode, setConnectorAddMode] =
+    useState<ConnectorAddModeOrNull>(null);
   const [busy, setBusy] = useState<Busy>(null);
   const [uninstallTarget, setUninstallTarget] =
     useState<AgentPluginView | null>(null);
@@ -107,26 +132,29 @@ export const PluginsPage = () => {
     };
   }, [loadPlugins]);
 
-  // Same inverted proportions as the Skills / Connectors libraries: fixed
-  // narrow list, wide detail aside; restored on unmount.
+  // Self-contained: hide the layout header and keep the default full-width
+  // main. Crucially we never call ``setRightPanel`` — the layout only renders
+  // the shared aside when a right panel is set, so the detail lives inside this
+  // page's own column instead of the global right panel. Reset on unmount.
   useEffect(() => {
     setHideHeader(true);
-    setMainClassName("w-[345px] flex-none");
-    setAsideClassName("flex-1 w-auto");
+    setMainClassName(undefined);
+    setAsideClassName(undefined);
+    setRightPanel(null);
     return () => {
       setHideHeader(false);
       setHeader(null);
       setMainClassName(undefined);
       setAsideClassName(undefined);
+      setRightPanel(null);
     };
-  }, [setHideHeader, setHeader, setMainClassName, setAsideClassName]);
-
-  const didInitRightPanel = useRef(false);
-  useEffect(() => {
-    if (didInitRightPanel.current) return;
-    didInitRightPanel.current = true;
-    panelSetCollapsed(false);
-  }, [panelSetCollapsed]);
+  }, [
+    setHideHeader,
+    setHeader,
+    setMainClassName,
+    setAsideClassName,
+    setRightPanel,
+  ]);
 
   /* ── Derived state ─────────────────────────────────────────── */
 
@@ -276,143 +304,284 @@ export const PluginsPage = () => {
     }
   };
 
-  /* ── Right panel ───────────────────────────────────────────── */
-
-  useEffect(() => {
-    if (!current) {
-      setRightPanel(null);
-      return;
-    }
-    setRightPanel(
-      <PluginDetailPanel
-        key={current.id}
-        plugin={current}
-        busy={busy}
-        onToggleEnabled={(enabled) => void handleToggle(current, enabled)}
-        onUpdate={() => void handleUpdate(current)}
-        onUninstall={() => setUninstallTarget(current)}
-        onExport={() => void handleExport(current)}
-        onOpenMember={openMember}
-      />,
-    );
-    return () => {
-      setRightPanel(null);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, busy, setRightPanel]);
-
   /* ── Render ────────────────────────────────────────────────── */
+
+  const isPlugin = resourceType === "plugin";
+  const marketHref =
+    resourceType === "skill"
+      ? "/marketplace?tab=skills&from=skills"
+      : resourceType === "connector"
+        ? "/marketplace?tab=connectors&from=connectors"
+        : "/marketplace?tab=plugins&from=plugins";
+  const searchPlaceholder =
+    resourceType === "skill"
+      ? t("skill.searchPlaceholder")
+      : resourceType === "connector"
+        ? t("connector.searchPlaceholder")
+        : t("plugin.searchPlaceholder");
+
+  // Switching types resets the shared search so a stale query never
+  // filters the newly-shown list.
+  const switchType = (next: ResourceType) => {
+    setResourceType(next);
+    setSearchQuery("");
+    setSearchOpen(false);
+    setSkillAddMode(null);
+    setConnectorAddMode(null);
+  };
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-2 px-5">
-        <span className="shrink-0 whitespace-nowrap text-base font-semibold text-ink-heading">
-          {t("plugin.title")}
-        </span>
-        <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
-          <button
-            type="button"
-            className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-brand transition-colors hover:bg-brand-light/60 hover:text-brand"
-            onClick={() => navigate("/marketplace?tab=plugins&from=plugins")}
-          >
-            <Store className="h-3.5 w-3.5" />
-            {t("marketplace.title")}
-          </button>
-          {searchOpen ? (
-            <input
-              type="text"
-              autoFocus
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onBlur={() => {
-                if (!searchQuery) setSearchOpen(false);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  setSearchQuery("");
-                  setSearchOpen(false);
-                }
-              }}
-              placeholder={t("plugin.searchPlaceholder")}
-              className="h-7 w-full min-w-0 max-w-[200px] rounded-none border-0 border-b border-brand bg-transparent px-1 text-xs text-ink-heading placeholder:text-ink-meta outline-none"
-            />
-          ) : null}
-          <button
-            type="button"
-            aria-label={t("common.search")}
-            onClick={() => setSearchOpen((o) => !o)}
-            className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-ink-meta transition-colors hover:bg-surface-soft hover:text-ink-body"
-          >
-            <Search className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            aria-label={t("plugin.install")}
-            title={t("plugin.install")}
-            onClick={() => setInstallOpen(true)}
-            className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-ink-meta transition-colors hover:bg-surface-soft hover:text-ink-body"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
+      {/* Full-width header: type switch + search + install/market (plugin). */}
+      <div className="shrink-0">
+        {/* Title row — title + description, no divider under it (mirrors
+            the Knowledge Base header). */}
+        <div className="flex min-w-0 items-center h-15 px-5">
+          <span className="text-base font-semibold leading-5 text-ink-heading">
+            {t("plugin.title")}
+          </span>
         </div>
-      </header>
 
-      {loading ? (
-        <PageLoader logo />
-      ) : (
-        <div className="flex-1 overflow-y-auto py-4">
-          <div className="mb-4 space-y-2 px-4">
-            {filtered.length === 0 ? (
-              <EmptyState
-                className="py-16"
-                icon={<Puzzle />}
-                title={
-                  plugins.length === 0
-                    ? t("plugin.emptyTitle")
-                    : t("plugin.noMatch")
-                }
-                message={
-                  plugins.length === 0 ? t("plugin.emptyDesc") : undefined
-                }
-                action={
-                  plugins.length === 0 ? (
-                    <div className="flex flex-wrap justify-center gap-2">
-                      <Button
-                        variant="default"
-                        size="sm"
-                        onClick={() =>
-                          navigate("/marketplace?tab=plugins&from=plugins")
-                        }
-                      >
-                        <Store className="h-3 w-3" />
-                        {t("plugin.browseMarket")}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setInstallOpen(true)}
-                      >
-                        <Plus className="h-3 w-3" />
-                        {t("plugin.install")}
-                      </Button>
-                    </div>
-                  ) : undefined
-                }
+        {/* Tab row: underline tabs (left) + actions (right). The divider
+            sits under this row, and the active tab's brand bar rides it. */}
+        <div className="flex items-center gap-2 border-b border-surface-border px-5">
+          <nav
+            className="flex items-center"
+            role="tablist"
+            aria-label={t("plugin.title")}
+          >
+            {RESOURCE_TABS.map((tab) => {
+              const active = resourceType === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => switchType(tab.id)}
+                  className={cn(
+                    "relative px-3.5 py-2.5 text-sm font-medium transition-colors",
+                    active
+                      ? "text-ink-heading after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:bg-brand"
+                      : "text-ink-meta hover:text-ink-body",
+                  )}
+                >
+                  {t(tab.labelKey as Parameters<typeof t>[0])}
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
+            <button
+              type="button"
+              className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-brand transition-colors hover:bg-brand-light/60 hover:text-brand"
+              onClick={() => navigate(marketHref)}
+            >
+              <Store className="h-3.5 w-3.5" />
+              {t("marketplace.title")}
+            </button>
+            {searchOpen ? (
+              <input
+                type="text"
+                autoFocus
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onBlur={() => {
+                  if (!searchQuery) setSearchOpen(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setSearchQuery("");
+                    setSearchOpen(false);
+                  }
+                }}
+                placeholder={searchPlaceholder}
+                className="h-7 w-full min-w-0 max-w-[200px] rounded-none border-0 border-b border-brand bg-transparent px-1 text-xs text-ink-heading placeholder:text-ink-meta outline-none"
               />
+            ) : null}
+            <button
+              type="button"
+              aria-label={t("common.search")}
+              onClick={() => setSearchOpen((o) => !o)}
+              className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-ink-meta transition-colors hover:bg-surface-soft hover:text-ink-body"
+            >
+              <Search className="h-3.5 w-3.5" />
+            </button>
+            {isPlugin ? (
+              <button
+                type="button"
+                aria-label={t("plugin.install")}
+                title={t("plugin.install")}
+                onClick={() => setInstallOpen(true)}
+                className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-ink-meta transition-colors hover:bg-surface-soft hover:text-ink-body"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            ) : resourceType === "skill" ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={t("skill.addBtn" as Parameters<typeof t>[0])}
+                    className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-ink-meta transition-colors hover:bg-surface-soft hover:text-ink-body"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[160px]">
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      navigate(
+                        "/conversation/new?mode=skill-creator&skill_kind=skills_library",
+                      )
+                    }
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    {t("skill.aiCreate" as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setSkillAddMode("link")}>
+                    <FileText className="h-4 w-4" />
+                    {t("skill.linkImportShort" as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setSkillAddMode("upload")}>
+                    <Upload className="h-4 w-4" />
+                    {t("skill.upload" as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             ) : (
-              filtered.map((plugin) => (
-                <PluginListCard
-                  key={plugin.id}
-                  plugin={plugin}
-                  active={current?.id === plugin.id}
-                  onClick={() => setActiveId(plugin.id)}
-                  onToggle={(enabled) => void handleToggle(plugin, enabled)}
-                />
-              ))
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={t(
+                      "connector.addMenuTitle" as Parameters<typeof t>[0],
+                    )}
+                    className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-ink-meta transition-colors hover:bg-surface-soft hover:text-ink-body"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[180px]">
+                  <DropdownMenuItem
+                    onSelect={() => setConnectorAddMode("http")}
+                  >
+                    <Link2 className="h-4 w-4" />
+                    {t("connector.addHttp" as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => setConnectorAddMode("stdio")}
+                  >
+                    <Plus className="h-4 w-4" />
+                    {t("connector.addStdio" as Parameters<typeof t>[0])}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
           </div>
         </div>
-      )}
+      </div>
+
+      {/* Body: list | detail. Plugin renders its two columns inline; skill
+          and connector delegate to their own self-contained panes. */}
+      <div className="flex min-h-0 flex-1">
+        {isPlugin ? (
+          <>
+            <div className="w-[345px] shrink-0 overflow-y-auto border-r border-surface-border">
+              {loading ? (
+                <PageLoader logo className="py-16" />
+              ) : filtered.length === 0 ? (
+                <div className="flex justify-center pt-24">
+                  <EmptyState
+                    icon={<Puzzle />}
+                    title={
+                      plugins.length === 0
+                        ? t("plugin.emptyTitle")
+                        : t("plugin.noMatch")
+                    }
+                    message={
+                      plugins.length === 0 ? t("plugin.emptyDesc") : undefined
+                    }
+                    action={
+                      plugins.length === 0 ? (
+                        <div className="flex flex-wrap justify-center gap-2">
+                          <Button
+                            variant="default"
+                            size="sm"
+                            onClick={() =>
+                              navigate("/marketplace?tab=plugins&from=plugins")
+                            }
+                          >
+                            <Store className="h-3 w-3" />
+                            {t("plugin.browseMarket")}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setInstallOpen(true)}
+                          >
+                            <Plus className="h-3 w-3" />
+                            {t("plugin.install")}
+                          </Button>
+                        </div>
+                      ) : undefined
+                    }
+                  />
+                </div>
+              ) : (
+                <div className="pt-6 pb-2">
+                  {filtered.map((plugin) => (
+                    <PluginRow
+                      key={plugin.id}
+                      plugin={plugin}
+                      active={current?.id === plugin.id}
+                      onClick={() => setActiveId(plugin.id)}
+                      onToggle={(enabled) => void handleToggle(plugin, enabled)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="min-w-0 flex-1">
+              {current ? (
+                <PluginDetailPanel
+                  key={current.id}
+                  plugin={current}
+                  busy={busy}
+                  onToggleEnabled={(enabled) =>
+                    void handleToggle(current, enabled)
+                  }
+                  onUpdate={() => void handleUpdate(current)}
+                  onUninstall={() => setUninstallTarget(current)}
+                  onExport={() => void handleExport(current)}
+                  onOpenMember={openMember}
+                />
+              ) : (
+                <div className="flex justify-center pt-24">
+                  <EmptyState
+                    icon={<Puzzle />}
+                    message={t("resource.emptyDetail")}
+                  />
+                </div>
+              )}
+            </div>
+          </>
+        ) : resourceType === "skill" ? (
+          <SkillsPane
+            query={searchQuery}
+            addMode={skillAddMode}
+            onAddModeChange={setSkillAddMode}
+          />
+        ) : (
+          <ConnectorsPane
+            query={searchQuery}
+            addMode={connectorAddMode}
+            onAddModeChange={setConnectorAddMode}
+          />
+        )}
+      </div>
 
       <PluginInstallDialog
         open={installOpen}
@@ -465,9 +634,9 @@ export const PluginsPage = () => {
   );
 };
 
-/* ── List card ─────────────────────────────────────────────── */
+/* ── Compact list row (mirrors ConnectorListItem density) ──── */
 
-function PluginListCard({
+function PluginRow({
   plugin,
   active,
   onClick,
@@ -481,77 +650,61 @@ function PluginListCard({
   const { t } = useTranslation();
   const tint = tintFor(plugin.name);
   return (
-    <Card
-      onClick={onClick}
+    <div
+      role="option"
+      aria-selected={active}
       data-testid="plugin-list-card"
+      onClick={onClick}
       className={cn(
-        "cursor-default rounded-lg border-surface-border bg-surface py-0 shadow-xs transition-[border-color,box-shadow] select-none",
-        active ? "border-brand bg-surface shadow-sm" : "card-interactive",
+        "mx-4 flex cursor-pointer select-none items-center gap-2.5 rounded-lg px-2 py-2 transition-colors",
+        active ? "bg-brand-light/60" : "hover:bg-surface-soft",
         !plugin.enabled && "opacity-70",
       )}
     >
-      <CardContent className="flex items-start gap-2 px-4 py-3">
-        <div
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-          style={{ background: tint.bg, color: tint.fg }}
-        >
-          <Package className="h-[18px] w-[18px]" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="mb-0.5 flex flex-wrap items-center gap-1.5">
-            <span className="min-w-0 truncate text-sm font-medium text-ink-heading">
-              {plugin.name}
-            </span>
-            {plugin.version ? (
-              <Badge
-                variant="metaNeutral"
-                className="h-4 px-1 font-mono text-2xs text-ink-meta"
-              >
-                v{plugin.version}
-              </Badge>
-            ) : null}
-            <Badge variant="metaOutline" className="h-4 px-1 text-2xs">
-              {t(
-                PLUGIN_COMPOSITION_LABEL_KEYS[plugin.composition] as Parameters<
-                  typeof t
-                >[0],
-              )}
-            </Badge>
-            {plugin.update_available ? (
-              <Badge variant="brand" className="h-4 px-1 text-2xs">
-                {t("plugin.updateAvailable")}
-              </Badge>
-            ) : null}
-          </div>
-          <div className="mb-1 font-mono text-2xs text-ink-meta">
-            {t("marketplace.pluginMembers", {
-              skills: plugin.skill_count,
-              connectors: plugin.connector_count,
-            })}
-          </div>
-          {plugin.description ? (
-            <p className="line-clamp-2 text-xs leading-relaxed text-ink-body">
-              {plugin.description}
-            </p>
-          ) : null}
-        </div>
-        <div
-          className="flex shrink-0 items-center"
-          // The switch lives inside the card's click target; stop propagation
-          // so toggling never changes the selection.
-          onClick={(e) => e.stopPropagation()}
-        >
-          <Switch
-            size="sm"
-            checked={plugin.enabled}
-            onCheckedChange={onToggle}
-            aria-label={
-              plugin.enabled ? t("plugin.disable") : t("plugin.enable")
-            }
-          />
-        </div>
-      </CardContent>
-    </Card>
+      <div
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
+        style={{ background: tint.bg, color: tint.fg }}
+      >
+        <Package className="h-4 w-4" />
+      </div>
+      <span className="min-w-0 flex-1 truncate text-sm text-ink-heading">
+        {plugin.name}
+      </span>
+      {plugin.update_available ? (
+        <span
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand"
+          title={t("plugin.updateAvailable")}
+        />
+      ) : null}
+      <Badge
+        variant="metaOutline"
+        className="h-4 shrink-0 px-1 text-2xs"
+        title={t(
+          PLUGIN_COMPOSITION_LABEL_KEYS[plugin.composition] as Parameters<
+            typeof t
+          >[0],
+        )}
+      >
+        {t(
+          PLUGIN_COMPOSITION_LABEL_KEYS[plugin.composition] as Parameters<
+            typeof t
+          >[0],
+        )}
+      </Badge>
+      <div
+        className="shrink-0"
+        // The switch lives inside the row's click target; stop propagation so
+        // toggling never changes the selection.
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Switch
+          size="sm"
+          checked={plugin.enabled}
+          onCheckedChange={onToggle}
+          aria-label={plugin.enabled ? t("plugin.disable") : t("plugin.enable")}
+        />
+      </div>
+    </div>
   );
 }
 

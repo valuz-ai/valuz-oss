@@ -227,7 +227,6 @@ export const AutomationPage = () => {
     () => (
       <PageHeader
         title={t(k("automation.title"))}
-        description={t(k("automation.subtitle"))}
         action={
           <div className="flex shrink-0 items-center gap-2">
             <div className="hidden h-8 items-center gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 text-xs md:flex">
@@ -266,7 +265,7 @@ export const AutomationPage = () => {
 
   useEffect(() => {
     setHeader(pageHeader);
-    setHeaderClassName("h-auto px-5 py-5");
+    setHeaderClassName("h-15 px-5");
     setContentInnerClassName("p-0");
     return () => {
       setHeader(null);
