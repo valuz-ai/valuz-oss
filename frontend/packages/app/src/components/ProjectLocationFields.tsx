@@ -89,6 +89,12 @@ export interface ProjectExecutionLocation {
    */
   isRemoteTarget: boolean;
   /**
+   * True when the effective target supplies its own directory chooser
+   * (remote desktop) — the directory field is then usable even where the
+   * platform itself cannot pick local folders (browser builds).
+   */
+  hasOwnDirectoryPicker: boolean;
+  /**
    * Pick a directory FOR the effective target: its own chooser when it has
    * one (remote desktop), else the platform's native picker. ``null`` when
    * cancelled / unavailable.
@@ -127,6 +133,8 @@ export function useProjectExecutionLocation(): ProjectExecutionLocation {
       : (targets.find((target) => target.id === targetId) ??
         getDefaultExecutionTarget());
   const isRemoteTarget = targetUsesManagedCwd(effectiveTarget);
+  const hasOwnDirectoryPicker =
+    typeof effectiveTarget?.selectDirectory === "function";
 
   const selectDirectory = useCallback(async () => {
     const own = effectiveTarget?.selectDirectory;
@@ -214,6 +222,7 @@ export function useProjectExecutionLocation(): ProjectExecutionLocation {
     setTargetId,
     effectiveTarget,
     isRemoteTarget,
+    hasOwnDirectoryPicker,
     selectDirectory,
     initialFiles,
     pickInitialFolder,

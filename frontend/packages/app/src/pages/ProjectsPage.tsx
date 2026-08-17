@@ -62,10 +62,13 @@ export const ProjectsPage = ({
   const importInputRef = useRef<HTMLInputElement>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importOpen, setImportOpen] = useState(false);
-  const managedDirectory = directoryFieldMode === "managed";
   // Execution location for the create dialog (multi-target editions; inert
   // no-target state on single-backend builds).
   const execLocation = useProjectExecutionLocation();
+  // A target with its own directory chooser (remote desktop) keeps the
+  // directory field even where this platform cannot pick local folders.
+  const managedDirectory =
+    directoryFieldMode === "managed" && !execLocation.hasOwnDirectoryPicker;
   // Initial members for the create dialog (shared with the sidebar entry).
   // Source candidates from the chosen target's backend so a cloud-bound
   // project only lists cloud-deployable agents.

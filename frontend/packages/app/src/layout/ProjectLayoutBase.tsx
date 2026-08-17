@@ -249,6 +249,11 @@ export function ProjectLayoutBase({
   // Execution location for the create dialog (multi-target editions; inert
   // no-target state on single-backend builds).
   const execLocation = useProjectExecutionLocation();
+  // A target with its own directory chooser (remote desktop) turns the
+  // directory field into a picker even on platforms that cannot pick local
+  // folders themselves (browser builds).
+  const effectiveDirectoryFieldMode: DirectoryFieldMode =
+    execLocation.hasOwnDirectoryPicker ? "picker" : directoryFieldMode;
   // Initial members for the create dialog (shared with the projects-page
   // entry). Source candidates from the chosen target's backend so a cloud-
   // bound project only lists cloud-deployable agents.
@@ -651,7 +656,7 @@ export function ProjectLayoutBase({
     // A remote execution target has no access to this machine's paths — the
     // backend allocates a managed cwd and the picked folder uploads after.
     const managed =
-      directoryFieldMode === "managed" || execLocation.isRemoteTarget;
+      effectiveDirectoryFieldMode === "managed" || execLocation.isRemoteTarget;
     if (!trimmedName || (!managed && !trimmedPath)) return;
     setCreateError("");
     try {
@@ -1154,7 +1159,7 @@ export function ProjectLayoutBase({
               createError ? (
                 <p className="text-xs text-destructive">{createError}</p>
               ) : null
-            ) : directoryFieldMode === "managed" ? (
+            ) : effectiveDirectoryFieldMode === "managed" ? (
               <div className="flex flex-col">
                 <label className="mb-[5px] text-xs font-medium text-foreground">
                   {t("project.projectDir")}
@@ -1174,7 +1179,7 @@ export function ProjectLayoutBase({
                   {t("project.projectDir")}
                 </label>
                 <div className="flex items-center gap-2">
-                  {directoryFieldMode === "picker" ? (
+                  {effectiveDirectoryFieldMode === "picker" ? (
                     <button
                       type="button"
                       className="flex h-8 flex-1 items-center rounded-lg border border-input bg-surface px-2.5 text-sm text-foreground transition-[border-color,box-shadow,color,background-color] hover:border-ring focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/20 focus-visible:outline-none"
@@ -1201,7 +1206,8 @@ export function ProjectLayoutBase({
                       className="flex-1"
                     />
                   )}
-                  {directoryFieldMode === "picker" || platform.isElectron ? (
+                  {effectiveDirectoryFieldMode === "picker" ||
+                  platform.isElectron ? (
                     <Button
                       type="button"
                       variant="outline"
@@ -1240,7 +1246,7 @@ export function ProjectLayoutBase({
               onClick={() => void handleCreateProject()}
               disabled={
                 !newName.trim() ||
-                (directoryFieldMode !== "managed" &&
+                (effectiveDirectoryFieldMode !== "managed" &&
                   !execLocation.isRemoteTarget &&
                   !newRootPath.trim())
               }
