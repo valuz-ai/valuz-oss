@@ -53,7 +53,7 @@ describe("HTML citation location", () => {
       "当前国内外科技盈利均保持高增长，同时整体盈利增速持续回升，财报季有望成为市场从估值消化切换至盈利驱动的拐点。";
     const doc = html(`<p>${shared}市场称其为“胜负手”。</p>`);
     const range = findHtmlQuoteRange(doc.body, {
-      exact: `${shared}市场称其为\"胜负手\"。`,
+      exact: `${shared}市场称其为"胜负手"。`,
     });
 
     const matched = range?.toString() ?? "";

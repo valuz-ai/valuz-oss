@@ -34,6 +34,11 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_S = 5.0
 GRACEFUL_EXIT_GRACE_S = 15.0
 
+# Win32 ``SYNCHRONIZE`` access right — the cheapest ``OpenProcess`` mask that
+# still proves the pid exists. A module constant, not a function local, so the
+# Windows-only branch below reads as the platform constant it is.
+_WIN32_SYNCHRONIZE = 0x00100000
+
 _task: asyncio.Task[None] | None = None
 
 
@@ -55,8 +60,7 @@ def parent_alive(pid: int) -> bool:
     if sys.platform == "win32":
         import ctypes
 
-        SYNCHRONIZE = 0x00100000
-        handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+        handle = ctypes.windll.kernel32.OpenProcess(_WIN32_SYNCHRONIZE, False, pid)
         if not handle:
             return False
         ctypes.windll.kernel32.CloseHandle(handle)
