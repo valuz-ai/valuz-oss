@@ -2076,20 +2076,10 @@ class ClaudeAgentRuntime:
             else:
                 merged.pop("CLAUDE_CODE_DISABLE_ADVISOR_TOOL", None)
             if session is not None:
-                # Tag gateway LLM requests with the valuz session context so the
-                # gateway can set session_id / session_title on ledger rows —
-                # same mechanism as deepagents (_session_gateway_headers).
+                # Tag gateway LLM requests with the session id so the gateway
+                # can stamp session_id on gateway_debit ledger rows.
                 # ANTHROPIC_CUSTOM_HEADERS format: "Name: Value" lines joined by "\n".
-                headers: dict[str, str] = {"X-Valuz-Session-Id": str(session.id)}
-                metadata = session.metadata if isinstance(session.metadata, dict) else {}
-                valuz = metadata.get("valuz")
-                if isinstance(valuz, dict):
-                    name = valuz.get("name")
-                    if isinstance(name, str) and name:
-                        headers["X-Valuz-Session-Title"] = name[:256]
-                merged["ANTHROPIC_CUSTOM_HEADERS"] = "\n".join(
-                    f"{k}: {v}" for k, v in headers.items()
-                )
+                merged["ANTHROPIC_CUSTOM_HEADERS"] = f"X-Valuz-Session-Id: {session.id}"
         else:
             # If a previous env carried a stale base_url (e.g. parent
             # shell exported one for an unrelated workflow), wipe it so
