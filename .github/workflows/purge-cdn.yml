@@ -1,0 +1,73 @@
+name: Purge CDN
+
+# Operational recovery for the live update feed.
+#
+# The release workflow purges the manifests it overwrites, but a purge can
+# still be missed — a cancelled job, a re-run of an older workflow version, or
+# a manifest restored by hand during a rollback. In those cases the origin is
+# already correct and only the CDN edge is stale, which no rebuild is needed to
+# fix. Rebuilding a platform to move one 500-byte file is 30 minutes for
+# nothing, and that gap is what forced a manual console purge after v0.4.2.
+
+on:
+  workflow_dispatch:
+    inputs:
+      paths:
+        description: >-
+          Space-separated CDN paths to purge, relative to the site root
+          (e.g. "oss/latest-mac.yml oss/latest.yml").
+        required: true
+        default: oss/latest-mac.yml
+      base:
+        description: CDN origin
+        required: false
+        default: https://files.valuz.cn
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Setup tccli
+        run: python3 -m pip install --quiet --disable-pip-version-check tccli
+
+      - name: Purge
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+          BASE: ${{ inputs.base }}
+          PATHS: ${{ inputs.paths }}
+        run: |
+          urls=()
+          for p in $PATHS; do
+            urls+=("${BASE%/}/${p#/}")
+          done
+          bash scripts/purge-cdn.sh "${urls[@]}"
+
+      # A purge that "succeeded" while the edge still serves the old bytes is
+      # the failure mode this whole workflow exists for, so check the URL the
+      # client actually reads rather than trusting the API's acknowledgement.
+      - name: Verify the edge is serving the new object
+        env:
+          BASE: ${{ inputs.base }}
+          PATHS: ${{ inputs.paths }}
+        run: |
+          sleep 20
+          rc=0
+          for p in $PATHS; do
+            url="${BASE%/}/${p#/}"
+            before=$(curl -sI --max-time 20 "$url" | grep -i '^etag:' | tr -d '\r')
+            fresh=$(curl -sI --max-time 20 "$url?cachebust=$RANDOM$RANDOM" | grep -i '^etag:' | tr -d '\r')
+            echo "$url"
+            echo "  edge:   ${before:-<no etag>}"
+            echo "  origin: ${fresh:-<no etag>}"
+            if [ -n "$before" ] && [ "$before" = "$fresh" ]; then
+              echo "  OK — edge matches origin"
+            else
+              echo "  STALE — edge has not picked up the new object yet"
+              rc=1
+            fi
+          done
+          exit $rc

@@ -173,6 +173,15 @@ jobs:
       - name: Setup coscli
         run: bash scripts/install-coscli.sh
 
+      # CDN purge is a different API surface from COS, so coscli cannot do it.
+      # shell: bash because the windows runner defaults to pwsh, and the
+      # interpreter is python3 everywhere except windows, where it is python.
+      - name: Setup tccli (CDN purge)
+        shell: bash
+        run: |
+          py=python3; command -v "$py" >/dev/null 2>&1 || py=python
+          "$py" -m pip install --quiet --disable-pip-version-check tccli
+
       - name: Upload to Tencent COS
         env:
           TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
@@ -334,6 +343,15 @@ jobs:
       - name: Setup coscli
         run: bash scripts/install-coscli.sh
 
+      # CDN purge is a different API surface from COS, so coscli cannot do it.
+      # shell: bash because the windows runner defaults to pwsh, and the
+      # interpreter is python3 everywhere except windows, where it is python.
+      - name: Setup tccli (CDN purge)
+        shell: bash
+        run: |
+          py=python3; command -v "$py" >/dev/null 2>&1 || py=python
+          "$py" -m pip install --quiet --disable-pip-version-check tccli
+
       - name: Upload to Tencent COS
         env:
           TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
@@ -478,6 +496,15 @@ jobs:
       - name: Setup coscli
         run: bash scripts/install-coscli.sh
 
+      # CDN purge is a different API surface from COS, so coscli cannot do it.
+      # shell: bash because the windows runner defaults to pwsh, and the
+      # interpreter is python3 everywhere except windows, where it is python.
+      - name: Setup tccli (CDN purge)
+        shell: bash
+        run: |
+          py=python3; command -v "$py" >/dev/null 2>&1 || py=python
+          "$py" -m pip install --quiet --disable-pip-version-check tccli
+
       - name: Upload to Tencent COS
         env:
           TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
@@ -619,6 +646,15 @@ jobs:
       - name: Setup coscli
         run: bash scripts/install-coscli.sh
 
+      # CDN purge is a different API surface from COS, so coscli cannot do it.
+      # shell: bash because the windows runner defaults to pwsh, and the
+      # interpreter is python3 everywhere except windows, where it is python.
+      - name: Setup tccli (CDN purge)
+        shell: bash
+        run: |
+          py=python3; command -v "$py" >/dev/null 2>&1 || py=python
+          "$py" -m pip install --quiet --disable-pip-version-check tccli
+
       - name: Upload to Tencent COS
         shell: bash
         env:
@@ -711,11 +747,14 @@ jobs:
       - name: Setup coscli
         run: bash scripts/install-coscli.sh
 
-      - name: Upload merged latest-mac.yml to GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # CDN purge is a different API surface from COS, so coscli cannot do it.
+      # shell: bash because the windows runner defaults to pwsh, and the
+      # interpreter is python3 everywhere except windows, where it is python.
+      - name: Setup tccli (CDN purge)
+        shell: bash
         run: |
-          gh release upload "v${{ needs.set-version.outputs.version }}" latest-mac.yml --clobber --repo valuz-ai/valuz-oss
+          py=python3; command -v "$py" >/dev/null 2>&1 || py=python
+          "$py" -m pip install --quiet --disable-pip-version-check tccli
 
       - name: Upload merged latest-mac.yml to Tencent COS
         env:
@@ -753,3 +792,24 @@ jobs:
               latest-mac.yml > latest-mac.yml.live
           coscli -c "$COS_CONFIG" cp latest-mac.yml.live "cos://valuz/${VALUZ_EDITION}/latest-mac.yml"
           echo "Live mac manifest: https://files.valuz.cn/${VALUZ_EDITION}/latest-mac.yml"
+
+      # Overwriting the origin does not expire the copy the CDN edge is already
+      # serving. v0.4.2 published a correct merged manifest and mac clients kept
+      # being offered the single-arch one until this was done by hand.
+      - name: Purge the live mac manifest from the CDN
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+          VALUZ_EDITION: oss
+        run: |
+          bash scripts/purge-cdn.sh "https://files.valuz.cn/${VALUZ_EDITION}/latest-mac.yml"
+
+      # Mirror last, and never gating the feed: this is the manual-download
+      # surface, while COS above is what auto-update reads. Running it first is
+      # what turned a GitHub 503 into a skipped COS upload in v0.4.2.
+      - name: Upload merged latest-mac.yml to GitHub Release
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "v${{ needs.set-version.outputs.version }}" latest-mac.yml --clobber --repo valuz-ai/valuz-oss
