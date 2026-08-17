@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   URL or market item / enable / disable / update / reference-counted uninstall /
   export / memberships), `.claude-plugin` / `.codebuddy-plugin` compat readers
   that materialize the normalized layout, marketplace item type `plugin`
-  (`market:plugin:<slug>`, `composition` filter, source `pluginmarket`), the
+  (`market:plugin:<slug>`, `composition` filter, source `plugin`), the
   `/plugins` library page, market tabs (agents 单智能体|团队, skills 技能|套件,
   plugins 全部|技能套件|含连接器) and plugin badges on skill / connector cards
   (#908 @St0neWan9).
@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Marketplace `source` is an open string** — where a market item comes from
+  is data the index grows over time; the client no longer validates it against
+  a closed enum (which made the whole skills tab fail the moment the index
+  published a source an older build had not heard of). Unknown sources render
+  with a generic pill, unknown badges are dropped, and an index page is parsed
+  item by item so a row this build cannot render (new `type` /
+  `install_target`) is skipped instead of failing the page. Plugin-package
+  members are labelled source `plugin` (was `pluginmarket`) (#911 @St0neWan9).
 - **Agents page default view** — the view switcher lists "All agents" first
   and opens on it by default; "By project" is the second tab (#906 @St0neWan9).
 

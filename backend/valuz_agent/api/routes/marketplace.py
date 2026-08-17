@@ -109,8 +109,9 @@ async def list_marketplace_items(
     ),
     category: str | None = Query(default=None),
     subcategory: str | None = Query(default=None),
-    source: Literal["skillhub", "valuz_official", "modelscope", "redskill", "pluginmarket"]
-    | None = Query(default=None),
+    # Open string (see ``models.MarketplaceSource``): the index decides which
+    # sources exist; an unknown filter simply matches nothing upstream.
+    source: str | None = Query(default=None, max_length=64),
     q: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=30, ge=1, le=100),

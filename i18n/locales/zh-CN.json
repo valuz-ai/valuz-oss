@@ -2967,7 +2967,7 @@
     "pluginFilterWithConnectors": "含连接器",
     "pluginMembers": "{skills} 技能 · {connectors} 连接器",
     "pluginSkillCount": "{count} 个技能",
-    "sourcePluginMarket": "插件市场",
+    "sourcePlugin": "插件",
     "backToPlugins": "返回插件库",
     "pluginsShelfTitle": "精选插件",
     "suitesShelfTitle": "精选技能套件",

@@ -17,12 +17,20 @@ export type MarketplaceItemType =
   | "agent_team_template"
   | "connector"
   | "plugin";
-export type MarketplaceSource =
+/** Sources this build knows a label for. */
+export type MarketplaceKnownSource =
   | "skillhub"
   | "valuz_official"
   | "modelscope"
   | "redskill"
-  | "pluginmarket";
+  | "plugin";
+/**
+ * ``source`` is an OPEN string on the wire — the index grows sources over
+ * time (a new upstream store, a new ingest) and must never require a client
+ * release. Known values keep autocompletion; anything else renders with a
+ * generic label (see ``MarketplaceSourcePill``).
+ */
+export type MarketplaceSource = MarketplaceKnownSource | (string & {});
 export type MarketplaceBadge =
   | "free_install"
   | "requires_api_key"

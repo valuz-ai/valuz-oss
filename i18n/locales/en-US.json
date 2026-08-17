@@ -2967,7 +2967,7 @@
     "pluginFilterWithConnectors": "With connectors",
     "pluginMembers": "{skills} skills · {connectors} connectors",
     "pluginSkillCount": "{count} skills",
-    "sourcePluginMarket": "Plugin market",
+    "sourcePlugin": "Plugin",
     "backToPlugins": "Back to plugins",
     "pluginsShelfTitle": "Featured plugins",
     "suitesShelfTitle": "Featured skill suites",
