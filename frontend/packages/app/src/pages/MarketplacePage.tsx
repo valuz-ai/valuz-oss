@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { Bot, CloudOff, Plug, Puzzle, Sparkles, Store, Zap } from "lucide-react";
-import { BackLink, Button, SearchInput, SegmentedControl, cn } from "@valuz/ui";
+import { useSearchParams } from "react-router-dom";
+import {
+  Bot,
+  CloudOff,
+  Plug,
+  Puzzle,
+  Search,
+  Sparkles,
+  Zap,
+} from "lucide-react";
+import { Button, SegmentedControl, cn } from "@valuz/ui";
 import type {
   MarketplaceCategory,
   MarketplaceItem,
@@ -51,7 +59,6 @@ const PLUGIN_PAGE_SIZE = 30;
  * All data comes from the market index (Valuz cloud) via the backend. */
 export function MarketplacePage() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const {
     setHideHeader,
     setHeader,
@@ -87,27 +94,6 @@ export function MarketplacePage() {
   const setQuery = (value: string) => {
     setQueries((prev) => ({ ...prev, [tab]: value }));
   };
-  const from = searchParams.get("from");
-  const backTarget =
-    from === "skills"
-      ? "/skills"
-      : from === "agents"
-        ? "/agents"
-        : from === "connectors"
-          ? "/connectors"
-          : from === "plugins"
-            ? "/plugins"
-            : null;
-  const backLabel =
-    from === "skills"
-      ? tr("marketplace.backToSkills")
-      : from === "agents"
-        ? tr("marketplace.backToAgents")
-        : from === "connectors"
-          ? tr("marketplace.backToConnectors")
-          : from === "plugins"
-            ? tr("marketplace.backToPlugins")
-            : null;
   const setTab = (next: MarketTab) => {
     const params = new URLSearchParams(searchParams);
     params.set("tab", next);
@@ -130,6 +116,9 @@ export function MarketplacePage() {
   const [connectorOpen, setConnectorOpen] = useState(false);
   const [pluginItem, setPluginItem] = useState<MarketplaceItem | null>(null);
   const [pluginOpen, setPluginOpen] = useState(false);
+  // Search is collapsed to an icon by default; clicking expands an inline
+  // input (mirrors the resource page's header search).
+  const [searchOpen, setSearchOpen] = useState(false);
   const openItem = (item: MarketplaceItem) => {
     if (item.type === "connector") {
       setConnectorItem(item);
@@ -183,73 +172,82 @@ export function MarketplacePage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* header */}
-      <div className="border-b border-surface-border px-6 pt-5">
-        {backTarget && backLabel ? (
-          <BackLink
-            onClick={() => navigate(backTarget)}
-            label={backLabel}
-            className="mb-3"
-          />
-        ) : null}
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <Store className="h-[18px] w-[18px] text-brand" />
-              <span className="text-[17px] font-medium tracking-tight text-ink-heading">
-                {tr("marketplace.title")}
-              </span>
-            </div>
-            <div className="mt-1 text-[12.5px] text-ink-body">
-              {tr("marketplace.subtitle")}
-            </div>
-          </div>
-          <SearchInput
-            value={query}
-            onChange={setQuery}
-            placeholder={
-              tab === "agents"
-                ? tr("marketplace.searchAgents")
-                : tab === "skills"
-                  ? tr("marketplace.searchSkills")
-                  : tab === "plugins"
-                    ? tr("marketplace.searchPlugins")
-                    : tr("marketplace.searchConnectors")
-            }
-            className="w-[250px]"
-          />
+      {/* Header — same structure as the resource page: a title-only row
+          above an underline-tab row that carries the search on its right. */}
+      <div className="shrink-0">
+        <div className="flex min-w-0 items-center h-15 px-5">
+          <span className="text-base font-semibold leading-5 text-ink-heading">
+            {tr("marketplace.title")}
+          </span>
         </div>
-        {/* tabs */}
-        <div className="mt-3 flex gap-5" role="tablist">
-          {MARKET_TABS.map((key) => (
-            <button
-              key={key}
-              type="button"
-              role="tab"
-              aria-selected={tab === key}
-              onClick={() => setTab(key)}
-              className={cn(
-                "relative px-1 py-2 text-sm",
-                tab === key
-                  ? "font-semibold text-ink-heading"
-                  : "text-ink-body",
-              )}
-            >
-              {key === "agents"
-                ? tr("marketplace.tabAgents")
-                : key === "skills"
-                  ? tr("marketplace.tabSkills")
-                  : key === "plugins"
-                    ? tr("marketplace.tabPlugins")
-                    : tr("marketplace.tabConnectors")}
-              <span
-                className={cn(
-                  "absolute inset-x-0 -bottom-px h-0.5 rounded-full",
-                  tab === key ? "bg-brand" : "bg-transparent",
-                )}
+
+        <div className="flex items-center gap-2 border-b border-surface-border px-5">
+          <nav className="flex items-center" role="tablist">
+            {MARKET_TABS.map((key) => {
+              const active = tab === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setTab(key)}
+                  className={cn(
+                    "relative px-3.5 py-2.5 text-sm font-medium transition-colors",
+                    active
+                      ? "text-ink-heading after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:bg-brand"
+                      : "text-ink-meta hover:text-ink-body",
+                  )}
+                >
+                  {key === "agents"
+                    ? tr("marketplace.tabAgents")
+                    : key === "skills"
+                      ? tr("marketplace.tabSkills")
+                      : key === "plugins"
+                        ? tr("marketplace.tabPlugins")
+                        : tr("marketplace.tabConnectors")}
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
+            {searchOpen ? (
+              <input
+                type="text"
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onBlur={() => {
+                  if (!query) setSearchOpen(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setQuery("");
+                    setSearchOpen(false);
+                  }
+                }}
+                placeholder={
+                  tab === "agents"
+                    ? tr("marketplace.searchAgents")
+                    : tab === "skills"
+                      ? tr("marketplace.searchSkills")
+                      : tab === "plugins"
+                        ? tr("marketplace.searchPlugins")
+                        : tr("marketplace.searchConnectors")
+                }
+                className="h-7 w-full min-w-0 max-w-[200px] rounded-none border-0 border-b border-brand bg-transparent px-1 text-xs text-ink-heading placeholder:text-ink-meta outline-none"
               />
+            ) : null}
+            <button
+              type="button"
+              aria-label={tr("common.search")}
+              onClick={() => setSearchOpen((o) => !o)}
+              className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-ink-meta transition-colors hover:bg-surface-soft hover:text-ink-body"
+            >
+              <Search className="h-3.5 w-3.5" />
             </button>
-          ))}
+          </div>
         </div>
       </div>
 

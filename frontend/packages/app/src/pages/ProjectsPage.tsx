@@ -105,7 +105,6 @@ export const ProjectsPage = ({
     () => (
       <PageHeader
         title={t("sidebar.projects" as Parameters<typeof t>[0])}
-        description={t("project.createDesc" as Parameters<typeof t>[0])}
         action={
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -136,7 +135,7 @@ export const ProjectsPage = ({
 
   useEffect(() => {
     setHeader(pageHeader);
-    setHeaderClassName("h-auto px-5 py-5");
+    setHeaderClassName("h-15 px-5");
     return () => {
       setHeader(null);
       setHeaderClassName(undefined);

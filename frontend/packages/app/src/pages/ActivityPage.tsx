@@ -268,8 +268,12 @@ export const ActivityPage = () => {
   const historyFeed = useActivityFeed({ tab: filter, pollMs: 4000 });
 
   useEffect(() => {
-    setHeader(<PageHeader title={t(tk("nav.activity"))} />);
-    setHeaderClassName("h-auto px-5 py-5");
+    setHeader(
+      <PageHeader
+        title={t(tk("nav.activity"))}
+      />,
+    );
+    setHeaderClassName("h-15 px-5");
     // Drop the AppShell's default vertical padding for this page —
     // the page already self-manages bottom space (``pb-12``) and the outer ``py-7`` was
     // adding double breathing room that stranded the history list
@@ -428,7 +432,6 @@ export const ActivityPage = () => {
   // ──────────────────────────────────────────────────────────────
   // Render
   // ──────────────────────────────────────────────────────────────
-
 
   return (
     <div className="mx-auto max-w-[760px] pb-12">

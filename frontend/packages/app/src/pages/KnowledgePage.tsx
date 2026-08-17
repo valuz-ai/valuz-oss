@@ -1064,9 +1064,6 @@ export const KnowledgePage = ({
             <span className="text-base font-semibold leading-5 text-ink-heading">
               {t("knowledge.knowledgeBase" as Parameters<typeof t>[0])}
             </span>
-            <span className="truncate text-xs leading-4 text-ink-body">
-              {t("knowledge.linkLocalDir" as Parameters<typeof t>[0])}
-            </span>
           </div>
         )}
         {activeKb ? (
@@ -1137,7 +1134,7 @@ export const KnowledgePage = ({
 
   useEffect(() => {
     setHeader(pageHeader);
-    setHeaderClassName(activeKb ? "h-auto px-5 py-5" : "h-auto px-5 py-5");
+    setHeaderClassName(activeKb ? "h-15 px-5" : "h-15 px-5");
     setContentInnerClassName("p-0");
     return () => {
       setHeader(null);

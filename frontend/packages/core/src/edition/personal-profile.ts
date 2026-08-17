@@ -66,22 +66,6 @@ const personalNavItems: NavItemModule[] = [
     edition: "personal",
   },
   {
-    id: "skills",
-    label: "sidebar.skills",
-    href: "/skills",
-    position: "bottom",
-    navGroup: "library",
-    edition: "personal",
-  },
-  {
-    id: "connectors",
-    label: "nav.connectors",
-    href: "/connectors",
-    position: "bottom",
-    navGroup: "library",
-    edition: "personal",
-  },
-  {
     id: "plugins",
     label: "plugin.title",
     href: "/plugins",

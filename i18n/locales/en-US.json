@@ -3112,5 +3112,14 @@
     "loadMore": "Load more",
     "kindCompleted": "Completed",
     "notifCompletedTitle": "Task finished: {task}"
+  },
+  "resource": {
+    "title": "Resources",
+    "tabPlugin": "Plugins",
+    "tabSkill": "Skills",
+    "tabConnector": "Connectors",
+    "comingSoon": "Coming soon",
+    "comingSoonDesc": "This resource type will be wired into this page in a later step.",
+    "emptyDetail": "Select an item on the left to view details"
   }
 }
