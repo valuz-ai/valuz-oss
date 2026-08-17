@@ -1821,7 +1821,7 @@ class ClaudeAgentRuntime:
         # process environment; repeat only the non-secret loopback routing
         # fields in ``--settings`` so a project cannot bypass the registered
         # capability by replacing ANTHROPIC_BASE_URL.
-        model_env = self._build_model_provider_env()
+        model_env = self._build_model_provider_env(session=session)
         forced_egress_env: dict[str, str] | None = None
         if self._egress_enabled_for_spawn and model_env is not None:
             forced_egress_env = {
@@ -2075,6 +2075,21 @@ class ClaudeAgentRuntime:
                 merged["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] = "1"
             else:
                 merged.pop("CLAUDE_CODE_DISABLE_ADVISOR_TOOL", None)
+            if session is not None:
+                # Tag gateway LLM requests with the valuz session context so the
+                # gateway can set session_id / session_title on ledger rows —
+                # same mechanism as deepagents (_session_gateway_headers).
+                # ANTHROPIC_CUSTOM_HEADERS format: "Name: Value" lines joined by "\n".
+                headers: dict[str, str] = {"X-Valuz-Session-Id": str(session.id)}
+                metadata = session.metadata if isinstance(session.metadata, dict) else {}
+                valuz = metadata.get("valuz")
+                if isinstance(valuz, dict):
+                    name = valuz.get("name")
+                    if isinstance(name, str) and name:
+                        headers["X-Valuz-Session-Title"] = name[:256]
+                merged["ANTHROPIC_CUSTOM_HEADERS"] = "\n".join(
+                    f"{k}: {v}" for k, v in headers.items()
+                )
         else:
             # If a previous env carried a stale base_url (e.g. parent
             # shell exported one for an unrelated workflow), wipe it so
