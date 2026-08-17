@@ -5,11 +5,11 @@ Per ``docs/design/CODEX-INTEGRATION-DESIGN.md`` +
 
 * one ``AsyncCodex`` per Session, lazy-spawned on the first turn
 * ``Session.instructions`` -> ``thread_start(developer_instructions=...)``
-* ``Session.mcp_servers`` -> a private, one-shot Codex profile
+* ``Session.mcp_servers`` -> one-shot Codex config overrides
   (the per-thread ``ThreadStartParams.config`` dict silently drops
-  unknown keys; serializing secret MCP headers into ``--config k=v`` process
-  flags leaks them through the OS process table, so the profile is mode 0600
-  and unlinked immediately after app-server initialization).
+  unknown keys; secret MCP headers / stdio environment values are converted to
+  Codex's ``env_http_headers`` / ``env_vars`` references so only environment
+  variable names, never their values, enter ``--config k=v`` process flags).
 * ``Session.skills`` -> materialized into ``cwd/.agents/skills/``
 * ``Session.permission_mode`` drives the codex preset selection in
   ``_build_thread_kwargs`` (``never``+``danger-full-access`` for
@@ -40,7 +40,6 @@ import time
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import asdict
-from pathlib import Path
 from typing import Any, Literal, cast
 
 from openai_codex import (
@@ -175,7 +174,6 @@ class CodexRuntime:
         self.egress_descriptor = egress_descriptor
 
         self._codex: AsyncCodex | None = None
-        self._config_profile_path: Path | None = None
         self._thread: AsyncThread | None = None
         self._active_turn: AsyncTurnHandle | None = None
         self._active_task: asyncio.Task[Any] | None = None
@@ -862,7 +860,6 @@ class CodexRuntime:
             except Exception:
                 logger.debug("Error closing AsyncCodex", exc_info=True)
             self._codex = None
-        self._remove_config_profile()
         if self._registered_session_id is not None:
             from src.core.mcp_bridge import unregister_session_toolkit
 
@@ -909,23 +906,16 @@ class CodexRuntime:
                 self.egress_descriptor.base_url if self.egress_descriptor is not None else None
             ),
         )
-        profile_name, profile_path = _write_private_config_profile(overrides)
-        self._config_profile_path = profile_path
+        safe_overrides, mcp_secret_env = _externalize_mcp_secrets(session, overrides)
         cfg = CodexConfig(
             codex_bin=codex_bin,
-            launch_args_override=(
-                codex_bin,
-                "--profile",
-                profile_name,
-                "app-server",
-                "--listen",
-                "stdio://",
-            ),
+            config_overrides=safe_overrides,
             env=_build_codex_env(
                 self.model_provider,
                 egress_base_url=(
                     self.egress_descriptor.base_url if self.egress_descriptor is not None else None
                 ),
+                mcp_secret_env=mcp_secret_env,
             ),
         )
         self._codex = AsyncCodex(config=cfg)
@@ -938,25 +928,8 @@ class CodexRuntime:
                 logger.debug("Error closing failed Codex startup", exc_info=True)
             self._codex = None
             raise
-        finally:
-            # Codex has parsed the profile before app-server initialization
-            # returns. Remove the only on-disk copy immediately; ``close`` is a
-            # second cleanup guard for partial lifecycle paths.
-            self._remove_config_profile()
         self._install_approval_handler()
         await self._emit_turn_phase("runtime_init", duration_ms=int((time.monotonic() - t0) * 1000))
-
-    def _remove_config_profile(self) -> None:
-        path = self._config_profile_path
-        self._config_profile_path = None
-        if path is None:
-            return
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            # A mode-0600 profile is preferable to crashing runtime teardown,
-            # but leave a loud audit trail so residue is never silently hidden.
-            logger.warning("Failed to remove private Codex profile %s", path, exc_info=True)
 
     def _install_approval_handler(self) -> None:
         """Monkey-patch the sync client's approval handler.
@@ -1528,39 +1501,110 @@ _HARNESS_PROVIDER_ENV_KEY = "HARNESS_CODEX_PROVIDER_API_KEY"
 # Responses API documentation recommends. Not user-configurable — this
 # is the harness's "show reasoning summaries by default" stance.
 _CODEX_REASONING_SUMMARY_DEFAULT = "auto"
-_CODEX_SESSION_PROFILE_PREFIX = "valuz-session-"
+_CODEX_MCP_SECRET_ENV_PREFIX = "VALUZ_CODEX_MCP_SECRET_"
+_CODEX_MCP_UNSAFE_PARENT_ENV_NAMES = frozenset(
+    {
+        "ALL_PROXY",
+        "AZURE_OPENAI_API_KEY",
+        "COMSPEC",
+        "HOME",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "HARNESS_CODEX_PROVIDER_API_KEY",
+        "NO_PROXY",
+        "NODE_OPTIONS",
+        "OPENAI_API_KEY",
+        "PATH",
+        "PATHEXT",
+        "PYTHONPATH",
+        "SHELL",
+        "SYSTEMROOT",
+        "USERPROFILE",
+    }
+)
 
 
-def _write_private_config_profile(overrides: tuple[str, ...]) -> tuple[str, Path]:
-    """Write one process-private Codex profile and return ``(name, path)``.
+def _externalize_mcp_secrets(
+    session: Session,
+    overrides: tuple[str, ...],
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Replace MCP secret literals with Codex environment references.
 
-    Codex only accepts its full MCP map through configuration. Passing those
-    values via repeated ``--config`` flags exposes bearer tokens and internal
-    session credentials in ``ps`` output. A random profile preserves the exact
-    same TOML surface while keeping argv secret-free. The caller unlinks it as
-    soon as app-server completes initialization, and also on every failure /
-    close path.
+    Codex app-server does not accept ``--profile`` (verified against
+    codex-cli 0.144.x), while putting the original ``http_headers`` / ``env``
+    entries in repeated ``--config`` flags exposes their values in the OS
+    process table. Codex officially supports ``env_http_headers`` for remote
+    MCP headers and ``env_vars`` for stdio MCP variables, so use those paths
+    and carry the values only in the child environment.
+
+    Stdio ``env_vars`` preserves the variable's declared name. Two servers
+    cannot therefore request different values for the same name through one
+    Codex parent process; fail closed instead of silently giving one server the
+    other's credential.
     """
 
-    configured_home = os.getenv("CODEX_HOME")
-    codex_home = (
-        Path(configured_home).expanduser() if configured_home else Path.home() / ".codex"
-    )
-    codex_home.mkdir(mode=0o700, parents=True, exist_ok=True)
-    profile_name = f"{_CODEX_SESSION_PROFILE_PREFIX}{uuid.uuid4().hex}"
-    profile_path = codex_home / f"{profile_name}.config.toml"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    fd = os.open(profile_path, flags, 0o600)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as profile:
-            profile.write("\n".join(overrides))
-            profile.write("\n")
-    except BaseException:
-        profile_path.unlink(missing_ok=True)
-        raise
-    return profile_name, profile_path
+    remove: set[str] = set()
+    add: list[str] = []
+    secret_env: dict[str, str] = {}
+    stdio_secret_values: dict[str, tuple[str, str]] = {}
+    nonce = uuid.uuid4().hex
+    inherited_stdio_names = {
+        name.upper()
+        for cfg in session.mcp_servers
+        if isinstance(cfg, McpStdioServerConfig)
+        for name in cfg.env_vars
+    }
+
+    for server_index, cfg in enumerate(session.mcp_servers):
+        if isinstance(cfg, McpStdioServerConfig):
+            env_vars = list(cfg.env_vars)
+            if cfg.env_vars:
+                remove.add(f"mcp_servers.{cfg.name}.env_vars={_toml_array(cfg.env_vars)}")
+            for key, value in cfg.env.items():
+                upper_key = key.upper()
+                if (
+                    upper_key in _CODEX_MCP_UNSAFE_PARENT_ENV_NAMES
+                    or upper_key.startswith("CODEX_")
+                    or upper_key in inherited_stdio_names
+                ):
+                    raise RuntimeError(
+                        "Codex cannot securely externalize MCP stdio environment "
+                        f"variable {key!r}; use a dedicated, non-runtime variable name"
+                    )
+                remove.add(f"mcp_servers.{cfg.name}.env.{_toml_key(key)}={_toml_quote(value)}")
+                previous = stdio_secret_values.get(upper_key)
+                if previous is not None and previous != (key, value):
+                    raise RuntimeError(
+                        "Codex MCP stdio servers declare conflicting values "
+                        f"for environment variable {key!r}; use distinct names"
+                    )
+                stdio_secret_values[upper_key] = (key, value)
+                secret_env[key] = value
+                if key not in env_vars:
+                    env_vars.append(key)
+            if env_vars:
+                add.append(f"mcp_servers.{cfg.name}.env_vars={_toml_array(env_vars)}")
+            continue
+
+        for header_index, (key, value) in enumerate(cfg.headers.items()):
+            remove.add(f"mcp_servers.{cfg.name}.http_headers.{_toml_key(key)}={_toml_quote(value)}")
+            env_name = f"{_CODEX_MCP_SECRET_ENV_PREFIX}{nonce}_{server_index}_{header_index}"
+            secret_env[env_name] = value
+            add.append(
+                f"mcp_servers.{cfg.name}.env_http_headers.{_toml_key(key)}={_toml_quote(env_name)}"
+            )
+
+    shell_secret_filter = "shell_environment_policy.ignore_default_excludes=false"
+    if secret_env and shell_secret_filter not in overrides:
+        add.append(shell_secret_filter)
+    safe_overrides = tuple(value for value in overrides if value not in remove) + tuple(add)
+    serialized = "\n".join(safe_overrides)
+    leaked = [value for value in secret_env.values() if value and value in serialized]
+    if leaked:
+        raise RuntimeError("Refusing to launch Codex because an MCP secret remained in argv")
+    return safe_overrides, secret_env
 
 
 def _build_config_overrides(
@@ -1571,7 +1615,7 @@ def _build_config_overrides(
     expose_toolkit: bool = False,
     egress_base_url: str | None = None,
 ) -> tuple[str, ...]:
-    """Serialize per-session config to dotted TOML profile entries.
+    """Serialize per-session config to dotted TOML override entries.
 
     Three channels are emitted:
 
@@ -1584,9 +1628,9 @@ def _build_config_overrides(
        (``env`` / ``http_headers``) are emitted ONE dotted key at a time, never
        as an inline table ``{ … }`` — codex's config overlay parser reads an inline
        table as a string and aborts at startup ("invalid type: string …
-       expected a map"); see ``_toml_key``. ``env_vars`` is passed through
-       verbatim so codex resolves it against its own process env at child-spawn
-       time (token values therefore never appear in the overrides string).
+       expected a map"); see ``_toml_key``. Before launch,
+       ``_externalize_mcp_secrets`` replaces header / explicit env values with
+       environment references so their values never enter process argv.
     2. Model transport -> a synthetic ``[model_providers.harness]`` block when
        a user provider or an egress subscription descriptor is present. API
        keys use a dedicated ``env_key``; ChatGPT subscriptions use Codex's
@@ -1798,6 +1842,7 @@ def _build_codex_env(
     provider: ModelProvider | None,
     *,
     egress_base_url: str | None = None,
+    mcp_secret_env: dict[str, str] | None = None,
 ) -> dict[str, str] | None:
     """Subprocess env passed to ``codex app-server``.
 
@@ -1814,15 +1859,23 @@ def _build_codex_env(
       The harness-specific env var is *not* set in this branch (it'd
       be dead weight; codex's built-in openai provider doesn't read
       it).
+
+    ``mcp_secret_env`` carries values referenced by secret-free MCP
+    ``env_http_headers`` / ``env_vars`` config entries. Generated HTTP-header
+    names contain ``SECRET`` so Codex's shell environment policy strips them
+    from shell tools. Stdio variables are explicitly allowlisted for MCP and
+    common secret-shaped names are filtered from shell tools as well.
     """
     if provider is None:
-        if egress_base_url is None:
+        if egress_base_url is None and not mcp_secret_env:
             return None
-        # The model transport keeps using Codex's native ChatGPT auth.json.
-        # We only provide an explicit environment so the loopback ingress is
-        # never captured by a user/system proxy inherited by the GUI process.
         subscription_env = dict(os.environ)
-        merge_loopback_no_proxy(subscription_env, egress_base_url)
+        if egress_base_url is not None:
+            # The model transport keeps using Codex's native ChatGPT auth.json.
+            # Keep loopback ingress out of any proxy inherited by the GUI.
+            merge_loopback_no_proxy(subscription_env, egress_base_url)
+        if mcp_secret_env:
+            subscription_env.update(mcp_secret_env)
         return subscription_env
     merged: dict[str, str] = dict(os.environ)
     if egress_base_url is not None or provider.base_url is not None:
@@ -1839,6 +1892,8 @@ def _build_codex_env(
         merged["CODEX_INTERNAL_ORIGINATOR_OVERRIDE"] = "codex_exec"
     else:
         merged["OPENAI_API_KEY"] = provider.api_key
+    if mcp_secret_env:
+        merged.update(mcp_secret_env)
     return merged
 
 
