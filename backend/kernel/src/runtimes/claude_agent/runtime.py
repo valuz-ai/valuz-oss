@@ -1821,7 +1821,7 @@ class ClaudeAgentRuntime:
         # process environment; repeat only the non-secret loopback routing
         # fields in ``--settings`` so a project cannot bypass the registered
         # capability by replacing ANTHROPIC_BASE_URL.
-        model_env = self._build_model_provider_env()
+        model_env = self._build_model_provider_env(session=session)
         forced_egress_env: dict[str, str] | None = None
         if self._egress_enabled_for_spawn and model_env is not None:
             forced_egress_env = {
@@ -2075,6 +2075,11 @@ class ClaudeAgentRuntime:
                 merged["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] = "1"
             else:
                 merged.pop("CLAUDE_CODE_DISABLE_ADVISOR_TOOL", None)
+            if session is not None:
+                # Tag gateway LLM requests with the session id so the gateway
+                # can stamp session_id on gateway_debit ledger rows.
+                # ANTHROPIC_CUSTOM_HEADERS format: "Name: Value" lines joined by "\n".
+                merged["ANTHROPIC_CUSTOM_HEADERS"] = f"X-Valuz-Session-Id: {session.id}"
         else:
             # If a previous env carried a stale base_url (e.g. parent
             # shell exported one for an unrelated workflow), wipe it so
