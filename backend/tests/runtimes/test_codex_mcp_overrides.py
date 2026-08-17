@@ -1,7 +1,7 @@
 """Regression: MCP map fields (``http_headers`` / ``env``) must be emitted as
-per-key dotted ``-c`` overrides, never as an inline table.
+per-key dotted config entries, never as an inline table.
 
-Codex's ``-c k=v`` parser reads an inline-table RHS
+Codex's config overlay parser reads an inline-table RHS
 (``mcp_servers.X.http_headers={ Authorization = "…" }``) as a *string* and
 aborts at app-server startup with ``invalid type: string … expected a map in
 mcp_servers.X.http_headers`` (verified against codex-cli 0.137.0-alpha.4
