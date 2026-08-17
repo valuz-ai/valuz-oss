@@ -3091,6 +3091,76 @@ def test_the_backstop_does_not_settle_a_member_it_just_saw_stop(
     assert _runs(db_factory)["sB"] == "active", "and nothing may be written for it yet"
 
 
+def test_recovery_attributes_only_what_the_member_wrote(db_factory, tmp_path, monkeypatch) -> None:
+    """The reconcile path bounds artifacts by the member's own run row too.
+
+    It was the last of the four manifest call sites written without
+    ``since_epoch``, and the one the watchdog reaches when it adopts an
+    orphaned task — so the fix that made adoption common also made this bug
+    common. Observed on qa: two members handed the same 56-file manifest,
+    including reports written three and five days before the task existed.
+    """
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    monkeypatch.setattr(
+        kernel_client_mod,
+        "get_session",
+        _as_async(
+            lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+        ),
+    )
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    seen: dict[str, float] = {}
+
+    async def _capture(_sid, _run_dir, _status, *, since_epoch, **_kw):
+        seen["since_epoch"] = since_epoch
+        return {"status": "completed", "summary": "ok", "artifacts": []}
+
+    monkeypatch.setattr(manifest_mod, "collect_manifest", _capture)
+
+    orch = TaskOrchestrator()
+
+    async def _noop(*_a, **_kw) -> None: ...
+
+    monkeypatch.setattr(orch._recovery, "_interrupt_kernel_session", _noop)
+    monkeypatch.setattr(orch._actor, "run_actor_loop", _noop)
+
+    asyncio.run(orch.recovery.adopt_orphaned_task("t1", "w1", OWNER))
+
+    run_created_ms = next(
+        r.created_at
+        for r in db_factory().query(TaskSessionRow).filter_by(task_id="t1", session_id="sB")
+    )
+    assert seen.get("since_epoch") == pytest.approx(run_created_ms / 1000.0), (
+        "recovery must bound artifacts by the member's own run row, not by 0 — "
+        f"got {seen.get('since_epoch')!r}"
+    )
+
+
+def test_manifest_collection_refuses_to_guess_the_attribution_window() -> None:
+    """``since_epoch`` must stay required — a default is how this keeps happening.
+
+    It defaulted to ``0.0``, meaning "every file under run_dir belongs to this
+    member". Under a shared project cwd that is never true, and THREE of the
+    four call sites were written without it over time — each found separately,
+    months apart, each after it had already written wrong data. An omission
+    that is indistinguishable from a deliberate "attribute everything" cannot
+    have a default; the signature is the only thing that catches the fourth.
+    """
+    import inspect
+
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    for fn in (manifest_mod.collect_manifest, manifest_mod.collect_manifest_safe):
+        param = inspect.signature(fn).parameters["since_epoch"]
+        assert param.default is inspect.Parameter.empty, (
+            f"{fn.__name__} grew a default attribution window — a caller that "
+            "forgets it silently claims the whole directory"
+        )
+
+
 def test_the_backstop_attributes_only_what_the_member_wrote(
     db_factory, tmp_path, monkeypatch
 ) -> None:
