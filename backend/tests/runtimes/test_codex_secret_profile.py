@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import stat
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -23,7 +21,7 @@ class _Sink:
         del event
 
 
-def _session() -> Session:
+def _session(*, local_env: dict[str, str] | None = None) -> Session:
     return Session(
         id="secret-session",
         agent_config=AgentConfig(id="a", name="a"),
@@ -38,7 +36,7 @@ def _session() -> Session:
             McpStdioServerConfig(
                 name="local",
                 command="local-mcp",
-                env={"LOCAL_TOKEN": "stdio-secret"},
+                env=local_env or {"LOCAL_TOKEN": "stdio-secret"},
             ),
         ),
     )
@@ -55,9 +53,8 @@ def _runtime() -> codex_runtime.CodexRuntime:
     return runtime
 
 
-def test_secret_overrides_use_private_ephemeral_profile_not_argv(
+def test_secret_values_use_environment_references_not_argv(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
     captured: dict[str, Any] = {}
 
@@ -66,61 +63,63 @@ def test_secret_overrides_use_private_ephemeral_profile_not_argv(
             captured["config"] = config
 
         async def __aenter__(self) -> _FakeCodex:
-            config = captured["config"]
-            profile_name = config.launch_args_override[2]
-            profile_path = tmp_path / f"{profile_name}.config.toml"
-            captured["profile_path"] = profile_path
-            captured["profile_text"] = profile_path.read_text(encoding="utf-8")
-            captured["profile_mode"] = stat.S_IMODE(profile_path.stat().st_mode)
             return self
 
         async def close(self) -> None:
             return None
 
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     monkeypatch.setattr(codex_runtime, "_resolve_codex_bin", lambda: "/safe/codex")
     monkeypatch.setattr(codex_runtime, "AsyncCodex", _FakeCodex)
 
     asyncio.run(_runtime()._ensure_codex(_session()))
 
     config = captured["config"]
-    argv = tuple(config.launch_args_override)
-    assert argv[0] == "/safe/codex"
-    assert argv[1] == "--profile"
-    assert argv[3:] == ("app-server", "--listen", "stdio://")
-    assert config.config_overrides == ()
-    assert "remote-secret" not in " ".join(argv)
-    assert "stdio-secret" not in " ".join(argv)
-    assert 'mcp_servers.remote.http_headers.Authorization="Bearer remote-secret"' in captured[
-        "profile_text"
-    ]
-    assert 'mcp_servers.local.env.LOCAL_TOKEN="stdio-secret"' in captured["profile_text"]
-    assert captured["profile_mode"] == 0o600
-    assert not captured["profile_path"].exists()
+    argv = [config.codex_bin]
+    for value in config.config_overrides:
+        argv.extend(["--config", value])
+    argv.extend(["app-server", "--listen", "stdio://"])
+    serialized_argv = " ".join(argv)
+
+    assert config.launch_args_override is None
+    assert "--profile" not in argv
+    assert "remote-secret" not in serialized_argv
+    assert "stdio-secret" not in serialized_argv
+    assert "mcp_servers.remote.http_headers.Authorization" not in serialized_argv
+    assert "env.LOCAL_TOKEN" not in serialized_argv
+    assert "env_http_headers.Authorization" in serialized_argv
+    assert 'mcp_servers.local.env_vars=["LOCAL_TOKEN"]' in config.config_overrides
+    assert "shell_environment_policy.ignore_default_excludes=false" in config.config_overrides
+
+    secret_env = {
+        key: value
+        for key, value in config.env.items()
+        if key.startswith(codex_runtime._CODEX_MCP_SECRET_ENV_PREFIX) or key == "LOCAL_TOKEN"
+    }
+    assert set(secret_env.values()) == {"Bearer remote-secret", "stdio-secret"}
+    assert all(name not in serialized_argv for name in secret_env.values())
 
 
-def test_secret_profile_is_removed_when_codex_startup_fails(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    captured: dict[str, Any] = {}
+def test_conflicting_stdio_secret_names_fail_closed() -> None:
+    session = Session(
+        id="conflict",
+        agent_config=AgentConfig(id="a", name="a"),
+        cwd="/tmp",
+        runtime_provider="codex",
+        mcp_servers=(
+            McpStdioServerConfig(name="one", command="one", env={"TOKEN": "first"}),
+            McpStdioServerConfig(name="two", command="two", env={"TOKEN": "second"}),
+        ),
+    )
+    overrides = codex_runtime._build_config_overrides(session, None, "gpt-5.5")
 
-    class _FailingCodex:
-        def __init__(self, *, config: Any) -> None:
-            captured["config"] = config
+    with pytest.raises(RuntimeError, match="conflicting values"):
+        codex_runtime._externalize_mcp_secrets(session, overrides)
 
-        async def __aenter__(self) -> _FailingCodex:
-            raise RuntimeError("startup failed")
 
-        async def close(self) -> None:
-            return None
+@pytest.mark.parametrize("name", ["PATH", "CODEX_HOME", "HTTPS_PROXY"])
+def test_runtime_control_environment_names_fail_closed(name: str) -> None:
+    session = _session(local_env={name: "unsafe"})
+    overrides = codex_runtime._build_config_overrides(session, None, "gpt-5.5")
 
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
-    monkeypatch.setattr(codex_runtime, "_resolve_codex_bin", lambda: "/safe/codex")
-    monkeypatch.setattr(codex_runtime, "AsyncCodex", _FailingCodex)
-
-    with pytest.raises(RuntimeError, match="startup failed"):
-        asyncio.run(_runtime()._ensure_codex(_session()))
-
-    profile_name = captured["config"].launch_args_override[2]
-    assert not (tmp_path / f"{profile_name}.config.toml").exists()
+    with pytest.raises(RuntimeError, match="cannot securely externalize"):
+        codex_runtime._externalize_mcp_secrets(session, overrides)
