@@ -468,18 +468,10 @@ DEEPAGENTS_TODO_TOOL_NAME = "write_todos"
 def _session_gateway_headers(session: Session) -> dict[str, str]:
     """Build headers to forward to the gateway on each LLM call.
 
-    ``X-Valuz-Session-Id`` tags ledger rows; ``X-Valuz-Session-Title``
-    lets the gateway store the human-readable name without a round-trip.
+    ``X-Valuz-Session-Id`` tags gateway_debit ledger rows with the session.
     Ignored by first-party providers (api.openai.com / api.anthropic.com).
     """
-    headers: dict[str, str] = {"X-Valuz-Session-Id": str(session.id)}
-    metadata = session.metadata if isinstance(session.metadata, dict) else {}
-    valuz = metadata.get("valuz")
-    if isinstance(valuz, dict):
-        name = valuz.get("name")
-        if isinstance(name, str) and name:
-            headers["X-Valuz-Session-Title"] = name[:256]
-    return headers
+    return {"X-Valuz-Session-Id": str(session.id)}
 
 
 def _session_evidence_binding_enabled(session: Session) -> bool:
