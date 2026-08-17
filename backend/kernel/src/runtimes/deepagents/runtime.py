@@ -1732,6 +1732,7 @@ class DeepAgentsRuntime:
                 model_name=self.model,
                 timeout=None,
                 stop=None,
+                default_headers={"X-Valuz-Session-Id": str(session.id)},
             )
             if self.model_provider.base_url is not None:
                 kwargs["base_url"] = self.model_provider.base_url
@@ -1808,6 +1809,10 @@ class DeepAgentsRuntime:
             # `usage_update` event has real numbers.
             stream_usage=True,
             extra_body=extra_body,
+            # Forward session identity to the gateway so gateway_debit rows
+            # are tagged with this conversation's session_id. Ignored by
+            # first-party providers (api.openai.com etc.).
+            default_headers={"X-Valuz-Session-Id": str(session.id)},
         )
         egress_descriptor = getattr(self, "egress_descriptor", None)
         if egress_descriptor is not None:
