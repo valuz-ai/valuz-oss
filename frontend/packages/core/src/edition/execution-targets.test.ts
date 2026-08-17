@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import {
+  executionTargetIconKind,
   getDefaultExecutionTarget,
   getDefaultRuntimeLocation,
   getExecutionTargets,
@@ -79,5 +80,35 @@ describe("default runtime location", () => {
       setDefaultRuntimeLocation("cloud");
     });
     expect(result.current).toBe("cloud");
+  });
+});
+
+describe("executionTargetIconKind", () => {
+  it("should infer local / cloud / device from the id when no target is registered", () => {
+    expect(executionTargetIconKind("local")).toBe("local");
+    expect(executionTargetIconKind("cloud")).toBe("cloud");
+    expect(executionTargetIconKind("device:abc123")).toBe("device");
+    expect(executionTargetIconKind("something-else")).toBe("local");
+  });
+
+  it("should prefer an explicit icon on the registered target", () => {
+    setExecutionTargets([
+      LOCAL,
+      { id: "edge-1", labelKey: "x", baseUrl: "http://edge", icon: "device" },
+      { id: "device:legacy", labelKey: "y", baseUrl: "http://y", icon: "cloud" },
+    ]);
+    expect(executionTargetIconKind("edge-1")).toBe("device");
+    expect(executionTargetIconKind("device:legacy")).toBe("cloud");
+  });
+
+  it("should use the passed target without consulting the registry", () => {
+    expect(
+      executionTargetIconKind("whatever", {
+        id: "whatever",
+        labelKey: "k",
+        baseUrl: "http://w",
+        icon: "cloud",
+      }),
+    ).toBe("cloud");
   });
 });

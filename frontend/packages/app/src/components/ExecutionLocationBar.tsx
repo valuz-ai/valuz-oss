@@ -30,13 +30,11 @@ import {
   DropdownMenuTrigger,
   cn,
 } from "@valuz/ui";
-import { Check, ChevronDown, Cloud, FolderOpen, HardDrive } from "lucide-react";
+import { Check, ChevronDown, FolderOpen } from "lucide-react";
+import { executionTargetIcon } from "./execution-target-icon";
 
 type TK = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
 
-function targetIcon(targetId: string) {
-  return targetId === "cloud" ? Cloud : HardDrive;
-}
 
 export interface ExecutionLocationBarProject {
   id: string;
@@ -112,7 +110,9 @@ export function ExecutionLocationBar({
       ? t("conversation.tempChat" as TK)
       : t("conversation.execSelectProject" as TK);
 
-  const LocationIcon = effectiveTarget ? targetIcon(effectiveTarget.id) : null;
+  const LocationIcon = effectiveTarget
+    ? executionTargetIcon(effectiveTarget.id, effectiveTarget)
+    : null;
   const locationChipBody =
     effectiveTarget && LocationIcon ? (
       <>
@@ -179,7 +179,7 @@ export function ExecutionLocationBar({
               onCloseAutoFocus={(e) => e.preventDefault()}
             >
               {targets.map((target) => {
-                const Icon = targetIcon(target.id);
+                const Icon = executionTargetIcon(target.id, target);
                 return (
                   <DropdownMenuItem
                     key={target.id}

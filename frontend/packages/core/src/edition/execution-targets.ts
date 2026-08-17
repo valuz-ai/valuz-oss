@@ -22,6 +22,20 @@
 
 import { useSyncExternalStore } from "react";
 
+/**
+ * Which glyph the picker / origin badge draws for a target. Editions may set
+ * it explicitly; otherwise it is inferred from the id (see
+ * {@link executionTargetIconKind}).
+ *
+ * - ``local`` — this machine's own backend;
+ * - ``cloud`` — the shared cloud backend;
+ * - ``device`` — another desktop reached through the remote-control relay.
+ */
+export type ExecutionTargetIcon = "local" | "cloud" | "device";
+
+/** Id prefix editions use for remote-desktop targets (``device:<device id>``). */
+export const DEVICE_TARGET_ID_PREFIX = "device:";
+
 export interface ExecutionTarget {
   /** Stable id — also used as the row ``origin`` tag (e.g. "local"/"cloud"). */
   id: string;
@@ -36,6 +50,25 @@ export interface ExecutionTarget {
    * upload instead of a directory picker.
    */
   remote?: boolean;
+  /** Glyph override; inferred from ``id`` when omitted. */
+  icon?: ExecutionTargetIcon;
+}
+
+/**
+ * Resolve the glyph kind for a target id: an explicit ``icon`` on the
+ * registered target wins, then ``"cloud"`` → cloud, ``device:*`` → device,
+ * anything else (``"local"``, unknown ids) → local. Pure — safe to call
+ * outside React and for ids that are not registered (stale origin tags).
+ */
+export function executionTargetIconKind(
+  targetId: string,
+  target?: ExecutionTarget | null,
+): ExecutionTargetIcon {
+  const registered = target ?? _targets.find((t) => t.id === targetId);
+  if (registered?.icon) return registered.icon;
+  if (targetId === "cloud") return "cloud";
+  if (targetId.startsWith(DEVICE_TARGET_ID_PREFIX)) return "device";
+  return "local";
 }
 
 let _targets: ExecutionTarget[] = [];
