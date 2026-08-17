@@ -36,8 +36,8 @@ export const AppToaster = () => (
     toastOptions={{
       classNames: {
         toast:
-          "flex !w-[300px] !items-start !gap-2.5 !rounded-[10px] !border !border-surface-border !bg-surface !px-3.5 !py-[11px] !text-[13px] !text-ink-heading !shadow-3",
-        title: "text-[13px] font-semibold leading-[1.35] !text-ink-heading",
+          "flex !w-[300px] !items-start !gap-2.5 !rounded-xl !border !border-surface-border !bg-surface !px-3.5 !py-[11px] !text-sm !text-ink-heading !shadow-3",
+        title: "text-sm font-semibold leading-[1.35] !text-ink-heading",
         description: "text-xs leading-[1.45] !text-ink-body",
         icon: "!mt-0 !ml-0 !mr-0 flex !h-[18px] !w-[18px] shrink-0 !items-center !justify-center rounded-full text-white [&_svg]:!m-0 [&_svg]:stroke-[2]",
         success: "[&_[data-icon]]:bg-success",

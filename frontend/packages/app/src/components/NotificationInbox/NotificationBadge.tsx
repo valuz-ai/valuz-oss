@@ -59,7 +59,7 @@ export function NotificationBadge(): ReactElement | null {
               // Same box as the bell (h-3.5): the filled pill carries more
               // visual weight than the outlined icon, so equal boxes read as
               // equal size. 10px digits keep two-digit counts breathable.
-              <span className="flex h-3.5 min-w-3.5 -translate-y-[0.5px] items-center justify-center rounded-full bg-brand px-1 text-[10px] font-semibold text-white">
+              <span className="flex h-3.5 min-w-3.5 -translate-y-[0.5px] items-center justify-center rounded-full bg-brand px-1 text-micro font-semibold text-white">
                 {unread}
               </span>
             )}

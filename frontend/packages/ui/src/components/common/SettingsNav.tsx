@@ -109,7 +109,7 @@ export const SettingsNav = ({
           {groups.map((group) => (
             <div key={group.id} className="space-y-0.5">
               {group.label ? (
-                <div className="mb-1.5 px-2.5 text-[11px] font-medium text-ink-section">
+                <div className="mb-1.5 px-2.5 text-2xs font-medium text-ink-section">
                   {group.label}
                 </div>
               ) : null}

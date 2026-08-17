@@ -381,7 +381,7 @@ function TemplateCard({
           </div>
         </div>
         {item.installed && (
-          <span className="rounded bg-surface-soft px-1.5 py-0.5 text-[10px] font-medium text-ink-meta">
+          <span className="rounded bg-surface-soft px-1.5 py-0.5 text-micro font-medium text-ink-meta">
             {tr("marketplace.installed")}
           </span>
         )}
@@ -542,7 +542,7 @@ function AgentsTab({ q, tr, onOpen, withInstalled }: TabProps) {
     <div className="flex min-h-0 flex-1">
       {/* category rail — same pattern as the Skills / Connectors tabs */}
       <div className="w-[190px] flex-none overflow-y-auto border-r border-surface-border px-2.5 py-4">
-        <div className="px-2 pb-1.5 font-mono text-[11px] uppercase tracking-wider text-ink-meta">
+        <div className="px-2 pb-1.5 font-mono text-2xs uppercase tracking-wider text-ink-meta">
           {tr("marketplace.categories")}
         </div>
         <RailItem
@@ -645,7 +645,7 @@ function TeamCard({
           </div>
         </div>
         {team.installed && (
-          <span className="rounded bg-surface-soft px-1.5 py-0.5 text-[10px] font-medium text-ink-meta">
+          <span className="rounded bg-surface-soft px-1.5 py-0.5 text-micro font-medium text-ink-meta">
             {tr("marketplace.installed")}
           </span>
         )}
@@ -656,7 +656,7 @@ function TeamCard({
           return (
             <div
               key={m.name}
-              className="-ml-1.5 flex h-6 w-6 items-center justify-center rounded-full border-2 border-surface text-[10px] font-semibold first:ml-0"
+              className="-ml-1.5 flex h-6 w-6 items-center justify-center rounded-full border-2 border-surface text-micro font-semibold first:ml-0"
               style={{ background: tint.bg, color: tint.fg }}
             >
               {m.name.slice(0, 1)}
@@ -781,7 +781,7 @@ function SkillsTab({ q, tr, onOpen, withInstalled }: TabProps) {
     <div className="flex min-h-0 flex-1">
       {/* category rail */}
       <div className="w-[190px] flex-none overflow-y-auto border-r border-surface-border px-2.5 py-4">
-        <div className="px-2 pb-1.5 font-mono text-[11px] uppercase tracking-wider text-ink-meta">
+        <div className="px-2 pb-1.5 font-mono text-2xs uppercase tracking-wider text-ink-meta">
           {tr("marketplace.categories")}
         </div>
         <RailItem
@@ -953,7 +953,7 @@ function PluginsTab({ q, tr, onOpen, withInstalled }: TabProps) {
     <div className="flex min-h-0 flex-1">
       {/* category rail */}
       <div className="w-[190px] flex-none overflow-y-auto border-r border-surface-border px-2.5 py-4">
-        <div className="px-2 pb-1.5 font-mono text-[11px] uppercase tracking-wider text-ink-meta">
+        <div className="px-2 pb-1.5 font-mono text-2xs uppercase tracking-wider text-ink-meta">
           {tr("marketplace.categories")}
         </div>
         <RailItem
@@ -1160,7 +1160,7 @@ function ConnectorsTab({ q, tr, onOpen, withInstalled }: TabProps) {
   return (
     <div className="flex min-h-0 flex-1">
       <div className="w-[190px] flex-none overflow-y-auto border-r border-surface-border px-2.5 py-4">
-        <div className="px-2 pb-1.5 font-mono text-[11px] uppercase tracking-wider text-ink-meta">
+        <div className="px-2 pb-1.5 font-mono text-2xs uppercase tracking-wider text-ink-meta">
           {tr("marketplace.categories")}
         </div>
         <RailItem
@@ -1249,7 +1249,7 @@ function ConnectorMarketCard({
           </div>
         </div>
         {connector.installed ? (
-          <span className="rounded bg-surface-soft px-1.5 py-0.5 text-[10px] font-medium text-ink-meta">
+          <span className="rounded bg-surface-soft px-1.5 py-0.5 text-micro font-medium text-ink-meta">
             {tr("marketplace.connected")}
           </span>
         ) : null}
@@ -1300,7 +1300,7 @@ function RailItem({
     >
       <span className="truncate text-[12.5px]">{label}</span>
       {count != null && (
-        <span className="ml-2 flex-none text-[11px] tabular-nums text-ink-muted">
+        <span className="ml-2 flex-none text-2xs tabular-nums text-ink-muted">
           {formatCount(count)}
         </span>
       )}
@@ -1329,7 +1329,7 @@ function SkillMarketCard({
       <div className="mb-2 flex items-start gap-2.5">
         <ItemIcon item={skill} size="sm" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-semibold tracking-tight text-ink-heading">
+          <div className="truncate text-sm font-semibold tracking-tight text-ink-heading">
             {skill.title}
           </div>
           <div className="mt-1 flex items-center gap-1.5">

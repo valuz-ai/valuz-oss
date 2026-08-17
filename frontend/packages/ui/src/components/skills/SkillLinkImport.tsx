@@ -141,7 +141,7 @@ export const SkillLinkImport = ({
                         </p>
                       )}
                       {c.relpath && (
-                        <p className="mt-0.5 truncate font-mono text-[11px] text-ink-meta">
+                        <p className="mt-0.5 truncate font-mono text-2xs text-ink-meta">
                           {c.relpath}
                         </p>
                       )}

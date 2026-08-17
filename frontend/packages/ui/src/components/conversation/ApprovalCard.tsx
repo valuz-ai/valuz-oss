@@ -142,11 +142,11 @@ function _renderPayload(
     const cwd = _str(payload.cwd);
     return (
       <div className="space-y-1">
-        <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded-md bg-ink-heading/95 px-3 py-2 font-mono text-[12px] leading-snug text-white">
+        <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded-md bg-ink-heading/95 px-3 py-2 font-mono text-xs leading-snug text-white">
           {command || "(empty command)"}
         </pre>
         {cwd ? (
-          <p className="text-[11px] text-ink-meta">
+          <p className="text-2xs text-ink-meta">
             <span className="text-ink-meta/70">cwd:</span> {cwd}
           </p>
         ) : null}
@@ -159,13 +159,13 @@ function _renderPayload(
     const summary = _str(payload.diff_summary);
     return (
       <div className="space-y-1">
-        <p className="font-mono text-[12px] text-ink-body">
+        <p className="font-mono text-xs text-ink-body">
           {path || "(unknown path)"}
         </p>
-        <p className="text-[11px] text-ink-meta">
+        <p className="text-2xs text-ink-meta">
           <span
             className={cn(
-              "mr-1.5 inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium uppercase",
+              "mr-1.5 inline-flex rounded px-1.5 py-0.5 text-micro font-medium uppercase",
               kind === "create"
                 ? "bg-success-light text-success-text"
                 : "bg-[color-mix(in_oklab,var(--accent-sky)_14%,var(--background))] text-[color-mix(in_oklab,var(--accent-sky)_62%,var(--foreground))]",
@@ -191,13 +191,13 @@ function _renderPayload(
     }
     return (
       <div className="space-y-1">
-        <p className="text-[12px] text-ink-body">
+        <p className="text-xs text-ink-body">
           <span className="font-medium">{server || "(unknown-server)"}</span>
           <span className="text-ink-meta"> · </span>
           <span className="font-mono">{toolName || "(unknown-tool)"}</span>
         </p>
         {argsStr ? (
-          <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-md bg-surface-2 px-3 py-2 font-mono text-[11px] leading-snug text-ink-body">
+          <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-md bg-surface-2 px-3 py-2 font-mono text-2xs leading-snug text-ink-body">
             {argsStr}
           </pre>
         ) : null}
@@ -229,11 +229,11 @@ function _renderPayload(
   }
   return (
     <div className="space-y-1">
-      <p className="font-mono text-[12px] text-ink-body">
+      <p className="font-mono text-xs text-ink-body">
         {toolName || "(unknown-tool)"}
       </p>
       {inputStr ? (
-        <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-md bg-surface-2 px-3 py-2 font-mono text-[11px] leading-snug text-ink-body">
+        <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-md bg-surface-2 px-3 py-2 font-mono text-2xs leading-snug text-ink-body">
           {inputStr}
         </pre>
       ) : null}
@@ -281,11 +281,11 @@ export const ApprovalCard = memo(function ApprovalCard({
         >
           <Icon className="h-3.5 w-3.5" />
         </div>
-        <span className="flex-1 text-[13px] font-medium text-ink-heading">
+        <span className="flex-1 text-sm font-medium text-ink-heading">
           {t(meta.titleKey as Parameters<typeof t>[0])}
         </span>
         {receivedAtLabel ? (
-          <span className="text-[11px] text-ink-meta/80">
+          <span className="text-2xs text-ink-meta/80">
             {receivedAtLabel}
           </span>
         ) : null}
@@ -297,7 +297,7 @@ export const ApprovalCard = memo(function ApprovalCard({
           menu item so the user knows what rule they're about to
           commit before they click. */}
       {sessionRulePreviewDisplay ? (
-        <div className="flex items-center gap-1.5 px-3 pb-2 text-[11px] text-sky-700/90">
+        <div className="flex items-center gap-1.5 px-3 pb-2 text-2xs text-sky-700/90">
           <Sparkles className="h-3 w-3 shrink-0" />
           <span className="truncate">
             {t("conversation.approvalRulePreviewPrefix")}
@@ -321,7 +321,7 @@ export const ApprovalCard = memo(function ApprovalCard({
           />
         ) : (
           <div className="flex items-center justify-between">
-            <span className="font-mono text-[10px] text-ink-meta/70">
+            <span className="font-mono text-micro text-ink-meta/70">
               {pendingId.slice(0, 8)}…
             </span>
             <div className="flex items-center gap-2">
@@ -391,7 +391,7 @@ export const ApprovalCard = memo(function ApprovalCard({
                       <span className="flex-1 truncate">
                         {t("conversation.approvalApproveForSession")}
                         {sessionRulePreviewDisplay ? (
-                          <span className="ml-1 text-[11px] text-ink-meta/80">
+                          <span className="ml-1 text-2xs text-ink-meta/80">
                             ({sessionRulePreviewDisplay})
                           </span>
                         ) : null}

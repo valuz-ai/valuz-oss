@@ -326,7 +326,7 @@ const SidebarLink = ({
   <LinkComponent
     to={href}
     className={cn(
-      "relative mx-1 flex cursor-default items-center gap-[9px] px-[10px] py-[7px] text-[13px] font-normal text-ink-heading outline-none transition-[background-color,box-shadow] duration-[120ms] focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-[0_6px_16px_rgba(17,24,39,0.12)]",
+      "relative mx-1 flex cursor-default items-center gap-[9px] px-[10px] py-[7px] text-sm font-normal text-ink-heading outline-none transition-[background-color,box-shadow] duration-[120ms] focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-[0_6px_16px_rgba(17,24,39,0.12)]",
       editing ? "" : "rounded-[7px]",
       editing
         ? ""
@@ -417,7 +417,7 @@ const ProjectRow = ({
         className={cn(
           // ``group`` enables ``group-hover`` on the project-row ``...``
           // menu button (hidden until row hover; see below).
-          "group relative grid h-[31px] cursor-default grid-cols-[16px_minmax(0,1fr)_auto] items-center gap-[7px] px-[10px] text-[13px] font-normal text-ink-heading outline-none transition-[background-color,box-shadow] duration-[120ms] focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-[0_6px_16px_rgba(17,24,39,0.12)]",
+          "group relative grid h-[31px] cursor-default grid-cols-[16px_minmax(0,1fr)_auto] items-center gap-[7px] px-[10px] text-sm font-normal text-ink-heading outline-none transition-[background-color,box-shadow] duration-[120ms] focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-[0_6px_16px_rgba(17,24,39,0.12)]",
           projectRenaming ? "" : "rounded-[7px]",
           projectRenaming
             ? ""
@@ -1116,7 +1116,7 @@ export const DesktopSidebar = ({
                         />
                         <span>{item.label}</span>
                         {item.badgeCount ? (
-                          <span className="ml-auto flex items-center gap-1 text-[10px] font-medium text-ink-meta">
+                          <span className="ml-auto flex items-center gap-1 text-micro font-medium text-ink-meta">
                             <span
                               className={cn(
                                 "h-1.5 w-1.5 rounded-full animate-pulse",

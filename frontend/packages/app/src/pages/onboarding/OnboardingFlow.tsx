@@ -207,7 +207,7 @@ const OnboardingChrome = ({
 
         <div className="flex items-center gap-3">
           {showProgress && (
-            <span className="font-mono text-[11px] tracking-wide text-ink-muted">
+            <span className="font-mono text-2xs tracking-wide text-ink-muted">
               {t("onboarding.stepCounter" as Parameters<typeof t>[0], {
                 current: stepIndex,
                 total: 2,

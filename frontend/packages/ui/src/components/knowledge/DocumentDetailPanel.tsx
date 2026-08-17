@@ -104,7 +104,7 @@ export const DocumentDetailPanel = ({
   return (
     <div className={cn("flex h-full flex-col")}>
       <div className="flex h-12 shrink-0 items-center px-5">
-        <span className="truncate text-[15px] font-medium text-ink-heading">
+        <span className="truncate text-lg font-medium text-ink-heading">
           {t("knowledge.docDetail")}
         </span>
       </div>
@@ -144,7 +144,7 @@ export const DocumentDetailPanel = ({
 
         {doc.preview ? (
           <section className="mb-5 border-b border-surface-border pb-5">
-            <div className="text-[11px] font-medium text-ink-section">
+            <div className="text-2xs font-medium text-ink-section">
               {t("knowledge.preview")}
             </div>
             <MarkdownContent
@@ -158,7 +158,7 @@ export const DocumentDetailPanel = ({
           <div className="mb-4 space-y-3">
             {meta.kbName ? (
               <div>
-                <div className="text-[11px] font-medium text-ink-section">
+                <div className="text-2xs font-medium text-ink-section">
                   {t("knowledge.parentKb")}
                 </div>
                 <div className="mt-1 flex items-center gap-1.5 text-xs text-ink-heading">
@@ -169,7 +169,7 @@ export const DocumentDetailPanel = ({
             ) : null}
             {meta.relativePath ? (
               <div>
-                <div className="text-[11px] font-medium text-ink-section">
+                <div className="text-2xs font-medium text-ink-section">
                   {t("knowledge.kbPath")}
                 </div>
                 <div className="mt-1 wrap-anywhere font-mono text-xs text-ink-heading">
@@ -179,7 +179,7 @@ export const DocumentDetailPanel = ({
             ) : null}
             {meta.sourcePath ? (
               <div>
-                <div className="text-[11px] font-medium text-ink-section">
+                <div className="text-2xs font-medium text-ink-section">
                   {t("knowledge.sourcePath")}
                 </div>
                 <div
@@ -192,7 +192,7 @@ export const DocumentDetailPanel = ({
             ) : null}
             {meta.fileSize != null ? (
               <div>
-                <div className="text-[11px] font-medium text-ink-section">
+                <div className="text-2xs font-medium text-ink-section">
                   {t("knowledge.fileSize")}
                 </div>
                 <div className="mt-1 text-xs text-ink-heading">
@@ -206,7 +206,7 @@ export const DocumentDetailPanel = ({
             ) : null}
             {meta.importedAt ? (
               <div>
-                <div className="text-[11px] font-medium text-ink-section">
+                <div className="text-2xs font-medium text-ink-section">
                   {t("knowledge.importTime")}
                 </div>
                 <div className="mt-1 text-xs text-ink-heading">
@@ -226,7 +226,7 @@ export const DocumentDetailPanel = ({
 
         {hasParseInfo ? (
           <div className="mb-4 space-y-2">
-            <div className="text-[11px] font-medium text-ink-section">
+            <div className="text-2xs font-medium text-ink-section">
               {t("knowledge.parseHistory")}
             </div>
             {parse?.parserMode || isProcessing ? (
@@ -262,7 +262,7 @@ export const DocumentDetailPanel = ({
                   return (
                     <li
                       key={`${a.pluginId}-${a.occurredAt}-${idx}`}
-                      className="flex items-start gap-2 text-[11px]"
+                      className="flex items-start gap-2 text-2xs"
                     >
                       {a.ok ? (
                         <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-success-text" />
@@ -291,7 +291,7 @@ export const DocumentDetailPanel = ({
             ) : null}
 
             {isFailed && parse?.lastErrorMessage ? (
-              <div className="flex items-start gap-2 rounded-md border border-error-text/30 bg-error-text/5 px-3 py-2 text-[11px] text-ink-body">
+              <div className="flex items-start gap-2 rounded-md border border-error-text/30 bg-error-text/5 px-3 py-2 text-2xs text-ink-body">
                 <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-error-text" />
                 <div className="min-w-0 flex-1">
                   <div className="font-medium text-error-text">

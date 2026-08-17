@@ -1,13 +1,13 @@
 {
   "version": 1,
   "note": "Current known design-rule debt. scripts/design-audit.mjs fails when counts increase.",
-  "generatedAt": "2026-07-13T07:05:45.936Z",
+  "generatedAt": "2026-08-17T13:55:53.272Z",
   "counts": {
-    "hex-color": 249,
-    "arbitrary-px-text": 299,
-    "arbitrary-px-radius": 87,
+    "hex-color": 226,
+    "arbitrary-px-text": 70,
+    "arbitrary-px-radius": 34,
     "manual-rgba-shadow": 10,
-    "tailwind-palette-color": 145,
+    "tailwind-palette-color": 134,
     "secondary-variant": 0
   }
 }

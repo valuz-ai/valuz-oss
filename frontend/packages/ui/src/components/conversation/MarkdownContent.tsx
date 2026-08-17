@@ -895,7 +895,7 @@ const RICH_TEXT_OVERRIDES = [
   "[&_[data-streamdown='table-wrapper']]:overflow-hidden",
   "[&_[data-streamdown='table-wrapper']]:p-0",
   "[&_[data-streamdown='table-wrapper']]:gap-0",
-  "[&_[data-streamdown='table-wrapper']]:text-[13px]",
+  "[&_[data-streamdown='table-wrapper']]:text-sm",
   // Toolbar region — overlay only, so it does not create a second header row.
   // Do not identify it merely by the presence of a button: citation-quality
   // markers inside table cells are buttons too.  Streamdown's data region is
@@ -954,7 +954,7 @@ const RICH_TEXT_OVERRIDES = [
   "[&_[data-streamdown='table-row']:last-child]:border-b-0",
   "[&_[data-streamdown='table-cell']]:px-[14px]",
   "[&_[data-streamdown='table-cell']]:py-[9px]",
-  "[&_[data-streamdown='table-cell']]:text-[13px]",
+  "[&_[data-streamdown='table-cell']]:text-sm",
   "[&_[data-streamdown='table-cell']]:text-ink-heading",
   "[&_[data-streamdown='table-cell']]:text-right",
   "[&_[data-streamdown='table-cell']:first-child]:text-left",

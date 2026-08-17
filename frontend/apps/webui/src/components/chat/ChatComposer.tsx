@@ -73,7 +73,7 @@ export const ChatComposer = ({
         className="min-h-20 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
       />
       <div className="mt-2 flex items-center justify-between">
-        <div className="text-[11px] text-muted-foreground">
+        <div className="text-2xs text-muted-foreground">
           {isStreaming ? "Streaming response..." : ""}
         </div>
         <div className="flex items-center gap-1.5">

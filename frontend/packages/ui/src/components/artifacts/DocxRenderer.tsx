@@ -89,7 +89,7 @@ export function DocxRenderer({ artifact, content }: ArtifactRendererProps) {
       {error ? (
         <div className="flex h-full items-center justify-center px-6 py-16">
           <div
-            className="max-w-[420px] rounded-[10px] border border-error-light bg-error-light px-5 py-4 text-error-text"
+            className="max-w-[420px] rounded-xl border border-error-light bg-error-light px-5 py-4 text-error-text"
             role="alert"
           >
             <div className="text-sm font-medium">{t("ui.artifact.docxPreviewFailed")}</div>

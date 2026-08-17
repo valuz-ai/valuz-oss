@@ -48,7 +48,7 @@ export const ConversationSummaryCard: FC<ConversationSummaryCardProps> = ({
             </span>
             <div className="flex flex-wrap gap-1.5">
               {references.map((ref, i) => (
-                <Badge key={i} variant="outline" className="text-[11px]">
+                <Badge key={i} variant="outline" className="text-2xs">
                   {ref}
                 </Badge>
               ))}

@@ -185,7 +185,7 @@ export const ActivityFeedList = ({
           className="flex w-full cursor-default items-center gap-2 rounded-xl px-3 py-3 text-left outline-none transition-colors hover:bg-surface-soft focus-visible:bg-surface-soft"
         >
           {!hideScopeTag && (
-            <span className="inline-flex max-w-[45%] shrink-0 items-center gap-1 text-[11px] text-ink-muted">
+            <span className="inline-flex max-w-[45%] shrink-0 items-center gap-1 text-2xs text-ink-muted">
               <Icon className="h-3 w-3 shrink-0" strokeWidth={2} />
               <span className="truncate">{scopeText}</span>
             </span>
@@ -195,7 +195,7 @@ export const ActivityFeedList = ({
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-heading">
             {item.title}
           </span>
-          <span className="shrink-0 whitespace-nowrap text-[11px] text-ink-meta">
+          <span className="shrink-0 whitespace-nowrap text-2xs text-ink-meta">
             {formatCreatedAt(item.sort_at, t)}
           </span>
           <span className="relative inline-flex min-w-6 shrink-0 items-center justify-center">

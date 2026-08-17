@@ -78,12 +78,12 @@ export const ConnectorListItem = ({
         <StatusPill
           status={status}
           label={statusLabel}
-          className="shrink-0 px-1.5 py-0 text-[10px] leading-4"
+          className="shrink-0 px-1.5 py-0 text-micro leading-4"
         />
       ) : badge ? (
         <Badge
           variant="metaNeutral"
-          className="h-4 shrink-0 px-1 text-[10px] leading-4 font-normal text-ink-meta"
+          className="h-4 shrink-0 px-1 text-micro leading-4 font-normal text-ink-meta"
         >
           {badge}
         </Badge>

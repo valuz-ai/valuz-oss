@@ -70,7 +70,7 @@ function QuestionBlock({
     <fieldset disabled={answered} className="space-y-1.5">
       <div className="flex items-center gap-2">
         {header ? (
-          <span className="inline-flex rounded-md bg-brand/10 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wider text-brand">
+          <span className="inline-flex rounded-md bg-brand/10 px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wider text-brand">
             {header}
           </span>
         ) : null}
@@ -85,7 +85,7 @@ function QuestionBlock({
               type="button"
               onClick={() => onToggle(opt.label)}
               className={cn(
-                "flex w-full items-start gap-2.5 rounded-md border px-3 py-2 text-left text-[13px] transition-colors focus:outline-none",
+                "flex w-full items-start gap-2.5 rounded-md border px-3 py-2 text-left text-sm transition-colors focus:outline-none",
                 isSelected
                   ? "border-brand/40 bg-brand/5"
                   : "border-transparent bg-surface hover:bg-surface-2",
@@ -118,7 +118,7 @@ function QuestionBlock({
               <div className="min-w-0 flex-1">
                 <span className="font-medium text-ink-body">{opt.label}</span>
                 {opt.description ? (
-                  <p className="mt-0.5 text-[12px] leading-snug text-ink-meta">
+                  <p className="mt-0.5 text-xs leading-snug text-ink-meta">
                     {opt.description}
                   </p>
                 ) : null}
@@ -142,7 +142,7 @@ function QuestionBlock({
             }
           }}
           className={cn(
-            "flex w-full items-start gap-2.5 rounded-md border px-3 py-2 text-left text-[13px] transition-colors focus:outline-none",
+            "flex w-full items-start gap-2.5 rounded-md border px-3 py-2 text-left text-sm transition-colors focus:outline-none",
             otherSelected
               ? "border-brand/40 bg-brand/5"
               : "border-transparent bg-surface hover:bg-surface-2",
@@ -184,7 +184,7 @@ function QuestionBlock({
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
               placeholder={t("conversation.customAnswerPlaceholder")}
-              className="mt-1 block w-full rounded border border-surface-border bg-surface px-2 py-1 text-[12px] text-ink-body placeholder:text-ink-meta/60 focus:border-brand focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              className="mt-1 block w-full rounded border border-surface-border bg-surface px-2 py-1 text-xs text-ink-body placeholder:text-ink-meta/60 focus:border-brand focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
             />
           </div>
         </div>

@@ -67,7 +67,7 @@ export const QueuedInputsBar = ({
     // lines up with the input below it instead of spanning the full column.
     <div className="mx-auto mb-1.5 w-full max-w-[760px] space-y-1.5">
       <div className="flex items-center justify-between px-1">
-        <span className="text-[11px] text-ink-meta">
+        <span className="text-2xs text-ink-meta">
           {queue.length > 0
             ? `${t("common.queueRunsAfter")} (${queue.length})`
             : t("common.queueSending")}
@@ -93,7 +93,7 @@ export const QueuedInputsBar = ({
         >
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
-              <p className="line-clamp-2 text-[13px] text-ink-body">
+              <p className="line-clamp-2 text-sm text-ink-body">
                 {dispatching.text}
               </p>
               {dispatching.attachment_count > 0 && (
@@ -125,7 +125,7 @@ export const QueuedInputsBar = ({
                 value={editText}
                 onChange={(e) => setEditText(e.target.value)}
                 rows={2}
-                className="resize-none text-[13px]"
+                className="resize-none text-sm"
               />
               <div className="flex justify-end gap-1.5">
                 <Button
@@ -150,16 +150,16 @@ export const QueuedInputsBar = ({
           ) : (
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0 flex-1">
-                <p className="line-clamp-2 text-[13px] text-ink-body">
+                <p className="line-clamp-2 text-sm text-ink-body">
                   {item.text}
                 </p>
                 {item.status === "blocked" && (
-                  <p className="mt-0.5 text-[11px] text-error-text">
+                  <p className="mt-0.5 text-2xs text-error-text">
                     {item.error_message || t("common.queueBlocked")}
                   </p>
                 )}
                 {item.attachment_count > 0 && (
-                  <p className="mt-0.5 flex items-center gap-1 text-[11px] text-ink-meta">
+                  <p className="mt-0.5 flex items-center gap-1 text-2xs text-ink-meta">
                     <Paperclip className="size-3" />
                     {item.attachment_count}
                   </p>

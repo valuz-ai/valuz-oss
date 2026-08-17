@@ -34,7 +34,7 @@ export const ParsingModeSelector: FC<ParsingModeSelectorProps> = ({
                 {mode.name}
               </span>
               <span className="text-xs text-ink-body">{mode.detail}</span>
-              <span className="mt-1 text-[11px] uppercase text-ink-muted">
+              <span className="mt-1 text-2xs uppercase text-ink-muted">
                 {mode.latency}
               </span>
             </div>

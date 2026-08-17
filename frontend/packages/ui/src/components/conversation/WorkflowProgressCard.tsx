@@ -128,7 +128,7 @@ export const WorkflowProgressCard = memo(
               <button
                 type="button"
                 onClick={() => onOpenStateFile?.(state.statePath as string)}
-                className="inline-flex items-center gap-1.5 text-[11px] text-brand transition-colors hover:underline"
+                className="inline-flex items-center gap-1.5 text-2xs text-brand transition-colors hover:underline"
               >
                 <FileText className="h-3 w-3 shrink-0" aria-hidden />
                 {t("conversation.workflow.viewDetails")}
@@ -160,7 +160,7 @@ export const WorkflowProgressCard = memo(
                   </span>
                   <span
                     className={cn(
-                      "shrink-0 text-[11px]",
+                      "shrink-0 text-2xs",
                       isDone ? "text-success-text" : "text-ink-meta",
                     )}
                   >

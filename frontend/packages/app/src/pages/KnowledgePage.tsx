@@ -799,7 +799,7 @@ export const KnowledgePage = ({
               paddingRight: "12px",
             }}
             className={cn(
-              "mx-5 flex w-[calc(100%-40px)] items-center gap-2 rounded-[8px] border-b border-[#f7f8fa] py-2.5 text-left transition-colors",
+              "mx-5 flex w-[calc(100%-40px)] items-center gap-2 rounded-lg border-b border-[#f7f8fa] py-2.5 text-left transition-colors",
               node.status === "missing"
                 ? "opacity-60"
                 : "hover:bg-surface-soft",
@@ -836,7 +836,7 @@ export const KnowledgePage = ({
               paddingRight: "12px",
             }}
             className={cn(
-              "mx-5 flex w-[calc(100%-40px)] items-center gap-2 rounded-[8px] border-b border-[#f7f8fa] py-2.5 text-left transition-colors",
+              "mx-5 flex w-[calc(100%-40px)] items-center gap-2 rounded-lg border-b border-[#f7f8fa] py-2.5 text-left transition-colors",
               selectedDocId === node.id
                 ? "bg-brand-light/35"
                 : "hover:bg-surface-soft",
@@ -927,14 +927,14 @@ export const KnowledgePage = ({
                             onClick={() => enterKb(kb.id)}
                             className={cn(
                               "group",
-                              "flex min-h-[148px] w-full flex-col rounded-[12px] border border-surface-border",
+                              "flex min-h-[148px] w-full flex-col rounded-2xl border border-surface-border",
                               "bg-[#ffffff] p-4 text-left shadow-xs transition-all",
                               "hover:-translate-y-1 hover:bg-[#ffffff] hover:shadow-md",
                               isProcessing && "bg-brand-light/25",
                             )}
                           >
                             <div className="flex items-start justify-between gap-3">
-                              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-[#f3f2ff] text-brand">
+                              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#f3f2ff] text-brand">
                                 <KbIcon className="h-4 w-4" />
                               </div>
                               {isProcessing ? (

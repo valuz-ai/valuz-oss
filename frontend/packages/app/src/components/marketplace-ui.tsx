@@ -100,7 +100,7 @@ export function MarketplaceBadgePill({ badge }: { badge: MarketplaceBadge }) {
   const key = BADGE_LABEL_KEYS[badge];
   return (
     <span
-      className="inline-flex items-center rounded border border-surface-border px-1.5 py-0.5 text-[10px] font-medium"
+      className="inline-flex items-center rounded border border-surface-border px-1.5 py-0.5 text-micro font-medium"
       style={{ background: style.bg, color: style.fg }}
     >
       {key ? t(key as Parameters<typeof t>[0]) : humanizeWireValue(badge)}

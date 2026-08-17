@@ -54,7 +54,7 @@ export const ConnectorDetailPanel = ({
           <ConnectorIcon
             name={name}
             iconUrl={iconUrl}
-            className="mx-auto h-10 w-10 rounded-[10px]"
+            className="mx-auto h-10 w-10 rounded-xl"
           />
           <p className="mt-3 text-xs leading-[1.6] text-ink-body">
             {t("connector.notConnectedYet", { name })}

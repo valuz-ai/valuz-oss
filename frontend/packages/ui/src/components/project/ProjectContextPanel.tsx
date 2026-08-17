@@ -79,7 +79,7 @@ function FileTypeIcon({ filename }: { filename: string }) {
 
   return (
     <span
-      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[8px] bg-surface-muted"
+      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-surface-muted"
       data-testid="uploaded-file-type-icon"
     >
       <Icon aria-hidden="true" className="h-3.5 w-3.5 text-ink-muted" />
@@ -996,7 +996,7 @@ export function AccordionSection({
             )}
             strokeWidth={1.9}
           />
-          <span className="flex-1 text-left text-[13px] font-medium text-ink-heading">
+          <span className="flex-1 text-left text-sm font-medium text-ink-heading">
             {title}
           </span>
           {count !== undefined && (
@@ -1398,7 +1398,7 @@ export const ProjectDetailContextPanel = ({
                   <button
                     type="button"
                     onClick={() => onRemoveUploadedFile(f.id)}
-                    className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-meta opacity-0 transition group-hover:opacity-100 hover:bg-red-50 hover:text-red-500"
+                    className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-meta opacity-0 transition group-hover:opacity-100 hover:bg-error-light hover:text-error-text"
                     title={t("common.remove")}
                   >
                     <X className="h-3 w-3" />
@@ -1783,7 +1783,7 @@ export const ProjectDetailContextPanel = ({
                                   event.currentTarget.blur();
                                   onRemoveMember(member.slug);
                                 }}
-                                className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-red-50 hover:text-red-600"
+                                className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-error-light hover:text-error-text"
                                 title={t(
                                   "agent.deleteMember" as Parameters<
                                     typeof t
@@ -1900,7 +1900,7 @@ export const ProjectDetailContextPanel = ({
                               event.currentTarget.blur();
                               onDiscardWorktree(wt);
                             }}
-                            className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-red-50 hover:text-red-600"
+                            className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-error-light hover:text-error-text"
                             title={t(
                               "project.worktreeDiscard" as Parameters<
                                 typeof t
@@ -1996,7 +1996,7 @@ export const ProjectDetailContextPanel = ({
                       <button
                         type="button"
                         onClick={() => onRemoveSkill(skill.id)}
-                        className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-ink-meta opacity-0 transition group-hover:opacity-100 hover:bg-red-50 hover:text-red-500"
+                        className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-ink-meta opacity-0 transition group-hover:opacity-100 hover:bg-error-light hover:text-error-text"
                         title={t("common.remove")}
                       >
                         <X className="h-3 w-3" />
@@ -2062,7 +2062,7 @@ export const ProjectDetailContextPanel = ({
                       <button
                         type="button"
                         onClick={() => onToggleMcpServer(server.slug, false)}
-                        className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-ink-meta opacity-0 transition group-hover:opacity-100 hover:bg-red-50 hover:text-red-500"
+                        className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-ink-meta opacity-0 transition group-hover:opacity-100 hover:bg-error-light hover:text-error-text"
                         title={t("common.remove" as Parameters<typeof t>[0])}
                       >
                         <X className="h-3 w-3" />
@@ -2622,7 +2622,7 @@ export const ProjectDetailContextPanel = ({
                                 event.currentTarget.blur();
                                 onDeleteChat(chat.id);
                               }}
-                              className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-red-50 hover:text-red-600"
+                              className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-error-light hover:text-error-text"
                               aria-label={t(
                                 "project.deleteChat" as Parameters<typeof t>[0],
                               )}

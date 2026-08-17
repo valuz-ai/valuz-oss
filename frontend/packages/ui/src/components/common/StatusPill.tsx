@@ -25,7 +25,7 @@ export const StatusPill: FC<StatusPillProps> = ({
       className={cn(
         // ``relative + overflow-hidden`` are only needed for the running
         // shimmer overlay below, but they're cheap on the static states.
-        "relative inline-flex h-5 shrink-0 items-center gap-1 overflow-hidden rounded-[4px] px-2 py-0 text-[11px] font-medium",
+        "relative inline-flex h-5 shrink-0 items-center gap-1 overflow-hidden rounded-sm px-2 py-0 text-2xs font-medium",
         statusPillClass(status),
         className,
       )}

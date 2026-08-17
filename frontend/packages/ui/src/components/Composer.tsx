@@ -210,7 +210,7 @@ const buildChipNode = (skill: SkillSearchItem): HTMLElement => {
   chip.contentEditable = "false";
   chip.dataset.skillName = skill.name;
   chip.className =
-    "mr-0.5 inline-flex h-5 items-center gap-1 rounded-[4px] bg-brand-100 px-2 py-0 text-2xs text-brand-700 align-middle select-none";
+    "mr-0.5 inline-flex h-5 items-center gap-1 rounded-sm bg-brand-100 px-2 py-0 text-2xs text-brand-700 align-middle select-none";
   chip.innerHTML = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg><span>${skill.name}</span>`;
   return chip;
 };
@@ -1605,7 +1605,7 @@ export const Composer = ({
               )}
               data-empty={currentValue ? undefined : ""}
               className={cn(
-                "min-h-[44px] max-h-[180px] w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent px-2 text-[13px] leading-[1.55] text-ink-heading focus:outline-none",
+                "min-h-[44px] max-h-[180px] w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent px-2 text-sm leading-[1.55] text-ink-heading focus:outline-none",
                 "data-[empty]:before:pointer-events-none data-[empty]:before:text-ink-body data-[empty]:before:content-[attr(data-placeholder)]",
               )}
               onInput={handleEditorInput}
@@ -2001,7 +2001,7 @@ export const Composer = ({
                               <span className="truncate text-[12.5px] leading-[18px]">
                                 {item.label}
                               </span>
-                              <span className="truncate text-[11px] leading-[15px] text-ink-meta">
+                              <span className="truncate text-2xs leading-[15px] text-ink-meta">
                                 {item.hint}
                               </span>
                             </span>
@@ -2247,7 +2247,7 @@ export const Composer = ({
                               the task detail page uses (TaskContextPanel
                               + sub-sidebar). */}
                           {mode === "task" && (
-                            <span className="inline-flex h-4 shrink-0 items-center rounded-[4px] bg-brand-light px-1 text-[10px] leading-none font-normal text-brand-700">
+                            <span className="inline-flex h-4 shrink-0 items-center rounded-sm bg-brand-light px-1 text-micro leading-none font-normal text-brand-700">
                               {t("task.runLead" as Parameters<typeof t>[0])}
                             </span>
                           )}
@@ -3100,7 +3100,7 @@ export const Composer = ({
                                 </button>
                               );
                             })}
-                            <div className="mx-1.5 mt-1 border-t border-[color:var(--fg-3)] px-2 pt-1.5 pb-0.5 text-[11px] text-ink-meta">
+                            <div className="mx-1.5 mt-1 border-t border-[color:var(--fg-3)] px-2 pt-1.5 pb-0.5 text-2xs text-ink-meta">
                               {t("effort.hint" as Parameters<typeof t>[0])}
                             </div>
                           </div>

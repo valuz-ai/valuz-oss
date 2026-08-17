@@ -65,7 +65,7 @@ const API_KEY_DISPLAY: Record<string, string> = {
 };
 
 const DEFAULT_BADGE_CLASS =
-  "h-4 rounded-[4px] px-1 py-0 text-[10px] leading-none font-normal";
+  "h-4 rounded-sm px-1 py-0 text-micro leading-none font-normal";
 const AVAILABLE_BADGE_CLASS = "rounded-full text-2xs";
 
 // group key → section header i18n key. api_key is handled separately (it always
@@ -392,7 +392,7 @@ const OptionCard = ({
     >
       <div className="flex items-center gap-3.5 px-4 py-3.5" {...headerProps}>
         <div
-          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[13px] font-bold ${
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-sm font-bold ${
             selected || isDefault
               ? "bg-brand/10 text-brand"
               : "bg-surface-soft text-ink-meta"
