@@ -89,6 +89,7 @@ def test_secret_values_use_environment_references_not_argv(
     assert "env_http_headers.Authorization" in serialized_argv
     assert 'mcp_servers.local.env_vars=["LOCAL_TOKEN"]' in config.config_overrides
     assert "shell_environment_policy.ignore_default_excludes=false" in config.config_overrides
+    assert 'shell_environment_policy.inherit="core"' in config.config_overrides
 
     secret_env = {
         key: value
@@ -123,3 +124,21 @@ def test_runtime_control_environment_names_fail_closed(name: str) -> None:
 
     with pytest.raises(RuntimeError, match="cannot securely externalize"):
         codex_runtime._externalize_mcp_secrets(session, overrides)
+
+
+@pytest.mark.parametrize("base_url", [None, "https://gateway.example.com/v1"])
+def test_custom_provider_secrets_force_core_shell_inheritance(base_url: str | None) -> None:
+    provider = codex_runtime.ModelProvider(
+        api_protocol="openai_response",
+        api_key="provider-secret",
+        base_url=base_url,
+    )
+
+    overrides = codex_runtime._build_config_overrides(
+        _session(local_env={}),
+        provider,
+        "gpt-5.5",
+    )
+
+    assert "shell_environment_policy.ignore_default_excludes=false" in overrides
+    assert 'shell_environment_policy.inherit="core"' in overrides

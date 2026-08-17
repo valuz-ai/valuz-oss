@@ -1502,6 +1502,8 @@ _HARNESS_PROVIDER_ENV_KEY = "HARNESS_CODEX_PROVIDER_API_KEY"
 # is the harness's "show reasoning summaries by default" stance.
 _CODEX_REASONING_SUMMARY_DEFAULT = "auto"
 _CODEX_MCP_SECRET_ENV_PREFIX = "VALUZ_CODEX_MCP_SECRET_"
+_CODEX_SHELL_APPLY_SECRET_FILTERS = "shell_environment_policy.ignore_default_excludes=false"
+_CODEX_SHELL_CORE_INHERIT = 'shell_environment_policy.inherit="core"'
 _CODEX_MCP_UNSAFE_PARENT_ENV_NAMES = frozenset(
     {
         "ALL_PROXY",
@@ -1596,9 +1598,21 @@ def _externalize_mcp_secrets(
                 f"mcp_servers.{cfg.name}.env_http_headers.{_toml_key(key)}={_toml_quote(env_name)}"
             )
 
-    shell_secret_filter = "shell_environment_policy.ignore_default_excludes=false"
-    if secret_env and shell_secret_filter not in overrides:
-        add.append(shell_secret_filter)
+    if secret_env:
+        # codex-cli 0.144.4 applies the automatic KEY/SECRET/TOKEN filter to
+        # app-server ``command/exec`` requests, but its model-facing ``shell``
+        # tool can still inherit the full app-server environment.  MCP header
+        # values have to live in that parent environment for
+        # ``env_http_headers`` to resolve them, so make shell inheritance
+        # fail-closed at the stronger ``core`` baseline.  This keeps HOME,
+        # PATH, and the other portable process essentials while excluding
+        # Valuz's generated header variables and explicit stdio secrets.
+        for policy in (
+            _CODEX_SHELL_APPLY_SECRET_FILTERS,
+            _CODEX_SHELL_CORE_INHERIT,
+        ):
+            if policy not in overrides:
+                add.append(policy)
     safe_overrides = tuple(value for value in overrides if value not in remove) + tuple(add)
     serialized = "\n".join(safe_overrides)
     leaked = [value for value in secret_env.values() if value and value in serialized]
@@ -1822,7 +1836,7 @@ def _build_config_overrides(
             # replacing the user's legacy exclude/include arrays. This keeps
             # the per-session provider key in the model transport process but
             # out of shell and other command subprocesses.
-            overrides.append("shell_environment_policy.ignore_default_excludes=false")
+            overrides.append(_CODEX_SHELL_APPLY_SECRET_FILTERS)
     elif provider is not None and model:
         # First-party OpenAI: no synthetic provider block, no
         # ``model_provider=harness`` override. Codex uses its built-in
@@ -1834,6 +1848,18 @@ def _build_config_overrides(
         # string here would make codex try to resolve a deployment named
         # ``""`` and fail with "Missed model deployment".
         overrides.append(f"model={_toml_quote(model)}")
+
+    if provider is not None:
+        # Every custom provider path puts an API key in the app-server parent
+        # environment (HARNESS_CODEX_PROVIDER_API_KEY or OPENAI_API_KEY).
+        # codex-cli 0.144.4's model ``shell`` path does not reliably honor the
+        # name-based default filter, so use the same fail-closed inheritance
+        # boundary as MCP secrets.  Avoid changing native ChatGPT subscription
+        # sessions, which carry no provider credential in the process env.
+        if _CODEX_SHELL_APPLY_SECRET_FILTERS not in overrides:
+            overrides.append(_CODEX_SHELL_APPLY_SECRET_FILTERS)
+        if _CODEX_SHELL_CORE_INHERIT not in overrides:
+            overrides.append(_CODEX_SHELL_CORE_INHERIT)
 
     return tuple(overrides)
 
@@ -1862,9 +1888,11 @@ def _build_codex_env(
 
     ``mcp_secret_env`` carries values referenced by secret-free MCP
     ``env_http_headers`` / ``env_vars`` config entries. Generated HTTP-header
-    names contain ``SECRET`` so Codex's shell environment policy strips them
-    from shell tools. Stdio variables are explicitly allowlisted for MCP and
-    common secret-shaped names are filtered from shell tools as well.
+    names contain ``SECRET`` for defense in depth.  The generated config also
+    constrains model shell tools to Codex's ``core`` inheritance baseline,
+    because codex-cli 0.144.4 does not reliably apply its name filter on that
+    execution path.  Stdio variables remain explicitly available to their MCP
+    processes without being inherited by model shell commands.
     """
     if provider is None:
         if egress_base_url is None and not mcp_secret_env:
