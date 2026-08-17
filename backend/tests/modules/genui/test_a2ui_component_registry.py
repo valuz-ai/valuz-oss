@@ -59,13 +59,25 @@ def test_selected_catalog_keeps_only_requested_entries_and_registered_notes() ->
     assert "Use a registered finance source" in catalog
 
 
-def test_registered_notes_can_be_filtered_by_selected_source_key() -> None:
+def test_registered_notes_can_be_filtered_by_selected_component() -> None:
+    """``component_data_names`` narrows contract notes to the chosen components.
+
+    The key is the ``component`` field of a ``COMPONENT_DATA_CONTRACT`` note —
+    a note carrying no contract key is shared guidance and always survives, so
+    narrowing the components never silently drops the rules that apply to all
+    of them.
+    """
     protocol.build_a2ui_catalog("all")
     _register(
         notes=(
             "Binding-first shared rule.",
-            "finance.market.quote (params {symbol}) → QuoteStrip.",
-            "finance.market.kline (params {symbols}) → TimeSeriesChart.",
+            'COMPONENT_DATA_CONTRACT {"component":"QuoteStrip","params":"{symbol: prefixed}",'
+            '"inputs":[{"key":"quote","source":"finance.market.quote",'
+            '"shape":"FinanceMetricData","bindings":{"metrics":"metrics"}}]}',
+            'COMPONENT_DATA_CONTRACT {"component":"TimeSeriesChart",'
+            '"params":"{symbols: comma-separated symbols}",'
+            '"inputs":[{"key":"prices","source":"finance.market.kline",'
+            '"shape":"FinanceTimeSeriesData","bindings":{"data":"data"}}]}',
             "Shared closing rule.",
         )
     )
@@ -74,13 +86,16 @@ def test_registered_notes_can_be_filtered_by_selected_source_key() -> None:
         "all",
         component_names=("SecuritySnapshot",),
         include_edition_data_notes=True,
-        data_source_ids=("finance.market.kline",),
+        component_data_names=("TimeSeriesChart",),
     )
 
+    # Keyless notes are shared guidance — never filtered out.
     assert "Binding-first shared rule" in catalog
+    assert "Shared closing rule" in catalog
+    # The selected component's contract survives; the unselected one is dropped.
     assert "finance.market.kline" in catalog
     assert "finance.market.quote" not in catalog
-    assert "Shared closing rule" in catalog
+    assert "QuoteStrip" not in catalog
 
 
 def test_scope_split_tracks_component_origin() -> None:

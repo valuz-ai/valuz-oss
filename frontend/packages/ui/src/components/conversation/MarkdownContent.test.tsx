@@ -545,7 +545,7 @@ describe("MarkdownContent citations", () => {
     fireEvent.mouseEnter(pill);
     expect(screen.getByText("1 Annual report")).not.toBeNull();
     expect(
-      screen.getByRole("button", { name: /^1Annual report$/i }),
+      screen.getByRole("button", { name: /^1 Annual report$/i }),
     ).not.toBeNull();
   });
 
@@ -571,10 +571,10 @@ describe("MarkdownContent citations", () => {
     expect(pill.parentElement?.className).toContain("mx-0.5");
 
     const firstSource = screen.getByRole("button", {
-      name: /^1Annual report$/i,
+      name: /^1 Annual report$/i,
     });
     const secondSource = screen.getByRole("button", {
-      name: /^2Earnings release$/i,
+      name: /^2 Earnings release$/i,
     });
     expect(firstSource.parentElement).toBe(secondSource.parentElement);
     expect(firstSource.parentElement?.className).toContain("flex-col");
@@ -631,10 +631,10 @@ describe("MarkdownContent citations", () => {
       screen.getByRole("button", { name: /(?:citation|引用) 2/i }),
     ).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: /^1–2Annual report$/i }),
+      screen.getByRole("button", { name: /^1–2 Annual report$/i }),
     ).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: /^2Annual report$/i }),
+      screen.queryByRole("button", { name: /^2 Annual report$/i }),
     ).toBeNull();
   });
 
@@ -863,7 +863,8 @@ describe("MarkdownContent citations", () => {
     expect(
       document.querySelectorAll("[data-citation-evidence-text]"),
     ).toHaveLength(1);
-    expect(screen.getByRole("table").className).toContain("text-[11px]");
+    // 11px, now expressed as the design token instead of an arbitrary value.
+    expect(screen.getByRole("table").className).toContain("text-2xs");
     expect(
       screen.getByRole("cell", { name: "145,928" }).className,
     ).toContain("px-2");
@@ -1447,9 +1448,14 @@ describe("MarkdownContent citations", () => {
     fireEvent.mouseEnter(
       screen.getByRole("button", { name: /(?:citation|引用) 1/i }),
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: /1 Annual report/i }),
+    // The hover card's title link and the source-list row now share the same
+    // leading text, so the accessible name no longer identifies one of them.
+    // This test is about the title link — address it by its marker.
+    const titleLink = document.querySelector<HTMLElement>(
+      "[data-citation-title-link='true']",
     );
+    expect(titleLink).not.toBeNull();
+    fireEvent.click(titleLink!);
 
     expect(onCitationClick).toHaveBeenCalledWith({
       messageId: "msg-title",
@@ -2625,20 +2631,20 @@ describe("MarkdownContent citations", () => {
     const wrapper = container.querySelector<HTMLElement>(
       "[data-streamdown='table-wrapper']",
     );
-    const dataRegion = wrapper?.querySelector<HTMLElement>(
-      ":scope > div:has([data-streamdown='table'])",
-    );
-    expect(dataRegion).not.toBeNull();
-    expect(dataRegion?.querySelector("[data-citation-claim-quality]")).not.toBeNull();
-    const toolbarRegions = wrapper?.querySelectorAll(
-      ":scope > div:not(:has([data-streamdown='table']))",
-    );
+    // jsdom implements no `:has()` — a `:scope > div:has(...)` query silently
+    // returns nothing there, so the region split is computed in JS instead.
+    // (The `:has()` strings asserted on `className` above are Tailwind
+    // variants shipped to the browser; only the queries need this.)
+    const wrapperRegions = Array.from(wrapper?.children ?? []) as HTMLElement[];
+    const containsTable = (node: HTMLElement) =>
+      node.querySelector("[data-streamdown='table']") !== null;
+    const dataRegion = wrapperRegions.find(containsTable);
+    expect(dataRegion).not.toBeUndefined();
+    const claimMarker = dataRegion?.querySelector("[data-citation-claim-quality]");
+    expect(claimMarker).not.toBeNull();
+    const toolbarRegions = wrapperRegions.filter((node) => !containsTable(node));
     expect(toolbarRegions).toHaveLength(1);
-    expect(
-      toolbarRegions?.[0]?.contains(
-        dataRegion?.querySelector("[data-citation-claim-quality]") ?? null,
-      ),
-    ).toBe(false);
+    expect(toolbarRegions[0]?.contains(claimMarker ?? null)).toBe(false);
   });
 
   it("keeps a table valid when a table-cell audit offset drifted into its delimiter", () => {

@@ -44,6 +44,26 @@ def _observer(
     )
 
 
+#: ``turn_phase`` is host lifecycle metadata marking the post-run verification
+#: window (``_MessageObserverSink._begin_post_run_verification``) — "never
+#: assistant-authored content". The assertions below are about what the RUNTIME
+#: authored and whether a sidecar replaced it, so the markers are filtered out
+#: instead of being baked into every expected list.
+_LIFECYCLE_EVENT_TYPES = {"turn_phase"}
+
+
+def _authored_types(sink: _RecordingSink) -> list[str]:
+    """Event types excluding host lifecycle markers, in order."""
+    return [event.type for event in sink.events if event.type not in _LIFECYCLE_EVENT_TYPES]
+
+
+def _assert_only_lifecycle_extras(sink: _RecordingSink, expected: list[str]) -> None:
+    """The authored stream is exactly ``expected``; any extra is a known marker."""
+    assert _authored_types(sink) == expected
+    extras = {event.type for event in sink.events} - set(expected)
+    assert extras <= _LIFECYCLE_EVENT_TYPES, f"unexpected event types: {sorted(extras)}"
+
+
 def _evidence_payload() -> str:
     return json.dumps(
         {
@@ -370,7 +390,7 @@ async def test_sidecar_failure_never_removes_or_replaces_runtime_message(
     await observer.emit(Event(type="assistant_message", data={"text": original}))
     await observer.emit(Event(type="session_idle", data={"num_turns": 1}))
 
-    assert [event.type for event in sink.events] == ["assistant_message", "session_idle"]
+    _assert_only_lifecycle_extras(sink, ["assistant_message", "session_idle"])
     assert sink.events[0].data["text"] == original
     assert observer.assistant_text == original
 
@@ -437,7 +457,7 @@ async def test_sidecar_computation_runs_off_the_event_loop(monkeypatch: Any) -> 
     release.set()
     await finalize_task
 
-    assert [event.type for event in sink.events] == ["assistant_message", "session_idle"]
+    _assert_only_lifecycle_extras(sink, ["assistant_message", "session_idle"])
 
 
 async def test_partial_after_canonical_message_is_persisted_separately() -> None:
