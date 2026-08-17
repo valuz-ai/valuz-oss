@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Marketplace tab order** — the top-level tabs now read agents → plugins →
+  skills → connectors (plugins moved next to agents) (#918 @St0neWan9).
 - **Marketplace `source` is an open string** — where a market item comes from
   is data the index grows over time; the client no longer validates it against
   a closed enum (which made the whole skills tab fail the moment the index

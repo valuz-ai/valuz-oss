@@ -22,10 +22,12 @@ import {
 
 export type MarketTab = "agents" | "skills" | "plugins" | "connectors";
 
+// Display order: agents → plugins → skills → connectors (plugins sit right
+// after agents as the larger install unit; skills follow).
 const MARKET_TABS: readonly MarketTab[] = [
   "agents",
-  "skills",
   "plugins",
+  "skills",
   "connectors",
 ];
 

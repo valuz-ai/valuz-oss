@@ -118,13 +118,13 @@ describe("MarketplacePage", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders the four top-level tabs in order: agents, skills, plugins, connectors", async () => {
+  it("renders the four top-level tabs in order: agents, plugins, skills, connectors", async () => {
     renderPage();
     const tabs = await screen.findAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent)).toEqual([
       "智能体",
-      "技能",
       "插件",
+      "技能",
       "连接器",
     ]);
     expect(tabs[0].getAttribute("aria-selected")).toBe("true");
@@ -167,7 +167,7 @@ describe("MarketplacePage", () => {
   it("?tab=plugins selects the plugins tab, defaults to 全部 and filters by composition", async () => {
     renderPage("/marketplace?tab=plugins");
     const tabs = await screen.findAllByRole("tab");
-    expect(tabs[2].getAttribute("aria-selected")).toBe("true");
+    expect(tabs[1].getAttribute("aria-selected")).toBe("true");
 
     // Default 全部 → no composition filter; both cards visible with the
     // "N 技能 · M 连接器" members line.
@@ -212,13 +212,13 @@ describe("MarketplacePage", () => {
   it("switching to the plugins tab via the header updates the URL tab param", async () => {
     renderPage();
     const tabs = await screen.findAllByRole("tab");
-    fireEvent.click(tabs[2]);
+    fireEvent.click(tabs[1]);
     await waitFor(() => {
       expect(listSpy).toHaveBeenCalledWith(
         expect.objectContaining({ type: "plugin" }),
       );
     });
-    expect(screen.getAllByRole("tab")[2].getAttribute("aria-selected")).toBe(
+    expect(screen.getAllByRole("tab")[1].getAttribute("aria-selected")).toBe(
       "true",
     );
   });
