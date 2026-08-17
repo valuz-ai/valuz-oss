@@ -90,6 +90,7 @@ def test_secret_values_use_environment_references_not_argv(
     assert 'mcp_servers.local.env_vars=["LOCAL_TOKEN"]' in config.config_overrides
     assert "shell_environment_policy.ignore_default_excludes=false" in config.config_overrides
     assert 'shell_environment_policy.inherit="core"' in config.config_overrides
+    assert "allow_login_shell=false" in config.config_overrides
 
     secret_env = {
         key: value
@@ -132,7 +133,7 @@ def test_runtime_control_environment_names_fail_closed(name: str) -> None:
 
 
 @pytest.mark.parametrize("base_url", [None, "https://gateway.example.com/v1"])
-def test_custom_provider_secrets_force_core_shell_inheritance(base_url: str | None) -> None:
+def test_custom_provider_secrets_disable_login_shell(base_url: str | None) -> None:
     provider = codex_runtime.ModelProvider(
         api_protocol="openai_response",
         api_key="provider-secret",
@@ -147,6 +148,7 @@ def test_custom_provider_secrets_force_core_shell_inheritance(base_url: str | No
 
     assert "shell_environment_policy.ignore_default_excludes=false" in overrides
     assert 'shell_environment_policy.inherit="core"' in overrides
+    assert "allow_login_shell=false" in overrides
     expected_env_key = (
         codex_runtime._HARNESS_PROVIDER_ENV_KEY
         if base_url is not None

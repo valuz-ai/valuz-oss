@@ -212,6 +212,7 @@ def test_codex_uses_local_ingress_without_exposing_real_upstream() -> None:
     assert f'model_providers.harness.base_url="{local}"' in overrides
     assert "shell_environment_policy.ignore_default_excludes=false" in overrides
     assert 'shell_environment_policy.inherit="core"' in overrides
+    assert "allow_login_shell=false" in overrides
     assert (
         'shell_environment_policy.filters.HARNESS_CODEX_PROVIDER_API_KEY="exclude"'
         in overrides
@@ -252,6 +253,7 @@ def test_codex_subscription_uses_native_auth_through_local_ingress() -> None:
     assert "model_providers.harness.supports_websockets=false" in overrides
     assert not any("model_providers.harness.env_key" in value for value in overrides)
     assert "shell_environment_policy.ignore_default_excludes=false" not in overrides
+    assert "allow_login_shell=false" not in overrides
     # No Valuz credential is introduced on the subscription path, so an
     # identically named user variable remains governed by Codex's own policy.
     assert 'mcp_servers.env_probe.env_vars=["HARNESS_CODEX_PROVIDER_API_KEY"]' in overrides
@@ -297,6 +299,7 @@ def test_bundled_codex_core_shell_policy_scrubs_secrets_but_preserves_core_env()
         config_overrides=(
             "shell_environment_policy.ignore_default_excludes=false",
             'shell_environment_policy.inherit="core"',
+            "allow_login_shell=false",
             'shell_environment_policy.filters.HARNESS_CODEX_PROVIDER_API_KEY="exclude"',
         ),
         env={
