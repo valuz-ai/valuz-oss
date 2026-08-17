@@ -189,6 +189,15 @@ class RecoveryService:
                         Path(run.run_dir) if run.run_dir else Path(),
                         "idle",
                         agent_slug=run.agent_slug or "",
+                        # The member's own run row bounds what may be attributed
+                        # to it. Under a shared project cwd ``run_dir`` IS the
+                        # whole project, so omitting this (as this call did)
+                        # means "every file here is yours". Observed on qa: this
+                        # path, reached because the watchdog adopted an orphaned
+                        # task, wrote two members a 56-file manifest apiece —
+                        # the same list for both, including reports written
+                        # three and five days earlier.
+                        since_epoch=(run.created_at or 0) / 1000.0,
                         user_id=user_id,
                     )
                 if rec.run_status:

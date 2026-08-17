@@ -120,7 +120,7 @@ async def collect_manifest(
     run_dir: Path,
     status: str,
     *,
-    since_epoch: float = 0.0,
+    since_epoch: float,
     user_id: str,
 ) -> MemberManifest:
     """Build a SubtaskResult manifest after a member session completes.
@@ -129,9 +129,18 @@ async def collect_manifest(
     artifacts  — list of {path, size} for files under run_dir written by this
                  member. Under v2.1 the member's cwd is the shared project dir,
                  so we attribute artifacts by mtime ≥ *since_epoch* (the
-                 dispatch-start time) instead of relying on a private run dir.
-                 ``since_epoch=0.0`` means "include everything" (worktree /
-                 legacy private dir, where every file is the member's).
+                 member's own run row) instead of relying on a private run dir.
+                 ``0.0`` means "include everything", which is right only for a
+                 worktree / private run dir where every file IS the member's.
+
+                 ``since_epoch`` has NO DEFAULT on purpose. It used to default
+                 to ``0.0``, and three of the four call sites were written
+                 without it over time — each one silently attributing an entire
+                 shared project directory to whichever member happened to
+                 finish. The last of them was found in production, handing two
+                 members the same 56-file list with reports from three earlier
+                 days in it. A parameter whose omission is indistinguishable
+                 from a deliberate "everything" cannot have a default.
     status     — the final session status string
     session_id — for cross-reference
     """
@@ -161,7 +170,7 @@ async def collect_manifest_safe(
     status: str,
     *,
     agent_slug: str,
-    since_epoch: float = 0.0,
+    since_epoch: float,
     user_id: str,
 ) -> MemberManifest:
     """``collect_manifest`` that never raises — the terminal-write callers'
