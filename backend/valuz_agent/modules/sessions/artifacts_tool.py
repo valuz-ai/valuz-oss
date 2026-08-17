@@ -346,7 +346,7 @@ async def _host_binding_receipt(user_id: str, results: list[dict[str, Any]]) -> 
     flow). One trailer at most: the client parses a single trailer at the end
     of the result.
     """
-    from valuz_agent.modules.artifacts.datastore import ArtifactDatastore
+    from valuz_agent.modules.artifacts.service import list_artifact_host_bindings
     from valuz_agent.ports.ui_artifact import ui_artifact_receipt_trailer
 
     candidates = [
@@ -359,22 +359,20 @@ async def _host_binding_receipt(user_id: str, results: list[dict[str, Any]]) -> 
     ]
     if not candidates:
         return ""
-    async with async_unit_of_work(commit=False) as db:
-        ds = ArtifactDatastore(db)
-        for entry in candidates:
-            bindings = await ds.list_bindings_for_artifact(user_id, str(entry["artifactId"]))
-            if not bindings:
-                continue
-            binding = bindings[0]
-            return ui_artifact_receipt_trailer(
-                artifact_id=str(entry["artifactId"]),
-                revision_id=str(entry["revisionId"]),
-                version_no=int(entry.get("versionNo") or 0),
-                host_type=binding.host_type,
-                host_id=binding.host_id,
-                slot=binding.slot or "main",
-                expected_revision_id=binding.artifact_revision_id,
-            )
+    for entry in candidates:
+        bindings = await list_artifact_host_bindings(user_id, str(entry["artifactId"]))
+        if not bindings:
+            continue
+        binding = bindings[0]
+        return ui_artifact_receipt_trailer(
+            artifact_id=str(entry["artifactId"]),
+            revision_id=str(entry["revisionId"]),
+            version_no=int(entry.get("versionNo") or 0),
+            host_type=binding.host_type,
+            host_id=binding.host_id,
+            slot=binding.slot or "main",
+            expected_revision_id=binding.artifact_revision_id,
+        )
     return ""
 
 

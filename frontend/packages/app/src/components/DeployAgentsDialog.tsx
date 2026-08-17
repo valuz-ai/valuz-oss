@@ -166,14 +166,14 @@ export const DeployAgentsDialog = ({
                         {isDeployed && (
                           <Badge
                             variant="outline"
-                            className="shrink-0 px-1.5 py-0 text-[10px] font-normal"
+                            className="shrink-0 px-1.5 py-0 text-micro font-normal"
                           >
                             {t("agent.deployed")}
                           </Badge>
                         )}
                         <Badge
                           variant="outline"
-                          className="shrink-0 px-1.5 py-0 text-[10px] font-normal text-ink-meta"
+                          className="shrink-0 px-1.5 py-0 text-micro font-normal text-ink-meta"
                         >
                           {agent.source === "official"
                             ? t("agent.groupOfficial")

@@ -1199,7 +1199,7 @@ export const TaskDetailPage = () => {
     <>
       <div className="mb-3 flex items-center gap-2">
         <ListTodo className="h-3.5 w-3.5 text-[#6b63e8]" />
-        <h2 className="text-[14px] font-semibold text-[#131313]">
+        <h2 className="text-base font-semibold text-[#131313]">
           {t("task.eventsTitle")}
         </h2>
       </div>
@@ -1304,7 +1304,7 @@ export const TaskDetailPage = () => {
                   {taskPending.length > 1 && (
                     <Badge
                       variant="warning"
-                      className="px-1.5 py-0 text-[10px] leading-4"
+                      className="px-1.5 py-0 text-micro leading-4"
                     >
                       {taskPending.length}
                     </Badge>
@@ -1423,7 +1423,7 @@ export const TaskDetailPage = () => {
             <h1 className="text-[18px] font-semibold leading-6 text-ink-heading">
               {task.title}
             </h1>
-            <div className="mt-2 flex flex-wrap items-center text-[11px] font-normal leading-4">
+            <div className="mt-2 flex flex-wrap items-center text-2xs font-normal leading-4">
               <span
                 className={cn(
                   "inline-flex items-center gap-1",
@@ -1458,7 +1458,7 @@ export const TaskDetailPage = () => {
               )}
               <span className="mx-3 h-3 w-px bg-[#f3f4f6]" />
               <span className="inline-flex items-center gap-1.5 text-[#898f9c]">
-                <span className="inline-flex h-4 shrink-0 items-center rounded-[4px] bg-brand-light px-1 text-[10px] font-normal leading-none text-brand-700">
+                <span className="inline-flex h-4 shrink-0 items-center rounded-sm bg-brand-light px-1 text-micro font-normal leading-none text-brand-700">
                   Lead
                 </span>
                 {leadAgentName ?? task.lead_agent_slug}
@@ -1482,7 +1482,7 @@ export const TaskDetailPage = () => {
               <ClampText
                 text={task.goal}
                 t={t}
-                className="text-[12px] leading-5 text-[#131313]"
+                className="text-xs leading-5 text-[#131313]"
               />
             )}
             {/* Attachment chips — files staged by the user when launching
@@ -1516,7 +1516,7 @@ export const TaskDetailPage = () => {
           <button
             type="button"
             onClick={() => setRunTimelineOpen((v) => !v)}
-            className="mt-4 flex w-full items-center gap-1.5 rounded-md text-[12px] text-ink-meta transition-colors hover:text-ink-heading focus-visible:outline-none focus-visible:ring-[1px] focus-visible:ring-ring/50"
+            className="mt-4 flex w-full items-center gap-1.5 rounded-md text-xs text-ink-meta transition-colors hover:text-ink-heading focus-visible:outline-none focus-visible:ring-[1px] focus-visible:ring-ring/50"
             aria-expanded={runTimelineOpen}
           >
             <ChevronRight
@@ -1580,7 +1580,7 @@ export const TaskDetailPage = () => {
               show the basename so long project-relative paths don't
               dominate the row. */}
             {deliverableOpen && (
-              <div className="overflow-hidden rounded-[8px] border border-[#e6e7e9] bg-white">
+              <div className="overflow-hidden rounded-lg border border-[#e6e7e9] bg-white">
                 {completionInfo.artifacts.length > 0 && (
                   // ``max-h-[240px] overflow-y-auto`` caps the artifact list
                   // so a 30-file deliverable doesn't push the summary
@@ -1600,7 +1600,7 @@ export const TaskDetailPage = () => {
                           >
                             <span
                               className={cn(
-                                "flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px]",
+                                "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
                                 artifactIconBgClassName(basename),
                               )}
                             >
@@ -1613,13 +1613,13 @@ export const TaskDetailPage = () => {
                             </span>
                             <div className="flex min-w-0 flex-1 flex-col justify-center">
                               <span
-                                className="truncate text-[13px] font-semibold leading-5 text-[#1f2937]"
+                                className="truncate text-sm font-semibold leading-5 text-[#1f2937]"
                                 title={absolute}
                               >
                                 {basename}
                               </span>
                               {leadAgentName && (
-                                <span className="relative -top-0.5 text-[11px] leading-4 text-[#9aa3b2]">
+                                <span className="relative -top-0.5 text-2xs leading-4 text-[#9aa3b2]">
                                   {t(
                                     "task.artifactBy" as Parameters<
                                       typeof t
@@ -1649,11 +1649,11 @@ export const TaskDetailPage = () => {
                 >
                   <summary className="flex h-12 cursor-pointer items-center gap-3 px-4 text-left list-none [&::-webkit-details-marker]:hidden">
                     <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[#98a1b2] transition-transform group-open/d:rotate-90" />
-                    <span className="min-w-0 flex-1 text-[13px] font-semibold leading-5 text-[#131313]">
+                    <span className="min-w-0 flex-1 text-sm font-semibold leading-5 text-[#131313]">
                       {t("task.completionSummary" as Parameters<typeof t>[0])}
                     </span>
                   </summary>
-                  <div className="whitespace-pre-wrap px-3 pb-3 pt-0 text-[12px] leading-6 text-ink-body">
+                  <div className="whitespace-pre-wrap px-3 pb-3 pt-0 text-xs leading-6 text-ink-body">
                     {completionInfo.summary}
                   </div>
                 </details>
@@ -1673,7 +1673,7 @@ export const TaskDetailPage = () => {
           // an invisible 0-height scroll box. Sizing to content lets the turns
           // render and the page scroll instead.
           <section className="mt-6 flex w-full flex-col">
-            <div className="mb-3 flex shrink-0 items-center gap-2 text-[12px] font-medium text-ink-heading">
+            <div className="mb-3 flex shrink-0 items-center gap-2 text-xs font-medium text-ink-heading">
               <span className="h-px flex-1 bg-surface-border" />
               {t("task.followUp.heading")}
               <span className="h-px flex-1 bg-surface-border" />
@@ -1730,7 +1730,7 @@ export const TaskDetailPage = () => {
               <div className="flex items-center justify-end px-2 pb-2">
                 <Button
                   size="sm"
-                  className="text-[12px]"
+                  className="text-xs"
                   onClick={() => void handleFollowUpSend()}
                   disabled={followUp.sending || !followUpDraft.trim()}
                   loading={followUp.sending}
@@ -1830,7 +1830,7 @@ export const TaskDetailPage = () => {
             <Button
               size="sm"
               variant="outline"
-              className="text-[12px]"
+              className="text-xs"
               onClick={() =>
                 void runIntervene({ action: "pause" }, "task.paused")
               }
@@ -1843,7 +1843,7 @@ export const TaskDetailPage = () => {
             <Button
               size="sm"
               variant="destructive"
-              className="bg-[#f54b4b] text-[12px] hover:bg-[#f54b4b]/90 focus-visible:ring-[#f54b4b]/20"
+              className="bg-[#f54b4b] text-xs hover:bg-[#f54b4b]/90 focus-visible:ring-[#f54b4b]/20"
               onClick={() =>
                 void runIntervene({ action: "stop" }, "task.stopped")
               }
@@ -2214,7 +2214,7 @@ function ClampText({
               e.stopPropagation();
               setExpanded((v) => !v);
             }}
-            className="text-[11px] font-medium text-brand transition-colors hover:text-brand/80"
+            className="text-2xs font-medium text-brand transition-colors hover:text-brand/80"
           >
             {t(
               (expanded ? "common.collapse" : "common.expand") as Parameters<
@@ -2297,18 +2297,18 @@ function EventBody({
       }
     >
       <div className="flex items-center gap-2">
-        <span className="text-[12px] font-semibold leading-5 text-ink-heading">
+        <span className="text-xs font-semibold leading-5 text-ink-heading">
           {actorLabel}
         </span>
-        <span className="text-[11px] font-semibold leading-5 text-ink-meta">
+        <span className="text-2xs font-semibold leading-5 text-ink-meta">
           {t(meta.labelKey as Parameters<typeof t>[0])}
         </span>
         <span className="ml-auto flex min-w-[112px] items-center justify-end gap-2 text-right opacity-0 transition-opacity group-hover:opacity-100">
-          <span className="text-[11px] tabular-nums text-ink-meta">
+          <span className="text-2xs tabular-nums text-ink-meta">
             {formatEventTime(evt.created_at)}
           </span>
           {clickable && (
-            <span className="text-[11px] text-brand">
+            <span className="text-2xs text-brand">
               {t("task.viewSession" as Parameters<typeof t>[0])}
             </span>
           )}
@@ -2318,7 +2318,7 @@ function EventBody({
         <ClampText
           text={detail}
           t={t}
-          className="mt-1 text-[12px] leading-5 text-ink-body"
+          className="mt-1 text-xs leading-5 text-ink-body"
         />
       )}
     </div>
@@ -2381,18 +2381,18 @@ function GroupedEventCard({
       }
     >
       <div className="flex items-center gap-2">
-        <span className="text-[12px] font-semibold leading-5 text-ink-heading">
+        <span className="text-xs font-semibold leading-5 text-ink-heading">
           {spawnActor}
         </span>
-        <span className="text-[11px] font-semibold leading-5 text-ink-meta">
+        <span className="text-2xs font-semibold leading-5 text-ink-meta">
           {t(spawnMeta.labelKey as Parameters<typeof t>[0])}
         </span>
         <span className="ml-auto flex min-w-[112px] items-center justify-end gap-2 text-right opacity-0 transition-opacity group-hover:opacity-100">
-          <span className="text-[11px] tabular-nums text-ink-meta">
+          <span className="text-2xs tabular-nums text-ink-meta">
             {formatEventTime(spawn.created_at)}
           </span>
           {clickable && (
-            <span className="text-[11px] text-brand">
+            <span className="text-2xs text-brand">
               {t("task.viewSession" as Parameters<typeof t>[0])}
             </span>
           )}
@@ -2402,12 +2402,12 @@ function GroupedEventCard({
         <ClampText
           text={spawnDetail}
           t={t}
-          className="mt-1 text-[12px] leading-5 text-ink-body"
+          className="mt-1 text-xs leading-5 text-ink-body"
         />
       )}
       <div
         className={cn(
-          "mt-2 inline-flex h-5 items-center rounded-[4px] px-2 py-0 text-[10px] leading-4",
+          "mt-2 inline-flex h-5 items-center rounded-sm px-2 py-0 text-micro leading-4",
           outcome
             ? "bg-emerald-50 text-emerald-700"
             : "bg-surface-soft text-ink-meta",

@@ -39,7 +39,7 @@ export const ApprovalRejectInline = memo(function ApprovalRejectInline({
         onChange={(e) => setReason(e.target.value)}
         disabled={submitting}
         placeholder={t("conversation.approvalRejectReasonPlaceholder")}
-        className="min-h-[64px] resize-y text-[12px] leading-snug"
+        className="min-h-[64px] resize-y text-xs leading-snug"
         spellCheck={false}
         autoFocus
       />

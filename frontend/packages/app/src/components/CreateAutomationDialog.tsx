@@ -642,7 +642,7 @@ export const CreateAutomationDialog = ({
                         }
                       >
                         <div className="font-medium">{opt.label}</div>
-                        <div className="mt-0.5 text-[11px] leading-4 text-ink-meta">
+                        <div className="mt-0.5 text-2xs leading-4 text-ink-meta">
                           {opt.hint}
                         </div>
                       </button>
@@ -663,7 +663,7 @@ export const CreateAutomationDialog = ({
                   )}
                 >
                   <div className="flex items-center justify-between gap-3 rounded-lg border border-surface-border bg-card px-3 py-2">
-                    <p className="text-[11px] leading-4 text-ink-meta">
+                    <p className="text-2xs leading-4 text-ink-meta">
                       {t("automation.worktreeHint" as Parameters<typeof t>[0])}
                     </p>
                     <Switch checked={worktree} onCheckedChange={setWorktree} />

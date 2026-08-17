@@ -113,7 +113,7 @@ function ReadonlyResourceList({
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-heading">
             {item.name}
           </span>
-          <span className="shrink-0 text-[11px] text-ink-meta">
+          <span className="shrink-0 text-2xs text-ink-meta">
             {item.status}
           </span>
         </div>
@@ -982,7 +982,7 @@ export const AgentDetailView = ({
                 <span className="flex items-center gap-2 truncate">
                   {agent.name}
                   {isSystem ? (
-                    <span className="inline-flex h-5 shrink-0 items-center rounded-[4px] bg-brand-light px-1.5 text-[10px] font-normal text-brand">
+                    <span className="inline-flex h-5 shrink-0 items-center rounded-sm bg-brand-light px-1.5 text-micro font-normal text-brand">
                       {t("agent.systemBadge" as Parameters<typeof t>[0])}
                     </span>
                   ) : null}
@@ -1284,7 +1284,7 @@ export const AgentDetailView = ({
                         </span>
                       </div>
                       {skill.identifier !== skill.name && (
-                        <div className="mt-0.5 truncate font-mono text-[11px] text-ink-meta">
+                        <div className="mt-0.5 truncate font-mono text-2xs text-ink-meta">
                           {skill.identifier}
                         </div>
                       )}
@@ -1383,7 +1383,7 @@ export const AgentDetailView = ({
                         </span>
                       </div>
                       {connector.name !== connector.slug && (
-                        <div className="mt-0.5 truncate font-mono text-[11px] text-ink-meta">
+                        <div className="mt-0.5 truncate font-mono text-2xs text-ink-meta">
                           {connector.slug}
                         </div>
                       )}
@@ -1420,7 +1420,7 @@ export const AgentDetailView = ({
                           <StatusPill
                             status={connector.status}
                             label={t(statusKey as Parameters<typeof t>[0])}
-                            className="shrink-0 px-1.5 py-0 text-[10px] leading-4"
+                            className="shrink-0 px-1.5 py-0 text-micro leading-4"
                           />
                         ) : null}
                         {connector.removable ? (
@@ -1473,14 +1473,14 @@ export const AgentDetailView = ({
                           label={t(
                             "agent.wecomAibotBound" as Parameters<typeof t>[0],
                           )}
-                          className="px-1.5 py-0 text-[10px] leading-4"
+                          className="px-1.5 py-0 text-micro leading-4"
                         />
                       ) : null}
                       {aibotBoundToThisAgent ? (
                         <StatusPill
                           status={aibotRuntimeStatus.status}
                           label={aibotRuntimeStatus.label}
-                          className="px-1.5 py-0 text-[10px] leading-4"
+                          className="px-1.5 py-0 text-micro leading-4"
                         />
                       ) : null}
                     </div>

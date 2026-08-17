@@ -826,7 +826,7 @@ const UserMessageActions = ({
   return (
     <div className="mt-0.5 flex items-center gap-1">
       {formatted ? (
-        <span className="px-1 text-[11px] text-ink-muted opacity-0 transition-opacity group-hover:opacity-100">
+        <span className="px-1 text-2xs text-ink-muted opacity-0 transition-opacity group-hover:opacity-100">
           {formatted}
         </span>
       ) : null}
@@ -882,7 +882,7 @@ const UserMessageBody = ({
     parts.push(
       <span
         key={`s-${key++}`}
-        className="mr-0.5 inline-flex h-5 items-center gap-1 rounded-[4px] border border-brand/20 bg-brand-100 px-2 py-0 text-2xs text-brand-700 align-middle select-none"
+        className="mr-0.5 inline-flex h-5 items-center gap-1 rounded-sm border border-brand/20 bg-brand-100 px-2 py-0 text-2xs text-brand-700 align-middle select-none"
       >
         <Zap className="h-3 w-3" />
         {entry?.name ?? slug}
@@ -1215,12 +1215,12 @@ const TurnRow = memo(
                 still take a ``space-y-3`` gap and the row would visibly shift
                 when the label appeared. */}
             {headerLabel === null ? null : (
-              <div className="font-sans text-[13px] leading-[1.6] text-[#6e7481]">
+              <div className="font-sans text-sm leading-[1.6] text-[#6e7481]">
                 {headerFoldable ? (
                   <button
                     type="button"
                     onClick={() => setTurnFolded((value) => !value)}
-                    className="inline-flex items-center py-1 text-left text-[13px] font-normal text-[#6e7481] transition-colors hover:text-[#525860]"
+                    className="inline-flex items-center py-1 text-left text-sm font-normal text-[#6e7481] transition-colors hover:text-[#525860]"
                     aria-expanded={!turnFolded}
                   >
                     <span>{headerLabel}</span>
@@ -1232,7 +1232,7 @@ const TurnRow = memo(
                     />
                   </button>
                 ) : (
-                  <div className="inline-flex items-center py-1 text-[13px] font-normal text-[#6e7481]">
+                  <div className="inline-flex items-center py-1 text-sm font-normal text-[#6e7481]">
                     <span>{headerLabel}</span>
                   </div>
                 )}
@@ -1358,7 +1358,7 @@ const TurnRow = memo(
                 role="status"
                 aria-live="polite"
               >
-                <div className="inline-flex items-center gap-1.5 rounded-full border border-surface-border bg-surface-soft/80 px-2.5 py-1 text-[12px] leading-5 text-ink-muted">
+                <div className="inline-flex items-center gap-1.5 rounded-full border border-surface-border bg-surface-soft/80 px-2.5 py-1 text-xs leading-5 text-ink-muted">
                   <LoaderCircle
                     className="h-3.5 w-3.5 shrink-0 animate-spin"
                     aria-hidden="true"
@@ -1377,7 +1377,7 @@ const TurnRow = memo(
             ) : null}
 
             {interruptLabel ? (
-              <div className="py-1.5 text-[13px] italic text-ink-muted">
+              <div className="py-1.5 text-sm italic text-ink-muted">
                 {interruptLabel}
               </div>
             ) : null}

@@ -26,7 +26,7 @@ export const SettingsSection = ({
   <section className={cn("mb-8", fill && "mb-0 flex min-h-0 flex-1 flex-col")}>
     <div className="mb-3">
       {kicker ? (
-        <div className="text-[10px] uppercase tracking-[0.8px] text-ink-section">
+        <div className="text-micro uppercase tracking-[0.8px] text-ink-section">
           {kicker}
         </div>
       ) : null}

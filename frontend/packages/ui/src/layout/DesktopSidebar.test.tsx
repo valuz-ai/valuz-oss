@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { DropdownMenuItem } from "../components/ui/dropdown-menu";
 import { DesktopSidebar } from "./DesktopSidebar";
@@ -119,10 +120,7 @@ describe("DesktopSidebar", () => {
       />,
     );
 
-    fireEvent.pointerDown(screen.getByLabelText("添加项目"), {
-      button: 0,
-      ctrlKey: false,
-    });
+    await userEvent.click(screen.getByLabelText("添加项目"));
 
     expect(await screen.findByText("组织内导入")).toBeTruthy();
   });

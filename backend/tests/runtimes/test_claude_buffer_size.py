@@ -38,7 +38,9 @@ def _make_runtime():
     rt._build_system_prompt = lambda session: "system"
     rt._build_settings = lambda: None
     rt._build_sandbox_settings = lambda: None
-    rt._build_model_provider_env = lambda: None
+    # Mirrors the real signature — the runtime passes the session through so
+    # per-session headers (X-Valuz-Session-Id) reach the provider env.
+    rt._build_model_provider_env = lambda session=None: None
     return rt
 
 

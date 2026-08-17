@@ -753,7 +753,7 @@ const CITATION_MARKDOWN_COMPONENTS = {
     <table
       {...props}
       className={cn(
-        "w-max min-w-full border-collapse text-[11px] leading-4",
+        "w-max min-w-full border-collapse text-2xs leading-4",
         className,
       )}
     />
@@ -781,7 +781,7 @@ const CITATION_MARKDOWN_COMPONENTS = {
     <th
       {...props}
       className={cn(
-        "whitespace-nowrap px-2 py-1.5 text-left text-[11px] font-semibold leading-4",
+        "whitespace-nowrap px-2 py-1.5 text-left text-2xs font-semibold leading-4",
         className,
       )}
     />
@@ -794,7 +794,7 @@ const CITATION_MARKDOWN_COMPONENTS = {
     <td
       {...props}
       className={cn(
-        "whitespace-nowrap px-2 py-1 align-top text-[11px] leading-4",
+        "whitespace-nowrap px-2 py-1 align-top text-2xs leading-4",
         className,
       )}
     />

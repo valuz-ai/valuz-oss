@@ -353,9 +353,9 @@ describe("ConversationTurnList virtualization", () => {
       screen.getByRole("button", { name: /(?:citation|引用) 2/i })
         .textContent,
     ).toBe("2");
-    expect(screen.getByRole("button", { name: /^1Main source$/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^1 Main source$/i })).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: /^2Repair source$/i }),
+      screen.getByRole("button", { name: /^2 Repair source$/i }),
     ).toBeTruthy();
   });
 
@@ -435,7 +435,7 @@ describe("ConversationTurnList virtualization", () => {
       screen.getByRole("button", { name: /(?:citation|引用) 1/i }).textContent,
     ).toBe("1");
     expect(container.querySelectorAll("[data-citation-source-list]")).toHaveLength(1);
-    expect(screen.getByRole("button", { name: /^1Revenue source$/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^1 Revenue source$/i })).toBeTruthy();
   });
 });
 
@@ -468,7 +468,9 @@ describe("ConversationTurnList token usage", () => {
     expect(screen.getByText("输入（命中缓存）")).not.toBeNull();
     expect(screen.getByText("59,900")).not.toBeNull();
     expect(screen.getByText("98.8%")).not.toBeNull();
-    expect(screen.getByText("gpt-5.6-codex")).not.toBeNull();
+    // The breakdown shows the public name (``modelLabel``), not the raw
+    // runtime id: gpt-5.6-codex → "GPT 5.6 Codex".
+    expect(screen.getByText("GPT 5.6 Codex")).not.toBeNull();
   });
 });
 

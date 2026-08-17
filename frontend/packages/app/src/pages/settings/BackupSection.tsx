@@ -470,7 +470,7 @@ export const BackupSection = () => {
                     <span className="text-sm font-medium text-ink-heading">
                       {formatTime(v.created_at)}
                       {v.kind !== "scheduled" && (
-                        <span className="ml-2 rounded bg-surface-muted px-1.5 py-0.5 text-[10px] text-ink-meta">
+                        <span className="ml-2 rounded bg-surface-muted px-1.5 py-0.5 text-micro text-ink-meta">
                           {t(`settings.backup.kind.${v.kind}`)}
                         </span>
                       )}

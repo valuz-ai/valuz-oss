@@ -385,12 +385,12 @@ export const AgentsPage = () => {
                 {agent.name}
               </div>
               {isSystemAgent(agent) && (
-                <span className="inline-flex h-5 shrink-0 items-center rounded-[4px] bg-brand-light px-1.5 py-0 text-[10px] leading-none text-brand">
+                <span className="inline-flex h-5 shrink-0 items-center rounded-sm bg-brand-light px-1.5 py-0 text-micro leading-none text-brand">
                   {t("agent.systemBadge" as Parameters<typeof t>[0])}
                 </span>
               )}
               {deploymentCount > 0 && (
-                <span className="inline-flex h-5 shrink-0 items-center rounded-[4px] bg-surface-soft px-1.5 py-0 text-[10px] leading-none text-ink-meta">
+                <span className="inline-flex h-5 shrink-0 items-center rounded-sm bg-surface-soft px-1.5 py-0 text-micro leading-none text-ink-meta">
                   {t("agent.deployedInProjects" as Parameters<typeof t>[0], {
                     count: deploymentCount,
                   })}

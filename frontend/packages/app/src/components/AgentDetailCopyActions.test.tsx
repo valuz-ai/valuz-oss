@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useRegistryStore } from "@valuz/core";
 import { DropdownMenuItem } from "@valuz/ui";
@@ -53,7 +54,7 @@ describe("AgentDetailCopyActions", () => {
     expect(onCopy).toHaveBeenCalledOnce();
   });
 
-  it("moves export into the copy menu when menu items are contributed", () => {
+  it("moves export into the copy menu when menu items are contributed", async () => {
     const onExport = vi.fn();
     const onCopy = vi.fn();
     registerCopyMenuItem();
@@ -72,14 +73,14 @@ describe("AgentDetailCopyActions", () => {
     ).toBeNull();
 
     const trigger = screen.getByRole("button", { name: "agent.copyAgent" });
-    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    await userEvent.click(trigger);
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "agent.pack.export" }),
     );
     expect(onExport).toHaveBeenCalledOnce();
 
-    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    await userEvent.click(trigger);
     fireEvent.click(
       screen.getByRole("menuitem", { name: "agent.copyAgent" }),
     );

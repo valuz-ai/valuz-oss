@@ -402,10 +402,18 @@ export function A2UIRenderer({ body, status, hostParams }: A2UIRendererProps) {
     () => buildSurfaces(body, liveMessages, status === "running"),
     [body, version, liveMessages, status],
   );
-  const lastGood = useRef<{ body: string; surfaces: SurfaceModel<ReactComponentImplementation>[] }>({ body: "", surfaces: [] });
-  if (built.length) lastGood.current = { body, surfaces: built };
-  const inherits = lastGood.current.surfaces.length > 0 && body.startsWith(lastGood.current.body);
-  const surfaces = built.length || status !== "running" || !inherits ? built : lastGood.current.surfaces;
+  // 流式过程中某一帧解析不出 surface 时，沿用上一帧的成品，避免画面闪空。
+  // 这是"渲染期派生状态"，不是 ref 的用途：写/读 ref 会在并发渲染下失准
+  // （react-hooks/refs）。用 state + 渲染期 setState（React 会立刻以新
+  // state 重跑函数体再提交）表达同一意图。`built` 来自 useMemo，同一次
+  // 渲染身份稳定，可直接用它做守卫，不会自触发循环。
+  const [lastGood, setLastGood] = useState<{
+    body: string;
+    surfaces: SurfaceModel<ReactComponentImplementation>[];
+  }>({ body: "", surfaces: [] });
+  if (built.length && lastGood.surfaces !== built) setLastGood({ body, surfaces: built });
+  const inherits = lastGood.surfaces.length > 0 && body.startsWith(lastGood.body);
+  const surfaces = built.length || status !== "running" || !inherits ? built : lastGood.surfaces;
 
   if (!surfaces.length) return status === "running" ? <GenerationSkeleton /> : null;
   return (

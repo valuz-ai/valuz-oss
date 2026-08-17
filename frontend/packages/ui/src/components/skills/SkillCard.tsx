@@ -124,7 +124,7 @@ export const SkillCard = ({
                   <Badge
                     variant="metaBrand"
                     className={cn(
-                      "h-4 px-1 text-[10px] leading-4",
+                      "h-4 px-1 text-micro leading-4",
                       ORIGIN_BADGE_TONE[originBadge.tone ?? "default"],
                     )}
                   >
@@ -133,13 +133,13 @@ export const SkillCard = ({
                 ) : sourceLabel ? (
                   <Badge
                     variant="metaNeutral"
-                    className="h-4 px-1 text-[10px] leading-4"
+                    className="h-4 px-1 text-micro leading-4"
                   >
                     {sourceLabel}
                   </Badge>
                 ) : null}
                 {skill.locked ? (
-                  <span className="inline-flex items-center gap-0.5 rounded-[4px] border border-surface-border px-1 py-0 text-[10px] leading-4 text-ink-meta">
+                  <span className="inline-flex items-center gap-0.5 rounded-sm border border-surface-border px-1 py-0 text-micro leading-4 text-ink-meta">
                     <Lock className="h-2.5 w-2.5" /> {t("skill.needsLogin")}
                   </span>
                 ) : null}
@@ -173,7 +173,7 @@ export const SkillCard = ({
                 <Badge
                   key={tag}
                   variant="metaOutline"
-                  className="h-4 px-1 text-[10px] font-normal leading-4 text-ink-body"
+                  className="h-4 px-1 text-micro font-normal leading-4 text-ink-body"
                 >
                   {tag}
                 </Badge>

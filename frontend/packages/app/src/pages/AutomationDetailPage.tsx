@@ -291,7 +291,7 @@ export const AutomationDetailPage = () => {
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-heading">
           {run.result_summary?.trim() || detail.name}
         </span>
-        <span className="shrink-0 text-[11px] text-ink-meta">
+        <span className="shrink-0 text-2xs text-ink-meta">
           {formatCreatedAt(run.triggered_at, t)}
           {run.duration_ms ? ` · ${formatDuration(run.duration_ms)}` : ""}
         </span>
@@ -410,7 +410,7 @@ export const AutomationDetailPage = () => {
               {t(k("cron.instruction"))}
             </h2>
             <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-[#f7f8fa] bg-surface-soft/40 p-4">
-              <p className="whitespace-pre-wrap text-[13px] leading-6 text-ink-body">
+              <p className="whitespace-pre-wrap text-sm leading-6 text-ink-body">
                 {detail.prompt_template}
               </p>
             </div>

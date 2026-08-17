@@ -202,7 +202,7 @@ export const UpdateToast = () => {
                 value={isPreparing ? 100 : progress}
                 className="h-1.5 flex-1"
               />
-              <span className="shrink-0 text-[11px] tabular-nums text-ink-muted">
+              <span className="shrink-0 text-2xs tabular-nums text-ink-muted">
                 {isPreparing
                   ? t("updater.preparing" as Parameters<typeof t>[0])
                   : `${Math.round(progress)}%`}

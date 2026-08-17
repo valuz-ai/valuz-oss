@@ -196,7 +196,7 @@ const RunningCard = ({
       className="flex h-[226px] flex-col overflow-hidden rounded-xl bg-card p-4 pt-5 text-left shadow-[var(--shadow-1)] transition-colors hover:bg-surface-soft"
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="inline-flex min-w-0 items-center gap-1 text-[11px] text-ink-meta">
+        <span className="inline-flex min-w-0 items-center gap-1 text-2xs text-ink-meta">
           <ScopeIcon className="h-3 w-3 shrink-0" strokeWidth={2} />
           <span className="truncate">{sourceLabel}</span>
           {elapsed && (

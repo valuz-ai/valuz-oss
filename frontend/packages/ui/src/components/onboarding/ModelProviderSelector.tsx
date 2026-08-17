@@ -51,7 +51,7 @@ export const ModelProviderSelector: FC<ModelProviderSelectorProps> = ({
             <span className="text-xs text-ink-body">{provider.desc}</span>
             <span
               className={cn(
-                "inline-flex h-5 w-fit items-center rounded-[4px] px-2 py-0 text-[10px] font-medium",
+                "inline-flex h-5 w-fit items-center rounded-sm px-2 py-0 text-micro font-medium",
                 provider.connected
                   ? "bg-success-light text-success-text"
                   : "bg-surface-soft text-ink-muted",
@@ -61,7 +61,7 @@ export const ModelProviderSelector: FC<ModelProviderSelectorProps> = ({
                 ? t("onboarding.connected")
                 : t("onboarding.pending")}
             </span>
-            <span className="truncate font-mono text-[11px] text-ink-muted">
+            <span className="truncate font-mono text-2xs text-ink-muted">
               {provider.endpoint}
             </span>
           </button>
