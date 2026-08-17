@@ -1502,6 +1502,7 @@ _HARNESS_PROVIDER_ENV_KEY = "HARNESS_CODEX_PROVIDER_API_KEY"
 # is the harness's "show reasoning summaries by default" stance.
 _CODEX_REASONING_SUMMARY_DEFAULT = "auto"
 _CODEX_MCP_SECRET_ENV_PREFIX = "VALUZ_CODEX_MCP_SECRET_"
+_CODEX_OPENAI_API_KEY = "OPENAI_API_KEY"
 _CODEX_SHELL_APPLY_SECRET_FILTERS = "shell_environment_policy.ignore_default_excludes=false"
 _CODEX_SHELL_CORE_INHERIT = 'shell_environment_policy.inherit="core"'
 _CODEX_MCP_UNSAFE_PARENT_ENV_NAMES = frozenset(
@@ -1611,6 +1612,19 @@ def _externalize_mcp_secrets(
             _CODEX_SHELL_APPLY_SECRET_FILTERS,
             _CODEX_SHELL_CORE_INHERIT,
         ):
+            if policy not in overrides:
+                add.append(policy)
+        # ``env_http_headers`` / ``env_vars`` are explicit references, and
+        # codex-cli keeps referenced values available even under ``core``
+        # inheritance.  A keyed exclude is the final authority: current
+        # 0.144.4 applies it to the model-facing shell after resolving MCP
+        # references.  Emit one exact-name rule per credential so unrelated
+        # user environment remains untouched.
+        for env_name in secret_env:
+            policy = (
+                f"shell_environment_policy.filters.{_toml_key(env_name)}="
+                f"{_toml_quote('exclude')}"
+            )
             if policy not in overrides:
                 add.append(policy)
     safe_overrides = tuple(value for value in overrides if value not in remove) + tuple(add)
@@ -1829,14 +1843,6 @@ def _build_config_overrides(
                 f"model_providers.{name}.env_key={_toml_quote(env_key)}",
             ]
         )
-        if egress_base_url is not None:
-            # Codex 0.144.4 does not yet support the newer keyed
-            # shell_environment_policy.filters map. Its supported automatic
-            # policy removes names containing KEY/SECRET/TOKEN without
-            # replacing the user's legacy exclude/include arrays. This keeps
-            # the per-session provider key in the model transport process but
-            # out of shell and other command subprocesses.
-            overrides.append(_CODEX_SHELL_APPLY_SECRET_FILTERS)
     elif provider is not None and model:
         # First-party OpenAI: no synthetic provider block, no
         # ``model_provider=harness`` override. Codex uses its built-in
@@ -1853,13 +1859,23 @@ def _build_config_overrides(
         # Every custom provider path puts an API key in the app-server parent
         # environment (HARNESS_CODEX_PROVIDER_API_KEY or OPENAI_API_KEY).
         # codex-cli 0.144.4's model ``shell`` path does not reliably honor the
-        # name-based default filter, so use the same fail-closed inheritance
-        # boundary as MCP secrets.  Avoid changing native ChatGPT subscription
-        # sessions, which carry no provider credential in the process env.
+        # automatic name filter, so use the same fail-closed core boundary and
+        # exact keyed exclusion as MCP secrets.  Avoid changing native ChatGPT
+        # subscription sessions, which carry no provider credential in the
+        # process env.
         if _CODEX_SHELL_APPLY_SECRET_FILTERS not in overrides:
             overrides.append(_CODEX_SHELL_APPLY_SECRET_FILTERS)
         if _CODEX_SHELL_CORE_INHERIT not in overrides:
             overrides.append(_CODEX_SHELL_CORE_INHERIT)
+        provider_env_key = (
+            _HARNESS_PROVIDER_ENV_KEY
+            if effective_base_url is not None
+            else _CODEX_OPENAI_API_KEY
+        )
+        overrides.append(
+            f"shell_environment_policy.filters.{_toml_key(provider_env_key)}="
+            f"{_toml_quote('exclude')}"
+        )
 
     return tuple(overrides)
 
@@ -1889,9 +1905,11 @@ def _build_codex_env(
     ``mcp_secret_env`` carries values referenced by secret-free MCP
     ``env_http_headers`` / ``env_vars`` config entries. Generated HTTP-header
     names contain ``SECRET`` for defense in depth.  The generated config also
-    constrains model shell tools to Codex's ``core`` inheritance baseline,
-    because codex-cli 0.144.4 does not reliably apply its name filter on that
-    execution path.  Stdio variables remain explicitly available to their MCP
+    constrains model shell tools to Codex's ``core`` inheritance baseline and
+    adds an exact keyed exclusion for every credential.  codex-cli 0.144.4
+    does not reliably apply its automatic name filter on that execution path,
+    and MCP environment references are otherwise retained after the core
+    baseline.  Stdio variables remain explicitly available to their MCP
     processes without being inherited by model shell commands.
     """
     if provider is None:
@@ -1919,7 +1937,7 @@ def _build_codex_env(
         # spoofing the originator makes the SDK path match the working CLI path.
         merged["CODEX_INTERNAL_ORIGINATOR_OVERRIDE"] = "codex_exec"
     else:
-        merged["OPENAI_API_KEY"] = provider.api_key
+        merged[_CODEX_OPENAI_API_KEY] = provider.api_key
     if mcp_secret_env:
         merged.update(mcp_secret_env)
     return merged

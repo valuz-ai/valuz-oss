@@ -212,6 +212,10 @@ def test_codex_uses_local_ingress_without_exposing_real_upstream() -> None:
     assert f'model_providers.harness.base_url="{local}"' in overrides
     assert "shell_environment_policy.ignore_default_excludes=false" in overrides
     assert 'shell_environment_policy.inherit="core"' in overrides
+    assert (
+        'shell_environment_policy.filters.HARNESS_CODEX_PROVIDER_API_KEY="exclude"'
+        in overrides
+    )
     assert 'mcp_servers.env_probe.env_vars=["VALUZ_USER_PROXY"]' in overrides
     assert not any('HARNESS_CODEX_PROVIDER_API_KEY"]' in value for value in overrides)
     assert not any("gateway.example" in value for value in overrides)
@@ -293,6 +297,7 @@ def test_bundled_codex_core_shell_policy_scrubs_secrets_but_preserves_core_env()
         config_overrides=(
             "shell_environment_policy.ignore_default_excludes=false",
             'shell_environment_policy.inherit="core"',
+            'shell_environment_policy.filters.HARNESS_CODEX_PROVIDER_API_KEY="exclude"',
         ),
         env={
             **os.environ,
