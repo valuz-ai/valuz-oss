@@ -7,12 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-18
+
 ### Added
 
-- **Reusable desktop network egress capability** — the Electron-owned egress
-  manager now exposes versioned renderer/main contracts, edition policy
-  injection and capability negotiation so overlay desktops can reuse the same
-  network path without copying the runtime (#909 @zhourongyu).
 - **Agent Plugins** — plugins are a first-class install unit per the Agent
   Plugins 1.0.0 spec (`plugin.json` + `skills/` + optional `mcp.json`): a
   skills-only plugin is a "skill suite", one with MCP servers a "plugin with
@@ -21,42 +19,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   export / memberships), `.claude-plugin` / `.codebuddy-plugin` compat readers
   that materialize the normalized layout, marketplace item type `plugin`
   (`market:plugin:<slug>`, `composition` filter, source `plugin`), the
-  `/plugins` library page, market tabs (agents 单智能体|团队, skills 技能|套件,
-  plugins 全部|技能套件|含连接器) and plugin badges on skill / connector cards
-  (#908 @St0neWan9).
+  `/plugins` library page, market tabs and plugin badges on skill / connector
+  cards (#908 @St0neWan9).
+- **One resource page for plugins, skills and connectors** — the three library
+  surfaces share a single page and consistent headers instead of three
+  near-identical layouts (#925 @St0neWan9).
+- **DataService credential rotation without a restart** — the kernel picks up a
+  rotated credential in place, so re-keying no longer costs a process cycle
+  (#923 @Ready22Race).
+- **Per-session gateway headers** — DeepAgents and Claude Agent forward
+  `X-Valuz-Session-Id` to the gateway (via `ANTHROPIC_CUSTOM_HEADERS` for Claude),
+  so gateway-side logs can be traced back to a session (#919 @homeant,
+  #921 @homeant).
+- **Model selection hints in the pickers** — the hint that explains why a model
+  is or is not selectable now renders where the choice is made (#902 @homeant).
+- **Close a document preview with the platform shortcut** — Cmd+W on macOS,
+  Ctrl+W elsewhere (#900 @St0neWan9).
 - **RedSkill marketplace source** — `MarketplaceSource` accepts `redskill` (the
   Xiaohongshu RedSkill store the commercial control plane now ingests) and the
   market card's source pill labels it (#907 @St0neWan9).
+- **Marketplace infinite scroll** — the market list loads the next page as you
+  reach the end instead of behind a "load more" button (#927 @St0neWan9).
 
 ### Changed
 
+- **Reusable desktop network egress capability** — the Electron-owned egress
+  manager moved into its own workspace package and now exposes versioned
+  renderer/main contracts, edition policy injection and capability negotiation,
+  so overlay desktops can reuse the same network path without copying the
+  runtime (#909 @zhourongyu).
+- **Post-run checks are gated on external tools** — citation verification and
+  Task Coverage only run when the turn actually brought external information
+  into the answer. A session may expose host tools over MCP as an
+  implementation detail, and those local calls no longer trigger an expensive
+  post-run model pass (#901 @St0neWan9).
 - **Marketplace tab order** — the top-level tabs now read agents → plugins →
   skills → connectors (plugins moved next to agents) (#918 @St0neWan9).
-- **Marketplace `source` is an open string** — where a market item comes from
-  is data the index grows over time; the client no longer validates it against
-  a closed enum (which made the whole skills tab fail the moment the index
+- **Marketplace `source` is an open string** — where a market item comes from is
+  data the index grows over time; the client no longer validates it against a
+  closed enum (which made the whole skills tab fail the moment the index
   published a source an older build had not heard of). Unknown sources render
   with a generic pill, unknown badges are dropped, and an index page is parsed
-  item by item so a row this build cannot render (new `type` /
-  `install_target`) is skipped instead of failing the page. Plugin-package
-  members are labelled source `plugin` (was `pluginmarket`) (#911 @St0neWan9).
-- **Agents page default view** — the view switcher lists "All agents" first
-  and opens on it by default; "By project" is the second tab (#906 @St0neWan9).
+  item by item so a row this build cannot render (new `type` / `install_target`)
+  is skipped instead of failing the page. Plugin-package members are labelled
+  source `plugin` (was `pluginmarket`) (#911 @St0neWan9).
+- **Agents page default view** — the view switcher lists "All agents" first and
+  opens on it by default; "By project" is the second tab (#906 @St0neWan9).
+- **Only `X-Valuz-Session-Id` is forwarded** — the companion `Session-Title`
+  header was dropped from both the DeepAgents and Claude Agent paths; a title is
+  user content and does not belong in a transport header (#921 @homeant).
 
 ### Fixed
 
+- **Codex no longer leaks MCP secrets into process state** — five related fixes:
+  secrets are kept out of the process argv (#913) and the app-server argv (#914),
+  the tool shell is isolated from runtime secrets (#915), referenced secrets are
+  excluded from that shell (#916), and login-shell secret restoration is blocked
+  so a user's profile cannot put them back (#917 @zhourongyu).
 - **Safe desktop network ownership changes** — activity checks and confirmed
-  interrupts now use the memory-only desktop control capability instead of
+  interrupts use the memory-only desktop control capability instead of
   owner-scoped user APIs, and a late task race rolls the selected mode back
-  instead of restarting an active backend.
-- **Desktop close shortcut** — with no preview open, Ctrl+W on Windows/Linux
-  fell through to closing the only window and quit the app; it is now a no-op
-  there, while macOS keeps Cmd+W's window-close meaning and an open preview
-  still closes first everywhere (#904 @St0neWan9).
+  rather than restarting an active backend (#910 @zhourongyu).
+- **Incompatible egress contracts are rejected** — a renderer and main process on
+  mismatched contract versions now fail the negotiation instead of proceeding on
+  assumptions (#912 @zhourongyu).
+- **Task crash backstop no longer outraces delivery** — the backstop that exists
+  to cover a crashed member could fire before that member's result was
+  delivered, failing work that had in fact completed (#922 @Ready22Race).
+- **Task manifest attribution** — the fourth manifest call site now attributes
+  like the other three, and the window is no longer defaulted when a caller did
+  not state one (#924 @Ready22Race).
+- **A2UI catalog array shapes** — array element object shapes are expanded in the
+  catalog, so the compiler sees the fields it is expected to bind (#926
+  @St0neWan9).
+- **Project pages survive overlay routes** — an overlay route no longer replaces
+  the project page underneath it (#899 @St0neWan9).
+- **Model selection hints stay on the option rows** — they were showing on the
+  collapsed trigger, where the choice is not being made (#903 @St0neWan9).
+- **Desktop close shortcut** — with no preview open, Ctrl+W on Windows/Linux fell
+  through to closing the only window and quit the app; it is now a no-op there,
+  while macOS keeps Cmd+W's window-close meaning and an open preview still closes
+  first everywhere (#904 @St0neWan9).
 - **Desktop window controls** — a maximized window on Windows/Linux showed two
   outward arrows ("enlarge") where Windows draws the restore glyph; the control
   now draws `ChromeRestore` — a square in the lower-left with a second square's
   edges behind it (#898 @St0neWan9).
+
+### Docs & Chore
+
+- **The quality gates are green again** — ruff, eslint, the design audit, the
+  module boundary contract and both test suites (backend 4313, frontend 1191)
+  all pass. Two of the design audit's own rules were misfiring: token/theme files
+  were counted as their own debt, and PR references written in code comments
+  parse as valid hex colours, inflating the colour count on their own. The remaining overage
+  was paid down with exact-equivalent design tokens, so no rendered pixel
+  changes. Ten cross-module datastore imports now go through the owning module's
+  service or a new `ports/effective_resource_sources` (#928 @St0neWan9).
 
 ## [0.4.1] - 2026-08-14
 
