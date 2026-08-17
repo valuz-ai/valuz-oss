@@ -5,10 +5,11 @@ Per ``docs/design/CODEX-INTEGRATION-DESIGN.md`` +
 
 * one ``AsyncCodex`` per Session, lazy-spawned on the first turn
 * ``Session.instructions`` -> ``thread_start(developer_instructions=...)``
-* ``Session.mcp_servers`` -> ``CodexConfig.config_overrides``
+* ``Session.mcp_servers`` -> a private, one-shot Codex profile
   (the per-thread ``ThreadStartParams.config`` dict silently drops
-  unknown keys; ``--config k=v`` process flags work — see spike
-  ``docs/archive/codex-spike/spike_mcp_via_config_overrides_v2.py``).
+  unknown keys; serializing secret MCP headers into ``--config k=v`` process
+  flags leaks them through the OS process table, so the profile is mode 0600
+  and unlinked immediately after app-server initialization).
 * ``Session.skills`` -> materialized into ``cwd/.agents/skills/``
 * ``Session.permission_mode`` drives the codex preset selection in
   ``_build_thread_kwargs`` (``never``+``danger-full-access`` for
@@ -39,6 +40,7 @@ import time
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, Literal, cast
 
 from openai_codex import (
@@ -173,6 +175,7 @@ class CodexRuntime:
         self.egress_descriptor = egress_descriptor
 
         self._codex: AsyncCodex | None = None
+        self._config_profile_path: Path | None = None
         self._thread: AsyncThread | None = None
         self._active_turn: AsyncTurnHandle | None = None
         self._active_task: asyncio.Task[Any] | None = None
@@ -859,6 +862,7 @@ class CodexRuntime:
             except Exception:
                 logger.debug("Error closing AsyncCodex", exc_info=True)
             self._codex = None
+        self._remove_config_profile()
         if self._registered_session_id is not None:
             from src.core.mcp_bridge import unregister_session_toolkit
 
@@ -893,16 +897,29 @@ class CodexRuntime:
         t0 = time.monotonic()
         await self._emit_turn_phase("runtime_init_started")
         expose_toolkit = self._register_toolkit_if_eligible(session)
+        codex_bin = _resolve_codex_bin()
+        if codex_bin is None:
+            raise RuntimeError("Codex runtime binary is unavailable")
+        overrides = _build_config_overrides(
+            session,
+            self.model_provider,
+            self.model,
+            expose_toolkit=expose_toolkit,
+            egress_base_url=(
+                self.egress_descriptor.base_url if self.egress_descriptor is not None else None
+            ),
+        )
+        profile_name, profile_path = _write_private_config_profile(overrides)
+        self._config_profile_path = profile_path
         cfg = CodexConfig(
-            codex_bin=_resolve_codex_bin(),
-            config_overrides=_build_config_overrides(
-                session,
-                self.model_provider,
-                self.model,
-                expose_toolkit=expose_toolkit,
-                egress_base_url=(
-                    self.egress_descriptor.base_url if self.egress_descriptor is not None else None
-                ),
+            codex_bin=codex_bin,
+            launch_args_override=(
+                codex_bin,
+                "--profile",
+                profile_name,
+                "app-server",
+                "--listen",
+                "stdio://",
             ),
             env=_build_codex_env(
                 self.model_provider,
@@ -912,9 +929,34 @@ class CodexRuntime:
             ),
         )
         self._codex = AsyncCodex(config=cfg)
-        await self._codex.__aenter__()
+        try:
+            await self._codex.__aenter__()
+        except BaseException:
+            try:
+                await self._codex.close()
+            except Exception:
+                logger.debug("Error closing failed Codex startup", exc_info=True)
+            self._codex = None
+            raise
+        finally:
+            # Codex has parsed the profile before app-server initialization
+            # returns. Remove the only on-disk copy immediately; ``close`` is a
+            # second cleanup guard for partial lifecycle paths.
+            self._remove_config_profile()
         self._install_approval_handler()
         await self._emit_turn_phase("runtime_init", duration_ms=int((time.monotonic() - t0) * 1000))
+
+    def _remove_config_profile(self) -> None:
+        path = self._config_profile_path
+        self._config_profile_path = None
+        if path is None:
+            return
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            # A mode-0600 profile is preferable to crashing runtime teardown,
+            # but leave a loud audit trail so residue is never silently hidden.
+            logger.warning("Failed to remove private Codex profile %s", path, exc_info=True)
 
     def _install_approval_handler(self) -> None:
         """Monkey-patch the sync client's approval handler.
@@ -1486,6 +1528,39 @@ _HARNESS_PROVIDER_ENV_KEY = "HARNESS_CODEX_PROVIDER_API_KEY"
 # Responses API documentation recommends. Not user-configurable — this
 # is the harness's "show reasoning summaries by default" stance.
 _CODEX_REASONING_SUMMARY_DEFAULT = "auto"
+_CODEX_SESSION_PROFILE_PREFIX = "valuz-session-"
+
+
+def _write_private_config_profile(overrides: tuple[str, ...]) -> tuple[str, Path]:
+    """Write one process-private Codex profile and return ``(name, path)``.
+
+    Codex only accepts its full MCP map through configuration. Passing those
+    values via repeated ``--config`` flags exposes bearer tokens and internal
+    session credentials in ``ps`` output. A random profile preserves the exact
+    same TOML surface while keeping argv secret-free. The caller unlinks it as
+    soon as app-server completes initialization, and also on every failure /
+    close path.
+    """
+
+    configured_home = os.getenv("CODEX_HOME")
+    codex_home = (
+        Path(configured_home).expanduser() if configured_home else Path.home() / ".codex"
+    )
+    codex_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    profile_name = f"{_CODEX_SESSION_PROFILE_PREFIX}{uuid.uuid4().hex}"
+    profile_path = codex_home / f"{profile_name}.config.toml"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(profile_path, flags, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as profile:
+            profile.write("\n".join(overrides))
+            profile.write("\n")
+    except BaseException:
+        profile_path.unlink(missing_ok=True)
+        raise
+    return profile_name, profile_path
 
 
 def _build_config_overrides(
@@ -1496,7 +1571,7 @@ def _build_config_overrides(
     expose_toolkit: bool = False,
     egress_base_url: str | None = None,
 ) -> tuple[str, ...]:
-    """Serialize per-session config to ``--config k=v`` strings.
+    """Serialize per-session config to dotted TOML profile entries.
 
     Three channels are emitted:
 
@@ -1507,7 +1582,7 @@ def _build_config_overrides(
        ``mcp_servers.X.env.<KEY>`` per var; remote entries emit ``url`` and a
        dotted ``mcp_servers.X.http_headers.<KEY>`` per header. Map fields
        (``env`` / ``http_headers``) are emitted ONE dotted key at a time, never
-       as an inline table ``{ … }`` — codex's ``-c`` parser reads an inline
+       as an inline table ``{ … }`` — codex's config overlay parser reads an inline
        table as a string and aborts at startup ("invalid type: string …
        expected a map"); see ``_toml_key``. ``env_vars`` is passed through
        verbatim so codex resolves it against its own process env at child-spawn
@@ -1548,7 +1623,7 @@ def _build_config_overrides(
                 if env_vars:
                     overrides.append(f"mcp_servers.{cfg.name}.env_vars={_toml_array(env_vars)}")
             # ``env`` is a TOML map: emit one dotted key per var, NOT an inline
-            # table — codex's ``-c`` parser rejects ``env={ … }`` as a string
+            # table — codex's config parser rejects ``env={ … }`` as a string
             # (see ``_toml_key``).
             for k, v in cfg.env.items():
                 overrides.append(f"mcp_servers.{cfg.name}.env.{_toml_key(k)}={_toml_quote(v)}")
