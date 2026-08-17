@@ -170,13 +170,9 @@ async def _scope_artifact_count(user_id: str, project_id: str, worktree: str) ->
     if not project_id:
         return 0
     try:
-        from valuz_agent.infra.db import async_unit_of_work
-        from valuz_agent.modules.artifacts.datastore import ArtifactDatastore, Scope
+        from valuz_agent.modules.artifacts.service import count_scope_artifacts
 
-        async with async_unit_of_work(commit=False) as db:
-            return await ArtifactDatastore(db).count_scope_artifacts(
-                Scope(user_id=user_id, project_id=project_id, worktree=worktree)
-            )
+        return await count_scope_artifacts(user_id, project_id, worktree)
     except Exception:  # noqa: BLE001 — never block teardown on a lookup
         logger.warning("worktrees: artifact lookup failed for '%s'", worktree, exc_info=True)
         return 0
@@ -191,13 +187,9 @@ async def _archive_scope_artifacts(user_id: str, project_id: str, worktree: str)
     if not project_id:
         return 0
     try:
-        from valuz_agent.infra.db import async_unit_of_work
-        from valuz_agent.modules.artifacts.datastore import ArtifactDatastore, Scope
+        from valuz_agent.modules.artifacts.service import archive_scope_artifacts
 
-        async with async_unit_of_work() as db:
-            return await ArtifactDatastore(db).archive_scope(
-                Scope(user_id=user_id, project_id=project_id, worktree=worktree)
-            )
+        return await archive_scope_artifacts(user_id, project_id, worktree)
     except Exception:  # noqa: BLE001 — the worktree is already gone; do not raise
         logger.warning("worktrees: could not archive artifacts for '%s'", worktree, exc_info=True)
         return 0

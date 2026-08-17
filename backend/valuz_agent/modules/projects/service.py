@@ -254,6 +254,22 @@ async def project_brief_by_id(user_id: str, project_id: str) -> tuple[str, str, 
     return (row.kind, row.name, row.instructions_md)
 
 
+async def project_row_by_id(user_id: str, project_id: str) -> ProjectRow | None:
+    """Return the owner-scoped project row, or ``None`` if it no longer exists.
+
+    Sibling modules that must hand a whole project to another collaborator —
+    ``worktrees.resolve_session_cwd`` takes a ``ProjectRowLike`` — need the row
+    itself, not a projection. Serving it here keeps the datastore private to
+    this module (the boundary contract) while ``ProjectRow`` stays a plain
+    domain type from ``projects.models``.
+    """
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.projects.datastore import ProjectDatastore
+
+    async with async_unit_of_work(commit=False) as db:
+        return await ProjectDatastore(db).get_by_id(user_id, project_id)
+
+
 class ProjectService:
     def __init__(
         self,

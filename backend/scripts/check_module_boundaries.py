@@ -150,6 +150,11 @@ SRC_CORE_ALLOWLIST = {
     "modules/sessions/artifacts_tool.py",
     "modules/memory/tools.py",
     "modules/browser/tools.py",
+    # Same category as the tool files above — they declare ToolDef/ToolResult/
+    # ExecContext for the calculation and GenUI tool surfaces. Both were added
+    # after this list was last touched, so they were never registered.
+    "modules/citations/calculation_tool.py",
+    "modules/genui/tools.py",
     "integrations/tools_skill_creator.py",
     "integrations/tools_agent_proposal.py",
     "integrations/toolkit_mcp_server.py",
@@ -157,6 +162,13 @@ SRC_CORE_ALLOWLIST = {
     # kernel store/domain objects into host read surfaces during boot.
     "adapters/data_service_local.py",
     "boot/kernel_db_colocate.py",
+    # Boot lifecycle, like ``boot/kernel.py``: installs the kernel's tracing
+    # configuration before any runtime exists, so there is no wire schema to
+    # speak — the config object IS the contract.
+    "boot/steps.py",
+    # Binds ``SandboxCredentialVerifierPort`` to the kernel's own token signer;
+    # the signer's claim type is the verified identity the port hands back.
+    "integrations/sandbox_credential_hmac.py",
 }
 
 

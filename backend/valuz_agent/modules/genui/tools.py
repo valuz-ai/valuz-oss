@@ -1005,34 +1005,23 @@ async def _load_host_generation_context(
         return None
     context = _HostGenerationContext(target_host=target_host)
     try:
-        from valuz_agent.infra.db import async_unit_of_work
-        from valuz_agent.modules.artifacts.datastore import ArtifactDatastore
+        from valuz_agent.modules.artifacts.service import load_bound_host_revision
 
-        async with async_unit_of_work(commit=False) as db:
-            ds = ArtifactDatastore(db)
-            binding = await ds.get_binding(
-                user_id,
-                target_host.host_type,
-                target_host.host_id,
-                target_host.slot or "main",
-            )
-            if binding is None:
-                return context
-            revision = await ds.get_revision(user_id, binding.artifact_revision_id)
-            artifact = await ds.get_artifact(user_id, binding.artifact_id)
-            content = (
-                await ds.get_content(user_id, revision.content_id)
-                if revision is not None
-                else None
-            )
-            document = content.content_inline if content is not None else None
-            file_path = str(getattr(revision, "abs_path", "") or "")
-        if document is None and file_path:
-            document = await asyncio.to_thread(_read_revision_file, file_path)
+        bound = await load_bound_host_revision(
+            user_id,
+            host_type=target_host.host_type,
+            host_id=target_host.host_id,
+            slot=target_host.slot or "main",
+        )
+        if bound is None:
+            return context
+        document = bound.document_inline
+        if document is None and bound.file_path:
+            document = await asyncio.to_thread(_read_revision_file, bound.file_path)
         return _HostGenerationContext(
             target_host=target_host,
-            expected_revision_id=binding.artifact_revision_id,
-            bound_artifact=artifact,
+            expected_revision_id=bound.artifact_revision_id,
+            bound_artifact=bound.artifact,
             current_document=document,
         )
     except Exception:  # noqa: BLE001 — generation remains useful without a base

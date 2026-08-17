@@ -9,9 +9,12 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.infra.time_utils import now_ms
-from valuz_agent.modules.connectors.datastore import ConnectorDatastore
-from valuz_agent.modules.docs.datastore import DocumentDatastore
-from valuz_agent.modules.skills.datastore import SkillDatastore
+from valuz_agent.ports.effective_resource_sources import (
+    ConnectorListSource,
+    KnowledgeBaseListSource,
+    SkillListSource,
+    build_effective_resource_sources,
+)
 
 
 @dataclass(frozen=True)
@@ -102,9 +105,9 @@ class EffectiveResourceResolver:
     def __init__(
         self,
         *,
-        skills: SkillDatastore,
-        connectors: ConnectorDatastore | None,
-        docs: DocumentDatastore | None,
+        skills: SkillListSource,
+        connectors: ConnectorListSource | None,
+        docs: KnowledgeBaseListSource | None,
     ) -> None:
         self._skills = skills
         self._connectors = connectors
@@ -112,10 +115,11 @@ class EffectiveResourceResolver:
 
     @classmethod
     def from_session(cls, db: AsyncSession) -> EffectiveResourceResolver:
+        sources = build_effective_resource_sources(db)
         return cls(
-            skills=SkillDatastore(db),
-            connectors=ConnectorDatastore(db),
-            docs=DocumentDatastore(db),
+            skills=sources.skills,
+            connectors=sources.connectors,
+            docs=sources.docs,
         )
 
     async def resolve(
