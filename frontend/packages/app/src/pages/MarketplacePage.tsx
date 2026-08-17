@@ -9,7 +9,7 @@ import {
   Sparkles,
   Zap,
 } from "lucide-react";
-import { Button, SegmentedControl, cn } from "@valuz/ui";
+import { SegmentedControl, cn } from "@valuz/ui";
 import type {
   MarketplaceCategory,
   MarketplaceItem,
@@ -51,6 +51,44 @@ type PluginFilter = "all" | MarketplacePluginComposition;
 const SKILL_PAGE_SIZE = 30;
 const CONNECTOR_PAGE_SIZE = 20;
 const PLUGIN_PAGE_SIZE = 30;
+
+/**
+ * Auto-load the next page when a bottom sentinel scrolls near the viewport
+ * (pre-fetched via ``rootMargin``), replacing a manual "load more" button.
+ * ``onLoadMore`` is read through a ref so a fresh page/closure never
+ * re-subscribes the observer; re-observing on ``count`` re-fires while the
+ * sentinel stays visible, so a short page keeps filling until ``hasMore`` is
+ * false. The ``loading`` guard disconnects mid-fetch, so a page already in
+ * flight is never double-requested. Mirrors the infinite scroll in
+ * ``ActivityFeedList``.
+ */
+function useInfiniteScroll(
+  onLoadMore: () => void,
+  {
+    hasMore,
+    loading,
+    count,
+  }: { hasMore: boolean; loading: boolean; count: number },
+) {
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const onLoadMoreRef = useRef(onLoadMore);
+  onLoadMoreRef.current = onLoadMore;
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasMore || loading) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          onLoadMoreRef.current();
+        }
+      },
+      { rootMargin: "300px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, loading, count]);
+  return sentinelRef;
+}
 
 /** Full-screen marketplace — four tabs (Agents / Skills / Plugins /
  * Connectors) per the product prototype
@@ -733,6 +771,11 @@ function SkillsTab({ q, tr, onOpen, withInstalled }: TabProps) {
   const visible = withInstalled(items);
   const hasMore =
     !degraded && items.length < total && items.length >= SKILL_PAGE_SIZE;
+  const sentinelRef = useInfiniteScroll(() => load(page + 1, true), {
+    hasMore,
+    loading,
+    count: items.length,
+  });
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -808,18 +851,10 @@ function SkillsTab({ q, tr, onOpen, withInstalled }: TabProps) {
                 ),
               )}
             </div>
-            {hasMore && (
-              <div className="mt-5 flex justify-center">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={loading}
-                  onClick={() => load(page + 1, true)}
-                >
-                  {loading
-                    ? tr("marketplace.loading")
-                    : tr("marketplace.loadMore")}
-                </Button>
+            {hasMore && <div ref={sentinelRef} aria-hidden className="h-px" />}
+            {loading && items.length > 0 && (
+              <div className="mt-5 flex justify-center text-sm text-ink-meta">
+                {tr("marketplace.loading")}
               </div>
             )}
           </>
@@ -901,6 +936,11 @@ function PluginsTab({ q, tr, onOpen, withInstalled }: TabProps) {
   const visible = withInstalled(items);
   const hasMore =
     !degraded && items.length < total && items.length >= PLUGIN_PAGE_SIZE;
+  const sentinelRef = useInfiniteScroll(() => load(page + 1, true), {
+    hasMore,
+    loading,
+    count: items.length,
+  });
 
   const filterLabel = (key: PluginFilter) =>
     key === "all"
@@ -964,15 +1004,11 @@ function PluginsTab({ q, tr, onOpen, withInstalled }: TabProps) {
           ))}
         </div>
         {hasMore ? (
-          <div className="mt-5 flex justify-center">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={loading}
-              onClick={() => load(page + 1, true)}
-            >
-              {loading ? tr("marketplace.loading") : tr("marketplace.loadMore")}
-            </Button>
+          <div ref={sentinelRef} aria-hidden className="h-px" />
+        ) : null}
+        {loading && items.length > 0 ? (
+          <div className="mt-5 flex justify-center text-sm text-ink-meta">
+            {tr("marketplace.loading")}
           </div>
         ) : null}
       </div>
@@ -1116,6 +1152,11 @@ function ConnectorsTab({ q, tr, onOpen, withInstalled }: TabProps) {
   const visible = withInstalled(items);
   const hasMore =
     !degraded && items.length < total && page * CONNECTOR_PAGE_SIZE < 100;
+  const sentinelRef = useInfiniteScroll(() => load(page + 1, true), {
+    hasMore,
+    loading,
+    count: items.length,
+  });
   return (
     <div className="flex min-h-0 flex-1">
       <div className="w-[190px] flex-none overflow-y-auto border-r border-surface-border px-2.5 py-4">
@@ -1163,17 +1204,11 @@ function ConnectorsTab({ q, tr, onOpen, withInstalled }: TabProps) {
               ))}
             </div>
             {hasMore ? (
-              <div className="mt-5 flex justify-center">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={loading}
-                  onClick={() => load(page + 1, true)}
-                >
-                  {loading
-                    ? tr("marketplace.loading")
-                    : tr("marketplace.loadMore")}
-                </Button>
+              <div ref={sentinelRef} aria-hidden className="h-px" />
+            ) : null}
+            {loading && items.length > 0 ? (
+              <div className="mt-5 flex justify-center text-sm text-ink-meta">
+                {tr("marketplace.loading")}
               </div>
             ) : null}
           </>
