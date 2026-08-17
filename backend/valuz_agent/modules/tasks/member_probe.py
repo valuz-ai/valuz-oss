@@ -21,6 +21,7 @@ file that gets edited for reasons its other half does not care about.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -62,13 +63,29 @@ def _member_result(
     }
 
 
+@dataclass(frozen=True)
+class HeartbeatOutcome:
+    """What one heartbeat pass found, and what it acted on.
+
+    ``settled`` is what the caller may hand the lead; ``terminal`` is every
+    pending key whose kernel session has stopped running, ACTED ON OR NOT.
+    The split exists so a caller can grant a grace period per member: see it
+    stop in one pass, settle it in the next if its own report has still not
+    arrived.
+    """
+
+    settled: dict[str, dict[str, Any]] = field(default_factory=dict)
+    terminal: set[str] = field(default_factory=set)
+
+
 async def heartbeat_pending(
     *,
     task_id: str,
     project_id: str,
     pending_keys: set[str],
     user_id: str,
-) -> dict[str, dict[str, Any]]:
+    settle_keys: set[str] | None = None,
+) -> HeartbeatOutcome:
     """Backstop for bad-case #3 (VALUZ-RESUME §5.4): a member whose kernel
     session went terminal but whose ``member_done`` never reached the lead's
     mailbox (delivery window / crash before finalize).
@@ -78,10 +95,23 @@ async def heartbeat_pending(
     and return a synthesized collection entry so the lead's wait completes.
     ``running``/resumable members are left pending (resume is a restart
     concern, not an online-wait one).
+
+    ``settle_keys`` limits which keys may be ACTED on; every terminal key is
+    reported either way. ``None`` means "settle whatever you find", which is
+    what the between-turns crash recovery wants — there is no competing
+    in-turn delivery to lose a race to there. The in-turn wait passes only
+    keys it saw stop in an EARLIER pass, because this backstop otherwise wins
+    that race every time: it reads the kernel session, which goes terminal the
+    moment the member's turn ends, while the member is still inside
+    ``notify_lead_member_idle`` scanning its run directory. Measured in
+    production: 2 of 3 members were settled by this function 1.7s and 2.6s
+    after they finished, with their own reports arriving later and being
+    dropped as duplicates.
     """
     if not pending_keys:
-        return {}
+        return HeartbeatOutcome()
     out: dict[str, dict[str, Any]] = {}
+    terminal: set[str] = set()
     async with async_unit_of_work() as db:
         run_ds = TaskSessionDatastore(db)
         task_ds = TaskDatastore(db)
@@ -92,7 +122,8 @@ async def heartbeat_pending(
             if r.kind == "subtask" and r.subtask_key and r.status == "active"
         }
         if not any(k in runs_by_key for k in pending_keys):
-            return {}  # nothing in-flight for these keys — don't touch the plan
+            # nothing in-flight for these keys — don't touch the plan
+            return HeartbeatOutcome()
         task = await task_ds.get_task_by_project(user_id, project_id, task_id)
         # Node mutations are recorded as (key, fields, only_from) and
         # applied inside persist_plan's CAS closure against the fresh plan.
@@ -104,6 +135,11 @@ async def heartbeat_pending(
             ks = await data_reader().get_session(user_id, run.session_id)
             if getattr(ks, "status", None) == "running":
                 continue  # genuinely in flight — keep waiting
+            # It has stopped. Report that regardless of whether we act on it —
+            # the caller's grace period is counted from this observation.
+            terminal.add(key)
+            if settle_keys is not None and key not in settle_keys:
+                continue
             disp = classify_member(
                 getattr(ks, "status", None) if ks is not None else None,
                 getattr(ks, "stop_reason", None) if ks is not None else None,
@@ -114,6 +150,15 @@ async def heartbeat_pending(
                     Path(run.run_dir) if run.run_dir else Path(),
                     "idle",
                     agent_slug=run.agent_slug or "",
+                    # The member's own run row is the lower bound for
+                    # attributing files to it. Omitting this means
+                    # ``since_epoch=0`` — "every file under run_dir is yours" —
+                    # which under a shared cwd is wrong and was wrong in
+                    # production: two members came back with 29 and 31
+                    # artifacts, including reports written on three earlier days
+                    # and each other's output. The delivery path has always
+                    # passed this; this path is the one that was missed.
+                    since_epoch=(run.created_at or 0) / 1000.0,
                     user_id=user_id,
                 )
                 await run_ds.update_run_by_session(
@@ -187,7 +232,7 @@ async def heartbeat_pending(
                 diverges="probed member outcomes not reflected on their nodes "
                 f"({', '.join(k for k, _, _ in mutations)})",
             )
-    return out
+    return HeartbeatOutcome(settled=out, terminal=terminal)
 
 async def probe_pending_members(
     *,
