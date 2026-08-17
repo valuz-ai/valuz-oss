@@ -113,7 +113,7 @@ describe("Valuz A2UI base catalog", () => {
 
     expect(description).toContain("palette?: palette");
     expect(description).toContain(
-      "series: array<{key,label?,role?,stack?,curve?}>",
+      "series: array<{key,label?,url?,role?,stack?,curve?}>",
     );
     expect(description).toContain("Series entries use label, never name");
     expect(description).not.toContain('palette?: "ocean"|');
