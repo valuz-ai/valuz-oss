@@ -9,8 +9,11 @@ same Runtime and native thread; it never replaces or blocks primary output.
 # ruff: noqa: I001 — kernel bootstrap side-effect import must precede src.*
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
+
+import pytest
 
 import valuz_agent.boot.kernel  # noqa: F401 — sets sys.path for ``src`` / ``app``
 
@@ -62,6 +65,7 @@ class _RecordingRuntime:
         primary_text: str = "Primary answer.",
         silent_continuation: bool = False,
         raise_continuation: bool = False,
+        cancel_continuation: str | None = None,
         supports_native_continuation: bool = True,
         evidence_payload: dict[str, object] | None = None,
         coverage_noop: bool = False,
@@ -76,6 +80,10 @@ class _RecordingRuntime:
         self.primary_text = primary_text
         self.silent_continuation = silent_continuation
         self.raise_continuation = raise_continuation
+        # ``"stray"`` raises a CancelledError that is NOT a cancel request on
+        # the current task (the runtime-teardown misfire); ``"genuine"``
+        # really cancels the current task and lets it land.
+        self.cancel_continuation = cancel_continuation
         self.supports_native_continuation = supports_native_continuation
         self.evidence_payload = evidence_payload
         self.coverage_noop = coverage_noop
@@ -154,6 +162,14 @@ class _RecordingRuntime:
                 )
         elif self.raise_continuation:
             raise RuntimeError("coverage provider crashed")
+        elif self.cancel_continuation == "stray":
+            raise asyncio.CancelledError()
+        elif self.cancel_continuation == "genuine":
+            current = asyncio.current_task()
+            assert current is not None
+            current.cancel()
+            await asyncio.sleep(0)
+            raise AssertionError("cancel was not delivered")  # pragma: no cover
         elif self.fail_continuation:
             session.stop_reason = Error(
                 category="execution_error",
@@ -1023,6 +1039,105 @@ async def test_task_coverage_exception_preserves_and_finalizes_primary_output(
     assert message.assistant_message == "Primary answer."
     assert [event.type for event in store.appended].count("assistant_message") == 1
     assert [event.type for event in store.appended].count("session_idle") == 1
+
+
+async def test_task_coverage_stray_cancellation_preserves_and_finalizes_primary_output(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A CancelledError escaping the continuation that is NOT a live cancel
+    request on this task (the Claude runtime's client rebuild used to leak the
+    idle drainer's own cancellation this way) must be absorbed like any other
+    continuation failure: the completed primary answer is finalized normally,
+    the post-run window closes, and nothing propagates to the host — which
+    would otherwise mint ``session_error{category: CancelledError}`` and show a
+    "run failed" card under a finished answer."""
+    session = _session(tmp_path, task_coverage_enabled=True)
+    store = _FakeStore(session)
+    runtime_holder: list[_RecordingRuntime] = []
+
+    def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
+        runtime = _RecordingRuntime(
+            args[2],
+            cancel_continuation="stray",
+            called_tool_name="mcp__valuz_docs__document_search",
+        )
+        runtime_holder.append(runtime)
+        return runtime
+
+    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
+
+    async def turn():
+        message = await SessionOrchestrator(store).run_turn(
+            "owner-1",
+            session.id,
+            UserMessage(text="Answer normally."),
+        )
+        current = asyncio.current_task()
+        assert current is not None
+        return message, current.cancelling()
+
+    message, cancelling = await asyncio.create_task(turn())
+
+    assert cancelling == 0
+    assert len(runtime_holder[0].prompts) == 2
+    assert message.status == "completed"
+    assert message.assistant_message == "Primary answer."
+    assert message.metadata["task_coverage"]["status"] == "failed"
+    assert message.metadata["task_coverage"]["reason"] == "cancelled"
+    types = [event.type for event in store.appended]
+    assert types.count("assistant_message") == 1
+    assert types.count("session_idle") == 1
+    assert types.count("session_error") == 0
+    phases = [
+        (event.data.get("phase"), event.data.get("state"))
+        for event in store.appended
+        if event.type == "turn_phase"
+    ]
+    assert phases == [
+        ("post_run_verification", "started"),
+        ("post_run_verification", "completed"),
+    ]
+    assert store._session.status == "idle"
+
+
+async def test_task_coverage_genuine_cancellation_still_propagates(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A real cancel of the turn task during the continuation is not ours to
+    swallow — it must propagate (after restoring the primary outcome on the
+    session) so host teardown semantics hold."""
+    session = _session(tmp_path, task_coverage_enabled=True)
+    store = _FakeStore(session)
+
+    def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
+        return _RecordingRuntime(
+            args[2],
+            cancel_continuation="genuine",
+            called_tool_name="mcp__valuz_docs__document_search",
+        )
+
+    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
+
+    async def turn():
+        await SessionOrchestrator(store).run_turn(
+            "owner-1",
+            session.id,
+            UserMessage(text="Answer normally."),
+        )
+
+    task = asyncio.create_task(turn())
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert task.cancelled()
+    # The turn is not finalized here (no terminal events) — the host
+    # classifies the escaped CancelledError as an interruption and closes the
+    # turn itself; the primary outcome is restored on the session object.
+    types = [event.type for event in store.appended]
+    assert types.count("session_idle") == 0
+    assert types.count("session_error") == 0
+    assert isinstance(session.stop_reason, EndTurn)
 
 
 async def test_semantic_verifier_factory_is_owner_scoped_and_only_loaded_when_enabled(

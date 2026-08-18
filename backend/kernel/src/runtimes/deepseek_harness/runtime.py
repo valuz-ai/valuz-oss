@@ -69,7 +69,11 @@ from src.runtimes.deepseek_harness.jsonrpc_client import (
     DshNotification,
     DshRuntimeClient,
 )
-from src.runtimes.interruption import describe_exception, is_runtime_interruption
+from src.runtimes.interruption import (
+    absorb_interrupt_cancellations,
+    describe_exception,
+    is_runtime_interruption,
+)
 from src.runtimes.skills_materialize import prepare_codex_skills
 
 logger = logging.getLogger(__name__)
@@ -126,6 +130,10 @@ class DeepSeekHarnessRuntime:
         self._process_turns = 0
         self._cancelled = False
         self._active_task: asyncio.Task[Any] | None = None
+        # ``interrupt()`` cancels of ``_active_task`` this turn; balanced by
+        # ``run()`` after it swallows the injected ``CancelledError`` (see
+        # ``absorb_interrupt_cancellations``).
+        self._interrupt_cancels = 0
         self._turn_anchor: dict[str, Any] | None = None
         self._mapper = DshEventMapper()
         if toolkit is not None and toolkit.list_tools():
@@ -207,6 +215,7 @@ class DeepSeekHarnessRuntime:
         task = self._active_task
         if task is not None and not task.done():
             task.cancel()
+            self._interrupt_cancels += 1
 
     async def close(self) -> None:
         client = self._client
@@ -226,6 +235,7 @@ class DeepSeekHarnessRuntime:
 
         session.status = "running"
         self._cancelled = False
+        self._interrupt_cancels = 0
         self._active_task = asyncio.current_task()
         try:
             # The composition is baked once per subprocess, but the session's
@@ -309,6 +319,8 @@ class DeepSeekHarnessRuntime:
             session.stop_reason = Error(
                 category="user_interrupt", retry_status="terminal", message="cancelled"
             )
+            absorb_interrupt_cancellations(self._interrupt_cancels)
+            self._interrupt_cancels = 0
         except Exception as exc:
             session.status = "idle"
             if self._cancelled:

@@ -83,7 +83,11 @@ from src.runtimes.deepagents.middleware import (
     ToolErrorTolerantMiddleware,
     citation_artifact_content,
 )
-from src.runtimes.interruption import describe_exception, is_runtime_interruption
+from src.runtimes.interruption import (
+    absorb_interrupt_cancellations,
+    describe_exception,
+    is_runtime_interruption,
+)
 from src.runtimes.mcp_env import resolve_stdio_env
 from src.runtimes.network_egress import ForwardProxyDescriptor, record_runtime_egress_phase
 
@@ -524,6 +528,10 @@ class DeepAgentsRuntime:
         self._checkpointer: Any | None = None
         self._checkpointer_cm: Any | None = None
         self._active_task: asyncio.Task[Any] | None = None
+        # ``interrupt()`` cancels of ``_active_task`` this turn; balanced by
+        # ``run()`` after it swallows the injected ``CancelledError`` (see
+        # ``absorb_interrupt_cancellations``).
+        self._interrupt_cancels = 0
         self._cancelled: bool = False
         # Native fork anchor for the turn most recently completed:
         # ``{"provider": "deepagents", "thread_id": ..., "checkpoint_id":
@@ -740,6 +748,7 @@ class DeepAgentsRuntime:
 
         session.status = "running"
         self._cancelled = False
+        self._interrupt_cancels = 0
         self._cur_session_id = session.id
         self._egress_turn_attempt_id = uuid.uuid4().hex
         if not self._continuing_same_user_turn:
@@ -1061,6 +1070,8 @@ class DeepAgentsRuntime:
                 retry_status="terminal",
                 message="cancelled",
             )
+            absorb_interrupt_cancellations(self._interrupt_cancels)
+            self._interrupt_cancels = 0
         except Exception as exc:
             session.status = "idle"
             if is_runtime_interruption(exc):
@@ -1165,6 +1176,7 @@ class DeepAgentsRuntime:
         task = self._active_task
         if task is not None and not task.done():
             task.cancel()
+            self._interrupt_cancels += 1
 
     async def submit_action(
         self,
