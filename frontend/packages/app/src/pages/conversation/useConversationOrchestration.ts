@@ -1317,6 +1317,7 @@ export function useConversationOrchestration({
   // ``sending`` release.
   const {
     showScrollBottom,
+    activeTurnIndex,
     containerHeight,
     handleScrollToBottom,
     handleTurnListVirtualApiReady,
@@ -1542,6 +1543,7 @@ export function useConversationOrchestration({
     loadOlderTurns,
     containerHeight,
     showScrollBottom,
+    activeTurnIndex,
     handleScrollToBottom,
     handleTurnListVirtualApiReady,
     scrollToTurnIndex,
