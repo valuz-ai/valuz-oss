@@ -2675,6 +2675,8 @@
     "noRuns": "暂无运行记录。",
     "eventsTitle": "执行过程",
     "noEvents": "暂无事件。",
+    "starting": "任务启动中…",
+    "startingHint": "正在准备运行环境，执行过程会自动出现。",
     "runLead": "Lead",
     "runSubtask": "子任务",
     "manifestSummary": "摘要",

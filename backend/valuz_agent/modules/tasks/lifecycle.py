@@ -10,7 +10,9 @@ authoring changes cannot disturb the terminal invariants.
 # ruff: noqa: I001
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Coroutine
 from typing import Any
 from uuid import uuid4
 
@@ -42,6 +44,20 @@ from valuz_agent.modules.tasks.plan import TaskPlan
 from valuz_agent.modules.tasks.provenance import resolve_trigger_provenance
 
 logger = logging.getLogger(__name__)
+
+
+# Strong references to the detached startup coroutines. asyncio keeps only a
+# WEAK one to a running task, so a fire-and-forget ``create_task`` whose handle
+# nobody holds can be collected mid-flight — and the flight here is a ~17s
+# sandbox provision. The set is that reference; the done callback empties it.
+_detached: set[asyncio.Task[None]] = set()
+
+
+def _run_detached(coro: Coroutine[Any, Any, None], *, name: str) -> None:
+    """Run *coro* behind the response, keeping it alive until it finishes."""
+    task = asyncio.create_task(coro, name=name)
+    _detached.add(task)
+    task.add_done_callback(_detached.discard)
 
 
 class LifecycleService:
@@ -79,11 +95,14 @@ class LifecycleService:
         worktree: bool = False,
         user_id: str,
     ) -> TaskRow:
-        """Create a task and start its lead session in the background.
+        """Register a task, then start its lead session behind the response.
 
-        The lead runs as a persistent actor (``run_actor_loop``): it ends a
-        turn and is re-woken by ``member_done`` / ``send`` until
-        ``finish_task``. Returns the newly created TaskRow.
+        Returns as soon as the task exists and every host-side check has
+        passed; ``_start_lead`` provisions the sandbox, creates the kernel
+        session and drives the lead as a persistent actor (``run_actor_loop``:
+        it ends a turn and is re-woken by ``member_done`` / ``send`` until
+        ``finish_task``). Returns the newly created TaskRow — which is
+        addressable immediately, before its lead is up.
 
         An over-long ``goal`` is no longer rejected: the lead brief is *spilled*
         to a doc and the lead receives a short pointer to read (see
@@ -92,8 +111,6 @@ class LifecycleService:
         """
         async with async_unit_of_work() as db:
             task_ds = TaskDatastore(db)
-            event_ds = TaskEventDatastore(db)
-            run_ds = TaskSessionDatastore(db)
 
             # Resolve the project env (row + main cwd + instructions) through
             # the single host-knowledge seam (tasks/resolution.py).
@@ -250,6 +267,72 @@ class LifecycleService:
                     + "\n".join(f"- {g}" for g in member_gaps)
                 )
 
+        # Everything above is host-side VALIDATION — cheap DB reads, and the
+        # source of every 4xx this endpoint can answer with, so it stays in the
+        # request. Everything below STARTS the task, and starting it means
+        # provisioning the task's sandbox: one task = one scope = a COLD
+        # instance every single time (17.2s of a 19.0s kickoff, measured on qa
+        # 2026-08-18; reusing a warm scope is ~1s). Holding the response for
+        # that left the project composer looking frozen for the whole cold
+        # start and then dropped the user into a task that was already
+        # mid-turn — so the startup runs BEHIND the response.
+        #
+        # The caller still gets a real, addressable task: the row above is
+        # already committed (datastore writes commit individually —
+        # ``async_unit_of_work`` is a session scope, not a transaction), so the
+        # UI can navigate to its detail page immediately and watch the lead
+        # come up there. Until it does the task is ``active`` with no runs and
+        # no events, which every reader already tolerates: the health monitor
+        # explicitly stands down on a task whose lead run is absent
+        # (``TaskHealthMonitor.sweep_once``), and the detail page polls.
+        _run_detached(
+            self._start_lead(
+                lead_session=lead_session,
+                brief=lead_brief,
+                task_id=task_id,
+                project_id=project_id,
+                lead_agent_slug=lead_agent_slug,
+                goal=goal,
+                lead_cwd=lead_cwd,
+                created_by=created_by,
+                user_id=user_id,
+            ),
+            name=f"task-kickoff-{task_id}",
+        )
+
+        return task_row
+
+    async def _start_lead(
+        self,
+        *,
+        lead_session: Any,
+        brief: str,
+        task_id: str,
+        project_id: str,
+        lead_agent_slug: str,
+        goal: str,
+        lead_cwd: str,
+        created_by: str,
+        user_id: str,
+    ) -> None:
+        """Bring a registered task's lead up — the slow half of ``kickoff``.
+
+        Runs detached, after the response. Creates the kernel session under the
+        task's sandbox scope (the cold provision), records the lead run, writes
+        the ``kickoff`` event, and finally drives the lead as a persistent
+        actor: it ends a turn and is re-woken by ``member_done`` / ``send``
+        until ``finish_task`` (the actor loop's finalize callback auto-closes a
+        lead that ends without an explicit finish).
+
+        A failure here can no longer become an HTTP error, so it becomes the
+        state the user can act on: ``blocked`` + a ``kickoff_failed`` event
+        carrying the reason (same landing as the pre-flight gaps above), which
+        ``resume_task`` can retry once the cause is fixed. That is strictly
+        more recoverable than the old in-request behaviour, where a raise here
+        returned a 500 and left the already-committed task ``active`` with no
+        lead and nothing to explain it.
+        """
+        try:
             await launcher.create_task_session(
                 user_id,
                 lead_session,
@@ -258,48 +341,76 @@ class LifecycleService:
                 kind="task_lead",
             )
 
-            # Record the lead run in valuz_task_session
-            lead_run = TaskSessionRow(
-                project_id=project_id,
-                task_id=task_id,
-                session_id=lead_session.id,
-                agent_slug=lead_agent_slug,
-                sequence=0,
-                kind="lead",
-                status="active",
-                label="Kickoff",
-                goal=goal,
-                project_mode="shared",
-                run_dir=lead_cwd,
-            )
-            await run_ds.create_run(user_id, lead_run)
+            async with async_unit_of_work() as db:
+                # The task is visible and actionable during this window now, so
+                # the user can stop it before its lead ever exists —
+                # ``stop_task`` accepts a task with no lead run and flips it
+                # right here. Re-read before committing to the spawn: starting
+                # a lead onto a task the user just stopped is the one way this
+                # split can produce work nobody asked for.
+                task_row = await TaskDatastore(db).get_task_by_project(user_id, project_id, task_id)
+                if task_row is None or task_row.status != "active":
+                    logger.info(
+                        "task %s: no longer active (%s) — standing down before the lead spawn",
+                        task_id,
+                        None if task_row is None else task_row.status,
+                    )
+                    return
 
-            # Append kickoff event
-            await event_ds.append_event(
-                user_id,
-                project_id=project_id,
-                task_id=task_id,
-                type="kickoff",
-                actor=created_by,
-                session_id=lead_session.id,
-                payload={"goal": goal, "lead_agent_slug": lead_agent_slug},
-            )
+                # Record the lead run in valuz_task_session
+                lead_run = TaskSessionRow(
+                    project_id=project_id,
+                    task_id=task_id,
+                    session_id=lead_session.id,
+                    agent_slug=lead_agent_slug,
+                    sequence=0,
+                    kind="lead",
+                    status="active",
+                    label="Kickoff",
+                    goal=goal,
+                    project_mode="shared",
+                    run_dir=lead_cwd,
+                )
+                await TaskSessionDatastore(db).create_run(user_id, lead_run)
 
-        # Drive the lead as a persistent actor: it ends a turn and is re-woken
-        # by member_done / send until finish_task (the actor loop's finalize
-        # callback auto-closes a lead that ends without an explicit finish).
+                # Append kickoff event
+                await TaskEventDatastore(db).append_event(
+                    user_id,
+                    project_id=project_id,
+                    task_id=task_id,
+                    type="kickoff",
+                    actor=created_by,
+                    session_id=lead_session.id,
+                    payload={"goal": goal, "lead_agent_slug": lead_agent_slug},
+                )
+        except Exception as exc:  # noqa: BLE001 — nothing above us can report it
+            logger.exception("task %s: lead startup failed", task_id)
+            try:
+                async with async_unit_of_work() as db:
+                    await block_task(
+                        db,
+                        user_id=user_id,
+                        project_id=project_id,
+                        task_id=task_id,
+                        event_type="kickoff_failed",
+                        actor=created_by,
+                        reason=f"lead startup failed: {exc}",
+                    )
+            except Exception:  # noqa: BLE001 — the log above is the last word
+                logger.exception(
+                    "task %s: could not record the failed lead startup", task_id
+                )
+            return
 
         launcher.spawn_actor(
             self._actor,
             session_id=lead_session.id,
-            prompt=lead_brief,
+            prompt=brief,
             role="lead",
             task_id=task_id,
             project_id=project_id,
             user_id=user_id,
         )
-
-        return task_row
 
     # ------------------------------------------------------------------
     # Chat-plan-then-execute (VALUZ-CHATPLAN) — Slice 2

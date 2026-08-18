@@ -2675,6 +2675,8 @@
     "noRuns": "No runs yet.",
     "eventsTitle": "Execution",
     "noEvents": "No events yet.",
+    "starting": "Starting the task…",
+    "startingHint": "Preparing the run environment — the activity will appear on its own.",
     "runLead": "Lead",
     "runSubtask": "Subtask",
     "manifestSummary": "Summary",

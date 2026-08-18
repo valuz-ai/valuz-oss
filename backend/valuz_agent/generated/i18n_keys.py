@@ -2547,6 +2547,8 @@ I18nKey = Literal[
     "task.runSubtask",
     "task.runsTitle",
     "task.selectLeadAgent",
+    "task.starting",
+    "task.startingHint",
     "task.statusAbandoned",
     "task.statusActive",
     "task.statusBlocked",
