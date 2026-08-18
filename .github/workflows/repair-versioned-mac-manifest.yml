@@ -1,0 +1,115 @@
+name: Repair versioned mac manifest
+
+# Each mac job writes its own arch-specific latest-mac.yml under v<version>/,
+# and until the fix in #932 only the LIVE copy was replaced by
+# merge-mac-manifest — so every versioned mac manifest up to and including
+# v0.4.2 is single-arch. Nothing reads it day to day, but the documented
+# rollback promotes exactly that file back to live, which would hand every
+# Apple Silicon client the x86_64 build. This restores it from the merged
+# manifest the release already published to GitHub Releases, which carries the
+# bare URLs the versioned copy is supposed to have.
+#
+# Releases built after #932 write the versioned copy correctly and never need
+# this. It stays as recovery for the ones that predate it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: Space-separated tags to repair (e.g. "v0.4.1 v0.4.2").
+        required: true
+        default: v0.4.1 v0.4.2
+      edition:
+        description: Edition prefix in the bucket.
+        required: false
+        default: oss
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Setup coscli
+        run: bash scripts/install-coscli.sh
+
+      - name: Setup tccli (CDN purge)
+        run: python3 -m pip install --quiet --disable-pip-version-check tccli
+
+      - name: Restore each versioned manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+          TENCENT_COS_BUCKET: ${{ secrets.TENCENT_COS_BUCKET }}
+          TENCENT_COS_REGION: ${{ secrets.TENCENT_COS_REGION }}
+          VERSIONS: ${{ inputs.versions }}
+          EDITION: ${{ inputs.edition }}
+        run: |
+          set -euo pipefail
+          COS_CONFIG="$HOME/.cos.yaml"
+          cat > "$COS_CONFIG" <<CFG
+          cos:
+            base:
+              secretid: ${TENCENT_SECRET_ID}
+              secretkey: ${TENCENT_SECRET_KEY}
+              sessiontoken: ""
+            buckets:
+              - name: ${TENCENT_COS_BUCKET}
+                alias: valuz
+                endpoint: cos.${TENCENT_COS_REGION}.myqcloud.com
+          CFG
+
+          purge_urls=()
+          for tag in $VERSIONS; do
+            ver="${tag#v}"
+            echo "=== $tag ==="
+            rm -f latest-mac.yml
+            gh release download "$tag" --pattern latest-mac.yml --dir . --clobber \
+              --repo valuz-ai/valuz-oss
+
+            # Never overwrite a stored manifest with one that is no better than
+            # what is already there — that would turn a repair into the outage.
+            arm=$(grep -c 'darwin-arm64' latest-mac.yml || true)
+            amd=$(grep -c 'darwin-amd64' latest-mac.yml || true)
+            got=$(sed -n 's/^version: *//p' latest-mac.yml | head -1)
+            echo "  release manifest: version=$got arm64=$arm amd64=$amd"
+            if [ "$arm" -lt 1 ] || [ "$amd" -lt 1 ]; then
+              echo "::error::$tag: release manifest is not multi-arch — refusing to publish it"
+              exit 1
+            fi
+            if [ "$got" != "$ver" ]; then
+              echo "::error::$tag: manifest says version '$got', expected '$ver'"
+              exit 1
+            fi
+
+            # Bare URLs are correct here: the artifacts sit in the same prefix.
+            key="${EDITION}/v${ver}/latest-mac.yml"
+            coscli -c "$COS_CONFIG" cp latest-mac.yml "cos://valuz/${key}"
+            echo "  wrote cos://valuz/${key}"
+            purge_urls+=("https://files.valuz.cn/${key}")
+          done
+
+          bash scripts/purge-cdn.sh "${purge_urls[@]}"
+
+      - name: Verify what the CDN now serves
+        env:
+          VERSIONS: ${{ inputs.versions }}
+          EDITION: ${{ inputs.edition }}
+        run: |
+          set -uo pipefail
+          sleep 20
+          rc=0
+          for tag in $VERSIONS; do
+            url="https://files.valuz.cn/${EDITION}/${tag}/latest-mac.yml"
+            body=$(curl -s --max-time 25 "$url")
+            arm=$(printf '%s' "$body" | grep -c 'darwin-arm64')
+            amd=$(printf '%s' "$body" | grep -c 'darwin-amd64')
+            echo "$url -> arm64=$arm amd64=$amd"
+            if [ "$arm" -lt 1 ] || [ "$amd" -lt 1 ]; then
+              echo "::error::$tag still single-arch at the edge"
+              rc=1
+            fi
+          done
+          exit $rc
