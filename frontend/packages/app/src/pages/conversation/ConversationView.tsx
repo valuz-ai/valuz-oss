@@ -3,7 +3,7 @@ import { DeleteConfirmDialog, BackgroundTaskStrip } from "@valuz/ui";
 import { useProjectOutlet } from "@valuz/app/layout";
 import { ArtifactSplitPane } from "../../components/ArtifactSplitPane";
 import { useProjectHandoff } from "./useProjectHandoff";
-import { FORKABLE_RUNTIMES, useTitleActions } from "./useTitleActions";
+import { canForkSession, useTitleActions } from "./useTitleActions";
 import { useContextPanel } from "./useContextPanel";
 import {
   useConversationOrchestration,
@@ -261,17 +261,7 @@ function ConversationViewPage(props: ConversationViewProps) {
             hasPendingProjectSend={hasPendingProjectSend}
             startingRuntime={core.startingRuntime}
             emptyStateOverride={props.emptyState}
-            // A task's sessions are excluded, matching the whole-session fork
-            // gate the recents row already applies (`source_kind !== "task"`
-            // in ProjectLayoutBase). Only the per-message affordance was
-            // missing it, so "Fork from here" stayed offered inside a task
-            // conversation and the fork it produced could not run.
-            canForkFromTurn={
-              !core.selectedSession?.task_id &&
-              FORKABLE_RUNTIMES.has(
-                core.selectedSession?.runtime_provider ?? "",
-              )
-            }
+            canForkFromTurn={canForkSession(core.selectedSession)}
             forkInFlight={forkInFlight}
             forkingMessageId={forkingMessageId}
             onForkFromTurn={(messageId) => void handleFork(messageId)}
