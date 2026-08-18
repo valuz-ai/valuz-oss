@@ -336,8 +336,11 @@ logs land under `.ai/dev/{backend,frontend}.log`.
   per-model defaults can't know; the host snapshots it into kernel
   `ModelSettings.max_input_tokens` at session create and each runtime derives
   its auto-compaction trigger (deepagents langchain `profile`, claude
-  `autoCompactWindow`, codex `model_context_window` +
-  `model_auto_compact_token_limit`). Never guess it from a model name.
+  `autoCompactWindow` + `CLAUDE_CODE_MAX_CONTEXT_TOKENS` in the CLI env — the
+  CLI caps the auto-compact window at the window it *assumes* for an
+  unrecognized gateway id, so the real window must be declared too; codex
+  `model_context_window` + `model_auto_compact_token_limit`). Never guess it
+  from a model name.
 - **`rg`** (ripgrep) is a runtime helper for `integrations/docs_embedded`,
   located via the `VALUZ_RG_PATH` env the Electron sidecar sets to the packaged
   `libexec/rg`. The binary is vendored per platform at
