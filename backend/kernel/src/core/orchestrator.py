@@ -1752,6 +1752,28 @@ class SessionOrchestrator:
                             ),
                             no_op_tool=build_task_coverage_noop_tool(),
                         )
+                    except asyncio.CancelledError:
+                        # The primary answer is already complete; the
+                        # continuation is an optional enhancement. A
+                        # CancelledError here is either a genuine
+                        # cancellation of this task (host teardown — let it
+                        # propagate) or a stray one raised by the runtime's
+                        # own client rebuild/teardown. Only the former shows
+                        # up as a live cancel request on the current task;
+                        # anything else must not turn a finished turn into a
+                        # "run failed".
+                        session.status = primary_status
+                        session.stop_reason = primary_stop_reason
+                        current = asyncio.current_task()
+                        if current is not None and current.cancelling():
+                            raise
+                        logger.warning(
+                            "task_coverage continuation cancelled message=%s session=%s; "
+                            "preserving primary",
+                            message.id,
+                            session.id,
+                        )
+                        await observer.abort_task_coverage_continuation(reason="cancelled")
                     except Exception:  # noqa: BLE001 — optional enhancement is fail-open
                         logger.exception(
                             "task_coverage continuation failed message=%s session=%s; "

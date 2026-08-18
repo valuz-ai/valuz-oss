@@ -17,6 +17,7 @@ itself.
 # ruff: noqa: I001
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -312,6 +313,24 @@ async def run_session_to_idle(
             except Exception:  # noqa: BLE001
                 pass
 
+    except asyncio.CancelledError as exc:
+        # A ``CancelledError`` reaching this frame means the turn was
+        # INTERRUPTED — this task was cancelled mid-turn (host teardown, an
+        # in-process supervisor) or a runtime teardown let a cancellation
+        # slip out — never that the model or a tool failed. Classify it like
+        # the runtimes' own ``user_interrupt`` / ``interrupted`` stop reasons
+        # (``_INTERRUPT_CATEGORIES``): the session settles idle and
+        # resumable, and the durable marker is an interruption the client
+        # renders as a quiet line — NOT a ``run.failed`` card with retry /
+        # switch-model plus a failure notification, which is what the generic
+        # ``type(exc).__name__`` mapping below used to produce for a turn
+        # whose answer had already completed.
+        logger.warning(
+            "run_session_to_idle: turn interrupted (CancelledError) for session %s",
+            session_id,
+        )
+        final_status = "interrupted"
+        turn_error = exc
     except BaseException as exc:  # noqa: BLE001
         logger.exception("run_session_to_idle: unexpected error for session %s", session_id)
         final_status = "terminated"

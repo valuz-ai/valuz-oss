@@ -100,7 +100,11 @@ from src.runtimes.codex.event_mapper import (
     extract_turn_completed,
     map_notification,
 )
-from src.runtimes.interruption import describe_exception, is_runtime_interruption
+from src.runtimes.interruption import (
+    absorb_interrupt_cancellations,
+    describe_exception,
+    is_runtime_interruption,
+)
 from src.runtimes.network_egress import (
     ModelIngressDescriptor,
     merge_loopback_no_proxy,
@@ -177,6 +181,10 @@ class CodexRuntime:
         self._thread: AsyncThread | None = None
         self._active_turn: AsyncTurnHandle | None = None
         self._active_task: asyncio.Task[Any] | None = None
+        # ``interrupt()`` cancels of ``_active_task`` this turn; balanced by
+        # ``run()`` after it swallows the injected ``CancelledError`` (see
+        # ``absorb_interrupt_cancellations``).
+        self._interrupt_cancels = 0
         self._prepare_lock = asyncio.Lock()
         self._background_prepare_tasks: set[asyncio.Task[Any]] = set()
         self._cancelled: bool = False
@@ -372,6 +380,7 @@ class CodexRuntime:
 
         session.status = "running"
         self._cancelled = False
+        self._interrupt_cancels = 0
         self._active_task = asyncio.current_task()
         turn_attempt_id = uuid.uuid4().hex
 
@@ -657,6 +666,8 @@ class CodexRuntime:
                 retry_status="terminal",
                 message="cancelled",
             )
+            absorb_interrupt_cancellations(self._interrupt_cancels)
+            self._interrupt_cancels = 0
         except Exception as exc:
             session.status = "idle"
             if self._cancelled:
@@ -828,6 +839,7 @@ class CodexRuntime:
         task = self._active_task
         if task is not None and not task.done():
             task.cancel()
+            self._interrupt_cancels += 1
         for prepare_task in tuple(self._background_prepare_tasks):
             if not prepare_task.done():
                 prepare_task.cancel()

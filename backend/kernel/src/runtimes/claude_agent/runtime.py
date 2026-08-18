@@ -119,7 +119,11 @@ from src.runtimes.claude_agent.approval_bridge import (
     _build_pending_payload,
     _classify_subject,
 )
-from src.runtimes.interruption import describe_exception, is_runtime_interruption
+from src.runtimes.interruption import (
+    absorb_interrupt_cancellations,
+    describe_exception,
+    is_runtime_interruption,
+)
 from src.runtimes.mcp_env import resolve_stdio_env
 from src.runtimes.network_egress import (
     ModelIngressDescriptor,
@@ -438,6 +442,12 @@ class ClaudeAgentRuntime:
         # iterator unblocks even when ``receive_response().__anext__`` is
         # waiting on the SDK subprocess for the next chunk.
         self._active_task: asyncio.Task[Any] | None = None
+        # How many times ``interrupt()`` cancelled ``_active_task`` during the
+        # current turn. ``run()`` swallows the injected ``CancelledError`` and
+        # then ``uncancel()``s exactly this many times so the turn task does
+        # not carry a stale cancellation count into later turns it drives
+        # (see ``absorb_interrupt_cancellations``).
+        self._interrupt_cancels = 0
         # Idle-stream drainer: consumes SDK messages BETWEEN turns so
         # background-task lifecycle pushes (task_updated / task_notification)
         # and the CLI's spontaneous wake-up turns are processed live instead
@@ -707,6 +717,7 @@ class ClaudeAgentRuntime:
         self._egress_turn_attempt_id = uuid.uuid4().hex
         self._egress_first_model_event_recorded = False
         self._cancelled = False
+        self._interrupt_cancels = 0
         # Reset stderr buffer so any ``session_error`` from this turn
         # carries only this turn's CLI output, not noise from prior
         # successful turns rolling in the deque.
@@ -777,12 +788,19 @@ class ClaudeAgentRuntime:
         except asyncio.CancelledError:
             # interrupt() called task.cancel() to unblock the SDK iterator
             # when it was waiting on the subprocess for the next chunk.
+            # Swallowing it ends the turn as a user cancel; balancing the
+            # cancel count keeps this task honest for the turns it drives
+            # next (queue drain / actor loop) — a stale ``cancelling() > 0``
+            # made ``_stop_idle_drainer`` mistake a later drainer teardown
+            # for its own cancellation and fail a completed turn.
             session.status = "idle"
             session.stop_reason = Error(
                 category="user_interrupt",
                 retry_status="terminal",
                 message="cancelled",
             )
+            absorb_interrupt_cancellations(self._interrupt_cancels)
+            self._interrupt_cancels = 0
             await self._destroy_client()
 
         except Exception as exc:
@@ -1050,15 +1068,16 @@ class ClaudeAgentRuntime:
         if task is None or task.done():
             return
         task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            # Re-raise ONLY if it is *this* coroutine being cancelled;
-            # the drainer's own cancellation lands here as a plain result.
-            if (cur := asyncio.current_task()) is not None and cur.cancelling():
-                raise
-        except Exception:
-            logger.debug("claude_agent: idle drainer teardown failed", exc_info=True)
+        # ``asyncio.wait`` never re-raises the DRAINER's cancellation into this
+        # coroutine — only a genuine cancellation of the current task
+        # propagates out of it. (The previous ``await task`` +
+        # ``current_task().cancelling()`` discriminator misfired whenever the
+        # turn task carried a stale cancel count from an earlier swallowed
+        # interrupt, surfacing the drainer's own CancelledError as a turn
+        # failure right after a completed answer.)
+        await asyncio.wait({task})
+        if not task.cancelled() and (exc := task.exception()) is not None:
+            logger.debug("claude_agent: idle drainer teardown failed: %r", exc)
 
     async def _drain_idle_stream(self, session: Session) -> None:
         """Between-turns consumer: background-task pushes + wake-up turns.
@@ -1452,6 +1471,7 @@ class ClaudeAgentRuntime:
         task = self._active_task
         if task is not None and not task.done():
             task.cancel()
+            self._interrupt_cancels += 1
 
     async def close(self) -> None:
         await self._destroy_client()

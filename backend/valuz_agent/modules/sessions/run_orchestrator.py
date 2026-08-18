@@ -27,7 +27,7 @@ from valuz_agent.infra.eventbus import EventBus
 from valuz_agent.infra.execution_lease import hold_lease, load_lease_states
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.sessions.pre_turn import chat_capability_hook
-from valuz_agent.modules.sessions.turn_driver import run_session_to_idle
+from valuz_agent.modules.sessions.turn_driver import _INTERRUPT_CATEGORIES, run_session_to_idle
 from valuz_agent.ports.message_context import HostRef
 
 logger = logging.getLogger(__name__)
@@ -446,6 +446,12 @@ async def _project_conversation_run_result(
     if error_event is None:
         await notification_service.resolve_session_failures(owner_user_id, session_id)
         return
+    if str((getattr(error_event, "data", None) or {}).get("category") or "") in (
+        _INTERRUPT_CATEGORIES
+    ):
+        # An interrupted turn (user stop / host teardown / cancelled task) is
+        # resumable intent, not a failure — no badge, no OS notification.
+        return
 
     meta = getattr(session, "metadata", None) or {}
     valuz = meta.get("valuz") if isinstance(meta, dict) else None
@@ -512,7 +518,21 @@ async def _finalize_session(
     error_event = None
     stop_reason_type = None
     stop_reason_message = None
-    if error is not None:
+    if isinstance(error, asyncio.CancelledError):
+        # The turn was interrupted, not failed (``run_session_to_idle`` maps
+        # this onto the loop-local ``interrupted`` status). Still record a
+        # durable terminal marker — the kernel may not have emitted one when
+        # the cancellation cut the turn short, and the client needs a bracket
+        # to close the turn on reload — but as an INTERRUPTION category the
+        # client renders quietly (no retry / switch-model card), and without
+        # stamping the session's stop_reason as an error: the session stays
+        # a clean, resumable idle. ``_project_conversation_run_result``
+        # skips interruption categories, so no failure notification fires.
+        error_event = EventPayload(
+            type="session_error",
+            data={"category": "interrupted", "message": "turn interrupted"},
+        )
+    elif error is not None:
         message = str(error) or "agent turn failed"
         error_event = EventPayload(
             type="session_error",
