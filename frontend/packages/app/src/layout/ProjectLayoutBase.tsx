@@ -740,8 +740,11 @@ export function ProjectLayoutBase({
         route.path === location.pathname ||
         location.pathname.startsWith(`${route.path}/`),
     );
-    const raw = match?.label ?? branding.appName;
-    return t(raw as Parameters<typeof t>[0]);
+    // Route labels are i18n keys; the branding app name is a literal product
+    // string ("Valuz Team") and must not go through t() — it would log a
+    // "missing translation" warning on every unmatched route.
+    if (!match?.label) return branding.appName;
+    return t(match.label as Parameters<typeof t>[0]);
   }, [desktopRoutes, location.pathname, branding.appName, t]);
 
   const outletContext: ProjectOutletContext = {

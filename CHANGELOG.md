@@ -71,6 +71,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Window title fallback no longer goes through i18n** — on routes without a
+  registered label the layout used the branding app name as an i18n key
+  (`[i18n] missing translation for key "Valuz Team"` on every navigation);
+  the literal product name is now used directly (#935 @St0neWan9).
 - **Codex no longer leaks MCP secrets into process state** — five related fixes:
   secrets are kept out of the process argv (#913) and the app-server argv (#914),
   the tool shell is isolated from runtime secrets (#915), referenced secrets are
