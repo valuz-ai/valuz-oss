@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from valuz_agent.api.middleware import (
     ErrorHandlerMiddleware,
+    LocaleMiddleware,
     TimingMiddleware,
 )
 from valuz_agent.api.routes.activity import router as activity_router
@@ -136,6 +137,9 @@ def create_app(
     # per-request ContextVars with a reset boundary, with deps in ``kwargs``).
     _auth_cls, _auth_kwargs = ext.auth_middleware
     app.add_middleware(_auth_cls, **_auth_kwargs)
+    # Outside auth, inside Timing: the locale must be bound before any handler
+    # (or any ``t()`` inside auth failures) renders text.
+    app.add_middleware(LocaleMiddleware)
     app.add_middleware(TimingMiddleware)
     app.add_middleware(
         CORSMiddleware,
