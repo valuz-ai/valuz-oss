@@ -59,6 +59,10 @@ export function useConversationScroll({
     scrollToTurnTop: (index: number) => void;
   } | null>(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
+  // Index of the turn whose top has most recently passed the viewport
+  // top — i.e. the one the reader is on. Drives the message index rail's
+  // highlight; nothing else needs it, so it stays local to this cluster.
+  const [activeTurnIndex, setActiveTurnIndex] = useState(0);
 
   // Scroll to bottom
   const handleScrollToBottom = useCallback(() => {
@@ -111,6 +115,21 @@ export function useConversationScroll({
         const next = distanceFromBottom > 120;
         return prev === next ? prev : next;
       });
+      // Which turn is at the viewport top. Rides this recompute rather
+      // than a listener of its own — it needs exactly the same triggers
+      // (scroll, resize, fold/unfold mutations, the 250ms fallback), and
+      // virtualization keeps the row count in the DOM to ~10, so the
+      // rect reads are cheap.
+      const containerTop = el.getBoundingClientRect().top;
+      let active = 0;
+      el.querySelectorAll<HTMLElement>("[data-index]").forEach((row) => {
+        const idx = Number(row.dataset.index);
+        if (Number.isNaN(idx)) return;
+        if (row.getBoundingClientRect().top - containerTop <= 24) {
+          active = Math.max(active, idx);
+        }
+      });
+      setActiveTurnIndex((prev) => (prev === active ? prev : active));
     };
     recompute();
     el.addEventListener("scroll", recompute, { passive: true });
@@ -536,6 +555,7 @@ export function useConversationScroll({
 
   return {
     showScrollBottom,
+    activeTurnIndex,
     containerHeight,
     handleScrollToBottom,
     handleTurnListVirtualApiReady,

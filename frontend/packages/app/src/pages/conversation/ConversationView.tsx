@@ -267,6 +267,7 @@ function ConversationViewPage(props: ConversationViewProps) {
             forkInFlight={forkInFlight}
             forkingMessageId={forkingMessageId}
             onForkFromTurn={(messageId) => void handleFork(messageId)}
+            activeTurnIndex={core.activeTurnIndex}
           />
 
           <ApprovalTray
