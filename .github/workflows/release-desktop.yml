@@ -790,8 +790,18 @@ jobs:
           sed -e 's|url: |url: v'"$VALUZ_VERSION"'/|g' \
               -e 's|^path: |path: v'"$VALUZ_VERSION"'/|' \
               latest-mac.yml > latest-mac.yml.live
-          coscli -c "$COS_CONFIG" cp latest-mac.yml.live "cos://valuz/${VALUZ_EDITION}/latest-mac.yml"
+          coscli -c "$COS_CONFIG" cp latest-mac.yml.live "cos://valuz/${VALUZ_EDITION}/latest-mac.yml" \
+            --meta "Cache-Control:max-age=60"
           echo "Live mac manifest: https://files.valuz.cn/${VALUZ_EDITION}/latest-mac.yml"
+
+          # Also replace the versioned copy. Each mac job writes its own
+          # arch-specific manifest under v${VERSION}/, and until now only the
+          # live copy was merged — leaving every versioned mac manifest
+          # single-arch, so the documented "promote the old manifest back to
+          # live" rollback would have served x86_64 to Apple Silicon. Bare
+          # URLs here: the artifacts sit next to it.
+          coscli -c "$COS_CONFIG" cp latest-mac.yml "cos://valuz/${VALUZ_EDITION}/v${VALUZ_VERSION}/latest-mac.yml"
+          echo "Versioned mac manifest: https://files.valuz.cn/${VALUZ_EDITION}/v${VALUZ_VERSION}/latest-mac.yml"
 
       # Overwriting the origin does not expire the copy the CDN edge is already
       # serving. v0.4.2 published a correct merged manifest and mac clients kept
