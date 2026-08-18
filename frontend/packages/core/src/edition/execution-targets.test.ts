@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import {
+  executionTargetIconKind,
+  targetUsesManagedCwd,
   getDefaultExecutionTarget,
   getDefaultRuntimeLocation,
   getExecutionTargets,
@@ -79,5 +81,58 @@ describe("default runtime location", () => {
       setDefaultRuntimeLocation("cloud");
     });
     expect(result.current).toBe("cloud");
+  });
+});
+
+describe("executionTargetIconKind", () => {
+  it("should infer local / cloud / device from the id when no target is registered", () => {
+    expect(executionTargetIconKind("local")).toBe("local");
+    expect(executionTargetIconKind("cloud")).toBe("cloud");
+    expect(executionTargetIconKind("device:abc123")).toBe("device");
+    expect(executionTargetIconKind("something-else")).toBe("local");
+  });
+
+  it("should prefer an explicit icon on the registered target", () => {
+    setExecutionTargets([
+      LOCAL,
+      { id: "edge-1", labelKey: "x", baseUrl: "http://edge", icon: "device" },
+      { id: "device:legacy", labelKey: "y", baseUrl: "http://y", icon: "cloud" },
+    ]);
+    expect(executionTargetIconKind("edge-1")).toBe("device");
+    expect(executionTargetIconKind("device:legacy")).toBe("cloud");
+  });
+
+  it("should use the passed target without consulting the registry", () => {
+    expect(
+      executionTargetIconKind("whatever", {
+        id: "whatever",
+        labelKey: "k",
+        baseUrl: "http://w",
+        icon: "cloud",
+      }),
+    ).toBe("cloud");
+  });
+});
+
+describe("targetUsesManagedCwd", () => {
+  it("should be false for local / undefined targets", () => {
+    expect(targetUsesManagedCwd(undefined)).toBe(false);
+    expect(targetUsesManagedCwd(LOCAL)).toBe(false);
+  });
+
+  it("should be true for a remote target without its own directory chooser", () => {
+    expect(targetUsesManagedCwd({ ...CLOUD, remote: true })).toBe(true);
+  });
+
+  it("should be false for a remote target that can browse its own filesystem", () => {
+    expect(
+      targetUsesManagedCwd({
+        id: "device:x",
+        labelKey: "k",
+        baseUrl: "http://relay/x",
+        remote: true,
+        selectDirectory: async () => ({ path: "/Users/me/proj" }),
+      }),
+    ).toBe(false);
   });
 });

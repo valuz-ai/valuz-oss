@@ -20,13 +20,9 @@ import {
   type EntityOriginKind,
 } from "@valuz/core";
 import { SegmentedControl, cn } from "@valuz/ui";
-import { Cloud, HardDrive } from "lucide-react";
+import { executionTargetIcon } from "./execution-target-icon";
 
 type TK = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
-
-function originIcon(targetId: string) {
-  return targetId === "cloud" ? Cloud : HardDrive;
-}
 
 export interface ExecutionLocationPickerProps {
   /** Selected target id; ``null`` = follow the registered default. */
@@ -51,7 +47,7 @@ export function ExecutionLocationPicker({
       options={targets.map((target) => ({
         value: target.id,
         label: t(target.labelKey as TK),
-        icon: originIcon(target.id),
+        icon: executionTargetIcon(target.id, target),
       }))}
       className={cn("h-8 w-fit", className)}
     />
@@ -75,7 +71,7 @@ export function OriginIcon({ origin, className }: OriginIconProps) {
   if (!origin || targets.length < 2) return null;
   const target = targets.find((candidate) => candidate.id === origin);
   const label = target ? t(target.labelKey as TK) : origin;
-  const Icon = originIcon(origin);
+  const Icon = executionTargetIcon(origin, target);
   return (
     <Icon
       data-slot="origin-icon"
@@ -112,7 +108,7 @@ export function OriginBadge({
   if (!effective || targets.length < 2) return null;
   const target = targets.find((candidate) => candidate.id === effective);
   const label = target ? t(target.labelKey as TK) : effective;
-  const Icon = originIcon(effective);
+  const Icon = executionTargetIcon(effective, target);
   return (
     <span
       data-slot="origin-badge"

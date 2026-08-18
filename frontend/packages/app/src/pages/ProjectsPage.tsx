@@ -21,11 +21,11 @@ import { toast } from "sonner";
 import { FolderKanban, MoreVertical, Plus, Upload } from "lucide-react";
 import {
   projectsApi,
+  recordEntityOrigin,
   useProjectStore,
   useTranslation,
   type ProjectListItem,
 } from "@valuz/core";
-import { usePlatform } from "@valuz/app/platform";
 import { useProjectOutlet } from "@valuz/app/layout";
 import type { DirectoryFieldMode } from "../layout";
 import { useAgentDeployPicker } from "../components/agent-deploy-picker";
@@ -45,7 +45,6 @@ export const ProjectsPage = ({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { selectDirectory } = usePlatform();
   const { setHeader, setHeaderClassName } = useProjectOutlet();
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -63,10 +62,13 @@ export const ProjectsPage = ({
   const importInputRef = useRef<HTMLInputElement>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importOpen, setImportOpen] = useState(false);
-  const managedDirectory = directoryFieldMode === "managed";
   // Execution location for the create dialog (multi-target editions; inert
   // no-target state on single-backend builds).
   const execLocation = useProjectExecutionLocation();
+  // A target with its own directory chooser (remote desktop) keeps the
+  // directory field even where this platform cannot pick local folders.
+  const managedDirectory =
+    directoryFieldMode === "managed" && !execLocation.hasOwnDirectoryPicker;
   // Initial members for the create dialog (shared with the sidebar entry).
   // Source candidates from the chosen target's backend so a cloud-bound
   // project only lists cloud-deployable agents.
@@ -143,11 +145,23 @@ export const ProjectsPage = ({
   }, [pageHeader, setHeader, setHeaderClassName]);
 
   const handleSelectDirectory = async () => {
-    const path = await selectDirectory();
-    if (path) {
-      setNewRootPath(path);
+    const picked = await execLocation.selectDirectory();
+    if (!picked) return;
+    if (picked.existingProjectId) {
+      // Already a project on that target — open it rather than create a
+      // duplicate binding (the backend answers 409 for that).
+      const target = execLocation.effectiveTarget;
+      if (target) recordEntityOrigin(picked.existingProjectId, target.id);
+      setCreateOpen(false);
+      setNewName("");
+      setNewRootPath("");
       setCreateError("");
+      execLocation.reset();
+      navigate(`/projects/${picked.existingProjectId}`);
+      return;
     }
+    setNewRootPath(picked.path);
+    setCreateError("");
   };
 
   const handleCreate = async () => {

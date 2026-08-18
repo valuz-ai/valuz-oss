@@ -22,6 +22,20 @@
 
 import { useSyncExternalStore } from "react";
 
+/**
+ * Which glyph the picker / origin badge draws for a target. Editions may set
+ * it explicitly; otherwise it is inferred from the id (see
+ * {@link executionTargetIconKind}).
+ *
+ * - ``local`` — this machine's own backend;
+ * - ``cloud`` — the shared cloud backend;
+ * - ``device`` — another desktop reached through the remote-control relay.
+ */
+export type ExecutionTargetIcon = "local" | "cloud" | "device";
+
+/** Id prefix editions use for remote-desktop targets (``device:<device id>``). */
+export const DEVICE_TARGET_ID_PREFIX = "device:";
+
 export interface ExecutionTarget {
   /** Stable id — also used as the row ``origin`` tag (e.g. "local"/"cloud"). */
   id: string;
@@ -36,6 +50,56 @@ export interface ExecutionTarget {
    * upload instead of a directory picker.
    */
   remote?: boolean;
+  /** Glyph override; inferred from ``id`` when omitted. */
+  icon?: ExecutionTargetIcon;
+  /**
+   * Edition-provided directory chooser for a target whose filesystem is NOT
+   * this machine's but can still be browsed (a remote desktop reached
+   * through the relay). When set, the create-project / create-KB dialogs
+   * show their normal directory field and call this instead of the
+   * platform's native picker; ``remote`` then no longer forces the managed
+   * cwd + upload flow (see {@link targetUsesManagedCwd}). Resolves to
+   * ``null`` when the user cancels.
+   */
+  selectDirectory?: () => Promise<ExecutionTargetDirectory | null>;
+}
+
+/**
+ * Result of {@link ExecutionTarget.selectDirectory}. When the picked
+ * directory is already bound to a project on that target, the edition
+ * reports it so the dialog can open that project instead of creating a
+ * duplicate (the backend rejects a second binding of the same root with 409).
+ */
+export interface ExecutionTargetDirectory {
+  path: string;
+  existingProjectId?: string;
+  existingProjectName?: string;
+}
+
+/**
+ * True when creating on ``target`` must use the managed-cwd + initial-upload
+ * flow: the backend is remote AND cannot offer its own directory chooser.
+ * ``undefined`` (single-target builds) → false.
+ */
+export function targetUsesManagedCwd(target: ExecutionTarget | null | undefined): boolean {
+  return target?.remote === true && typeof target.selectDirectory !== "function";
+}
+
+/**
+ * Resolve the glyph kind for a target id: an explicit ``icon`` on the
+ * registered target wins, then ``"cloud"`` → cloud, ``device:*`` → device,
+ * anything else (``"local"``, unknown ids) → local. Pure — safe to call
+ * outside React and for ids that are not registered (stale origin tags).
+ */
+export function executionTargetIconKind(
+  targetId: string,
+  target?: ExecutionTarget | null,
+): ExecutionTargetIcon {
+  const registered = target ?? _targets.find((t) => t.id === targetId);
+  if (registered?.icon) return registered.icon;
+  if (targetId === "cloud") return "cloud";
+  if (targetId.startsWith(DEVICE_TARGET_ID_PREFIX)) return "device";
+  return "local";
 }
 
 let _targets: ExecutionTarget[] = [];
