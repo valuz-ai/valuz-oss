@@ -30,7 +30,7 @@ import {
   cn,
 } from "@valuz/ui";
 import { SlotRenderer } from "@valuz/core";
-import { FORKABLE_RUNTIMES } from "./useTitleActions";
+import { canForkSession } from "./useTitleActions";
 import { SessionStatusPill } from "./SessionStatusPill";
 import type { useComposerConfig } from "./useComposerConfig";
 import type { useConversationHistory } from "./useConversationHistory";
@@ -65,8 +65,8 @@ type ConversationHeaderProps = {
   agentNameBySlug: ComposerConfig["agentNameBySlug"];
   activeProject: ProjectDetail | null;
   /** Whole-session fork (docs/design/session-fork.md). The item renders
-   *  only for runtimes with a wired native fork (codex today) and is
-   *  disabled while a turn is running or a fork is already in flight. */
+   *  only when ``canForkSession`` allows it and is disabled while a turn is
+   *  running or a fork is already in flight. */
   onFork: () => void;
   forkInFlight: boolean;
 };
@@ -236,13 +236,10 @@ export function ConversationHeader({
                       <FilePenLine />
                       {t("sidebar.rename" as Parameters<typeof t>[0])}
                     </DropdownMenuItem>
-                    {FORKABLE_RUNTIMES.has(
-                      selectedSession?.runtime_provider ?? "",
-                    ) && (
+                    {canForkSession(selectedSession) && (
                       <DropdownMenuItem
                         disabled={
-                          forkInFlight ||
-                          selectedSession?.status === "running"
+                          forkInFlight || selectedSession?.status === "running"
                         }
                         onSelect={() => onFork()}
                       >
