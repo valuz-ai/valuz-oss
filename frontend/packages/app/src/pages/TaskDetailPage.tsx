@@ -1161,6 +1161,15 @@ export const TaskDetailPage = () => {
 
   const { task, events } = detail;
   const isActive = task.status === "active";
+  // A task is addressable the moment it is registered — its lead comes up
+  // behind the kickoff response, because starting one provisions a sandbox for
+  // a brand-new scope (a cold instance, ~17s on the cloud backend). So this
+  // page opens on a task that legitimately has no runs and no events yet, and
+  // "no events" would read as "nothing is happening" when the truth is "it is
+  // starting". The poller above swaps this out for the real timeline the
+  // moment the lead lands. A halted/terminal task with an empty timeline is
+  // NOT starting — it never got there, and its own state bar says so.
+  const isStarting = isActive && events.length === 0 && detail.runs.length === 0;
   const isPaused = task.status === "paused";
   // ``blocked`` is the failed-but-resumable terminal (lead turn errored — e.g.
   // an API/socket drop — or unresolved subtasks). Surface a retry/继续 entry
@@ -1203,7 +1212,15 @@ export const TaskDetailPage = () => {
           {t("task.eventsTitle")}
         </h2>
       </div>
-      {events.length === 0 ? (
+      {isStarting ? (
+        <div className="flex items-start gap-2 text-xs text-ink-meta">
+          <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
+          <span>
+            <span className="text-ink-body">{t("task.starting")}</span>
+            <span className="ml-1">{t("task.startingHint")}</span>
+          </span>
+        </div>
+      ) : events.length === 0 ? (
         <p className="text-xs text-ink-meta">{t("task.noEvents")}</p>
       ) : (
         <ol className="flex flex-col gap-4">
