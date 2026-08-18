@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # upload-to-cos.sh — Upload desktop release artifacts to Tencent COS.
 #
-# Uses coscli (Tencent's official Go CLI for COS). tccli does NOT have a cos
-# subcommand — COS has its own API surface separate from the Tencent Cloud API
-# 3.0 that tccli wraps. See scripts/install-coscli.sh for setup.
+# Uses coscli (Tencent's official Go CLI for COS). COS has its own API surface,
+# separate from the Tencent Cloud API 3.0 that tccli wraps — `tccli cos` exists
+# but exposes a different, thinner operation set, so coscli is the tool for
+# object work here (tccli is still needed for the CDN purge, which is API 3.0).
+# See scripts/install-coscli.sh for setup.
 #
 # Uploads two things from a release directory:
 #   1. Every distributable artifact (*.dmg, *.zip, *.exe, *.AppImage, *.deb,
