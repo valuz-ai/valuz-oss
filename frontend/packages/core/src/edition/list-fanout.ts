@@ -180,11 +180,32 @@ function scheduleReprobe(): void {
  * that answer are removed from the degraded set (real list content follows
  * with the next regular refresh). Still-failed targets keep the banner and
  * the next probe stays scheduled.
+ *
+ * Every exit has to leave recovery running or cancelled deliberately — an
+ * early return that simply drops the timer strands the banner forever, which
+ * is the exact failure the active-recovery design above exists to prevent.
  */
 async function runReprobe(): Promise<void> {
+  const registered = getListFanOutTargets();
+  // A target that has left the registry — or a drop back to the
+  // single-backend fast path, where ``getListFanOutTargets`` returns [] — is
+  // no longer fanned out to, so the list cannot be missing its content. Drop
+  // those ids instead of naming a target the user can no longer see.
+  const stillListed = _degraded.filter((id) =>
+    registered.some((t) => t.id === id),
+  );
+  if (stillListed.length !== _degraded.length) {
+    publishDegradedTargets(stillListed);
+  }
   const fetchOne = _lastFanOut;
-  const failed = getListFanOutTargets().filter((t) => _degraded.includes(t.id));
-  if (!fetchOne || failed.length === 0) return;
+  const failed = registered.filter((t) => _degraded.includes(t.id));
+  if (!fetchOne || failed.length === 0) {
+    // Nothing to probe on this tick. ``scheduleReprobe`` runs from the timer
+    // callback that already cleared ``_reprobeTimer``, so returning without
+    // rescheduling would end recovery permanently and strand the banner.
+    if (_degraded.length > 0) scheduleReprobe();
+    return;
+  }
   const settled = await Promise.allSettled(
     failed.map((target) => fetchTarget(fetchOne, target)),
   );
