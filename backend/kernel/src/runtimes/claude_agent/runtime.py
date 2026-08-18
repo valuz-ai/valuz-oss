@@ -1990,7 +1990,12 @@ class ClaudeAgentRuntime:
           can't know). The trigger is ``AUTO_COMPACT_WINDOW_FRACTION`` of
           the input window, clamped to the CLI's documented 100k–1M range —
           a sub-100k trigger is skipped entirely (emitting the 100k floor
-          would place the trigger past the real window).
+          would place the trigger past the real window). The CLI caps this
+          window at the model's context window, so the same declaration is
+          also exported as ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` in the
+          subprocess env (``_build_model_provider_env``) — without it an
+          unrecognized gateway id keeps the CLI's assumed window and a
+          trigger above it would be silently clamped.
 
         Keep each a true *default*: inject it only when the project hasn't set
         the key, so a project's explicit value loaded through
@@ -2043,6 +2048,21 @@ class ClaudeAgentRuntime:
           may be unavailable behind a gateway); cleared on the first-party
           path so it keeps the default.
         * ``ANTHROPIC_AUTH_TOKEN`` — the per-session api_key.
+        * ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` — the session's channel-declared
+          ``max_input_tokens`` (see ``_build_settings``). For a gateway /
+          custom model id the CLI cannot resolve to a Claude model it
+          otherwise *assumes* a window for the id (its generic default), so
+          both the auto-compact trigger and the ``autoCompactWindow`` we
+          inject — which the CLI caps at the assumed window — would be
+          measured against the wrong size. Declaring the real window is the
+          Claude analog of codex's ``model_context_window``. Documented
+          semantics (model-config "Correct the window for a gateway or
+          custom model ID"): applies directly to an id that neither starts
+          with ``claude-`` nor contains ``[1m]``; a ``claude-`` / resolvable
+          Claude id keeps the CLI's own tuning (the variable is a no-op
+          there unless ``DISABLE_COMPACT`` is set), and an unresolvable
+          ``[1m]`` id keeps the CLI's assumed 1M window. Only set when
+          declared — never guessed from the model name.
         * Non-Claude model aliases additionally rewrite the SDK's
           ``ANTHROPIC_DEFAULT_*_MODEL`` family so the CLI doesn't
           short-circuit to its built-in Claude defaults when running
@@ -2110,6 +2130,10 @@ class ClaudeAgentRuntime:
             # advisor-off flag so the first-party path gets the default
             # (advisor on) rather than silently honoring a parent export.
             merged.pop("CLAUDE_CODE_DISABLE_ADVISOR_TOOL", None)
+        model_settings = getattr(self, "model_settings", None)
+        max_input_tokens = getattr(model_settings, "max_input_tokens", None)
+        if isinstance(max_input_tokens, int) and max_input_tokens > 0:
+            merged["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(max_input_tokens)
         if self.model_provider is None:
             # Native subscription credentials remain in Claude Code's own
             # credential store. In particular, do not materialize
