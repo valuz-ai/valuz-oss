@@ -261,9 +261,17 @@ function ConversationViewPage(props: ConversationViewProps) {
             hasPendingProjectSend={hasPendingProjectSend}
             startingRuntime={core.startingRuntime}
             emptyStateOverride={props.emptyState}
-            canForkFromTurn={FORKABLE_RUNTIMES.has(
-              core.selectedSession?.runtime_provider ?? "",
-            )}
+            // A task's sessions are excluded, matching the whole-session fork
+            // gate the recents row already applies (`source_kind !== "task"`
+            // in ProjectLayoutBase). Only the per-message affordance was
+            // missing it, so "Fork from here" stayed offered inside a task
+            // conversation and the fork it produced could not run.
+            canForkFromTurn={
+              !core.selectedSession?.task_id &&
+              FORKABLE_RUNTIMES.has(
+                core.selectedSession?.runtime_provider ?? "",
+              )
+            }
             forkInFlight={forkInFlight}
             forkingMessageId={forkingMessageId}
             onForkFromTurn={(messageId) => void handleFork(messageId)}
@@ -289,83 +297,83 @@ function ConversationViewPage(props: ConversationViewProps) {
               leaving the composer live invites sending a message in a mode
               where that makes no sense. */}
           {composerSuppressed ? null : (
-          <ComposerPane
-            showScrollBottom={core.showScrollBottom}
-            handleScrollToBottom={core.handleScrollToBottom}
-            displayBusy={core.displayBusy}
-            selectedSession={core.selectedSession}
-            rosterEmpty={core.rosterEmpty}
-            channelLoaded={core.channelLoaded}
-            hasChannel={core.hasChannel}
-            channelsPending={core.channelsPending}
-            agentPending={core.agentPending}
-            setupPending={core.setupPending}
-            refreshChannels={core.refreshChannels}
-            refreshAgents={core.refreshAgents}
-            createAgentOpen={core.createAgentOpen}
-            setCreateAgentOpen={core.setCreateAgentOpen}
-            setAgentLibraryRevision={core.setAgentLibraryRevision}
-            setSelectedAgentSlug={core.setSelectedAgentSlug}
-            setComposerTouched={core.setComposerTouched}
-            selectedSessionId={core.selectedSessionId}
-            queue={core.queue}
-            isBusy={core.isBusy}
-            queueDispatching={core.queueDispatching}
-            queuePaused={core.queuePaused}
-            handleEditQueued={core.handleEditQueued}
-            handleDeleteQueued={core.handleDeleteQueued}
-            handleResumeQueue={core.handleResumeQueue}
-            handleSteerQueued={core.handleSteerQueued}
-            conversationInstanceKey={core.conversationInstanceKey}
-            draft={core.draft}
-            setDraft={core.setDraft}
-            isProjectProject={core.isProjectProject}
-            effectiveAgentSlug={core.effectiveAgentSlug}
-            handleSend={handleSend}
-            interruptRef={core.interruptRef}
-            sessionAttachments={core.sessionAttachments}
-            handleRemoveSessionAttachment={core.handleRemoveSessionAttachment}
-            composerAgents={core.composerAgents}
-            sessionAgentSlug={core.sessionAgentSlug}
-            selectedAgentSlug={core.selectedAgentSlug}
-            execBarLocked={core.execBarLocked}
-            sessionExecOrigin={core.sessionExecOrigin}
-            execTargetId={core.execTargetId}
-            setExecTargetId={core.setExecTargetId}
-            setSelectedProviderId={core.setSelectedProviderId}
-            setSelectedModelId={core.setSelectedModelId}
-            projects={core.projects}
-            selectedProjectId={core.selectedProjectId}
-            setSelectedProjectId={core.setSelectedProjectId}
-            setSelectedComposerSkill={core.setSelectedComposerSkill}
-            execBarProjects={core.execBarProjects}
-            providerTarget={core.providerTarget}
-            panelSetCollapsed={core.panelSetCollapsed}
-            composerProviders={core.composerProviders}
-            selectedProviderId={core.selectedProviderId}
-            selectedModelId={core.selectedModelId}
-            composerRuntimes={core.composerRuntimes}
-            selectedRuntimeId={core.selectedRuntimeId}
-            setSelectedRuntimeId={core.setSelectedRuntimeId}
-            selectedPermissionMode={core.selectedPermissionMode}
-            setSelectedPermissionMode={core.setSelectedPermissionMode}
-            isNewSession={core.isNewSession}
-            id={core.id}
-            selectedEffort={core.selectedEffort}
-            setSelectedEffort={core.setSelectedEffort}
-            modelSelectorUnlocked={core.modelSelectorUnlocked}
-            selectedAgentSkillItems={core.selectedAgentSkillItems}
-            composerMentionSkills={core.composerMentionSkills}
-            availableSkills={core.availableSkills}
-            handleOpenKbPicker={core.handleOpenKbPicker}
-            handleLocalFilesAttach={core.handleLocalFilesAttach}
-            connectorOptions={core.connectorOptions}
-            selectedMcpSlugs={core.selectedMcpSlugs}
-            toggleConnector={core.toggleConnector}
-            parsingConfirmOpen={core.parsingConfirmOpen}
-            setParsingConfirmOpen={core.setParsingConfirmOpen}
-            performSend={core.performSend}
-          />
+            <ComposerPane
+              showScrollBottom={core.showScrollBottom}
+              handleScrollToBottom={core.handleScrollToBottom}
+              displayBusy={core.displayBusy}
+              selectedSession={core.selectedSession}
+              rosterEmpty={core.rosterEmpty}
+              channelLoaded={core.channelLoaded}
+              hasChannel={core.hasChannel}
+              channelsPending={core.channelsPending}
+              agentPending={core.agentPending}
+              setupPending={core.setupPending}
+              refreshChannels={core.refreshChannels}
+              refreshAgents={core.refreshAgents}
+              createAgentOpen={core.createAgentOpen}
+              setCreateAgentOpen={core.setCreateAgentOpen}
+              setAgentLibraryRevision={core.setAgentLibraryRevision}
+              setSelectedAgentSlug={core.setSelectedAgentSlug}
+              setComposerTouched={core.setComposerTouched}
+              selectedSessionId={core.selectedSessionId}
+              queue={core.queue}
+              isBusy={core.isBusy}
+              queueDispatching={core.queueDispatching}
+              queuePaused={core.queuePaused}
+              handleEditQueued={core.handleEditQueued}
+              handleDeleteQueued={core.handleDeleteQueued}
+              handleResumeQueue={core.handleResumeQueue}
+              handleSteerQueued={core.handleSteerQueued}
+              conversationInstanceKey={core.conversationInstanceKey}
+              draft={core.draft}
+              setDraft={core.setDraft}
+              isProjectProject={core.isProjectProject}
+              effectiveAgentSlug={core.effectiveAgentSlug}
+              handleSend={handleSend}
+              interruptRef={core.interruptRef}
+              sessionAttachments={core.sessionAttachments}
+              handleRemoveSessionAttachment={core.handleRemoveSessionAttachment}
+              composerAgents={core.composerAgents}
+              sessionAgentSlug={core.sessionAgentSlug}
+              selectedAgentSlug={core.selectedAgentSlug}
+              execBarLocked={core.execBarLocked}
+              sessionExecOrigin={core.sessionExecOrigin}
+              execTargetId={core.execTargetId}
+              setExecTargetId={core.setExecTargetId}
+              setSelectedProviderId={core.setSelectedProviderId}
+              setSelectedModelId={core.setSelectedModelId}
+              projects={core.projects}
+              selectedProjectId={core.selectedProjectId}
+              setSelectedProjectId={core.setSelectedProjectId}
+              setSelectedComposerSkill={core.setSelectedComposerSkill}
+              execBarProjects={core.execBarProjects}
+              providerTarget={core.providerTarget}
+              panelSetCollapsed={core.panelSetCollapsed}
+              composerProviders={core.composerProviders}
+              selectedProviderId={core.selectedProviderId}
+              selectedModelId={core.selectedModelId}
+              composerRuntimes={core.composerRuntimes}
+              selectedRuntimeId={core.selectedRuntimeId}
+              setSelectedRuntimeId={core.setSelectedRuntimeId}
+              selectedPermissionMode={core.selectedPermissionMode}
+              setSelectedPermissionMode={core.setSelectedPermissionMode}
+              isNewSession={core.isNewSession}
+              id={core.id}
+              selectedEffort={core.selectedEffort}
+              setSelectedEffort={core.setSelectedEffort}
+              modelSelectorUnlocked={core.modelSelectorUnlocked}
+              selectedAgentSkillItems={core.selectedAgentSkillItems}
+              composerMentionSkills={core.composerMentionSkills}
+              availableSkills={core.availableSkills}
+              handleOpenKbPicker={core.handleOpenKbPicker}
+              handleLocalFilesAttach={core.handleLocalFilesAttach}
+              connectorOptions={core.connectorOptions}
+              selectedMcpSlugs={core.selectedMcpSlugs}
+              toggleConnector={core.toggleConnector}
+              parsingConfirmOpen={core.parsingConfirmOpen}
+              setParsingConfirmOpen={core.setParsingConfirmOpen}
+              performSend={core.performSend}
+            />
           )}
         </div>
       </ArtifactSplitPane>
