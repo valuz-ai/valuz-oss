@@ -944,6 +944,7 @@ async def build_member_session(
     plan_pre_committed: bool = False,
     worktree_notice: str | None = None,
     user_id: str,
+    task_title: str | None = None,
 ) -> CreateSessionRequest | None:
     """Construct the kernel create-session request for a dispatch member or lead.
 
@@ -970,7 +971,7 @@ async def build_member_session(
         instructions = [deployment global preamble +] agent.instructions
                        + project_prompt
                        + (DISPATCH_PLAYBOOK if is_lead else "") + brief
-        metadata["valuz"] = {project_id, agent_slug, task_id, run_kind}
+        metadata["valuz"] = {project_id, agent_slug, task_id, task_title, run_kind}
         runtime_provider, model, skills, mcp_servers, permission_mode from agent
     """
     member_row = await members.get(user_id, project_id, agent_slug)
@@ -1260,6 +1261,10 @@ async def build_member_session(
         "project_id": project_id,
         "agent_slug": agent_slug,
         "task_id": task_id,
+        # Snapshot the durable Task label into every lead/member execution
+        # session.  Consumers can attribute model use without an extra task
+        # lookup or a separate control-plane metadata request.
+        **({"task_title": task_title} if task_title else {}),
         "run_kind": run_kind,
         # Composer reads locked_provider_id from valuz metadata to match
         # the session's locked (provider, model) pair.

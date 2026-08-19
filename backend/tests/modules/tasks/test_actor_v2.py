@@ -336,6 +336,7 @@ def test_build_member_session_injects_skill_scoping(
             members=fake_members,  # type: ignore[arg-type]
             is_lead=False,
             task_id="t1",
+            task_title="Quarterly research",
             run_dir="/proj",  # shared project cwd
             brief="## Goal\n\nwrite a file",
         )
@@ -348,6 +349,7 @@ def test_build_member_session_injects_skill_scoping(
     # Own skills are scoped: everything else in the cwd is to be ignored
     # (the always-on baseline skills are surfaced separately as "Shared").
     assert "Ignore any other skills" in session.instructions
+    assert session.metadata["valuz"]["task_title"] == "Quarterly research"
 
 
 def test_build_member_session_freezes_memory_section(
