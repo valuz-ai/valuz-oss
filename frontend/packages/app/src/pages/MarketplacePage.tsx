@@ -363,18 +363,18 @@ function TemplateCard({
     <button
       type="button"
       onClick={() => onOpen(item)}
-      className="flex min-h-[120px] w-full flex-col rounded-xl border border-surface-border bg-surface p-3.5 text-left transition hover:-translate-y-px hover:shadow-md"
+      className="flex min-h-[150px] w-full flex-col rounded-xl border border-surface-border bg-surface p-3.5 text-left transition hover:-translate-y-px hover:shadow-md"
     >
       <div className="mb-2 flex items-start gap-2.5">
         <ItemIcon item={item} size="md" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13.5px] font-semibold tracking-tight text-ink-heading">
+          <div className="truncate text-sm font-semibold tracking-tight text-ink-heading">
             {item.title}
           </div>
           <div className="mt-1 flex items-center gap-1.5">
             <MarketplaceSourcePill source={item.source} />
             {item.category_label ? (
-              <span className="truncate text-[10.5px] text-ink-meta">
+              <span className="truncate text-2xs text-ink-meta">
                 {item.category_label}
               </span>
             ) : null}
@@ -386,12 +386,12 @@ function TemplateCard({
           </span>
         )}
       </div>
-      <div className="mb-2.5 line-clamp-2 min-h-[37px] text-xs leading-relaxed text-ink-body">
+      <div className="mb-2.5 line-clamp-2 min-h-9 text-xs leading-relaxed text-ink-body">
         {item.description}
       </div>
       {/* Footer mirrors TeamCard: divider + version | add/added. */}
       <div className="mt-auto flex items-center justify-between border-t border-surface-border pt-2.5">
-        <span className="font-mono text-[10.5px] tabular-nums text-ink-body">
+        <span className="font-mono text-2xs tabular-nums text-ink-body">
           {item.version ? `v${item.version}` : ""}
         </span>
         <span
@@ -633,13 +633,13 @@ function TeamCard({
       <div className="mb-2 flex items-start gap-2.5">
         <ItemIcon item={team} size="md" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13.5px] font-semibold tracking-tight text-ink-heading">
+          <div className="truncate text-sm font-semibold tracking-tight text-ink-heading">
             {team.title}
           </div>
           <div className="mt-1 flex items-center gap-1.5">
             <MarketplaceSourcePill source={team.source} />
             {team.category_label ? (
-              <span className="truncate text-[10.5px] text-ink-meta">
+              <span className="truncate text-2xs text-ink-meta">
                 {team.category_label}
               </span>
             ) : null}
@@ -675,7 +675,7 @@ function TeamCard({
         {team.description}
       </div>
       <div className="mt-auto flex items-center justify-between border-t border-surface-border pt-2.5">
-        <span className="font-mono text-[10.5px] tabular-nums text-ink-body">
+        <span className="font-mono text-2xs tabular-nums text-ink-body">
           {team.version ? `v${team.version}` : ""}
         </span>
         <span
@@ -1237,13 +1237,13 @@ function ConnectorMarketCard({
       <div className="mb-2 flex items-start gap-2.5">
         <ItemIcon item={connector} size="md" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13.5px] font-semibold tracking-tight text-ink-heading">
+          <div className="truncate text-sm font-semibold tracking-tight text-ink-heading">
             {connector.title}
           </div>
           <div className="mt-1 flex items-center gap-1.5">
             <MarketplaceSourcePill source={connector.source} />
             {connector.category_label ? (
-              <span className="truncate text-[10.5px] text-ink-meta">
+              <span className="truncate text-2xs text-ink-meta">
                 {connector.category_label}
               </span>
             ) : null}
@@ -1259,7 +1259,7 @@ function ConnectorMarketCard({
         {connector.description || tr("marketplace.connectorNoDescription")}
       </div>
       <div className="mt-auto flex items-center justify-between border-t border-surface-border pt-2.5">
-        <span className="font-mono text-[10.5px] tabular-nums text-ink-body">
+        <span className="font-mono text-2xs tabular-nums text-ink-body">
           {connector.version ? `v${connector.version}` : ""}
         </span>
         <span
@@ -1325,7 +1325,7 @@ function SkillMarketCard({
     <button
       type="button"
       onClick={() => onOpen(skill)}
-      className="flex w-full flex-col rounded-xl border border-surface-border bg-surface p-3.5 text-left transition hover:-translate-y-px hover:shadow-md"
+      className="flex min-h-[150px] w-full flex-col rounded-xl border border-surface-border bg-surface p-3.5 text-left transition hover:-translate-y-px hover:shadow-md"
     >
       <div className="mb-2 flex items-start gap-2.5">
         <ItemIcon item={skill} size="sm" />
@@ -1336,7 +1336,7 @@ function SkillMarketCard({
           <div className="mt-1 flex items-center gap-1.5">
             <MarketplaceSourcePill source={skill.source} />
             {skill.category_label ? (
-              <span className="truncate text-[10.5px] text-ink-meta">
+              <span className="truncate text-2xs text-ink-meta">
                 {skill.category_label}
               </span>
             ) : null}
@@ -1350,7 +1350,7 @@ function SkillMarketCard({
         {skill.description}
       </div>
       <div className="mt-auto flex items-center justify-between border-t border-surface-border pt-2.5">
-        <span className="font-mono text-[10.5px] tabular-nums text-ink-body">
+        <span className="font-mono text-2xs tabular-nums text-ink-body">
           {skill.version ? `v${skill.version}` : ""}
         </span>
         <span
