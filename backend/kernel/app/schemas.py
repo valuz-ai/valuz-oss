@@ -472,6 +472,20 @@ class ForkSessionRequest(BaseModel):
 
     message_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    #: Same opaque per-operation context ``run_turn`` carries. A fork builds a
+    #: runtime for the new session, so a deployment whose stored credential is
+    #: a runtime-context marker cannot materialize one without it.
+    runtime_context: dict[str, str] | None = None
+
+
+class PrepareRuntimeRequest(BaseModel):
+    """Warm a session's runtime — see ``ForkSessionRequest.runtime_context``.
+
+    The body is optional on the wire (older callers send none), so every field
+    has a default.
+    """
+
+    runtime_context: dict[str, str] | None = None
 
 
 # -- Events --

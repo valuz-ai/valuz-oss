@@ -27,6 +27,7 @@ from app.schemas import (
     ModelProviderInputSchema,
     ModelProviderUpdateSchema,
     ModelSettingsSchema,
+    PrepareRuntimeRequest,
     SessionListResponse,
     SessionResponse,
     SetSessionModeRequest,
@@ -261,6 +262,7 @@ async def fork_session(
                 forked,
                 source_native_session_id=fork_source.native_session_id,
                 anchor=fork_source.anchor,
+                runtime_context=body.runtime_context,
             )
         except NotImplementedError as exc:
             # Rollout gate expressed by the runtime itself: codex is wired
@@ -508,10 +510,15 @@ async def prepare_session_runtime(
     session_id: str,
     owner: OwnerDep,
     orchestrator: OrchestratorDep,
+    body: PrepareRuntimeRequest | None = None,
 ) -> dict[str, Any]:
     """Initialize a session runtime without dispatching a model turn."""
     try:
-        await orchestrator.prepare_runtime(owner, session_id)
+        await orchestrator.prepare_runtime(
+            owner,
+            session_id,
+            runtime_context=body.runtime_context if body is not None else None,
+        )
     except SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
     return {"data": {"ready": True}}

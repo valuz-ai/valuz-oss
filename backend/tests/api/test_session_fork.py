@@ -137,6 +137,7 @@ class _Orchestrator:
         self.error = error
         self.forked: list[tuple[str, str, str | None]] = []
         self.cleaned: list[str] = []
+        self.runtime_contexts: list[dict[str, str] | None] = []
 
     async def fork_session(
         self,
@@ -145,9 +146,11 @@ class _Orchestrator:
         *,
         source_native_session_id: str,
         anchor: str | None = None,
+        runtime_context: dict[str, str] | None = None,
     ) -> str:
         self.store.oplog.append("fork_session")
         self.forked.append((session.id, source_native_session_id, anchor))
+        self.runtime_contexts.append(runtime_context)
         if self.error is not None:
             raise self.error
         session.runtime_session_id = "th-forked"
@@ -223,6 +226,28 @@ async def test_session_fork_at_tail_forks_with_null_anchor() -> None:
     assert forked.metadata["forked_from"] == {"session_id": "src-sess", "message_id": None}
     # Orphaned running rows are not copied.
     assert [m.user_message.text for m in store.saved_messages] == ["prompt 1"]
+
+
+async def test_runtime_context_reaches_the_native_fork() -> None:
+    """The fork builds a runtime, so it needs the caller's opaque context.
+
+    Without it a deployment that persists a runtime-context MARKER instead of
+    a real credential cannot materialize one, and the native fork dies as a
+    502 before it ever touches the transcript — even though forking makes no
+    model call at all.
+    """
+    store = _Store(_session(), [_message(1, turn_id="t1")])
+    orchestrator = _Orchestrator(store)
+
+    await fork_session(
+        "src-sess",
+        ForkSessionRequest(runtime_context={"example.runtime": "resolved"}),
+        store,
+        orchestrator,
+        "owner",
+    )
+
+    assert orchestrator.runtime_contexts == [{"example.runtime": "resolved"}]
 
 
 async def test_never_ran_source_is_plain_copy_without_native_fork() -> None:
