@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
@@ -60,6 +60,7 @@ import {
 } from "@valuz/core";
 import { modelLabel } from "@valuz/shared";
 import { AgentModelPicker, type AgentModelSelection } from "./AgentModelPicker";
+import { reconcileDraft, sameBrain } from "./agent-draft-sync";
 import { AgentDetailCopyActions } from "./AgentDetailCopyActions";
 import { CatalogPickerDialog } from "./CatalogPickerDialog";
 import { ExportPackDialog } from "./ExportPackDialog";
@@ -113,9 +114,7 @@ function ReadonlyResourceList({
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-heading">
             {item.name}
           </span>
-          <span className="shrink-0 text-2xs text-ink-meta">
-            {item.status}
-          </span>
+          <span className="shrink-0 text-2xs text-ink-meta">{item.status}</span>
         </div>
       ))}
     </div>
@@ -338,20 +337,82 @@ export const AgentDetailView = ({
     void Promise.resolve().then(loadData);
   }, [loadData]);
 
+  // Values the drafts were last seeded from. A draft still equal to its seed
+  // is pristine and may be refreshed; one that has diverged is an edit in
+  // progress and belongs to the user.
+  const seededRef = useRef<{
+    slug: string;
+    instructions: string;
+    name: string;
+    description: string;
+    avatar: string | null;
+    brain: AgentModelSelection;
+    effort: string;
+  } | null>(null);
+
   // Re-seed the per-tab drafts whenever the loaded agent changes — a deliberate
   // data → draft-state sync, not derived-during-render state.
+  //
+  // Every save re-fetches the agent so the other tabs see fresh data, and each
+  // fetch is a new object, so this runs far more often than "the user opened a
+  // different agent". Writing the response into every draft unconditionally
+  // threw away whatever was half-typed elsewhere: save the inheritance switch
+  // — or just keep typing while the instructions save is still in flight — and
+  // the reply reverted the textarea to the stored version. So each field is
+  // reconciled on its own, and only a pristine one is refreshed.
   useEffect(() => {
     if (!agent) return;
-    setInstrDraft(agent.instructions);
-    setNameDraft(agent.name);
-    setDescDraft(agent.description);
-    setAvatarDraft(agent.avatar);
-    setBrainDraft({
-      runtime: agent.runtime,
-      providerId: agent.provider_id,
-      model: agent.model,
-    });
-    setEffortDraft(agent.effort ?? "high");
+    const seeded = seededRef.current;
+    const incoming = {
+      slug: agent.slug,
+      instructions: agent.instructions,
+      name: agent.name,
+      description: agent.description,
+      avatar: agent.avatar,
+      brain: {
+        runtime: agent.runtime,
+        providerId: agent.provider_id,
+        model: agent.model,
+      },
+      effort: agent.effort ?? "high",
+    };
+    // A different agent in the same mounted view (the full-page route swaps
+    // ``slug`` without remounting) — those drafts belong to the previous one.
+    const agentChanged = seeded === null || seeded.slug !== incoming.slug;
+    const opts = { agentChanged };
+
+    setInstrDraft((cur) =>
+      reconcileDraft(
+        cur,
+        seeded?.instructions ?? cur,
+        incoming.instructions,
+        opts,
+      ),
+    );
+    setNameDraft((cur) =>
+      reconcileDraft(cur, seeded?.name ?? cur, incoming.name, opts),
+    );
+    setDescDraft((cur) =>
+      reconcileDraft(
+        cur,
+        seeded?.description ?? cur,
+        incoming.description,
+        opts,
+      ),
+    );
+    setAvatarDraft((cur) =>
+      reconcileDraft(cur, seeded?.avatar ?? cur, incoming.avatar, opts),
+    );
+    setBrainDraft((cur) =>
+      reconcileDraft(cur, seeded?.brain ?? cur, incoming.brain, {
+        ...opts,
+        isEqual: sameBrain,
+      }),
+    );
+    setEffortDraft((cur) =>
+      reconcileDraft(cur, seeded?.effort ?? cur, incoming.effort, opts),
+    );
+    seededRef.current = incoming;
   }, [agent]);
 
   const doSave = async (tab: string, fields: UpdateAgentPayload) => {
@@ -997,8 +1058,8 @@ export const AgentDetailView = ({
                   isSystem
                     ? t("agent.groupSystem" as Parameters<typeof t>[0])
                     : agent.source === "official"
-                    ? t("agent.groupOfficial" as Parameters<typeof t>[0])
-                    : t("agent.groupCustom" as Parameters<typeof t>[0]),
+                      ? t("agent.groupOfficial" as Parameters<typeof t>[0])
+                      : t("agent.groupCustom" as Parameters<typeof t>[0]),
                   modelLabel(agent.model),
                   agent.effort ?? "—",
                 ].join(" · ")}
@@ -1178,10 +1239,16 @@ export const AgentDetailView = ({
             {isSystem ? (
               <div className="rounded-[14px] border border-surface-border bg-card p-4 text-sm leading-6 text-ink-body">
                 <div className="font-medium text-ink-heading">
-                  {t("agent.valurionInstructionsTitle" as Parameters<typeof t>[0])}
+                  {t(
+                    "agent.valurionInstructionsTitle" as Parameters<
+                      typeof t
+                    >[0],
+                  )}
                 </div>
                 <p className="mt-1 text-xs text-ink-meta">
-                  {t("agent.valurionInstructionsHint" as Parameters<typeof t>[0])}
+                  {t(
+                    "agent.valurionInstructionsHint" as Parameters<typeof t>[0],
+                  )}
                 </p>
               </div>
             ) : (
@@ -1251,9 +1318,7 @@ export const AgentDetailView = ({
                         typeof t
                       >[0],
                     )
-                  : t(
-                      "agent.skillsSectionHint" as Parameters<typeof t>[0],
-                    )}
+                  : t("agent.skillsSectionHint" as Parameters<typeof t>[0])}
               </p>
               {!isSystem ? (
                 <Button size="sm" variant="outline" onClick={openSkillPicker}>
@@ -1266,11 +1331,7 @@ export const AgentDetailView = ({
               {displayedSkills.length === 0 ? (
                 <div className="rounded-[14px] border border-dashed border-surface-border bg-card px-4 py-6 text-center text-xs text-ink-meta">
                   {isSystem
-                    ? t(
-                        "agent.noEffectiveResources" as Parameters<
-                          typeof t
-                        >[0],
-                      )
+                    ? t("agent.noEffectiveResources" as Parameters<typeof t>[0])
                     : t("agent.noSkills")}
                 </div>
               ) : (
@@ -1346,9 +1407,7 @@ export const AgentDetailView = ({
                         typeof t
                       >[0],
                     )
-                  : t(
-                      "agent.connectorsSectionHint" as Parameters<typeof t>[0],
-                    )}
+                  : t("agent.connectorsSectionHint" as Parameters<typeof t>[0])}
               </p>
               {!isSystem ? (
                 <Button
@@ -1365,11 +1424,7 @@ export const AgentDetailView = ({
               {displayedConnectors.length === 0 ? (
                 <div className="rounded-[14px] border border-dashed border-surface-border bg-card px-4 py-6 text-center text-xs text-ink-meta">
                   {isSystem
-                    ? t(
-                        "agent.noEffectiveResources" as Parameters<
-                          typeof t
-                        >[0],
-                      )
+                    ? t("agent.noEffectiveResources" as Parameters<typeof t>[0])
                     : t("agent.noConnectors")}
                 </div>
               ) : (
@@ -1426,9 +1481,7 @@ export const AgentDetailView = ({
                         {connector.removable ? (
                           <button
                             type="button"
-                            onClick={() =>
-                              toggleConnector(connector.slug)
-                            }
+                            onClick={() => toggleConnector(connector.slug)}
                             aria-label={t("common.delete")}
                             className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-ink-muted transition-colors hover:bg-surface-soft hover:text-[#f54b4b]"
                           >
@@ -1446,11 +1499,15 @@ export const AgentDetailView = ({
           {isSystem ? (
             <TabsContent value="knowledge" className="mt-4">
               <p className="mb-3 text-xs leading-5 text-ink-meta">
-                {t("agent.allAvailableResourcesHint" as Parameters<typeof t>[0])}
+                {t(
+                  "agent.allAvailableResourcesHint" as Parameters<typeof t>[0],
+                )}
               </p>
               <ReadonlyResourceList
                 items={effectiveResources?.knowledge_bases ?? []}
-                emptyText={t("agent.noEffectiveResources" as Parameters<typeof t>[0])}
+                emptyText={t(
+                  "agent.noEffectiveResources" as Parameters<typeof t>[0],
+                )}
               />
             </TabsContent>
           ) : null}
