@@ -386,10 +386,11 @@ function TemplateCard({
           </span>
         )}
       </div>
-      <div className="mb-3 line-clamp-2 min-h-[37px] text-xs leading-relaxed text-ink-body">
+      <div className="mb-2.5 line-clamp-2 min-h-[37px] text-xs leading-relaxed text-ink-body">
         {item.description}
       </div>
-      <div className="mt-auto flex items-center justify-between">
+      {/* Footer mirrors TeamCard: divider + version | add/added. */}
+      <div className="mt-auto flex items-center justify-between border-t border-surface-border pt-2.5">
         <span className="font-mono text-[10.5px] tabular-nums text-ink-body">
           {item.version ? `v${item.version}` : ""}
         </span>
