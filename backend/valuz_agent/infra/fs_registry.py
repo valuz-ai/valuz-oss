@@ -29,8 +29,10 @@ via ``project_cwd()``.
 
 from __future__ import annotations
 
+import secrets
 import tempfile
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -39,6 +41,22 @@ from valuz_agent.ports.workspace import LocalWorkspaceHandle, WorkspaceHandle
 
 ProjectKind = Literal["chat", "project"]
 SkillSource = Literal["claude", "codex"]
+
+# ``project_root`` subdirectory per project kind. Chats and projects are kept
+# apart because they grow at completely different rates: a project is created
+# deliberately, while a chat directory is minted for EVERY quick chat and every
+# scheduled-automation run.
+MANAGED_SUBDIR: dict[str, str] = {"project": "projects", "chat": "chats"}
+
+# Alphabet for the managed directory code. Uppercase CONSONANTS only: the code
+# is user-visible in a file browser, and dropping vowels means a draw can never
+# spell a word (or an obscenity) at the 8-character length used here.
+MANAGED_CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXYZ"
+MANAGED_CODE_LENGTH = 8
+# Attempts before giving up on finding an unused code. 21**8 ≈ 3.8e10 per day
+# directory, so a second attempt is already improbable — this only exists so a
+# genuinely wedged filesystem raises instead of looping.
+_MANAGED_CODE_ATTEMPTS = 16
 
 # The only KB class OSS itself creates. ``KnowledgeBaseRow.kind`` is a neutral
 # discriminator so embedding hosts can distinguish classes of knowledge base
@@ -190,10 +208,16 @@ class FsRegistry:
 
         - ``kind="project"``: caller-supplied ``root_path`` is used as-is. The
           path must already be absolute; it is not created.
-        - ``kind="chat"``: a managed cwd is allocated under the configured
-          user-visible project root and created on demand. Deployments that
+        - ``kind="chat"``: the stored ``root_path`` when the row has one (every
+          chat project created since the dated layout landed), otherwise the
+          LEGACY derivation ``<project_root>/<project_id>``. Deployments that
           need user scoping can set ``VALUZ_USER_PROJECT_ROOT`` to a template
           such as ``~/Valuz/{user_id}``.
+
+        The legacy branch is load-bearing, not dead code: chat rows written
+        before the cutover have ``root_path IS NULL`` and their directories are
+        still on disk under the flat layout. ``root_path`` being set is exactly
+        the new-vs-old discriminator — there is no migration and no flag.
         """
         if kind == "project":
             if not root_path:
@@ -203,9 +227,61 @@ class FsRegistry:
                 raise ValueError(f"project root_path must be absolute: {root_path}")
             return path
 
+        if root_path:
+            path = Path(root_path).expanduser()
+            if not path.is_absolute():
+                raise ValueError(f"chat root_path must be absolute: {root_path}")
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+
         path = self.project_root(user_id) / project_id
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def allocate_managed_project_dir(
+        self, user_id: str, kind: ProjectKind, *, now: datetime | None = None
+    ) -> Path:
+        """Allocate + create a fresh managed workspace directory.
+
+        ``<project_root>/{projects|chats}/YYYY/MM/dd/<CODE>`` where ``CODE`` is
+        :data:`MANAGED_CODE_LENGTH` random uppercase consonants.
+
+        The code is deliberately NOT derived from the project id. The old layout
+        was ``<project_root>/<project_id>``, and because that path was
+        recomputable from a row id, callers grew the habit of rebuilding it
+        instead of reading the stored ``root_path`` — the cloud cwd bridge did
+        exactly that, and it is why a layout change can break the sandbox data
+        path. An unguessable directory name makes the stored path the only way
+        to reach a workspace, so the habit cannot come back.
+
+        The date segment comes from the LOCAL time of whoever calls this (the
+        host process). On a desktop install that is the user's own timezone; a
+        container gets whatever ``TZ`` the deployment sets. The value is frozen
+        into ``root_path`` at creation and never recomputed, so a later timezone
+        change cannot move an existing workspace.
+        """
+        stamp = now or datetime.now().astimezone()
+        parent = (
+            self.project_root(user_id)
+            / MANAGED_SUBDIR[kind]
+            / f"{stamp.year:04d}"
+            / f"{stamp.month:02d}"
+            / f"{stamp.day:02d}"
+        )
+        parent.mkdir(parents=True, exist_ok=True)
+        for _ in range(_MANAGED_CODE_ATTEMPTS):
+            code = "".join(
+                secrets.choice(MANAGED_CODE_ALPHABET) for _ in range(MANAGED_CODE_LENGTH)
+            )
+            candidate = parent / code
+            try:
+                # exist_ok=False IS the collision check — an atomic mkdir also
+                # makes two processes racing for the same code safe.
+                candidate.mkdir()
+            except FileExistsError:
+                continue
+            return candidate
+        raise RuntimeError(f"could not allocate a managed {kind} directory under {parent}")
 
     def project_root(self, user_id: str) -> Path:
         """Return the app-visible root for managed project workspaces.
