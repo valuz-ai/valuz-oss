@@ -75,3 +75,52 @@ describe("StartupScreen boot progress", () => {
     expect(pct(failed.container)).toBe(0);
   });
 });
+
+describe("boot pacing learns from this machine's previous boots", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    localStorage.clear();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("uses the median of recorded boots (clamped) and falls back to a default", async () => {
+    const { estimateBootSeconds, pacedTarget } = await import("./StartupScreen");
+    expect(estimateBootSeconds([])).toBe(6);
+    expect(estimateBootSeconds([2000, 2500, 30000])).toBe(2.5); // outlier ignored
+    expect(estimateBootSeconds([100])).toBe(1.5); // floor
+    // linear to 85% at the estimate, then a slow asymptote below 92
+    expect(pacedTarget(1, 2)).toBeCloseTo(42.5, 1);
+    expect(pacedTarget(2, 2)).toBeCloseTo(85, 1);
+    expect(pacedTarget(20, 2)).toBeLessThan(92);
+    expect(pacedTarget(20, 2)).toBeGreaterThan(85);
+  });
+
+  it("paces a fast machine faster and records the real boot duration", () => {
+    localStorage.setItem("valuz-boot-durations", JSON.stringify([2000, 2000, 2000]));
+    const { container, rerender } = render(
+      <StartupScreen
+        services={svc("starting")}
+        logs={[]}
+        loading={true}
+        error={null}
+        onRetry={async () => {}}
+      />,
+    );
+    act(() => vi.advanceTimersByTime(1_000));
+    // ~42% at half the 2s estimate (eased, so a touch below the raw target)
+    expect(pct(container)).toBeGreaterThan(35);
+    rerender(
+      <StartupScreen
+        services={svc("running")}
+        logs={[]}
+        loading={false}
+        error={null}
+        onRetry={async () => {}}
+      />,
+    );
+    act(() => vi.advanceTimersByTime(500));
+    const stored = JSON.parse(localStorage.getItem("valuz-boot-durations") ?? "[]");
+    expect(stored).toHaveLength(4);
+    expect(stored[3]).toBeGreaterThanOrEqual(1_000);
+  });
+});

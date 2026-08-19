@@ -13,17 +13,68 @@ interface StartupScreenProps {
   onRetry: () => Promise<void>;
 }
 
-// Boot progress that actually *moves*. The only hard signal we have is
-// per-service readiness, and a desktop boot is usually a single backend
-// service — so the raw ratio sits at 0% and then jumps to 100%. Instead the
-// displayed value eases toward a moving target: a time-based ceiling that
-// climbs asymptotically toward BOOT_CEIL while we wait (never claiming to be
-// done), lifted by real readiness as services come up, then runs to 100%
-// once everything is running. It never moves backwards and freezes on error.
+// Boot progress that actually *moves* — and arrives roughly when the app
+// does. The only hard signal is per-service readiness, and a desktop boot is
+// usually a single backend service, so the raw ratio sits at 0% and jumps to
+// 100%. Instead the bar is paced by THIS machine's own recent boots: we keep
+// the last few boot durations in localStorage and drive the bar linearly to
+// BOOT_LINEAR_END right at their median — a fast laptop and a slow desktop
+// both see the bar reach ~85% as the backend comes up. First launch (nothing
+// recorded yet) uses BOOT_DEFAULT_S. Past the estimate the bar keeps creeping
+// asymptotically toward BOOT_CEIL (never fakes completion); real readiness
+// lifts it; once everything is running it sprints to 100%. Never moves
+// backwards, freezes on error.
+const BOOT_HISTORY_KEY = "valuz-boot-durations";
+const BOOT_HISTORY_MAX = 5;
+const BOOT_DEFAULT_S = 6;
+const BOOT_MIN_S = 1.5;
+const BOOT_MAX_S = 90;
+const BOOT_LINEAR_END = 85;
 const BOOT_CEIL = 92;
 const BOOT_TICK_MS = 100;
-// Time constant of the waiting curve: ~40% at 4s, ~63% at 8s, ~80% at 13s.
-const BOOT_TAU_S = 8;
+
+function readBootHistoryMs(): number[] {
+  try {
+    const raw = globalThis.localStorage?.getItem(BOOT_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Median of the recorded boots (robust to a one-off slow launch such as a
+ *  post-update migration), clamped to a sane range, in seconds. */
+export function estimateBootSeconds(history: number[] = readBootHistoryMs()): number {
+  if (history.length === 0) return BOOT_DEFAULT_S;
+  const sorted = [...history].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median =
+    sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  return Math.min(BOOT_MAX_S, Math.max(BOOT_MIN_S, median / 1000));
+}
+
+export function recordBootDurationMs(ms: number): void {
+  if (!Number.isFinite(ms) || ms <= 0) return;
+  try {
+    const next = [...readBootHistoryMs(), Math.round(ms)].slice(-BOOT_HISTORY_MAX);
+    globalThis.localStorage?.setItem(BOOT_HISTORY_KEY, JSON.stringify(next));
+  } catch {
+    /* private mode / no storage — pacing just falls back to the default */
+  }
+}
+
+/** Where the bar should be after ``elapsed`` seconds of waiting, given the
+ *  expected boot length: linear to BOOT_LINEAR_END at the estimate, then a
+ *  slow asymptote toward BOOT_CEIL. */
+export function pacedTarget(elapsedS: number, estimateS: number): number {
+  if (elapsedS <= estimateS) return BOOT_LINEAR_END * (elapsedS / estimateS);
+  const overshoot = (elapsedS - estimateS) / estimateS;
+  return BOOT_LINEAR_END + (BOOT_CEIL - BOOT_LINEAR_END) * (1 - Math.exp(-overshoot));
+}
 
 function useBootProgress({
   loading,
@@ -38,20 +89,29 @@ function useBootProgress({
 }): number {
   const [display, setDisplay] = useState(0);
   const startRef = useRef<number>(Date.now());
+  const estimateRef = useRef<number>(estimateBootSeconds());
+  const recordedRef = useRef(false);
   const done = !loading && !error && (total === 0 || ready === total);
+
+  // Remember how long this boot really took — it paces the next launch.
+  useEffect(() => {
+    if (!done || total === 0 || recordedRef.current) return;
+    recordedRef.current = true;
+    recordBootDurationMs(Date.now() - startRef.current);
+  }, [done, total]);
 
   useEffect(() => {
     if (error) return; // freeze where we are — the error strip explains why
     const timer = setInterval(() => {
       const elapsed = (Date.now() - startRef.current) / 1000;
-      const waitingCeil = BOOT_CEIL * (1 - Math.exp(-elapsed / BOOT_TAU_S));
+      const paced = pacedTarget(elapsed, estimateRef.current);
       const readiness = total > 0 ? (ready / total) * BOOT_CEIL : 0;
-      const target = done ? 100 : Math.min(BOOT_CEIL, Math.max(waitingCeil, readiness));
+      const target = done ? 100 : Math.min(BOOT_CEIL, Math.max(paced, readiness));
       setDisplay((prev) => {
         if (target <= prev) return prev;
         // Ease toward the target; sprint when we are actually done.
         const gap = target - prev;
-        const step = done ? Math.max(4, gap * 0.35) : Math.max(0.25, gap * 0.12);
+        const step = done ? Math.max(4, gap * 0.35) : Math.max(0.25, gap * 0.5);
         return Math.min(target, prev + step);
       });
     }, BOOT_TICK_MS);
