@@ -257,6 +257,7 @@ class KernelClient(Protocol):
         text: str,
         attachments: list[dict[str, Any]] | None = None,
         additional_context: str = "",
+        runtime_context: dict[str, str] | None = None,
     ) -> MessageData: ...
 
     async def runtime_availability(self) -> dict[str, RuntimeAvailability]: ...
@@ -664,6 +665,7 @@ class InProcessKernelClient:
         text: str,
         attachments: list[dict[str, Any]] | None = None,
         additional_context: str = "",
+        runtime_context: dict[str, str] | None = None,
     ) -> MessageData:
         # Remote analog: the WS /run channel. The wire shape is
         # {"message": {"text": ..., "attachments": [...],
@@ -683,6 +685,7 @@ class InProcessKernelClient:
             user_id,
             session_id,
             UserMessage(text=text, attachments=atts, additional_context=additional_context),
+            runtime_context=runtime_context,
         )
         return _message_to_data(message)
 
@@ -1301,7 +1304,37 @@ async def run_turn(
             logger.warning("pre-turn hook failed for session %s", session_id, exc_info=True)
         finally:
             _pinned_control_kernel.reset(token)
-    return await k.run_turn(user_id, session_id, text, attachments, additional_context)
+    runtime_context = await _build_runtime_turn_context(user_id, session_id)
+    return await k.run_turn(
+        user_id,
+        session_id,
+        text,
+        attachments,
+        additional_context,
+        runtime_context=runtime_context,
+    )
+
+
+async def _build_runtime_turn_context(user_id: str, session_id: str) -> dict[str, str] | None:
+    """Build opaque overlay context from durable session state for one turn."""
+    from valuz_agent.ports.runtime_turn_context import (
+        NoopRuntimeTurnContextContributor,
+        get_runtime_turn_context_contributor,
+    )
+
+    contributor = get_runtime_turn_context_contributor()
+    # Preserve the OSS hot path exactly: no data-plane read, no extra failure
+    # mode, and no dependency on an initialized store when the extension is
+    # not bound.
+    if isinstance(contributor, NoopRuntimeTurnContextContributor):
+        return None
+    session = await _data_plane().get_session(user_id, session_id)
+    metadata = getattr(session, "metadata", {}) if session is not None else {}
+    return await contributor.build(
+        user_id=user_id,
+        session_id=session_id,
+        metadata=metadata if isinstance(metadata, dict) else {},
+    )
 
 
 async def run_ephemeral_review_in_scope(

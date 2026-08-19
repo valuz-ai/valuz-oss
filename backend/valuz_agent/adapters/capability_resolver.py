@@ -485,8 +485,9 @@ async def always_on_http_mcp_servers(
     from valuz_agent.integrations.toolkit_mcp_server import toolkit_mcp_url
     from valuz_agent.ports.sandbox_credential import get_sandbox_credential_verifier
 
+    internal_credential = await get_sandbox_credential_verifier().credential_for(owner_user_id)
     headers = {
-        "X-Valuz-Internal": await get_sandbox_credential_verifier().credential_for(owner_user_id),
+        "X-Valuz-Internal": internal_credential,
         "X-Valuz-Session-Id": session_id,
     }
     base = _settings.backend_base_url

@@ -98,6 +98,12 @@ from valuz_agent.ports.runtime_resource import (
     require_sync_apply_origin,
     validate_skill_reference,
 )
+from valuz_agent.ports.runtime_turn_context import (
+    NoopRuntimeTurnContextContributor,
+    RuntimeTurnContextContributor,
+    get_runtime_turn_context_contributor,
+    set_runtime_turn_context_contributor,
+)
 from valuz_agent.ports.sandbox_maintenance import (
     SandboxMaintenanceLease,
     SandboxMaintenancePort,
@@ -229,6 +235,10 @@ __all__ = [
     "set_connector_lifecycle_hook",
     "set_connector_oauth_refresh_port",
     "set_file_address_resolver",
+    "NoopRuntimeTurnContextContributor",
+    "RuntimeTurnContextContributor",
+    "get_runtime_turn_context_contributor",
+    "set_runtime_turn_context_contributor",
     "set_provider_policy",
     "set_sandbox_policy",
     "set_skill_lifecycle_hook",

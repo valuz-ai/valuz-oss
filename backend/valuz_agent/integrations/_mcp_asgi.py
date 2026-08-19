@@ -76,7 +76,7 @@ async def _resolve_session_owner(session_id: str) -> str | None:
     return sessions[0].user_id if sessions else None
 
 
-async def _verify_token_owner(token: str | None) -> str | None:
+async def _verify_token_owner(token: str | None):  # noqa: ANN201
     """Verified owner from a per-owner MCP token, or None if invalid/absent.
 
     Same per-owner signing/verification as the data service (unifies the two
@@ -92,7 +92,7 @@ async def _verify_token_owner(token: str | None) -> str | None:
     except Exception:  # noqa: BLE001 — auth backend failure must fail closed
         logger.warning("Internal MCP: sandbox credential verification failed", exc_info=True)
         return None
-    return claims.user_id if claims else None
+    return claims
 
 
 def build_internal_mcp_asgi(inner: Any) -> Any:
@@ -116,8 +116,8 @@ def build_internal_mcp_asgi(inner: Any) -> Any:
         }
         # Owner comes from the VERIFIED token — never a shared secret or a trusted
         # header. A forged sub / unknown owner fails verification.
-        owner_id = await _verify_token_owner(headers.get("x-valuz-internal"))
-        if not owner_id:
+        credential_claims = await _verify_token_owner(headers.get("x-valuz-internal"))
+        if credential_claims is None:
             response = PlainTextResponse("Forbidden", status_code=403)
             await response(scope, receive, send)
             return
@@ -127,6 +127,14 @@ def build_internal_mcp_asgi(inner: Any) -> Any:
             response = PlainTextResponse("Missing X-Valuz-Session-Id header", status_code=400)
             await response(scope, receive, send)
             return
+
+        # A managed credential may be bound to one session. Legacy owner
+        # credentials have ``session_id=None`` and retain owner-wide behavior.
+        if credential_claims.session_id is not None and credential_claims.session_id != session_id:
+            response = PlainTextResponse("Forbidden", status_code=403)
+            await response(scope, receive, send)
+            return
+        owner_id = credential_claims.user_id
 
         # The session must belong to the authenticated owner (cross-owner guard).
         session_owner = await _resolve_session_owner(session_id)

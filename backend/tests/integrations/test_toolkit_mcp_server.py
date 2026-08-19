@@ -229,7 +229,8 @@ def test_asgi_per_owner_verification(monkeypatch) -> None:
 
     # Positive path at the verifier level (the ASGI success case would reach the
     # MCP inner app, which needs a running task group — out of scope here):
-    assert asyncio.run(_mcp_asgi._verify_token_owner(tok_a)) == "A"  # valid token → owner
+    claims = asyncio.run(_mcp_asgi._verify_token_owner(tok_a))
+    assert claims is not None and claims.user_id == "A"  # valid token → owner
     assert asyncio.run(_mcp_asgi._verify_token_owner(forged)) is None  # forged → rejected
 
 
@@ -282,6 +283,52 @@ def test_asgi_awaits_bound_sandbox_credential_verifier() -> None:
 
     assert status == 204
     assert calls == ["opaque-sandbox-credential"]
+
+
+def test_asgi_rejects_session_bound_managed_credential_for_another_session() -> None:
+    """A managed MCP credential cannot be replayed through another session."""
+    from types import SimpleNamespace
+
+    from valuz_agent.adapters import data_reader as dr
+    from valuz_agent.ports.sandbox_credential import (
+        SandboxCredentialClaims,
+        get_sandbox_credential_verifier,
+        set_sandbox_credential_verifier,
+    )
+
+    class _Verifier:
+        async def verify(self, credential: str | None) -> SandboxCredentialClaims | None:
+            assert credential == "managed_for_session_1"
+            return SandboxCredentialClaims(user_id="owner-a", session_id="session-1")
+
+    class _Reader:
+        async def list_all_sessions(self, *, ids=None, limit=50, **_):
+            return [SimpleNamespace(user_id="owner-a")]
+
+    async def _inner(scope, receive, send) -> None:
+        raise AssertionError("a mismatched session must not reach MCP")
+
+    previous = get_sandbox_credential_verifier()
+    try:
+        set_sandbox_credential_verifier(_Verifier())
+        dr.bind_data_reader(_Reader())
+        app = _mcp_asgi.build_internal_mcp_asgi(_inner)
+        status = asyncio.run(
+            _run_asgi(
+                app,
+                _scope(
+                    {
+                        "x-valuz-internal": "managed_for_session_1",
+                        "x-valuz-session-id": "session-2",
+                    }
+                ),
+            )
+        )
+    finally:
+        dr.bind_data_reader(None)
+        set_sandbox_credential_verifier(previous)
+
+    assert status == 403
 
 
 def test_asgi_fails_closed_when_sandbox_credential_verifier_errors() -> None:

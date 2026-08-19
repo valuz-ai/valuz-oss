@@ -74,6 +74,10 @@ from valuz_agent.ports.runtime_resource import (
     ManagedConnectorMutationPort,
     RuntimeResourceApplyPort,
 )
+from valuz_agent.ports.runtime_turn_context import (
+    NoopRuntimeTurnContextContributor,
+    RuntimeTurnContextContributor,
+)
 from valuz_agent.ports.sandbox_allocator import BootSingletonAllocator, SandboxAllocatorPort
 from valuz_agent.ports.sandbox_credential import SandboxCredentialVerifierPort
 from valuz_agent.ports.sandbox_maintenance import (
@@ -125,6 +129,11 @@ class Extensions:
         # database/cache-backed verifier for their workload credential.
         self.sandbox_credential_verifier: SandboxCredentialVerifierPort = (
             PerOwnerHmacSandboxCredentialVerifier()
+        )
+        # An overlay may attach opaque, non-persisted context to a runtime
+        # turn. OSS never interprets its keys or values.
+        self.runtime_turn_context: RuntimeTurnContextContributor = (
+            NoopRuntimeTurnContextContributor()
         )
         self.resource_list_hook: ResourceListHook = NoopResourceListHook()
         self.skill_lifecycle: SkillLifecycleHook = NoopSkillLifecycleHook()
