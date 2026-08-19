@@ -2,7 +2,7 @@ import type { ServiceInfo, ServiceStatusType } from "@valuz/shared";
 import { t } from "@valuz/shared/i18n";
 import { assetUrl } from "@valuz/shared";
 import { WindowDragRegion, WindowControls } from "@valuz/ui";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePlatform } from "@valuz/app/platform";
 
 interface StartupScreenProps {
@@ -11,6 +11,54 @@ interface StartupScreenProps {
   loading: boolean;
   error: string | null;
   onRetry: () => Promise<void>;
+}
+
+// Boot progress that actually *moves*. The only hard signal we have is
+// per-service readiness, and a desktop boot is usually a single backend
+// service — so the raw ratio sits at 0% and then jumps to 100%. Instead the
+// displayed value eases toward a moving target: a time-based ceiling that
+// climbs asymptotically toward BOOT_CEIL while we wait (never claiming to be
+// done), lifted by real readiness as services come up, then runs to 100%
+// once everything is running. It never moves backwards and freezes on error.
+const BOOT_CEIL = 92;
+const BOOT_TICK_MS = 100;
+// Time constant of the waiting curve: ~40% at 4s, ~63% at 8s, ~80% at 13s.
+const BOOT_TAU_S = 8;
+
+function useBootProgress({
+  loading,
+  error,
+  ready,
+  total,
+}: {
+  loading: boolean;
+  error: string | null;
+  ready: number;
+  total: number;
+}): number {
+  const [display, setDisplay] = useState(0);
+  const startRef = useRef<number>(Date.now());
+  const done = !loading && !error && (total === 0 || ready === total);
+
+  useEffect(() => {
+    if (error) return; // freeze where we are — the error strip explains why
+    const timer = setInterval(() => {
+      const elapsed = (Date.now() - startRef.current) / 1000;
+      const waitingCeil = BOOT_CEIL * (1 - Math.exp(-elapsed / BOOT_TAU_S));
+      const readiness = total > 0 ? (ready / total) * BOOT_CEIL : 0;
+      const target = done ? 100 : Math.min(BOOT_CEIL, Math.max(waitingCeil, readiness));
+      setDisplay((prev) => {
+        if (target <= prev) return prev;
+        // Ease toward the target; sprint when we are actually done.
+        const gap = target - prev;
+        const step = done ? Math.max(4, gap * 0.35) : Math.max(0.25, gap * 0.12);
+        return Math.min(target, prev + step);
+      });
+    }, BOOT_TICK_MS);
+    return () => clearInterval(timer);
+  }, [done, error, ready, total]);
+
+  return Math.min(100, Math.round(display));
 }
 
 // Self-contained boot splash. Pure CSS animations (no extra deps) — an
@@ -39,12 +87,7 @@ export const StartupScreen = ({
   const total = services.length;
   const ready = services.filter((s) => s.status === "running").length;
   const erroring = services.filter((s) => s.status === "error").length;
-  // Boot progress goes 5% → 100% even when there are no services yet, so
-  // the bar animates instead of sitting at zero on a fast launch.
-  const progress = useMemo(() => {
-    if (total === 0) return loading ? 18 : 100;
-    return Math.max(8, Math.round((ready / total) * 100));
-  }, [ready, total, loading]);
+  const progress = useBootProgress({ loading, error, ready, total });
 
   const tail = logs.slice(-3);
 
