@@ -141,6 +141,7 @@ class DispatcherService:
                 env=env,
                 project_id=project_id,
                 task_id=task_id,
+                task_title=task_row.title,
                 agent_slug=agent,
                 run_dir=str(run_dir),
                 brief=member_brief,
