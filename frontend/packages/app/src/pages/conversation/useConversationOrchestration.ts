@@ -61,6 +61,12 @@ import {
 } from "./useComposerSelection";
 import { useKbPickerState } from "./useKbPickerState";
 
+/** How often to re-read the durable while a send's optimistic pending is still
+ *  outstanding. Long enough that a normal turn (whose ``message.user`` echo
+ *  lands at run entry, well before the answer) never triggers it, short enough
+ *  that a turn which died before it started settles promptly. */
+const PENDING_RECONCILE_INTERVAL_MS = 15_000;
+
 export interface ConversationOrchestrationParams {
   /** ``page`` = the conversation route (may drive page chrome like the global
    *  right panel and consume navigation state); ``panel`` = embedded inside a
@@ -1016,6 +1022,30 @@ export function useConversationOrchestration({
       setSessions,
       setSelectedSessionId,
     });
+
+  // Safety net for a turn that dies before the kernel ever accepts it (a
+  // rejected cloud execution capability, a sandbox that won't allocate). Such
+  // a turn produces NO live frame — the host's live tap is a no-op with no
+  // instance to emit into — so the terminal handler in ``useSessionSubscription``
+  // never runs, nothing reconciles, and the optimistic pending sits there with
+  // the "starting runtime" header counting up indefinitely.
+  //
+  // Poll the durable instead of trusting the stream. The host records the
+  // turn's ``user_message`` + ``session_error`` there even when it never
+  // started (``turn_driver``), so ONE reconcile is enough to settle the view:
+  // the echo-release effect above sees the user message and retires the
+  // pending. Deliberately a re-read and nothing more — it never fabricates a
+  // terminal state, so a genuinely slow start (cloud cold-start legitimately
+  // runs tens of seconds) just re-reads, finds no echo, and keeps waiting.
+  useEffect(() => {
+    if (!pendingUserMessage) return;
+    const sessionId = selectedSessionIdRef.current;
+    if (!sessionId) return;
+    const handle = window.setInterval(() => {
+      void refreshActiveSession(sessionId);
+    }, PENDING_RECONCILE_INTERVAL_MS);
+    return () => window.clearInterval(handle);
+  }, [pendingUserMessage, refreshActiveSession]);
 
   useEffect(() => {
     const request = bootstrapGuardRef.current.start();
