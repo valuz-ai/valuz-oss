@@ -9,7 +9,6 @@ export interface ErrorMessageCardProps {
   retryCount?: number;
   maxRetries?: number;
   onRetry?: () => void;
-  onSwitchModel?: () => void;
 }
 
 export const ErrorMessageCard = ({
@@ -17,7 +16,6 @@ export const ErrorMessageCard = ({
   retryCount = 0,
   maxRetries = 3,
   onRetry,
-  onSwitchModel,
 }: ErrorMessageCardProps) => {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
@@ -55,8 +53,13 @@ export const ErrorMessageCard = ({
           })}
         </div>
       )}
-      <div className="mt-3 flex flex-wrap gap-2">
-        {onRetry && retryCount < maxRetries && (
+      {/* Retry is the only recovery action: the session's model is frozen
+          at creation (V5 / ADR-006), so there is no mid-session model swap
+          to offer here. The row is gated on the button rather than always
+          rendered — an empty flex row would leave a stray 12px of padding
+          once the retry budget is spent. */}
+      {onRetry && retryCount < maxRetries && (
+        <div className="mt-3 flex flex-wrap gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -65,18 +68,8 @@ export const ErrorMessageCard = ({
           >
             <RefreshCw className="mr-1 h-3 w-3" /> {t("system.retry")}
           </Button>
-        )}
-        {onSwitchModel && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs"
-            onClick={onSwitchModel}
-          >
-            {t("conversation.switchModel")}
-          </Button>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -46,7 +46,6 @@ type ConversationBodyProps = {
   postRunVerificationActive: boolean;
   error: string | null;
   handleRetry: ConversationSend["handleRetry"];
-  handleSwitchModel: (turnId: string) => void;
   retryCounts: Record<string, number>;
   containerHeight: ConversationScroll["containerHeight"];
   skillsBySlug: ComposerConfig["skillsBySlug"];
@@ -113,7 +112,6 @@ export function ConversationBody({
   postRunVerificationActive,
   error,
   handleRetry,
-  handleSwitchModel,
   retryCounts,
   containerHeight,
   skillsBySlug,
@@ -293,7 +291,6 @@ export function ConversationBody({
                 loading={id === NEW_SESSION_ID ? false : loading}
                 error={error}
                 onRetry={handleRetry}
-                onSwitchModel={handleSwitchModel}
                 retryCounts={retryCounts}
                 lastTurnMinHeight={
                   effectiveTurns.length > 1 ? containerHeight : 0

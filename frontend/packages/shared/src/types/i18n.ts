@@ -722,7 +722,6 @@ export type KnownI18nKey =
   | "conversation.stop"
   | "conversation.supplementary"
   | "conversation.supportedFormats"
-  | "conversation.switchModel"
   | "conversation.syncSkillFailed"
   | "conversation.syncedSkills"
   | "conversation.taskAbandon"

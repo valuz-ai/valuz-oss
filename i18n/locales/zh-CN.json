@@ -409,7 +409,6 @@
     "stop": "停止",
     "supplementary": "补记",
     "supportedFormats": "支持 PDF / Word / PPT / Excel / OpenDocument / RTF / EPUB / Markdown / CSV",
-    "switchModel": "切换模型",
     "syncSkillFailed": "同步失败: {error}",
     "syncedSkills": "已同步 {count} 个技能到技能库",
     "thinking": "思考中",

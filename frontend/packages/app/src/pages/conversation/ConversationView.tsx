@@ -245,7 +245,6 @@ function ConversationViewPage(props: ConversationViewProps) {
             postRunVerificationActive={core.postRunVerificationActive}
             error={core.error}
             handleRetry={core.handleRetry}
-            handleSwitchModel={core.handleSwitchModel}
             retryCounts={core.retryCounts}
             containerHeight={core.containerHeight}
             skillsBySlug={core.skillsBySlug}
@@ -351,7 +350,6 @@ function ConversationViewPage(props: ConversationViewProps) {
               id={core.id}
               selectedEffort={core.selectedEffort}
               setSelectedEffort={core.setSelectedEffort}
-              modelSelectorUnlocked={core.modelSelectorUnlocked}
               selectedAgentSkillItems={core.selectedAgentSkillItems}
               composerMentionSkills={core.composerMentionSkills}
               availableSkills={core.availableSkills}
@@ -418,7 +416,6 @@ function ConversationViewPanel(props: ConversationViewProps) {
         postRunVerificationActive={core.postRunVerificationActive}
         error={core.error}
         handleRetry={core.handleRetry}
-        handleSwitchModel={core.handleSwitchModel}
         retryCounts={core.retryCounts}
         containerHeight={core.containerHeight}
         skillsBySlug={core.skillsBySlug}
@@ -508,7 +505,6 @@ function ConversationViewPanel(props: ConversationViewProps) {
         id={core.id}
         selectedEffort={core.selectedEffort}
         setSelectedEffort={core.setSelectedEffort}
-        modelSelectorUnlocked={core.modelSelectorUnlocked}
         selectedAgentSkillItems={core.selectedAgentSkillItems}
         composerMentionSkills={core.composerMentionSkills}
         availableSkills={core.availableSkills}

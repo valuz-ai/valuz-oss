@@ -409,7 +409,6 @@
     "stop": "Stop",
     "supplementary": "Supplementary",
     "supportedFormats": "Supports PDF, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB, Markdown, CSV",
-    "switchModel": "Switch model",
     "syncSkillFailed": "Sync failed: {error}",
     "syncedSkills": "Synced {count} skills to library",
     "thinking": "Thinking",

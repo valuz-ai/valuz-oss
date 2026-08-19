@@ -999,7 +999,7 @@ const createTurnsBuilder = () => {
         const kind = interruptKind(payload.category);
         if (kind === "user") {
           // User cancelled the run — render a quiet grey line, not the
-          // ``ErrorMessageCard`` (with retry / switch-model) a real failure gets.
+          // ``ErrorMessageCard`` (with retry) a real failure gets.
           turn.cancelled = true;
         } else if (kind === "runtime") {
           // Runtime/agent subprocess torn down or crashed mid-turn — same quiet

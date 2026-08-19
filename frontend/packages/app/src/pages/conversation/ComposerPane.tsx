@@ -96,7 +96,6 @@ type ComposerPaneProps = {
   setSelectedEffort: Dispatch<
     SetStateAction<"low" | "medium" | "high" | "xhigh" | "max" | null>
   >;
-  modelSelectorUnlocked: boolean;
   selectedAgentSkillItems: ComposerConfig["selectedAgentSkillItems"];
   composerMentionSkills: ComposerConfig["composerMentionSkills"];
   availableSkills: SkillView[];
@@ -185,7 +184,6 @@ export function ComposerPane({
   id,
   selectedEffort,
   setSelectedEffort,
-  modelSelectorUnlocked,
   selectedAgentSkillItems,
   composerMentionSkills,
   availableSkills,
@@ -477,11 +475,11 @@ export function ComposerPane({
           // picker the moment a session exists — including freshly-created
           // sessions (e.g. Skill Creator opens a session before the user
           // can type), where the previous ``turns.length > 0`` guard let
-          // the picker pretend it was effective. ``modelSelectorUnlocked``
-          // is the manual escape hatch the retry-with-different-model flow
-          // toggles via ``handleSwitchModel``. The same lock applies to
-          // ``runtime`` per ADR-006 + REP-107 — no mid-session swaps.
-          modelLocked={selectedSession != null && !modelSelectorUnlocked}
+          // the picker pretend it was effective. The lock has no escape
+          // hatch: nothing downstream can honour a mid-session swap, so an
+          // unlocked picker would only ever lie. The same lock applies to
+          // ``runtime`` per ADR-006 + REP-107.
+          modelLocked={selectedSession != null}
           onModelChange={(chId, mId) => {
             setSelectedProviderId(chId);
             setSelectedModelId(mId);

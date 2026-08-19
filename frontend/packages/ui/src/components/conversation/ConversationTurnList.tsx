@@ -885,7 +885,6 @@ interface TurnRowProps {
   postRunVerificationActive: boolean;
   skillsBySlug?: Record<string, { name: string }>;
   onRetry?: (turnId: string) => void;
-  onSwitchModel?: (turnId: string) => void;
   retryCount: number;
   /** Optional override for rendering a tool block. Returning ``null``
    * (or omitting the prop) falls back to the generic ToolCallCard.
@@ -943,7 +942,6 @@ const TurnRow = memo(
     postRunVerificationActive,
     skillsBySlug,
     onRetry,
-    onSwitchModel,
     retryCount,
     renderToolCall,
     renderTurnActions,
@@ -1382,9 +1380,6 @@ const TurnRow = memo(
                 message={turn.failedMessage}
                 retryCount={retryCount}
                 onRetry={onRetry ? () => onRetry(turn.id) : undefined}
-                onSwitchModel={
-                  onSwitchModel ? () => onSwitchModel(turn.id) : undefined
-                }
               />
             ) : null}
           </div>
@@ -1414,7 +1409,6 @@ interface ConversationTurnListProps {
   loading: boolean;
   error: string | null;
   onRetry?: (turnId: string) => void;
-  onSwitchModel?: (turnId: string) => void;
   retryCounts?: Record<string, number>;
   lastTurnMinHeight?: number;
   skillsBySlug?: Record<string, { name: string }>;
@@ -1485,7 +1479,6 @@ export function ConversationTurnList({
   loading,
   error,
   onRetry,
-  onSwitchModel,
   retryCounts,
   lastTurnMinHeight,
   skillsBySlug,
@@ -1659,7 +1652,6 @@ export function ConversationTurnList({
                     }
                     skillsBySlug={skillsBySlug}
                     onRetry={onRetry}
-                    onSwitchModel={onSwitchModel}
                     retryCount={retryCounts?.[turn.id] ?? 0}
                     renderToolCall={renderToolCall}
                     renderTurnActions={renderTurnActions}
