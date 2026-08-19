@@ -11,6 +11,14 @@ interface StartupScreenProps {
   loading: boolean;
   error: string | null;
   onRetry: () => Promise<void>;
+  /** Host's own "boot is complete" verdict. When given it decides when the
+   *  bar may run to 100% (otherwise: every service running and not loading),
+   *  so the splash and the host can never disagree about "done". */
+  complete?: boolean;
+  /** Fired once the bar has visibly reached 100% after every service is up —
+   *  the host keeps the splash mounted until then so the bar finishes instead
+   *  of cutting away mid-way (design: "arrive, then enter"). */
+  onComplete?: () => void;
 }
 
 // Boot progress that actually *moves* — and arrives roughly when the app
@@ -22,16 +30,20 @@ interface StartupScreenProps {
 // both see the bar reach ~85% as the backend comes up. First launch (nothing
 // recorded yet) uses BOOT_DEFAULT_S. Past the estimate the bar keeps creeping
 // asymptotically toward BOOT_CEIL (never fakes completion); real readiness
-// lifts it; once everything is running it sprints to 100%. Never moves
-// backwards, freezes on error.
+// lifts it; once everything is running it runs on to 100% and only THEN
+// reports completion (``onComplete``) so the host can swap the splash away
+// after the bar visibly finished. Never moves backwards, freezes on error.
 const BOOT_HISTORY_KEY = "valuz-boot-durations";
 const BOOT_HISTORY_MAX = 5;
 const BOOT_DEFAULT_S = 6;
 const BOOT_MIN_S = 1.5;
 const BOOT_MAX_S = 90;
-const BOOT_LINEAR_END = 85;
-const BOOT_CEIL = 92;
+// Linear to 92% at the estimate, then wait for the backend near the top.
+const BOOT_LINEAR_END = 92;
+const BOOT_CEIL = 96;
 const BOOT_TICK_MS = 100;
+// How long 100% stays on screen before the host swaps the splash away.
+const BOOT_COMPLETE_DWELL_MS = 250;
 
 function readBootHistoryMs(): number[] {
   try {
@@ -81,17 +93,26 @@ function useBootProgress({
   error,
   ready,
   total,
+  complete,
+  onComplete,
 }: {
   loading: boolean;
   error: string | null;
   ready: number;
   total: number;
+  complete?: boolean;
+  onComplete?: () => void;
 }): number {
   const [display, setDisplay] = useState(0);
   const startRef = useRef<number>(Date.now());
   const estimateRef = useRef<number>(estimateBootSeconds());
   const recordedRef = useRef(false);
-  const done = !loading && !error && (total === 0 || ready === total);
+  const completedRef = useRef(false);
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
+  const done =
+    !error &&
+    (complete ?? (!loading && (total === 0 || ready === total)));
 
   // Remember how long this boot really took — it paces the next launch.
   useEffect(() => {
@@ -118,7 +139,17 @@ function useBootProgress({
     return () => clearInterval(timer);
   }, [done, error, ready, total]);
 
-  return Math.min(100, Math.round(display));
+  // Bar visibly at 100% and everything running → tell the host (once), after
+  // a short dwell so "100%" is actually seen.
+  const shown = Math.min(100, Math.round(display));
+  useEffect(() => {
+    if (!done || shown < 100 || completedRef.current) return;
+    completedRef.current = true;
+    const t = setTimeout(() => onCompleteRef.current?.(), BOOT_COMPLETE_DWELL_MS);
+    return () => clearTimeout(t);
+  }, [done, shown]);
+
+  return shown;
 }
 
 // Self-contained boot splash. Pure CSS animations (no extra deps) — an
@@ -131,6 +162,8 @@ export const StartupScreen = ({
   loading,
   logs,
   onRetry,
+  complete,
+  onComplete,
   services,
 }: StartupScreenProps) => {
   const platform = usePlatform();
@@ -147,7 +180,14 @@ export const StartupScreen = ({
   const total = services.length;
   const ready = services.filter((s) => s.status === "running").length;
   const erroring = services.filter((s) => s.status === "error").length;
-  const progress = useBootProgress({ loading, error, ready, total });
+  const progress = useBootProgress({
+    loading,
+    error,
+    ready,
+    total,
+    complete,
+    onComplete,
+  });
 
   const tail = logs.slice(-3);
 

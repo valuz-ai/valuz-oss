@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { providersApi } from "@valuz/core";
 import { ErrorBoundary, LogoShimmer } from "@valuz/ui";
 import { StartupScreen } from "./components/StartupScreen";
@@ -18,6 +18,16 @@ export const App = () => {
   const { services, logs, loading, checking, ready, error, retry } =
     useDesktopStartup();
   const [setupChecked, setSetupChecked] = useState(false);
+
+  // "Arrive, then enter": once the backend is up we keep the splash mounted
+  // until its progress bar has visibly run to 100% (StartupScreen calls
+  // onComplete) instead of cutting away mid-bar. Only when a boot was
+  // actually shown — if services were already up when we looked (renderer
+  // reload, warm relaunch) there is nothing to finish and we go straight on.
+  const [splashDone, setSplashDone] = useState(false);
+  const sawBootRef = useRef(false);
+  if (!checking && !ready) sawBootRef.current = true;
+  const holdSplash = ready && sawBootRef.current && !splashDone;
 
   useEffect(() => {
     if (!ready) return;
@@ -62,7 +72,20 @@ export const App = () => {
   // usePlatform() (frameless-window controls), so rendering it outside
   // the provider crashes the renderer before the backend is ready.
   let content = null;
-  if (checking || (ready && !setupChecked)) {
+  if (!checking && (!ready || holdSplash)) {
+    // The onboarding probe above runs concurrently while the bar finishes.
+    content = (
+      <StartupScreen
+        services={services}
+        logs={logs}
+        loading={loading}
+        error={error}
+        onRetry={retry}
+        complete={ready}
+        onComplete={() => setSplashDone(true)}
+      />
+    );
+  } else if (checking || !setupChecked) {
     // Startup gates (services status probe / onboarding check) used to
     // render literally nothing here — a plain white window with no hint
     // of life for however long they took (the onboarding probe can retry
@@ -71,16 +94,6 @@ export const App = () => {
       <div className="flex h-screen items-center justify-center">
         <LogoShimmer size="md" />
       </div>
-    );
-  } else if (!ready) {
-    content = (
-      <StartupScreen
-        services={services}
-        logs={logs}
-        loading={loading}
-        error={error}
-        onRetry={retry}
-      />
     );
   } else {
     content = (
