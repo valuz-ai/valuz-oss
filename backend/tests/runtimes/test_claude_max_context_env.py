@@ -1,12 +1,11 @@
 """``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` from the channel-declared window.
 
-Companion to the ``autoCompactWindow`` injection (``_build_settings``): the
-Claude CLI caps the auto-compact window at the context window it *assumes*
-for the model id, and for a gateway / custom id it can't resolve to a Claude
-model that assumption is a generic default — so a declared 1M window would
-still compact at the assumed size. ``_build_model_provider_env`` exports the
-declared ``max_input_tokens`` as ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` (the
-Claude analog of codex's ``model_context_window``), only when declared.
+For a gateway / custom model id the Claude CLI can't resolve to a Claude
+model it assumes a generic 200k window, so its auto-compaction would fire
+against the wrong size. ``_build_model_provider_env`` exports the declared
+``max_input_tokens`` as ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` (the Claude analog
+of codex's ``model_context_window``), only when declared; the compaction
+threshold inside that window is the CLI's own.
 """
 
 from __future__ import annotations

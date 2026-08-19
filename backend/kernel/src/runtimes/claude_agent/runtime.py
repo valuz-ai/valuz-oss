@@ -96,7 +96,6 @@ from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
 from src.core.tools import ExecContext, ToolDef, ToolKit, ToolResult
 from src.core.types import (
-    AUTO_COMPACT_WINDOW_FRACTION,
     BudgetExhausted,
     EndTurn,
     Error,
@@ -1977,25 +1976,26 @@ class ClaudeAgentRuntime:
         omitted.
 
         The workspace's own settings are read once up front so each harness
-        default can defer to an explicit project value. Three defaults today:
+        default can defer to an explicit project value. Two defaults today:
 
         - dynamic workflows / ``/deep-research`` (``enableWorkflows``), which
           the ``setting_sources=["project"]`` scoping otherwise drops (it
           lives in the user surface; see ``_WORKFLOW_SETTINGS``);
         - ``skipWebFetchPreflight`` when the deployment opts in via
           ``VALUZ_SKIP_WEBFETCH_PREFLIGHT`` (see
-          ``SKIP_WEBFETCH_PREFLIGHT_ENV``);
-        - ``autoCompactWindow`` when the session carries a channel-declared
-          ``max_input_tokens`` (gateway aliases the CLI's per-model tuning
-          can't know). The trigger is ``AUTO_COMPACT_WINDOW_FRACTION`` of
-          the input window, clamped to the CLI's documented 100k–1M range —
-          a sub-100k trigger is skipped entirely (emitting the 100k floor
-          would place the trigger past the real window). The CLI caps this
-          window at the model's context window, so the same declaration is
-          also exported as ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` in the
-          subprocess env (``_build_model_provider_env``) — without it an
-          unrecognized gateway id keeps the CLI's assumed window and a
-          trigger above it would be silently clamped.
+          ``SKIP_WEBFETCH_PREFLIGHT_ENV``).
+
+        Deliberately NOT ``autoCompactWindow``. The harness used to inject
+        ``0.85 x max_input_tokens`` here; the CLI treats that key as "how
+        full the context may get before compaction" and reports it as the
+        window in ``/context`` (``Tokens: x / 850k`` for a declared 1M),
+        which reads as a wrong window even though the model window was
+        right. The channel-declared window travels as
+        ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` instead
+        (``_build_model_provider_env``) and the CLI applies its own tuned
+        compaction threshold inside it — the same policy it uses for every
+        model it knows — so a project's / user's ``autoCompactWindow`` is
+        the only thing that ever narrows it.
 
         Keep each a true *default*: inject it only when the project hasn't set
         the key, so a project's explicit value loaded through
@@ -2021,11 +2021,6 @@ class ClaudeAgentRuntime:
             settings.update(_WORKFLOW_SETTINGS)
         if _skip_webfetch_preflight_enabled() and "skipWebFetchPreflight" not in project:
             settings["skipWebFetchPreflight"] = True
-        max_input_tokens = self.model_settings.max_input_tokens if self.model_settings else None
-        if max_input_tokens and "autoCompactWindow" not in project:
-            window = int(max_input_tokens * AUTO_COMPACT_WINDOW_FRACTION)
-            if window >= 100_000:
-                settings["autoCompactWindow"] = min(window, 1_000_000)
         return json.dumps(settings) if settings else None
 
     def _build_model_provider_env(self, session: Session | None = None) -> dict[str, str] | None:
@@ -2049,20 +2044,20 @@ class ClaudeAgentRuntime:
           path so it keeps the default.
         * ``ANTHROPIC_AUTH_TOKEN`` — the per-session api_key.
         * ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` — the session's channel-declared
-          ``max_input_tokens`` (see ``_build_settings``). For a gateway /
-          custom model id the CLI cannot resolve to a Claude model it
-          otherwise *assumes* a window for the id (its generic default), so
-          both the auto-compact trigger and the ``autoCompactWindow`` we
-          inject — which the CLI caps at the assumed window — would be
-          measured against the wrong size. Declaring the real window is the
-          Claude analog of codex's ``model_context_window``. Documented
-          semantics (model-config "Correct the window for a gateway or
-          custom model ID"): applies directly to an id that neither starts
-          with ``claude-`` nor contains ``[1m]``; a ``claude-`` / resolvable
-          Claude id keeps the CLI's own tuning (the variable is a no-op
-          there unless ``DISABLE_COMPACT`` is set), and an unresolvable
-          ``[1m]`` id keeps the CLI's assumed 1M window. Only set when
-          declared — never guessed from the model name.
+          ``max_input_tokens``. For a gateway / custom model id the CLI
+          cannot resolve to a Claude model it otherwise *assumes* a window
+          for the id (its generic 200k default), so its auto-compaction
+          would be measured against the wrong size. Declaring the real
+          window is the Claude analog of codex's ``model_context_window``;
+          the compaction threshold itself is left to the CLI (its own tuned
+          headroom below the window, the same policy it applies to every
+          model it knows). Documented semantics (model-config "Correct the
+          window for a gateway or custom model ID"): applies directly to an
+          id that neither starts with ``claude-`` nor contains ``[1m]``; a
+          ``claude-`` / resolvable Claude id keeps the CLI's own tuning (the
+          variable is a no-op there unless ``DISABLE_COMPACT`` is set), and
+          an unresolvable ``[1m]`` id keeps the CLI's assumed 1M window.
+          Only set when declared — never guessed from the model name.
         * Non-Claude model aliases additionally rewrite the SDK's
           ``ANTHROPIC_DEFAULT_*_MODEL`` family so the CLI doesn't
           short-circuit to its built-in Claude defaults when running

@@ -137,14 +137,6 @@ class ModelSettings:
     max_input_tokens: int | None = None
 
 
-# Fraction of ``max_input_tokens`` at which claude_agent / codex trigger
-# automatic history compaction. Aligned with deepagents' own
-# SummarizationMiddleware fraction default (0.85) so all three runtimes
-# compact at the same relative fill; deepagents applies the fraction
-# itself, so only the CLI runtimes consume this constant.
-AUTO_COMPACT_WINDOW_FRACTION = 0.85
-
-
 # -- MCP server config (tagged union) --
 
 
