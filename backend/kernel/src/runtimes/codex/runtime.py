@@ -70,7 +70,6 @@ from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
 from src.core.tools import ExecContext, ToolDef, ToolKit
 from src.core.types import (
-    AUTO_COMPACT_WINDOW_FRACTION,
     BudgetExhausted,
     EndTurn,
     Error,
@@ -1790,20 +1789,27 @@ def _build_config_overrides(
 
     # Channel-declared input window for models codex's own catalog can't
     # know (gateway aliases). ``model_context_window`` feeds codex's
-    # remaining-context bookkeeping; ``model_auto_compact_token_limit``
-    # triggers compaction at the shared fraction. Both are bare TOML
-    # integers (quoting turns them into strings codex rejects). Unlike
-    # ``model_reasoning_effort`` there is no thread-metadata pin trap:
-    # the model is locked per session, so the value never changes between
+    # remaining-context bookkeeping AND its compaction trigger: codex
+    # derives ``auto_compact_token_limit`` as 90% of the resolved window on
+    # its own (``ModelInfo::auto_compact_token_limit``) and clamps any
+    # explicit ``model_auto_compact_token_limit`` to that same 90%, so the
+    # runtime owns the threshold and we declare only the window. Bare TOML
+    # integer (quoting turns it into a string codex rejects). Unlike
+    # ``model_reasoning_effort`` there is no thread-metadata pin trap: the
+    # model is locked per session, so the value never changes between
     # thread_start and any later resume.
+    #
+    # Known upstream cap (codex-cli 0.144.x): an alias codex resolves to
+    # its fallback metadata carries ``max_context_window = 272k`` and the
+    # override is clamped to it, so a declaration above 272k is honoured
+    # only up to 272k unless the alias prefix-matches a catalog model with
+    # a larger cap. Nothing to do here — declaring the real value keeps the
+    # config correct for a codex that lifts the cap.
     max_input_tokens = (
         session.model_settings.max_input_tokens if session.model_settings is not None else None
     )
     if max_input_tokens:
         overrides.append(f"model_context_window={max_input_tokens}")
-        overrides.append(
-            f"model_auto_compact_token_limit={int(max_input_tokens * AUTO_COMPACT_WINDOW_FRACTION)}"
-        )
 
     if provider is not None:
         # Codex's ``web_search`` tool is wired against the OpenAI

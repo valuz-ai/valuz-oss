@@ -1,13 +1,15 @@
-"""``model_context_window`` / ``model_auto_compact_token_limit`` emission.
+"""``model_context_window`` emission from the channel-declared window.
 
 Codex's own model catalog can't know gateway aliases (``valuz-pro-anthropic``
 style ids), so without an override it falls back to its generic context
 bookkeeping. When the session carries a channel-declared
-``ModelSettings.max_input_tokens``, the runtime emits both keys — the window
-itself and the compaction trigger at the shared fraction — as BARE TOML
-integers (quoting turns them into strings codex rejects at startup). No
-declaration → neither key, so codex keeps its tuned defaults for models it
-does know.
+``ModelSettings.max_input_tokens``, the runtime emits ``model_context_window``
+as a BARE TOML integer (quoting turns it into a string codex rejects at
+startup) and leaves the compaction trigger to codex, which derives
+``auto_compact_token_limit`` as 90% of the resolved window itself (and clamps
+any explicit ``model_auto_compact_token_limit`` to that same 90%). No
+declaration → no key, so codex keeps its tuned defaults for models it does
+know.
 """
 
 # ruff: noqa: I001 — kernel bootstrap side-effect import must precede src.*
@@ -30,16 +32,16 @@ def _session(model_settings: ModelSettings | None) -> Session:
     )
 
 
-def test_declared_window_emits_both_overrides_as_bare_ints() -> None:
+def test_declared_window_emits_only_the_window_as_a_bare_int() -> None:
     ov = _build_config_overrides(_session(ModelSettings(max_input_tokens=200_000)), None, "alias")
     assert "model_context_window=200000" in ov
-    assert "model_auto_compact_token_limit=170000" in ov  # 0.85 x 200k
-    # Bare integers — a quoted value is the exact shape codex rejects.
+    # Bare integer — a quoted value is the exact shape codex rejects.
     assert not any('model_context_window="' in o for o in ov)
-    assert not any('model_auto_compact_token_limit="' in o for o in ov)
+    # The trigger is codex's own (90% of the window); never pinned from here.
+    assert not any(o.startswith("model_auto_compact_token_limit=") for o in ov)
 
 
-def test_no_declaration_emits_neither_override() -> None:
+def test_no_declaration_emits_no_window_override() -> None:
     for settings in (None, ModelSettings(effort="high")):
         ov = _build_config_overrides(_session(settings), None, "gpt-5.5")
         assert not any(o.startswith("model_context_window=") for o in ov)
