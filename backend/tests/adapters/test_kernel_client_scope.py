@@ -83,6 +83,40 @@ async def test_exec_ops_default_to_session_scope(monkeypatch) -> None:
     assert alloc.new_turns == [True]
 
 
+async def test_turn_context_is_built_from_durable_session_metadata(monkeypatch) -> None:
+    """An overlay receives durable metadata rather than request headers."""
+    alloc = _ScopedAllocator()
+    monkeypatch.setattr(ext, "sandbox_allocator", alloc)
+    seen: dict[str, object] = {}
+
+    class _ContextContributor:
+        async def build(self, **kwargs):  # noqa: ANN003
+            seen.update(kwargs)
+            return {"example.runtime": "opaque-value"}
+
+    class _Kernel:
+        async def run_turn(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            seen["kernel_context"] = kwargs.get("runtime_context")
+            return "MSG"
+
+    class _DataPlane:
+        async def get_session(self, user_id, session_id):  # noqa: ANN001
+            assert (user_id, session_id) == ("u1", "member-1")
+            return SimpleNamespace(metadata={"valuz": {"task_id": "task-7"}})
+
+    monkeypatch.setattr(ext, "runtime_turn_context", _ContextContributor())
+    monkeypatch.setattr(kc, "_host_data_client", _DataPlane())
+    monkeypatch.setattr(kc, "_endpoint_clients", {"https://session:member-1.pool": _Kernel()})
+
+    assert await kc.run_turn("u1", "member-1", "hi") == "MSG"
+    assert seen == {
+        "user_id": "u1",
+        "session_id": "member-1",
+        "metadata": {"valuz": {"task_id": "task-7"}},
+        "kernel_context": {"example.runtime": "opaque-value"},
+    }
+
+
 async def test_non_turn_ops_do_not_set_new_turn(monkeypatch) -> None:
     alloc = _ScopedAllocator()
     monkeypatch.setattr(ext, "sandbox_allocator", alloc)

@@ -1480,6 +1480,8 @@ class SessionOrchestrator:
         user_id: str,
         session_id: str,
         user_message: UserMessage,
+        *,
+        runtime_context: dict[str, str] | None = None,
     ) -> Message:
         """Execute one conversation turn.
 
@@ -1633,6 +1635,7 @@ class SessionOrchestrator:
                 observer,
                 session.cwd,
                 user_id=user_id,
+                runtime_context=runtime_context,
             )
         except EgressRegistrationError as exc:
             # The desktop and non-model APIs remain usable when the egress
@@ -1993,6 +1996,7 @@ class SessionOrchestrator:
         workspace_root: str,
         *,
         user_id: str | None = None,
+        runtime_context: dict[str, str] | None = None,
     ) -> RuntimePort:
         from src.runtimes.factory import create_runtime
         from src.runtimes.network_egress import (
@@ -2016,11 +2020,14 @@ class SessionOrchestrator:
                     self._runtime_owners[session_id] = user_id
                 return cached
 
-            egress_descriptor = await prepare_runtime_egress(session_id, session)
+            from src.core.runtime_context import materialize_runtime_context
+
+            runtime_session = materialize_runtime_context(session, runtime_context)
+            egress_descriptor = await prepare_runtime_egress(session_id, runtime_session)
             try:
                 runtime = create_runtime(
                     agent,
-                    session,
+                    runtime_session,
                     sink,
                     workspace_root=workspace_root,
                     egress_descriptor=egress_descriptor,

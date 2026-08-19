@@ -126,9 +126,16 @@ async def run_session(websocket: WebSocket, session_id: str) -> None:
 
     current_run: asyncio.Task[Any] | None = None
 
-    async def _execute_turn(user_message: UserMessage) -> None:
+    async def _execute_turn(
+        user_message: UserMessage, runtime_context: dict[str, str] | None = None
+    ) -> None:
         try:
-            await orchestrator.run_turn(owner, session_id, user_message)
+            await orchestrator.run_turn(
+                owner,
+                session_id,
+                user_message,
+                runtime_context=runtime_context,
+            )
         except SessionNotFoundError:
             await _send_safely(
                 websocket,
@@ -166,6 +173,29 @@ async def run_session(websocket: WebSocket, session_id: str) -> None:
                 )
                 continue
 
+            runtime_context = msg.get("runtime_context")
+            if runtime_context is not None and (
+                not isinstance(runtime_context, dict)
+                or not all(
+                    isinstance(key, str)
+                    and key
+                    and isinstance(value, str)
+                    and value
+                    for key, value in runtime_context.items()
+                )
+            ):
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "data": {
+                                "message": "runtime_context must map non-empty strings to strings"
+                            },
+                        }
+                    )
+                )
+                continue
+
             # Wait for the prior turn to finish before dispatching a new
             # one. Awaiting closes the brief race window where ``done()``
             # is still False after the final sink emit.
@@ -173,7 +203,9 @@ async def run_session(websocket: WebSocket, session_id: str) -> None:
                 with contextlib.suppress(Exception):
                     await current_run
 
-            current_run = asyncio.create_task(_execute_turn(user_message))
+            current_run = asyncio.create_task(
+                _execute_turn(user_message, runtime_context=runtime_context)
+            )
 
     except WebSocketDisconnect:
         # Detach only — the agent's run task continues, the bus stays,

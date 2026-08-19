@@ -457,6 +457,7 @@ class HttpKernelClient:
         text: str,
         attachments: list[dict[str, Any]] | None = None,
         additional_context: str = "",
+        runtime_context: dict[str, str] | None = None,
     ) -> MessageData:
         import websockets
 
@@ -479,13 +480,15 @@ class HttpKernelClient:
         url = f"{ws_base}{self._prefix}/v1/sessions/{session_id}/run"
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
         headers["X-Valuz-Owner-Id"] = user_id
-        payload = {
+        payload: dict[str, Any] = {
             "message": {
                 "text": text,
                 "attachments": attachments or [],
                 "additional_context": additional_context,
             }
         }
+        if runtime_context is not None:
+            payload["runtime_context"] = runtime_context
         try:
             # The run channel carries a whole agent turn, which can legitimately
             # go quiet for long stretches (a slow tool call, a model streaming
