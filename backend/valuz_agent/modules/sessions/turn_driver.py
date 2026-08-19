@@ -32,9 +32,7 @@ from valuz_agent.ports.message_context import HostRef
 logger = logging.getLogger(__name__)
 
 
-async def _stamp_turn_host_ref(
-    user_id: str, session_id: str, host_ref: HostRef
-) -> None:
+async def _stamp_turn_host_ref(user_id: str, session_id: str, host_ref: HostRef) -> None:
     """Persist the turn's declared host under ``metadata.valuz.host_ref``.
 
     Read by tools that must act on the host the user is looking at
@@ -58,9 +56,7 @@ async def _stamp_turn_host_ref(
         return
     valuz["host_ref"] = stamped
     metadata["valuz"] = valuz
-    await kernel_client.update_session(
-        user_id, session_id, UpdateSessionRequest(metadata=metadata)
-    )
+    await kernel_client.update_session(user_id, session_id, UpdateSessionRequest(metadata=metadata))
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +296,39 @@ async def run_session_to_idle(
             final_status = "terminated"
             encountered_error = True
             turn_error = exc
+            # The kernel never accepted this turn, so it never wrote the
+            # ``user_message`` that opens the turn's event bracket. Write it
+            # here, BEFORE the failure is recorded, or the turn is unassembleable:
+            # the client rebuilds the transcript purely from events, so with no
+            # user message the failure has nothing to attach to (it renders above
+            # the user's own bubble) and the optimistic bubble is never retired
+            # (the "starting runtime" header counts up forever). Ordering matters
+            # — the event is anchored on append, so it has to land first.
+            if isinstance(exc, kernel_client.TurnNotStartedError):
+                try:
+                    from app.schemas import EventPayload
+
+                    await kernel_client.append_event(
+                        user_id,
+                        session_id,
+                        EventPayload(
+                            type="user_message",
+                            data={
+                                "message": content,
+                                "attachments": [
+                                    {"source_path": source, "parsed_path": parsed}
+                                    for source, parsed in attachment_specs
+                                ],
+                            },
+                        ),
+                    )
+                except Exception:  # noqa: BLE001 — best effort; never mask the real failure
+                    logger.warning(
+                        "run_session_to_idle: could not record the user message for the "
+                        "unstarted turn on session %s",
+                        session_id,
+                        exc_info=True,
+                    )
             try:
                 await kernel_client.emit_live_event(
                     user_id,

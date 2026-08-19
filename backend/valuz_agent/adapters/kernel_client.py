@@ -120,6 +120,34 @@ class KernelNotImplementedError(KernelClientError):
     pass
 
 
+class TurnNotStartedError(RuntimeError):
+    """A turn failed BEFORE the kernel accepted it.
+
+    Everything ``run_turn`` does ahead of handing the turn to the kernel —
+    allocating the turn's kernel, building the overlay's runtime context (a
+    commercial build swaps a cloud execution capability in here) — can fail.
+    When it does, the kernel is never entered, so it never emits the
+    ``user_message`` event that opens the turn.
+
+    That distinction is load-bearing for the caller, not cosmetic. The client
+    transcript is rebuilt purely from the event stream, so a turn with no
+    ``user_message`` has nothing to anchor its failure to: the error card
+    renders ABOVE the user's own message, and the optimistic bubble is never
+    retired so the "starting runtime" header counts up forever. The turn
+    driver catches this type specifically and writes the missing event itself
+    (see ``turn_driver.run_session_to_idle``).
+
+    Failures raised from INSIDE the kernel keep their own type — by then the
+    kernel owns the turn's event bracket.
+
+    Deliberately NOT a ``KernelClientError``: that base carries HTTP ``status``
+    semantics and is caught wholesale at the route layer, so hanging this off
+    it would silently re-map every pre-flight failure for synchronous callers.
+    The wrapped cause's text is preserved verbatim, which is what reaches the
+    user as the turn's stop reason.
+    """
+
+
 def _raise_mapped(exc: HTTPException) -> NoReturn:
     detail = str(exc.detail)
     if exc.status_code == 404:
@@ -1031,9 +1059,9 @@ async def create_session(
         scope = await _scope_for(user_id, req_id)
     elif scope is not None and req_id:
         _scope_cache_put(req_id, scope)
-    return await (
-        await _kernel_for(user_id, scope, session_id=req_id or "")
-    ).create_session(user_id, req)
+    return await (await _kernel_for(user_id, scope, session_id=req_id or "")).create_session(
+        user_id, req
+    )
 
 
 async def runtime_availability() -> dict[str, RuntimeAvailability]:
@@ -1293,18 +1321,26 @@ async def run_turn(
     Hooks are best-effort by contract: a refresh failure degrades a capability,
     it must never sink the turn.
     """
-    # new_turn=True: a scoped allocator may run a fresh instance for this turn
-    # (chat = per-turn instance; task reuses its shared one). See sandbox §2.
-    k = await _kernel_for(user_id, await _scope_for(user_id, session_id), new_turn=True)
-    if pre_turn is not None:
-        token = _pinned_control_kernel.set((session_id, k))
-        try:
-            await pre_turn()
-        except Exception:  # noqa: BLE001 — a hook must never block a turn
-            logger.warning("pre-turn hook failed for session %s", session_id, exc_info=True)
-        finally:
-            _pinned_control_kernel.reset(token)
-    runtime_context = await _build_runtime_turn_context(user_id, session_id)
+    # Everything up to ``k.run_turn`` below is PRE-FLIGHT: the kernel has not
+    # accepted the turn yet, so it has not opened the turn's event bracket. A
+    # failure here would otherwise unwind with nothing written at all, leaving
+    # the client a transcript it cannot assemble — see ``TurnNotStartedError``,
+    # which the turn driver catches to write the missing ``user_message``.
+    try:
+        # new_turn=True: a scoped allocator may run a fresh instance for this turn
+        # (chat = per-turn instance; task reuses its shared one). See sandbox §2.
+        k = await _kernel_for(user_id, await _scope_for(user_id, session_id), new_turn=True)
+        if pre_turn is not None:
+            token = _pinned_control_kernel.set((session_id, k))
+            try:
+                await pre_turn()
+            except Exception:  # noqa: BLE001 — a hook must never block a turn
+                logger.warning("pre-turn hook failed for session %s", session_id, exc_info=True)
+            finally:
+                _pinned_control_kernel.reset(token)
+        runtime_context = await _build_runtime_turn_context(user_id, session_id)
+    except Exception as exc:
+        raise TurnNotStartedError(str(exc) or type(exc).__name__) from exc
     return await k.run_turn(
         user_id,
         session_id,
