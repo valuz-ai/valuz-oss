@@ -565,11 +565,7 @@ class _MessageObserverSink:
 
         elif event.type == "tool_result":
             tool_use_id = event.data.get("id")
-            tool_name = (
-                self._tool_names.get(tool_use_id)
-                if isinstance(tool_use_id, str)
-                else None
-            )
+            tool_name = self._tool_names.get(tool_use_id) if isinstance(tool_use_id, str) else None
             event = self._register_and_redact_tool_result(event)
 
         elif event.type == "session_idle":
@@ -834,8 +830,7 @@ class _MessageObserverSink:
         """
 
         return any(
-            self._matches_tool_name(tool_name, name)
-            for tool_name in self._tool_names.values()
+            self._matches_tool_name(tool_name, name) for tool_name in self._tool_names.values()
         )
 
     def called_external_tool(self) -> bool:
@@ -879,9 +874,7 @@ class _MessageObserverSink:
     @staticmethod
     def _matches_tool_name(tool_name: str, name: str) -> bool:
         return (
-            tool_name == name
-            or tool_name.endswith(f"__{name}")
-            or tool_name.endswith(f"/{name}")
+            tool_name == name or tool_name.endswith(f"__{name}") or tool_name.endswith(f"/{name}")
         )
 
     def skip_post_run_verification_for_generated_ui(self) -> None:
@@ -1261,8 +1254,20 @@ class SessionOrchestrator:
             if session_id not in self._active:
                 await self._evict_runtime(session_id)
 
-    async def prepare_runtime(self, user_id: str, session_id: str) -> None:
-        """Warm one session runtime without dispatching a model request."""
+    async def prepare_runtime(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        runtime_context: dict[str, str] | None = None,
+    ) -> None:
+        """Warm one session runtime without dispatching a model request.
+
+        ``runtime_context`` is the same opaque per-operation context a turn
+        carries. Warming builds a real runtime (codex opens its app-server
+        thread), so a stored credential that is a runtime-context marker must
+        be materialized here exactly as it is for a turn.
+        """
         if session_id in self._active:
             return
         session, agent = await self._load_session(user_id, session_id)
@@ -1274,6 +1279,7 @@ class SessionOrchestrator:
             _DiscardEventSink(),
             session.cwd,
             user_id=user_id,
+            runtime_context=runtime_context,
         )
         try:
             await runtime.prepare(session)
@@ -1291,6 +1297,7 @@ class SessionOrchestrator:
         *,
         source_native_session_id: str,
         anchor: str | None = None,
+        runtime_context: dict[str, str] | None = None,
     ) -> str:
         """Create *session*'s native thread by forking a source thread.
 
@@ -1312,6 +1319,7 @@ class SessionOrchestrator:
             _DiscardEventSink(),
             session.cwd,
             user_id=user_id,
+            runtime_context=runtime_context,
         )
         try:
             return await runtime.fork_session(

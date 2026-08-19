@@ -276,7 +276,12 @@ class KernelClient(Protocol):
 
     async def interrupt(self, user_id: str, session_id: str) -> None: ...
 
-    async def prepare_runtime(self, user_id: str, session_id: str) -> None: ...
+    async def prepare_runtime(
+        self,
+        user_id: str,
+        session_id: str,
+        runtime_context: dict[str, str] | None = None,
+    ) -> None: ...
 
     async def run_turn(
         self,
@@ -683,8 +688,13 @@ class InProcessKernelClient:
                 return
             _raise_mapped(exc)
 
-    async def prepare_runtime(self, user_id: str, session_id: str) -> None:
-        await _orchestrator().prepare_runtime(user_id, session_id)
+    async def prepare_runtime(
+        self,
+        user_id: str,
+        session_id: str,
+        runtime_context: dict[str, str] | None = None,
+    ) -> None:
+        await _orchestrator().prepare_runtime(user_id, session_id, runtime_context=runtime_context)
 
     async def run_turn(
         self,
@@ -1262,6 +1272,16 @@ async def fork_session(
     kernel — exactly like ``prepare_runtime``.
     """
     k = await _kernel_for(user_id, await _scope_for(user_id, session_id))
+    # Same context a turn carries. The fork builds a runtime for the new
+    # session before any row exists, so a deployment whose stored credential
+    # is a runtime-context marker cannot materialize one without it — the
+    # native fork then dies as a 502 before touching the transcript. Read from
+    # the SOURCE session: the new one is not persisted yet, and the fork
+    # executes in the source's scope.
+    if req.runtime_context is None:
+        req = req.model_copy(
+            update={"runtime_context": await _build_runtime_turn_context(user_id, session_id)}
+        )
     return await k.fork_session(user_id, session_id, req)
 
 
@@ -1282,7 +1302,11 @@ async def interrupt(user_id: str, session_id: str) -> None:
 
 async def prepare_runtime(user_id: str, session_id: str) -> None:
     k = await _kernel_for(user_id, await _scope_for(user_id, session_id))
-    await k.prepare_runtime(user_id, session_id)
+    # Warming builds a real runtime, so it needs the credential context for
+    # the same reason ``fork_session`` above does.
+    await k.prepare_runtime(
+        user_id, session_id, await _build_runtime_turn_context(user_id, session_id)
+    )
 
 
 async def run_turn(

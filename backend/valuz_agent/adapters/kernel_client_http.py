@@ -443,10 +443,16 @@ class HttpKernelClient:
         except KernelSessionNotFoundError:
             return
 
-    async def prepare_runtime(self, user_id: str, session_id: str) -> None:
+    async def prepare_runtime(
+        self,
+        user_id: str,
+        session_id: str,
+        runtime_context: dict[str, str] | None = None,
+    ) -> None:
         await self._request(
             "POST",
             f"{self._prefix}/v1/sessions/{session_id}/prepare",
+            json_body={"runtime_context": runtime_context},
             owner=user_id,
         )
 
