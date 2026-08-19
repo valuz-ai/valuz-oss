@@ -359,8 +359,8 @@ export function useConversationOrchestration({
   );
   // Composer override state spine — runtime / provider / model / effort /
   // permission / connector / skill selections, their Settings-default and
-  // runtime-availability seeding, the locked-session mirror effect and
-  // ``handleSwitchModel`` — extracted to useComposerSelection. (The two
+  // runtime-availability seeding, the locked-session mirror effect and the
+  // per-turn retry counts — extracted to useComposerSelection. (The two
   // composer-override effects that read useComposerConfig outputs —
   // seed-from-brain and provider auto-pick — stay below.)
   const {
@@ -376,7 +376,6 @@ export function useConversationOrchestration({
     runtimeList,
     retryCounts,
     setRetryCounts,
-    modelSelectorUnlocked,
     selectedPermissionMode,
     setSelectedPermissionMode,
     selectedEffort,
@@ -386,7 +385,6 @@ export function useConversationOrchestration({
     toggleConnector,
     selectedComposerSkill,
     setSelectedComposerSkill,
-    handleSwitchModel,
   } = useComposerSelection({
     selectedSessionId,
     selectedAgentSlug,
@@ -1516,7 +1514,6 @@ export function useConversationOrchestration({
     performEnqueue,
     handleRetry,
     retryCounts,
-    handleSwitchModel,
     hasPendingProjectSend: false,
     handleSend: () => {
       if (!draft.trim()) return;
@@ -1603,7 +1600,6 @@ export function useConversationOrchestration({
     setSelectedPermissionMode,
     selectedEffort,
     setSelectedEffort,
-    modelSelectorUnlocked,
     selectedAgentSkillItems,
     composerMentionSkills,
     availableSkills,

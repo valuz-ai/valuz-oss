@@ -728,7 +728,6 @@ I18nKey = Literal[
     "conversation.stop",
     "conversation.supplementary",
     "conversation.supportedFormats",
-    "conversation.switchModel",
     "conversation.syncSkillFailed",
     "conversation.syncedSkills",
     "conversation.taskAbandon",
