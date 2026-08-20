@@ -1,7 +1,10 @@
 import type { EffortLevel } from "@valuz/shared";
 import { createFetchJson } from "./fetch-json";
 import { resolveApiBase } from "./base-resolver";
-import { getDefaultExecutionTarget } from "../edition/execution-targets";
+import {
+  DEVICE_TARGET_ID_PREFIX,
+  getDefaultExecutionTarget,
+} from "../edition/execution-targets";
 import { fanOutTargets, getListFanOutTargets } from "../edition/list-fanout";
 import { invalidateRequestCache } from "./request";
 
@@ -234,12 +237,17 @@ export const agentsApi = {
   /**
    * The agent library.
    *
-   * Multi-target editions fan out: a machine you may run on has its own
-   * library, and "what can I run" is the union — the same rule projects and
-   * sessions already follow. Rows answered by a non-default target carry
-   * ``exec_target_id``, which is what makes picking one in the composer move
-   * the conversation to that machine instead of failing with "agent not
-   * found" locally.
+   * Multi-target editions fan out over MACHINES: another desktop has its own
+   * library, and "what can I run" is the union. Rows answered by a non-default
+   * target carry ``exec_target_id``, which is what makes picking one in the
+   * composer move the conversation to that machine instead of failing with
+   * "agent not found" locally.
+   *
+   * Unlike projects and sessions, a sibling runtime of the SAME account (an
+   * edition's cloud execution plane) is skipped: it materializes the account's
+   * own library, so fanning out to it lists every agent a second time under a
+   * different target rather than finding new ones. Only ``device:*`` targets
+   * hold a library this one has never seen.
    *
    * Slugs are NOT deduplicated across targets: two machines may both have an
    * "sde", and they are different agents with different instructions. The
@@ -255,7 +263,13 @@ export const agentsApi = {
   ): Promise<{ agents: Agent[] }> {
     const params = source ? `?source=${encodeURIComponent(source)}` : "";
     const cache = options?.fresh ? undefined : AGENTS_LIST_CACHE;
-    const targets = options?.baseUrl ? [] : getListFanOutTargets();
+    const machines = options?.baseUrl
+      ? []
+      : getListFanOutTargets().filter(
+          (target) =>
+            target.isDefault || target.id.startsWith(DEVICE_TARGET_ID_PREFIX),
+        );
+    const targets = machines.length >= 2 ? machines : [];
     if (targets.length === 0) {
       return fetchJson(`/v1/agents${params}`, {
         baseUrl: options?.baseUrl,
@@ -263,12 +277,14 @@ export const agentsApi = {
       });
     }
     const defaultTargetId = getDefaultExecutionTarget()?.id;
-    const outcome = await fanOutTargets((target, signal) =>
-      fetchJson<{ agents: Agent[] }>(`/v1/agents${params}`, {
-        baseUrl: target.baseUrl,
-        cache,
-        signal,
-      }),
+    const outcome = await fanOutTargets(
+      (target, signal) =>
+        fetchJson<{ agents: Agent[] }>(`/v1/agents${params}`, {
+          baseUrl: target.baseUrl,
+          cache,
+          signal,
+        }),
+      targets,
     );
     const merged: Agent[] = [];
     for (const { target, value } of outcome.values) {
