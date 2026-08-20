@@ -53,14 +53,16 @@ export interface ExecutionTarget {
   /** Glyph override; inferred from ``id`` when omitted. */
   icon?: ExecutionTargetIcon;
   /**
-   * ``false`` = routable but never offered as a choice. The target still
-   * resolves labels, icons and base URLs for entities that already live
-   * there, but the "where should this run" pickers skip it.
+   * ``false`` = the edition holds only narrow handles into this target: it can
+   * route requests for entities that already live there (labels, icons and
+   * base URLs all resolve), but it can neither create there nor enumerate it.
+   * The "where should this run" pickers skip it AND list fan-out leaves it
+   * alone — asking such a target for "your sessions" is refused by
+   * construction, which would otherwise show up as a permanent "partially
+   * unreachable" banner.
    *
-   * For targets an edition can route to without the user being able to
-   * *create* there: a session on someone else's machine reached through a
-   * narrow grant (only that session's verbs are permitted, so a new
-   * conversation aimed at it would be refused). Without this the target has
+   * The case: a session on someone else's machine reached through a grant
+   * that only permits that session's verbs. Without this flag the target has
    * to stay unregistered, and then every label lookup for its entities falls
    * back to the default target — a conversation running elsewhere claims to
    * run locally. Defaults to ``true`` when omitted.
