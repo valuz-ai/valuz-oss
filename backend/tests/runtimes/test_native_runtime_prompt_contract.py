@@ -440,6 +440,7 @@ async def test_deepagents_production_graph_has_no_host_research_controller(
     assert middleware_names == [
         "InvalidToolCallPairMiddleware",
         "ToolErrorTolerantMiddleware",
+        "WindowsPathVirtualizerMiddleware",
         "CitationEvidenceCompactionMiddleware",
     ]
     assert all("Research" not in name and "Budget" not in name for name in middleware_names)
@@ -549,6 +550,7 @@ async def test_deepagents_subagents_receive_only_the_minimal_citation_protocol(
     assert general_purpose["skills"] == ["/tmp/skills"]
     assert [type(item).__name__ for item in general_purpose["middleware"]] == [
         "InvalidToolCallPairMiddleware",
+        "WindowsPathVirtualizerMiddleware",
         "CitationEvidenceCompactionMiddleware",
     ]
     main_compaction = next(

@@ -81,6 +81,7 @@ from src.runtimes.deepagents.middleware import (
     CitationEvidenceCompactionMiddleware,
     InvalidToolCallPairMiddleware,
     ToolErrorTolerantMiddleware,
+    WindowsPathVirtualizerMiddleware,
     citation_artifact_content,
 )
 from src.runtimes.interruption import (
@@ -1626,6 +1627,7 @@ class DeepAgentsRuntime:
             "middleware": [
                 InvalidToolCallPairMiddleware(),
                 ToolErrorTolerantMiddleware(),
+                WindowsPathVirtualizerMiddleware(self.workspace_root),
                 CitationEvidenceCompactionMiddleware(
                     # Evidence Registry is shared infrastructure.  Always
                     # publish trusted source metadata to the Host; Citation
@@ -2128,6 +2130,7 @@ class DeepAgentsRuntime:
                 ),
                 "middleware": [
                     InvalidToolCallPairMiddleware(),
+                    WindowsPathVirtualizerMiddleware(self.workspace_root),
                     CitationEvidenceCompactionMiddleware(
                         evidence_registry=self._turn_evidence_registry,
                         citation_artifact_emitter=self._emit_citation_evidence,
@@ -2161,8 +2164,12 @@ class DeepAgentsRuntime:
                 else sub_def.prompt
             ),
         }
+        # Subagent ``middleware`` is additive (appended to deepagents' default
+        # stack), so always carry the Windows-path normalizer; the citation
+        # pair stays gated on the protocol as before.
+        entry["middleware"] = [WindowsPathVirtualizerMiddleware(self.workspace_root)]
         if citation_protocol:
-            entry["middleware"] = [
+            entry["middleware"] += [
                 InvalidToolCallPairMiddleware(),
                 CitationEvidenceCompactionMiddleware(
                     evidence_registry=self._turn_evidence_registry,
