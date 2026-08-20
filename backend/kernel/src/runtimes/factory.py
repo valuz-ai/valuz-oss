@@ -148,6 +148,15 @@ def create_runtime(
                 "DeepSeekHarnessRuntime requires both `model` and `model_provider` "
                 "(the dsh subprocess reads credentials from its environment)."
             )
+        if not (session.model_provider.base_url or "").strip():
+            # dsh's own empty-endpoint fallback is DeepSeek's public API —
+            # silently wrong for any other channel's key. Fail at creation
+            # with an actionable message instead of a confusing 401 later.
+            raise ValueError(
+                "DeepSeekHarnessRuntime requires an explicit `model_provider.base_url` "
+                "(the dsh adapter posts to `{base_url}/chat/completions` and has no "
+                "safe first-party default for a non-DeepSeek channel)."
+            )
         from src.runtimes.deepseek_harness.runtime import DeepSeekHarnessRuntime
 
         return DeepSeekHarnessRuntime(

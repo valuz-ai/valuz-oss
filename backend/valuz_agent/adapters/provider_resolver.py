@@ -198,6 +198,20 @@ async def resolve_model_provider(
     api_protocol = _resolve_api_protocol(provider, model_id, runtime_provider)
     base_url = _resolve_base_url(provider, api_protocol)
 
+    if runtime_provider == "deepseek_harness" and base_url is None:
+        # ``None`` normally means "the runtime SDK's ambient first-party
+        # default" — but dsh's empty-endpoint fallback is DeepSeek's public
+        # API, which is only right for the DeepSeek channel (and that one
+        # always resolves a concrete URL above). Materialize the kind's own
+        # default so e.g. an OpenAI key posts to api.openai.com, not
+        # api.deepseek.com. Kinds with no default (blank ``compatible``)
+        # stay ``None`` and are rejected by the kernel factory.
+        from valuz_agent.modules.providers.service import _PROVIDER_MAP
+
+        descriptor = _PROVIDER_MAP.get(provider.provider_kind)
+        if descriptor is not None and descriptor.default_base_url:
+            base_url = descriptor.default_base_url
+
     api_key = _resolve_api_key(provider)
     if not api_key:
         raise ProviderNotResolvable(

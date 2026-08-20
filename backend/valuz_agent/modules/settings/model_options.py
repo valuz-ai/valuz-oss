@@ -48,8 +48,8 @@ _SUBSCRIPTION_KINDS: frozenset[str] = frozenset({"claude-subscription", "codex-s
 
 # Preferred runtime when a model can run on more than one. Onboarding's one-click
 # pick uses ``default_runtime``; this order is the tie-break. claude_agent first
-# (richest reasoning), then codex, then the generic deepagents, then the
-# DeepSeek-channel-only deepseek_harness.
+# (richest reasoning), then codex, then the generic deepagents, then
+# deepseek_harness (chat-completions channels; never the one-click default).
 _RUNTIME_PRIORITY: tuple[str, ...] = ("claude_agent", "codex", "deepagents", "deepseek_harness")
 
 # provider_kind → the CLI tool the client probes / launches for login.
@@ -102,10 +102,17 @@ def runtimes_for(
     ):
         out.add("deepagents")
 
-    # deepseek_harness: the DeepSeek channel only — the dsh adapter targets
-    # DeepSeek's own endpoint/models, so other OpenAI-compatible channels
-    # don't derive it (a producer can still declare it explicitly).
-    if provider_kind == "deepseek" and (
+    # deepseek_harness: any non-subscription channel speaking the
+    # chat-completions wire — protocol-scoped, exactly like codex on the
+    # Responses wire above. The dsh adapter posts a plain
+    # ``${base_url}/chat/completions`` body (the same convention the
+    # deepagents client uses), honors the channel's endpoint via
+    # $DEEPSEEK_BASE_URL, and parses standard streaming chunks, so it is
+    # not limited to DeepSeek's own channel or models. (DeepSeek-dialect
+    # extras — ``thinking`` / ``reasoning_effort`` — only go on the wire
+    # when the agent sets effort; clear effort on a model that rejects
+    # them, same per-model rule as deepagents.)
+    if provider_kind not in _SUBSCRIPTION_KINDS and (
         protos & set(RUNTIME_REGISTRY["deepseek_harness"].supported_protocols)
     ):
         out.add("deepseek_harness")
