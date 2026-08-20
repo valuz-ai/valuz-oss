@@ -12,7 +12,7 @@
  */
 
 import { Bot } from "lucide-react";
-import { useRuntimes, useTranslation, type Agent } from "@valuz/core";
+import { useTranslation, type Agent } from "@valuz/core";
 import { modelLabel } from "@valuz/shared";
 
 import { SlotRenderer } from "@valuz/core";
@@ -32,12 +32,7 @@ function Fact({ label, value }: { label: string; value: string }) {
 
 export function RemoteAgentDetail({ agent }: { agent: Agent }) {
   const { t } = useTranslation();
-  const { runtimes } = useRuntimes();
   const resource = agent as unknown as Record<string, unknown>;
-  // Names, never ids: "claude_agent" and "deepseek-v4-pro-anthropic" are how
-  // the machine spells them, not how the product does.
-  const runtimeName =
-    runtimes.find((r) => r.id === agent.runtime)?.display_name ?? agent.runtime;
   return (
     <div className="flex flex-col gap-4 p-5">
       {/* Same identity block as a local agent: name + tag, then the plain
@@ -62,6 +57,8 @@ export function RemoteAgentDetail({ agent }: { agent: Agent }) {
         </div>
       </div>
 
+      <div className="border-b border-surface-border" />
+
       {agent.description ? (
         <p className="px-1 text-xs leading-relaxed text-ink-meta">
           {agent.description}
@@ -80,9 +77,6 @@ export function RemoteAgentDetail({ agent }: { agent: Agent }) {
       />
 
       <div className="flex flex-col">
-        {agent.runtime ? (
-          <Fact label={t("agent.runtimeLabel" as TK)} value={runtimeName} />
-        ) : null}
         {agent.skills?.length ? (
           <Fact
             label={t("agent.skillsLabel" as TK)}
