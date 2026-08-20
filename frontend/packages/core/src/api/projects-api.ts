@@ -29,6 +29,38 @@ export interface ProjectListItem {
   exec_origin?: string;
 }
 
+/**
+ * Projects an edition can reach that no execution target lists.
+ *
+ * A narrow grant (an agent shared to you, execution-endpoints.md §3) opens
+ * exactly ONE project on someone else's machine: the list fan-out cannot ask
+ * that host for its projects — it would rightly refuse — but the project the
+ * agent works in is readable and has to appear, or the user is blind to the
+ * files the agent is changing.
+ *
+ * The provider owns tagging ``exec_origin`` and feeding the origin index, so
+ * every project-scoped call routes back to the machine that answered.
+ */
+export type ExtraProjectsProvider = () => Promise<ProjectListItem[]>;
+
+let _extraProjects: ExtraProjectsProvider | null = null;
+
+export function setExtraProjectsProvider(
+  provider: ExtraProjectsProvider | null,
+): void {
+  _extraProjects = provider;
+}
+
+async function extraProjects(): Promise<ProjectListItem[]> {
+  if (!_extraProjects) return [];
+  try {
+    return await _extraProjects();
+  } catch {
+    // Never let a narrow-grant host's hiccup empty the project list.
+    return [];
+  }
+}
+
 export interface ProjectDetail extends ProjectListItem {
   instructions_md: string | null;
   /** Member slug that leads a task when the caller names none; null = unset. */
@@ -249,7 +281,13 @@ export const projectsApi = {
     // index so entity-scoped calls route to the owning backend. Zero targets
     // (OSS) keeps the single-backend path byte-identical.
     if (getListFanOutTargets().length === 0) {
-      return fetchJson("/v1/projects", { cache: PROJECTS_LIST_CACHE });
+      const [mine, extra] = await Promise.all([
+        fetchJson<{ projects: ProjectListItem[] }>("/v1/projects", {
+          cache: PROJECTS_LIST_CACHE,
+        }),
+        extraProjects(),
+      ]);
+      return { projects: [...mine.projects, ...extra] };
     }
     const outcome = await fanOutTargets((target, signal) =>
       fetchJson<{ projects: ProjectListItem[] }>("/v1/projects", {
@@ -260,6 +298,11 @@ export const projectsApi = {
     );
     const seen = new Set<string>();
     const merged: ProjectListItem[] = [];
+    for (const project of await extraProjects()) {
+      if (seen.has(project.id)) continue;
+      seen.add(project.id);
+      merged.push(project);
+    }
     for (const { target, value } of outcome.values) {
       recordEntityOrigins(value.projects.map((w) => [w.id, target.id]));
       for (const project of value.projects) {
