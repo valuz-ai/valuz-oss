@@ -10,6 +10,7 @@ from src.core.citation import (
     private_citation_tool_content,
 )
 from src.core.mcp_source_metadata import (
+    MCP_LEGACY_SOURCE_METADATA_KEY,
     MCP_SOURCE_METADATA_KEY,
     MCP_SOURCE_TRANSPORT_KEY,
     adapt_mcp_source_result,
@@ -74,6 +75,52 @@ def test_transport_preserves_meta_and_restores_original_structured_content() -> 
     assert actual_descriptor == descriptor
     assert actual_structured == structured
     assert restored == {"structured_content": structured, "existing": True}
+
+
+def test_transport_accepts_legacy_source_metadata_key() -> None:
+    structured = {"data": [{"ticker": "600519", "revenue": 1}]}
+    descriptor = _descriptor(structured, tool_name="income_statement", resources=[])
+    result = CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(structured))],
+        structuredContent=structured,
+        _meta={MCP_LEGACY_SOURCE_METADATA_KEY: descriptor},
+    )
+
+    wrapped = wrap_mcp_result_metadata_for_transport(result, server_name="reportify")
+
+    assert wrapped.structuredContent is not None
+    artifact = {"structured_content": wrapped.structuredContent}
+    actual_descriptor, actual_structured, _ = unwrap_mcp_source_transport(artifact)
+    assert actual_descriptor == descriptor
+    assert actual_structured == structured
+
+
+def test_conflicting_current_and_legacy_descriptors_fail_closed() -> None:
+    structured = {"data": [{"ticker": "600519", "revenue": 1}]}
+    current = _descriptor(structured, tool_name="income_statement", resources=[])
+    legacy = json.loads(json.dumps(current))
+    legacy["provider"]["id"] = "different"
+    result = CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(structured))],
+        structuredContent=structured,
+        _meta={
+            MCP_SOURCE_METADATA_KEY: current,
+            MCP_LEGACY_SOURCE_METADATA_KEY: legacy,
+        },
+    )
+
+    wrapped = wrap_mcp_result_metadata_for_transport(result, server_name="reportify")
+
+    assert wrapped is result
+    wire = {
+        "content": [{"type": "text", "text": json.dumps(structured)}],
+        "structuredContent": structured,
+        "_meta": {
+            MCP_SOURCE_METADATA_KEY: current,
+            MCP_LEGACY_SOURCE_METADATA_KEY: legacy,
+        },
+    }
+    assert adapt_mcp_source_result(wire, tool_name="income_statement") is None
 
 
 def test_discovery_metadata_stays_non_citable_retrieval_input() -> None:
@@ -804,6 +851,93 @@ def test_large_structured_result_registers_one_collection_and_materializes_one_a
         == 0
     )
     assert rejected.rejected_count == 1
+
+
+def test_structured_provenance_maps_original_source_without_replacing_delivery_provider() -> None:
+    payload = {
+        "data": {
+            "items": [
+                {
+                    "symbol": "US:AAPL",
+                    "metric": "revenue",
+                    "value": 100,
+                    "source_original": "SEC EDGAR",
+                    "source_url": "https://www.sec.gov/Archives/example.htm",
+                    "accession_number": "0000320193-25-000079",
+                }
+            ]
+        },
+        "meta": {"provenance": {"data_as_of": "2025-09-27"}},
+    }
+    descriptor = _descriptor(
+        payload,
+        tool_name="get_company_kpis",
+        resources=[
+            {
+                "resourceId": "company-kpis",
+                "kind": "structured-collection",
+                "authority": "authoritative",
+                "rootPointer": "",
+                "itemsPointer": "/data/items",
+                "dataset": {"id": "valuz-data.company-kpis", "revision": "v1"},
+                "identity": {"fields": ["/symbol", "/metric"]},
+                "semantics": {
+                    "entity": {"symbol": "/symbol"},
+                    "metric": {"name": "/metric"},
+                },
+                "addressing": {
+                    "mode": "json-pointer",
+                    "allowedPathRoots": ["/data/items"],
+                },
+                "provenance": {
+                    "origin": {
+                        "status": "available",
+                        "scope": "item",
+                        "mapping": {
+                            "sourceName": "/source_original",
+                            "sourceUrl": "/source_url",
+                            "documentId": "/accession_number",
+                        },
+                    },
+                    "temporal": {"dataAsOf": "/meta/provenance/data_as_of"},
+                    "derivation": {
+                        "class": "extracted",
+                        "methodRef": {
+                            "id": "valuz.company-kpi-normalization",
+                            "revision": "v1",
+                        },
+                    },
+                },
+            }
+        ],
+    )
+    descriptor["provider"] = {
+        "id": "valuz-data",
+        "name": "Valuz Data",
+        "adapterRevision": "valuz-data-source-v1",
+    }
+
+    adapted = adapt_mcp_source_result(
+        [],
+        tool_name="get_company_kpis",
+        descriptor=descriptor,
+        structured_content=payload,
+    )
+
+    assert adapted is not None and adapted.citable
+    compacted = compact_citation_tool_content(adapted.model_content)
+    private = private_citation_tool_content(adapted.model_content, model_content=compacted)
+    assert compacted is not None and private is not None
+    registry = EvidenceRegistry()
+    assert registry.register_tool_projection(compacted, private, trusted_private=True) == 1
+    handle = compacted["_valuz_evidence_hint"]["collectionHandle"]
+    record = registry.materialize_reference(handle, "#/data/items/0/value")
+    assert record is not None
+    assert record.source["providerId"] == "valuz-data"
+    assert record.source["organization"] == "SEC EDGAR"
+    assert record.source["canonicalUrl"] == "https://www.sec.gov/Archives/example.htm"
+    assert record.source["documentId"] == "0000320193-25-000079"
+    assert record.evidence["asOf"] == "2025-09-27"
 
 
 def test_tampered_business_result_rejects_metadata() -> None:

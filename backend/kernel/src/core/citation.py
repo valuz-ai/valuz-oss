@@ -197,6 +197,7 @@ class EvidenceCollectionRecord:
     common: dict[str, Any]
     addressing: dict[str, Any]
     semantics: dict[str, Any]
+    provenance: dict[str, Any]
     content_hash: str
     snapshot: Any
     tool_name: str | None
@@ -500,6 +501,10 @@ class EvidenceRegistry:
                     found, snapshot = _resolve_json_pointer(node, content_root)
                     if not found:
                         continue
+                    if content_root == "" and isinstance(snapshot, dict):
+                        snapshot = copy.deepcopy(snapshot)
+                        snapshot.pop(EVIDENCE_ENVELOPE_KEY, None)
+                        snapshot.pop(EVIDENCE_HINT_KEY, None)
                     content_hash = _content_hash(snapshot)
                     self._pending_collection_snapshots.setdefault(
                         handle,
@@ -2966,6 +2971,7 @@ def _inflate_private_collection(item: dict[str, Any], *, model_payload: Any) -> 
             if isinstance(schema_id, str):
                 common.setdefault("datasetId", schema_id)
     item.setdefault("semantics", {})
+    item.setdefault("provenance", {})
 
 
 def _collection_descriptor(collection: EvidenceCollectionRecord) -> dict[str, Any]:
@@ -2979,6 +2985,8 @@ def _collection_descriptor(collection: EvidenceCollectionRecord) -> dict[str, An
         "semantics": copy.deepcopy(collection.semantics),
         "contentHash": collection.content_hash,
     }
+    if collection.provenance:
+        descriptor["provenance"] = copy.deepcopy(collection.provenance)
     if collection.sparse_overrides:
         descriptor["sparseOverrides"] = copy.deepcopy(list(collection.sparse_overrides.values()))
     return descriptor
@@ -3814,6 +3822,96 @@ def _normalize_collection_addressing(value: Any) -> dict[str, Any] | None:
     return result
 
 
+def _normalize_collection_provenance(value: Any) -> dict[str, Any] | None:
+    if value is None or value == {}:
+        return {}
+    if not isinstance(value, dict) or set(value) - {"origin", "temporal", "derivation"}:
+        return None
+    origin = value.get("origin")
+    derivation = value.get("derivation")
+    if not isinstance(origin, dict) or not isinstance(derivation, dict):
+        return None
+    status = origin.get("status")
+    scope = origin.get("scope")
+    if status not in {"available", "not-provided", "mixed"} or scope not in {
+        "resource",
+        "item",
+    }:
+        return None
+    normalized_origin: dict[str, Any] = {"status": status, "scope": scope}
+    mapping = origin.get("mapping")
+    if mapping is not None:
+        if not isinstance(mapping, dict) or set(mapping) - {
+            "sourceName",
+            "sourceUrl",
+            "sourceId",
+            "documentId",
+            "publishedAt",
+        }:
+            return None
+        normalized_mapping: dict[str, str] = {}
+        for key, pointer in mapping.items():
+            if not isinstance(pointer, str) or _json_pointer_tokens(pointer) is None:
+                return None
+            normalized_mapping[key] = pointer
+        if normalized_mapping:
+            normalized_origin["mapping"] = normalized_mapping
+    if status == "not-provided" and "mapping" in normalized_origin:
+        return None
+    if status in {"available", "mixed"} and "mapping" not in normalized_origin:
+        return None
+
+    derivation_class = derivation.get("class")
+    if derivation_class not in {
+        "direct",
+        "normalized",
+        "extracted",
+        "aggregated",
+        "calculated",
+    } or set(derivation) - {"class", "methodRef", "inputPointers"}:
+        return None
+    normalized_derivation: dict[str, Any] = {"class": derivation_class}
+    method_ref = derivation.get("methodRef")
+    if method_ref is not None:
+        if (
+            not isinstance(method_ref, dict)
+            or set(method_ref) != {"id", "revision"}
+            or not _bounded_nonempty_string(method_ref.get("id"), _MAX_SOURCE_ID_CHARS)
+            or not _bounded_nonempty_string(method_ref.get("revision"), _MAX_SOURCE_ID_CHARS)
+        ):
+            return None
+        normalized_derivation["methodRef"] = dict(method_ref)
+    input_pointers = derivation.get("inputPointers")
+    if input_pointers is not None:
+        if (
+            not isinstance(input_pointers, list)
+            or len(input_pointers) > 64
+            or any(
+                not isinstance(pointer, str) or _json_pointer_tokens(pointer) is None
+                for pointer in input_pointers
+            )
+        ):
+            return None
+        normalized_derivation["inputPointers"] = list(input_pointers)
+
+    normalized: dict[str, Any] = {
+        "origin": normalized_origin,
+        "derivation": normalized_derivation,
+    }
+    temporal = value.get("temporal")
+    if temporal is not None:
+        if not isinstance(temporal, dict) or set(temporal) - {"dataAsOf", "observedAt"}:
+            return None
+        normalized_temporal: dict[str, str] = {}
+        for key, pointer in temporal.items():
+            if not isinstance(pointer, str) or _json_pointer_tokens(pointer) is None:
+                return None
+            normalized_temporal[key] = pointer
+        if normalized_temporal:
+            normalized["temporal"] = normalized_temporal
+    return normalized
+
+
 def _normalize_collection_semantics(value: Any) -> dict[str, Any] | None:
     if value is None:
         return {}
@@ -3971,6 +4069,7 @@ def _validate_evidence_collection(
     common = _normalize_collection_common(item.get("common"))
     addressing = _normalize_collection_addressing(item.get("addressing"))
     semantics = _normalize_collection_semantics(item.get("semantics"))
+    provenance = _normalize_collection_provenance(item.get("provenance"))
     content_hash = item.get("contentHash")
     if (
         item.get("version") != 1
@@ -3981,6 +4080,7 @@ def _validate_evidence_collection(
         or common is None
         or addressing is None
         or semantics is None
+        or provenance is None
         or not isinstance(content_hash, str)
         or len(content_hash) > 128
     ):
@@ -3994,6 +4094,15 @@ def _validate_evidence_collection(
         found, snapshot = _resolve_json_pointer(container, content_root)
         if not found:
             return None
+        if content_root == "" and isinstance(snapshot, dict):
+            # A root-scoped Collection hashes the producer's business payload.
+            # The adapter adds its private Evidence envelope only after that
+            # payload was hashed, so exclude citation transport fields when
+            # validating the model projection.  They are not source data and
+            # must never change the immutable Collection snapshot.
+            snapshot = copy.deepcopy(snapshot)
+            snapshot.pop(EVIDENCE_ENVELOPE_KEY, None)
+            snapshot.pop(EVIDENCE_HINT_KEY, None)
         actual_hash = _content_hash(snapshot)
     if actual_hash != content_hash:
         return None
@@ -4010,6 +4119,7 @@ def _validate_evidence_collection(
         common=common,
         addressing=addressing,
         semantics=semantics,
+        provenance=provenance,
         content_hash=content_hash,
         snapshot=copy.deepcopy(snapshot),
         tool_name=(
@@ -4115,6 +4225,7 @@ def _legacy_collection_records(
                     common=common,
                     addressing=addressing,
                     semantics={},
+                    provenance={},
                     content_hash=content_hash,
                     snapshot=copy.deepcopy(snapshot),
                     tool_name=first.tool_name,
@@ -4376,6 +4487,10 @@ def _materialize_collection_address(
         group="basis",
         keys=("basis",),
     )
+    provenance_as_of = _collection_provenance_temporal_value(
+        collection,
+        key="dataAsOf",
+    )
 
     fiscal_year = semantic_fiscal_year or context.get("fiscal_year") or context.get("fiscalYear")
     concrete_period = (
@@ -4462,6 +4577,7 @@ def _materialize_collection_address(
         "asOf": (
             sparse_override.get("asOf")
             or semantic_as_of
+            or provenance_as_of
             or collection.common.get("asOf")
             or context.get("asOf")
             or context.get("end_date")
@@ -4489,11 +4605,68 @@ def _materialize_collection_address(
     ).hexdigest()[:24]
     return EvidenceRecord(
         handle=f"ev_mat_{digest}",
-        source=copy.deepcopy(collection.source),
+        source=_collection_source_for_record(collection, record),
         evidence=normalized_evidence,
         locator=None,
         tool_name=collection.tool_name or str(collection.common.get("toolName") or "") or None,
     )
+
+
+def _collection_source_for_record(
+    collection: EvidenceCollectionRecord,
+    record: Any,
+) -> dict[str, Any]:
+    source = copy.deepcopy(collection.source)
+    origin = collection.provenance.get("origin")
+    if not isinstance(origin, dict) or origin.get("status") not in {"available", "mixed"}:
+        return source
+    mapping = origin.get("mapping")
+    if not isinstance(mapping, dict):
+        return source
+    base = record if origin.get("scope") == "item" and record is not None else collection.snapshot
+
+    def mapped(key: str) -> Any:
+        pointer = mapping.get(key)
+        if not isinstance(pointer, str):
+            return None
+        found, value = _resolve_json_pointer(base, pointer)
+        return value if found else None
+
+    source_name = mapped("sourceName")
+    if _bounded_nonempty_string(source_name, _MAX_SOURCE_TEXT_CHARS):
+        source["organization"] = str(source_name).strip()
+    source_url = mapped("sourceUrl")
+    if (
+        isinstance(source_url, str)
+        and len(source_url) <= _MAX_URL_CHARS
+        and _safe_canonical_url(source_url)
+    ):
+        source["canonicalUrl"] = source_url.strip()
+    source_id = mapped("sourceId")
+    if _bounded_nonempty_string(source_id, _MAX_SOURCE_ID_CHARS):
+        source["sourceId"] = str(source_id).strip()
+    document_id = mapped("documentId")
+    if _bounded_nonempty_string(document_id, _MAX_SOURCE_ID_CHARS):
+        source["documentId"] = str(document_id).strip()
+    published_at = mapped("publishedAt")
+    if _bounded_nonempty_string(published_at, 128):
+        source["publishedAt"] = str(published_at).strip()
+    return source
+
+
+def _collection_provenance_temporal_value(
+    collection: EvidenceCollectionRecord,
+    *,
+    key: str,
+) -> Any:
+    temporal = collection.provenance.get("temporal")
+    if not isinstance(temporal, dict):
+        return None
+    pointer = temporal.get(key)
+    if not isinstance(pointer, str):
+        return None
+    found, value = _resolve_json_pointer(collection.snapshot, pointer)
+    return value if found else None
 
 
 def _normalize_collection_item_pointer(
