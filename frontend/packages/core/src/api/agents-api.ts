@@ -59,6 +59,9 @@ export interface Agent {
    * reader experiences as "the tag is missing".
    */
   badge_label?: string;
+  /** Palette for {@link badge_label} — "shared" / "remote" match the library's
+   *  own tags, so the same agent reads the same in both places. */
+  badge_tone?: "shared" | "remote";
 }
 
 /** One派驻 of an agent — the project (project) it's deployed into. */
