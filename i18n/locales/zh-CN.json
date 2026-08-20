@@ -2621,7 +2621,8 @@
     "setDefaultLead": "设为默认 lead",
     "clearDefaultLead": "取消默认 lead",
     "remoteGroup": "远程",
-    "sharedGroup": "开放"
+    "sharedGroup": "分享",
+    "remoteDetailNote": "这个 Agent 运行在另一台机器上，这里只能查看。要用它，在输入框里选中它——对话会直接在那台机器上开始。"
   },
   "task": {
     "triggeredByChat": "由对话触发",
