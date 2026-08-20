@@ -1,6 +1,8 @@
 import type { EffortLevel } from "@valuz/shared";
 import { createFetchJson } from "./fetch-json";
 import { resolveApiBase } from "./base-resolver";
+import { getDefaultExecutionTarget } from "../edition/execution-targets";
+import { fanOutTargets, getListFanOutTargets } from "../edition/list-fanout";
 import { invalidateRequestCache } from "./request";
 
 let _apiBase =
@@ -229,15 +231,53 @@ function invalidateAgents(projectId?: string | null): void {
 }
 
 export const agentsApi = {
-  listAgents(
+  /**
+   * The agent library.
+   *
+   * Multi-target editions fan out: a machine you may run on has its own
+   * library, and "what can I run" is the union — the same rule projects and
+   * sessions already follow. Rows answered by a non-default target carry
+   * ``exec_target_id``, which is what makes picking one in the composer move
+   * the conversation to that machine instead of failing with "agent not
+   * found" locally.
+   *
+   * Slugs are NOT deduplicated across targets: two machines may both have an
+   * "sde", and they are different agents with different instructions. The
+   * caller distinguishes them by ``exec_target_id``.
+   *
+   * ``options.baseUrl`` addresses one specific target, so it opts out of the
+   * fan-out (that is how the fan-out asks each target, and how the composer
+   * reads a single machine's library).
+   */
+  async listAgents(
     source?: string,
     options?: ListAgentsOptions,
   ): Promise<{ agents: Agent[] }> {
     const params = source ? `?source=${encodeURIComponent(source)}` : "";
-    return fetchJson(`/v1/agents${params}`, {
-      baseUrl: options?.baseUrl,
-      cache: options?.fresh ? undefined : AGENTS_LIST_CACHE,
-    });
+    const cache = options?.fresh ? undefined : AGENTS_LIST_CACHE;
+    const targets = options?.baseUrl ? [] : getListFanOutTargets();
+    if (targets.length === 0) {
+      return fetchJson(`/v1/agents${params}`, {
+        baseUrl: options?.baseUrl,
+        cache,
+      });
+    }
+    const defaultTargetId = getDefaultExecutionTarget()?.id;
+    const outcome = await fanOutTargets((target, signal) =>
+      fetchJson<{ agents: Agent[] }>(`/v1/agents${params}`, {
+        baseUrl: target.baseUrl,
+        cache,
+        signal,
+      }),
+    );
+    const merged: Agent[] = [];
+    for (const { target, value } of outcome.values) {
+      const elsewhere = target.id !== defaultTargetId;
+      for (const agent of value.agents) {
+        merged.push(elsewhere ? { ...agent, exec_target_id: target.id } : agent);
+      }
+    }
+    return { agents: merged };
   },
 
   getAgent(slug: string): Promise<Agent> {

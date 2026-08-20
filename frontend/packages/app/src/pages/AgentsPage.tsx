@@ -53,6 +53,8 @@ import { ExportPackDialog } from "../components/ExportPackDialog";
 import {
   compareAgentsWithValurionFirst,
   isCloudOnlyAgent,
+  isRemoteAgentRow,
+  runsOnAnotherTarget,
   isSystemAgent,
 } from "./agent-list-state";
 
@@ -252,8 +254,10 @@ export const AgentsPage = () => {
   /* -- Derived state -- */
 
   const visibleAgents = agents;
+  // Bulk actions and local edit paths only ever apply to agents that live on
+  // THIS machine — never to catalog entries or to another target's library.
   const localAgents = useMemo(
-    () => agents.filter((agent) => !isCloudOnlyAgent(agent)),
+    () => agents.filter((agent) => !isRemoteAgentRow(agent)),
     [agents],
   );
 
@@ -356,10 +360,14 @@ export const AgentsPage = () => {
       opts?: { deploymentCount?: number },
     ) => {
       const AgentIcon = agentIcons.get(agent.slug) ?? Bot;
-      const cloudOnly = isCloudOnlyAgent(agent);
+      const cloudOnly = isRemoteAgentRow(agent);
+      const elsewhere = runsOnAnotherTarget(agent);
       const isChecked = checked.has(agent.slug);
-      const deploymentCount =
-        opts?.deploymentCount ?? deploymentCountBySlug.get(agent.slug) ?? 0;
+      // Deployments are indexed by slug on THIS machine; another target's
+      // agent would borrow a local namesake's count.
+      const deploymentCount = elsewhere
+        ? 0
+        : (opts?.deploymentCount ?? deploymentCountBySlug.get(agent.slug) ?? 0);
       return (
         <div
           className={`group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors select-none ${
@@ -656,9 +664,11 @@ export const AgentsPage = () => {
                         <div className="flex flex-col gap-3">
                           {unassignedAgents.map((agent) => (
                             <div
-                              key={agent.slug}
+                              key={`${agent.exec_target_id ?? ""}:${agent.slug}`}
                               onClick={() => {
-                                if (isCloudOnlyAgent(agent)) return;
+                                // Same slug can exist on several machines; a
+                                // detail view here would open the local one.
+                                if (isRemoteAgentRow(agent)) return;
                                 if (selecting) {
                                   if (!isSystemAgent(agent)) {
                                     toggleChecked(agent.slug);
@@ -669,7 +679,7 @@ export const AgentsPage = () => {
                                 setActiveProjectMemberKey(null);
                               }}
                               className={
-                                isCloudOnlyAgent(agent)
+                                isRemoteAgentRow(agent)
                                   ? "cursor-default"
                                   : "cursor-pointer"
                               }
