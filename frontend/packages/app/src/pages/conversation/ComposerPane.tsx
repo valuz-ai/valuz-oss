@@ -359,6 +359,24 @@ export function ComposerPane({
           agentLocked={selectedSession != null}
           onAgentChange={(slug) => {
             setSelectedAgentSlug(slug);
+            // An agent that lives on another backend brings its location with
+            // it: follow it, or the draft would be sent to a backend that has
+            // never heard of this agent. Same resets as picking that location
+            // by hand — provider/model ids are backend-local, and a project
+            // belongs to one backend.
+            const agentTarget = slug
+              ? composerAgents.find((a) => a.slug === slug)?.execTargetId
+              : undefined;
+            if (agentTarget && agentTarget !== execTargetId) {
+              setExecTargetId(agentTarget);
+              setSelectedProviderId(null);
+              setSelectedModelId(null);
+              const current = projects.find((w) => w.id === selectedProjectId);
+              if (current && (current.exec_origin ?? "local") !== agentTarget) {
+                setSelectedProjectId("chat-default");
+                setSelectedComposerSkill(null);
+              }
+            }
             // Switching to an agent re-seeds runtime/model/effort from that
             // agent's brain. Picking "Default" (slug = null) keeps whatever
             // you already chose in the rows below — don't reset it.

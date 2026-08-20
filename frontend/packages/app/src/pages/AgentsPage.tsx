@@ -29,7 +29,10 @@ import {
   PopoverTrigger,
   SegmentedControl,
 } from "@valuz/ui";
-import { ResourceActionSlot } from "../components/ResourceActionSlot";
+import {
+  ResourceActionSlot,
+  ResourceTitleBadgeSlot,
+} from "../components/ResourceActionSlot";
 import {
   agentsApi,
   projectsApi,
@@ -389,6 +392,10 @@ export const AgentsPage = () => {
                   {t("agent.systemBadge" as Parameters<typeof t>[0])}
                 </span>
               )}
+              <ResourceTitleBadgeSlot
+                resourceType="agent"
+                resource={agent as unknown as Record<string, unknown>}
+              />
               {deploymentCount > 0 && (
                 <span className="inline-flex h-5 shrink-0 items-center rounded-sm bg-surface-soft px-1.5 py-0 text-micro leading-none text-ink-meta">
                   {t("agent.deployedInProjects" as Parameters<typeof t>[0], {

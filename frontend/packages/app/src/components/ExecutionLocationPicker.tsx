@@ -14,6 +14,7 @@
 
 import {
   getDefaultExecutionTarget,
+  selectableExecutionTargets,
   useEntityOrigin,
   useExecutionTargets,
   useTranslation,
@@ -37,7 +38,9 @@ export function ExecutionLocationPicker({
   className,
 }: ExecutionLocationPickerProps) {
   const { t } = useTranslation();
-  const targets = useExecutionTargets();
+  // Only offer targets the user may create on; unselectable ones (a session
+  // reached through a narrow grant) still resolve labels below.
+  const targets = selectableExecutionTargets(useExecutionTargets());
   if (targets.length < 2) return null;
   const active = value ?? getDefaultExecutionTarget()?.id ?? targets[0]!.id;
   return (

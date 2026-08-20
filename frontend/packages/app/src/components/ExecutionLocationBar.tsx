@@ -19,6 +19,7 @@
 
 import {
   getDefaultExecutionTarget,
+  selectableExecutionTargets,
   useExecutionTargets,
   useTranslation,
 } from "@valuz/core";
@@ -82,6 +83,9 @@ export function ExecutionLocationBar({
 }: ExecutionLocationBarProps) {
   const { t } = useTranslation();
   const targets = useExecutionTargets();
+  // Choices exclude unselectable targets; ``targets`` itself still resolves
+  // the label of wherever this conversation actually runs.
+  const targetChoices = selectableExecutionTargets(targets);
   const multiTarget = targets.length >= 2;
 
   const selectedProject =
@@ -178,7 +182,7 @@ export function ExecutionLocationBar({
               className="min-w-[160px]"
               onCloseAutoFocus={(e) => e.preventDefault()}
             >
-              {targets.map((target) => {
+              {targetChoices.map((target) => {
                 const Icon = executionTargetIcon(target.id, target);
                 return (
                   <DropdownMenuItem

@@ -32,11 +32,19 @@
  */
 
 import { useSyncExternalStore } from "react";
-import { getExecutionTargets, type ExecutionTarget } from "./execution-targets";
+import {
+  getExecutionTargets,
+  selectableExecutionTargets,
+  type ExecutionTarget,
+} from "./execution-targets";
 
 /** Targets to fan a list call out to; [] = single-backend fast path. */
 export function getListFanOutTargets(): ExecutionTarget[] {
-  const targets = getExecutionTargets();
+  // Unselectable targets are narrow grants (see ExecutionTarget.selectable):
+  // they answer for the entities the edition already holds, not for "list
+  // everything you have". Fanning out to one only ever yields a refusal, and
+  // a refusal here is what raises the "list may be incomplete" banner.
+  const targets = selectableExecutionTargets(getExecutionTargets());
   return targets.length >= 2 ? targets : [];
 }
 

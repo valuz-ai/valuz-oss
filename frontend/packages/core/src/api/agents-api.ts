@@ -39,6 +39,14 @@ export interface Agent {
   deletable: boolean;
   /** Preset icon key or uploaded asset URL (08-agents-module v2); null = unset. */
   avatar: string | null;
+  /**
+   * Execution target this agent runs on, when it is not "wherever you are".
+   * An edition can list an agent that only exists on another backend (a
+   * colleague's desktop reached through a relay, say); picking it in the
+   * composer moves the conversation there instead of failing with "agent not
+   * found" against the local backend. Absent = runs on the active target.
+   */
+  exec_target_id?: string;
 }
 
 /** One派驻 of an agent — the project (project) it's deployed into. */

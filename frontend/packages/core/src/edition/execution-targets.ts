@@ -53,6 +53,22 @@ export interface ExecutionTarget {
   /** Glyph override; inferred from ``id`` when omitted. */
   icon?: ExecutionTargetIcon;
   /**
+   * ``false`` = the edition holds only narrow handles into this target: it can
+   * route requests for entities that already live there (labels, icons and
+   * base URLs all resolve), but it can neither create there nor enumerate it.
+   * The "where should this run" pickers skip it AND list fan-out leaves it
+   * alone — asking such a target for "your sessions" is refused by
+   * construction, which would otherwise show up as a permanent "partially
+   * unreachable" banner.
+   *
+   * The case: a session on someone else's machine reached through a grant
+   * that only permits that session's verbs. Without this flag the target has
+   * to stay unregistered, and then every label lookup for its entities falls
+   * back to the default target — a conversation running elsewhere claims to
+   * run locally. Defaults to ``true`` when omitted.
+   */
+  selectable?: boolean;
+  /**
    * Edition-provided directory chooser for a target whose filesystem is NOT
    * this machine's but can still be browsed (a remote desktop reached
    * through the relay). When set, the create-project / create-KB dialogs
@@ -81,6 +97,13 @@ export interface ExecutionTargetDirectory {
  * flow: the backend is remote AND cannot offer its own directory chooser.
  * ``undefined`` (single-target builds) → false.
  */
+/** Targets the user may pick when creating something (see {@link ExecutionTarget.selectable}). */
+export function selectableExecutionTargets(
+  targets: readonly ExecutionTarget[],
+): ExecutionTarget[] {
+  return targets.filter((target) => target.selectable !== false);
+}
+
 export function targetUsesManagedCwd(target: ExecutionTarget | null | undefined): boolean {
   return target?.remote === true && typeof target.selectDirectory !== "function";
 }

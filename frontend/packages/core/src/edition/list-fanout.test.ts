@@ -35,6 +35,22 @@ describe("getListFanOutTargets", () => {
     setExecutionTargets([LOCAL, CLOUD]);
     expect(getListFanOutTargets().map((t) => t.id)).toEqual(["local", "cloud"]);
   });
+
+  it("skips narrow-grant targets — they cannot be enumerated", () => {
+    // Fanning out to one only yields a refusal, which would pin the
+    // "list may be incomplete" banner on forever.
+    setExecutionTargets([
+      { id: "local", labelKey: "l", baseUrl: "http://local" },
+      { id: "cloud", labelKey: "c", baseUrl: "http://cloud" },
+      {
+        id: "device:owner-mac",
+        labelKey: "d",
+        baseUrl: "http://relay/owner-mac",
+        selectable: false,
+      },
+    ]);
+    expect(getListFanOutTargets().map((t) => t.id)).toEqual(["local", "cloud"]);
+  });
 });
 
 describe("fanOutTargets", () => {
