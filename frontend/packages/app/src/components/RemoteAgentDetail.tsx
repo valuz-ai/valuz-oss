@@ -57,8 +57,6 @@ export function RemoteAgentDetail({ agent }: { agent: Agent }) {
         </div>
       </div>
 
-      <div className="border-b border-surface-border" />
-
       {agent.description ? (
         <p className="px-1 text-xs leading-relaxed text-ink-meta">
           {agent.description}
@@ -68,6 +66,8 @@ export function RemoteAgentDetail({ agent }: { agent: Agent }) {
       <p className="rounded-md bg-surface-soft px-3 py-2 text-xs leading-relaxed text-ink-meta">
         {t("agent.remoteDetailNote" as TK)}
       </p>
+
+      <div className="border-b border-surface-border" />
 
       {/* Editions add what only they can know about an agent on another
           machine — the conversations you have had with it, say. */}
