@@ -2340,8 +2340,21 @@ def _extract_full_thinking(output: Any) -> str:
 def _extract_usage(output: Any) -> dict[str, int] | None:
     """Project LangChain's ``UsageMetadata`` onto our four flat token fields.
 
-    LangChain has no notion of cache_write/creation, so cache_write_tokens
-    is always zero on the deepagents path.
+    LangChain's ``input_tokens`` is the SUM of every input bucket — its own
+    ``total_tokens`` is ``input_tokens + output_tokens`` — and
+    ``input_token_details.cache_read`` / ``cache_creation`` are subsets of it.
+    The cross-runtime contract is the opposite: the four flat fields are
+    DISJOINT, because every usage surface adds them up (session panel,
+    monthly rollup, task usage, billing meter). Passing LangChain's total
+    through unchanged therefore counted the cached prefix twice — on a real
+    session, a turn with 77,859 prompt tokens of which 75,904 were cache hits
+    was reported as 153,763, +97%, and dragged the displayed cache hit rate
+    down from 97.5% to 49.4%. Subtract the cached buckets out, the same way
+    the codex runtime does with ``cached_input_tokens``.
+
+    The ``response_metadata`` fallback below carries no cache detail at all,
+    so its ``prompt_tokens`` is reported as fully uncached — nothing to
+    subtract, and no double count either.
     """
     if output is None:
         return None
@@ -2354,7 +2367,7 @@ def _extract_usage(output: Any) -> dict[str, int] | None:
             cache_read = int(details.get("cache_read", 0) or 0)
             cache_write = int(details.get("cache_creation", 0) or 0)
         return {
-            "input_tokens": int(metadata.get("input_tokens", 0)),
+            "input_tokens": max(0, int(metadata.get("input_tokens", 0)) - cache_read - cache_write),
             "output_tokens": int(metadata.get("output_tokens", 0)),
             "cache_read_tokens": cache_read,
             "cache_write_tokens": cache_write,
