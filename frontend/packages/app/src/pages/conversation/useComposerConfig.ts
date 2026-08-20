@@ -216,6 +216,9 @@ export function useComposerConfig({
           runtimeList.find((r) => r.id === a.runtime)?.display_name ??
           a.runtime,
         modelLabel: modelLabel(a.model),
+        // Agents that live on another backend carry it — picking one moves
+        // the conversation there (see ComposerPane's onAgentChange).
+        execTargetId: a.exec_target_id,
       }));
     }
     return projectAgents.map((m) => ({

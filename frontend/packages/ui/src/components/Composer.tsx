@@ -250,6 +250,11 @@ export interface ComposerAgentItem {
   runtimeLabel: string;
   /** Model id / label shown as subtext. */
   modelLabel: string;
+  /**
+   * Execution target this agent runs on. Set by editions for agents hosted
+   * elsewhere; the conversation follows the agent when one is picked.
+   */
+  execTargetId?: string;
 }
 
 export interface ComposerProjectItem {

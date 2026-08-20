@@ -6,6 +6,7 @@ import {
   getDefaultExecutionTarget,
   getDefaultRuntimeLocation,
   getExecutionTargets,
+  selectableExecutionTargets,
   setDefaultRuntimeLocation,
   setExecutionTargets,
   useDefaultRuntimeLocation,
@@ -134,5 +135,28 @@ describe("targetUsesManagedCwd", () => {
         selectDirectory: async () => ({ path: "/Users/me/proj" }),
       }),
     ).toBe(false);
+  });
+});
+
+describe("selectableExecutionTargets", () => {
+  it("should keep targets that do not say otherwise", () => {
+    expect(selectableExecutionTargets([LOCAL, CLOUD])).toEqual([LOCAL, CLOUD]);
+  });
+
+  it("should drop targets an edition marked unselectable", () => {
+    // Routable but not offerable: a session hosted on someone else's machine
+    // resolves its label and base URL here, yet must never be a *choice* when
+    // creating something new.
+    const shared = {
+      id: "device:owner-mac",
+      labelKey: "k",
+      baseUrl: "http://relay/owner-mac",
+      remote: true,
+      selectable: false,
+    };
+    expect(selectableExecutionTargets([LOCAL, shared, CLOUD])).toEqual([
+      LOCAL,
+      CLOUD,
+    ]);
   });
 });

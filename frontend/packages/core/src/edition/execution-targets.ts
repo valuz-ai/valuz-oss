@@ -53,6 +53,20 @@ export interface ExecutionTarget {
   /** Glyph override; inferred from ``id`` when omitted. */
   icon?: ExecutionTargetIcon;
   /**
+   * ``false`` = routable but never offered as a choice. The target still
+   * resolves labels, icons and base URLs for entities that already live
+   * there, but the "where should this run" pickers skip it.
+   *
+   * For targets an edition can route to without the user being able to
+   * *create* there: a session on someone else's machine reached through a
+   * narrow grant (only that session's verbs are permitted, so a new
+   * conversation aimed at it would be refused). Without this the target has
+   * to stay unregistered, and then every label lookup for its entities falls
+   * back to the default target — a conversation running elsewhere claims to
+   * run locally. Defaults to ``true`` when omitted.
+   */
+  selectable?: boolean;
+  /**
    * Edition-provided directory chooser for a target whose filesystem is NOT
    * this machine's but can still be browsed (a remote desktop reached
    * through the relay). When set, the create-project / create-KB dialogs
@@ -81,6 +95,13 @@ export interface ExecutionTargetDirectory {
  * flow: the backend is remote AND cannot offer its own directory chooser.
  * ``undefined`` (single-target builds) → false.
  */
+/** Targets the user may pick when creating something (see {@link ExecutionTarget.selectable}). */
+export function selectableExecutionTargets(
+  targets: readonly ExecutionTarget[],
+): ExecutionTarget[] {
+  return targets.filter((target) => target.selectable !== false);
+}
+
 export function targetUsesManagedCwd(target: ExecutionTarget | null | undefined): boolean {
   return target?.remote === true && typeof target.selectDirectory !== "function";
 }
