@@ -391,6 +391,7 @@ class SessionService:
     ) -> list[SessionListItem]:
         if user_id is None:
             raise ValueError("user_id is required")
+        await project_index.ensure_legacy_session_index(user_id)
         # Task-internal sessions (lead / dispatched sub-runs, user_id: str | None = None) belong to
         # tasks and are reachable from the task detail page; the sidebar
         # 对话 rail only wants user-initiated chats. The host-side
