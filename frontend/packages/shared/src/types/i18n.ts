@@ -205,6 +205,7 @@ export type KnownI18nKey =
   | "agent.proposalSkills"
   | "agent.proposalUnnamed"
   | "agent.readonlyHint"
+  | "agent.remoteDetailNote"
   | "agent.remoteGroup"
   | "agent.runtime"
   | "agent.runtimeDesc"

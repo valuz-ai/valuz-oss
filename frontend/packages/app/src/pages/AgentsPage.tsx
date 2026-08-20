@@ -48,12 +48,14 @@ import type { ResourceCategory } from "@valuz/shared";
 import { useProjectOutlet } from "@valuz/app/layout";
 import { pickAgentIcon } from "../components/agent-icons";
 import { AgentDetailView } from "../components/AgentDetailView";
+import { RemoteAgentDetail } from "../components/RemoteAgentDetail";
 import { CreateAgentDialog } from "../components/CreateAgentDialog";
 import { ImportPackDialog } from "../components/ImportPackDialog";
 import { ExportPackDialog } from "../components/ExportPackDialog";
 import {
   agentRowId,
   agentTargetKind,
+  isCloudOnlyAgent,
   compareAgentsWithValurionFirst,
   isRemoteAgentRow,
   runsOnAnotherTarget,
@@ -147,6 +149,11 @@ export const AgentsPage = () => {
   );
   const [loading, setLoading] = useState(true);
   const [activeSlug, setActiveSlug] = useState<string | null>(null);
+  // A row from another machine cannot be "the active slug": slugs resolve
+  // against THIS machine's library, so it would land on a local namesake or on
+  // nothing — which is why clicking one used to bounce back to the default
+  // agent a moment later. Hold the row itself instead.
+  const [activeRemote, setActiveRemote] = useState<Agent | null>(null);
   const [activeProjectMemberKey, setActiveProjectMemberKey] = useState<
     string | null
   >(null);
@@ -346,8 +353,9 @@ export const AgentsPage = () => {
   // Keep the detail panel stable across tab switches: honour the explicit
   // selection if it still exists, otherwise fall back to the first agent in
   // the active tab (then any agent at all).
-  const currentAgent =
-    localAgents.find((a) => a.slug === activeSlug) ?? localAgents[0] ?? null;
+  const currentAgent = activeRemote
+    ? activeRemote
+    : (localAgents.find((a) => a.slug === activeSlug) ?? localAgents[0] ?? null);
   const effectiveActiveSlug = currentAgent?.slug ?? null;
   const effectiveProjectMemberKey =
     activeProjectMemberKey ??
@@ -377,13 +385,20 @@ export const AgentsPage = () => {
     }
     setRightPanel(
       <div className="h-full overflow-y-auto">
-        {/* key by slug: remount on agent change so per-agent dialog/draft
+        {/* key by row: remount on agent change so per-agent dialog/draft
             state (delete confirm, edits, deploy) never leaks across agents. */}
-        <AgentDetailView
-          key={currentAgent.slug}
-          slug={currentAgent.slug}
-          onChanged={loadData}
-        />
+        {runsOnAnotherTarget(currentAgent) ? (
+          <RemoteAgentDetail
+            key={agentRowId(currentAgent)}
+            agent={currentAgent}
+          />
+        ) : (
+          <AgentDetailView
+            key={currentAgent.slug}
+            slug={currentAgent.slug}
+            onChanged={loadData}
+          />
+        )}
       </div>,
     );
     return () => setRightPanel(null);
@@ -751,16 +766,26 @@ export const AgentsPage = () => {
                 // remote agent shares its slug with the local namesake.
                 getId={agentRowId}
                 selectedId={
-                  effectiveActiveSlug ? `local:${effectiveActiveSlug}` : null
+                  activeRemote
+                    ? agentRowId(activeRemote)
+                    : effectiveActiveSlug
+                      ? `local:${effectiveActiveSlug}`
+                      : null
                 }
                 onSelect={(a: Agent) => {
-                  // A row from another machine has no local detail to open —
-                  // the local backend has never heard of that slug.
-                  if (isRemoteAgentRow(a)) return;
+                  if (runsOnAnotherTarget(a)) {
+                    // Selectable, but read-only: its instructions and
+                    // resources live on that machine.
+                    setActiveRemote(a);
+                    setActiveProjectMemberKey(null);
+                    return;
+                  }
+                  if (isCloudOnlyAgent(a)) return;
                   if (selecting) {
                     if (!isSystemAgent(a)) toggleChecked(a.slug);
                     return;
                   }
+                  setActiveRemote(null);
                   setActiveSlug(a.slug);
                   setActiveProjectMemberKey(null);
                 }}

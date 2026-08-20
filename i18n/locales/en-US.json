@@ -2621,7 +2621,8 @@
     "setDefaultLead": "Set as default lead",
     "clearDefaultLead": "Clear default lead",
     "remoteGroup": "Remote",
-    "sharedGroup": "Open"
+    "sharedGroup": "Shared",
+    "remoteDetailNote": "This agent lives on another machine, so it is read-only here. To use it, pick it in the composer — the conversation starts over there."
   },
   "task": {
     "triggeredByChat": "Triggered by a conversation",
