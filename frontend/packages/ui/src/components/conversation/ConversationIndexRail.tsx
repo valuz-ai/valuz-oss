@@ -244,7 +244,9 @@ export function ConversationIndexRail({
           const isNear =
             hover !== null && Math.abs(index - hover.pointer) <= MAGNIFY_RADIUS;
           const failed = Boolean(turn.failedMessage);
-          const halted = Boolean(turn.cancelled || turn.interrupted);
+          const halted = Boolean(
+            turn.cancelled || turn.interrupted || turn.budgetHalt,
+          );
           return (
             <button
               key={turn.id}

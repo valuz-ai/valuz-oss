@@ -194,8 +194,8 @@ class AgentConfigSchema(BaseModel):
     runtime_provider: RuntimeProvider = "claude_agent"
     instructions: str = ""
     permission_mode: Literal["default", "auto_review", "full_access"] = "full_access"
-    max_turns: int = 50
-    max_cost_usd: float = 10.0
+    max_turns: int = 1000
+    max_cost_usd: float = 500.0
     tools: list[ToolDefSchema] = Field(default_factory=list)
     callable_agents: list[SubAgentDefSchema] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)

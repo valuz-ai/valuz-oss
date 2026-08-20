@@ -576,6 +576,8 @@ I18nKey = Literal[
     "conversation.bgTask.running",
     "conversation.brainOverride",
     "conversation.browsedPages",
+    "conversation.budgetHaltCost",
+    "conversation.budgetHaltTurns",
     "conversation.calledServer",
     "conversation.calledSkills",
     "conversation.calledTools",

@@ -66,8 +66,20 @@ class AgentConfig:
 
     permission_mode: Literal["default", "auto_review", "full_access"] = "full_access"
 
-    max_turns: int = 50
-    max_cost_usd: float = 10.0
+    # Per-CLI-PROCESS budgets, not per-session and not per-turn: the claude
+    # runtime bakes them into the subprocess at spawn (``--max-turns`` /
+    # ``--max-budget-usd``) and the CLI compares its own running totals
+    # against them, so the counters only reset when the warm runtime is
+    # rebuilt. ``max_cost_usd`` is spent against the CLI's OWN price table,
+    # which has nothing to do with what a gateway model actually bills —
+    # on a long context a single turn can "cost" several dollars of it.
+    # The old 10.0 therefore turned into a silent hard stop a few turns into
+    # any large session (turn accepted, zero model calls, ``budget_exhausted``)
+    # and un-stuck itself only when the runtime happened to respawn. These are
+    # backstops against a runaway loop, not a spend control — spend belongs to
+    # whoever owns the billing ledger.
+    max_turns: int = 1000
+    max_cost_usd: float = 500.0
 
     # Default effort prefilled into ``session.model_settings.effort`` at
     # session create. The runtime reads the session value, not this one
