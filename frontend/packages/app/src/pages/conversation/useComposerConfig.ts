@@ -206,11 +206,19 @@ export function useComposerConfig({
   // Label of the target an agent declares, when it is somewhere else than the
   // conversation currently runs. Undefined otherwise — no chip for the
   // ordinary "runs where you are" case.
+  // An agent that runs somewhere else says WHAT it is, not which box it sits
+  // in: 分享 (a host lent you this one agent) vs 远程 (your own other desktop),
+  // the same two words the library groups by. The device name is already on
+  // the location chip below the composer, so repeating it here — often a long
+  // hostname — only crowded the row.
   const agentTargetBadge = useCallback(
     (agentTargetId: string | undefined): string | undefined => {
       if (!agentTargetId || agentTargetId === providerTargetId) return undefined;
       const target = executionTargets.find((t) => t.id === agentTargetId);
-      return target ? t(target.labelKey as Parameters<typeof t>[0]) : undefined;
+      if (!target) return undefined;
+      return t(
+        target.selectable === false ? "agent.sharedGroup" : "agent.remoteGroup",
+      );
     },
     [executionTargets, providerTargetId, t],
   );
