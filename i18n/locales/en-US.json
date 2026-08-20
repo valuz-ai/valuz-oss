@@ -395,6 +395,8 @@
     "runFailed": "Run failed",
     "userCancelled": "You cancelled this conversation",
     "runtimeInterrupted": "Conversation interrupted — you can retry",
+    "budgetHaltCost": "This turn stopped early because the runtime hit its cost ceiling — the model did not refuse. Retrying usually continues; if several turns in a row stop this way, this conversation's context has grown too large and you should start a new one.",
+    "budgetHaltTurns": "This turn stopped early because the runtime hit its maximum step count. Retry to continue the unfinished work.",
     "runtimeLocked": "Runtime locked at session creation. Start a new chat to switch.",
     "saveSkillSuccess": "Saved {name} to skill library",
     "searchSkill": "Search skills...",

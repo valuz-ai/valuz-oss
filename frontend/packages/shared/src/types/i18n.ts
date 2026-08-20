@@ -567,6 +567,8 @@ export type KnownI18nKey =
   | "conversation.bgTask.running"
   | "conversation.brainOverride"
   | "conversation.browsedPages"
+  | "conversation.budgetHaltCost"
+  | "conversation.budgetHaltTurns"
   | "conversation.calledServer"
   | "conversation.calledSkills"
   | "conversation.calledTools"

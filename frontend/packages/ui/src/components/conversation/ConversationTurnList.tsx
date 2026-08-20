@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  AlertTriangle,
   Check,
   ChevronRight,
   Copy,
@@ -971,6 +972,17 @@ const TurnRow = memo(
       : turn.interrupted
         ? t("conversation.runtimeInterrupted")
         : null;
+    // A budget stop is neither a cancel nor an error, and the kernel records
+    // the turn as COMPLETED — so it gets its own notice instead of the quiet
+    // grey line. It must stay legible even when it is the ONLY thing in the
+    // turn: a ``max_cost`` stop is rejected by the CLI before any model call,
+    // leaving zero blocks, which used to render as an unexplained blank reply.
+    const budgetLabel =
+      turn.budgetHalt === "max_cost"
+        ? t("conversation.budgetHaltCost" as Parameters<typeof t>[0])
+        : turn.budgetHalt === "max_turns"
+          ? t("conversation.budgetHaltTurns" as Parameters<typeof t>[0])
+          : null;
     const actionText = assistantText || interruptLabel || "";
 
     // Turn-level meta: total elapsed (max of any block's elapsedMs) and
@@ -1364,9 +1376,19 @@ const TurnRow = memo(
               </div>
             ) : null}
 
+            {budgetLabel ? (
+              <div className="my-1.5 flex items-start gap-2 rounded-lg border border-warning-border bg-warning-light px-3 py-2 text-sm text-warning-text">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{budgetLabel}</span>
+              </div>
+            ) : null}
+
             {!inFlight &&
             !turn.failedMessage &&
-            (assistantText || turn.cancelled || turn.interrupted) ? (
+            (assistantText ||
+              turn.cancelled ||
+              turn.interrupted ||
+              turn.budgetHalt) ? (
               <MessageActions
                 text={actionText}
                 onRetry={onRetry ? () => onRetry(turn.id) : undefined}
