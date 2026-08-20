@@ -499,7 +499,7 @@ class CodexRuntime:
 
             completed: TurnCompletedNotification | None = None
             error_message: str | None = None
-            usage_payload: dict[str, Any] | None = None
+            usage_tracker = _TurnUsageTracker()
             saw_compaction = False
             saw_model_event = False
 
@@ -568,11 +568,10 @@ class CodexRuntime:
 
                     usage = extract_token_usage(notification)
                     if usage is not None:
-                        latest_usage_payload = _usage_payload_from_token_usage(
-                            usage.token_usage, self.model
-                        )
-                        if latest_usage_payload is not None:
-                            usage_payload = latest_usage_payload
+                        # One notification per model request; a turn that
+                        # calls the model more than once produces several,
+                        # and all of them belong to this turn's increment.
+                        usage_tracker.observe(usage.token_usage)
 
                     if extract_goal_cleared(notification) and session.mode == "goal":
                         # Slice 6 of session-modes: codex-core fires
@@ -602,10 +601,6 @@ class CodexRuntime:
                     turn_done = extract_turn_completed(notification)
                     if turn_done is not None:
                         completed = turn_done
-                        # final usage from ``Turn`` itself when the running
-                        # token-usage stream didn't catch the last update.
-                        if usage_payload is None:
-                            usage_payload = _empty_usage_payload(self.model)
                         break
             finally:
                 await stream.aclose()
@@ -655,8 +650,22 @@ class CodexRuntime:
             if is_compact and completed is not None and not saw_compaction:
                 await self.event_sink.emit(Event(type="compaction", data={}))
 
-            if usage_payload is not None:
-                await self.event_sink.emit(Event(type="usage_update", data=usage_payload))
+            # A turn that reached ``turn/completed`` reports its spend even
+            # when no usage notification arrived (an all-local turn) — an
+            # explicit zero, so the message row records "this turn cost
+            # nothing" rather than leaving the field empty.
+            turn_totals = usage_tracker.totals()
+            if turn_totals is not None:
+                await self.event_sink.emit(
+                    Event(
+                        type="usage_update",
+                        data=_usage_payload_from_turn_totals(turn_totals, self.model),
+                    )
+                )
+            elif completed is not None:
+                await self.event_sink.emit(
+                    Event(type="usage_update", data=_empty_usage_payload(self.model))
+                )
 
         except asyncio.CancelledError:
             session.status = "idle"
@@ -2046,26 +2055,92 @@ def _stop_reason_from_turn(turn_done: TurnCompletedNotification) -> StopReason:
     return BudgetExhausted(reason="max_turns")
 
 
-def _usage_payload_from_token_usage(usage: Any, model: str) -> dict[str, Any] | None:
-    """Project Codex's latest-turn usage onto our four flat fields.
+_BREAKDOWN_FIELDS = (
+    "input_tokens",
+    "cached_input_tokens",
+    "output_tokens",
+    "reasoning_output_tokens",
+    "total_tokens",
+)
 
-    ``ThreadTokenUsage.total`` is a cumulative thread snapshot, whereas
-    ``last`` is the most recent turn's increment. Message rows are summed for
-    session/monthly reports, so persisting ``total`` on every message would
-    recount all earlier turns. Codex also reports cached input as a subset of
-    ``input_tokens`` and reasoning as a separate output bucket; normalize the
-    flat fields to the cross-runtime contract (uncached input, all output,
-    cache read, cache write) before they leave the runtime.
-    """
-    last = getattr(usage, "last", None)
-    if last is None:
+
+def _breakdown_fields(breakdown: Any) -> dict[str, int] | None:
+    """Read one ``TokenUsageBreakdown`` into a plain int map."""
+    if breakdown is None:
         return None
-    total_input = int(last.input_tokens or 0)
-    cache_read = int(last.cached_input_tokens or 0)
-    reasoning_output = int(last.reasoning_output_tokens or 0)
+    return {field: int(getattr(breakdown, field, 0) or 0) for field in _BREAKDOWN_FIELDS}
+
+
+class _TurnUsageTracker:
+    """Accumulate ONE turn's token spend from codex's usage notifications.
+
+    Codex emits ``thread/tokenUsage/updated`` once per model request, and its
+    ``ThreadTokenUsage`` carries two views: ``total`` is cumulative for the
+    thread, ``last`` covers only the request that just finished. Neither is
+    the turn: a turn that calls the model twice (the common tool-use shape)
+    produces two notifications, so keeping just the newest ``last`` — what
+    this runtime used to do by overwriting the payload each time — silently
+    dropped every request but the final one. On a real 3-turn session that
+    lost 69,193 of the first turn's 70,974 input tokens.
+
+    Differencing ``total`` across the turn is exact and, unlike summing
+    ``last``, survives a repeated or coalesced notification. The pre-turn
+    baseline is recovered from the first notification (``total - last``), so
+    nothing has to be carried across turns — a resumed thread that restores
+    its cumulative counter cannot leak into the next turn's numbers.
+    ``last``-summing stays as the fallback for a payload with no ``total``.
+    """
+
+    def __init__(self) -> None:
+        self._baseline: dict[str, int] | None = None
+        self._latest: dict[str, int] | None = None
+        self._summed: dict[str, int] = dict.fromkeys(_BREAKDOWN_FIELDS, 0)
+        self._saw_any = False
+
+    def observe(self, thread_usage: Any) -> None:
+        last = _breakdown_fields(getattr(thread_usage, "last", None))
+        total = _breakdown_fields(getattr(thread_usage, "total", None))
+        if last is None and total is None:
+            return
+        self._saw_any = True
+        if total is not None:
+            if self._baseline is None:
+                self._baseline = {
+                    field: max(0, total[field] - (last or {}).get(field, 0))
+                    for field in _BREAKDOWN_FIELDS
+                }
+            self._latest = total
+        if last is not None:
+            for field in _BREAKDOWN_FIELDS:
+                self._summed[field] += last[field]
+
+    def totals(self) -> dict[str, int] | None:
+        """This turn's spend, or None if no usage notification arrived."""
+        if not self._saw_any:
+            return None
+        if self._latest is None or self._baseline is None:
+            return dict(self._summed)
+        return {
+            field: max(0, self._latest[field] - self._baseline[field])
+            for field in _BREAKDOWN_FIELDS
+        }
+
+
+def _usage_payload_from_turn_totals(totals: dict[str, int], model: str) -> dict[str, Any]:
+    """Project one turn's codex totals onto our four flat fields.
+
+    Codex reports cached input as a subset of ``input_tokens`` (so the
+    uncached remainder is the cross-runtime ``input_tokens``) and reasoning
+    as a subset of ``output_tokens`` — its own ``total_tokens`` is
+    ``input_tokens + output_tokens`` with reasoning nowhere added, which is
+    how we know. Adding reasoning on top of output, as this used to, counted
+    the reasoning tokens twice.
+    """
+    cache_read = totals["cached_input_tokens"]
+    reasoning_output = totals["reasoning_output_tokens"]
     flat = {
-        "input_tokens": max(0, total_input - cache_read),
-        "output_tokens": int(last.output_tokens or 0) + reasoning_output,
+        "input_tokens": max(0, totals["input_tokens"] - cache_read),
+        "output_tokens": totals["output_tokens"],
         "cache_read_tokens": cache_read,
         "cache_write_tokens": 0,
     }
@@ -2074,7 +2149,7 @@ def _usage_payload_from_token_usage(usage: Any, model: str) -> dict[str, Any] | 
         model: {
             **flat,
             "reasoning_output_tokens": reasoning_output,
-            "total_tokens": int(last.total_tokens or 0),
+            "total_tokens": totals["total_tokens"],
         }
     }
     return payload

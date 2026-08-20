@@ -345,14 +345,29 @@ logs land under `.ai/dev/{backend,frontend}.log`.
   `Message` row is the durable per-turn record that every usage surface sums
   (session panel, monthly rollup, task usage, billing meter), so a runtime
   whose SDK reports a cumulative counter must difference two snapshots before
-  emitting: codex uses `ThreadTokenUsage.last` (not `.total`), and claude
-  differences the CLI's process-wide `modelUsage` accumulator
+  emitting: claude differences the CLI's process-wide `modelUsage` accumulator
   (`ClaudeAgentRuntime._usage_delta_payload`, baseline dropped with the CLI
-  subprocess). Add/subtract rules for the per-model breakdown live in
+  subprocess), codex differences `ThreadTokenUsage.total` across the turn
+  (`_TurnUsageTracker`; the pre-turn baseline is recovered from the first
+  notification's `total - last`, so nothing crosses a turn boundary). A turn
+  is NOT one model request — every runtime here can call the model several
+  times per turn, so an SDK's per-request view has to be accumulated, not
+  latched. Add/subtract rules for the per-model breakdown live in
   `src/core/usage.py` — counters accumulate, `contextWindow`/`canonicalModel`
   and friends do not. Note that the CLI's accumulator also counts requests it
   never writes to its transcript (conversation-title generation, ~540 input
   tokens a session), so kernel totals legitimately exceed a `.jsonl` replay.
+- **The four flat token fields are DISJOINT** — `input_tokens` is the
+  *uncached* prompt, with cache hits in `cache_read_tokens` / writes in
+  `cache_write_tokens`, and `output_tokens` already contains reasoning
+  tokens. Consumers add all four up, so any bucket that is a *subset*
+  upstream must be subtracted out in the runtime: codex's
+  `cached_input_tokens` ⊂ `input_tokens` and `reasoning_output_tokens` ⊂
+  `output_tokens` (its `total_tokens = input + output` is the proof);
+  LangChain's `usage_metadata.input_tokens` is the sum of every input bucket
+  with `input_token_details.cache_read` / `cache_creation` inside it.
+  Anthropic's shape is natively disjoint and dsh declares disjointness in its
+  `TokenUsage` contract, so those two pass through.
 - **`rg`** (ripgrep) is a runtime helper for `integrations/docs_embedded`,
   located via the `VALUZ_RG_PATH` env the Electron sidecar sets to the packaged
   `libexec/rg`. The binary is vendored per platform at
