@@ -243,7 +243,9 @@ export function useComposerConfig({
         // names that place, so the dropdown says where a pick would run
         // instead of silently relocating the draft.
         execTargetId: a.exec_target_id,
-        badgeLabel: agentTargetBadge(a.exec_target_id),
+        // The row's own tag wins: it is a fact about the agent, not about
+        // whether its target happens to be registered right now.
+        badgeLabel: a.badge_label || agentTargetBadge(a.exec_target_id),
       }));
     }
     return projectAgents.map((m) => ({
