@@ -341,6 +341,18 @@ logs land under `.ai/dev/{backend,frontend}.log`.
   `autoCompactWindow` — the CLI reports that key as the window in `/context`;
   codex `model_context_window`, whose auto-compact limit codex derives at 90%
   and clamps any explicit value to). Never guess it from a model name.
+- **`usage_update` carries ONE TURN's increment**, never a running total. A
+  `Message` row is the durable per-turn record that every usage surface sums
+  (session panel, monthly rollup, task usage, billing meter), so a runtime
+  whose SDK reports a cumulative counter must difference two snapshots before
+  emitting: codex uses `ThreadTokenUsage.last` (not `.total`), and claude
+  differences the CLI's process-wide `modelUsage` accumulator
+  (`ClaudeAgentRuntime._usage_delta_payload`, baseline dropped with the CLI
+  subprocess). Add/subtract rules for the per-model breakdown live in
+  `src/core/usage.py` — counters accumulate, `contextWindow`/`canonicalModel`
+  and friends do not. Note that the CLI's accumulator also counts requests it
+  never writes to its transcript (conversation-title generation, ~540 input
+  tokens a session), so kernel totals legitimately exceed a `.jsonl` replay.
 - **`rg`** (ripgrep) is a runtime helper for `integrations/docs_embedded`,
   located via the `VALUZ_RG_PATH` env the Electron sidecar sets to the packaged
   `libexec/rg`. The binary is vendored per platform at

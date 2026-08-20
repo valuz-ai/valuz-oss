@@ -53,6 +53,7 @@ from src.core.types import (
     Session,
     UserMessage,
 )
+from src.core.usage import merge_model_usage
 from src.core.workspace import bootstrap_session_workspace
 
 # Per-session callable injected into runtimes that wire ``approve_for_session``.
@@ -638,7 +639,17 @@ class _MessageObserverSink:
                 self.usage = {key: self.usage.get(key, 0) + value for key, value in current.items()}
             raw_model_usage = event.data.get("model_usage")
             if isinstance(raw_model_usage, dict):
-                self.model_usage = copy.deepcopy(raw_model_usage)
+                # Every ``usage_update`` is one disjoint increment, so a turn
+                # that produces several of them (claude interleaving a
+                # wake-up turn's result before its own) must ADD the
+                # per-model breakdowns the same way the flat fields above
+                # are added — overwriting would leave ``model_usage``
+                # describing only the last fragment of the turn.
+                self.model_usage = (
+                    copy.deepcopy(raw_model_usage)
+                    if self.model_usage is None
+                    else merge_model_usage(self.model_usage, raw_model_usage)
+                )
 
         elif event.type == "todo_update":
             raw_todos = event.data.get("todos")

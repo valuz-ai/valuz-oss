@@ -107,6 +107,7 @@ from src.core.types import (
     UserMessage,
     is_bare_completion,
 )
+from src.core.usage import diff_model_usage
 
 # Approval bridge — pure helpers live in ``approval_bridge.py``; we
 # re-export them here so existing call sites importing from
@@ -400,6 +401,11 @@ class ClaudeAgentRuntime:
         self.egress_descriptor = egress_descriptor
         self._client: ClaudeSDKClient | None = None
         self._active_client: ClaudeSDKClient | None = None
+        # Last cumulative usage snapshot echoed by the CLI, kept so every
+        # ``usage_update`` we emit carries a disjoint increment. Cleared
+        # with the client: a fresh CLI process restarts its accumulator at
+        # zero, so the next snapshot IS the delta.
+        self._usage_snapshot: dict[str, Any] | None = None
         # tool_use ids for TodoWrite calls in the current turn — used to
         # drop the matching ToolResultBlock from the outbound stream.
         self._todo_tool_use_ids: set[str] = set()
@@ -1038,7 +1044,7 @@ class ClaudeAgentRuntime:
                     await self.event_sink.emit(
                         Event(
                             type="usage_update",
-                            data=_build_usage_payload(self.model, msg),
+                            data=self._usage_delta_payload(msg),
                         )
                     )
                     continue
@@ -1097,7 +1103,7 @@ class ClaudeAgentRuntime:
                     await self.event_sink.emit(
                         Event(
                             type="usage_update",
-                            data=_build_usage_payload(self.model, msg),
+                            data=self._usage_delta_payload(msg),
                         )
                     )
                     await self.event_sink.emit(
@@ -1482,6 +1488,10 @@ class ClaudeAgentRuntime:
         self._bracket_open = False
         self._open_bracket_is_wakeup = False
         self._pending_wakeups = 0
+        # The CLI process owns the cumulative usage counter this runtime
+        # differences against; a rebuilt CLI starts it at zero again, so a
+        # baseline that outlived its process would swallow the next turn.
+        self._usage_snapshot = None
         # Background processes die with the CLI subprocess — flush a terminal
         # event for each so the persisted stream never claims a task is
         # running on a dead runtime. Best-effort: destroy may run during
@@ -1513,6 +1523,55 @@ class ClaudeAgentRuntime:
             finally:
                 self._client = None
                 self._active_client = None
+
+    def _usage_delta_payload(self, result_msg: Any) -> dict[str, Any]:
+        """Turn the CLI's cumulative usage counter into THIS turn's increment.
+
+        The Claude CLI keeps one per-model usage accumulator for the whole
+        process (``Ot.modelUsage``, reset only by a conversation reset) and
+        echoes it on every ``result`` message. Persisting that snapshot as
+        the turn's usage made every message row carry "everything spent so
+        far", so summing rows — which is exactly what the session panel, the
+        monthly rollup and the billing meter do — recounted earlier turns:
+        a 3-turn session reported ~3x its real input tokens, and a turn that
+        issued no request at all (a local slash command) reported a full
+        copy of the previous turn's total.
+
+        Differencing against the last snapshot makes every emitted
+        ``usage_update`` a disjoint increment, which also makes the two
+        snapshots a single turn can produce (an interleaved wake-up turn
+        plus our own result) additive instead of double-counted. A counter
+        that moved backwards means the CLI restarted or reset its
+        conversation mid-flight; drop the stale baseline and take the fresh
+        snapshot whole rather than clamping the turn to zero.
+        """
+        snapshot = _build_cumulative_usage_snapshot(self.model, result_msg)
+        previous = self._usage_snapshot
+        self._usage_snapshot = snapshot
+        if previous is not None and any(
+            int(snapshot.get(field) or 0) < int(previous.get(field) or 0)
+            for field in _FLAT_USAGE_FIELDS
+        ):
+            previous = None
+
+        delta: dict[str, Any] = {
+            field: max(0, int(snapshot.get(field) or 0) - int((previous or {}).get(field) or 0))
+            for field in _FLAT_USAGE_FIELDS
+        }
+        per_model = snapshot.get("model_usage")
+        if isinstance(per_model, dict):
+            base = (previous or {}).get("model_usage")
+            delta["model_usage"] = diff_model_usage(
+                base if isinstance(base, dict) else None, per_model
+            )
+        else:
+            delta["model_usage"] = per_model
+        if "cost_usd" in snapshot:
+            cost = float(snapshot.get("cost_usd") or 0.0) - float(
+                (previous or {}).get("cost_usd") or 0.0
+            )
+            delta["cost_usd"] = max(0.0, cost)
+        return delta
 
     def _on_stderr_line(self, line: str) -> None:
         """Callback wired into ``ClaudeAgentOptions.stderr``. Pushes the
@@ -3255,7 +3314,7 @@ class ClaudeAgentRuntime:
                             message=_result_error_message(message),
                         )
 
-            usage_payload = _build_usage_payload(self.model, message)
+            usage_payload = self._usage_delta_payload(message)
             await self.event_sink.emit(Event(type="usage_update", data=usage_payload))
 
             num_turns = message.num_turns or 1
@@ -3435,6 +3494,15 @@ def _load_persisted_tool_result_content(
         return None
 
 
+# The cross-runtime flat token fields every ``usage_update`` carries.
+_FLAT_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+)
+
+
 def _normalize_anthropic_usage(raw: Any) -> dict[str, int]:
     """Project the Anthropic-native usage shape onto our four flat fields.
 
@@ -3467,12 +3535,19 @@ def _normalize_anthropic_usage(raw: Any) -> dict[str, int]:
     }
 
 
-def _build_usage_payload(default_model: str, result_msg: Any) -> dict[str, Any]:
-    """Build the ``usage_update`` event payload from a ResultMessage.
+def _build_cumulative_usage_snapshot(default_model: str, result_msg: Any) -> dict[str, Any]:
+    """Project a ResultMessage's usage onto our payload shape, AS REPORTED.
 
     Aggregate fields are the totals across all models that participated in
     the run (e.g. main agent + sub-agents). ``model_usage`` retains the
     SDK-native per-model breakdown so consumers can do per-model attribution.
+
+    What the SDK reports here is **cumulative for the CLI process**, not this
+    turn: the CLI records every model request (including ones it never writes
+    to the transcript, e.g. conversation-title generation) into one global
+    per-model accumulator and echoes that accumulator on every ``result``
+    message. Callers must difference two snapshots before emitting a
+    ``usage_update`` — see ``ClaudeAgentRuntime._usage_delta_payload``.
     """
     raw_usage = getattr(result_msg, "usage", None) or {}
     raw_model_usage = getattr(result_msg, "model_usage", None)
