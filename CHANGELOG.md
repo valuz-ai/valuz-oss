@@ -7,6 +7,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-08-21
+
+### Added
+
+- **The agent library is a union across execution targets** — on editions that
+  reach more than one machine, the library lists every reachable machine's
+  agents, grouped by where they came from, in the ALL tab too. A row keeps its
+  own identity once two machines are listed (a slug is not a row id), an agent
+  from elsewhere is selectable and stays selected, and a target that cannot be
+  picked as a destination is still routable for the rows it owns
+  (#957 @St0neWan9, #959 @St0neWan9, #960 @St0neWan9, #961 @St0neWan9,
+  #963 @St0neWan9, #964 @St0neWan9, #965 @St0neWan9, #967 @St0neWan9).
+- **An edition can contribute projects no execution target lists** — a narrow
+  grant opens exactly one project on someone else's machine, and the list
+  fan-out cannot ask that host for its projects; the project the agent works in
+  now appears anyway (#968 @St0neWan9).
+- **Agent rows say where they came from** — the composer's agent lists carry the
+  row's own tag, in the library's palette, so an agent from elsewhere states
+  what it is rather than where it sits (#970 @St0neWan9, #973 @St0neWan9,
+  #974 @St0neWan9, #975 @St0neWan9).
+- **A read-only detail page for an agent someone shared with you** — it reads
+  like a local agent's header (names, not ids), a rule separates the header from
+  the activity list, and an overlay can inject sections beneath it
+  (#976 @St0neWan9, #977 @St0neWan9, #978 @St0neWan9, #979 @St0neWan9,
+  #980 @St0neWan9).
+- **Remote-desktop execution targets** — a distinct glyph for a remote desktop
+  target, plus an edition-aware directory chooser (#931 @St0neWan9).
+- **Message index rail** — a rail pinned to the left of the transcript for
+  jumping between messages in a long conversation (#934 @St0neWan9).
+- **`deepseek_harness` derives per protocol** — any non-subscription channel
+  speaking the chat-completions wire offers it, mirroring how Codex derives for
+  any Responses-wire channel, instead of only the `deepseek` provider kind
+  (#966 @jiaoqsh).
+- **MCP source provenance in citations** — reads `dev.valuz/source-metadata`
+  while preserving the legacy `cn.valuz/citation-source` descriptor, and fails
+  closed when the two conflict (#972 @St0neWan9).
+- **Opaque per-turn runtime context** — a runtime-context port whose marker
+  values materialize only in the runtime's session copy, leaving persisted
+  session snapshots untouched (#947 @homeant); a task's title is snapshotted
+  into its lead and member execution sessions so billing attribution needs no
+  extra lookup (#950 @homeant).
+- **`CLAUDE_CODE_MAX_CONTEXT_TOKENS`** — the declared context window is exported
+  to the Claude Agent runtime (#941 @jiaoqsh).
+- **Date-partitioned managed workspace directories** — managed project and chat
+  workspaces move off a flat `<project_root>/<project_id>` layout to dated,
+  unguessable directories (#943 @Ready22Race).
+
+### Changed
+
+- **The project grid is the knowledge grid** — the project list renders the same
+  tile cards, on the same measured grid, as the knowledge page; both size from
+  one shared rule (#981 @St0neWan9). The marketplace's single-agent card footer
+  lines up with the team card the same way (#945 @St0neWan9).
+- **Each runtime owns its compaction threshold** — the host declares the context
+  window and stops dictating when to compact (#946 @jiaoqsh).
+- **Task creation returns as soon as the task is registered** — the lead starts
+  behind the response instead of holding the HTTP request for the whole bring-up
+  (#937 @Ready22Race).
+
+### Fixed
+
+- **Turns silently dropped when the runtime budget was exhausted** — messages
+  near the end of a long conversation produced no output, no error and no label
+  (#971 @tutu).
+- **Usage accounting per turn** — Claude's `usage_update` carries one turn rather
+  than the running total, and every model request in a turn is counted with each
+  token bucket counted once (#955 @jiaoqsh, #956 @jiaoqsh).
+- **Sessions** — a user message is recorded for a turn that never started
+  (#951 @Ready22Race); the runtime context is carried on fork and prepare, not
+  only on run (#952 @Ready22Race); a one-time reconciliation backfills the
+  legacy project-session index before activity and history reads
+  (#958 @zhourongyu); `task_id` rides the session detail so "Fork from here" is
+  decided by one predicate and stays hidden inside a task's sessions
+  (#939 @Ready22Race, #940 @Ready22Race).
+- **A swallowed interrupt no longer fails a later completed turn** as
+  `CancelledError` (#936 @jiaoqsh).
+- **In-workspace Windows absolute paths** are accepted by the DeepAgents file
+  tools (#969 @jiaoqsh).
+- **i18n** — each request is answered in the language it asked for
+  (#942 @St0neWan9); route labels are i18n keys (#954 @St0neWan9); the page-title
+  fallback stops passing the branding app name through `t()` (#935 @St0neWan9).
+- **The degraded re-probe could stop for the rest of the session** (#938
+  @St0neWan9).
+- **Editing an agent's instructions** is no longer reverted by a background
+  re-fetch while you type (#944 @St0neWan9).
+- **The desktop splash progress advances continuously** instead of jumping
+  (#948 @St0neWan9).
+- **The dead "Switch model" action** is gone from the conversation error card
+  (#949 @Ready22Race).
+
+### Docs & Chore
+
+- **Release pipeline** — CI purges the CDN after overwriting a live manifest
+  (#930 @St0neWan9), a purge failure can no longer fail the release
+  (#953 @St0neWan9), a recovery workflow rebuilds the single-arch versioned mac
+  manifests (#933 @St0neWan9), and the rollback runbook is corrected so
+  rollback is actually safe (#932 @St0neWan9).
+- Agents test fixture satisfies `ExecutionTarget` (#962 @St0neWan9).
+
 ## [0.4.2] - 2026-08-18
 
 ### Added
