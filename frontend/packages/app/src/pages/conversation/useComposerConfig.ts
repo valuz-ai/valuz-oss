@@ -6,6 +6,7 @@ import {
   useComposerProviderChannelState,
   useComposerAgentLibrary,
   useComposerProviders,
+  useTranslation,
   type ExecutionTarget,
   type MemberWithAgent,
   type ProjectDetail,
@@ -101,6 +102,7 @@ export function useComposerConfig({
   // The route id is authoritative during navigation. ``selectedSessionId``
   // intentionally lags until session detail resolves, so preferring it here
   // would briefly query the previous conversation's execution target.
+  const { t } = useTranslation();
   const defaultRuntimeLocation = useDefaultRuntimeLocation();
   const providerSessionId = id !== NEW_SESSION_ID ? id : null;
   const sessionExecOrigin = useEntityOrigin(providerSessionId, "session");
@@ -201,6 +203,18 @@ export function useComposerConfig({
   // chip: 临时对话 → the "我的" library (``myAgents``); a project → its
   // 派驻 member roster (``projectAgents``). Runtime ids are mapped to their
   // display names so the dropdown reads "Claude Agent · mimo-v2.5-pro".
+  // Label of the target an agent declares, when it is somewhere else than the
+  // conversation currently runs. Undefined otherwise — no chip for the
+  // ordinary "runs where you are" case.
+  const agentTargetBadge = useCallback(
+    (agentTargetId: string | undefined): string | undefined => {
+      if (!agentTargetId || agentTargetId === providerTargetId) return undefined;
+      const target = executionTargets.find((t) => t.id === agentTargetId);
+      return target ? t(target.labelKey as Parameters<typeof t>[0]) : undefined;
+    },
+    [executionTargets, providerTargetId, t],
+  );
+
   const composerAgents = useMemo<ComposerAgentItem[]>(() => {
     if (isTempConversation) {
       // Pin the built-in Valurion to the top of
@@ -217,8 +231,11 @@ export function useComposerConfig({
           a.runtime,
         modelLabel: modelLabel(a.model),
         // Agents that live on another backend carry it — picking one moves
-        // the conversation there (see ComposerPane's onAgentChange).
+        // the conversation there (see ComposerPane's onAgentChange). The chip
+        // names that place, so the dropdown says where a pick would run
+        // instead of silently relocating the draft.
         execTargetId: a.exec_target_id,
+        badgeLabel: agentTargetBadge(a.exec_target_id),
       }));
     }
     return projectAgents.map((m) => ({
@@ -231,7 +248,7 @@ export function useComposerConfig({
         "",
       modelLabel: modelLabel(m.agent?.model ?? ""),
     }));
-  }, [isTempConversation, myAgents, projectAgents, runtimeList]);
+  }, [agentTargetBadge, isTempConversation, myAgents, projectAgents, runtimeList]);
 
   // The brain (runtime / model / provider / effort) of the currently bound
   // agent. It seeds the override controls' defaults; an untouched override

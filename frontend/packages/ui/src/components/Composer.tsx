@@ -255,6 +255,12 @@ export interface ComposerAgentItem {
    * elsewhere; the conversation follows the agent when one is picked.
    */
   execTargetId?: string;
+  /**
+   * Short chip shown next to the name — where this agent runs, when that is
+   * not "here". Derived from the execution-target registry, so the edition
+   * owns the wording.
+   */
+  badgeLabel?: string;
 }
 
 export interface ComposerProjectItem {
@@ -2505,8 +2511,15 @@ export const Composer = ({
                                     }}
                                   >
                                     <span className="flex min-w-0 flex-1 flex-col">
-                                      <span className="truncate text-[12.5px] text-ink-heading">
-                                        {a.name}
+                                      <span className="flex min-w-0 items-center gap-1.5">
+                                        <span className="truncate text-[12.5px] text-ink-heading">
+                                          {a.name}
+                                        </span>
+                                        {a.badgeLabel && (
+                                          <span className="shrink-0 rounded-sm bg-surface-soft px-1 py-0 text-micro leading-[1.4] text-ink-meta">
+                                            {a.badgeLabel}
+                                          </span>
+                                        )}
                                       </span>
                                       <span className="truncate text-2xs text-ink-meta">
                                         {a.runtimeLabel} · {a.modelLabel}
