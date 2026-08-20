@@ -223,6 +223,16 @@ export function useComposerConfig({
     [executionTargets, providerTargetId, t],
   );
 
+  const agentTargetTone = useCallback(
+    (agentTargetId: string | undefined): "shared" | "remote" | undefined => {
+      if (!agentTargetId || agentTargetId === providerTargetId) return undefined;
+      const target = executionTargets.find((t) => t.id === agentTargetId);
+      if (!target) return undefined;
+      return target.selectable === false ? "shared" : "remote";
+    },
+    [executionTargets, providerTargetId],
+  );
+
   const composerAgents = useMemo<ComposerAgentItem[]>(() => {
     if (isTempConversation) {
       // Pin the built-in Valurion to the top of
@@ -246,6 +256,7 @@ export function useComposerConfig({
         // The row's own tag wins: it is a fact about the agent, not about
         // whether its target happens to be registered right now.
         badgeLabel: a.badge_label || agentTargetBadge(a.exec_target_id),
+        badgeTone: a.badge_tone ?? agentTargetTone(a.exec_target_id),
       }));
     }
     return projectAgents.map((m) => ({
@@ -258,7 +269,14 @@ export function useComposerConfig({
         "",
       modelLabel: modelLabel(m.agent?.model ?? ""),
     }));
-  }, [agentTargetBadge, isTempConversation, myAgents, projectAgents, runtimeList]);
+  }, [
+    agentTargetBadge,
+    agentTargetTone,
+    isTempConversation,
+    myAgents,
+    projectAgents,
+    runtimeList,
+  ]);
 
   // The brain (runtime / model / provider / effort) of the currently bound
   // agent. It seeds the override controls' defaults; an untouched override
