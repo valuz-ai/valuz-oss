@@ -3125,5 +3125,17 @@
     "comingSoon": "即将接入",
     "comingSoonDesc": "该资源类型将在后续步骤接入本页面。",
     "emptyDetail": "从左侧选择一项查看详情"
+  },
+  "route": {
+    "projectDetail": "项目详情",
+    "agentDetail": "智能体详情",
+    "skillDetail": "技能详情",
+    "automationDetail": "自动化详情",
+    "onboarding": "初始设置",
+    "componentGallery": "组件库",
+    "apiKeyConfig": "API Key 配置",
+    "toolCalls": "工具调用",
+    "contextPanel": "上下文面板",
+    "overlays": "浮层预览"
   }
 }
