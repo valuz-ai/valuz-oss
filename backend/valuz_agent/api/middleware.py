@@ -5,6 +5,11 @@ import uuid
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from valuz_agent.i18n import (
+    parse_accept_language,
+    reset_request_locale,
+    set_request_locale,
+)
 from valuz_agent.infra.auth_context import (
     OwnerContextUnsetError,
     reset_current_user_id,
@@ -17,6 +22,35 @@ from valuz_agent.infra.logging import (
 )
 
 logger = logging.getLogger("valuz_agent.api.access")
+
+
+class LocaleMiddleware(BaseHTTPMiddleware):
+    """Bind the request's ``Accept-Language`` so server-side text answers in
+    the caller's language.
+
+    Without this, everything the backend renders — ``t()`` strings, and the
+    marketplace category labels the index returns per ``locale`` — followed a
+    *process-wide* locale pushed once at startup from one user's stored
+    preference. That is wrong in two ways: a cloud process serves many users
+    at once, and the commercial desktop never pushes at all (its
+    ``VALUZ_INITIALIZE_USER_CONTENT_ON_STARTUP=false`` short-circuits
+    ``boot.steps.configure_i18n``), so a client set to 中文 was answered in
+    English until it happened to change the setting again.
+
+    The client already sends the header on every request; this just makes the
+    backend believe it. Falls back to the pushed/stored locale when the header
+    is absent (non-browser callers, internal probes).
+    """
+
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        header = request.headers.get("Accept-Language")
+        token = set_request_locale(parse_accept_language(header) if header else None)
+        try:
+            return await call_next(request)
+        finally:
+            reset_request_locale(token)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
