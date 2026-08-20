@@ -67,7 +67,9 @@ export function RemoteAgentDetail({ agent }: { agent: Agent }) {
         {t("agent.remoteDetailNote" as TK)}
       </p>
 
-      <div className="border-b border-surface-border" />
+      {/* Full-bleed: the rule marks where the header ends, so it runs the
+          width of the panel rather than the width of the text. */}
+      <div className="-mx-5 border-b border-surface-border" />
 
       {/* Editions add what only they can know about an agent on another
           machine — the conversations you have had with it, say. */}
