@@ -35,9 +35,7 @@ import {
 } from "../components/ResourceActionSlot";
 import {
   agentsApi,
-  getDefaultExecutionTarget,
   projectsApi,
-  useExecutionTargets,
   useExecutionTargetsRevision,
   usePanelStore,
   useResourceCategories,
@@ -54,16 +52,16 @@ import { CreateAgentDialog } from "../components/CreateAgentDialog";
 import { ImportPackDialog } from "../components/ImportPackDialog";
 import { ExportPackDialog } from "../components/ExportPackDialog";
 import {
+  agentRowId,
   agentTargetKind,
   compareAgentsWithValurionFirst,
-  isCloudOnlyAgent,
   isRemoteAgentRow,
   runsOnAnotherTarget,
   isSystemAgent,
 } from "./agent-list-state";
 
 /** Keep the always-present built-in agent separate from portable agents. */
-function buildAgentCategories(
+export function buildAgentCategories(
   t: ReturnType<typeof useTranslation>["t"],
 ): ResourceCategory<Agent>[] {
   // Agents that live somewhere else get their own two groups rather than
@@ -201,7 +199,6 @@ export const AgentsPage = () => {
 
   /* -- Data loading -- */
 
-  const executionTargets = useExecutionTargets();
   const targetsRevision = useExecutionTargetsRevision();
 
   const mountedRef = useRef(true);
@@ -214,7 +211,15 @@ export const AgentsPage = () => {
       const projectRows = projectRes.projects.filter(
         (w) => w.kind === "project",
       );
-      const agentsBySlug = new Map(agentRes.agents.map((a) => [a.slug, a]));
+      // Project members are deployments on THIS machine, so they resolve
+      // against this machine's library. Indexing every row by slug let a
+      // remote namesake (the fan-out appends those after the local ones)
+      // overwrite the local agent and take over its row.
+      const agentsBySlug = new Map(
+        agentRes.agents
+          .filter((a) => !runsOnAnotherTarget(a))
+          .map((a) => [a.slug, a]),
+      );
       const memberResults = await Promise.all(
         projectRows.map(async (project) => {
           try {
@@ -330,44 +335,13 @@ export const AgentsPage = () => {
     const deployed = new Set(projectMembers.map((member) => member.sourceSlug));
     return agents
       .filter((agent) => !deployed.has(agent.slug))
-      // Agents that live on another machine get their own section below —
-      // inline they would read as duplicates of the local ones (both machines
-      // ship the same built-ins) with no way to tell which is which.
+      // Agents that live on another machine are not part of THIS machine's
+      // project layout at all — they are grouped on the 全部 Agent tab
+      // (buildAgentCategories: 远程 / 开放).
       .filter((agent) => !runsOnAnotherTarget(agent))
       .sort(compareAgentsWithValurionFirst);
   }, [agents, projectMembers]);
 
-  /**
-   * Agents that do not live on this machine, split by how you got them:
-   *
-   * - **remote** — one of your own desktops, reached by remote control. You
-   *   may create there, so its target is selectable.
-   * - **shared** — a host that opened a single agent to you. Narrow grant:
-   *   the target is registered so the location chip can name it, but it is
-   *   never a "create here" choice.
-   *
-   * Kept out of the local groups on purpose: both machines ship the same
-   * built-ins, so inline they read as duplicates with nothing to tell them
-   * apart.
-   */
-  const offMachineGroups = useMemo(() => {
-    const defaultId = getDefaultExecutionTarget()?.id;
-    const remote: Agent[] = [];
-    const shared: Agent[] = [];
-    for (const agent of agents) {
-      const targetId = agent.exec_target_id;
-      if (!targetId || targetId === defaultId) continue;
-      const target = executionTargets.find((t) => t.id === targetId);
-      const narrowGrant = target
-        ? target.selectable === false
-        : isCloudOnlyAgent(agent);
-      (narrowGrant ? shared : remote).push(agent);
-    }
-    return {
-      remote: remote.sort(compareAgentsWithValurionFirst),
-      shared: shared.sort(compareAgentsWithValurionFirst),
-    };
-  }, [agents, executionTargets]);
 
   // Keep the detail panel stable across tab switches: honour the explicit
   // selection if it still exists, otherwise fall back to the first agent in
@@ -767,56 +741,18 @@ export const AgentsPage = () => {
                       )}
                     </section>
                   )}
-                  {(
-                    [
-                      ["_remote", offMachineGroups.remote, "agent.remoteGroup"],
-                      ["_shared", offMachineGroups.shared, "agent.sharedGroup"],
-                    ] as const
-                  ).map(([key, rows, labelKey]) =>
-                    rows.length === 0 ? null : (
-                      <section key={key}>
-                        <button
-                          type="button"
-                          onClick={() => toggleProjectGroup(key)}
-                          className="label-mono mb-3 flex w-full cursor-default items-center gap-1.5 text-left transition-colors hover:text-ink-body"
-                        >
-                          {collapsedProjectGroups.has(key) ? (
-                            <ChevronRight className="h-3 w-3" />
-                          ) : (
-                            <ChevronDown className="h-3 w-3" />
-                          )}
-                          <span className="min-w-0 flex-1 truncate">
-                            {t(labelKey)}
-                          </span>
-                          <span className="ml-1 text-ink-meta">
-                            {rows.length}
-                          </span>
-                        </button>
-                        {!collapsedProjectGroups.has(key) && (
-                          <div className="flex flex-col gap-3">
-                            {rows.map((agent) => (
-                              <div
-                                key={`${agent.exec_target_id ?? ""}:${agent.slug}`}
-                                className="cursor-default"
-                              >
-                                {renderAgentRow(agent, false, {
-                                  deploymentCount: 0,
-                                })}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </section>
-                    ),
-                  )}
                 </div>
               )
             ) : (
               <CategorizedList
                 items={visibleAgents}
                 categories={categories}
-                selectedId={effectiveActiveSlug}
-                getId={(a: Agent) => a.slug}
+                // Rows, not slugs: the bucketing dedupes on this id, and a
+                // remote agent shares its slug with the local namesake.
+                getId={agentRowId}
+                selectedId={
+                  effectiveActiveSlug ? `local:${effectiveActiveSlug}` : null
+                }
                 onSelect={(a: Agent) => {
                   // A row from another machine has no local detail to open —
                   // the local backend has never heard of that slug.
