@@ -71,14 +71,10 @@ import { usePlatform } from "@valuz/app/platform";
 import { useTranslation, useResourceCategories } from "@valuz/core";
 import type { ResourceCategory } from "@valuz/shared";
 import { CreateKbDialog } from "../components";
+import { useCardGridColumns } from "../hooks/use-card-grid-columns";
 import { OriginIcon } from "../components/ExecutionLocationPicker";
 
 type UiStatus = "ready" | "indexing" | "failed" | "queued" | "missing";
-
-const KB_CARD_MIN_WIDTH = 240;
-const KB_CARD_PREFERRED_MIN_WIDTH = 280;
-const KB_CARD_MAX_WIDTH = 360;
-const KB_CARD_GAP = 12;
 
 const KB_ICON_RULES: Array<{ keywords: string[]; icon: LucideIcon }> = [
   {
@@ -299,6 +295,9 @@ export const KnowledgePage = ({
   const [health, setHealth] = useState<DocsHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const kbIcons = useMemo(() => getUniqueKbIcons(kbs), [kbs]);
+  const { ref: kbGridRef, columns: kbGridColumns } = useCardGridColumns(
+    kbs.length,
+  );
   const kbCategories = useResourceCategories<KbListItem>(
     "kb",
     useMemo(() => buildKbCategories(t), [t]),
@@ -330,9 +329,7 @@ export const KnowledgePage = ({
   const [dragOver, setDragOver] = useState(false);
   const [dropping, setDropping] = useState(false);
   const dragCounterRef = useRef(0);
-  const kbGridRef = useRef<HTMLDivElement | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
-  const [kbGridWidth, setKbGridWidth] = useState(0);
 
   const {
     setRightPanel,
@@ -342,40 +339,7 @@ export const KnowledgePage = ({
   } = useProjectOutlet();
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
 
-  useEffect(() => {
-    const el = kbGridRef.current;
-    if (!el) return;
 
-    const updateWidth = () => setKbGridWidth(el.clientWidth);
-    updateWidth();
-
-    const ro = new ResizeObserver(updateWidth);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [loading, kbs.length, activeKb]);
-
-  const kbGridColumns = useMemo(() => {
-    if (kbGridWidth <= 0) {
-      return `repeat(auto-fill, ${KB_CARD_MAX_WIDTH}px)`;
-    }
-
-    const maxColumns = Math.max(
-      1,
-      Math.floor(
-        (kbGridWidth + KB_CARD_GAP) /
-          (KB_CARD_PREFERRED_MIN_WIDTH + KB_CARD_GAP),
-      ),
-    );
-    const columns = Math.min(kbs.length || 1, maxColumns);
-    const widthAtMaxColumns =
-      (kbGridWidth - KB_CARD_GAP * (columns - 1)) / columns;
-    const cardWidth = Math.max(
-      KB_CARD_MIN_WIDTH,
-      Math.min(KB_CARD_MAX_WIDTH, Math.floor(widthAtMaxColumns)),
-    );
-
-    return `repeat(${columns}, minmax(${KB_CARD_MIN_WIDTH}px, ${cardWidth}px))`;
-  }, [kbGridWidth, kbs.length]);
 
   // ── Load KB list ──────────────────────────────────────────────────
 
@@ -934,7 +898,7 @@ export const KnowledgePage = ({
                             )}
                           >
                             <div className="flex items-start justify-between gap-3">
-                              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#f3f2ff] text-brand">
+                              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand">
                                 <KbIcon className="h-4 w-4" />
                               </div>
                               {isProcessing ? (

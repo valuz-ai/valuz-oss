@@ -27,3 +27,4 @@ export type {
   ConversationLocalFileLinkOverride,
   ConversationLocalFileLinkResolution,
 } from "./use-conversation-local-file-links";
+export { useCardGridColumns } from "./use-card-grid-columns";
