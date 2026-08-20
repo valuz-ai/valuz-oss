@@ -61,6 +61,16 @@ export function agentTargetKind(agent: Agent): "local" | "remote" | "shared" {
   return isCloudOnlyAgent(agent) ? "shared" : "remote";
 }
 
+/**
+ * Identity of a LIST ROW, which a slug alone is not: two machines may each
+ * have an "sde" and both are listed. Anything that dedupes, keys or selects
+ * rows has to use this — dedupe by slug silently drops the second machine's
+ * copy.
+ */
+export function agentRowId(agent: Agent): string {
+  return `${agent.exec_target_id ?? "local"}:${agent.slug}`;
+}
+
 /** Neither editable nor openable here: a catalog entry, or another machine's. */
 export function isRemoteAgentRow(agent: Agent): boolean {
   return isCloudOnlyAgent(agent) || runsOnAnotherTarget(agent);

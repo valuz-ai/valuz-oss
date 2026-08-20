@@ -13,6 +13,50 @@ export interface CategorizedListProps<T> {
   className?: string;
 }
 
+/**
+ * Split ``items`` into category buckets, in category order.
+ *
+ * ``getId`` must identify a ROW, not a logical entity: an item claimed by a
+ * non-multiAssign category is withheld from later ones, so two rows sharing an
+ * id make the second disappear from the list entirely.
+ *
+ * Exported for tests — the grouping is the part worth pinning down.
+ */
+export function bucketByCategory<T>(
+  items: T[],
+  categories: ResourceCategory<T>[],
+  getId: (item: T) => string,
+): { category: ResourceCategory<T>; items: T[] }[] {
+  const result: { category: ResourceCategory<T>; items: T[] }[] = [];
+  const assigned = new Set<string>();
+  for (const cat of categories) {
+    const filtered = items.filter((item) => {
+      if (assigned.has(getId(item))) return false;
+      return cat.filter(item);
+    });
+    if (cat.sort) filtered.sort(cat.sort);
+    if (filtered.length > 0) {
+      result.push({ category: cat, items: filtered });
+      if (!cat.multiAssign) {
+        for (const item of filtered) assigned.add(getId(item));
+      }
+    }
+  }
+  const unassigned = items.filter((item) => !assigned.has(getId(item)));
+  if (unassigned.length > 0) {
+    result.push({
+      category: {
+        id: "_other",
+        label: "Other",
+        order: 999,
+        filter: () => true,
+      },
+      items: unassigned,
+    });
+  }
+  return result;
+}
+
 export function CategorizedList<T>({
   items,
   categories,
@@ -31,36 +75,10 @@ export function CategorizedList<T>({
     return init;
   });
 
-  const buckets = useMemo(() => {
-    const result: { category: ResourceCategory<T>; items: T[] }[] = [];
-    const assigned = new Set<string>();
-    for (const cat of categories) {
-      const filtered = items.filter((item) => {
-        if (assigned.has(getId(item))) return false;
-        return cat.filter(item);
-      });
-      if (cat.sort) filtered.sort(cat.sort);
-      if (filtered.length > 0) {
-        result.push({ category: cat, items: filtered });
-        if (!cat.multiAssign) {
-          for (const item of filtered) assigned.add(getId(item));
-        }
-      }
-    }
-    const unassigned = items.filter((item) => !assigned.has(getId(item)));
-    if (unassigned.length > 0) {
-      result.push({
-        category: {
-          id: "_other",
-          label: "Other",
-          order: 999,
-          filter: () => true,
-        },
-        items: unassigned,
-      });
-    }
-    return result;
-  }, [items, categories, getId]);
+  const buckets = useMemo(
+    () => bucketByCategory(items, categories, getId),
+    [items, categories, getId],
+  );
 
   if (items.length === 0 && emptyState) return <>{emptyState}</>;
 
