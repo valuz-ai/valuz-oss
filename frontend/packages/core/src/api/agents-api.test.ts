@@ -4,7 +4,7 @@ import { agentsApi } from "./agents-api";
 import { invalidateRequestCache } from "./request";
 import { setExecutionTargets } from "../edition/execution-targets";
 
-const LOCAL = { id: "local", labelKey: "local", isDefault: true };
+const LOCAL = { id: "local", labelKey: "local", baseUrl: "", isDefault: true };
 const CLOUD = { id: "cloud", labelKey: "cloud", baseUrl: "https://cloud.test" };
 const DEVICE = {
   id: "device:d1",
