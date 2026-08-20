@@ -15,6 +15,8 @@ import { Bot } from "lucide-react";
 import { useRuntimes, useTranslation, type Agent } from "@valuz/core";
 import { modelLabel } from "@valuz/shared";
 
+import { SlotRenderer } from "@valuz/core";
+
 import { ResourceTitleBadgeSlot } from "./ResourceActionSlot";
 
 type TK = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
@@ -69,6 +71,13 @@ export function RemoteAgentDetail({ agent }: { agent: Agent }) {
       <p className="rounded-md bg-surface-soft px-3 py-2 text-xs leading-relaxed text-ink-meta">
         {t("agent.remoteDetailNote" as TK)}
       </p>
+
+      {/* Editions add what only they can know about an agent on another
+          machine — the conversations you have had with it, say. */}
+      <SlotRenderer
+        name="resource.agent.remote.sections"
+        context={{ resourceType: "agent", resource }}
+      />
 
       <div className="flex flex-col">
         {agent.runtime ? (
