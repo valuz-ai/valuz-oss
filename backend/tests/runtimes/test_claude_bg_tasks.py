@@ -65,6 +65,7 @@ def _make_runtime(client: _ScriptedClient | None = None) -> ClaudeAgentRuntime:
 
     rt.event_sink = SimpleNamespace(emit=_emit)
     rt._cancelled = False
+    rt._usage_snapshot = None
     rt._bracket_open = False
     rt._open_bracket_is_wakeup = False
     rt._pending_wakeups = 0

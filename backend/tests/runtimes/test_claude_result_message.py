@@ -40,6 +40,7 @@ def _make_runtime():
     rt.model = "claude-sonnet-4-6"
     rt.event_sink = SimpleNamespace(emit=_emit)
     rt._cancelled = False
+    rt._usage_snapshot = None
     rt._emitted = emitted  # test handle
     return rt
 
