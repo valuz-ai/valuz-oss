@@ -6,6 +6,7 @@ import {
   getDefaultExecutionTarget,
   getDefaultRuntimeLocation,
   getExecutionTargets,
+  getExecutionTargetsRevision,
   selectableExecutionTargets,
   setDefaultRuntimeLocation,
   setExecutionTargets,
@@ -158,5 +159,28 @@ describe("selectableExecutionTargets", () => {
       LOCAL,
       CLOUD,
     ]);
+  });
+});
+
+describe("execution target revision", () => {
+  it("bumps only when the fan-out set actually changes", () => {
+    // Editions re-register on every presence poll. If re-announcing the same
+    // set bumped the revision, every list that uses it as an effect dep would
+    // refetch on a timer.
+    const before = getExecutionTargetsRevision();
+    setExecutionTargets([LOCAL, CLOUD]);
+    const registered = getExecutionTargetsRevision();
+    expect(registered).toBeGreaterThan(before);
+
+    setExecutionTargets([LOCAL, CLOUD]);
+    expect(getExecutionTargetsRevision()).toBe(registered);
+
+    // A device coming online is exactly the change lists must react to.
+    setExecutionTargets([
+      LOCAL,
+      CLOUD,
+      { id: "device:d1", labelKey: "x", baseUrl: "https://relay/proxy" },
+    ]);
+    expect(getExecutionTargetsRevision()).toBe(registered + 1);
   });
 });

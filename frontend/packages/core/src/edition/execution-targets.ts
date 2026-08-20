@@ -128,9 +128,41 @@ export function executionTargetIconKind(
 let _targets: ExecutionTarget[] = [];
 const _listeners = new Set<() => void>();
 
+// Editions re-register on every presence poll, so the array identity churns
+// constantly. Lists that fan out must react to the set CHANGING, not to it
+// being re-announced — hence a fingerprint over exactly what fan-out reads.
+let _revision = 0;
+let _fingerprint = "";
+
+function fanOutFingerprint(targets: readonly ExecutionTarget[]): string {
+  return targets
+    .map((t) => `${t.id}|${t.baseUrl ?? ""}|${t.selectable === false ? 0 : 1}`)
+    .join(",");
+}
+
 export function setExecutionTargets(targets: ExecutionTarget[]): void {
   _targets = [...targets];
+  const fingerprint = fanOutFingerprint(_targets);
+  if (fingerprint !== _fingerprint) {
+    _fingerprint = fingerprint;
+    _revision += 1;
+  }
   for (const fn of _listeners) fn();
+}
+
+/**
+ * Bumps whenever the set a list call would fan out to changes — a desktop
+ * came online, a grant was approved, a target went away.
+ *
+ * Lists are fetched once on mount, but targets arrive asynchronously (an
+ * edition resolves them from its control plane after the tree is already
+ * painted). Without this, a machine that becomes reachable one second after
+ * launch stays invisible in 项目 / 对话 until something happens to remount the
+ * page: invalidating the response cache is not enough, because nothing asks
+ * again.
+ */
+export function getExecutionTargetsRevision(): number {
+  return _revision;
 }
 
 export function getExecutionTargets(): ExecutionTarget[] {
@@ -179,6 +211,12 @@ function subscribe(fn: () => void): () => void {
 /** Reactive view for creation entries (selector renders when length > 1). */
 export function useExecutionTargets(): ExecutionTarget[] {
   return useSyncExternalStore(subscribe, getExecutionTargets);
+}
+
+/** Reactive {@link getExecutionTargetsRevision} — use it as an effect dep to
+ *  refetch a fanned-out list when the target set changes. */
+export function useExecutionTargetsRevision(): number {
+  return useSyncExternalStore(subscribe, getExecutionTargetsRevision);
 }
 
 /**

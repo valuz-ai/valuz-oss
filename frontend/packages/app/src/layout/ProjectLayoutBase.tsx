@@ -33,6 +33,7 @@ import {
   type RunSummary,
   useDegradedListTargets,
   getExecutionTargets,
+  useExecutionTargetsRevision,
   recordEntityOrigin,
 } from "@valuz/core";
 import {
@@ -293,6 +294,8 @@ export function ProjectLayoutBase({
     useUpdaterStore.getState().show();
   }, []);
 
+  const targetsRevision = useExecutionTargetsRevision();
+
   const fetchProjects = useCallback(async () => {
     try {
       const data = await projectsApi.list();
@@ -371,13 +374,18 @@ export function ProjectLayoutBase({
     });
   }, [location.key]);
 
+  // ``targetsRevision`` re-runs these when the set a list fans out to changes.
+  // Targets land asynchronously (an edition resolves them from its control
+  // plane after the tree is painted), and these rails are otherwise fetched
+  // once on mount — so a desktop that becomes reachable a second after launch
+  // stayed missing from 项目 / 对话 until something remounted the page.
   useEffect(() => {
     void fetchProjects();
-  }, [fetchProjects]);
+  }, [fetchProjects, targetsRevision]);
 
   useEffect(() => {
     void fetchSessions();
-  }, [fetchSessions]);
+  }, [fetchSessions, targetsRevision]);
 
   useEffect(() => {
     void fetchAllTasks();

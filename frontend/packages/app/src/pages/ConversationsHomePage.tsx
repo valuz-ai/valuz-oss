@@ -18,6 +18,7 @@ import {
   useEntityOrigin,
   skillsApi,
   useComposerProviderChannels,
+  useExecutionTargetsRevision,
   useComposerProviders,
   useExecutionTargets,
   useModelDefaults,
@@ -198,6 +199,8 @@ export const ConversationsHomePage = () => {
     [globalSkills],
   );
 
+  const targetsRevision = useExecutionTargetsRevision();
+
   const bootstrap = useCallback(async () => {
     try {
       // Each quick-chat is now its own ephemeral chat project, so the
@@ -236,9 +239,12 @@ export const ConversationsHomePage = () => {
     }
   }, []);
 
+  // Refetch when the fan-out set changes: this page reads projects + sessions
+  // once on mount, and targets arrive after the tree is painted (see
+  // useExecutionTargetsRevision).
   useEffect(() => {
     void bootstrap();
-  }, [bootstrap]);
+  }, [bootstrap, targetsRevision]);
 
   const handleConnectDataSource = (slug: string) => {
     // Hand off to settings; the OAuth completion flips `connected` and a re-bootstrap
