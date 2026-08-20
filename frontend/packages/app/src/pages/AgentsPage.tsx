@@ -43,7 +43,6 @@ import {
   useResourceCategories,
   useTranslation,
   type Agent,
-  type ExecutionTarget,
   type MemberWithAgent,
   type ProjectListItem,
 } from "@valuz/core";
@@ -314,35 +313,35 @@ export const AgentsPage = () => {
   }, [agents, projectMembers]);
 
   /**
-   * One section per machine that is not this one — a desktop you control, or a
-   * host that opened an agent to you. Ordered by the registry, so your own
-   * machines come before narrow-grant hosts, and headed by the target's own
-   * label (the device name).
+   * Agents that do not live on this machine, split by how you got them:
+   *
+   * - **remote** — one of your own desktops, reached by remote control. You
+   *   may create there, so its target is selectable.
+   * - **shared** — a host that opened a single agent to you. Narrow grant:
+   *   the target is registered so the location chip can name it, but it is
+   *   never a "create here" choice.
+   *
+   * Kept out of the local groups on purpose: both machines ship the same
+   * built-ins, so inline they read as duplicates with nothing to tell them
+   * apart.
    */
-  const targetGroups = useMemo(() => {
+  const offMachineGroups = useMemo(() => {
     const defaultId = getDefaultExecutionTarget()?.id;
-    const byTarget = new Map<string, Agent[]>();
+    const remote: Agent[] = [];
+    const shared: Agent[] = [];
     for (const agent of agents) {
       const targetId = agent.exec_target_id;
       if (!targetId || targetId === defaultId) continue;
-      const rows = byTarget.get(targetId) ?? [];
-      rows.push(agent);
-      byTarget.set(targetId, rows);
+      const target = executionTargets.find((t) => t.id === targetId);
+      const narrowGrant = target
+        ? target.selectable === false
+        : isCloudOnlyAgent(agent);
+      (narrowGrant ? shared : remote).push(agent);
     }
-    const ordered = [
-      ...executionTargets.filter((target) => byTarget.has(target.id)),
-      // A target that answered but is no longer registered (it went offline
-      // between the fetch and this render) still deserves its rows.
-      ...[...byTarget.keys()]
-        .filter((id) => !executionTargets.some((t) => t.id === id))
-        .map((id) => ({ id, labelKey: "" }) as ExecutionTarget),
-    ];
-    return ordered.map((target) => ({
-      target,
-      agents: (byTarget.get(target.id) ?? []).sort(
-        compareAgentsWithValurionFirst,
-      ),
-    }));
+    return {
+      remote: remote.sort(compareAgentsWithValurionFirst),
+      shared: shared.sort(compareAgentsWithValurionFirst),
+    };
   }, [agents, executionTargets]);
 
   // Keep the detail panel stable across tab switches: honour the explicit
@@ -743,31 +742,32 @@ export const AgentsPage = () => {
                       )}
                     </section>
                   )}
-                  {targetGroups.map(({ target, agents: rows }) => {
-                    const key = `_target:${target.id}`;
-                    const collapsed = collapsedProjectGroups.has(key);
-                    return (
+                  {(
+                    [
+                      ["_remote", offMachineGroups.remote, "agent.remoteGroup"],
+                      ["_shared", offMachineGroups.shared, "agent.sharedGroup"],
+                    ] as const
+                  ).map(([key, rows, labelKey]) =>
+                    rows.length === 0 ? null : (
                       <section key={key}>
                         <button
                           type="button"
                           onClick={() => toggleProjectGroup(key)}
                           className="label-mono mb-3 flex w-full cursor-default items-center gap-1.5 text-left transition-colors hover:text-ink-body"
                         >
-                          {collapsed ? (
+                          {collapsedProjectGroups.has(key) ? (
                             <ChevronRight className="h-3 w-3" />
                           ) : (
                             <ChevronDown className="h-3 w-3" />
                           )}
                           <span className="min-w-0 flex-1 truncate">
-                            {target.labelKey
-                              ? t(target.labelKey as Parameters<typeof t>[0])
-                              : target.id}
+                            {t(labelKey)}
                           </span>
                           <span className="ml-1 text-ink-meta">
                             {rows.length}
                           </span>
                         </button>
-                        {!collapsed && (
+                        {!collapsedProjectGroups.has(key) && (
                           <div className="flex flex-col gap-3">
                             {rows.map((agent) => (
                               <div
@@ -782,8 +782,8 @@ export const AgentsPage = () => {
                           </div>
                         )}
                       </section>
-                    );
-                  })}
+                    ),
+                  )}
                 </div>
               )
             ) : (

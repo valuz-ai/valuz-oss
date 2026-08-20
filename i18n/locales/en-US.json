@@ -2619,7 +2619,9 @@
       "groupDescPlaceholder": "What is this group of agents for"
     },
     "setDefaultLead": "Set as default lead",
-    "clearDefaultLead": "Clear default lead"
+    "clearDefaultLead": "Clear default lead",
+    "remoteGroup": "Remote",
+    "sharedGroup": "Open"
   },
   "task": {
     "triggeredByChat": "Triggered by a conversation",

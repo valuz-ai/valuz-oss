@@ -2619,7 +2619,9 @@
       "groupDescPlaceholder": "这组 agent 是做什么的"
     },
     "setDefaultLead": "设为默认 lead",
-    "clearDefaultLead": "取消默认 lead"
+    "clearDefaultLead": "取消默认 lead",
+    "remoteGroup": "远程",
+    "sharedGroup": "开放"
   },
   "task": {
     "triggeredByChat": "由对话触发",
