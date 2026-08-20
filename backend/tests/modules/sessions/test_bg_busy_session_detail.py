@@ -126,7 +126,13 @@ def _wire_list(monkeypatch, sessions, *, bg_busy):
     async def _ids(*_a, **_k):
         return [s.id for s in sessions]
 
+    async def _ensure_index(*_a, **_k):
+        return 0
+
     monkeypatch.setattr(svc_mod, "data_reader", lambda: _Reader())
+    monkeypatch.setattr(
+        svc_mod.project_index, "ensure_legacy_session_index", _ensure_index
+    )
     monkeypatch.setattr(svc_mod.project_index, "list_session_ids", _ids)
     monkeypatch.setattr(
         svc_mod,
