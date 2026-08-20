@@ -2445,8 +2445,19 @@ export const Composer = ({
                                               }}
                                             >
                                               <span className="flex min-w-0 flex-1 flex-col">
-                                                <span className="truncate text-[12.5px] text-ink-heading">
-                                                  {a.name}
+                                                <span className="flex min-w-0 items-center gap-1.5">
+                                                  <span className="truncate text-[12.5px] text-ink-heading">
+                                                    {a.name}
+                                                  </span>
+                                                  {/* Same tag as the other
+                                                      agent list below — this
+                                                      one is the popover users
+                                                      actually open. */}
+                                                  {a.badgeLabel && (
+                                                    <span className="shrink-0 rounded-sm bg-surface-soft px-1 py-0 text-micro leading-[1.4] text-ink-meta">
+                                                      {a.badgeLabel}
+                                                    </span>
+                                                  )}
                                                 </span>
                                                 <span className="truncate text-2xs text-ink-meta">
                                                   {a.runtimeLabel} ·{" "}
