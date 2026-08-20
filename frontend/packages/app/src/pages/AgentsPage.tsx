@@ -35,11 +35,15 @@ import {
 } from "../components/ResourceActionSlot";
 import {
   agentsApi,
+  getDefaultExecutionTarget,
   projectsApi,
+  useExecutionTargets,
+  useExecutionTargetsRevision,
   usePanelStore,
   useResourceCategories,
   useTranslation,
   type Agent,
+  type ExecutionTarget,
   type MemberWithAgent,
   type ProjectListItem,
 } from "@valuz/core";
@@ -173,6 +177,9 @@ export const AgentsPage = () => {
 
   /* -- Data loading -- */
 
+  const executionTargets = useExecutionTargets();
+  const targetsRevision = useExecutionTargetsRevision();
+
   const mountedRef = useRef(true);
   const loadData = useCallback(async () => {
     try {
@@ -228,7 +235,10 @@ export const AgentsPage = () => {
     return () => {
       mountedRef.current = false;
     };
-  }, [loadData]);
+    // Machines register asynchronously, so refetch when the set changes —
+    // otherwise a desktop that comes online after this page mounted never
+    // contributes its library (same rule as the sidebar rails).
+  }, [loadData, targetsRevision]);
 
   /* -- Layout: split panel -- */
 
@@ -291,12 +301,49 @@ export const AgentsPage = () => {
       .filter(({ members }) => members.length > 0);
   }, [projectMembers, projects]);
 
+
   const unassignedAgents = useMemo(() => {
     const deployed = new Set(projectMembers.map((member) => member.sourceSlug));
     return agents
       .filter((agent) => !deployed.has(agent.slug))
+      // Agents that live on another machine get their own section below —
+      // inline they would read as duplicates of the local ones (both machines
+      // ship the same built-ins) with no way to tell which is which.
+      .filter((agent) => !runsOnAnotherTarget(agent))
       .sort(compareAgentsWithValurionFirst);
   }, [agents, projectMembers]);
+
+  /**
+   * One section per machine that is not this one — a desktop you control, or a
+   * host that opened an agent to you. Ordered by the registry, so your own
+   * machines come before narrow-grant hosts, and headed by the target's own
+   * label (the device name).
+   */
+  const targetGroups = useMemo(() => {
+    const defaultId = getDefaultExecutionTarget()?.id;
+    const byTarget = new Map<string, Agent[]>();
+    for (const agent of agents) {
+      const targetId = agent.exec_target_id;
+      if (!targetId || targetId === defaultId) continue;
+      const rows = byTarget.get(targetId) ?? [];
+      rows.push(agent);
+      byTarget.set(targetId, rows);
+    }
+    const ordered = [
+      ...executionTargets.filter((target) => byTarget.has(target.id)),
+      // A target that answered but is no longer registered (it went offline
+      // between the fetch and this render) still deserves its rows.
+      ...[...byTarget.keys()]
+        .filter((id) => !executionTargets.some((t) => t.id === id))
+        .map((id) => ({ id, labelKey: "" }) as ExecutionTarget),
+    ];
+    return ordered.map((target) => ({
+      target,
+      agents: (byTarget.get(target.id) ?? []).sort(
+        compareAgentsWithValurionFirst,
+      ),
+    }));
+  }, [agents, executionTargets]);
 
   // Keep the detail panel stable across tab switches: honour the explicit
   // selection if it still exists, otherwise fall back to the first agent in
@@ -696,6 +743,47 @@ export const AgentsPage = () => {
                       )}
                     </section>
                   )}
+                  {targetGroups.map(({ target, agents: rows }) => {
+                    const key = `_target:${target.id}`;
+                    const collapsed = collapsedProjectGroups.has(key);
+                    return (
+                      <section key={key}>
+                        <button
+                          type="button"
+                          onClick={() => toggleProjectGroup(key)}
+                          className="label-mono mb-3 flex w-full cursor-default items-center gap-1.5 text-left transition-colors hover:text-ink-body"
+                        >
+                          {collapsed ? (
+                            <ChevronRight className="h-3 w-3" />
+                          ) : (
+                            <ChevronDown className="h-3 w-3" />
+                          )}
+                          <span className="min-w-0 flex-1 truncate">
+                            {target.labelKey
+                              ? t(target.labelKey as Parameters<typeof t>[0])
+                              : target.id}
+                          </span>
+                          <span className="ml-1 text-ink-meta">
+                            {rows.length}
+                          </span>
+                        </button>
+                        {!collapsed && (
+                          <div className="flex flex-col gap-3">
+                            {rows.map((agent) => (
+                              <div
+                                key={`${agent.exec_target_id ?? ""}:${agent.slug}`}
+                                className="cursor-default"
+                              >
+                                {renderAgentRow(agent, false, {
+                                  deploymentCount: 0,
+                                })}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </section>
+                    );
+                  })}
                 </div>
               )
             ) : (

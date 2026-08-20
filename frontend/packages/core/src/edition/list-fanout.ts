@@ -121,10 +121,19 @@ function fetchTarget<T>(
  * so a timed-out target actually tears down the connection; callers that
  * ignore it still get the timeout, just without the abort.
  */
+/**
+ * Ask several targets the same GET and collect what answers.
+ *
+ * ``only`` narrows the set — a caller may know that some targets cannot hold
+ * anything new (the agent library, where a sibling runtime of the same account
+ * would just repeat it). Failures are then reported for that subset alone, so
+ * a target nobody asked is never announced as degraded.
+ */
 export async function fanOutTargets<T>(
   fetchOne: FanOutFetch<T>,
+  only?: readonly ExecutionTarget[],
 ): Promise<FanOutOutcome<T>> {
-  const targets = getListFanOutTargets();
+  const targets = only ? [...only] : getListFanOutTargets();
   if (targets.length > 0) {
     // Remembered so the degraded re-probe can replay the same request shape
     // (auth, params) against the failed targets. GET-only surfaces, so a
@@ -145,7 +154,9 @@ export async function fanOutTargets<T>(
       firstError ??= result.reason;
     }
   });
-  publishDegradedTargets(failedTargets);
+  // A narrowed fan-out speaks only for what it asked: it must not clear a
+  // degradation another list observed on a target it skipped.
+  if (!only || failedTargets.length > 0) publishDegradedTargets(failedTargets);
   if (values.length === 0 && failedTargets.length > 0) {
     throw firstError;
   }
