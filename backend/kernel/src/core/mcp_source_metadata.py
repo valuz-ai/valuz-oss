@@ -1,7 +1,7 @@
 """Validate MCP result source metadata and project it into Valuz Evidence.
 
 MCP servers keep business data in ``content`` / ``structuredContent`` and may
-describe its source semantics in ``_meta["cn.valuz/citation-source"]``.  This
+describe its source semantics in ``_meta["dev.valuz/source-metadata"]``.  This
 module is the trust-boundary adapter: it verifies the descriptor against the
 exact result snapshot, then creates Valuz-private direct Evidence or one lazy
 structured Collection.  External MCP servers never allocate Valuz handles.
@@ -19,7 +19,8 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
-MCP_SOURCE_METADATA_KEY = "cn.valuz/citation-source"
+MCP_SOURCE_METADATA_KEY = "dev.valuz/source-metadata"
+MCP_LEGACY_SOURCE_METADATA_KEY = "cn.valuz/citation-source"
 MCP_SOURCE_TRANSPORT_KEY = "_valuz_mcp_source_transport_v1"
 
 _MAX_DESCRIPTOR_CHARS = 256_000
@@ -35,6 +36,15 @@ _SUPPORTED_RESOURCE_KINDS = {
     "document-summary",
     "structured-collection",
     "operational",
+}
+_PROVENANCE_ORIGIN_STATUSES = {"available", "not-provided", "mixed"}
+_PROVENANCE_ORIGIN_SCOPES = {"resource", "item"}
+_PROVENANCE_DERIVATION_CLASSES = {
+    "direct",
+    "normalized",
+    "extracted",
+    "aggregated",
+    "calculated",
 }
 
 
@@ -77,7 +87,8 @@ def wrap_mcp_result_metadata_for_transport(
     """
 
     meta = getattr(result, "meta", None)
-    if not isinstance(meta, Mapping) or MCP_SOURCE_METADATA_KEY not in meta:
+    descriptor = _descriptor_from_meta(meta)
+    if descriptor is None:
         return result
     model_copy = getattr(result, "model_copy", None)
     if not callable(model_copy):
@@ -86,7 +97,7 @@ def wrap_mcp_result_metadata_for_transport(
     transport = {
         MCP_SOURCE_TRANSPORT_KEY: {
             "serverName": server_name,
-            "descriptor": copy.deepcopy(meta[MCP_SOURCE_METADATA_KEY]),
+            "descriptor": copy.deepcopy(descriptor),
             "hasStructuredContent": structured_content is not None,
             "structuredContent": copy.deepcopy(structured_content),
         }
@@ -293,14 +304,29 @@ def _descriptor_from_wire(value: Any) -> Any | None:
     if not isinstance(value, Mapping):
         return None
     meta = value.get("_meta") or value.get("meta")
-    if isinstance(meta, Mapping) and MCP_SOURCE_METADATA_KEY in meta:
-        return meta[MCP_SOURCE_METADATA_KEY]
+    descriptor = _descriptor_from_meta(meta)
+    if descriptor is not None:
+        return descriptor
     for key in ("result", "data"):
         nested = value.get(key)
         found = _descriptor_from_wire(nested)
         if found is not None:
             return found
     return None
+
+
+def _descriptor_from_meta(value: Any) -> Any | None:
+    """Read the canonical source descriptor with conflict-safe legacy support."""
+
+    if not isinstance(value, Mapping):
+        return None
+    current = value.get(MCP_SOURCE_METADATA_KEY)
+    legacy = value.get(MCP_LEGACY_SOURCE_METADATA_KEY)
+    if current is not None and legacy is not None:
+        if _canonical_json(current) != _canonical_json(legacy):
+            return None
+        return current
+    return current if current is not None else legacy
 
 
 def _structured_content_from_wire(value: Any) -> Any | None:
@@ -817,6 +843,9 @@ def _structured_collection_envelope(
     resource_id = _bounded_string(resource.get("resourceId"), 512)
     if not dataset_id or not resource_id:
         return None
+    provenance = _normalize_resource_provenance(resource.get("provenance"))
+    if "provenance" in resource and provenance is None:
+        return None
     provider = descriptor.get("provider")
     provider = provider if isinstance(provider, Mapping) else {}
     operation = descriptor.get("operation")
@@ -864,7 +893,7 @@ def _structured_collection_envelope(
         collection_addressing["allowedItemPaths"] = normalized_item_paths
     if normalized_schema:
         collection_addressing["fieldSchemaRef"] = normalized_schema
-    return {
+    envelope = {
         "version": 1,
         "kind": "structured-evidence-collection",
         "collectionHandle": f"evc_mcp_{digest}",
@@ -878,6 +907,98 @@ def _structured_collection_envelope(
         "semantics": semantics,
         "contentHash": _content_hash(snapshot),
     }
+    if provenance:
+        envelope["provenance"] = provenance
+    return envelope
+
+
+def _normalize_resource_provenance(value: Any) -> dict[str, Any] | None:
+    """Validate the optional public lineage mapping without copying business values."""
+
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        return None
+    origin = value.get("origin")
+    derivation = value.get("derivation")
+    if not isinstance(origin, Mapping) or not isinstance(derivation, Mapping):
+        return None
+    status = origin.get("status")
+    scope = origin.get("scope")
+    if status not in _PROVENANCE_ORIGIN_STATUSES or scope not in _PROVENANCE_ORIGIN_SCOPES:
+        return None
+    normalized_origin: dict[str, Any] = {"status": status, "scope": scope}
+    mapping = origin.get("mapping")
+    if mapping is not None:
+        if not isinstance(mapping, Mapping):
+            return None
+        normalized_mapping: dict[str, str] = {}
+        for key in ("sourceName", "sourceUrl", "sourceId", "documentId", "publishedAt"):
+            if key not in mapping:
+                continue
+            pointer = _pointer(mapping.get(key))
+            if pointer is None:
+                return None
+            normalized_mapping[key] = pointer
+        if len(normalized_mapping) != len(mapping):
+            return None
+        if normalized_mapping:
+            normalized_origin["mapping"] = normalized_mapping
+    if status == "not-provided" and "mapping" in normalized_origin:
+        return None
+    if status in {"available", "mixed"} and "mapping" not in normalized_origin:
+        return None
+
+    derivation_class = derivation.get("class")
+    if derivation_class not in _PROVENANCE_DERIVATION_CLASSES:
+        return None
+    normalized_derivation: dict[str, Any] = {"class": derivation_class}
+    method_ref = derivation.get("methodRef")
+    if method_ref is not None:
+        if not isinstance(method_ref, Mapping):
+            return None
+        method_id = _bounded_string(method_ref.get("id"), 512)
+        revision = _bounded_string(method_ref.get("revision"), 512)
+        if not method_id or not revision or len(method_ref) != 2:
+            return None
+        normalized_derivation["methodRef"] = {"id": method_id, "revision": revision}
+    input_pointers = derivation.get("inputPointers")
+    if input_pointers is not None:
+        if not isinstance(input_pointers, list) or len(input_pointers) > 64:
+            return None
+        normalized_inputs: list[str] = []
+        for raw_pointer in input_pointers:
+            pointer = _pointer(raw_pointer)
+            if pointer is None:
+                return None
+            normalized_inputs.append(pointer)
+        normalized_derivation["inputPointers"] = normalized_inputs
+    if set(derivation) - {"class", "methodRef", "inputPointers"}:
+        return None
+
+    normalized: dict[str, Any] = {
+        "origin": normalized_origin,
+        "derivation": normalized_derivation,
+    }
+    temporal = value.get("temporal")
+    if temporal is not None:
+        if not isinstance(temporal, Mapping):
+            return None
+        normalized_temporal: dict[str, str] = {}
+        for key in ("dataAsOf", "observedAt"):
+            if key not in temporal:
+                continue
+            pointer = _pointer(temporal.get(key))
+            if pointer is None:
+                return None
+            normalized_temporal[key] = pointer
+        if len(normalized_temporal) != len(temporal):
+            return None
+        if normalized_temporal:
+            normalized["temporal"] = normalized_temporal
+    if set(value) - {"origin", "temporal", "derivation"}:
+        return None
+    return normalized
 
 
 def _shift_root_envelopes(envelopes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1017,6 +1138,7 @@ def _now_iso() -> str:
 
 
 __all__ = [
+    "MCP_LEGACY_SOURCE_METADATA_KEY",
     "MCP_SOURCE_METADATA_KEY",
     "MCP_SOURCE_TRANSPORT_KEY",
     "McpSourceAdaptation",
