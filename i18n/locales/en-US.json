@@ -3125,5 +3125,17 @@
     "comingSoon": "Coming soon",
     "comingSoonDesc": "This resource type will be wired into this page in a later step.",
     "emptyDetail": "Select an item on the left to view details"
+  },
+  "route": {
+    "projectDetail": "Project detail",
+    "agentDetail": "Agent detail",
+    "skillDetail": "Skill detail",
+    "automationDetail": "Automation detail",
+    "onboarding": "Onboarding",
+    "componentGallery": "Component gallery",
+    "apiKeyConfig": "API key configuration",
+    "toolCalls": "Tool calls",
+    "contextPanel": "Context panel",
+    "overlays": "Overlays"
   }
 }
