@@ -1,4 +1,8 @@
-import { getDefaultExecutionTarget, type Agent } from "@valuz/core";
+import {
+  getDefaultExecutionTarget,
+  getExecutionTargets,
+  type Agent,
+} from "@valuz/core";
 
 interface AgentSyncInfo {
   status?: string;
@@ -34,6 +38,27 @@ export function runsOnAnotherTarget(agent: Agent): boolean {
   const target = agent.exec_target_id;
   if (!target) return false;
   return target !== (getDefaultExecutionTarget()?.id ?? "local");
+}
+
+/**
+ * Where an agent row came from, which is what the library groups by:
+ *
+ * - ``local``  — this machine's own library (or a catalog entry with no home).
+ * - ``remote`` — a machine you may run on freely: another of your desktops.
+ * - ``shared`` — a host that lent you this ONE agent. Its target is
+ *   registered (the location chip has to name it) but not selectable.
+ *
+ * Falls back to the cloud-only marker when the target is not registered yet:
+ * during a cold start a share would otherwise be filed as one of your own
+ * machines for a moment.
+ */
+export function agentTargetKind(agent: Agent): "local" | "remote" | "shared" {
+  if (!runsOnAnotherTarget(agent)) return "local";
+  const target = getExecutionTargets().find(
+    (t) => t.id === agent.exec_target_id,
+  );
+  if (target) return target.selectable === false ? "shared" : "remote";
+  return isCloudOnlyAgent(agent) ? "shared" : "remote";
 }
 
 /** Neither editable nor openable here: a catalog entry, or another machine's. */

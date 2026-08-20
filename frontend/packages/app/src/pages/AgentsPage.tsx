@@ -54,6 +54,7 @@ import { CreateAgentDialog } from "../components/CreateAgentDialog";
 import { ImportPackDialog } from "../components/ImportPackDialog";
 import { ExportPackDialog } from "../components/ExportPackDialog";
 import {
+  agentTargetKind,
   compareAgentsWithValurionFirst,
   isCloudOnlyAgent,
   isRemoteAgentRow,
@@ -65,26 +66,50 @@ import {
 function buildAgentCategories(
   t: ReturnType<typeof useTranslation>["t"],
 ): ResourceCategory<Agent>[] {
+  // Agents that live somewhere else get their own two groups rather than
+  // joining 内置 / 自定义 / 官方: every machine ships the same built-ins, so
+  // mixed in they read as duplicates of the local rows with nothing to tell
+  // them apart. The split is by HOW you got them — your own other desktop
+  // (远程) versus one agent a host opened to you (开放).
+  const isLocal = (a: Agent) => agentTargetKind(a) === "local";
   return [
     {
       id: "system",
       label: t("agent.groupSystem" as Parameters<typeof t>[0]),
       order: 0,
-      filter: isSystemAgent,
+      filter: (a: Agent) => isLocal(a) && isSystemAgent(a),
       sort: compareAgentsWithValurionFirst,
     },
     {
       id: "custom",
       label: t("agent.groupCustom" as Parameters<typeof t>[0]),
       order: 1,
-      filter: (a: Agent) => !isSystemAgent(a) && a.source !== "official",
+      filter: (a: Agent) =>
+        isLocal(a) && !isSystemAgent(a) && a.source !== "official",
       sort: compareAgentsWithValurionFirst,
     },
     {
       id: "official",
       label: t("agent.groupOfficial" as Parameters<typeof t>[0]),
       order: 2,
-      filter: (a: Agent) => !isSystemAgent(a) && a.source === "official",
+      filter: (a: Agent) =>
+        isLocal(a) && !isSystemAgent(a) && a.source === "official",
+      sort: compareAgentsWithValurionFirst,
+    },
+    {
+      id: "remote",
+      label: t("agent.remoteGroup"),
+      order: 3,
+      filter: (a: Agent) => agentTargetKind(a) === "remote",
+      sort: compareAgentsWithValurionFirst,
+    },
+    {
+      id: "shared",
+      label: t("agent.sharedGroup"),
+      order: 4,
+      // An edition that models "somebody opened this to me" more precisely
+      // replaces this category by id (useResourceCategories merges by id).
+      filter: (a: Agent) => agentTargetKind(a) === "shared",
       sort: compareAgentsWithValurionFirst,
     },
   ];
@@ -793,7 +818,9 @@ export const AgentsPage = () => {
                 selectedId={effectiveActiveSlug}
                 getId={(a: Agent) => a.slug}
                 onSelect={(a: Agent) => {
-                  if (isCloudOnlyAgent(a)) return;
+                  // A row from another machine has no local detail to open —
+                  // the local backend has never heard of that slug.
+                  if (isRemoteAgentRow(a)) return;
                   if (selecting) {
                     if (!isSystemAgent(a)) toggleChecked(a.slug);
                     return;
