@@ -68,11 +68,11 @@ import {
   type AgentSkillItem,
 } from "../lib/agent-skill-items";
 import { toFileTree } from "../lib/file-tree";
-import { AttachmentParsingDialog } from "../components/AttachmentParsingDialog";
 import { ArtifactSplitPane } from "../components/ArtifactSplitPane";
 import { useArtifactFile } from "../hooks/use-artifact-file";
 import { useForkSession } from "../hooks/use-fork-session";
 import { toAbsoluteProjectPath } from "../lib/project-paths";
+import { waitForAttachmentsToSettle } from "../lib/attachment-parse-wait";
 
 /** Bytes as the rail shows them. Local because the two other copies of this in
  *  the app are equally local; unifying them is not this change's business. */
@@ -487,12 +487,10 @@ export const ProjectDetailPage = () => {
   const [chatSessionId, setChatSessionId] = useState<string | null>(null);
   const {
     attachments: stagedAttachments,
-    hasParsing,
     attachLocalFiles,
     remove: removeAttachment,
     markPendingConsumed,
   } = useSessionAttachments(chatSessionId);
-  const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
   // PRD-PAAT §3.2 unified composer mode. ``chat`` creates a normal
   // session; ``task`` kicks off a background Task via tasksApi.kickoff
   // and routes to the task detail page.
@@ -1286,10 +1284,20 @@ export const ProjectDetailPage = () => {
       navigate(`/conversation/${session.id}`, {
         state: { handoff: { text, sentAt: Date.now() } },
       });
-      // ``text`` already contains any ``/slug`` tokens because Composer
-      // serializes inline skill chips into its controlled value. This page is
-      // unmounting behind the navigation; the failure toast below is global,
-      // and the conversation page simply never gets its turn.
+      // Then hold the TURN — not the user — until the attachments have text.
+      //
+      // A turn sent mid-parse still works: the kernel falls back to the raw
+      // ``source_path``. But the agent loses the markdown extract, which for a
+      // scanned PDF is the whole reason the file was attached. That is what
+      // the "submit anyway?" confirm used to protect, by stopping the person.
+      // Stopping the person is the expensive way to buy it: they are looking
+      // at a composer with nothing happening, and the only answer they can
+      // give is "yes". Waiting here buys the same thing while they read their
+      // own message on the conversation page.
+      //
+      // This runs past the navigation on purpose — the same already-detached
+      // continuation that has always sent the message after unmounting.
+      await waitForAttachmentsToSettle(session.id);
       await sessionsApi.sendMessage(session.id, text);
     } catch (cause) {
       // A billing rejection (402) carries an i18n key the client renders;
@@ -1354,11 +1362,10 @@ export const ProjectDetailPage = () => {
       return;
     }
 
-    // Chat mode — block on unfinished parsing, then send.
-    if (hasParsing) {
-      setParsingConfirmOpen(true);
-      return;
-    }
+    // Chat mode. Unfinished parsing no longer stops the user: the wait it
+    // exists for is held around the TURN instead, inside ``performChatSend``,
+    // so the navigation happens at once and the waiting happens on the
+    // conversation page where there is something to look at.
     void performChatSend();
   };
 
@@ -1700,14 +1707,6 @@ export const ProjectDetailPage = () => {
                       : undefined
                   }
                   onWorktreeToggle={setWorktreeEnabled}
-                />
-                <AttachmentParsingDialog
-                  open={parsingConfirmOpen}
-                  onConfirm={() => {
-                    setParsingConfirmOpen(false);
-                    void performChatSend();
-                  }}
-                  onCancel={() => setParsingConfirmOpen(false)}
                 />
               </div>
 
