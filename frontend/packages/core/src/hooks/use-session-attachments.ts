@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import {
-  sessionsApi,
-  type SessionAttachmentItem,
-} from "../api/sessions-api";
+import { sessionsApi, type SessionAttachmentItem } from "../api/sessions-api";
 
 /**
  * Mints (or returns) the session a freshly-attached file belongs to.
@@ -20,14 +17,23 @@ export interface UseSessionAttachmentsResult {
   /** Every attachment row for the active session (pending + consumed). */
   attachments: SessionAttachmentItem[];
   /**
-   * True while any *pending* (not-yet-sent) attachment is still parsing.
-   * Callers gate Send on this to surface the "submit anyway?" confirm.
+   * True while any *pending* (not-yet-sent) attachment is still being uploaded
+   * or parsed. Callers gate Send on this to surface the "submit anyway?"
+   * confirm. The upload window counts: a turn sent during it carries no
+   * reference to the file at all, which is strictly worse than carrying an
+   * unparsed one.
    */
   hasParsing: boolean;
   /** Upload local files immediately; eager-creates the session if needed. */
-  attachLocalFiles: (files: File[], ensureSession: EnsureSession) => Promise<void>;
+  attachLocalFiles: (
+    files: File[],
+    ensureSession: EnsureSession,
+  ) => Promise<void>;
   /** Attach KB documents immediately; eager-creates the session if needed. */
-  attachKbDocs: (docIds: string[], ensureSession: EnsureSession) => Promise<void>;
+  attachKbDocs: (
+    docIds: string[],
+    ensureSession: EnsureSession,
+  ) => Promise<void>;
   /** Remove one attachment (optimistic drop + server delete). */
   remove: (attachmentId: string) => Promise<void>;
   /**
@@ -48,6 +54,40 @@ export interface UseSessionAttachmentsResult {
 }
 
 const POLL_INTERVAL_MS = 1000;
+
+/** Marks a row that exists only in this hook — no server row behind it yet. */
+const LOCAL_ID_PREFIX = "local:";
+const isLocalPlaceholder = (a: SessionAttachmentItem): boolean =>
+  a.id.startsWith(LOCAL_ID_PREFIX);
+
+/** Unique within one page life, which is all a placeholder id has to be. */
+let localSeq = 0;
+
+/**
+ * The row a file gets the instant it is attached, before anything is uploaded.
+ *
+ * ``parse_status: "parsing"`` is deliberate rather than a new ``"uploading"``
+ * state. To the person watching, the two are one wait — the chip they want is
+ * the spinner that already exists for parsing — and reusing it means the
+ * upload window is covered by ``hasParsing`` too, so Send cannot slip a turn
+ * out while the file is still going up. A distinct status would have to be
+ * threaded through five call sites and a locale file to render the same chip
+ * and would leave that hole open.
+ */
+const placeholderFor = (file: File): SessionAttachmentItem => ({
+  id: `${LOCAL_ID_PREFIX}${(localSeq += 1)}`,
+  // Unknown until ``ensureSession`` resolves; the merges below key off the id
+  // prefix rather than this, so an empty session never drops the row.
+  session_id: "",
+  filename: file.name,
+  stored_path: "",
+  parse_status: "parsing",
+  size_bytes: file.size,
+  mime_type: file.type || null,
+  created_at: Date.now(),
+  source_kind: "local",
+  consumed_at: null,
+});
 
 /**
  * Owns a session's attachment staging set: load-on-session-change, eager
@@ -90,6 +130,10 @@ export function useSessionAttachments(
     null,
   );
 
+  // Placeholder ids the person removed while their upload was still in flight.
+  // See ``remove`` — the upload can't be cancelled, so it is undone on arrival.
+  const removedPlaceholdersRef = useRef<Set<string>>(new Set());
+
   // Re-assert the optimistic consume on a server row the server hasn't caught
   // up with yet: a still-pending row of the watermarked session uploaded
   // BEFORE the consume moment belongs to the already-sent turn (uploads
@@ -114,13 +158,18 @@ export function useSessionAttachments(
     (serverRows: SessionAttachmentItem[]) => {
       setAttachments((prev) => {
         const localById = new Map(prev.map((a) => [a.id, a]));
-        return serverRows.map((s) => {
+        const merged = serverRows.map((s) => {
           const local = localById.get(s.id);
           if (local?.consumed_at && !s.consumed_at) {
             return { ...s, consumed_at: local.consumed_at };
           }
           return applyConsumeWatermark(s);
         });
+        // A file still uploading has no server row to be returned, and this
+        // poll fires every second from the moment the session exists — so
+        // taking the server's list verbatim would delete the chip the person
+        // is watching, one tick after it appeared.
+        return [...merged, ...prev.filter(isLocalPlaceholder)];
       });
     },
     [applyConsumeWatermark],
@@ -150,7 +199,12 @@ export function useSessionAttachments(
     void load().then((items) => {
       if (cancelled) return;
       setAttachments((prev) => {
-        if (!sessionId) return [];
+        // No session yet: nothing to load, but a file may already have been
+        // attached — the new-conversation composer stages files precisely
+        // while ``sessionId`` is still null, and the session is minted by the
+        // upload that follows. Clearing here would erase the chip that was
+        // just put up.
+        if (!sessionId) return prev.filter(isLocalPlaceholder);
         const localById = new Map(prev.map((a) => [a.id, a]));
         const serverIds = new Set(items.map((r) => r.id));
         // Server rows win, but never backwards on ``consumed_at``: a send
@@ -164,8 +218,15 @@ export function useSessionAttachments(
           }
           return applyConsumeWatermark(s);
         });
+        // Placeholders are kept regardless of ``session_id``: this effect runs
+        // the moment ``ensureSession`` promotes null → the new id, which is
+        // BEFORE the upload that will tell the placeholder which session it
+        // belongs to. Matching on session would drop it at exactly that
+        // moment, and the chip would blink out mid-upload.
         const optimistic = prev.filter(
-          (a) => a.session_id === sessionId && !serverIds.has(a.id),
+          (a) =>
+            !serverIds.has(a.id) &&
+            (a.session_id === sessionId || isLocalPlaceholder(a)),
         );
         return [...merged, ...optimistic];
       });
@@ -208,15 +269,48 @@ export function useSessionAttachments(
   const attachLocalFiles = useCallback(
     async (files: File[], ensureSession: EnsureSession) => {
       if (files.length === 0) return;
-      const session = await ensureSession();
-      for (const file of files) {
+
+      // Show the files FIRST. ``ensureSession`` can take seconds — in cloud
+      // mode it allocates a sandbox — and the upload seconds more, and until
+      // this change every one of those seconds looked to the person like their
+      // drop had been ignored: no chip, no spinner, nothing. The row they see
+      // now is local; the upload below swaps in the server's.
+      const staged = files.map((file) => [file, placeholderFor(file)] as const);
+      setAttachments((prev) => [...prev, ...staged.map(([, row]) => row)]);
+
+      const drop = (id: string) =>
+        setAttachments((prev) => prev.filter((a) => a.id !== id));
+
+      let session: { id: string };
+      try {
+        session = await ensureSession();
+      } catch (cause) {
+        // No session means no upload for ANY of them — leaving the chips up
+        // would promise a turn that cannot carry them.
+        for (const [, row] of staged) drop(row.id);
+        throw cause;
+      }
+
+      for (const [file, row] of staged) {
         try {
           const item = await sessionsApi.uploadAttachment(session.id, file);
-          setAttachments((prev) =>
-            prev.some((a) => a.id === item.id) ? prev : [...prev, item],
-          );
+          if (removedPlaceholdersRef.current.delete(row.id)) {
+            void sessionsApi.deleteAttachment(session.id, item.id).catch(() => {
+              /* best-effort; the row is at worst an unreferenced file */
+            });
+            continue;
+          }
+          setAttachments((prev) => {
+            if (prev.some((a) => a.id === item.id))
+              return prev.filter((a) => a.id !== row.id);
+            // Swap in place rather than drop-and-append: the chip keeps its
+            // position in the row, so a multi-file attach doesn't reshuffle
+            // itself as each upload lands.
+            return prev.map((a) => (a.id === row.id ? item : a));
+          });
         } catch {
           /* best-effort; the caller surfaces an upload-failed toast */
+          drop(row.id);
         }
       }
     },
@@ -239,6 +333,15 @@ export function useSessionAttachments(
   const remove = useCallback(
     async (attachmentId: string) => {
       setAttachments((prev) => prev.filter((a) => a.id !== attachmentId));
+      // A placeholder has no server row yet, so DELETE would 404 on an id the
+      // server has never seen. The in-flight upload cannot be cancelled, so
+      // record the intent instead: when it lands, ``attachLocalFiles`` deletes
+      // the row it just created. Without that, a file the person visibly
+      // removed would still ship with the turn.
+      if (attachmentId.startsWith(LOCAL_ID_PREFIX)) {
+        removedPlaceholdersRef.current.add(attachmentId);
+        return;
+      }
       if (!sessionId) return;
       try {
         await sessionsApi.deleteAttachment(sessionId, attachmentId);
