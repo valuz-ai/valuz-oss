@@ -336,6 +336,7 @@ async def test_post_tool_hook_recovers_source_metadata_from_content_transport() 
     assert MCP_SOURCE_CONTENT_TRANSPORT_PREFIX not in json.dumps(compacted)
     sidecar = json.loads(runtime._citation_tool_result_sidecars["mcp-content-transport"])
     assert sidecar["_valuz_evidence"][0]["source"]["providerId"] == "valuz-data"
+    assert runtime._citation_tool_result_model_contents["mcp-content-transport"] == compacted
 
 
 async def test_post_tool_hook_builds_uncovered_provider_summary_evidence() -> None:
@@ -1091,6 +1092,7 @@ async def test_tool_result_event_replays_private_sidecar_for_registry() -> None:
             }
         ]
     }
+    runtime._citation_tool_result_model_contents["tool-1"] = compacted
 
     await runtime._handle_message(
         Session(id="s", agent_config=agent, cwd="/tmp"),
@@ -1108,7 +1110,9 @@ async def test_tool_result_event_replays_private_sidecar_for_registry() -> None:
     assert event.type == "tool_result"
     assert "bulk transcript" not in event.data["content"]
     assert "bulk transcript" in event.data["_citation_content"]
+    assert event.data["_citation_model_content"] == compacted
     assert "tool-1" not in runtime._citation_tool_result_sidecars
+    assert "tool-1" not in runtime._citation_tool_result_model_contents
 
 
 def test_disabled_citation_mode_does_not_install_internal_hook() -> None:

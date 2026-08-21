@@ -8,6 +8,7 @@ from src.core.citation import (
     EvidenceRegistry,
     compact_citation_tool_content,
     private_citation_tool_content,
+    rebase_collection_projections,
 )
 from src.core.mcp_source_metadata import (
     MCP_LEGACY_SOURCE_METADATA_KEY,
@@ -927,10 +928,14 @@ def test_large_structured_result_registers_one_collection_and_materializes_one_a
     assert collection["kind"] == "structured-evidence-collection"
     assert "T0999" not in json.dumps(collection, ensure_ascii=False)
 
-    compacted = compact_citation_tool_content(adapted.model_content)
-    legacy_private = private_citation_tool_content(adapted.model_content)
+    rebased = rebase_collection_projections(adapted.model_content)
+    assert rebased["_valuz_evidence"][0]["collectionHandle"] == collection["collectionHandle"]
+    assert rebased["_valuz_evidence"][0]["contentHash"] == collection["contentHash"]
+
+    compacted = compact_citation_tool_content(rebased)
+    legacy_private = private_citation_tool_content(rebased)
     private = private_citation_tool_content(
-        adapted.model_content,
+        rebased,
         model_content=compacted,
     )
     assert compacted is not None and private is not None

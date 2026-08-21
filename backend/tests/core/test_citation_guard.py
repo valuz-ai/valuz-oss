@@ -1886,6 +1886,136 @@ def test_calculation_inputs_resolve_structured_collection_addresses() -> None:
     assert result.bundle["integrity"]["evidenceMaterializedCount"] == 4
 
 
+def test_root_collection_calculation_inputs_normalize_omitted_items_wrapper() -> None:
+    business_payload = {
+        "data": {
+            "items": [
+                {
+                    "symbol": "SH:600600",
+                    "fiscal_year": "2026",
+                    "fiscal_quarter": "Q1",
+                    "currency": "CNY",
+                    "operating_revenue": 10_285_128_726,
+                },
+                {
+                    "symbol": "SH:600600",
+                    "fiscal_year": "2025",
+                    "fiscal_quarter": "Q1",
+                    "currency": "CNY",
+                    "operating_revenue": 10_445_537_525,
+                },
+            ]
+        },
+        "meta": {"provider": "valuz-data"},
+    }
+    serialized = json.dumps(
+        business_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    collection_handle = "evc_mcp_income_root_12345678"
+    raw = {
+        **business_payload,
+        "_valuz_evidence": [
+            {
+                "version": 1,
+                "kind": "structured-evidence-collection",
+                "collectionHandle": collection_handle,
+                "source": {
+                    "sourceId": "valuz-data:income-statement:SH:600600",
+                    "providerId": "valuz-data",
+                    "sourceType": "dataset",
+                    "title": "Valuz Data · get_financial_statements",
+                    "retrievedAt": "2026-08-21T00:00:00Z",
+                },
+                "common": {
+                    "datasetId": "valuz-data.financial.income_statement.v1",
+                    "toolName": "get_financial_statements",
+                    "capturedAt": "2026-08-21T00:00:00Z",
+                },
+                "addressing": {
+                    "mode": "json-pointer",
+                    "contentRoot": "",
+                    "itemsPointer": "/data/items",
+                    "identityFields": ["/symbol", "/fiscal_year", "/fiscal_quarter"],
+                    "allowedPathRoots": ["/data/items"],
+                },
+                "semantics": {
+                    "entity": {"id": "/symbol"},
+                    "period": {
+                        "fiscalYear": "/fiscal_year",
+                        "fiscalQuarter": "/fiscal_quarter",
+                    },
+                    "unit": {"currency": "/currency"},
+                    "metric": {"mode": "field-name", "valueRoots": [""]},
+                },
+                "contentHash": (
+                    f"sha256:{hashlib.sha256(serialized.encode('utf-8')).hexdigest()}"
+                ),
+            }
+        ],
+    }
+    visible = compact_citation_tool_content(raw)
+    private = private_citation_tool_content(raw, model_content=visible)
+    assert visible is not None and private is not None
+
+    registry = EvidenceRegistry()
+    assert registry.register_tool_projection(visible, private, trusted_private=True) == 1
+    current_address = f"{collection_handle}#/data/0/operating_revenue"
+    prior_address = f"{collection_handle}#/data/1/operating_revenue"
+    assert registry.materialize_reference(collection_handle, "#/data/0/operating_revenue")
+
+    calculation = _item("ev_calc_root_collection_12345678")
+    calculation["source"].update(
+        {
+            "sourceId": "calculation-growth-root",
+            "providerId": "valuz-calculation",
+            "sourceType": "tool-result",
+            "title": "Calculation",
+        }
+    )
+    calculation["evidence"] = {
+        "kind": "calculation",
+        "toolName": "runtime.calculation",
+        "expression": "((current - prior) / prior) * 100",
+        "inputs": [
+            {"name": "current", "citationId": current_address, "value": "10285128726"},
+            {"name": "prior", "citationId": prior_address, "value": "10445537525"},
+        ],
+        "result": "-1.54",
+        "unit": "%",
+        "rounding": "2dp",
+        "calculatedAt": "2026-08-21T00:00:01Z",
+        "metric": "revenue_growth",
+        "period": "2026 Q1 vs 2025 Q1",
+    }
+    assert registry.register_tool_result({"_valuz_evidence": calculation}) == 1
+
+    result = CitationGuard(
+        registry,
+        message_id="msg-root-collection-calculation",
+        user_prompt="计算营业收入同比并引用来源",
+        policy_available=True,
+        verification_enabled=True,
+    ).finalize(
+        "营业收入同比为 -1.54% "
+        "[source](evidence://ev_calc_root_collection_12345678)。"
+    )
+
+    assert result.bundle is not None
+    calculation_citation = next(
+        citation
+        for citation in result.bundle["citations"]
+        if citation["evidence"]["kind"] == "calculation"
+    )
+    input_ids = [item["citationId"] for item in calculation_citation["evidence"]["inputs"]]
+    assert all(citation_id.startswith("cit_") for citation_id in input_ids)
+    assert result.bundle["integrity"]["unknownCitationIds"] == []
+    assert result.bundle["integrity"]["evidenceMaterializationRejectedCount"] == 0
+
+
 def test_claim_audit_materializes_only_matching_collection_fields_for_missing_binding() -> None:
     source = {
         "sourceId": "financials:600519",

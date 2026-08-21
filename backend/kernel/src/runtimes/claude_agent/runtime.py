@@ -475,6 +475,13 @@ class ClaudeAgentRuntime:
         # selected by the retrieval tool; entries are consumed by the matching
         # ToolResultBlock and reset at each user turn.
         self._citation_tool_result_sidecars: dict[str, str] = {}
+        # ``private_citation_tool_content`` may replace repeated source data
+        # with JSON pointers into the canonical compacted projection. Claude's
+        # MCP bridge wraps that projection in a text content block before the
+        # matching ToolResultBlock reaches us, so retain the exact pointer
+        # root alongside the private sidecar. This is internal registration
+        # state only and is removed before the event is persisted/broadcast.
+        self._citation_tool_result_model_contents: dict[str, Any] = {}
         self._citation_compaction_enabled: bool = True
         self._citation_raw_documents: dict[str, dict[str, Any]] = {}
         self._citation_document_metadata: dict[str, dict[str, Any]] = {}
@@ -709,6 +716,7 @@ class ClaudeAgentRuntime:
         self._workflow_pollers = []
         self._active_workflows = []
         self._citation_tool_result_sidecars = {}
+        self._citation_tool_result_model_contents = {}
         self._citation_raw_documents = {}
         self._citation_document_metadata = {}
         self._cur_session_id = session.id
@@ -2542,6 +2550,9 @@ class ClaudeAgentRuntime:
                     <= _MAX_PERSISTED_CITATION_CONTENT_BYTES
                 ):
                     self._citation_tool_result_sidecars[tool_use_id] = private_citation_content
+                    self._citation_tool_result_model_contents[tool_use_id] = (
+                        compacted if compacted is not None else model_projection
+                    )
                 if compacted is None:
                     if source_content_transport_handled:
                         return post_tool_output(tool_name, effective_tool_response)
@@ -3264,8 +3275,24 @@ class ClaudeAgentRuntime:
                             result_content,
                             tool_use_id=block.tool_use_id,
                         )
+                        model_contents = getattr(
+                            self,
+                            "_citation_tool_result_model_contents",
+                            {},
+                        )
+                        citation_model_content = model_contents.pop(
+                            block.tool_use_id,
+                            None,
+                        )
                         citation_extra = (
-                            {"_citation_content": citation_content}
+                            {
+                                "_citation_content": citation_content,
+                                **(
+                                    {"_citation_model_content": citation_model_content}
+                                    if citation_model_content is not None
+                                    else {}
+                                ),
+                            }
                             if citation_content is not None
                             else {}
                         )
