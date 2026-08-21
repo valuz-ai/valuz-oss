@@ -115,7 +115,9 @@ describe("useSessionAttachments", () => {
   });
 
   it("uploads local files on attach and appends the parsing row", async () => {
-    uploadAttachment.mockResolvedValue(row({ id: "u1", parse_status: "parsing" }));
+    uploadAttachment.mockResolvedValue(
+      row({ id: "u1", parse_status: "parsing" }),
+    );
     const ensureSession = vi.fn().mockResolvedValue({ id: "s1" });
     const { result } = renderHook(() => useSessionAttachments("s1"));
     await waitFor(() => expect(listAttachments).toHaveBeenCalled());
@@ -152,7 +154,9 @@ describe("useSessionAttachments", () => {
   it("poll merge preserves an optimistic consumed_at (no chip flash-back)", async () => {
     vi.useFakeTimers();
     listAttachments
-      .mockResolvedValueOnce({ items: [row({ id: "p1", parse_status: "parsing" })] })
+      .mockResolvedValueOnce({
+        items: [row({ id: "p1", parse_status: "parsing" })],
+      })
       // Server still reports the row as pending (turn hasn't consumed it yet).
       .mockResolvedValue({
         items: [row({ id: "p1", parse_status: "ready", consumed_at: null })],
@@ -280,5 +284,147 @@ describe("useSessionAttachments", () => {
       await loadPromise;
     });
     expect(result.current.attachments[0].consumed_at).toBeNull();
+  });
+
+  // ── attach-time feedback ────────────────────────────────────────────────
+  //
+  // Reported on qa: attach an image in a cloud conversation and nothing
+  // happens for ~5 seconds. ``ensureSession`` allocates a sandbox (~3.6s) and
+  // the upload writes to COS (~1.3s), and the chip only appeared after both.
+
+  const file = (name = "f.png") => new File(["x"], name, { type: "image/png" });
+
+  it("shows the file the moment it is attached, before any request", async () => {
+    const { result } = renderHook(() => useSessionAttachments(null));
+    let releaseSession: (v: { id: string }) => void = () => {};
+    const ensure = () =>
+      new Promise<{ id: string }>((r) => {
+        releaseSession = r;
+      });
+
+    act(() => {
+      void result.current.attachLocalFiles([file()], ensure);
+    });
+
+    // Still inside ``ensureSession`` — nothing has been asked of the server.
+    await waitFor(() => expect(result.current.attachments).toHaveLength(1));
+    expect(result.current.attachments[0].filename).toBe("f.png");
+    expect(result.current.hasParsing).toBe(true);
+    expect(uploadAttachment).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseSession({ id: "s1" });
+    });
+  });
+
+  it("replaces the placeholder with the server row rather than showing both", async () => {
+    uploadAttachment.mockResolvedValue(row({ id: "srv1", filename: "f.png" }));
+    const { result } = renderHook(() => useSessionAttachments(null));
+
+    await act(async () => {
+      await result.current.attachLocalFiles([file()], async () => ({
+        id: "s1",
+      }));
+    });
+
+    expect(result.current.attachments).toHaveLength(1);
+    expect(result.current.attachments[0].id).toBe("srv1");
+  });
+
+  it("takes the chip back down when the upload fails", async () => {
+    uploadAttachment.mockRejectedValue(new Error("boom"));
+    const { result } = renderHook(() => useSessionAttachments(null));
+
+    await act(async () => {
+      await result.current.attachLocalFiles([file()], async () => ({
+        id: "s1",
+      }));
+    });
+
+    expect(result.current.attachments).toHaveLength(0);
+  });
+
+  it("takes every chip down when the session cannot be created", async () => {
+    const { result } = renderHook(() => useSessionAttachments(null));
+
+    await act(async () => {
+      await result.current
+        .attachLocalFiles([file("a.png"), file("b.png")], async () => {
+          throw new Error("no session");
+        })
+        .catch(() => {});
+    });
+
+    expect(result.current.attachments).toHaveLength(0);
+  });
+
+  it("the parse poll does not delete a chip whose upload is still in flight", async () => {
+    // ``mergeServer`` used to return the server list verbatim. The poll starts
+    // as soon as a session exists and fires every second, so it would erase
+    // the placeholder one tick after it appeared — the exact bug the chip was
+    // added to fix, reintroduced by the thing that watches it.
+    listAttachments.mockResolvedValue({
+      items: [row({ id: "other", parse_status: "parsing" })],
+    });
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useSessionAttachments("s1"));
+
+    let releaseUpload: (v: SessionAttachmentItem) => void = () => {};
+    uploadAttachment.mockReturnValue(
+      new Promise<SessionAttachmentItem>((r) => {
+        releaseUpload = r;
+      }),
+    );
+    await act(async () => {
+      void result.current.attachLocalFiles([file()], async () => ({
+        id: "s1",
+      }));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    expect(result.current.attachments.some((a) => a.filename === "f.png")).toBe(
+      true,
+    );
+
+    await act(async () => {
+      releaseUpload(row({ id: "srv1", filename: "f.png" }));
+    });
+  });
+
+  it("un-attaches server-side when the file is removed mid-upload", async () => {
+    // The upload cannot be cancelled. If nothing undid it, a file the person
+    // watched themselves remove would still ride along with the turn.
+    let releaseUpload: (v: SessionAttachmentItem) => void = () => {};
+    uploadAttachment.mockReturnValue(
+      new Promise<SessionAttachmentItem>((r) => {
+        releaseUpload = r;
+      }),
+    );
+    deleteAttachment.mockResolvedValue(undefined);
+    const { result } = renderHook(() => useSessionAttachments("s1"));
+
+    await act(async () => {
+      void result.current.attachLocalFiles([file()], async () => ({
+        id: "s1",
+      }));
+    });
+    await waitFor(() => expect(result.current.attachments).toHaveLength(1));
+    const placeholderId = result.current.attachments[0].id;
+
+    await act(async () => {
+      await result.current.remove(placeholderId);
+    });
+    expect(deleteAttachment).not.toHaveBeenCalled(); // no server row yet
+
+    await act(async () => {
+      releaseUpload(row({ id: "srv1", filename: "f.png" }));
+    });
+
+    await waitFor(() =>
+      expect(deleteAttachment).toHaveBeenCalledWith("s1", "srv1"),
+    );
+    expect(result.current.attachments).toHaveLength(0);
   });
 });
