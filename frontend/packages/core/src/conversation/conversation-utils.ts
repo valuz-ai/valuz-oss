@@ -223,10 +223,18 @@ const interruptKind = (value: unknown): "user" | "runtime" | null => {
  * an empty assistant area and no explanation (the CLI rejects the query before
  * any model call, so there are no blocks either). Surface it.
  *
+ * An unrecognized (or absent) ``reason`` still returns ``"unknown"`` rather
+ * than ``null``. Falling back to ``null`` would put the turn straight back
+ * into the silent-blank-reply bug this function exists to fix, and guessing a
+ * specific reason would state a cause we don't have — so the caller gets a
+ * cause-free marker and the UI says only what is known.
+ *
  * Accepts the bare string or a serialized ``{type}`` object, same as
  * ``interruptKind``.
  */
-const budgetHaltKind = (value: unknown): "max_cost" | "max_turns" | null => {
+const budgetHaltKind = (
+  value: unknown,
+): "max_cost" | "max_turns" | "unknown" | null => {
   if (typeof value !== "string") return null;
   const bare = value.trim().toLowerCase();
   if (bare === "max_cost" || bare === "max_turns") return bare;
@@ -237,7 +245,8 @@ const budgetHaltKind = (value: unknown): "max_cost" | "max_turns" | null => {
     if (String(obj.type ?? "").toLowerCase() !== "budget_exhausted")
       return null;
     const reason = String(obj.reason ?? "").toLowerCase();
-    return reason === "max_cost" || reason === "max_turns" ? reason : null;
+    if (reason === "max_cost" || reason === "max_turns") return reason;
+    return "unknown";
   } catch {
     return null;
   }

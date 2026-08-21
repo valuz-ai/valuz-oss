@@ -578,6 +578,7 @@ I18nKey = Literal[
     "conversation.browsedPages",
     "conversation.budgetHaltCost",
     "conversation.budgetHaltTurns",
+    "conversation.budgetHaltUnknown",
     "conversation.calledServer",
     "conversation.calledSkills",
     "conversation.calledTools",

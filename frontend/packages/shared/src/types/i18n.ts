@@ -572,6 +572,7 @@ export type KnownI18nKey =
   | "conversation.browsedPages"
   | "conversation.budgetHaltCost"
   | "conversation.budgetHaltTurns"
+  | "conversation.budgetHaltUnknown"
   | "conversation.calledServer"
   | "conversation.calledSkills"
   | "conversation.calledTools"

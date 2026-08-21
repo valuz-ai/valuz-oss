@@ -982,7 +982,9 @@ const TurnRow = memo(
         ? t("conversation.budgetHaltCost" as Parameters<typeof t>[0])
         : turn.budgetHalt === "max_turns"
           ? t("conversation.budgetHaltTurns" as Parameters<typeof t>[0])
-          : null;
+          : turn.budgetHalt === "unknown"
+            ? t("conversation.budgetHaltUnknown" as Parameters<typeof t>[0])
+            : null;
     const actionText = assistantText || interruptLabel || "";
 
     // Turn-level meta: total elapsed (max of any block's elapsedMs) and
