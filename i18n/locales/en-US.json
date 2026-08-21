@@ -737,8 +737,7 @@
     "groupDirectory": "Connected",
     "groupCustom": "Custom",
     "groupAvailable": "Available",
-    "systemManaged": "Built-in connectors are managed by the system",
-    "systemManagedBadge": "System managed"
+    "systemManaged": "Built-in connectors are managed by the system"
   },
   "nav": {
     "home": "Home",

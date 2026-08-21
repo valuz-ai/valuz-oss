@@ -2,7 +2,6 @@ import { Loader2, Plug, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import type { ToolInfo } from "@valuz/shared";
 import { useI18n } from "../../hooks/use-i18n";
-import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { ConnectorIcon } from "./ConnectorIcon";
 
@@ -94,15 +93,6 @@ export const ConnectorDetailPanel = ({
             </div>
           </div>
           {headerActions}
-          {systemManaged ? (
-            <Badge
-              variant="brand"
-              className="shrink-0"
-              title={t("connector.systemManaged")}
-            >
-              {t("connector.systemManagedBadge")}
-            </Badge>
-          ) : null}
           <Button
             variant="outline"
             size="sm"
@@ -117,6 +107,11 @@ export const ConnectorDetailPanel = ({
             {t("connector.disconnect")}
           </Button>
         </div>
+        {systemManaged ? (
+          <p className="mt-2 text-xs text-ink-meta">
+            {t("connector.systemManaged")}
+          </p>
+        ) : null}
         {description ? (
           <p className="mt-3 text-sm leading-relaxed text-ink-body">
             {description}

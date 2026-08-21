@@ -528,7 +528,6 @@ I18nKey = Literal[
     "connector.statusError",
     "connector.statusNotConnected",
     "connector.systemManaged",
-    "connector.systemManagedBadge",
     "connector.title",
     "connector.toolsError",
     "connector.toolsTitle",
