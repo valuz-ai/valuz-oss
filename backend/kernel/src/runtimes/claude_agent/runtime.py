@@ -15,7 +15,7 @@ import re
 import time
 import uuid
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -57,15 +57,6 @@ from claude_agent_sdk.types import (
     SystemPromptPreset,
     ToolPermissionContext,
 )
-from claude_agent_sdk.types import (
-    McpHttpServerConfig as SdkMcpHttpServerConfig,
-)
-from claude_agent_sdk.types import (
-    McpSSEServerConfig as SdkMcpSSEServerConfig,
-)
-from claude_agent_sdk.types import (
-    McpStdioServerConfig as SdkMcpStdioServerConfig,
-)
 from src.core.agent_config import AgentConfig
 from src.core.approval_rule_matcher import (
     ClaudePermissionUpdateRuleMatcher,
@@ -91,7 +82,10 @@ from src.core.events import (
     EventSink,
 )
 from src.core.hooks import Hooks
-from src.core.mcp_source_metadata import adapt_mcp_source_result
+from src.core.mcp_source_metadata import (
+    adapt_mcp_source_result,
+    unwrap_mcp_source_content_transport,
+)
 from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
 from src.core.tools import ExecContext, ToolDef, ToolKit, ToolResult
@@ -99,8 +93,6 @@ from src.core.types import (
     BudgetExhausted,
     EndTurn,
     Error,
-    McpServerConfig,
-    McpStdioServerConfig,
     ModelProvider,
     ModelSettings,
     Session,
@@ -119,12 +111,12 @@ from src.runtimes.claude_agent.approval_bridge import (
     _build_pending_payload,
     _classify_subject,
 )
+from src.runtimes.claude_agent.mcp_proxy import ClaudeMcpSourceProxy
 from src.runtimes.interruption import (
     absorb_interrupt_cancellations,
     describe_exception,
     is_runtime_interruption,
 )
-from src.runtimes.mcp_env import resolve_stdio_env
 from src.runtimes.network_egress import (
     ModelIngressDescriptor,
     claude_api_key_credential_gate,
@@ -401,6 +393,7 @@ class ClaudeAgentRuntime:
         self.egress_descriptor = egress_descriptor
         self._client: ClaudeSDKClient | None = None
         self._active_client: ClaudeSDKClient | None = None
+        self._mcp_source_proxies: list[ClaudeMcpSourceProxy] = []
         # Last cumulative usage snapshot echoed by the CLI, kept so every
         # ``usage_update`` we emit carries a disjoint increment. Cleared
         # with the client: a fresh CLI process restarts its accumulator at
@@ -1523,6 +1516,10 @@ class ClaudeAgentRuntime:
             finally:
                 self._client = None
                 self._active_client = None
+        proxies = getattr(self, "_mcp_source_proxies", [])
+        self._mcp_source_proxies = []
+        if proxies:
+            await asyncio.gather(*(proxy.close() for proxy in proxies), return_exceptions=True)
 
     def _usage_delta_payload(self, result_msg: Any) -> dict[str, Any]:
         """Turn the CLI's cumulative usage counter into THIS turn's increment.
@@ -1821,8 +1818,12 @@ class ClaudeAgentRuntime:
         if sdk_tools:
             mcp["harness"] = create_sdk_mcp_server(name="harness", tools=sdk_tools)
 
+        proxies: list[ClaudeMcpSourceProxy] = []
         for cfg in session.mcp_servers:
-            mcp[cfg.name] = _to_sdk_mcp_server(cfg)
+            proxy = ClaudeMcpSourceProxy(cfg)
+            proxies.append(proxy)
+            mcp[cfg.name] = proxy.sdk_config()
+        self._mcp_source_proxies = proxies
 
         # ``allowed_tools`` is the Claude SDK's *approval-bypass* list
         # (it lowers to ``--allowedTools`` on the CLI). Tools matched
@@ -2385,6 +2386,21 @@ class ClaudeAgentRuntime:
             hooks is not None and hooks._handlers.get("after_tool")
         ):
 
+            def post_tool_output(tool_name: str, value: Any) -> SyncHookJSONOutput:
+                if tool_name.startswith("mcp__"):
+                    return SyncHookJSONOutput(
+                        hookSpecificOutput={
+                            "hookEventName": "PostToolUse",
+                            "updatedMCPToolOutput": value,
+                        }
+                    )
+                return SyncHookJSONOutput(
+                    hookSpecificOutput={
+                        "hookEventName": "PostToolUse",
+                        "updatedToolOutput": value,
+                    }
+                )
+
             async def post_tool_use(
                 input_data: HookInput, tool_use_id: str | None, context: HookContext
             ) -> SyncHookJSONOutput:
@@ -2392,11 +2408,18 @@ class ClaudeAgentRuntime:
                 tool_name = str(data.get("tool_name") or "")
                 tool_response = data.get("tool_response", "")
                 if hooks is not None and hooks._handlers.get("after_tool"):
+                    _, _, hook_tool_response = unwrap_mcp_source_content_transport(tool_response)
                     await hooks.fire(
                         "after_tool",
                         tool_name=tool_name,
                         input=data.get("tool_input", {}),
-                        result=ToolResult(content=str(tool_response)),
+                        result=ToolResult(
+                            content=str(
+                                hook_tool_response
+                                if hook_tool_response is not None
+                                else tool_response
+                            )
+                        ),
                     )
                 if not self._citation_compaction_enabled:
                     return SyncHookJSONOutput()
@@ -2414,9 +2437,19 @@ class ClaudeAgentRuntime:
                     if persisted_tool_response is not None
                     else tool_response
                 )
+                (
+                    transport_descriptor,
+                    transport_structured_content,
+                    restored_tool_response,
+                ) = unwrap_mcp_source_content_transport(effective_tool_response)
+                source_content_transport_handled = restored_tool_response is not None
+                if source_content_transport_handled:
+                    effective_tool_response = restored_tool_response
                 source_adaptation = adapt_mcp_source_result(
                     effective_tool_response,
                     tool_name=tool_name or None,
+                    descriptor=transport_descriptor,
+                    structured_content=transport_structured_content,
                 )
                 source_metadata_handled = source_adaptation is not None
                 if source_adaptation is not None and source_adaptation.resource_kinds != {
@@ -2475,17 +2508,7 @@ class ClaudeAgentRuntime:
                                 ensure_ascii=False,
                                 separators=(",", ":"),
                             )
-                        output_key = (
-                            "updatedMCPToolOutput"
-                            if tool_name.startswith("mcp__")
-                            else "updatedToolOutput"
-                        )
-                        return SyncHookJSONOutput(
-                            hookSpecificOutput={
-                                "hookEventName": "PostToolUse",
-                                output_key: visible,
-                            }
-                        )
+                        return post_tool_output(tool_name, visible)
                 if not source_metadata_handled:
                     augmented_indexed_content = augment_indexed_document_evidence(
                         effective_tool_response,
@@ -2520,17 +2543,30 @@ class ClaudeAgentRuntime:
                 ):
                     self._citation_tool_result_sidecars[tool_use_id] = private_citation_content
                 if compacted is None:
+                    if source_content_transport_handled:
+                        return post_tool_output(tool_name, effective_tool_response)
                     return SyncHookJSONOutput()
-                output_key = (
-                    "updatedMCPToolOutput" if tool_name.startswith("mcp__") else "updatedToolOutput"
-                )
-                hook_output: dict[str, Any] = {
-                    "hookEventName": "PostToolUse",
-                    output_key: compacted,
-                }
-                return SyncHookJSONOutput(
-                    hookSpecificOutput=hook_output,
-                )
+                visible_output: Any = compacted
+                if source_content_transport_handled and tool_name.startswith("mcp__"):
+                    # Claude's SDK-MCP control bridge gives PostToolUse a list
+                    # of MCP content blocks and requires replacements to keep
+                    # that outer shape.  Source adaptation works on the
+                    # restored structured payload, so serialize its model
+                    # projection back into one ordinary compatibility block.
+                    # Returning the mapping directly makes the CLI call
+                    # ``reduce`` on a non-list and converts a successful tool
+                    # call into a runtime failure.
+                    visible_output = [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                compacted,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        }
+                    ]
+                return post_tool_output(tool_name, visible_output)
 
             sdk_hooks["PostToolUse"] = [HookMatcher(hooks=[post_tool_use])]
 
@@ -3421,7 +3457,7 @@ def _stringify_tool_result_content(content: Any) -> str:
         return str(content)
 
 
-def _iter_tool_response_mappings(value: Any):  # noqa: ANN202
+def _iter_tool_response_mappings(value: Any) -> Iterator[Mapping[str, Any]]:
     if isinstance(value, str):
         try:
             parsed = json.loads(value)
@@ -3575,53 +3611,3 @@ def _build_cumulative_usage_snapshot(default_model: str, result_msg: Any) -> dic
     if cost is not None:
         payload["cost_usd"] = float(cost)
     return payload
-
-
-def _apply_tool_timeout(entry: dict[str, Any], cfg: McpServerConfig) -> None:
-    """Carry ``tool_timeout_sec`` into the CLI's per-server idle timeout.
-
-    The Claude CLI aborts a silent MCP tool call after its own default
-    (300s) and tells the operator to set a per-server ``timeout`` in ms. A
-    generation tool legitimately runs longer than that with nothing to say
-    in between (``generate_ui`` streams a whole document from a model), so a
-    server that declared a tool timeout must have it honoured here — codex
-    already maps the same field onto its own config. The SDK forwards this
-    dict verbatim into ``--mcp-config``, so an extra key reaches the CLI
-    even though its TypedDict does not name one.
-    """
-    timeout_sec = getattr(cfg, "tool_timeout_sec", None)
-    if isinstance(timeout_sec, (int, float)) and timeout_sec > 0:
-        entry["timeout"] = int(float(timeout_sec) * 1000)
-
-
-def _to_sdk_mcp_server(
-    cfg: McpServerConfig,
-) -> SdkMcpHttpServerConfig | SdkMcpSSEServerConfig | SdkMcpStdioServerConfig:
-    """Translate kernel `McpServerConfig` to the SDK's wire-format dict."""
-    if isinstance(cfg, McpStdioServerConfig):
-        stdio: SdkMcpStdioServerConfig = {
-            "type": "stdio",
-            "command": cfg.command,
-            "args": list(cfg.args),
-        }
-        # Only include ``env`` when the user supplied something — once the
-        # SDK forwards an env dict, the Claude CLI uses it as-is for the
-        # MCP child, replacing the parent env entirely. Omitting lets the
-        # CLI inherit naturally (HOME / PATH / etc.), which ``npx``-style
-        # commands depend on.
-        env = resolve_stdio_env(cfg)
-        if env is not None:
-            stdio["env"] = env
-        _apply_tool_timeout(stdio, cfg)
-        return stdio
-    if cfg.transport == "sse":
-        sse: SdkMcpSSEServerConfig = {"type": "sse", "url": cfg.url}
-        if cfg.headers:
-            sse["headers"] = dict(cfg.headers)
-        _apply_tool_timeout(sse, cfg)
-        return sse
-    http: SdkMcpHttpServerConfig = {"type": "http", "url": cfg.url}
-    if cfg.headers:
-        http["headers"] = dict(cfg.headers)
-    _apply_tool_timeout(http, cfg)
-    return http

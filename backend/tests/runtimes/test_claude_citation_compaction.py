@@ -9,9 +9,15 @@ import json
 import valuz_agent.boot.kernel  # noqa: F401
 from claude_agent_sdk import ToolResultBlock
 from claude_agent_sdk import UserMessage as SdkUserMessage
+from mcp.types import CallToolResult, TextContent
 
 from src.core.agent_config import AgentConfig
 from src.core.citation import EvidenceRegistry
+from src.core.mcp_source_metadata import (
+    MCP_SOURCE_CONTENT_TRANSPORT_PREFIX,
+    MCP_SOURCE_METADATA_KEY,
+    wrap_mcp_result_metadata_in_content_for_transport,
+)
 from src.core.types import Session
 from src.runtimes.claude_agent.runtime import ClaudeAgentRuntime
 
@@ -249,6 +255,87 @@ async def test_post_tool_hook_builds_document_evidence_from_mcp_result_meta() ->
     sidecar = json.loads(runtime._citation_tool_result_sidecars["mcp-meta-document"])
     assert sidecar["_valuz_evidence"][0]["source"]["providerId"] == "reportify"
     assert sidecar["_valuz_evidence"][0]["locator"]["page"] == 9
+
+
+async def test_post_tool_hook_recovers_source_metadata_from_content_transport() -> None:
+    runtime = ClaudeAgentRuntime(AgentConfig(id="a", name="a"), "", _RecordingSink())
+    hook = runtime._map_hooks()["PostToolUse"][0].hooks[0]
+    payload = {
+        "doc_id": "msft-q1",
+        "title": "Microsoft FY2026 Q1 transcript",
+        "url": "https://reportify.cn/transcripts/msft-q1",
+        "document_version": "v1",
+        "chunks": [
+            {
+                "id": "chunk-1",
+                "content": "Demand continues to exceed available supply.",
+                "metadata": {"document_page": 9},
+            }
+        ],
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    descriptor = {
+        "version": 1,
+        "provider": {"id": "valuz-data", "name": "Valuz Data"},
+        "operation": {"toolName": "get_document_chunks"},
+        "result": {
+            "target": "structuredContent",
+            "hash": {"algorithm": "sha256", "value": digest},
+            "capturedAt": "2026-08-21T00:00:00Z",
+        },
+        "resources": [
+            {
+                "resourceId": "document-chunks",
+                "kind": "document-chunks",
+                "authority": "authoritative",
+                "rootPointer": "",
+                "document": {
+                    "scope": "resource",
+                    "sourceId": "/doc_id",
+                    "documentId": "/doc_id",
+                    "documentVersion": "/document_version",
+                    "title": "/title",
+                    "url": "/url",
+                },
+                "itemsPointer": "/chunks",
+                "mapping": {
+                    "chunkId": "/id",
+                    "text": "/content",
+                    "page": "/metadata/document_page",
+                },
+            }
+        ],
+    }
+    wrapped = wrap_mcp_result_metadata_in_content_for_transport(
+        CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(payload))],
+            structuredContent=payload,
+            _meta={MCP_SOURCE_METADATA_KEY: descriptor},
+        ),
+        server_name="valuz-data",
+    )
+    flattened = [item.model_dump(by_alias=True, exclude_none=True) for item in wrapped.content]
+
+    output = await hook(
+        {
+            "tool_name": "mcp__valuz-data__get_document_chunks",
+            "tool_input": {"document_id": "msft-q1"},
+            "tool_response": flattened,
+        },
+        "mcp-content-transport",
+        None,  # type: ignore[arg-type]
+    )
+
+    updated = output["hookSpecificOutput"]["updatedMCPToolOutput"]
+    assert isinstance(updated, list) and updated[0]["type"] == "text"
+    compacted = json.loads(updated[0]["text"])
+    assert compacted["chunks"][0]["content"] == payload["chunks"][0]["content"]
+    assert compacted["chunks"][0]["evidenceHandle"].startswith("ev_mcp_")
+    assert MCP_SOURCE_CONTENT_TRANSPORT_PREFIX not in json.dumps(compacted)
+    sidecar = json.loads(runtime._citation_tool_result_sidecars["mcp-content-transport"])
+    assert sidecar["_valuz_evidence"][0]["source"]["providerId"] == "valuz-data"
 
 
 async def test_post_tool_hook_builds_uncovered_provider_summary_evidence() -> None:
