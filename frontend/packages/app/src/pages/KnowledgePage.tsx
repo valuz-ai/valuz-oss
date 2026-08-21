@@ -72,6 +72,7 @@ import { useTranslation, useResourceCategories } from "@valuz/core";
 import type { ResourceCategory } from "@valuz/shared";
 import { CreateKbDialog } from "../components";
 import { useCardGridColumns } from "../hooks/use-card-grid-columns";
+import { useKbTreePolling } from "../hooks/use-kb-tree-polling";
 import { OriginIcon } from "../components/ExecutionLocationPicker";
 
 type UiStatus = "ready" | "indexing" | "failed" | "queued" | "missing";
@@ -331,7 +332,11 @@ export const KnowledgePage = ({
   const [deleteDocOpen, setDeleteDocOpen] = useState(false);
 
   const [dragOver, setDragOver] = useState(false);
-  const [dropping, setDropping] = useState(false);
+  // Covers BOTH upload entry points — the header button and the drop zone.
+  // ``dropping`` used to exist for the drop path alone, and even there it was
+  // unreachable: ``handleDrop`` clears ``dragOver`` before setting it, and the
+  // only thing that read it lived inside the ``dragOver &&`` overlay.
+  const [uploading, setUploading] = useState(false);
   const dragCounterRef = useRef(0);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -342,8 +347,6 @@ export const KnowledgePage = ({
     setContentInnerClassName,
   } = useProjectOutlet();
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
-
-
 
   // ── Load KB list ──────────────────────────────────────────────────
 
@@ -386,6 +389,49 @@ export const KnowledgePage = ({
       setTreeLoading(false);
     }
   }, []);
+
+  // Re-read the tree in place: same KB, same expansion, same selection.
+  //
+  // Deliberately not ``enterKb`` — that one resets ``expanded`` /
+  // ``selectedDoc`` / ``searchQuery``, which is right when the user opens a
+  // library and wrong when this fires underneath them every few seconds.
+  //
+  // Expanded folders are re-read too. Refreshing only the root would leave a
+  // document *inside* a folder frozen at "等待中" — the same bug one level
+  // down, and the harder one to notice.
+  const refreshTree = useCallback(async () => {
+    if (!activeKb) return;
+    const folderIds = [...expanded];
+    const [root, ...children] = await Promise.all([
+      kbApi.tree(activeKb.id),
+      ...folderIds.map((id) => kbApi.tree(activeKb.id, id)),
+    ]);
+    setRootNodes(root.nodes);
+    if (folderIds.length > 0) {
+      setChildrenMap((prev) => {
+        const next = { ...prev };
+        folderIds.forEach((id, i) => {
+          next[id] = children[i].nodes;
+        });
+        return next;
+      });
+    }
+  }, [activeKb, expanded]);
+
+  // Poll only while something is actually parsing; a settled library costs
+  // nothing. ``missing`` is terminal too — it means the source file is gone,
+  // which no amount of waiting fixes.
+  const treeIsSettling = useMemo(() => {
+    const inFlight = (n: KbTreeNode) =>
+      n.kind === "document" &&
+      (n.status === "queued" || n.status === "processing");
+    return (
+      rootNodes.some(inFlight) ||
+      Object.values(childrenMap).some((nodes) => nodes.some(inFlight))
+    );
+  }, [rootNodes, childrenMap]);
+
+  useKbTreePolling({ active: treeIsSettling, refresh: refreshTree });
 
   const exitKb = useCallback(() => {
     setActiveKb(null);
@@ -601,6 +647,10 @@ export const KnowledgePage = ({
   const uploadKbFiles = useCallback(
     async (files: File[]): Promise<void> => {
       if (!activeKb || files.length === 0) return;
+      // The header button's path had no progress state at all: a 3 MB PDF
+      // simply did nothing visible until the toast landed, which reads as a
+      // click that missed.
+      setUploading(true);
       try {
         await kbApi.uploadFiles(activeKb.id, files);
         toast.success(
@@ -620,6 +670,8 @@ export const KnowledgePage = ({
             t("knowledge.importFailed" as Parameters<typeof t>[0]),
           ),
         );
+      } finally {
+        setUploading(false);
       }
     },
     [activeKb, enterKb],
@@ -697,7 +749,7 @@ export const KnowledgePage = ({
       const files = Array.from(e.dataTransfer.files);
       if (files.length === 0) return;
 
-      setDropping(true);
+      setUploading(true);
       try {
         // Electron exposes ``File.path``; when present, copy the local
         // file straight into the KB root (fast — no upload). When absent
@@ -737,7 +789,7 @@ export const KnowledgePage = ({
           ),
         );
       } finally {
-        setDropping(false);
+        setUploading(false);
       }
     },
     [activeKb, enterKb, uploadKbFiles],
@@ -1046,6 +1098,7 @@ export const KnowledgePage = ({
               variant="outline"
               size="sm"
               onClick={() => uploadInputRef.current?.click()}
+              loading={uploading}
               aria-label={t("knowledge.uploadFiles" as Parameters<typeof t>[0])}
               className="h-8 w-8 p-0 text-ink-meta hover:text-ink-heading"
             >
@@ -1104,7 +1157,20 @@ export const KnowledgePage = ({
         )}
       </div>
     );
-  }, [activeKb, exitKb, handleRescan, health, loading, rescanning, t]);
+    // ``uploading`` is load-bearing here: the header is memoised into the
+    // layout slot, so leaving it out would freeze the upload button's spinner
+    // on its first value — the header would keep rendering "idle" for the
+    // whole upload, which is the exact symptom this change exists to fix.
+  }, [
+    activeKb,
+    exitKb,
+    handleRescan,
+    health,
+    loading,
+    rescanning,
+    uploading,
+    t,
+  ]);
 
   useEffect(() => {
     setHeader(pageHeader);
@@ -1131,17 +1197,14 @@ export const KnowledgePage = ({
       onDragOver={activeKb ? handleDragOver : undefined}
       onDrop={activeKb ? handleDrop : undefined}
     >
-      {dragOver && (
+      {(dragOver || uploading) && (
         <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-brand/5 backdrop-blur-sm">
           <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-brand/40 bg-card/90 px-12 py-10 shadow-lg">
             <Upload className="h-8 w-8 text-brand" />
             <span className="text-sm font-medium text-ink-heading">
-              {dropping
+              {uploading
                 ? t("common.processing" as Parameters<typeof t>[0])
                 : t("knowledge.importFiles" as Parameters<typeof t>[0])}
-            </span>
-            <span className="text-xs text-ink-meta">
-              {t("knowledge.importFiles" as Parameters<typeof t>[0])}
             </span>
           </div>
         </div>
