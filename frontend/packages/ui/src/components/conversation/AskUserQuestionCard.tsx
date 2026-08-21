@@ -68,13 +68,15 @@ function QuestionBlock({
   const { t } = useI18n();
   return (
     <fieldset disabled={answered} className="space-y-1.5">
-      <div className="flex items-center gap-2">
+      {/* Header pill sits on its own line above the question: side by side
+          they fight for width and both wrap mid-word on long CJK questions. */}
+      <div className="space-y-1">
         {header ? (
           <span className="inline-flex rounded-md bg-brand/10 px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wider text-brand">
             {header}
           </span>
         ) : null}
-        <span className="text-sm font-medium text-ink-heading">{question}</span>
+        <p className="text-sm font-medium text-ink-heading">{question}</p>
       </div>
       <div className="space-y-1">
         {options.map((opt) => {
