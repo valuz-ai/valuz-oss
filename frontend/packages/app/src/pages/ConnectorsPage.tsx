@@ -567,6 +567,7 @@ export const ConnectorsPage = () => {
           toolsError={activeToolsError}
           busy={busyKey === `installed:${c.id}`}
           onConnect={() => handleReconnectInstalled(c)}
+          systemManaged={!canDeleteConnector(c)}
           onDisconnect={() => canDeleteConnector(c) && setDeleteTarget(c)}
           headerActions={
             <ResourceDetailActionSlot
