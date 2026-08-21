@@ -70,7 +70,6 @@ from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
 from src.core.tools import ExecContext, ToolDef, ToolKit
 from src.core.types import (
-    BudgetExhausted,
     EndTurn,
     Error,
     McpStdioServerConfig,
@@ -1644,8 +1643,7 @@ def _externalize_mcp_secrets(
         # Exact filters plus disabled login-shell startup close both paths.
         for env_name in secret_env:
             policy = (
-                f"shell_environment_policy.filters.{_toml_key(env_name)}="
-                f"{_toml_quote('exclude')}"
+                f"shell_environment_policy.filters.{_toml_key(env_name)}={_toml_quote('exclude')}"
             )
             if policy not in overrides:
                 add.append(policy)
@@ -1899,9 +1897,7 @@ def _build_config_overrides(
         if _CODEX_DISABLE_LOGIN_SHELL not in overrides:
             overrides.append(_CODEX_DISABLE_LOGIN_SHELL)
         provider_env_key = (
-            _HARNESS_PROVIDER_ENV_KEY
-            if effective_base_url is not None
-            else _CODEX_OPENAI_API_KEY
+            _HARNESS_PROVIDER_ENV_KEY if effective_base_url is not None else _CODEX_OPENAI_API_KEY
         )
         overrides.append(
             f"shell_environment_policy.filters.{_toml_key(provider_env_key)}="
@@ -2050,9 +2046,21 @@ def _stop_reason_from_turn(turn_done: TurnCompletedNotification) -> StopReason:
             retry_status="exhausted",
             message=err.message if err is not None else "turn failed",
         )
-    # ``in_progress`` should not appear on a turn/completed notification, but
-    # surface as a budget-exhausted-ish marker rather than silently.
-    return BudgetExhausted(reason="max_turns")
+    # ``in_progress`` should not appear on a turn/COMPLETED notification —
+    # codex is contradicting itself. Surface it rather than swallowing it,
+    # but NOT as ``BudgetExhausted``: a budget stop is a legible, expected
+    # outcome that the UI now explains in so many words ("this turn hit the
+    # runtime's maximum step count"), and telling the user that about a
+    # protocol inconsistency is a confident lie. It reads as an anomaly,
+    # which is what it is.
+    return Error(
+        category="execution_error",
+        retry_status="exhausted",
+        # ``status.value``, not ``status`` — this string lands in the user's
+        # error card, and ``repr`` of the enum would leak
+        # ``<TurnStatus.in_progress: 'inProgress'>`` into it.
+        message=f"codex reported a completed turn still in status {status.value!r}",
+    )
 
 
 _BREAKDOWN_FIELDS = (
