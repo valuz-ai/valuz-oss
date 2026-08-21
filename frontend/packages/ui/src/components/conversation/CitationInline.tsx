@@ -1348,7 +1348,7 @@ export function CitationPill({
           data-citation-calculation-source
           className="flex w-full max-w-full cursor-default items-center rounded-md bg-transparent px-2 py-1 text-left text-xs text-ink-body outline-none transition hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-primary/20"
         >
-          <span className="mr-1 font-semibold text-primary">{indexLabel}</span>
+          <span className="font-semibold text-primary">{indexLabel}</span>{" "}
           <span className="min-w-0 truncate">{sourceLabel}</span>
         </span>
       ) : (
@@ -1505,9 +1505,9 @@ export function CitationSourceCards({
               }
               className="w-full max-w-full truncate rounded-md bg-transparent px-2 py-1 text-left text-xs text-ink-body transition enabled:hover:bg-surface-muted disabled:cursor-default disabled:opacity-60"
             >
-              <span className="mr-1 font-semibold text-primary">
+              <span className="font-semibold text-primary">
                 {displayIndex}
-              </span>
+              </span>{" "}
               {citation.source.title}
               {quality ? (
                 <>

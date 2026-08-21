@@ -1,7 +1,7 @@
 """replace Reportify search/stock connectors with Valuz Data built-ins
 
-Revision ID: 0033
-Revises: 0032
+Revision ID: 0037
+Revises: 0036
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0033"
-down_revision: str | None = "0032"
+revision: str = "0037"
+down_revision: str | None = "0036"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
