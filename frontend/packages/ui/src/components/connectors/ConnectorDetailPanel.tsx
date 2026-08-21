@@ -22,6 +22,9 @@ export interface ConnectorDetailPanelProps {
   toolsError?: string | null;
   /** A connect/disconnect request is in flight — disables the buttons. */
   busy?: boolean;
+  /** Built-in connector whose credentials the system manages: the
+   *  disconnect button renders disabled with an explanatory notice. */
+  systemManaged?: boolean;
   onConnect?: () => void;
   onDisconnect?: () => void;
   /** Edition/overlay-provided actions rendered in the detail header. */
@@ -37,6 +40,7 @@ export const ConnectorDetailPanel = ({
   tools,
   toolsError,
   busy,
+  systemManaged,
   onConnect,
   onDisconnect,
   headerActions,
@@ -93,13 +97,21 @@ export const ConnectorDetailPanel = ({
             variant="outline"
             size="sm"
             className="shrink-0"
-            disabled={busy}
-            onClick={onDisconnect}
+            disabled={busy || systemManaged}
+            title={
+              systemManaged ? t("connector.systemManaged") : undefined
+            }
+            onClick={systemManaged ? undefined : onDisconnect}
           >
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
             {t("connector.disconnect")}
           </Button>
         </div>
+        {systemManaged ? (
+          <p className="mt-2 text-xs text-ink-meta">
+            {t("connector.systemManaged")}
+          </p>
+        ) : null}
         {description ? (
           <p className="mt-3 text-sm leading-relaxed text-ink-body">
             {description}

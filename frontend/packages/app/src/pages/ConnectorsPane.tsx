@@ -535,6 +535,7 @@ export function ConnectorsPane({
             tools={tools}
             toolsError={toolsError}
             busy={busyKey === `installed:${selectedInstalled.id}`}
+            systemManaged={!canDeleteConnector(selectedInstalled)}
             onConnect={() => handleReconnect(selectedInstalled)}
             onDisconnect={() => {
               if (canDeleteConnector(selectedInstalled))
