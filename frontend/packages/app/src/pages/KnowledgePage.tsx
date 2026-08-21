@@ -286,8 +286,12 @@ const uploadErrorMessage = (error: unknown, fallback: string): string => {
 
 export const KnowledgePage = ({
   directoryFieldMode = "picker",
+  managedRootAutoDiscovers = true,
 }: {
   directoryFieldMode?: DirectoryFieldMode;
+  /** See ``CreateKbDialog`` — whether a managed root is one the owning
+   * backend rescans on a timer. */
+  managedRootAutoDiscovers?: boolean;
 } = {}) => {
   const { t } = useTranslation();
   const { copyFiles } = usePlatform();
@@ -611,7 +615,10 @@ export const KnowledgePage = ({
         // bare `catch {}` swallowed that and left the user guessing — which
         // was the whole point of making the rejection explicit.
         toast.error(
-          uploadErrorMessage(error, t("knowledge.importFailed" as Parameters<typeof t>[0])),
+          uploadErrorMessage(
+            error,
+            t("knowledge.importFailed" as Parameters<typeof t>[0]),
+          ),
         );
       }
     },
@@ -724,7 +731,10 @@ export const KnowledgePage = ({
         }
       } catch (error) {
         toast.error(
-          uploadErrorMessage(error, t("knowledge.importFailed" as Parameters<typeof t>[0])),
+          uploadErrorMessage(
+            error,
+            t("knowledge.importFailed" as Parameters<typeof t>[0]),
+          ),
         );
       } finally {
         setDropping(false);
@@ -1156,6 +1166,7 @@ export const KnowledgePage = ({
 
       <CreateKbDialog
         directoryFieldMode={directoryFieldMode}
+        managedRootAutoDiscovers={managedRootAutoDiscovers}
         open={createOpen}
         onOpenChange={setCreateOpen}
         onSubmit={async (data) => {
