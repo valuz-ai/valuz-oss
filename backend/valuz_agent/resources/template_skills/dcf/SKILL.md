@@ -1,6 +1,6 @@
 ---
 name: dcf
-description: DCF valuation model for global equities (US / HK / A-shares focus, also other markets) using Valuz financial data. Uses valuz-stock (Valuz Quotes MCP — real-time & historical quotes, financial statements, indicators) for financials and WACC inputs (risk-free rate from the relevant market's government bond yields) and valuz-search (Valuz Search MCP — earnings reports, calls, research, minutes, filings) for qualitative context and growth projections. Use instead of the original dcf-model skill for cross-market equities.
+description: DCF valuation model for global equities (US / HK / A-shares focus, also other markets) using Valuz financial data. Uses valuz-data (Valuz Quotes MCP — real-time & historical quotes, financial statements, indicators) for financials and WACC inputs (risk-free rate from the relevant market's government bond yields) and valuz-search (Valuz Search MCP — earnings reports, calls, research, minutes, filings) for qualitative context and growth projections. Use instead of the original dcf-model skill for cross-market equities.
 ---
 
 # dcf
@@ -9,20 +9,21 @@ description: DCF valuation model for global equities (US / HK / A-shares focus, 
 
 全球股票市场（美股/港股/A 股为主，兼顾其他市场）的 DCF 建模，统一使用两个 Valuz 连接器取数：
 
-- `valuz-stock` (Valuz Quotes MCP) — 行情、财务三表、指标、营收拆分等数值数据（quantitative/numeric）。
+- `valuz-data` (Valuz Quotes MCP) — 行情、财务三表、指标、营收拆分等数值数据（quantitative/numeric）。
 - `valuz-search` (Valuz Search MCP) — 财报、公告、研报、纪要、电话会、新闻检索（qualitative/text）。
 
-> **代码格式**：`valuz-stock` 用裸代码（AAPL / 00700 / 600519）；`valuz-search` 用 `market:ticker`（US:AAPL / HK:00700 / SH:600519）。
+> **代码格式**：两个连接器都使用 `MARKET:LOCAL` 规范代码（`US:AAPL` / `HK:00700` / `SH:600519`）；非规范输入先调用 `resolve_symbols`。
 
-> 取数原则：用 `income_statement` / `balance_sheet` / `cashflow_statement` / `stock_quote` / `ohlcv` / `revenue_breakdown`（valuz-stock）取财务与行情数据；用 `earnings_search` / `conferences_search` / `reports_search` / `news_search` / `filings_search`（valuz-search）取财报、纪要、研报、公告。
+> 取数原则：用 `get_financial_statements` / `get_snapshots` / `get_bars` / `get_financial_statements`（valuz-data）取财务与行情数据；用 `search_documents`（valuz-search）取财报、纪要、研报、公告。
 
 ```text
-income_statement(symbol, period="annual")    -> Historical P and L       (valuz-stock)
-balance_sheet(symbol, period="annual")       -> Historical BS            (valuz-stock)
-cashflow_statement(symbol, period="annual")  -> Historical CF            (valuz-stock)
-stock_quote(symbol)                          -> Market cap, price        (valuz-stock)
-revenue_breakdown(symbol)                    -> Revenue drivers          (valuz-stock)
-reports_search(query=..., symbols=[...])     -> Research / guidance      (valuz-search)
+get_financial_statements(statement_type="income", symbol, period="annual")    -> Historical P and L
+get_financial_statements(statement_type="balance", symbol, period="annual")   -> Historical BS
+get_financial_statements(statement_type="cash_flow", symbol, period="annual") -> Historical CF
+get_snapshots(symbol)                              -> Current price
+get_valuations(kind="latest", symbol)             -> Market cap and multiples
+get_financial_statements(statement_type="revenue_breakdown", symbol) -> Revenue drivers
+search_documents(category="research_reports", query=..., symbols=[...]) -> Research / guidance
 ```
 
 ## Key differences across markets
@@ -45,33 +46,34 @@ that applies to the ticker (US / HK / A-shares / other), not a single fixed mark
 
 ### Step 1: Pull financials
 
-用 `income_statement` / `balance_sheet` / `cashflow_statement`（valuz-stock，`period="annual"`，`limit` 取近 5 年；季度建基期改 `period="quarterly"`）拉历史三表：
+用 `get_financial_statements`（valuz-data，`period="annual"`，`limit` 取近 5 年；季度建基期改 `period="quarterly"`）拉历史三表：
 
 ```text
-income_statement(symbol, period="annual", limit=5)   → last 5 years   (valuz-stock)
-balance_sheet(symbol, period="annual", limit=5)                       (valuz-stock)
-cashflow_statement(symbol, period="annual", limit=5)                  (valuz-stock)
+get_financial_statements(statement_type="income", symbol, period="annual", limit=5)
+get_financial_statements(statement_type="balance", symbol, period="annual", limit=5)
+get_financial_statements(statement_type="cash_flow", symbol, period="annual", limit=5)
 ```
 
-> `valuz-stock` 用裸代码：美股 `AAPL`、港股 `00700`、A 股 `600519` —— 不带 `.HK` / `.SH` 后缀，也不硬限制为 .SH/.SZ。营收驱动可叠加 `revenue_breakdown(symbol)`。
+> `valuz-data` 使用 `US:AAPL`、`HK:00700`、`SH:600519` 等规范代码。营收驱动可叠加 `get_financial_statements(statement_type="revenue_breakdown", symbol=...)`。
 
 ### Step 2: Get market data
 
 ```text
-stock_quote(symbol)                  → price, market cap, PE, PB       (valuz-stock)
-ohlcv(symbol)                        → 个股历史价格序列（算 β / 收益率） (valuz-stock)
-index_quote(index_symbol)            → benchmark 行情（β 估计基准）     (valuz-stock)
+get_snapshots(symbol)                   → current price                  (valuz-data)
+get_valuations(kind="latest", symbol)  → market cap, PE, PB              (valuz-data)
+get_bars(kind="bars", symbol)          → 个股历史价格序列（算 β / 收益率） (valuz-data)
+get_snapshots(index_symbol)            → benchmark 行情（β 估计基准）     (valuz-data)
 ```
 
-用 `ohlcv`（valuz-stock，个股历史价格序列）与 `index_quote`（valuz-stock，基准指数）做 β 回归；基准指数按标的所在市场选（S&P 500 美股、Hang Seng 港股、上证指数 A 股）。
+用 `get_bars(kind="bars")` 分别取得个股与基准指数历史价格序列做 β 回归；基准指数按标的所在市场选。
 
 ### Step 3: Build projections
 
-- Project revenue using historical growth rates adjusted for the relevant market's macro outlook（必要时用 `revenue_breakdown`（valuz-stock）分部驱动）
+- Project revenue using historical growth rates adjusted for the relevant market's macro outlook（必要时用 `get_financial_statements`（valuz-data）分部驱动）
 - Assume 65-75% operating margin for high-margin sectors (e.g. 白酒 / premium brands)
 - Assume 15-25% operating margin for manufacturing
-- CapEx as % of revenue: check historical from `cashflow_statement`（valuz-stock）
-- 用 `earnings_search` / `conferences_search` / `reports_search`（valuz-search，`query` 必填，`symbols=["US:AAPL"]` 等限定标的）拉财报、业绩电话会纪要与机构研报，校验前瞻指引（forward guidance）与增长假设
+- CapEx as % of revenue: check historical from `get_financial_statements`（valuz-data）
+- 用 `search_documents`（valuz-search，`query` 必填，`symbols=["US:AAPL"]` 等限定标的）拉财报、业绩电话会纪要与机构研报，校验前瞻指引（forward guidance）与增长假设
 
 ### Step 4: Compute WACC
 
@@ -79,11 +81,11 @@ index_quote(index_symbol)            → benchmark 行情（β 估计基准）  
 WACC = E/(D+E) * Ke + D/(D+E) * Kd * (1 - tax_rate)
 
 Ke = Rf + β * ERP
-  Rf   = 对应市场国债（如美债/中债）10Y yield —— 无专门国债工具，用 reports_search / news_search（valuz-search，query 必填，如 query="US 10Y Treasury yield"）查最新值，或作为分析师输入
-  β    = regression on the market's benchmark index returns（ohlcv vs index_quote, valuz-stock）（or use comparable firm beta）
-  ERP  = market-specific equity risk premium（同样可用 reports_search / news_search 佐证，e.g. ~5-6% US, ~6-8% A-share）
+  Rf   = 对应市场国债（如美债/中债）10Y yield —— 无专门国债工具，用 search_documents(category="all")（valuz-search，query 必填，如 query="US 10Y Treasury yield"）查最新值，或作为分析师输入
+  β    = regression on the market's benchmark index returns（get_bars vs get_snapshots, valuz-data）（or use comparable firm beta）
+  ERP  = market-specific equity risk premium（同样可用 search_documents(category="all") 佐证，e.g. ~5-6% US, ~6-8% A-share）
 
-Kd   = market 5Y corporate bond yield + credit spread（用 reports_search / news_search 查对应市场公司债收益率）
+Kd   = market 5Y corporate bond yield + credit spread（用 search_documents(category="all") 查对应市场公司债收益率）
 ```
 
 ### Step 5: Terminal value

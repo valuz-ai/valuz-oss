@@ -1,6 +1,6 @@
 ---
 name: sector-overview
-description: Comprehensive global equity sector and industry landscape reports — market size, competitive positioning, policy environment, key players, trading multiples, and thematic trends. Covers global stock markets with a focus on US / HK / A-shares, while also handling other markets. Uses valuz-stock (Stock MCP — industry_constituents, index_constituents, concepts_today/latest, company_overview, stock_quote, income_statement) and valuz-search (Search MCP — reports_search, news_search, filings_search). Triggers on "行业分析", "行业研究", "板块分析", "sector overview", "sector deep dive", "[industry] 行业分析", or "[industry] landscape".
+description: Comprehensive global equity sector and industry landscape reports — market size, competitive positioning, policy environment, key players, trading multiples, and thematic trends. Uses valuz-data for structured data and valuz-search for categorized document discovery. Triggers on "行业分析", "行业研究", "板块分析", "sector overview", "sector deep dive", "[industry] 行业分析", or "[industry] landscape".
 ---
 
 # sector-overview
@@ -13,25 +13,26 @@ Create comprehensive **行业/板块深度报告 (industry/sector deep-dive)** c
 
 Two Valuz connectors cover everything you need:
 
-- **`valuz-stock`** (Stock MCP) — 行情、财务、行业/指数成分、概念热度. **裸代码**（AAPL / 00700 / 600519）.
-- **`valuz-search`** (Search MCP) — 财报、公告、研报、纪要、电话会、新闻检索. **`market:ticker`**（US:AAPL / HK:00700 / SH:600519）.
+- **`valuz-data`** (Valuz Data MCP) — 行情、财务、行业/指数成分、概念主题；也负责读取搜索命中的文档与引用 chunk。
+- **`valuz-search`** (Search MCP) — 财报、公告、研报、纪要、电话会、新闻发现。
 
-**符号格式（首次使用注意）：valuz-stock 用裸代码（AAPL / 00700 / 600519）；valuz-search 用 `market:ticker`（US:AAPL / HK:00700 / SH:600519）。**
+**两个连接器都使用 `MARKET:LOCAL` 规范代码（`US:AAPL` / `HK:00700` / `SH:600519`）；非规范输入先调用 `resolve_symbols`。**
 
-Rule of thumb: **用 `valuz-stock` 取行情/财务/行业成分/概念热度，用 `valuz-search` 取定性资料（研报/政策/新闻）。**
-注意：**没有专门的"宏观经济序列"MCP 工具** —— 行业规模、GDP/CPI/利率等宏观数据通过 `reports_search`（行业/宏观/策略研报）、`news_search`(valuz-search) 检索，或作为分析师输入。
+Rule of thumb: **用 `valuz-data` 取行情/财务/行业成分/概念热度，用 `valuz-search` 取定性资料（研报/政策/新闻）。**
+注意：**没有专门的"宏观经济序列"MCP 工具** —— 行业规模、GDP/CPI/利率等宏观数据通过 `search_documents`（行业/宏观/策略研报）、`search_documents`(valuz-search) 检索，或作为分析师输入。
 
 ```python
-# 板块/赛道玩家清单与基准 (valuz-stock, 裸代码)
-industry_constituents(...)                        → 行业/赛道成分股
-index_constituents(...)                           → 指数成分股（大盘基准）
-concepts_today() / concepts_latest()              → 主题/概念热度
-company_overview(symbol="AAPL")                   → 个股基本面对照
-stock_quote(symbol="AAPL")                        → 个股行情、规模（市值）
-income_statement(symbol="AAPL", period="annual")  → 财务数据对比
+# 板块/赛道玩家清单与基准 (valuz-data, MARKET:LOCAL 规范代码)
+get_industries(kind="constituents", ...)          → 行业/赛道成分股
+get_index(kind="constituents", ...)               → 指数成分股（大盘基准）
+get_themes(kind="list")                           → 主题/概念列表
+get_company(kind="profile", symbol="US:AAPL")    → 个股基本面对照
+get_snapshots(symbol="US:AAPL")                   → 个股行情
+get_valuations(kind="latest", symbol="US:AAPL")  → 市值与估值倍数
+get_financial_statements(statement_type="income", symbol="US:AAPL", period="annual") → 财务数据
 # 行业规模/政策/研报/新闻 (valuz-search, market:ticker)
-reports_search(query="...", symbols=["US:AAPL"])  → 行业/宏观/策略研报
-news_search(query="...")                          → 政策、行业新闻
+search_documents(category="all", query="...", symbols=["US:AAPL"])  → 行业/宏观/策略研报
+search_documents(category="all", query="...")                          → 政策、行业新闻
 ```
 
 ## Workflow
@@ -50,11 +51,11 @@ news_search(query="...")                          → 政策、行业新闻
 
 | Metric | Data | Source |
 |--------|------|--------|
-| Total market size | 市场规模 (target market) | `reports_search`(valuz-search, 行业/宏观研报) |
-| Growth rate | 同比增速 / CAGR | `reports_search`/`news_search`(valuz-search)，或个股 `income_statement`(valuz-stock) 汇总 |
-| Market share | CR5, CR10 concentration | `filings_search`/`reports_search`(valuz-search) |
-| Penetration rate | For new industries | `reports_search`(valuz-search, 行业研报) |
-| Export/import | 进出口数据 | `reports_search`/`news_search`(valuz-search, 宏观/贸易) |
+| Total market size | 市场规模 (target market) | `search_documents`(valuz-search, 行业/宏观研报) |
+| Growth rate | 同比增速 / CAGR | `search_documents`(valuz-search)，或个股 `get_financial_statements`(valuz-data) 汇总 |
+| Market share | CR5, CR10 concentration | `search_documents`(valuz-search) |
+| Penetration rate | For new industries | `search_documents`(valuz-search, 行业研报) |
+| Export/import | 进出口数据 | `search_documents`(valuz-search, 宏观/贸易) |
 
 **Listed representation (in the target market):**
 - Number of listed companies in sector
@@ -67,17 +68,18 @@ news_search(query="...")                          → 政策、行业新闻
 **Peer mapping:**
 
 ```python
-# 拉赛道玩家清单 (valuz-stock, 裸代码)
-industry_constituents(...)   → 行业/赛道成分股
-index_constituents(...)      → 指数成分（用指数代表板块时）
-concepts_today()             → 当日热门概念/题材成分
+# 拉赛道玩家清单 (valuz-data, MARKET:LOCAL 规范代码)
+get_industries(kind="constituents", ...) → 行业/赛道成分股
+get_index(kind="constituents", ...)      → 指数成分（用指数代表板块时）
+get_themes(kind="list")                  → 主题列表
 ```
 
-**For each major player, pull (valuz-stock, 裸代码):**
+**For each major player, pull (valuz-data, MARKET:LOCAL 规范代码):**
 ```python
-stock_quote(symbol="AAPL")                          → Price, market cap, multiples
-income_statement(symbol="AAPL", period="annual")    → Revenue, margins, growth
-company_overview(symbol="AAPL")                      → Business description, 基本面
+get_snapshots(symbol="US:AAPL")                              → Price and market activity
+get_valuations(kind="latest", symbol="US:AAPL")             → Market cap and multiples
+get_financial_statements(statement_type="income", symbol="US:AAPL", period="annual") → Revenue and margins
+get_company(kind="profile", symbol="US:AAPL")               → Business description
 ```
 
 **Competitive analysis table:**
@@ -129,7 +131,7 @@ company_overview(symbol="AAPL")                      → Business description, �
 - Capital-markets regulators (e.g., CSRC, SEC)
 - Central banks (e.g., PBoC, Fed) — monetary policy
 
-用 `reports_search`（行业/宏观/策略研报）与 `news_search`(valuz-search) 拉取相关市场的最新政策、监管事件与新闻。
+用 `search_documents`（行业/宏观/策略研报）与 `search_documents`(valuz-search) 拉取相关市场的最新政策、监管事件与新闻。
 
 ### Step 6: Key Drivers & Trends
 
@@ -213,7 +215,7 @@ company_overview(symbol="AAPL")                      → Business description, �
 | 板块轮动 | Sector rotation common | Timing important |
 | 跨境资金 | Foreign / 北向资金 flows tracked | Sentiment indicator |
 
-Example tickers across markets — valuz-stock 裸代码: **AAPL** (US), **00700** (HK), **600519** (A-share); valuz-search `market:ticker`: **US:AAPL**, **HK:00700**, **SH:600519**.
+Example tickers across markets — valuz-data MARKET:LOCAL 规范代码: **AAPL** (US), **00700** (HK), **600519** (A-share); valuz-search `market:ticker`: **US:AAPL**, **HK:00700**, **SH:600519**.
 
 ### Industry Classification
 
@@ -223,7 +225,7 @@ Example tickers across markets — valuz-stock 裸代码: **AAPL** (US), **00700
 - 中信行业分类 (CITIC) — alternative for A-shares
 - Regulatory / data-vendor classifications
 
-**用 `industry_constituents`(valuz-stock) 拉取与目标市场匹配的行业成分股；以指数代表板块时改用 `index_constituents`(valuz-stock)。**
+**用 `get_industries`(valuz-data) 拉取与目标市场匹配的行业成分股；以指数代表板块时改用 `get_index`(valuz-data)。**
 
 ### Sector-Specific Metrics
 
@@ -256,18 +258,18 @@ Example tickers across markets — valuz-stock 裸代码: **AAPL** (US), **00700
 - Historical policy impact patterns
 - Best/worst case scenarios
 
-用 `reports_search`（行业/宏观/策略研报）与 `news_search`(valuz-search) 拉取相关政策背景与新闻。
+用 `search_documents`（行业/宏观/策略研报）与 `search_documents`(valuz-search) 拉取相关政策背景与新闻。
 
 ## Quality Checks
 
 Before delivering:
 - [ ] Industry definition clear and consistent
-- [ ] Market scope (target market) stated; 符号格式正确（valuz-stock 裸代码 AAPL / 00700 / 600519；valuz-search `market:ticker` US:AAPL / HK:00700 / SH:600519）
-- [ ] Market size data sourced (`reports_search`/`news_search`(valuz-search))
-- [ ] Competitive landscape covers top 5-10 players (`industry_constituents`/`index_constituents`(valuz-stock))
-- [ ] Financials sourced via `income_statement`/`company_overview`(valuz-stock)
-- [ ] Valuation multiples calculated consistently (`stock_quote`(valuz-stock))
-- [ ] Policy environment analyzed (`reports_search`/`news_search`(valuz-search))
+- [ ] Market scope (target market) stated; 符号格式正确（valuz-data MARKET:LOCAL 规范代码 AAPL / 00700 / 600519；valuz-search `market:ticker` US:AAPL / HK:00700 / SH:600519）
+- [ ] Market size data sourced (`search_documents`(valuz-search))
+- [ ] Competitive landscape covers top 5-10 players (`get_industries`/`get_index`(valuz-data))
+- [ ] Financials sourced via `get_financial_statements`/`get_company`(valuz-data)
+- [ ] Valuation multiples calculated consistently (`get_snapshots`(valuz-data))
+- [ ] Policy environment analyzed (`search_documents`(valuz-search))
 - [ ] Investment themes articulated
 - [ ] Ideas shortlist included (3-5 names)
 - [ ] Risk factors specific to the target market included

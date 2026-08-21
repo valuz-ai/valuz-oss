@@ -61,7 +61,7 @@ async def _install_valuz(db) -> None:
             connector_type="recommended",
             transport="http",
             auth_type="oauth",
-            url="https://mcp.reportify.cn/search/mcp",
+            url="https://data.valuz.cn/mcp/search",
             enabled=True,
             status="pending_auth",
         )

@@ -1789,6 +1789,7 @@ export type KnownI18nKey =
   | "settings.browser.statusLabel"
   | "settings.browser.stop"
   | "settings.connectors.addEnvVar"
+  | "settings.connectors.builtIn"
   | "settings.connectors.addFailed"
   | "settings.connectors.addHeader"
   | "settings.connectors.addHttpConnector"

@@ -1257,7 +1257,7 @@ describe("buildTurns — concurrent subagent events (parent_tool_use_id)", () =>
       evt(2, "tool.call.started", {
         id: "t1",
         tool_use_id: "t1",
-        name: "mcp__valuz-stock__index_quote",
+        name: "mcp__valuz-data__index_quote",
         parent_tool_use_id: "agent-1",
       }),
     ]);

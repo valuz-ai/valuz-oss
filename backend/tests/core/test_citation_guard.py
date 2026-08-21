@@ -74,7 +74,7 @@ def _structured_item(
         "evidenceHandle": handle,
         "source": {
             "sourceId": f"dataset:{entity_id}",
-            "providerId": "valuz-stock",
+            "providerId": "valuz-data",
             "sourceType": "dataset",
             "title": f"Structured data · {entity_id}",
             "retrievedAt": "2026-08-05T00:00:00Z",
@@ -561,7 +561,7 @@ def test_native_reportify_collection_materializes_only_addressed_field() -> None
                 "collectionHandle": collection_handle,
                 "source": {
                     "sourceId": "reportify-financial-income-statement:600519",
-                    "providerId": "valuz-stock",
+                    "providerId": "valuz-data",
                     "sourceType": "dataset",
                     "sourceCategory": "structured_financials",
                     "title": "Company income statement · 600519",
@@ -683,7 +683,7 @@ def test_claim_audit_materializes_cross_scale_multi_period_table_values() -> Non
                 "collectionHandle": collection_handle,
                 "source": {
                     "sourceId": "reportify-income-statement:NVDA",
-                    "providerId": "valuz-stock",
+                    "providerId": "valuz-data",
                     "sourceType": "dataset",
                     "title": "Company income statement · NVDA",
                     "retrievedAt": "2026-08-10T00:00:00Z",
@@ -876,7 +876,7 @@ def test_collection_infers_currency_unit_only_for_monetary_field_names() -> None
                 "collectionHandle": collection_handle,
                 "source": {
                     "sourceId": "reportify-cashflow:NVDA",
-                    "providerId": "valuz-stock",
+                    "providerId": "valuz-data",
                     "sourceType": "dataset",
                     "title": "Cash-flow statement · NVDA",
                     "retrievedAt": "2026-08-10T00:00:00Z",
@@ -1181,7 +1181,7 @@ def test_guard_recovers_unknown_collection_handle_only_from_unique_valid_pointer
                 "evidenceHandle": "ev_net_profit_2024_12345678",
                 "source": {
                     "sourceId": "financials:600519",
-                    "providerId": "valuz-stock",
+                    "providerId": "valuz-data",
                     "sourceType": "dataset",
                     "title": "Company income statement · 600519",
                     "retrievedAt": "2026-08-05T08:00:00Z",
@@ -1236,7 +1236,7 @@ def test_registry_does_not_guess_unknown_collection_when_pointer_is_ambiguous() 
                     "evidenceHandle": f"ev_net_profit_{symbol}_12345678",
                     "source": {
                         "sourceId": f"financials:{symbol}",
-                        "providerId": "valuz-stock",
+                        "providerId": "valuz-data",
                         "sourceType": "dataset",
                         "title": f"Company income statement · {symbol}",
                         "retrievedAt": "2026-08-05T08:00:00Z",
@@ -1473,7 +1473,7 @@ def test_native_collection_uses_currency_as_unit_for_monetary_equity_field() -> 
 def test_multi_period_legacy_batch_collapses_repeated_fields_into_one_collection() -> None:
     source = {
         "sourceId": "financials:600519",
-        "providerId": "valuz-stock",
+        "providerId": "valuz-data",
         "sourceType": "dataset",
         "title": "Company income statement · 600519",
         "retrievedAt": "2026-08-02T08:00:00Z",
@@ -1556,7 +1556,7 @@ def test_multi_period_legacy_batch_collapses_repeated_fields_into_one_collection
 def test_large_nested_legacy_batch_is_indexed_once_and_collapses_to_collection() -> None:
     source = {
         "sourceId": "index-constituents:000905",
-        "providerId": "valuz-stock",
+        "providerId": "valuz-data",
         "sourceType": "dataset",
         "title": "Index constituents · 000905",
         "retrievedAt": "2026-08-03T05:00:00Z",
@@ -1768,7 +1768,7 @@ def test_standalone_calculation_citation_moves_to_preceding_latex_formula() -> N
 def test_calculation_inputs_resolve_structured_collection_addresses() -> None:
     source = {
         "sourceId": "financials:600519",
-        "providerId": "valuz-stock",
+        "providerId": "valuz-data",
         "sourceType": "dataset",
         "title": "Company income statement · 600519",
         "retrievedAt": "2026-08-02T08:00:00Z",
@@ -2019,7 +2019,7 @@ def test_root_collection_calculation_inputs_normalize_omitted_items_wrapper() ->
 def test_claim_audit_materializes_only_matching_collection_fields_for_missing_binding() -> None:
     source = {
         "sourceId": "financials:600519",
-        "providerId": "valuz-stock",
+        "providerId": "valuz-data",
         "sourceType": "dataset",
         "title": "Company income statement · 600519",
         "retrievedAt": "2026-08-01T08:00:00Z",
@@ -2096,7 +2096,7 @@ def test_claim_audit_materializes_only_matching_collection_fields_for_missing_bi
 def test_cross_source_collection_addresses_materialize_as_distinct_citations() -> None:
     registry = EvidenceRegistry()
     addresses: list[str] = []
-    for suffix, provider in (("primary", "valuz-stock"), ("filing", "exchange")):
+    for suffix, provider in (("primary", "valuz-data"), ("filing", "exchange")):
         raw = {
             "data": {"symbol": "600519", "operating_revenue": 174_144_000_000},
             "_valuz_evidence": [
@@ -2148,7 +2148,7 @@ def test_cross_source_collection_addresses_materialize_as_distinct_citations() -
     assert result.bundle is not None
     assert len(result.bundle["citations"]) == 2
     assert {item["source"]["providerId"] for item in result.bundle["citations"]} == {
-        "valuz-stock",
+        "valuz-data",
         "exchange",
     }
     assert result.bundle["integrity"]["evidenceCollectionCount"] == 2

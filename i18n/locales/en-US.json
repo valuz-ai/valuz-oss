@@ -1408,6 +1408,7 @@
       "customHeaders": "Custom Headers (optional)",
       "envVars": "Environment Variables (optional)",
       "addEnvVar": "+ Add",
+      "builtIn": "Built-in",
       "deleteFailed": "Delete failed",
       "desc": "Connect third-party tools to the agent via MCP protocol, Supports one-click recommended authorization and custom configuration",
       "detecting": "Detecting…",

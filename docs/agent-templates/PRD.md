@@ -81,7 +81,7 @@ Role {
 
 4 角色:行业分析师 → 财务建模师 → 业绩跟踪员 → 研报撰写人,skill 移植自
 claude-for-financial-services-cn 并**改写为全球股票市场口径(美股/港股/A 股为主)、去掉 `china-` 前缀**,
-数据用 Valuz 自有 MCP(`valuz-search` 检索 + `valuz-stock` 行情,OAuth 登录即用)。完整定义见 [teams.md](teams.md)。
+数据用 Valuz 自有 MCP(`valuz-search` 检索 + `valuz-data` 行情,OAuth 登录即用)。完整定义见 [teams.md](teams.md)。
 
 ## 界面与交互
 

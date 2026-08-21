@@ -115,7 +115,7 @@ async def test_restamps_stale_token_and_preserves_external(monkeypatch):
 
     external = McpHttpServerConfigSchema(
         name="valuz-search",
-        url="https://mcp.reportify.cn/search/mcp",
+        url="https://data.valuz.cn/mcp/search",
         transport="http",
         headers={"Authorization": "Bearer xyz"},
     )
@@ -160,7 +160,7 @@ async def test_external_oauth_connector_headers_refresh_on_restamp(monkeypatch):
     sessions, not only brand-new ones (Reportify tokens live ~1h)."""
     stale_external = McpHttpServerConfigSchema(
         name="valuz-search",
-        url="https://mcp.reportify.cn/search/mcp",
+        url="https://data.valuz.cn/mcp/search",
         transport="http",
         headers={"Authorization": "Bearer STALE-JWT"},
     )
@@ -168,7 +168,7 @@ async def test_external_oauth_connector_headers_refresh_on_restamp(monkeypatch):
 
     fresh_external = McpHttpServerConfigSchema(
         name="valuz-search",
-        url="https://mcp.reportify.cn/search/mcp",
+        url="https://data.valuz.cn/mcp/search",
         transport="http",
         headers={"Authorization": "Bearer FRESH-JWT"},
     )
