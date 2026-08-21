@@ -737,7 +737,8 @@
     "groupDirectory": "已连接",
     "groupCustom": "自定义",
     "groupAvailable": "可用",
-    "systemManaged": "内置连接器由系统管理"
+    "systemManaged": "内置连接器由系统管理",
+    "systemManagedBadge": "系统管理"
   },
   "nav": {
     "home": "首页",

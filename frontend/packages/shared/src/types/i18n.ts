@@ -522,6 +522,7 @@ export type KnownI18nKey =
   | "connector.statusError"
   | "connector.statusNotConnected"
   | "connector.systemManaged"
+  | "connector.systemManagedBadge"
   | "connector.title"
   | "connector.toolsError"
   | "connector.toolsTitle"
