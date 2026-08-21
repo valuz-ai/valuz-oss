@@ -136,8 +136,10 @@ export interface ConversationTurn {
    *  a ``max_cost`` stop renders as an empty assistant area with no
    *  explanation — the CLI rejects the query before any model call, so the
    *  turn has no blocks at all. Rendered as a visible notice with a retry
-   *  affordance. Optional: absent = the turn ended within budget. */
-  budgetHalt?: "max_cost" | "max_turns";
+   *  affordance. ``"unknown"`` = the stop reason said ``budget_exhausted``
+   *  but carried no reason we recognize; still surfaced, just without naming
+   *  a cause. Optional: absent = the turn ended within budget. */
+  budgetHalt?: "max_cost" | "max_turns" | "unknown";
   /** Whether this turn's message carries a runtime-native fork anchor
    *  (terminal ``session.update`` frames stamp it). ``false`` disables
    *  "Fork from here"; ``undefined`` = recorded before the signal existed —
