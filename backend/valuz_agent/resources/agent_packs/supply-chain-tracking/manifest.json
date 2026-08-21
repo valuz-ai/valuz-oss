@@ -42,7 +42,7 @@
       ],
       "connectors": [
         "valuz-search",
-        "valuz-stock"
+        "valuz-data"
       ]
     },
     {
@@ -68,7 +68,7 @@
       ],
       "connectors": [
         "valuz-search",
-        "valuz-stock"
+        "valuz-data"
       ]
     },
     {
@@ -95,7 +95,7 @@
       ],
       "connectors": [
         "valuz-search",
-        "valuz-stock"
+        "valuz-data"
       ]
     },
     {
@@ -121,7 +121,7 @@
       ],
       "connectors": [
         "valuz-search",
-        "valuz-stock"
+        "valuz-data"
       ]
     }
   ],
@@ -149,22 +149,22 @@
       },
       "transport": "http",
       "auth_type": "oauth",
-      "url": "https://mcp.reportify.cn/search/mcp"
+      "url": "https://data.valuz.cn/mcp/search"
     },
     {
-      "slug": "valuz-stock",
+      "slug": "valuz-data",
       "source": "catalog",
       "display_name": {
-        "zh-CN": "Valuz · 行情",
-        "en-US": "Valuz · Quotes"
+        "zh-CN": "Valuz · 数据",
+        "en-US": "Valuz · Data"
       },
       "description": {
-        "zh-CN": "全市场实时与历史行情、财务、指标数据",
-        "en-US": "Real-time and historical quotes, financials, and indicators across all markets"
+        "zh-CN": "完整的 Valuz Data 金融数据与文档工具集",
+        "en-US": "The complete Valuz Data financial and document toolset"
       },
       "transport": "http",
       "auth_type": "oauth",
-      "url": "https://mcp.reportify.cn/stock/mcp"
+      "url": "https://data.valuz.cn/mcp"
     }
   ]
 }

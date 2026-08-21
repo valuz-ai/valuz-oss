@@ -924,7 +924,7 @@ describe("MarkdownContent citations", () => {
           citationId: "cit_structured",
           source: {
             sourceId: "income:600519",
-            providerId: "valuz-stock",
+            providerId: "valuz-data",
             sourceType: "dataset",
             title: "Company income statement · 600519",
             retrievedAt: "2026-07-31T03:41:38Z",
@@ -975,7 +975,7 @@ describe("MarkdownContent citations", () => {
           citationId: "cit_revenue",
           source: {
             sourceId: "reportify-financial-income-statement:600519",
-            providerId: "valuz-stock",
+            providerId: "valuz-data",
             sourceType: "dataset",
             title: "Company income statement · 600519",
             retrievedAt: "2026-08-01T07:26:44Z",

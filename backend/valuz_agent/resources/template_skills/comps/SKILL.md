@@ -1,6 +1,6 @@
 ---
 name: comps
-description: Comparable company analysis for global equities (focus US / HK / A-shares, also other markets). Uses the Valuz Quotes MCP (valuz-stock) and Valuz Search MCP (valuz-search) to build cross-market peer groups, pull financial data, compute valuation multiples (PE, PB, PS), and assess relative value within an industry sector.
+description: Comparable company analysis for global equities (focus US / HK / A-shares, also other markets). Uses the Valuz Quotes MCP (valuz-data) and Valuz Search MCP (valuz-search) to build cross-market peer groups, pull financial data, compute valuation multiples (PE, PB, PS), and assess relative value within an industry sector.
 ---
 
 # comps
@@ -9,31 +9,31 @@ description: Comparable company analysis for global equities (focus US / HK / A-
 
 全球股票市场（美股/港股/A 股为主，兼顾其他市场）的可比公司分析使用两个 Valuz 连接器：
 
-> **代码格式（首次取数务必注意）**：`valuz-stock` 用**裸代码**（`AAPL` / `00700` / `600519`）；`valuz-search` 用 `market:ticker`（`US:AAPL` / `HK:00700` / `SH:600519`）。
+> **代码格式**：两个连接器都用规范的 `MARKET:LOCAL` 代码；非规范输入先调用 `resolve_symbols`。
 
-### `valuz-stock` — Valuz Stock MCP
+### `valuz-data` — Valuz Data MCP
 行情、财务报表、估值因子、行业成分。可比分析常用：
 
 ```text
-industry_constituents(...)                       → 同业（行业成分股）              # 选同业集
-index_constituents(...)                          → 指数成分股（备选同业来源）
-company_overview(symbol)                         → 公司画像、规模、业务描述
-stock_quote(symbol)                              → 价格、市值
-factors_compute(symbols=[...], ...)              → PE()/PB()/PS()/ROE()/EPS() 估值倍数
-factors(symbol=...)                              → 单票现成因子值
-income_statement(symbol, period="annual")        → 营收、净利润（财务口径）
-balance_sheet(symbol, period="annual")           → 账面价值、负债（财务口径）
+get_industries(kind="constituents", ...) → 同业（行业成分股）
+get_index(kind="constituents", ...)      → 指数成分股（备选同业来源）
+get_company(kind="profile", symbol)      → 公司画像、规模、业务描述
+get_snapshots(symbol)                     → 当前价格
+get_valuations(kind="latest", symbol)    → 市值与估值倍数
+compute_factors(symbols=[...], ...)              → PE()/PB()/PS()/ROE()/EPS() 估值倍数
+get_financial_statements(statement_type="income", symbol, period="annual") → 营收、净利润
+get_financial_statements(statement_type="balance", symbol, period="annual") → 账面价值、负债
 ```
 
 ### `valuz-search` — Valuz Search MCP
-财报、公告、研报、纪要、电话会检索。可比分析主要用 `reports_search` 取行业研报做定性对照。
+财报、公告、研报、纪要、电话会检索。可比分析主要用 `search_documents` 取行业研报做定性对照。
 
 ```text
-reports_search(query=..., symbols=["US:AAPL", ...])   → 行业研报 / 同业定性对照
-comprehensive_search(query=...)                       → 综合检索（财报/纪要/公告/新闻）
+search_documents(category="all", query=..., symbols=["US:AAPL", ...])   → 行业研报 / 同业定性对照
+search_documents(category="all", query=...)                       → 综合检索（财报/纪要/公告/新闻）
 ```
 
-> 取数原则：用 `valuz-stock` 取行情/财务/倍数与同业成分，用 `valuz-search`（`reports_search`）取定性研报对照。
+> 取数原则：用 `valuz-data` 取行情/财务/倍数与同业成分，用 `valuz-search`（`search_documents`）取定性研报对照。
 
 ---
 
@@ -43,7 +43,7 @@ comprehensive_search(query=...)                       → 综合检索（财报/
 
 ### 1. Define the peer group
 
-Start with the target stock, then use `industry_constituents`（valuz-stock，裸代码如 `600519`）to retrieve industry peers for that sector — or `index_constituents`（valuz-stock）when the peer set is better anchored to an index. Peer sets should be **cross-market** — a peer group can mix US, HK, and A-share listings within the same industry. Common sectors and example leaders:
+Start with the target stock, then use `get_industries`（valuz-data，MARKET:LOCAL 规范代码如 `600519`）to retrieve industry peers for that sector — or `get_index`（valuz-data）when the peer set is better anchored to an index. Peer sets should be **cross-market** — a peer group can mix US, HK, and A-share listings within the same industry. Common sectors and example leaders:
 
 | Industry | Example Leaders |
 |----------|-----------------|
@@ -58,36 +58,37 @@ Start with the target stock, then use `industry_constituents`（valuz-stock，�
 | 汽车整车 / Autos | {{SECTOR_LEADER}}, {{CHALLENGER_1}}, {{CHALLENGER_2}} |
 | 软件开发 / Software | {{SECTOR_LEADER}}, {{CHALLENGER_1}}, {{CHALLENGER_2}} |
 
-Tickers follow each market's convention — US (`AAPL`), HK (`0700.HK`), A-share (`600519.SH`).
+Use canonical symbols — US (`US:AAPL`), HK (`HK:00700`), A-share (`SH:600519`).
 
 ### 2. Pull financial data for each peer
 
-代码格式提醒：valuz-stock 用裸代码（`AAPL` / `00700` / `600519`），valuz-search 用 `market:ticker`（`US:AAPL` / `HK:00700` / `SH:600519`）。
+代码格式提醒：valuz-data 用MARKET:LOCAL 规范代码（`US:AAPL` / `HK:00700` / `SH:600519`），valuz-search 用 `market:ticker`（`US:AAPL` / `HK:00700` / `SH:600519`）。
 
 ```text
 For the peer set as a whole:
-  factors_compute(symbols=[...], ...)  → PE()/PB()/PS()/ROE()/EPS() 倍数（批量）   (valuz-stock)
+  compute_factors(symbols=[...], ...)  → PE()/PB()/PS()/ROE()/EPS() 倍数（批量）   (valuz-data)
 
 For each ticker in the peer set:
-  stock_quote(symbol)                       → price, market cap                    (valuz-stock)
-  company_overview(symbol)                  → business description, profile         (valuz-stock)
-  income_statement(symbol, period="annual") → revenue, net income (财务口径)        (valuz-stock)
-  balance_sheet(symbol, period="annual")    → book value, debt (财务口径)           (valuz-stock)
-  reports_search(query="...", symbols=["US:AAPL", ...]) → qualitative color (行业研报) (valuz-search)
+  get_snapshots(symbol)                              → price                         (valuz-data)
+  get_valuations(kind="latest", symbol)             → market cap and multiples      (valuz-data)
+  get_company(kind="profile", symbol)               → business description          (valuz-data)
+  get_financial_statements(statement_type="income", symbol, period="annual") → revenue, net income
+  get_financial_statements(statement_type="balance", symbol, period="annual") → book value, debt
+  search_documents(category="all", query="...", symbols=["US:AAPL", ...]) → qualitative color (行业研报) (valuz-search)
 ```
 
 ### 3. Compute standard multiples
 
-倍数优先用 `factors_compute`（valuz-stock）批量计算，因子语法用 `PE()` / `PB()` / `PS()` / `ROE()` / `EPS()`；无现成因子时再用 `stock_quote` + 报表口径自行换算。
+倍数优先用 `compute_factors`（valuz-data）批量计算，因子语法用 `PE()` / `PB()` / `PS()` / `ROE()` / `EPS()`；无现成因子时再用 `get_snapshots` + 报表口径自行换算。
 
-| Multiple | Formula | valuz-stock source |
+| Multiple | Formula | valuz-data source |
 |----------|---------|--------------------|
-| PE (TTM) | Price / EPS TTM | `factors_compute` → `PE()`（或 `PE_TTM()`） |
-| PB | Price / Book Value per share | `factors_compute` → `PB()` |
-| PS (TTM) | Market Cap / Revenue TTM | `factors_compute` → `PS()`（或由 `stock_quote` 市值 + `income_statement` 营收换算） |
-| EV/EBITDA | Enterprise Value / EBITDA | 由 `stock_quote` 市值 + `balance_sheet` 负债/现金换算 |
-| ROE | Net Income / Equity | `factors_compute` → `ROE()` |
-| Dividend Yield | DPS / Price | `stock_quote` → dividend yield |
+| PE (TTM) | Price / EPS TTM | `compute_factors` → `PE()`（或 `PE_TTM()`） |
+| PB | Price / Book Value per share | `compute_factors` → `PB()` |
+| PS (TTM) | Market Cap / Revenue TTM | `compute_factors` → `PS()`（或由 `get_valuations` 市值 + `get_financial_statements` 营收换算） |
+| EV/EBITDA | Enterprise Value / EBITDA | 由 `get_valuations` 市值 + `get_financial_statements` 负债/现金换算 |
+| ROE | Net Income / Equity | `compute_factors` → `ROE()` |
+| Dividend Yield | DPS / Price | `get_valuations(kind="latest")` → yield |
 
 ### 4. Present the comps table
 

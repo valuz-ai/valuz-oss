@@ -1213,7 +1213,7 @@ def _structured_fallback_collection(
         title_parts.append(formula)
     source: dict[str, Any] = {
         "sourceId": source_id,
-        "providerId": "valuz-stock",
+        "providerId": "valuz-data",
         "sourceType": "tool-result",
         "sourceCategory": str(spec.get("sourceCategory") or "financials"),
         "title": " · ".join(title_parts)[:1_024],

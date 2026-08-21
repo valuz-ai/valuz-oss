@@ -261,7 +261,7 @@ async def test_connector_document_uses_provider_summary_and_locks_qa_to_connecto
             transport="http",
         ),
         McpHttpServerConfigSchema(
-            name="valuz-stock",
+            name="valuz-data",
             url="http://localhost/stock",
             transport="http",
         ),

@@ -2,8 +2,8 @@
 
 A catalog *group* (a ``connector_catalog.json`` entry carrying a ``connectors``
 array) bundles what are really several MCP endpoints of ONE upstream service:
-the ``valuz`` group fronts ``valuz-search`` (``…/search/mcp``) and
-``valuz-stock`` (``…/stock/mcp``), both guarded by the same authorization
+the ``valuz`` group fronts ``valuz-search`` (``…/mcp/search``) and
+``valuz-data`` (``…/mcp``), both guarded by the same authorization
 server behind one protected-resource metadata document.
 
 Such a group's members can share a single set of OAuth credentials. The
@@ -159,7 +159,7 @@ def _blank_row(member: _Member) -> ConnectorRow:
         slug=member.slug,
         display_name=member.display_name or member.slug,
         description=member.description,
-        connector_type="recommended",
+        connector_type="builtin" if member.slug.startswith("valuz-") else "recommended",
         transport=member.transport if member.transport in ("http", "sse") else "http",
         url=member.url,
         auth_type="oauth",
@@ -229,6 +229,16 @@ async def propagate_oauth_credentials(
     """
     if not source.oauth_token_json:
         return []
+    # Cloud-issued Valuz credentials carry a distribution-specific connector
+    # policy (Finance: search+data, Team: search only). Local group propagation
+    # must not silently widen that policy. A user-initiated OSS OAuth family has
+    # no managed_provider marker and continues to share normally.
+    try:
+        client_info = json.loads(source.oauth_client_info_json or "{}")
+    except (TypeError, ValueError):
+        client_info = {}
+    if client_info.get("managed_provider") == "valuz":
+        return []
     slugs = sibling_slugs(source.slug)
     if not slugs:
         return []
@@ -296,6 +306,12 @@ async def inherit_oauth_credentials(
     for slug in sibling_slugs(target.slug):
         source = await ds.get_by_slug(user_id, slug)
         if source is None or not source.oauth_token_json:
+            continue
+        try:
+            client_info = json.loads(source.oauth_client_info_json or "{}")
+        except (TypeError, ValueError):
+            client_info = {}
+        if client_info.get("managed_provider") == "valuz":
             continue
         _copy_credentials(source, target)
         await _count_tools(target, probe)

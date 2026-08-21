@@ -1392,6 +1392,7 @@
       "customHeaders": "自定义请求头（可选）",
       "envVars": "环境变量（可选）",
       "addEnvVar": "+ 添加",
+      "builtIn": "内置",
       "deleteFailed": "删除失败",
       "desc": "通过 MCP 协议将第三方工具接入 Agent，支持推荐列表一键授权和自定义配置",
       "detecting": "检测中…",

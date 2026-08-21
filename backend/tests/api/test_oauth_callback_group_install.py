@@ -74,7 +74,7 @@ async def _run_callback(factory, *, connector_id: str) -> None:
             "code_verifier": "v",
             "client_id": "cid-1",
             "client_secret": None,
-            "server_url": "https://mcp.reportify.cn/search/mcp",
+            "server_url": "https://data.valuz.cn/mcp/search",
             "redirect_uri": "http://127.0.0.1:8000/v1/connectors/oauth/callback",
         }
     )
@@ -122,7 +122,7 @@ async def test_callback_installs_the_unlisted_sibling(sessionmaker_) -> None:
     """
     async with sessionmaker_() as db:
         row = await ConnectorDatastore(db).create(
-            USER, _pending("valuz-search", "https://mcp.reportify.cn/search/mcp")
+            USER, _pending("valuz-search", "https://data.valuz.cn/mcp/search")
         )
         search_id = row.id
 
@@ -134,11 +134,11 @@ async def test_callback_installs_the_unlisted_sibling(sessionmaker_) -> None:
         assert search is not None
         assert (search.status, search.enabled, search.tool_count) == ("connected", True, 11)
 
-        stock = await ds.get_by_slug(USER, "valuz-stock")
+        stock = await ds.get_by_slug(USER, "valuz-data")
         assert stock is not None, "sibling was never installed — it stays in「可添加」"
         assert (stock.status, stock.enabled) == ("connected", True)
         assert stock.tool_count == 11
-        assert stock.url == "https://mcp.reportify.cn/stock/mcp"
+        assert stock.url == "https://data.valuz.cn/mcp"
         # A refresh needs all three, not just the token.
         assert json.loads(stock.oauth_token_json or "{}")["access_token"] == "a1"
         assert stock.oauth_client_info_json is not None
@@ -149,17 +149,17 @@ async def test_callback_authorizes_an_already_installed_sibling(sessionmaker_) -
     """The other order: both installed and pending, authorizing one lights up both."""
     async with sessionmaker_() as db:
         ds = ConnectorDatastore(db)
-        row = await ds.create(USER, _pending("valuz-search", "https://mcp.reportify.cn/search/mcp"))
+        row = await ds.create(USER, _pending("valuz-search", "https://data.valuz.cn/mcp/search"))
         search_id = row.id
     async with sessionmaker_() as db:
         await ConnectorDatastore(db).create(
-            USER, _pending("valuz-stock", "https://mcp.reportify.cn/stock/mcp")
+            USER, _pending("valuz-data", "https://data.valuz.cn/mcp")
         )
 
     await _run_callback(sessionmaker_, connector_id=search_id)
 
     async with sessionmaker_() as db:
-        stock = await ConnectorDatastore(db).get_by_slug(USER, "valuz-stock")
+        stock = await ConnectorDatastore(db).get_by_slug(USER, "valuz-data")
         assert stock is not None
         assert (stock.status, stock.enabled, stock.tool_count) == ("connected", True, 11)
 
@@ -168,7 +168,7 @@ async def test_callback_leaves_an_unrelated_connector_alone(sessionmaker_) -> No
     """A token for the valuz group must never reach a connector outside it."""
     async with sessionmaker_() as db:
         ds = ConnectorDatastore(db)
-        row = await ds.create(USER, _pending("valuz-search", "https://mcp.reportify.cn/search/mcp"))
+        row = await ds.create(USER, _pending("valuz-search", "https://data.valuz.cn/mcp/search"))
         search_id = row.id
     async with sessionmaker_() as db:
         await ConnectorDatastore(db).create(

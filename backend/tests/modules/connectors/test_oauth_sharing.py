@@ -82,8 +82,8 @@ class _FakeDs:
 
 
 def test_valuz_group_members_are_siblings() -> None:
-    assert sibling_slugs("valuz-search") == ["valuz-stock"]
-    assert sibling_slugs("valuz-stock") == ["valuz-search"]
+    assert sibling_slugs("valuz-search") == ["valuz-data"]
+    assert sibling_slugs("valuz-data") == ["valuz-search"]
     assert credential_group_of("valuz-search") == "valuz"
 
 
@@ -177,7 +177,7 @@ def test_qualifying_group_shares(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_group_members_share_one_refresh_lock() -> None:
     # Same refresh token → must serialize, or a rotating server kills the loser.
     assert refresh_lock_key(_FakeRow(slug="valuz-search", id="c1")) == refresh_lock_key(
-        _FakeRow(slug="valuz-stock", id="c2")
+        _FakeRow(slug="valuz-data", id="c2")
     )
 
 
@@ -197,12 +197,12 @@ def test_refresh_lock_is_scoped_per_user_and_falls_back_to_the_row() -> None:
 @pytest.mark.asyncio
 async def test_propagate_hands_the_full_identity_to_a_pending_sibling() -> None:
     source = _authorized("valuz-search")
-    target = _FakeRow(slug="valuz-stock", id="c2")
-    ds = _FakeDs(rows={"valuz-search": source, "valuz-stock": target})
+    target = _FakeRow(slug="valuz-data", id="c2")
+    ds = _FakeDs(rows={"valuz-search": source, "valuz-data": target})
 
     written = await propagate_oauth_credentials("u1", source, ds)  # type: ignore[arg-type]
 
-    assert written == ["valuz-stock"]
+    assert written == ["valuz-data"]
     # The token alone is not enough — a refresh needs the metadata + client too.
     assert target.oauth_token_json == source.oauth_token_json
     assert target.oauth_client_info_json == source.oauth_client_info_json
@@ -212,11 +212,28 @@ async def test_propagate_hands_the_full_identity_to_a_pending_sibling() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cloud_managed_credentials_do_not_widen_distribution_policy() -> None:
+    source = _authorized("valuz-search")
+    source.oauth_client_info_json = (
+        '{"client_id":"valuz-team","managed_provider":"valuz"}'
+    )
+    target = _FakeRow(slug="valuz-data", id="c2")
+    ds = _FakeDs(rows={"valuz-search": source, "valuz-data": target})
+
+    assert await propagate_oauth_credentials("u1", source, ds) == []  # type: ignore[arg-type]
+    assert target.oauth_token_json is None
+
+    fresh = _FakeRow(slug="valuz-data", id="c3")
+    assert await inherit_oauth_credentials("u1", fresh, ds) is None  # type: ignore[arg-type]
+    assert fresh.oauth_token_json is None
+
+
+@pytest.mark.asyncio
 async def test_propagate_probes_so_the_sibling_lands_live() -> None:
     """A sibling must arrive connected AND counted — no Test click to finish it."""
     source = _authorized("valuz-search")
-    target = _FakeRow(slug="valuz-stock", id="c2")
-    ds = _FakeDs(rows={"valuz-search": source, "valuz-stock": target})
+    target = _FakeRow(slug="valuz-data", id="c2")
+    ds = _FakeDs(rows={"valuz-search": source, "valuz-data": target})
     probed: list[str] = []
 
     async def _probe(row: _FakeRow) -> int:
@@ -225,7 +242,7 @@ async def test_propagate_probes_so_the_sibling_lands_live() -> None:
 
     await propagate_oauth_credentials("u1", source, ds, probe=_probe)  # type: ignore[arg-type]
 
-    assert probed == ["valuz-stock"]
+    assert probed == ["valuz-data"]
     assert target.tool_count == 7
     assert target.last_tested_at > 0
 
@@ -233,8 +250,8 @@ async def test_propagate_probes_so_the_sibling_lands_live() -> None:
 @pytest.mark.asyncio
 async def test_a_failed_probe_keeps_the_previous_count() -> None:
     source = _authorized("valuz-search")
-    target = _FakeRow(slug="valuz-stock", id="c2", tool_count=3, last_tested_at=111)
-    ds = _FakeDs(rows={"valuz-search": source, "valuz-stock": target})
+    target = _FakeRow(slug="valuz-data", id="c2", tool_count=3, last_tested_at=111)
+    ds = _FakeDs(rows={"valuz-search": source, "valuz-data": target})
 
     async def _unreachable(row: _FakeRow) -> None:
         return None
@@ -243,7 +260,7 @@ async def test_a_failed_probe_keeps_the_previous_count() -> None:
 
     # Credentials still land; an unreachable server just doesn't erase what the
     # last successful probe knew.
-    assert written == ["valuz-stock"]
+    assert written == ["valuz-data"]
     assert target.oauth_token_json == source.oauth_token_json
     assert (target.tool_count, target.last_tested_at) == (3, 111)
 
@@ -252,8 +269,8 @@ async def test_a_failed_probe_keeps_the_previous_count() -> None:
 async def test_refresh_propagation_does_not_probe() -> None:
     """Renewing a token doesn't change a tool list — no probe without one asked for."""
     source = _authorized("valuz-search")
-    target = _FakeRow(slug="valuz-stock", id="c2", tool_count=5)
-    ds = _FakeDs(rows={"valuz-search": source, "valuz-stock": target})
+    target = _FakeRow(slug="valuz-data", id="c2", tool_count=5)
+    ds = _FakeDs(rows={"valuz-search": source, "valuz-data": target})
 
     await propagate_oauth_credentials("u1", source, ds)  # type: ignore[arg-type]
 
@@ -268,17 +285,17 @@ async def test_a_background_refresh_does_not_resurrect_a_deleted_member() -> Non
     whoever is still there and nothing more.
     """
     source = _authorized("valuz-search")
-    ds = _FakeDs(rows={"valuz-search": source})  # user deleted valuz-stock
+    ds = _FakeDs(rows={"valuz-search": source})  # user deleted valuz-data
 
     assert await propagate_oauth_credentials("u1", source, ds) == []  # type: ignore[arg-type]
     assert ds.created == []
-    assert "valuz-stock" not in ds.rows
+    assert "valuz-data" not in ds.rows
 
 
 @pytest.mark.asyncio
 async def test_install_probes_the_inherited_member() -> None:
     source = _authorized("valuz-search")
-    fresh = _FakeRow(slug="valuz-stock", id="c2")
+    fresh = _FakeRow(slug="valuz-data", id="c2")
     ds = _FakeDs(rows={"valuz-search": source})
 
     async def _probe(row: _FakeRow) -> int:
@@ -293,10 +310,10 @@ async def test_install_probes_the_inherited_member() -> None:
 async def test_propagate_does_not_re_enable_a_disabled_sibling() -> None:
     """A connected member the user deliberately turned off stays off."""
     source = _authorized("valuz-search")
-    target = _authorized("valuz-stock", id="c2")
+    target = _authorized("valuz-data", id="c2")
     target.enabled = False
     target.oauth_token_json = '{"access_token": "stale"}'
-    ds = _FakeDs(rows={"valuz-search": source, "valuz-stock": target})
+    ds = _FakeDs(rows={"valuz-search": source, "valuz-data": target})
 
     await propagate_oauth_credentials("u1", source, ds)  # type: ignore[arg-type]
 
@@ -307,7 +324,7 @@ async def test_propagate_does_not_re_enable_a_disabled_sibling() -> None:
 @pytest.mark.asyncio
 async def test_propagate_is_a_noop_without_a_token_or_siblings() -> None:
     unauthorized = _FakeRow(slug="valuz-search")
-    ds = _FakeDs(rows={"valuz-search": unauthorized, "valuz-stock": _FakeRow(slug="valuz-stock")})
+    ds = _FakeDs(rows={"valuz-search": unauthorized, "valuz-data": _FakeRow(slug="valuz-data")})
     assert await propagate_oauth_credentials("u1", unauthorized, ds) == []  # type: ignore[arg-type]
 
     lone = _authorized("github")
@@ -319,29 +336,29 @@ async def test_propagate_installs_a_sibling_that_has_no_row_yet() -> None:
     """Authorizing one member installs the rest — they are one service.
 
     This is the common path: the user connects Valuz search from the catalog and
-    expects quotes to land in the installed list too, already connected.
+    expects the full data toolset to land in the installed list too, already connected.
     """
     source = _authorized("valuz-search")
     ds = _FakeDs(rows={"valuz-search": source})
 
     written = await propagate_oauth_credentials("u1", source, ds, install_missing=True)  # type: ignore[arg-type]
 
-    assert written == ["valuz-stock"]
-    assert ds.created == ["valuz-stock"]
-    installed = ds.rows["valuz-stock"]
+    assert written == ["valuz-data"]
+    assert ds.created == ["valuz-data"]
+    installed = ds.rows["valuz-data"]
     assert (installed.status, installed.enabled) == ("connected", True)
     assert installed.oauth_token_json == source.oauth_token_json
     # Definitional fields come from the catalog, not from the source row.
-    assert installed.url == "https://mcp.reportify.cn/stock/mcp"
+    assert installed.url == "https://data.valuz.cn/mcp"
     assert installed.auth_type == "oauth"
-    assert installed.connector_type == "recommended"
+    assert installed.connector_type == "builtin"
 
 
 @pytest.mark.asyncio
 async def test_propagate_survives_a_failing_sibling() -> None:
     """The source's own authorization must not be undone by a sibling write."""
     source = _authorized("valuz-search")
-    ds = _FakeDs(rows={"valuz-search": source, "valuz-stock": _FakeRow(slug="valuz-stock")})
+    ds = _FakeDs(rows={"valuz-search": source, "valuz-data": _FakeRow(slug="valuz-data")})
 
     async def _boom(row: _FakeRow) -> _FakeRow:
         raise RuntimeError("db down")
@@ -357,7 +374,7 @@ async def test_propagate_survives_a_failing_sibling() -> None:
 @pytest.mark.asyncio
 async def test_install_inherits_from_an_authorized_sibling() -> None:
     source = _authorized("valuz-search")
-    fresh = _FakeRow(slug="valuz-stock", id="c2")
+    fresh = _FakeRow(slug="valuz-data", id="c2")
     ds = _FakeDs(rows={"valuz-search": source})
 
     assert await inherit_oauth_credentials("u1", fresh, ds) == "valuz-search"  # type: ignore[arg-type]
@@ -370,7 +387,7 @@ async def test_install_inherits_from_an_authorized_sibling() -> None:
 async def test_install_falls_through_when_no_sibling_is_authorized() -> None:
     # Sibling installed but never authorized → normal consent flow must run.
     ds = _FakeDs(rows={"valuz-search": _FakeRow(slug="valuz-search")})
-    fresh = _FakeRow(slug="valuz-stock", id="c2")
+    fresh = _FakeRow(slug="valuz-data", id="c2")
 
     assert await inherit_oauth_credentials("u1", fresh, ds) is None  # type: ignore[arg-type]
     assert fresh.status == "pending_auth"
@@ -380,7 +397,7 @@ async def test_install_falls_through_when_no_sibling_is_authorized() -> None:
 async def test_install_does_not_cross_users() -> None:
     """Another user's token must never seed this user's connector."""
     ds = _FakeDs(rows={"valuz-search": _authorized("valuz-search", user_id="someone-else")})
-    fresh = _FakeRow(slug="valuz-stock", id="c2", user_id="u1")
+    fresh = _FakeRow(slug="valuz-data", id="c2", user_id="u1")
 
     assert await inherit_oauth_credentials("u1", fresh, ds) is None  # type: ignore[arg-type]
     assert fresh.oauth_token_json is None

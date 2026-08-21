@@ -2533,7 +2533,7 @@ def test_equivalent_recap_reuses_cross_language_market_cap_binding() -> None:
         "evidenceHandle": handle,
         "source": {
             "sourceId": "google-market-cap",
-            "providerId": "valuz-stock",
+            "providerId": "valuz-data",
             "sourceType": "dataset",
             "title": "Reportify · stock_quote",
         },
@@ -2582,7 +2582,7 @@ def test_unique_unitless_market_cap_is_bound_for_user_inspection() -> None:
         "evidenceHandle": handle,
         "source": {
             "sourceId": "stock-quote:NVDA",
-            "providerId": "valuz-stock",
+            "providerId": "valuz-data",
             "sourceType": "dataset",
             "title": "Stock quote · NVDA",
         },
@@ -2617,7 +2617,7 @@ def test_unique_structured_value_conflict_is_corrected_before_binding() -> None:
         "evidenceHandle": handle,
         "source": {
             "sourceId": "stock-quote:MU",
-            "providerId": "valuz-stock",
+            "providerId": "valuz-data",
             "sourceType": "dataset",
             "title": "Stock quote · MU",
         },
@@ -2661,7 +2661,7 @@ def test_explicit_structured_value_conflict_is_corrected_without_rewriting_bindi
         "evidenceHandle": handle,
         "source": {
             "sourceId": "stock-quote:MU",
-            "providerId": "valuz-stock",
+            "providerId": "valuz-data",
             "sourceType": "dataset",
             "title": "Stock quote · MU",
         },
@@ -2890,7 +2890,7 @@ def test_structured_value_conflict_is_not_corrected_when_source_is_ambiguous() -
             "evidenceHandle": handle,
             "source": {
                 "sourceId": handle,
-                "providerId": "valuz-stock",
+                "providerId": "valuz-data",
                 "sourceType": "dataset",
                 "title": "Stock quote · MU",
             },
@@ -3289,7 +3289,7 @@ def test_outflow_metric_can_display_authoritative_negative_value_as_magnitude() 
         "evidenceHandle": "ev_msft_q1_capex_12345678",
         "source": {
             "sourceId": "msft-cashflow-q1",
-            "providerId": "valuz-stock",
+            "providerId": "valuz-data",
             "sourceType": "dataset",
             "title": "Company cash flow statement · MSFT",
         },

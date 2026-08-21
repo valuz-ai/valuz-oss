@@ -3,7 +3,7 @@ name: pptx-author
 description: >
   Generic PowerPoint authoring skill for global equity investment analysis and pitch decks.
   Creates professional 路演PPT / 投资分析PPT for any listed company across global stock markets
-  (US / HK / A-share focus, other markets too) using live data from the `valuz-stock` connector
+  (US / HK / A-share focus, other markets too) using live data from the `valuz-data` connector
   (quotes, financials, indicators) and the `valuz-search` connector (filings, research). All
   company-specific values are parameterized — never hardcoded.
   Triggers on "股票PPT制作", "投资PPT", "制作PPT", "路演PPT", "pitch deck",
@@ -21,12 +21,12 @@ This skill is a generic engine — every output is driven by two parameters:
 | Parameter | Example | Description |
 |-----------|---------|-------------|
 | `{{COMPANY_NAME}}` | {{COMPANY_NAME}} | Full company name (e.g., Apple Inc. / 腾讯控股 / 贵州茅台) |
-| `{{TICKER}}` | {{TICKER}} | Bare ticker for `valuz-stock` (e.g., AAPL / 00700 / 600519) |
+| `{{TICKER}}` | {{TICKER}} | Bare ticker for `valuz-data` (e.g., AAPL / 00700 / 600519) |
 | `{{MARKET}}` | {{MARKET}} | Market prefix for `valuz-search` symbols (US / HK / SH) |
 | `{{OUTPUT_PATH}}` | ./output.pptx | Where to save the PPTX file |
 
 All financial figures, price data, peer valuations, and company descriptions are
-fetched live from `valuz-stock` / `valuz-search` connectors. **Nothing is hardcoded.**
+fetched live from `valuz-data` / `valuz-search` connectors. **Nothing is hardcoded.**
 
 ---
 
@@ -35,67 +35,67 @@ fetched live from `valuz-stock` / `valuz-search` connectors. **Nothing is hardco
 Most deck content comes from team output; the data connectors are used only to
 fill in charts and figures. Two connectors back the data slides:
 
-- **`valuz-stock`** — quantitative data: quotes, financial statement values, segments.
+- **`valuz-data`** — quantitative data: quotes, financial statement values, segments.
 - **`valuz-search`** — qualitative data: filings, research, for citation/佐证.
 
-> **Symbol format:** `valuz-stock` takes a **bare ticker** (AAPL / 00700 / 600519);
+> **Symbol format:** `valuz-search` and `valuz-data` both use canonical `MARKET:LOCAL` symbols (`US:AAPL` / `HK:00700` / `SH:600519`). Call `resolve_symbols` first for aliases or non-canonical input. Search on `valuz-search`; read selected documents and all structured data on `valuz-data`.
 > `valuz-search` takes a `market:ticker` symbol (US:AAPL / HK:00700 / SH:600519).
 
 ### Step 1: Resolve Company Info
 
 ```python
-# valuz-stock — company_overview (bare ticker)
-company_overview(symbol="{{TICKER}}")
+# valuz-data — get_company (canonical MARKET:LOCAL symbol)
+get_company(kind="profile", symbol="{{TICKER}}")
 # → company profile + identifiers (e.g. NASDAQ / HKEX / SSE), full legal name
 ```
 
 ```python
-# valuz-stock — stock_quote (bare ticker)
-stock_quote(symbol="{{TICKER}}")
+# valuz-data — get_snapshots (canonical MARKET:LOCAL symbol)
+get_snapshots(symbol="{{TICKER}}")
 # → live price, market cap, turnover (for cover / highlights)
 ```
 
 ```python
-# valuz-stock — financial statements (bare ticker)
-income_statement(symbol="{{TICKER}}", period="annual", limit=5)
+# valuz-data — financial statements (canonical MARKET:LOCAL symbol)
+get_financial_statements(statement_type="income", symbol="{{TICKER}}", period="annual", limit=5)
 # → annual income statement: revenue, net profit, margins, EPS, etc.
-balance_sheet(symbol="{{TICKER}}", period="annual", limit=5)
+get_financial_statements(statement_type="balance", symbol="{{TICKER}}", period="annual", limit=5)
 # → balance sheet: assets, liabilities, equity
-cashflow_statement(symbol="{{TICKER}}", period="annual", limit=5)
+get_financial_statements(statement_type="cash_flow", symbol="{{TICKER}}", period="annual", limit=5)
 # → cash flow statement
-revenue_breakdown(symbol="{{TICKER}}", period="annual", limit=5)
+get_financial_statements(statement_type="revenue_breakdown", symbol="{{TICKER}}", period="annual", limit=5)
 # → segment / revenue mix for operating-metrics charts
 ```
 
 ```python
-# valuz-stock — price history for trend charts (bare ticker)
-ohlcv(symbol="{{TICKER}}", limit=260)
-# → OHLCV price history; use kline(symbol=...) for candlestick rendering
+# valuz-data — price history for trend charts (canonical MARKET:LOCAL symbol)
+get_bars(kind="bars", symbol="{{TICKER}}", limit=260)
+# → OHLCV price history; use get_bars(kind="bars", symbol=...) for candlestick rendering
 ```
 
 ```python
 # valuz-search — qualitative material for citations (market:ticker symbol)
-reports_search(query="{{COMPANY_NAME}} business overview", symbols=["{{MARKET}}:{{TICKER}}"])
-filings_search(query="{{COMPANY_NAME}} annual report", symbols=["{{MARKET}}:{{TICKER}}"])
+search_documents(category="all", query="{{COMPANY_NAME}} business overview", symbols=["{{MARKET}}:{{TICKER}}"])
+search_documents(category="all", query="{{COMPANY_NAME}} annual report", symbols=["{{MARKET}}:{{TICKER}}"])
 # → research notes / filings to cite and support narrative slides
 ```
 
 ### Step 2: Peer / Comps Data
 
 ```python
-# Pull peer figures with the same valuz-stock calls (stock_quote / income_statement)
+# Pull peer figures with the same valuz-data calls (get_snapshots / get_financial_statements)
 # on each comparable ticker; focus on top 5-8 comps by revenue/market cap.
 ```
 
 ### Step 3: Generate Charts
 
 Use matplotlib to create:
-1. **Revenue & Profit trend** — from `income_statement` (valuz-stock)
-2. **Margin trends** — gross margin, net margin, ROE over time (`income_statement`)
-3. **Growth rates** — YoY revenue and profit growth (`income_statement`)
-4. **Peer comparison** — horizontal bar chart of PE and PB vs peers (`stock_quote`)
-5. **Price trend** — from `ohlcv` / `kline` (valuz-stock)
-6. **Segment mix** — from `revenue_breakdown` (valuz-stock)
+1. **Revenue & Profit trend** — from `get_financial_statements` (valuz-data)
+2. **Margin trends** — gross margin, net margin, ROE over time (`get_financial_statements`)
+3. **Growth rates** — YoY revenue and profit growth (`get_financial_statements`)
+4. **Peer comparison** — horizontal bar chart of PE and PB vs peers (`get_snapshots`)
+5. **Price trend** — from `get_bars` / `get_bars` (valuz-data)
+6. **Segment mix** — from `get_financial_statements` (valuz-data)
 
 All chart titles and labels must include `{{COMPANY_NAME}}` dynamically.
 
@@ -123,16 +123,16 @@ Slide 2:  投资摘要 (Investment Highlights)
 Slide 3:  公司概览 (Company Overview)
     {{COMPANY_DESCRIPTION}}
     主营业务: {{MAIN_BUSINESS}}
-    成立时间 | 上市市场 | 控股股东 (from company_overview / stock_quote / valuz-search)
+    成立时间 | 上市市场 | 控股股东 (from get_company / get_snapshots / valuz-search)
 
 Slide 4:  行业分析 (Industry Overview)
     {{INDUSTRY_NAME}} — market size, trends, policy
-    Data from: reports_search / news_search (valuz-search) + peer figures
+    Data from: search_documents(category="all") (valuz-search) + peer figures
 
 Slide 5:  财务分析 (Financial Summary)
     [Chart: Revenue & Profit]  [Chart: Margin Trends]
     [Chart: Growth Rates]
-    All data from income_statement(period="annual") (valuz-stock)
+    All data from get_financial_statements(statement_type=..., period="annual") (valuz-data)
 
 Slide 6:  运营指标 (Operating Metrics)
     Segment breakdown, KPIs (if available from financials)
@@ -258,6 +258,6 @@ Examples across markets:
 - HK: `--company "腾讯控股" --ticker "0700.HK"`
 - A-share: `--company "贵州茅台" --ticker "600519.SH"`
 
-All quantitative data flows from the `valuz-stock` connector (行情/财务数值); all qualitative
+All quantitative data flows from the `valuz-data` connector (行情/财务数值); all qualitative
 material flows from the `valuz-search` connector (定性资料). No vendor API keys to configure —
 the connectors are provided by the Valuz workstation.

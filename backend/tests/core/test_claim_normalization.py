@@ -189,7 +189,7 @@ def test_normalized_metric_disambiguates_equal_value_candidates_in_binder() -> N
     records = [
         {
             "evidenceHandle": "ev_cloud_revenue",
-            "source": {"providerId": "valuz-stock", "sourceType": "dataset"},
+            "source": {"providerId": "valuz-data", "sourceType": "dataset"},
             "evidence": {
                 "kind": "structured-data",
                 "entityId": "MSFT",
@@ -201,7 +201,7 @@ def test_normalized_metric_disambiguates_equal_value_candidates_in_binder() -> N
         },
         {
             "evidenceHandle": "ev_total_revenue",
-            "source": {"providerId": "valuz-stock", "sourceType": "dataset"},
+            "source": {"providerId": "valuz-data", "sourceType": "dataset"},
             "evidence": {
                 "kind": "structured-data",
                 "entityId": "MSFT",
@@ -240,7 +240,7 @@ def _registry_item(handle: str, metric: str, field: str) -> dict:
         "evidenceHandle": handle,
         "source": {
             "sourceId": "dataset:MSFT",
-            "providerId": "valuz-stock",
+            "providerId": "valuz-data",
             "sourceType": "dataset",
             "title": "Structured data · MSFT",
             "retrievedAt": "2026-08-08T00:00:00Z",

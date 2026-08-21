@@ -1,6 +1,6 @@
 ---
 name: morning-note
-description: Daily morning research note for global equity markets. Summarizes overnight developments, pre-market sentiment, trade ideas, and key events for the trading day across US, HK, and A-share markets (and other markets where relevant). Uses valuz-stock for quotes, financials, and indicators, and valuz-search for earnings reports, calls, research, minutes, filings, and news. Triggers on "早报", "晨会纪要", "今日策略", "morning note", "morning meeting", or "daily market preview".
+description: Daily morning research note for global equity markets. Summarizes overnight developments, pre-market sentiment, trade ideas, and key events for the trading day across US, HK, and A-share markets (and other markets where relevant). Uses valuz-data for quotes, financials, and indicators, and valuz-search for earnings reports, calls, research, minutes, filings, and news. Triggers on "早报", "晨会纪要", "今日策略", "morning note", "morning meeting", or "daily market preview".
 ---
 
 # morning-note
@@ -11,18 +11,18 @@ Draft concise **晨会纪要/每日策略 (morning meeting note / daily strategy
 
 ## Data Sources
 
-> **Symbol formats** — `valuz-stock` takes a **bare ticker** (`AAPL`, `00700`, `600519`); `valuz-search` takes `market:ticker` (`US:AAPL`, `HK:00700`, `SH:600519`).
+> **Symbol format:** `valuz-search` and `valuz-data` both use canonical `MARKET:LOCAL` symbols (`US:AAPL` / `HK:00700` / `SH:600519`). Call `resolve_symbols` first for aliases or non-canonical input. Search on `valuz-search`; read selected documents and all structured data on `valuz-data`.
 
-### valuz-stock — 行情 / 指数 / 概念热度 / 财报日程 (quotes, indices, concept heat, earnings calendar)
+### valuz-data — 行情 / 指数 / 概念热度 / 财报日程 (quotes, indices, concept heat, earnings calendar)
 
-Use `valuz-stock` for structured market data: real-time quotes, index levels, intraday concept (theme) heat, and the day's earnings calendar. Covers US, HK, and A-share tickers (bare code, e.g. `AAPL`, `00700`, `600519`).
+Use `valuz-data` for structured market data: real-time quotes, index levels, intraday concept (theme) heat, and the day's earnings calendar. Covers US, HK, and A-share tickers (bare code, e.g. `AAPL`, `00700`, `600519`).
 
 ```
-valuz-stock stock_quote(symbol)          → Latest price, change, volume for a ticker
-valuz-stock index_quote(symbol)          → Index level and change
-valuz-stock concepts_today(...)          → Today's hot concepts / themes
-valuz-stock concepts_latest(...)         → Latest concept-heat ranking
-valuz-stock earnings_calendar(...)       → Companies reporting today
+valuz-data get_snapshots(symbol)          → Latest price, change, volume for a ticker
+valuz-data get_snapshots(symbol)          → Index level and change
+valuz-data get_themes(...)          → Today's hot concepts / themes
+valuz-data get_themes(...)         → Latest concept-heat ranking
+valuz-data get_calendar(...)       → Companies reporting today
 ```
 
 ### valuz-search — 要闻 / 公告 / 研报 / 财报检索 (news, filings, research, earnings)
@@ -30,10 +30,10 @@ valuz-stock earnings_calendar(...)       → Companies reporting today
 Use `valuz-search` for unstructured research retrieval: overnight/pre-market news, regulatory filings and announcements, sell-side research, and earnings materials. Pass `market:ticker` symbols (e.g. `US:AAPL`, `HK:00700`, `SH:600519`) via `symbols[]`, plus `query` and optional `start_datetime` / `end_datetime`.
 
 ```
-valuz-search news_search(query, symbols[])      → Market and stock-specific headlines
-valuz-search filings_search(query, symbols[])   → Regulatory filings and announcements
-valuz-search reports_search(query, symbols[])   → Sell-side research and analysis
-valuz-search earnings_search(query, symbols[])  → Earnings reports / calls / transcripts
+valuz-search search_documents(category="all", query, symbols[])      → Market and stock-specific headlines
+valuz-search search_documents(category="all", query, symbols[])   → Regulatory filings and announcements
+valuz-search search_documents(category="all", query, symbols[])   → Sell-side research and analysis
+valuz-search search_documents(category="all", query, symbols[])  → Earnings reports / calls / transcripts
 ```
 
 ### Macro Data (if relevant)
@@ -51,7 +51,7 @@ valuz-search earnings_search(query, symbols[])  → Earnings reports / calls / t
 
 ### Step 1: Overnight Developments
 
-> 要闻/公告/研报用 `news_search`、`filings_search`、`reports_search`(valuz-search)，按 `query` + `symbols[]`（`market:ticker`）检索，必要时加 `start_datetime`/`end_datetime` 限定隔夜区间。
+> 要闻/公告/研报用 `search_documents`(valuz-search)，按 `query` + `symbols[]`（`market:ticker`）检索，必要时加 `start_datetime`/`end_datetime` 限定隔夜区间。
 
 **Macro / Policy:**
 - Central bank announcements — Fed (FOMC, rate decisions), PBoC (MLF/LPR rates, RRR cuts, open market operations), and other central banks
@@ -79,7 +79,7 @@ valuz-search earnings_search(query, symbols[])  → Earnings reports / calls / t
 
 ### Step 2: Market Preview
 
-> 行情用 `stock_quote`（个股）/ `index_quote`（指数）(valuz-stock，裸代码)；板块/概念热度用 `concepts_today` 或 `concepts_latest`(valuz-stock)。
+> 行情用 `get_snapshots`（个股）/ `get_snapshots`（指数）(valuz-data，MARKET:LOCAL 规范代码)；板块/概念热度用 `get_themes` 或 `get_themes`(valuz-data)。
 
 **Previous session recap (per relevant market):**
 - US: S&P 500, Nasdaq, Dow — close, change, volume
@@ -118,7 +118,7 @@ For each idea:
 
 ### Step 4: Key Events Calendar
 
-> 当日财报日程用 `earnings_calendar`(valuz-stock)；相关公告/说明会用 `filings_search`、`earnings_search`(valuz-search，`symbols[]` 取 `market:ticker`)。
+> 当日财报日程用 `get_calendar`(valuz-data)；相关公告/说明会用 `search_documents`(valuz-search，`symbols[]` 取 `market:ticker`)。
 
 **Today's events:**
 - Earnings releases (US / HK / A-share companies reporting)

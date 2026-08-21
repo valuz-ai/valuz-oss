@@ -28,7 +28,7 @@ async def test_citation_evidence_is_compacted_for_model_and_preserved_privately(
         "evidenceHandle": "ev_revenue_12345678",
         "source": {
             "sourceId": "financials:600519",
-            "providerId": "valuz-stock",
+            "providerId": "valuz-data",
             "sourceType": "dataset",
             "title": "Company income statement · 600519",
             "retrievedAt": "2026-08-01T08:00:00Z",
@@ -98,7 +98,7 @@ async def test_citation_evidence_is_compacted_for_model_and_preserved_privately(
 async def test_large_nested_legacy_result_compacts_before_filesystem_eviction() -> None:
     source = {
         "sourceId": "index-constituents:000905",
-        "providerId": "valuz-stock",
+        "providerId": "valuz-data",
         "sourceType": "dataset",
         "title": "Index constituents · 000905",
         "retrievedAt": "2026-08-03T05:00:00Z",
@@ -198,7 +198,7 @@ async def test_calculation_rejects_value_that_does_not_match_collection_address(
                 "evidenceHandle": "ev_revenue_2025_12345678",
                 "source": {
                     "sourceId": "financials:600519",
-                    "providerId": "valuz-stock",
+                    "providerId": "valuz-data",
                     "sourceType": "dataset",
                     "title": "Company income statement · 600519",
                     "retrievedAt": "2026-08-02T08:00:00Z",
@@ -293,7 +293,7 @@ async def test_calculation_validates_evidence_uri_collection_address() -> None:
                 "evidenceHandle": "ev_revenue_2024_12345678",
                 "source": {
                     "sourceId": "financials:600519",
-                    "providerId": "valuz-stock",
+                    "providerId": "valuz-data",
                     "sourceType": "dataset",
                     "title": "Company income statement · 600519",
                     "retrievedAt": "2026-08-02T08:00:00Z",
@@ -1332,7 +1332,7 @@ async def test_financial_status_only_result_gets_addressable_collection() -> Non
         "evidenceHandle": "ev_status_12345678",
         "source": {
             "sourceId": "reportify:600519",
-            "providerId": "valuz-stock",
+            "providerId": "valuz-data",
             "sourceType": "tool-result",
             "title": "Revenue breakdown",
             "retrievedAt": "2026-08-02T00:00:00Z",
@@ -2179,7 +2179,7 @@ def _continuity_collection_payload(handle: str) -> dict[str, Any]:
                 "evidenceHandle": handle,
                 "source": {
                     "sourceId": "financials:600519",
-                    "providerId": "valuz-stock",
+                    "providerId": "valuz-data",
                     "sourceType": "dataset",
                     "title": "Company income statement · 600519",
                     "retrievedAt": "2026-08-05T00:00:00Z",
