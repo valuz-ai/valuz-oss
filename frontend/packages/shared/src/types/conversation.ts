@@ -130,6 +130,14 @@ export interface ConversationTurn {
    *  label so a system interruption is not misattributed to the user ("用户取消
    *  了当前对话"). Optional: absent is treated as ``false``. */
   interrupted?: boolean;
+  /** The run stopped because the runtime hit one of its per-run budgets
+   *  (``stop_reason.type === "budget_exhausted"``). NOT an error and NOT a
+   *  cancel: the turn is recorded as completed, so without an explicit marker
+   *  a ``max_cost`` stop renders as an empty assistant area with no
+   *  explanation — the CLI rejects the query before any model call, so the
+   *  turn has no blocks at all. Rendered as a visible notice with a retry
+   *  affordance. Optional: absent = the turn ended within budget. */
+  budgetHalt?: "max_cost" | "max_turns";
   /** Whether this turn's message carries a runtime-native fork anchor
    *  (terminal ``session.update`` frames stamp it). ``false`` disables
    *  "Fork from here"; ``undefined`` = recorded before the signal existed —

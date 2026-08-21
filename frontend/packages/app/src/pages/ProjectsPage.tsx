@@ -35,7 +35,8 @@ import {
   ProjectLocationFields,
   useProjectExecutionLocation,
 } from "../components/ProjectLocationFields";
-import { OriginBadge } from "../components/ExecutionLocationPicker";
+import { OriginIcon } from "../components/ExecutionLocationPicker";
+import { useCardGridColumns } from "../hooks/use-card-grid-columns";
 
 export const ProjectsPage = ({
   directoryFieldMode = "picker",
@@ -45,8 +46,12 @@ export const ProjectsPage = ({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { setHeader, setHeaderClassName } = useProjectOutlet();
+  const { setHeader, setHeaderClassName, setContentInnerClassName } =
+    useProjectOutlet();
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
+  const { ref: gridRef, columns: gridTemplateColumns } = useCardGridColumns(
+    projects.length,
+  );
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -138,11 +143,15 @@ export const ProjectsPage = ({
   useEffect(() => {
     setHeader(pageHeader);
     setHeaderClassName("h-15 px-5");
+    // Own the content padding outright, the way the knowledge page does,
+    // instead of cancelling the shell's default with negative margins.
+    setContentInnerClassName("p-0");
     return () => {
       setHeader(null);
       setHeaderClassName(undefined);
+      setContentInnerClassName(undefined);
     };
-  }, [pageHeader, setHeader, setHeaderClassName]);
+  }, [pageHeader, setHeader, setHeaderClassName, setContentInnerClassName]);
 
   const handleSelectDirectory = async () => {
     const picked = await execLocation.selectDirectory();
@@ -277,8 +286,9 @@ export const ProjectsPage = ({
       );
     }
 
+    // Same tiles, same sizing as the knowledge grid — see useCardGridColumns.
     return (
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <div ref={gridRef} className="grid gap-3" style={{ gridTemplateColumns }}>
         {projects.map((project) => (
           <ProjectCard
             key={project.id}
@@ -286,9 +296,10 @@ export const ProjectsPage = ({
             note={project.root_path || ""}
             href={`/projects/${project.id}`}
             badge={
-              // Execution origin (multi-target editions; fan-out tags rows).
+              // Execution origin (multi-target editions; fan-out tags rows) —
+              // the same icon the knowledge card puts after its name.
               project.exec_origin ? (
-                <OriginBadge origin={project.exec_origin} />
+                <OriginIcon origin={project.exec_origin} />
               ) : undefined
             }
             onDelete={() => setDeleteTarget(project)}
@@ -300,8 +311,8 @@ export const ProjectsPage = ({
   };
 
   return (
-    <div className="relative -m-6 h-[calc(100%+48px)] overflow-y-auto bg-card sm:-m-7 sm:h-[calc(100%+56px)]">
-      <div className="flex min-h-full flex-col px-5 pb-5">
+    <div className="relative flex h-full min-h-0 flex-col bg-card">
+      <div className="flex flex-1 flex-col overflow-y-auto px-5 pb-5 pt-3">
         {renderContent()}
       </div>
 

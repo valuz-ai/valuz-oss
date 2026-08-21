@@ -241,6 +241,19 @@ export interface RuntimeSelectorItem {
   unavailableReason?: string | null;
 }
 
+
+/** Tag palette, shared with the resource library so one agent looks the same
+ *  wherever it is listed: 分享 teal, 远程 green, anything else neutral. */
+const AGENT_BADGE_TONE: Record<string, string> = {
+  shared:
+    "bg-[color-mix(in_oklab,var(--accent-teal)_14%,var(--background))] text-[color-mix(in_oklab,var(--accent-teal)_62%,var(--foreground))]",
+  remote: "bg-success-light text-success-text",
+};
+
+function agentBadgeClass(tone: string | undefined): string {
+  return tone ? (AGENT_BADGE_TONE[tone] ?? "bg-surface-soft text-ink-meta") : "bg-surface-soft text-ink-meta";
+}
+
 export interface ComposerAgentItem {
   /** Project-local agent handle (the ``agent_slug``). */
   slug: string;
@@ -261,6 +274,7 @@ export interface ComposerAgentItem {
    * owns the wording.
    */
   badgeLabel?: string;
+  badgeTone?: "shared" | "remote";
 }
 
 export interface ComposerProjectItem {
@@ -2445,8 +2459,19 @@ export const Composer = ({
                                               }}
                                             >
                                               <span className="flex min-w-0 flex-1 flex-col">
-                                                <span className="truncate text-[12.5px] text-ink-heading">
-                                                  {a.name}
+                                                <span className="flex min-w-0 items-center gap-1.5">
+                                                  <span className="truncate text-[12.5px] text-ink-heading">
+                                                    {a.name}
+                                                  </span>
+                                                  {/* Same tag as the other
+                                                      agent list below — this
+                                                      one is the popover users
+                                                      actually open. */}
+                                                  {a.badgeLabel && (
+                                                    <span className={`shrink-0 rounded-sm px-1 py-0 text-micro leading-[1.4] ${agentBadgeClass(a.badgeTone)}`}>
+                                                      {a.badgeLabel}
+                                                    </span>
+                                                  )}
                                                 </span>
                                                 <span className="truncate text-2xs text-ink-meta">
                                                   {a.runtimeLabel} ·{" "}
@@ -2516,7 +2541,7 @@ export const Composer = ({
                                           {a.name}
                                         </span>
                                         {a.badgeLabel && (
-                                          <span className="shrink-0 rounded-sm bg-surface-soft px-1 py-0 text-micro leading-[1.4] text-ink-meta">
+                                          <span className={`shrink-0 rounded-sm px-1 py-0 text-micro leading-[1.4] ${agentBadgeClass(a.badgeTone)}`}>
                                             {a.badgeLabel}
                                           </span>
                                         )}

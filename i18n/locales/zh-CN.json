@@ -395,6 +395,8 @@
     "runFailed": "运行失败",
     "userCancelled": "用户取消了当前对话",
     "runtimeInterrupted": "对话被中断，可重试",
+    "budgetHaltCost": "本轮达到运行时的成本上限，已提前中止 —— 不是模型拒答。重试通常即可继续；如果连续多轮都这样，说明这个会话的上下文已经太大，建议新开一个会话。",
+    "budgetHaltTurns": "本轮达到运行时的最大步数上限，已提前中止。重试可以继续未完成的部分。",
     "runtimeLocked": "Runtime 在会话创建时已锁定。需要切换请新建对话。",
     "saveSkillSuccess": "已保存 {name} 到技能库",
     "searchSkill": "搜索 Skill...",

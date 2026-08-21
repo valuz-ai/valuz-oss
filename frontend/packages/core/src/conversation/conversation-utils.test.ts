@@ -615,6 +615,70 @@ describe("buildTurns — user interrupt", () => {
   });
 });
 
+describe("buildTurns — budget exhausted", () => {
+  it("should mark budgetHalt when a turn with no output stops on max_cost", () => {
+    // The exact shape the kernel emits once the CLI rejects a query over
+    // ``--max-budget-usd``: a COMPLETED turn carrying only the user message,
+    // no assistant blocks, no run.failed. Without budgetHalt this renders
+    // as a blank reply with no explanation.
+    const turns = buildTurns([
+      evt(1, "message.user", { text: "继续", message_id: "u1" }),
+      evt(2, "session.idle", {
+        stop_reason: JSON.stringify({
+          type: "budget_exhausted",
+          reason: "max_cost",
+        }),
+      }),
+    ]);
+
+    expect(turns[0]!.budgetHalt).toBe("max_cost");
+    expect(turns[0]!.blocks).toEqual([]);
+  });
+
+  it("should mark budgetHalt as max_turns when the step ceiling is hit", () => {
+    const turns = buildTurns([
+      evt(1, "message.user", { text: "go", message_id: "u1" }),
+      evt(2, "message.assistant.text_delta", {
+        text: "Partial",
+        message_id: "a1",
+      }),
+      evt(3, "session.idle", {
+        stop_reason: JSON.stringify({
+          type: "budget_exhausted",
+          reason: "max_turns",
+        }),
+      }),
+    ]);
+
+    expect(turns[0]!.budgetHalt).toBe("max_turns");
+  });
+
+  it("should leave budgetHalt unset when the turn ends normally", () => {
+    const turns = buildTurns([
+      evt(1, "message.user", { text: "done", message_id: "u1" }),
+      evt(2, "session.idle", { stop_reason: "end_turn" }),
+    ]);
+
+    expect(turns[0]!.budgetHalt).toBeUndefined();
+  });
+
+  it("should not confuse a budget stop with a cancel or an interruption", () => {
+    const turns = buildTurns([
+      evt(1, "message.user", { text: "继续", message_id: "u1" }),
+      evt(2, "session.idle", {
+        stop_reason: JSON.stringify({
+          type: "budget_exhausted",
+          reason: "max_cost",
+        }),
+      }),
+    ]);
+
+    expect(turns[0]!.cancelled).toBeFalsy();
+    expect(turns[0]!.interrupted).toBeFalsy();
+    expect(turns[0]!.failedMessage).toBeNull();
+  });
+});
+
 describe("buildTurns — runtime interrupt (not user cancel)", () => {
   it("marks session.idle with category 'interrupted' as interrupted, not cancelled", () => {
     const bare = buildTurns([
