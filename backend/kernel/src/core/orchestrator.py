@@ -125,44 +125,29 @@ def _is_task_coverage_meta_response(text: str) -> bool:
 
 
 class _TaskCoverageProtocolSink:
-    """Hide the coverage pass's protocol machinery: the private no-gap tool
-    and the pass's own reasoning stream.
+    """Keep the entire coverage pass private until its text is classified.
 
     Every event that flows through this sink belongs to the COVERAGE
     continuation, so the classification the UI cannot make ("is this trailing
     thinking just the completeness check?") is definitional here. The pass's
-    ``thinking`` / ``thinking_delta`` events are meta-reasoning about whether
-    the answer is complete — never user-facing content — so they are dropped
-    at the source; a silent no-op therefore streams NOTHING (previously the
-    transcript still grew a trailing 思考中 segment). A real supplement's
-    visible assistant text still streams unchanged, and an assistant message
-    such as ``(empty)`` is *not* interpreted or suppressed; it remains
-    visible. A no-gap pass can be silent only when the Runtime calls the
-    turn-scoped private tool supplied by ``run_task_coverage``.
+    reasoning and tool telemetry are internal verification machinery. Tool
+    results are still ingested by the observer so a genuine supplement can
+    cite newly collected Evidence, but they never create user-visible tool
+    cards. Assistant text is held until the pass ends: meta-responses are
+    dropped, while a genuine supplement is then published unchanged.
     """
-
-    # Visible characters after which held-back text is presumed a genuine
-    # supplement and flushed; meta-refusals are one short sentence, so the
-    # streaming penalty for a real continuation is at most this prefix.
-    _FLUSH_THRESHOLD_CHARS = 200
 
     def __init__(self, inner: EventSink) -> None:
         self._inner = inner
         self._private_tool_ids: set[str] = set()
         self.no_gap_declared = False
-        # Held-back visible-text events until the pass proves substantive
-        # (real tool call / enough text) or ``finalize`` classifies them.
+        # Coverage is an optional post-run verification pass. Hold all of its
+        # text until the terminal classification instead of guessing from a
+        # length threshold or from whether the verifier called another tool.
         self._held: list[Event] = []
-        self._held_delta_chars = 0
         self._held_message_texts: list[str] = []
-        self._passthrough = False
-
-    def _held_visible_len(self) -> int:
-        message_len = max((len(text) for text in self._held_message_texts), default=0)
-        return max(self._held_delta_chars, message_len)
 
     async def _flush_held(self) -> None:
-        self._passthrough = True
         held = self._held
         self._held = []
         for event in held:
@@ -172,7 +157,7 @@ class _TaskCoverageProtocolSink:
         """Classify held-back pass text: meta-refusal (or empty) → drop it and
         treat the pass as the silent no-op the protocol demanded; anything
         else is a real supplement and flushes downstream."""
-        if self._passthrough or not self._held:
+        if not self._held:
             return
         combined = " ".join(
             self._held_message_texts
@@ -213,21 +198,23 @@ class _TaskCoverageProtocolSink:
             and tool_id in self._private_tool_ids
         ):
             return
-        if event.type in {"text_delta", "assistant_message"} and not self._passthrough:
+        if event.type in {"text_delta", "assistant_message"}:
             self._held.append(event)
             text = str(event.data.get("text") or "")
-            if event.type == "text_delta":
-                self._held_delta_chars += len(text)
-            else:
+            if event.type == "assistant_message":
                 self._held_message_texts.append(text)
-            if self._held_visible_len() > self._FLUSH_THRESHOLD_CHARS:
-                await self._flush_held()
             return
         if event.type in {"tool_use", "tool_result"}:
-            # A real (non-private) tool call is substantive work — whatever
-            # text preceded it is part of a genuine continuation.
-            await self._flush_held()
-        elif event.type == "session_idle":
+            # Coverage tools are verifier implementation details. Let the
+            # observer register their names/Evidence without persisting or
+            # broadcasting a tool card.
+            ingest = getattr(self._inner, "emit_private_task_coverage_event", None)
+            if callable(ingest):
+                await ingest(event)
+            return
+        if event.type in {"tool_input_delta", "tool_output_delta"}:
+            return
+        if event.type == "session_idle":
             # The idle event closes the observer's coverage-segment window;
             # settle the held text FIRST so a real supplement is attributed
             # to the pass and a meta-refusal vanishes with the correct
@@ -681,6 +668,7 @@ class _MessageObserverSink:
         tool_use_id = event.data.get("id")
         tool_name = self._tool_names.get(tool_use_id) if isinstance(tool_use_id, str) else None
         citation_content = event.data.get("_citation_content")
+        citation_model_content = event.data.get("_citation_model_content")
         visible_content = event.data.get("content")
         compacted_content = compact_citation_tool_content(visible_content)
         private_projection = (
@@ -694,22 +682,54 @@ class _MessageObserverSink:
             else None
         )
         self._evidence_registry.register_tool_projection(
-            compacted_content if compacted_content is not None else visible_content,
+            (
+                citation_model_content
+                if citation_model_content is not None
+                else compacted_content
+                if compacted_content is not None
+                else visible_content
+            ),
             private_projection,
             tool_name=tool_name,
             trusted_private=(private_projection is not None or compacted_content is not None),
         )
-        if "_citation_content" not in event.data and compacted_content is None:
+        if (
+            "_citation_content" not in event.data
+            and "_citation_model_content" not in event.data
+            and compacted_content is None
+        ):
             return event
         return Event(
             type=event.type,
             data={
-                key: (compacted_content if key == "content" else value)
+                key: (
+                    compacted_content
+                    if key == "content" and compacted_content is not None
+                    else value
+                )
                 for key, value in event.data.items()
-                if key != "_citation_content"
+                if key not in {"_citation_content", "_citation_model_content"}
             },
             timestamp=event.timestamp,
         )
+
+    async def emit_private_task_coverage_event(self, event: Event) -> None:
+        """Ingest hidden Coverage tool events without creating transcript UI.
+
+        A genuine supplement may depend on a tool invoked by the verifier, so
+        its Evidence must enter the same turn-local Registry before assistant
+        text is published. The tool call/result itself is post-run protocol
+        telemetry and deliberately never reaches ``self._inner``.
+        """
+
+        if event.type == "tool_use":
+            tool_use_id = event.data.get("id")
+            tool_name = event.data.get("name")
+            if isinstance(tool_use_id, str) and isinstance(tool_name, str):
+                self._tool_names[tool_use_id] = tool_name
+            return
+        if event.type == "tool_result":
+            self._register_and_redact_tool_result(event)
 
     async def _publish_runtime_assistant(self, event: Event) -> bool:
         text = str(event.data.get("text") or event.data.get("content") or "")

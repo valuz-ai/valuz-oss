@@ -593,6 +593,7 @@ class EvidenceRegistry:
         deliberately keep the original broad record.
         """
 
+        record = self._with_best_document_source_metadata(record)
         locator_kind = str((record.locator or {}).get("kind") or "")
         if record.source.get("sourceType") != "document" or locator_kind in {
             "pdf",
@@ -641,7 +642,60 @@ class EvidenceRegistry:
                 ensure_ascii=False,
             )
             matches.setdefault(identity, candidate)
-        return next(iter(matches.values())) if len(matches) == 1 else record
+        preferred = next(iter(matches.values())) if len(matches) == 1 else record
+        return self._with_best_document_source_metadata(preferred)
+
+    def _with_best_document_source_metadata(self, record: EvidenceRecord) -> EvidenceRecord:
+        """Fill display metadata from the same validated document identity.
+
+        Some MCP chunk responses carry only immutable addressing fields while
+        a discovery result from the same provider carries the human title and
+        canonical URL. Keep the cited chunk's quote, version, and locator, but
+        reuse already-validated presentation metadata for that exact provider
+        and document identity.
+        """
+
+        source = record.source
+        if source.get("sourceType") != "document":
+            return record
+        identity = _document_source_identity(source)
+        provider_id = source.get("providerId")
+        if not identity or not isinstance(provider_id, str):
+            return record
+
+        candidates = [
+            candidate.source
+            for candidate in (*self._records.values(), *self._collections.values())
+            if candidate.source.get("sourceType") == "document"
+            and candidate.source.get("providerId") == provider_id
+            and _document_source_identity(candidate.source) == identity
+        ]
+        if not candidates:
+            return record
+        best = max(candidates, key=_document_source_metadata_score)
+        enriched = copy.deepcopy(source)
+        current_title = enriched.get("title")
+        best_title = best.get("title")
+        if _generic_document_title(current_title) and not _generic_document_title(best_title):
+            enriched["title"] = best_title
+        for key in ("canonicalUrl", "publishedAt", "organization", "author", "mimeType"):
+            current_value = enriched.get(key)
+            best_value = best.get(key)
+            if (
+                (not isinstance(current_value, str) or not current_value.strip())
+                and isinstance(best_value, str)
+                and best_value.strip()
+            ):
+                enriched[key] = best_value
+        if enriched == source:
+            return record
+        return EvidenceRecord(
+            handle=record.handle,
+            source=enriched,
+            evidence=record.evidence,
+            locator=record.locator,
+            tool_name=record.tool_name,
+        )
 
     def materialize_reference(self, handle: str, fragment: str | None) -> EvidenceRecord | None:
         """Resolve one model-proposed Collection Address into immutable Evidence."""
@@ -910,6 +964,35 @@ def _document_source_identity(source: Mapping[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _generic_document_title(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return True
+    normalized = re.sub(r"[\s_-]+", " ", value).strip().casefold()
+    return normalized in {
+        "document",
+        "document chunk",
+        "document summary",
+        "source",
+        "untitled",
+        "unknown document",
+    }
+
+
+def _document_source_metadata_score(source: Mapping[str, Any]) -> tuple[int, int, int]:
+    return (
+        int(not _generic_document_title(source.get("title"))),
+        int(_nonempty_source_text(source.get("canonicalUrl"))),
+        sum(
+            int(_nonempty_source_text(source.get(key)))
+            for key in ("publishedAt", "organization", "author", "mimeType")
+        ),
+    )
+
+
+def _nonempty_source_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _document_match_text(evidence: Mapping[str, Any]) -> str:
@@ -2429,6 +2512,16 @@ def rebase_collection_projections(content: Any) -> Any:
                 found, snapshot = _resolve_json_pointer(node, content_root)
                 if not found or not isinstance(snapshot, (dict, list)):
                     continue
+                if content_root == "" and isinstance(snapshot, dict):
+                    # Root-scoped Collections hash the provider's business
+                    # result, never the Valuz Evidence transport fields that
+                    # were appended after that result was verified. Keep this
+                    # identical to ``_validate_evidence_collection`` or every
+                    # valid root Collection is rebased to a hash that includes
+                    # its own descriptor and is then rejected at compaction.
+                    snapshot = copy.deepcopy(snapshot)
+                    snapshot.pop(EVIDENCE_ENVELOPE_KEY, None)
+                    snapshot.pop(EVIDENCE_HINT_KEY, None)
                 projection_hash = _content_hash(snapshot)
                 if candidate.get("contentHash") == projection_hash:
                     continue
@@ -4675,28 +4768,45 @@ def _normalize_collection_item_pointer(
 ) -> str | None:
     """Recover one deterministic Address that omits an ``items`` wrapper.
 
-    Some structured APIs expose ``data: {items: [...]}``.  The model-visible
-    Collection hint names both ``contentRoot=/data`` and
-    ``itemsPointer=/data/items``, but models occasionally copy the familiar
-    list form ``/data/9/market_cap``.  When the Collection handle is exact and
-    the first relative token is a row index, inserting the declared
-    ``itemsPointer`` is unambiguous.  No field, entity, value, or cross-
-    Collection guessing is involved; the normal allow-list and snapshot
-    validation still run on the normalized pointer.
+    Some structured APIs expose ``data: {items: [...]}``.  Models occasionally
+    copy the familiar list form ``/data/9/market_cap`` even though the declared
+    ``itemsPointer`` is ``/data/items``.  Root-scoped Collections are the same
+    case with ``contentRoot=''`` and must not lose this recovery path.
+
+    When the Collection handle is exact and the first token after the common
+    ``itemsPointer`` prefix is a row index, inserting the missing declared path
+    is unambiguous.  No field, entity, value, or cross-Collection guessing is
+    involved; the normal allow-list and snapshot validation still run on the
+    normalized pointer.
     """
 
     content_root = str(collection.addressing.get("contentRoot") or "")
     items_pointer = str(collection.addressing.get("itemsPointer") or content_root)
-    if not content_root or not items_pointer or items_pointer == content_root:
+    if not items_pointer or items_pointer == content_root:
         return None
-    prefix = f"{content_root.rstrip('/')}/"
-    if not pointer.startswith(prefix):
+    content_tokens = _json_pointer_tokens(content_root)
+    items_tokens = _json_pointer_tokens(items_pointer)
+    pointer_tokens = _json_pointer_tokens(pointer)
+    if content_tokens is None or items_tokens is None or pointer_tokens is None:
         return None
-    relative = pointer[len(content_root) :]
-    tokens = _json_pointer_tokens(relative)
-    if not tokens or not tokens[0].isdigit():
+    if items_tokens[: len(content_tokens)] != content_tokens:
         return None
-    normalized = f"{items_pointer.rstrip('/')}{relative}"
+    common = 0
+    for item_token, pointer_token in zip(items_tokens, pointer_tokens, strict=False):
+        if item_token != pointer_token:
+            break
+        common += 1
+    if (
+        common < len(content_tokens)
+        or common >= len(items_tokens)
+        or common >= len(pointer_tokens)
+        or not pointer_tokens[common].isdigit()
+    ):
+        return None
+    normalized_tokens = [*items_tokens, *pointer_tokens[common:]]
+    normalized = "".join(
+        f"/{_escape_json_pointer_token(token)}" for token in normalized_tokens
+    )
     return normalized if normalized != pointer else None
 
 
