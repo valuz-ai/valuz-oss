@@ -4,8 +4,10 @@ Maps AgentConfig + ToolKit → create_deep_agent(...) graph, harness Tools →
 StructuredTool, SubAgentDef → SubAgent (typed dict), and streams the graph's
 ``astream_events`` output to harness Events.
 
-Filesystem operations are bound to the project's cwd via FilesystemBackend
-(virtual_mode=True so absolute / parent-traversal paths are rejected).
+Filesystem operations resolve against the project's cwd via
+``_WorkspaceLocalShellBackend`` (virtual_mode=True: parent-traversal rejected,
+virtual "/" = workspace root, dead-end mappings fall through to existing host
+paths — see the class docstring).
 
 Approval contract (Phase 3 of the cross-runtime approval contract — see
 ``docs/design/cross-runtime-approval-contract.md`` §5.3, §9 Phase 3):
@@ -363,13 +365,24 @@ class _WorkspaceLocalShellBackend(LocalShellBackend):
 
     Both are fixed by judging containment **lexically** — before symlink
     resolution — and by accepting an absolute path that is already inside the
-    workspace as-is. ``..`` and ``~`` stay rejected, so a virtual path still
-    cannot name anything outside ``cwd``; the only reach beyond it is through a
-    link the harness or the user deliberately placed inside the workspace.
-    That is not a boundary being weakened: upstream documents ``virtual_mode``
-    as path semantics and explicitly NOT a security control, ``execute()``
-    below runs with un-translated host paths anyway, and before ``virtual_mode``
-    was enabled every absolute path was accepted unconditionally.
+    workspace as-is. ``..`` and ``~`` stay rejected.
+
+    Out-of-workspace absolutes get a host fallthrough: virtual resolution
+    wins whenever ``cwd / key`` names something real (so "/", every
+    workspace path, and the virtual dialect behave exactly as before), and
+    only a dead-end virtual mapping falls through to an existing host
+    location. Without it, ``ls /Users/x/test`` mapped to
+    ``<cwd>/Users/x/test`` and returned ``[]`` while the shell tool could
+    read the same directory freely — an inconsistency, not a boundary
+    (upstream documents ``virtual_mode`` as path semantics and explicitly
+    NOT a security control, ``execute()`` below runs with un-translated
+    host paths anyway, and claude/codex file tools reach the whole host
+    subject to the same approval gating). Flipping ``virtual_mode=False``
+    instead would break the virtual artifact namespaces — summarization
+    writes ``/conversation_history/<thread>.md`` and the large-result
+    offload uses ``/large_tool_results/`` — landing them on the filesystem
+    root, the exact desktop fail/retry bug ``virtual_mode=True`` fixed,
+    and would strand the Windows path virtualizer's ``/…`` outputs.
     """
 
     _VIRTUAL_ARTIFACT_PREFIXES = (
@@ -390,14 +403,43 @@ class _WorkspaceLocalShellBackend(LocalShellBackend):
         # unrecognizable. A driveless POSIX-style key is not absolute there and
         # falls through to the virtual mapping, as intended.
         raw = Path(key)
-        candidate = (
-            raw if raw.is_absolute() and _is_within(raw, self.cwd) else self.cwd / key.lstrip("/")
-        )
+        if raw.is_absolute() and _is_within(raw, self.cwd):
+            _raise_if_symlink_loop(raw)
+            return raw
+
+        # Virtual-first: the workspace mapping wins whenever it names
+        # something real, so every path that resolved before keeps resolving
+        # identically. Only a dead-end mapping may fall through to the host.
+        candidate = self.cwd / key.lstrip("/")
+        if not candidate.exists() and self._host_anchored(key, raw):
+            _raise_if_symlink_loop(raw)
+            return raw
         if not _is_within(candidate, self.cwd):
             msg = f"Path:{candidate} outside root directory: {self.cwd}"
             raise ValueError(msg)
         _raise_if_symlink_loop(candidate)
         return candidate
+
+    def _host_anchored(self, key: str, raw: Path) -> bool:
+        """Whether an absolute key names a real host location outside cwd.
+
+        Anchored means the path itself exists, or its parent directory does —
+        so a new file can be written into an existing host directory, while a
+        typo still resolves against the host and errors honestly. The
+        filesystem root is never an anchor: a bare top-level key like
+        ``/notes.md`` stays in the virtual dialect (parent ``/`` proves
+        nothing), and ``/`` itself always means the workspace root. The
+        DeepAgents artifact namespaces are pinned to the workspace regardless
+        of what exists on the host.
+        """
+        if not raw.is_absolute() or raw == Path(raw.anchor):
+            return False
+        if key.startswith(self._VIRTUAL_ARTIFACT_PREFIXES):
+            return False
+        if raw.exists():
+            return True
+        parent = raw.parent
+        return parent != Path(parent.anchor) and parent.exists()
 
     def _to_virtual_path(self, path: Path) -> str:
         # ``ls`` renders each child through here. Upstream resolves first, so a
@@ -405,7 +447,14 @@ class _WorkspaceLocalShellBackend(LocalShellBackend):
         # dropped as "outside root" — the reason a populated skills root listed
         # as empty. Children come from ``iterdir()`` on an already-absolute
         # parent, so a lexical relative path is both correct and stable.
-        return "/" + Path(path).relative_to(self.cwd).as_posix()
+        # Out-of-workspace host paths (accepted by the ``_resolve_path``
+        # fallthrough) render as their absolute POSIX form, which round-trips
+        # through the same fallthrough.
+        p = Path(path)
+        try:
+            return "/" + p.relative_to(self.cwd).as_posix()
+        except ValueError:
+            return p.as_posix()
 
     def read(
         self,
