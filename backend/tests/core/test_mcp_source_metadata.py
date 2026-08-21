@@ -11,11 +11,14 @@ from src.core.citation import (
 )
 from src.core.mcp_source_metadata import (
     MCP_LEGACY_SOURCE_METADATA_KEY,
+    MCP_SOURCE_CONTENT_TRANSPORT_PREFIX,
     MCP_SOURCE_METADATA_KEY,
     MCP_SOURCE_TRANSPORT_KEY,
     adapt_mcp_source_result,
+    unwrap_mcp_source_content_transport,
     unwrap_mcp_source_transport,
     wrap_mcp_result_metadata_for_transport,
+    wrap_mcp_result_metadata_in_content_for_transport,
 )
 
 
@@ -93,6 +96,117 @@ def test_transport_accepts_legacy_source_metadata_key() -> None:
     actual_descriptor, actual_structured, _ = unwrap_mcp_source_transport(artifact)
     assert actual_descriptor == descriptor
     assert actual_structured == structured
+
+
+def test_content_transport_survives_claude_sdk_result_flattening() -> None:
+    structured = {"data": [{"ticker": "600519", "revenue": 1}]}
+    descriptor = _descriptor(structured, tool_name="income_statement", resources=[])
+    result = CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(structured))],
+        structuredContent=structured,
+        _meta={MCP_SOURCE_METADATA_KEY: descriptor},
+    )
+
+    wrapped = wrap_mcp_result_metadata_in_content_for_transport(
+        result,
+        server_name="reportify",
+    )
+    flattened = [item.model_dump(by_alias=True, exclude_none=True) for item in wrapped.content]
+
+    actual_descriptor, actual_structured, restored = unwrap_mcp_source_content_transport(flattened)
+    assert actual_descriptor == descriptor
+    assert actual_structured == structured
+    assert restored == [{"type": "text", "text": json.dumps(structured)}]
+    assert MCP_SOURCE_CONTENT_TRANSPORT_PREFIX not in json.dumps(restored)
+
+
+def test_content_transport_does_not_mark_failed_mcp_result() -> None:
+    structured = {"error": {"code": "invalid_argument"}}
+    descriptor = _descriptor(structured, tool_name="arbitrary_tool", resources=[])
+    result = CallToolResult(
+        isError=True,
+        content=[TextContent(type="text", text=json.dumps(structured))],
+        structuredContent=structured,
+        _meta={MCP_SOURCE_METADATA_KEY: descriptor},
+    )
+
+    wrapped = wrap_mcp_result_metadata_in_content_for_transport(
+        result,
+        server_name="arbitrary-server",
+    )
+
+    assert wrapped is result
+    assert MCP_SOURCE_CONTENT_TRANSPORT_PREFIX not in json.dumps(
+        [item.model_dump(by_alias=True, exclude_none=True) for item in wrapped.content]
+    )
+
+
+def test_hash_accepts_semantically_identical_json_compatibility_text() -> None:
+    # Some cross-language JSON encoders preserve a decimal scale in the MCP
+    # compatibility text even though structuredContent has already been
+    # decoded into ordinary runtime numbers.  Bind the hash to that text only
+    # after proving that both carriers represent the same JSON value.
+    structured = {"data": {"items": [{"value": 1.0}]}}
+    compatibility_text = '{"data":{"items":[{"value":1.0000}]}}'
+    digest = hashlib.sha256(compatibility_text.encode()).hexdigest()
+    descriptor = _descriptor(
+        structured,
+        tool_name="arbitrary_tool",
+        resources=[
+            {
+                "resourceId": "arbitrary-data",
+                "kind": "structured-collection",
+                "authority": "authoritative",
+                "rootPointer": "",
+                "itemsPointer": "/data/items",
+                "dataset": {"id": "arbitrary.dataset", "revision": "v1"},
+                "identity": {"fields": ["/value"]},
+                "addressing": {
+                    "mode": "json-pointer",
+                    "allowedPathRoots": ["/data/items"],
+                },
+            }
+        ],
+    )
+    descriptor["result"]["hash"]["value"] = digest
+
+    adapted = adapt_mcp_source_result(
+        [{"type": "text", "text": compatibility_text}],
+        tool_name="mcp__any-server__arbitrary_tool",
+        descriptor=descriptor,
+        structured_content=structured,
+    )
+
+    assert adapted is not None
+    assert adapted.evidence_count == 1
+
+
+def test_hash_rejects_compatibility_text_that_differs_from_structured_content() -> None:
+    structured = {"data": {"items": [{"value": 2.0}]}}
+    compatibility_text = '{"data":{"items":[{"value":1.0000}]}}'
+    descriptor = _descriptor(
+        structured,
+        tool_name="arbitrary_tool",
+        resources=[
+            {
+                "resourceId": "arbitrary-data",
+                "kind": "operational",
+                "authority": "non-citable",
+                "rootPointer": "",
+            }
+        ],
+    )
+    descriptor["result"]["hash"]["value"] = hashlib.sha256(compatibility_text.encode()).hexdigest()
+
+    assert (
+        adapt_mcp_source_result(
+            [{"type": "text", "text": compatibility_text}],
+            tool_name="mcp__any-server__arbitrary_tool",
+            descriptor=descriptor,
+            structured_content=structured,
+        )
+        is None
+    )
 
 
 def test_conflicting_current_and_legacy_descriptors_fail_closed() -> None:

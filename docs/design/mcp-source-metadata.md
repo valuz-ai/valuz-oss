@@ -27,6 +27,22 @@ connection, tool name, target, canonical result hash, resource schema, and JSON
 Pointers before registering any private Evidence or Collection. Invalid or
 unsupported metadata fails closed and never makes the tool call itself fail.
 
+For structured-output compatibility, an MCP server may repeat the exact
+``structuredContent`` JSON value in a text ``content`` block.  JSON decoders do
+not retain number spellings such as ``1.0000``.  When the decoded text is
+strictly identical to ``structuredContent``, Valuz may therefore verify the
+descriptor hash from the text's canonical wire number spellings.  A mismatch,
+duplicate JSON key, non-finite number, or non-JSON text is never accepted as a
+hash substitute.
+
+Claude's native MCP bridge keeps only model-visible ``content`` and drops
+result-level ``_meta`` / ``structuredContent`` before ``PostToolUse``.  Valuz
+therefore exposes each configured MCP through one transparent in-process proxy
+that preserves the same descriptor in an internal content sidecar.  The hook
+removes the sidecar before model delivery.  Routing is independent of server
+and tool names; failed MCP results are never sidecar-wrapped because they cannot
+create Evidence.
+
 ## Resource provenance
 
 A resource can optionally describe origin, temporal meaning, and derivation:
