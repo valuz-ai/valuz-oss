@@ -1,2402 +1,32 @@
 import {
-  A2uiSurface,
-  createBinderlessComponentImplementation,
+  createValuzMessageProcessor,
+  effectiveA2UIComponents,
+  effectiveA2UIComponentNames,
+  getA2UIRegistryVersion,
+  subscribeA2UIComponents,
+  ValuzA2UISurface,
   type ReactComponentImplementation,
-} from "@a2ui/react/v0_9";
-import {
-  Catalog,
-  MessageProcessor,
-  type ComponentApi,
   type SurfaceModel,
-} from "@a2ui/web_core/v0_9";
-import * as OpenUI from "@openuidev/react-ui";
-import { Skeleton } from "../ui/skeleton";
-import { Modal as OpenUIModal } from "@openuidev/react-ui/Modal";
-import {
-  ROOT_COMPONENT_NAME,
-  builtInBlocksSuppressed,
-  effectiveBlockNames,
-  effectiveBlocks,
-  getRegistryVersion,
-  subscribeBlocks,
-} from "@valuz/genui-blocks";
-import { ChevronLeft, ChevronRight } from "lucide-react";
-import {
-  createContext,
-  type CSSProperties,
-  type ReactNode,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
-import { z } from "zod/v3";
+} from "@valuz/a2ui";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import { Skeleton } from "../ui/skeleton";
+import {
+  getGenUIDataHost,
+  type GenUIComponentDataRef,
+} from "./genui-channel/host-registry";
 import { completeJsonFragment } from "./partial-json";
 
 export interface A2UIRendererProps {
   body: string;
-  /** Whether the generation is still running. Drives the placeholder: a run
-   *  that has not written its first byte yet still deserves a skeleton — the
-   *  model may spend a while reasoning before any document appears, and an
-   *  empty pane there reads as "nothing is happening". */
   status?: "running" | "success";
-  /** Host render-context values handed to the edition data host for `$host`
-   *  param resolution (e.g. a company page's canonical symbol). */
   hostParams?: Record<string, string | number | boolean>;
 }
 
 type A2UIMessage = Record<string, unknown>;
-type A2UIComponent = Record<string, unknown> & {
-  id?: string;
-  component?: string;
-  type?: string;
-};
-
-type BuildChild = (id: string, basePath?: string) => ReactNode;
-
-const CATALOG_ID = "openui";
-const LEGACY_CATALOG_ID = "valuz";
-const looseComponentSchema = z.object({}).passthrough() as unknown;
-
-const OPENUI_COMPONENT_NAMES = [
-  "Accordion",
-  "AccordionItem",
-  "AreaChart",
-  "BarChart",
-  "Button",
-  "Buttons",
-  "Callout",
-  "Card",
-  "CardHeader",
-  "Carousel",
-  "CheckBoxGroup",
-  "CheckBoxItem",
-  "CodeBlock",
-  "Col",
-  "DatePicker",
-  "Form",
-  "FormControl",
-  "Grid",
-  "Heading",
-  "HorizontalBarChart",
-  "Image",
-  "ImageBlock",
-  "ImageGallery",
-  "Input",
-  "KPI",
-  "Label",
-  "LineChart",
-  "MarkDownRenderer",
-  "Markdown",
-  "Modal",
-  "Paragraph",
-  "PieChart",
-  "Point",
-  "RadarChart",
-  "RadialChart",
-  "RadioGroup",
-  "RadioItem",
-  "Row",
-  "ScatterChart",
-  "ScatterSeries",
-  "Section",
-  "Select",
-  "SelectItem",
-  "Separator",
-  "Series",
-  "SingleStackedBarChart",
-  "Slice",
-  "Slider",
-  "Stack",
-  "Steps",
-  "StepsItem",
-  "SwitchGroup",
-  "SwitchItem",
-  "TabItem",
-  "Table",
-  "Tabs",
-  "Tag",
-  "TagBlock",
-  "Text",
-  "TextArea",
-  "TextCallout",
-  "TextContent",
-  "Title",
-];
-
-/**
- * Name → block, including anything registered at runtime.
- *
- * Read through a function rather than captured in a module constant: an edition
- * registers its components at startup, which is after this module is imported.
- * A frozen map would accept the built-ins and silently ignore everything an
- * edition added — the block would render nowhere while still being described
- * in the prompt, which is the worst of the two failure directions.
- */
-function blockByName(name: string) {
-  // `effectiveBlocks()` rather than the built-in list: under an edition that
-  // replaces the set, a built-in must not still resolve here — it would render
-  // from a payload while being absent from the prompt.
-  return effectiveBlocks().find((block) => block.name === name);
-}
-
-/**
- * Names retired in favour of a block, kept resolvable so payloads generated
- * before the change — and any prompt still naming them — keep rendering.
- * `map` reshapes the retired component's props onto the block's.
- */
-const RETIRED_TO_BLOCK: Record<
-  string,
-  {
-    block: string;
-    map: (props: Record<string, unknown>) => Record<string, unknown>;
-  }
-> = {
-  FinanceMetric: {
-    block: "StatsCard",
-    map: (props) => ({
-      label: readText(props.label ?? props.name ?? props.title),
-      value: [
-        readText(props.value ?? props.latest ?? props.text),
-        readText(props.unit),
-      ]
-        .filter(Boolean)
-        .join(" "),
-      delta: readText(
-        props.changePct ?? props.change_pct ?? props.pct ?? props.change,
-      ),
-      description: readText(props.description),
-    }),
-  },
-};
-
-/**
- * Every name the A2UI runtime will accept: the hand-listed OpenUI names above,
- * every block in @valuz/genui-blocks, and the retired names.
- *
- * Derived rather than listed, because a name registered here but missing from
- * the block registry (or the reverse) fails silently — the model is told about
- * a component that renders as bare text, or a rendered component is never
- * offered to the model. Adding a block to that package is the only edit needed
- * to reach this protocol. Retired names stay registered so the runtime still
- * accepts them; the adapter maps them onto their replacement.
- */
-function a2uiComponentNames(): string[] {
-  // Under an edition that replaces the set, the only OpenUI name left is the
-  // root — and the retired aliases go with it, since each maps onto a built-in
-  // block that is no longer there. Accepting a name the prompt no longer offers
-  // would let a stale payload render a component the edition removed.
-  if (builtInBlocksSuppressed())
-    return [ROOT_COMPONENT_NAME, ...effectiveBlockNames()];
-  return [
-    ...OPENUI_COMPONENT_NAMES,
-    ...effectiveBlockNames(),
-    ...Object.keys(RETIRED_TO_BLOCK),
-  ];
-}
-
-/**
- * Render a block from an A2UI component model.
- *
- * One adapter serves every block because the two protocols differ in exactly
- * one place: children. A2UI passes child ids that `buildChild` turns into
- * React nodes, while a block expects to call `renderNode(props.children)`.
- * Handing it a `renderNode` that returns the already-built nodes closes the
- * gap; scalar and array props pass straight through, and the block's own zod
- * schema supplies defaults and coercion.
- */
-function renderBlockComponent(
-  name: string,
-  rawProps: Record<string, unknown>,
-  buildChild: BuildChild,
-): ReactNode | null {
-  const retired = RETIRED_TO_BLOCK[name];
-  const blockName = retired ? retired.block : name;
-  const block = blockByName(blockName);
-  if (!block) return null;
-
-  const props = retired ? retired.map(rawProps) : rawProps;
-  const built = readChildren(props, buildChild);
-
-  // Prefer the parsed value for its defaults and coercion, but never let a
-  // schema miss blank the component: model output is untrusted, and a missing
-  // optional field should degrade to an empty slot rather than a dropped block.
-  const parsed = block.props.safeParse({ ...props, children: [] });
-  const resolved: Record<string, unknown> = {
-    ...props,
-    ...(parsed.success ? (parsed.data as Record<string, unknown>) : {}),
-    children: built,
-  };
-
-  const Impl = block.component as (renderProps: {
-    props: Record<string, unknown>;
-    renderNode: (value: unknown) => ReactNode;
-  }) => ReactNode;
-
-  return <Impl props={resolved} renderNode={(value) => value as ReactNode} />;
-}
-
-/**
- * A `{path}` DynamicValue resolver over a component's raw properties.
- *
- * A2UI v0.9 lets any property be a data binding — `{"path": "/quote/items"}`
- * — resolved against the surface's DataModel. This renderer was binderless:
- * a bound property reached the component as that literal record and rendered
- * as nothing. Resolution happens here, at the single seam where properties
- * flow into components, so every component — block or OpenUI — gets bound
- * values without knowing bindings exist. `updateDataModel` messages then
- * re-render whatever was bound to the touched path on the next pass.
- *
- * The walk is conservative: only a record whose ONLY key is a string `path`
- * is treated as a binding (exactly the DataBinding schema), so a legitimate
- * object that happens to carry a `path` field among others passes through.
- * An unresolvable path yields undefined, which readers already degrade on —
- * the same posture as every other untrusted-model input here.
- */
-function resolveBoundProps(
-  props: Record<string, unknown>,
-  resolve: (binding: { path: string }) => unknown,
-  depth = 0,
-): Record<string, unknown> {
-  if (depth > 6) return props;
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(props)) {
-    out[key] = resolveBoundValue(value, resolve, depth);
-  }
-  return out;
-}
-
-function resolveBoundValue(
-  value: unknown,
-  resolve: (binding: { path: string }) => unknown,
-  depth: number,
-): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => resolveBoundValue(item, resolve, depth + 1));
-  }
-  if (isRecord(value)) {
-    const keys = Object.keys(value);
-    if (
-      keys.length === 1 &&
-      keys[0] === "path" &&
-      typeof value.path === "string"
-    ) {
-      try {
-        return resolve(value as { path: string });
-      } catch {
-        return undefined;
-      }
-    }
-    return resolveBoundProps(
-      value as Record<string, unknown>,
-      resolve,
-      depth + 1,
-    );
-  }
-  return value;
-}
-
-const createA2UIComponent =
-  createBinderlessComponentImplementation as unknown as (
-    api: ComponentApi,
-    render: (props: {
-      context: {
-        componentModel: {
-          type: string;
-          properties: Record<string, unknown>;
-        };
-        /** The scoped DataModel view; resolves `{path}` bindings (web_core ComponentContext). */
-        dataContext?: {
-          resolveDynamicValue: (value: unknown) => unknown;
-        };
-      };
-      buildChild: BuildChild;
-    }) => ReactNode,
-  ) => ReactComponentImplementation;
-/**
- * The catalogs, rebuilt when the block registry changes.
- *
- * They were module constants, which meant they were built at import — before
- * an edition has registered anything. Cached on the registry version so the
- * common case still builds them once, and a registration invalidates them.
- */
-type A2UICatalogPair = [
-  Catalog<ReactComponentImplementation>,
-  Catalog<ReactComponentImplementation>,
-];
-
-let catalogCache: { version: number; catalogs: A2UICatalogPair } | null = null;
-
-function a2uiCatalogs(): A2UICatalogPair {
-  const version = getRegistryVersion();
-  if (catalogCache?.version === version) return catalogCache.catalogs;
-  const catalogs: A2UICatalogPair = [
-    new Catalog(CATALOG_ID, createOpenUIComponents()),
-    new Catalog(LEGACY_CATALOG_ID, createOpenUIComponents()),
-  ];
-  catalogCache = { version, catalogs };
-  return catalogs;
-}
-
-/**
- * id → component, for resolving references that A2UI expresses as ids.
- *
- * A2UI nests by id: a chart carries `children: ["sector-series"]`, and the
- * Series is a sibling component elsewhere in the message. The runtime resolves
- * that for *rendering* (via `buildChild`), but chart data is not rendered — it
- * is read out of props — so a chart whose series arrives by reference had no
- * way to reach it. It rendered its category axis with no series at all: a tall
- * empty plot rather than an error.
- */
-import { getGenUIDataHost } from "./genui-channel/host-registry";
-
-const A2UIComponentIndex = createContext<Map<string, Record<string, unknown>>>(
-  new Map(),
-);
-
-/**
- * Collect `/refs` declarations per surface by scanning the payload messages —
- * no processor needed. The slot grammar writes one updateDataModel per slot
- * (`/refs/<slot>`) or one object at `/refs`; both are folded into a single
- * record per surface. Refs come only from the model-authored payload, never
- * from host-pushed updates, so the scan reads the raw body alone.
- */
-function collectDataRefs(body: string): Map<string, Record<string, unknown>> {
-  const bySurface = new Map<string, Record<string, unknown>>();
-  for (const message of parseA2UIMessages(body)) {
-    const update = message.updateDataModel;
-    if (!isRecord(update)) continue;
-    const surfaceId = readString(update.surfaceId);
-    const path = readString(update.path);
-    if (!surfaceId || !path) continue;
-    if (path === "/refs" && isRecord(update.value)) {
-      const existing = bySurface.get(surfaceId) ?? {};
-      bySurface.set(surfaceId, { ...existing, ...update.value });
-    } else if (path.startsWith("/refs/")) {
-      const slot = path.slice("/refs/".length);
-      if (!slot || slot.includes("/")) continue;
-      const existing = bySurface.get(surfaceId) ?? {};
-      bySurface.set(surfaceId, { ...existing, [slot]: update.value });
-    }
-  }
-  return bySurface;
-}
-
-/**
- * The shape a generated page is about to take: a title, a subtitle, and a row
- * of cards. Deliberately generic — it stands in for a page nobody has seen yet,
- * so it must not promise a layout the model may not produce. It is replaced the
- * moment the first real component resolves.
- */
-function GenerationSkeleton() {
-  return (
-    <div
-      data-slot="a2ui-generation-skeleton"
-      aria-hidden
-      className="min-w-0 space-y-4"
-    >
-      <div className="space-y-2">
-        <Skeleton className="h-6 w-56 max-w-full" />
-        <Skeleton className="h-3.5 w-36 max-w-full" />
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {[0, 1, 2].map((i) => (
-          <div
-            key={i}
-            className="space-y-2.5 rounded-xl border border-surface-border p-4"
-          >
-            <Skeleton className="h-4 w-24 max-w-full" />
-            <Skeleton className="h-3 w-full" />
-            <Skeleton className="h-3 w-4/5" />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-export function A2UIRenderer({ body, status, hostParams }: A2UIRendererProps) {
-  // Surfaces are rebuilt when a registration lands, not only when the payload
-  // changes: a conversation already on screen must pick up an edition's blocks.
-  const version = useSyncExternalStore(
-    subscribeBlocks,
-    getRegistryVersion,
-    getRegistryVersion,
-  );
-  // Host-pushed updateDataModel messages (M2). Keyed to the payload: a new
-  // body is a new answer, and stale live data must not leak into it.
-  const [liveMessages, setLiveMessages] = useState<Record<string, unknown>[]>(
-    [],
-  );
-  useEffect(() => {
-    setLiveMessages([]);
-  }, [body]);
-
-  // Start the edition's data host for every surface that declares refs. The
-  // effect keys on the body, not on liveMessages — refs are model-authored,
-  // and restarting the host on every push would be a feedback loop. Host
-  // params participate via a canonical string key, not object identity: the
-  // caller almost never memoizes the record, and an identity dep would
-  // restart every poller on every parent render.
-  const hostParamsKey = hostParams
-    ? JSON.stringify(
-        Object.keys(hostParams)
-          .sort()
-          .map((key) => [key, hostParams[key]]),
-      )
-    : "";
-  useEffect(() => {
-    const factory = getGenUIDataHost();
-    if (!factory) return;
-    const refsBySurface = collectDataRefs(body);
-    if (refsBySurface.size === 0) return;
-    const handles: { stop: () => void }[] = [];
-    for (const [surfaceId, refs] of refsBySurface) {
-      const handle = factory({
-        surfaceId,
-        refs,
-        push: (message) =>
-          setLiveMessages((previous) => [...previous, message]),
-        ...(hostParams ? { host: hostParams } : {}),
-      });
-      if (handle) handles.push(handle);
-    }
-    return () => {
-      for (const handle of handles) handle.stop();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [body, version, hostParamsKey]);
-
-  const built = useMemo(
-    () => buildSurfaces(body, liveMessages),
-    [body, version, liveMessages],
-  );
-  // A page that has appeared must not disappear. Building can come up empty
-  // MID-RUN for reasons that have nothing to do with what the user should see:
-  // the A2UI state machine throws on some half-written shapes (the catch in
-  // ``buildSurfaces`` swallows it), and a byte or two later the same document
-  // builds fine again. Rendering that gap — as a blank before, as a full-page
-  // skeleton now — dissolves a finished-looking page and rebuilds it seconds
-  // later. Hold the last good build instead; only a run that ENDS empty is
-  // really empty.
-  //
-  // Held per DOCUMENT, not per component instance. The same renderer element
-  // is reused when a surface swaps payloads (the workbench toggles between its
-  // bound page and the live one at the same position in the tree), and a hold
-  // that survived that showed the OLD page — with a loading tail under it —
-  // where the new generation belonged. A body only inherits the hold when it
-  // continues the body that produced it.
-  const lastGood = useRef<{
-    body: string;
-    surfaces: SurfaceModel<ReactComponentImplementation>[];
-  }>({ body: "", surfaces: [] });
-  if (built.length) lastGood.current = { body, surfaces: built };
-  const inheritsHold =
-    lastGood.current.surfaces.length > 0 &&
-    body.startsWith(lastGood.current.body);
-  const surfaces =
-    built.length || status !== "running" || !inheritsHold
-      ? built
-      : lastGood.current.surfaces;
-
-  const index = useMemo(() => buildComponentIndex(body), [body]);
-  // Nothing has ever rendered. While the run is live that is a WAIT, not an
-  // absence: the model may reason for a minute before writing its first byte,
-  // and the document that follows resolves component by component. Breathe a
-  // page-shaped skeleton through both — the runtime's own answer in the second
-  // half is the literal string ``[Loading root...]``. Once the run is over an
-  // empty result is genuinely empty, so render nothing.
-  if (!surfaces.length)
-    return status === "running" ? <GenerationSkeleton /> : null;
-
-  return (
-    <A2UIComponentIndex.Provider value={index}>
-      <div data-slot="a2ui-renderer">
-        {surfaces.map((surface) => (
-          <A2uiSurface key={surface.id} surface={surface} />
-        ))}
-        {status === "running" ? <GenerationTail /> : null}
-      </div>
-    </A2UIComponentIndex.Provider>
-  );
-}
-
-/**
- * The page is still being written — shown under the last component that has
- * landed, and kept in view as the page grows.
- *
- * Two jobs. It says the page is not finished (without it a page that has
- * stopped growing for a few seconds looks done, and the user applies a half
- * document). And it is the scroll anchor: the surface grows downward off the
- * bottom of the viewport, so following it is what makes the generation
- * watchable instead of something you have to chase with the scrollbar.
- */
-function GenerationTail() {
-  const ref = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    // Only follow while the user is already near the bottom. Scrolling someone
-    // back down after they deliberately scrolled up to read is worse than not
-    // following at all.
-    const scroller = findScrollParent(el);
-    if (scroller) {
-      const distance =
-        scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-      if (distance > 240) return;
-    }
-    el.scrollIntoView({ block: "end", behavior: "smooth" });
-  });
-
-  return (
-    <div
-      ref={ref}
-      data-slot="a2ui-generation-tail"
-      className="flex items-center gap-2 px-1 py-3 text-xs text-ink-meta"
-    >
-      <Skeleton className="h-3 w-32" />
-    </div>
-  );
-}
-
-/** Nearest ancestor that actually scrolls, or null when the page itself does. */
-function findScrollParent(from: HTMLElement): HTMLElement | null {
-  let node: HTMLElement | null = from.parentElement;
-  while (node) {
-    const overflowY = getComputedStyle(node).overflowY;
-    if (
-      (overflowY === "auto" || overflowY === "scroll") &&
-      node.scrollHeight > node.clientHeight
-    ) {
-      return node;
-    }
-    node = node.parentElement;
-  }
-  return null;
-}
-
-function buildComponentIndex(
-  body: string,
-): Map<string, Record<string, unknown>> {
-  const index = new Map<string, Record<string, unknown>>();
-  for (const message of normalizeMessages(parseA2UIMessages(body))) {
-    const update = (message as Record<string, unknown>).updateComponents;
-    if (!isRecord(update)) continue;
-    for (const component of toArray(update.components)) {
-      if (!isRecord(component)) continue;
-      const id = readText(component.id);
-      if (id) index.set(id, component);
-    }
-  }
-  return index;
-}
-
-/**
- * Drop repeated ``createSurface`` messages for a surface id that already
- * exists. Models occasionally "restart" mid-document and emit the surface
- * header again; the A2UI state machine throws on the duplicate, and the
- * catch below would blank the WHOLE payload. Keeping the first create and
- * letting the later ``updateComponents`` merge is the graceful-degradation
- * behavior the genui contract asks for (render what can be rendered).
- */
-function dropDuplicateCreateSurface(
-  messages: Record<string, unknown>[],
-): Record<string, unknown>[] {
-  const seen = new Set<string>();
-  return messages.filter((message) => {
-    const create = message.createSurface;
-    if (!isRecord(create)) return true;
-    const id = readText(create.surfaceId) ?? "";
-    if (seen.has(id)) return false;
-    seen.add(id);
-    return true;
-  });
-}
-
-/**
- * Drop a document the payload emits a SECOND time.
- *
- * A turn can carry the same document twice — the canonical assistant text is
- * the join of every model-end segment, and a run that produces the document in
- * two segments yields two identical copies. Merging the repeat is not merely
- * redundant, it is actively worse than useless WHILE STREAMING: the repeat
- * arrives a character at a time, so each component it redefines regresses from
- * its finished render to a half-parsed one and grows back — a completed page
- * visibly dissolving and reassembling.
- *
- * The test is deliberately narrow. A repeat is only dropped when everything it
- * has emitted so far is a PREFIX of the first copy — which covers both the
- * mid-flight repeat (still arriving) and the finished one (exactly equal), and
- * never touches a genuine restart that says something different. Those keep the
- * old merge behaviour.
- */
-function dropRepeatedDocument(body: string): string {
-  const text = body.trimEnd();
-  const firstLineEnd = text.indexOf("\n");
-  if (firstLineEnd < 0) return body;
-  const head = text.slice(0, firstLineEnd);
-  if (!head.trim()) return body;
-
-  // Candidate split points: every later line identical to the opening one. The
-  // repeat begins by re-announcing the same surface, so the document's first
-  // line is where a second copy starts.
-  let from = firstLineEnd;
-  for (;;) {
-    const at = text.indexOf(`\n${head}`, from);
-    if (at < 0) return body;
-    const first = text.slice(0, at);
-    const second = text.slice(at + 1);
-    // Equal → the finished repeat. Prefix → the repeat still arriving. Either
-    // way the first copy already says all of it, and says it completely.
-    if (first.startsWith(second)) return first;
-    from = at + 1;
-  }
-}
-
-/**
- * Withhold components the payload has not finished writing.
- *
- * The A2UI runtime is not ours and it narrates its gaps: a component whose
- * name is still half-written (``"PageHea``) renders as the literal text
- * ``Unknown component: PageHea``, and a child id a parent has declared but
- * whose definition has not arrived renders as ``[Loading card-brief...]``.
- * Mid-stream that is most of the screen, and it is debug output — a half-typed
- * identifier is not a thing to show anyone.
- *
- * So a component is handed over only once its name resolves, and a parent only
- * lists the children that came with it. What is not ready simply is not there
- * yet: the page grows by whole components instead of flickering through
- * skeletons of them.
- */
-function withoutUnreadyComponents(
-  messages: Record<string, unknown>[],
-  /** The payload's last line did not parse on its own, so the last message
-   *  came from the partial-JSON salvage and is still being written. A finished
-   *  document has none. */
-  trailingIsPartial: boolean,
-): Record<string, unknown>[] {
-  const known = new Set(a2uiComponentNames());
-  // Every id the payload has introduced, whatever its component name. Data
-  // carriers (``Series``, ``Point``, ``Group``…) are declared exactly like
-  // renderable components and referenced the same way, so a name-based test
-  // here would tear the chart data graph apart — membership is the only sound
-  // test for "has this id arrived".
-  //
-  // The one exception is the trailing message (see below): an id there counts
-  // only once its component name has finished arriving, otherwise a parent
-  // would keep pointing at a child this pass is about to withhold.
-  const lastMessageIndex = trailingIsPartial ? messages.length - 1 : -1;
-  const declared = new Set<string>();
-  messages.forEach((message, index) => {
-    const update = message.updateComponents;
-    if (!isRecord(update)) return;
-    for (const component of toArray(update.components)) {
-      if (!isRecord(component)) continue;
-      const id = readText(component.id);
-      if (!id) continue;
-      if (
-        index === lastMessageIndex &&
-        !known.has(readText(component.component) ?? "")
-      ) {
-        continue;
-      }
-      declared.add(id);
-    }
-  });
-  // The surface exists but nothing in it does — the runtime would narrate that
-  // as ``[Loading root...]``. Nothing at all is what "not started" looks like.
-  if (declared.size === 0) return [];
-
-  // Only the LAST message can be mid-write (the salvaged trailing fragment);
-  // everything before it came from a closed line and is final. A name that
-  // fails to resolve there is still being typed, not an unknown component —
-  // and typing it out on screen is what produced ``Unknown component: PageHea``.
-
-  return messages.map((message, index) => {
-    const update = message.updateComponents;
-    if (!isRecord(update)) return message;
-    const components = toArray(update.components)
-      .filter(
-        (component) =>
-          isRecord(component) &&
-          Boolean(readText(component.id)) &&
-          (index !== lastMessageIndex ||
-            known.has(readText(component.component) ?? "")),
-      )
-      .map((component) => {
-        const record = component as Record<string, unknown>;
-        if (!Array.isArray(record.children)) return record;
-        const children = record.children.filter(
-          (child) => typeof child !== "string" || declared.has(child),
-        );
-        return children.length === record.children.length
-          ? record
-          : { ...record, children };
-      });
-    return { ...message, updateComponents: { ...update, components } };
-  });
-}
-
-/** Did the payload stop mid-line? Only then is its last message provisional. */
-function hasPartialTrailingLine(body: string): boolean {
-  const trimmed = body.trimEnd();
-  if (!trimmed) return false;
-  const lastLine = trimmed.slice(trimmed.lastIndexOf("\n") + 1).trim();
-  if (!lastLine) return false;
-  try {
-    JSON.parse(lastLine);
-    return false;
-  } catch {
-    return true;
-  }
-}
-
-function buildSurfaces(
-  body: string,
-  liveMessages: Record<string, unknown>[] = [],
-): SurfaceModel<ReactComponentImplementation>[] {
-  // Live messages are appended AFTER normalization on purpose: they are
-  // host-pushed updateDataModel messages, already well-formed, and the
-  // normalization pass is for model-authored payload quirks.
-  const deduped = dropRepeatedDocument(body);
-  const messages = [
-    ...withoutUnreadyComponents(
-      dropDuplicateCreateSurface(normalizeMessages(parseA2UIMessages(deduped))),
-      hasPartialTrailingLine(deduped),
-    ),
-    ...(liveMessages as never[]),
-  ];
-  if (!messages.length) return [];
-
-  const processor = new MessageProcessor<ReactComponentImplementation>(
-    a2uiCatalogs(),
-  );
-
-  try {
-    processor.processMessages(messages as never);
-  } catch (error) {
-    if (import.meta.env.DEV) {
-      console.warn("[genui] failed to render A2UI payload", error);
-    }
-    return [];
-  }
-
-  return Array.from(processor.model.surfacesMap.values());
-}
-
-function createOpenUIComponents(): ReactComponentImplementation[] {
-  return a2uiComponentNames().map((name) => {
-    const api = {
-      name,
-      schema: looseComponentSchema,
-    } as unknown as ComponentApi;
-    return createA2UIComponent(api, ({ context, buildChild }) => (
-      <OpenUIComponent
-        name={normalizeOpenUIComponentName(context.componentModel.type)}
-        props={
-          context.dataContext
-            ? resolveBoundProps(context.componentModel.properties, (b) =>
-                context.dataContext!.resolveDynamicValue(b),
-              )
-            : context.componentModel.properties
-        }
-        buildChild={buildChild}
-      />
-    ));
-  });
-}
-
-function OpenUIComponent({
-  name,
-  props,
-  buildChild,
-}: {
-  name: string;
-  props: Record<string, unknown>;
-  buildChild: BuildChild;
-}) {
-  const children = readChildren(props, buildChild);
-  const componentIndex = useContext(A2UIComponentIndex);
-  const resolveRefs = (value: unknown): unknown[] =>
-    materializeRefs(value, componentIndex);
-
-  switch (name) {
-    case "Stack":
-      return (
-        <StackBox
-          component="stack"
-          direction={readString(props.direction) ?? "column"}
-          gap={readString(props.gap) ?? "m"}
-          align={readString(props.align) ?? "stretch"}
-          justify={readString(props.justify) ?? "start"}
-          wrap={typeof props.wrap === "boolean" ? props.wrap : true}
-        >
-          {children}
-        </StackBox>
-      );
-    case "Grid":
-      return (
-        <StackBox component="grid" direction="row" gap="m" wrap>
-          {children}
-        </StackBox>
-      );
-    case "Row":
-      return (
-        <StackBox
-          component="row"
-          direction="row"
-          gap={readString(props.gap) ?? "m"}
-          wrap={typeof props.wrap === "boolean" ? props.wrap : true}
-        >
-          {children}
-        </StackBox>
-      );
-    case "Card":
-      return <CardBox variant={readVariant(props.variant)}>{children}</CardBox>;
-    case "Section":
-      return (
-        <SectionBox
-          title={readText(props.title)}
-          description={readText(props.description ?? props.subtitle)}
-        >
-          {children}
-        </SectionBox>
-      );
-    case "CardHeader":
-      return (
-        <OpenUI.CardHeader
-          title={readText(props.title ?? props.text)}
-          subtitle={readText(props.subtitle ?? props.description)}
-        />
-      );
-    case "Text":
-    case "Paragraph":
-    case "Heading":
-    case "Title":
-    case "TextContent": {
-      const content =
-        props.text !== undefined || props.value !== undefined
-          ? readText(props.text ?? props.value)
-          : children;
-      return (
-        <TextBlock
-          size={readString(props.size) ?? defaultTextSizeForComponent(name)}
-        >
-          {content}
-        </TextBlock>
-      );
-    }
-    case "Markdown":
-    case "MarkDownRenderer":
-      return (
-        <OpenUI.MarkDownRenderer
-          textMarkdown={readText(props.textMarkdown ?? props.text)}
-        />
-      );
-    case "Callout":
-      return (
-        <OpenUI.Callout
-          variant={readCalloutVariant(props.variant)}
-          title={readText(props.title)}
-          description={readText(props.description ?? props.text)}
-        />
-      );
-    case "TextCallout":
-      return (
-        <OpenUI.TextCallout
-          variant={readTextCalloutVariant(props.variant)}
-          title={readText(props.title)}
-          description={readText(props.description ?? props.text)}
-        />
-      );
-    case "CodeBlock":
-      return (
-        <OpenUI.CodeBlock
-          language={readString(props.language) ?? "text"}
-          codeString={readText(props.codeString ?? props.code ?? props.text)}
-        />
-      );
-    case "Image":
-      return (
-        <OpenUI.Image
-          src={readString(props.src ?? props.url) ?? ""}
-          alt={readString(props.alt ?? props.description) ?? ""}
-        />
-      );
-    case "ImageBlock":
-      return (
-        <OpenUI.ImageBlock
-          src={readString(props.src ?? props.url) ?? ""}
-          alt={readString(props.alt ?? props.description) ?? ""}
-        />
-      );
-    case "ImageGallery":
-      return <OpenUI.ImageGallery images={readImages(props.images)} />;
-    case "Table":
-      return <MappedTable props={props} buildChild={buildChild} />;
-    case "BarChart": {
-      const data = buildChartData(props, resolveRefs);
-      if (!data.length) return null;
-      return (
-        <OpenUI.BarChartCondensed
-          data={data}
-          categoryKey="category"
-          variant={readString(props.variant) as never}
-          xAxisLabel={readString(props.xLabel)}
-          yAxisLabel={readString(props.yLabel)}
-          isAnimationActive={false}
-        />
-      );
-    }
-    case "LineChart": {
-      const data = buildChartData(props, resolveRefs);
-      if (!data.length) return null;
-      return (
-        <OpenUI.LineChartCondensed
-          data={data}
-          categoryKey="category"
-          variant={readString(props.variant) as never}
-          xAxisLabel={readString(props.xLabel)}
-          yAxisLabel={readString(props.yLabel)}
-          isAnimationActive={false}
-        />
-      );
-    }
-    case "AreaChart": {
-      const data = buildChartData(props, resolveRefs);
-      if (!data.length) return null;
-      return (
-        <OpenUI.AreaChartCondensed
-          data={data}
-          categoryKey="category"
-          variant={readString(props.variant) as never}
-          xAxisLabel={readString(props.xLabel)}
-          yAxisLabel={readString(props.yLabel)}
-          isAnimationActive={false}
-        />
-      );
-    }
-    case "HorizontalBarChart": {
-      const data = buildChartData(props, resolveRefs);
-      if (!data.length) return null;
-      return (
-        <OpenUI.HorizontalBarChart
-          data={data}
-          categoryKey="category"
-          variant={readString(props.variant) as never}
-          isAnimationActive={false}
-          height={readNumber(props.height)}
-        />
-      );
-    }
-    case "RadarChart": {
-      const data = buildChartData(props, resolveRefs);
-      if (!data.length) return null;
-      return (
-        <OpenUI.RadarChart
-          data={data}
-          categoryKey="category"
-          variant={readString(props.variant) as never}
-          isAnimationActive={false}
-        />
-      );
-    }
-    case "PieChart":
-      return <PieLikeChart Component={OpenUI.PieChart} props={props} />;
-    case "RadialChart":
-      return <PieLikeChart Component={OpenUI.RadialChart} props={props} />;
-    case "SingleStackedBarChart": {
-      const data = buildSliceData(props);
-      if (!data.length) return null;
-      return (
-        <OpenUI.SingleStackedBar
-          data={data}
-          categoryKey="category"
-          dataKey="value"
-          animated={false}
-        />
-      );
-    }
-    case "ScatterChart": {
-      const data = buildScatterData(props);
-      if (!data.length) return null;
-      return (
-        <OpenUI.ScatterChart
-          data={data}
-          xAxisDataKey="x"
-          yAxisDataKey="y"
-          isAnimationActive={false}
-        />
-      );
-    }
-    case "Form":
-      return (
-        <div
-          role="form"
-          style={{ display: "flex", flexDirection: "column", gap: 16 }}
-        >
-          {readRefs(props.fields, buildChild)}
-          {readRefs(props.buttons, buildChild)}
-          {children}
-        </div>
-      );
-    case "FormControl":
-      return <OpenUI.FormControl>{children}</OpenUI.FormControl>;
-    case "Label":
-      return <OpenUI.Label>{readText(props.text ?? props.label)}</OpenUI.Label>;
-    case "Input":
-      return (
-        <OpenUI.Input
-          name={readString(props.name)}
-          placeholder={readString(props.placeholder) ?? ""}
-          type={readString(props.type) ?? "text"}
-          defaultValue={readString(props.value)}
-        />
-      );
-    case "DatePicker":
-      // Presentational, like the other form controls here: A2UI renders a
-      // result, so the picker shows the date the answer is about rather than
-      // taking one. OpenUI's DatePicker is fully controlled, so an unparseable
-      // or absent value leaves it empty instead of defaulting to today —
-      // showing today's date for a value we do not have would be a fabrication.
-      return (
-        <OpenUI.DatePicker
-          mode={readString(props.mode) === "range" ? "range" : "single"}
-          selectedSingleDate={readDate(props.value ?? props.date)}
-        />
-      );
-    case "TextArea":
-      return (
-        <OpenUI.TextArea
-          name={readString(props.name)}
-          placeholder={readString(props.placeholder) ?? ""}
-          rows={readNumber(props.rows) ?? 3}
-          defaultValue={readString(props.value)}
-        />
-      );
-    case "Select":
-      return <MappedSelect props={props} buildChild={buildChild} />;
-    case "Slider":
-      return (
-        <OpenUI.SliderBlock
-          label={readString(props.label) ?? readString(props.name) ?? ""}
-          name={readString(props.name) ?? ""}
-          variant="continuous"
-          min={readNumber(props.min) ?? 0}
-          max={readNumber(props.max) ?? 100}
-          step={readNumber(props.step) ?? 1}
-          defaultValue={[readNumber(props.defaultValue ?? props.value) ?? 0]}
-        />
-      );
-    case "CheckBoxGroup":
-      return (
-        <OpenUI.CheckBoxGroup>
-          {readRefs(props.items ?? props.children, buildChild) as never}
-        </OpenUI.CheckBoxGroup>
-      );
-    case "CheckBoxItem":
-      return (
-        <OpenUI.CheckBoxItem
-          name={readString(props.name)}
-          label={readText(props.label)}
-          description={readText(props.description)}
-          defaultChecked={readBoolean(props.defaultChecked ?? props.checked)}
-        />
-      );
-    case "RadioGroup":
-      return (
-        <OpenUI.RadioGroup
-          name={readString(props.name)}
-          defaultValue={readString(props.defaultValue)}
-        >
-          {readRefs(props.items ?? props.children, buildChild) as never}
-        </OpenUI.RadioGroup>
-      );
-    case "RadioItem":
-      return (
-        <OpenUI.RadioItem
-          value={readString(props.value) ?? ""}
-          label={readText(props.label)}
-          description={readText(props.description)}
-        />
-      );
-    case "SwitchGroup":
-      return (
-        <OpenUI.SwitchGroup>
-          {readRefs(props.items ?? props.children, buildChild) as never}
-        </OpenUI.SwitchGroup>
-      );
-    case "SwitchItem":
-      return (
-        <OpenUI.SwitchItem
-          name={readString(props.name)}
-          label={readText(props.label)}
-          description={readText(props.description)}
-          defaultChecked={readBoolean(props.defaultChecked ?? props.checked)}
-        />
-      );
-    case "Button":
-      return (
-        <OpenUI.Button variant={readButtonVariant(props.variant)} size="medium">
-          {readText(props.label ?? props.text)}
-        </OpenUI.Button>
-      );
-    case "Buttons":
-      return (
-        <OpenUI.Buttons
-          variant={
-            readString(props.direction) === "column" ? "vertical" : "horizontal"
-          }
-        >
-          {readRefs(props.buttons ?? props.children, buildChild) as never}
-        </OpenUI.Buttons>
-      );
-    case "Tabs":
-      return <MappedTabs props={props} buildChild={buildChild} />;
-    case "Accordion":
-      return <MappedAccordion props={props} buildChild={buildChild} />;
-    case "Steps":
-      return <MappedSteps props={props} buildChild={buildChild} />;
-    case "Carousel":
-      return <MappedCarousel props={props} buildChild={buildChild} />;
-    case "Separator":
-      return (
-        <OpenUI.Separator
-          orientation={readString(props.orientation) as never}
-        />
-      );
-    case "Tag":
-      return (
-        <OpenUI.Tag
-          text={readText(props.text ?? props.label)}
-          size={readString(props.size) as never}
-          variant={readTagVariant(props.variant)}
-        />
-      );
-    case "TagBlock":
-      return (
-        <OpenUI.TagBlock>
-          {readTags(props.tags).map((tag) => (
-            <OpenUI.Tag key={tag} text={tag} />
-          ))}
-        </OpenUI.TagBlock>
-      );
-    case "Modal":
-      return (
-        <OpenUIModal
-          title={readText(props.title)}
-          open={readBoolean(props.open) ?? false}
-          onOpenChange={() => undefined}
-        >
-          {children}
-        </OpenUIModal>
-      );
-    default: {
-      // Blocks resolve here rather than as cases above: they are registered by
-      // name from the block catalog, so a switch arm per block would be a
-      // second list to keep in step with the first.
-      const block = renderBlockComponent(name, props, buildChild);
-      if (block) return block;
-      return (
-        <TextBlock>{readText(props.text ?? props.label ?? name)}</TextBlock>
-      );
-    }
-  }
-}
-
-function StackBox({
-  children,
-  component,
-  direction,
-  gap = "m",
-  align = "stretch",
-  justify = "start",
-  wrap,
-}: {
-  children: ReactNode;
-  component: string;
-  direction: string;
-  gap?: string;
-  align?: string;
-  justify?: string;
-  wrap?: boolean;
-}) {
-  return (
-    <div
-      data-a2ui-component={component}
-      style={{
-        display: "flex",
-        flexDirection: direction === "row" ? "row" : "column",
-        flexWrap: wrap ? "wrap" : undefined,
-        gap: gapToCss(gap),
-        alignItems: alignToCss(align),
-        justifyContent: justifyToCss(justify),
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function CardBox({
-  children,
-  variant,
-}: {
-  children: ReactNode;
-  variant: "card" | "clear" | "sunk";
-}) {
-  return (
-    <OpenUI.Card variant={variant} width="full">
-      <div
-        data-a2ui-card-content
-        style={{
-          display: "flex",
-          minWidth: 0,
-          flexDirection: "column",
-          gap: "var(--openui-space-m)",
-        }}
-      >
-        {children}
-      </div>
-    </OpenUI.Card>
-  );
-}
-
-function SectionBox({
-  children,
-  description,
-  title,
-}: {
-  children: ReactNode;
-  description?: string;
-  title?: string;
-}) {
-  return (
-    <section
-      data-a2ui-component="section"
-      style={{
-        display: "flex",
-        minWidth: 0,
-        flexDirection: "column",
-        gap: "var(--openui-space-m)",
-      }}
-    >
-      {title ? (
-        <OpenUI.CardHeader title={title} subtitle={description} />
-      ) : null}
-      {children}
-    </section>
-  );
-}
-
-function TextBlock({
-  children,
-  size = "default",
-}: {
-  children: ReactNode;
-  size?: string;
-}) {
-  return (
-    <OpenUI.TextContent variant="clear">
-      <span data-a2ui-text-size={size} style={textStyleForSize(size)}>
-        {children}
-      </span>
-    </OpenUI.TextContent>
-  );
-}
-
-function defaultTextSizeForComponent(name: string): string {
-  if (name === "Heading" || name === "Title") return "large-heavy";
-  return "default";
-}
-
-function textStyleForSize(size: string): CSSProperties {
-  const base: CSSProperties = {
-    display: "block",
-    minWidth: 0,
-    overflowWrap: "anywhere",
-    letterSpacing: 0,
-  };
-
-  switch (size) {
-    case "small":
-      return {
-        ...base,
-        color: "var(--openui-text-neutral-secondary)",
-        font: "var(--openui-text-body-sm)",
-      };
-    case "small-heavy":
-      return {
-        ...base,
-        color: "var(--openui-text-neutral-primary)",
-        font: "var(--openui-text-body-sm-heavy)",
-      };
-    case "medium-heavy":
-      return {
-        ...base,
-        color: "var(--openui-text-neutral-primary)",
-        font: "var(--openui-text-body-default-heavy)",
-        fontVariantNumeric: "tabular-nums",
-      };
-    case "large":
-      return {
-        ...base,
-        color: "var(--openui-text-neutral-primary)",
-        font: "var(--openui-text-body-lg)",
-      };
-    case "large-heavy":
-      return {
-        ...base,
-        color: "var(--openui-text-neutral-primary)",
-        font: "var(--openui-text-heading-md)",
-      };
-    default:
-      return {
-        ...base,
-        color: "var(--openui-text-neutral-primary)",
-        font: "var(--openui-text-body-default)",
-      };
-  }
-}
-
-/**
- * Resolve id references against the surface's components.
- *
- * The catalog teaches flat ids — `{"id":"root","component":"Tabs","children":
- * ["t1"]}` with `t1` declared as its own component — so a container's children
- * arrive as strings, not records. Every sub-item reader below parses records,
- * and a string that is not resolved first is either skipped outright or read as
- * its own label: a Tabs that renders nothing, a column headed "c1". Charts
- * already resolved theirs; the containers did not, and no test used the flat
- * form, so the gap held.
- */
-function useRefResolver(): (value: unknown) => unknown[] {
-  const componentIndex = useContext(A2UIComponentIndex);
-  return (value: unknown) => materializeRefs(value, componentIndex);
-}
-
-function MappedTable({
-  props,
-  buildChild,
-}: {
-  props: Record<string, unknown>;
-  buildChild: BuildChild;
-}) {
-  const columns = readColumns(props, buildChild, useRefResolver());
-  const rowCount = columns.length
-    ? Math.max(...columns.map((column) => column.values.length), 0)
-    : 0;
-
-  if (!columns.length) return null;
-
-  return (
-    <OpenUI.ScrollableTable>
-      <OpenUI.TableHeader>
-        <OpenUI.TableRow>
-          {columns.map((column) => (
-            <OpenUI.TableHead key={column.label}>
-              {column.label}
-            </OpenUI.TableHead>
-          ))}
-        </OpenUI.TableRow>
-      </OpenUI.TableHeader>
-      <OpenUI.TableBody>
-        {Array.from({ length: rowCount }, (_, rowIndex) => (
-          <OpenUI.TableRow key={rowIndex}>
-            {columns.map((column) => (
-              <OpenUI.TableCell key={column.label}>
-                {renderCell(column.values[rowIndex], buildChild)}
-              </OpenUI.TableCell>
-            ))}
-          </OpenUI.TableRow>
-        ))}
-      </OpenUI.TableBody>
-    </OpenUI.ScrollableTable>
-  );
-}
-
-function MappedSelect({
-  props,
-  buildChild,
-}: {
-  props: Record<string, unknown>;
-  buildChild: BuildChild;
-}) {
-  const resolve = useRefResolver();
-  const items = readOptionItems(
-    resolve(props.items ?? props.children),
-    buildChild,
-  );
-  return (
-    <OpenUI.Select
-      name={readString(props.name)}
-      defaultValue={readString(props.value)}
-    >
-      <OpenUI.SelectTrigger>
-        <OpenUI.SelectValue
-          placeholder={readString(props.placeholder) ?? "Select..."}
-        />
-      </OpenUI.SelectTrigger>
-      <OpenUI.SelectContent>
-        {items.map((item) => (
-          <OpenUI.SelectItem key={item.value} value={item.value}>
-            {item.label}
-          </OpenUI.SelectItem>
-        ))}
-      </OpenUI.SelectContent>
-    </OpenUI.Select>
-  );
-}
-
-function MappedTabs({
-  props,
-  buildChild,
-}: {
-  props: Record<string, unknown>;
-  buildChild: BuildChild;
-}) {
-  const resolve = useRefResolver();
-  const items = readTabItems(resolve(props.items ?? props.children));
-  if (!items.length) return null;
-  const firstValue = items[0]?.value ?? "";
-  return (
-    <OpenUI.Tabs defaultValue={firstValue}>
-      <OpenUI.TabsList>
-        {items.map((item) => (
-          <OpenUI.TabsTrigger
-            key={item.value}
-            value={item.value}
-            text={item.trigger}
-          />
-        ))}
-      </OpenUI.TabsList>
-      {items.map((item) => (
-        <OpenUI.TabsContent key={item.value} value={item.value}>
-          {readRefs(item.content, buildChild)}
-        </OpenUI.TabsContent>
-      ))}
-    </OpenUI.Tabs>
-  );
-}
-
-function MappedAccordion({
-  props,
-  buildChild,
-}: {
-  props: Record<string, unknown>;
-  buildChild: BuildChild;
-}) {
-  const resolve = useRefResolver();
-  const items = readTabItems(resolve(props.items ?? props.children));
-  if (!items.length) return null;
-  return (
-    <OpenUI.Accordion type="single" collapsible defaultValue={items[0]?.value}>
-      {items.map((item) => (
-        <OpenUI.AccordionItem key={item.value} value={item.value}>
-          <OpenUI.AccordionTrigger text={item.trigger} />
-          <OpenUI.AccordionContent>
-            {readRefs(item.content, buildChild)}
-          </OpenUI.AccordionContent>
-        </OpenUI.AccordionItem>
-      ))}
-    </OpenUI.Accordion>
-  );
-}
-
-function MappedSteps({
-  props,
-  buildChild,
-}: {
-  props: Record<string, unknown>;
-  buildChild: BuildChild;
-}) {
-  const items = useRefResolver()(props.items ?? props.children);
-  return (
-    <OpenUI.Steps>
-      {items.map((item, index) => {
-        const record = isRecord(item) ? item : {};
-        return (
-          <OpenUI.StepsItem
-            key={`${readString(record.value) ?? index}`}
-            number={index + 1}
-            title={readText(record.title ?? record.label)}
-            details={
-              readRefs(record.details ?? record.content, buildChild) ||
-              readText(record.details ?? record.description)
-            }
-          />
-        );
-      })}
-    </OpenUI.Steps>
-  );
-}
-
-function MappedCarousel({
-  props,
-  buildChild,
-}: {
-  props: Record<string, unknown>;
-  buildChild: BuildChild;
-}) {
-  const items = useRefResolver()(props.items ?? props.children);
-  return (
-    <OpenUI.Carousel showButtons variant={readString(props.variant) as never}>
-      <OpenUI.CarouselContent>
-        {items.map((item, index) => (
-          <OpenUI.CarouselItem key={index}>
-            {readRefs(item, buildChild) || renderCell(item, buildChild)}
-          </OpenUI.CarouselItem>
-        ))}
-      </OpenUI.CarouselContent>
-      <OpenUI.CarouselPrevious icon={<ChevronLeft />} />
-      <OpenUI.CarouselNext icon={<ChevronRight />} />
-    </OpenUI.Carousel>
-  );
-}
-
-function PieLikeChart({
-  Component,
-  props,
-}: {
-  Component: typeof OpenUI.PieChart | typeof OpenUI.RadialChart;
-  props: Record<string, unknown>;
-}) {
-  const data = buildSliceData(props);
-  if (!data.length) return null;
-
-  return (
-    <Component
-      data={data}
-      categoryKey="category"
-      dataKey="value"
-      variant={readString(props.variant) as never}
-      isAnimationActive={false}
-    />
-  );
-}
-
-function parseA2UIMessages(body: string): A2UIMessage[] {
-  const trimmed = body.trim();
-  if (!trimmed) return [];
-
-  const parsed = safeJsonParse(trimmed);
-  if (Array.isArray(parsed)) return parsed.filter(isRecord);
-  if (isRecord(parsed) && Array.isArray(parsed.messages)) {
-    return parsed.messages.filter(isRecord);
-  }
-  if (isRecord(parsed) && looksLikeA2UIMessage(parsed)) return [parsed];
-
-  const lines = trimmed.split(/\r?\n/).map((line) => line.trim());
-  const messages: A2UIMessage[] = [];
-  for (const line of lines) {
-    if (!line.startsWith("{")) continue;
-    if (line.endsWith("}")) {
-      const message = safeJsonParse(line);
-      if (isRecord(message)) messages.push(message);
-      continue;
-    }
-    // A line still arriving. One `updateComponents` message usually carries the
-    // entire tree, so waiting for its closing brace means the document appears
-    // in one jump at the end — no streaming at all. Salvaging the components
-    // that are already complete is what makes it build up instead.
-    const salvaged = salvagePartialComponents(line);
-    if (salvaged) messages.push(salvaged);
-  }
-  return messages;
-}
-
-/**
- * Recover what has arrived of a half-written `updateComponents` line.
- *
- * `completeJsonFragment` closes the fragment rather than waiting for the
- * model to close it, so a component still being typed renders with the fields
- * it has — text grows as it streams instead of appearing whole. It never
- * fabricates: an unfinished key or number is dropped, only an unfinished
- * string value is kept and closed.
- */
-function salvagePartialComponents(line: string): A2UIMessage | null {
-  const completed = completeJsonFragment(line);
-  if (!completed) return null;
-  const parsed = safeJsonParse(completed);
-  if (!isRecord(parsed)) return null;
-  const update = parsed.updateComponents;
-  if (!isRecord(update) || !Array.isArray(update.components)) return null;
-  return update.components.some(isRecord) ? (parsed as A2UIMessage) : null;
-}
-
-function normalizeMessages(messages: A2UIMessage[]): A2UIMessage[] {
-  const normalized = messages
-    .map(normalizeMessage)
-    .filter(Boolean) as A2UIMessage[];
-  const defaultSurfaceId = inferSurfaceId(normalized);
-  if (!normalized.some((message) => isRecord(message.createSurface))) {
-    normalized.unshift({
-      version: "v0.9",
-      createSurface: { surfaceId: defaultSurfaceId, catalogId: CATALOG_ID },
-    });
-  }
-  if (!normalized.some((message) => isRecord(message.updateComponents))) {
-    return normalized;
-  }
-  return ensureRootComponent(normalized, defaultSurfaceId);
-}
-
-function normalizeMessage(message: A2UIMessage): A2UIMessage | null {
-  if (isRecord(message.createSurface)) {
-    return {
-      ...message,
-      createSurface: {
-        ...message.createSurface,
-        catalogId: normalizeCatalogId(message.createSurface.catalogId),
-      },
-    };
-  }
-
-  if (!isRecord(message.updateComponents)) return message;
-
-  const components = normalizeComponentList(
-    toArray(message.updateComponents.components).filter(isA2UIComponent),
-  );
-
-  return {
-    ...message,
-    updateComponents: {
-      ...message.updateComponents,
-      components,
-    },
-  };
-}
-
-function normalizeComponentList(components: A2UIComponent[]): A2UIComponent[] {
-  const flattened: A2UIComponent[] = [];
-  for (const component of components) {
-    flattened.push(...flattenComponent(component));
-  }
-  return flattened;
-}
-
-function flattenComponent(component: A2UIComponent): A2UIComponent[] {
-  const merged = mergeProps(component);
-  const id = readString(merged.id) ?? makeComponentId(merged);
-  const normalized: A2UIComponent = {
-    ...merged,
-    id,
-    component: normalizeOpenUIComponentName(merged.component ?? merged.type),
-  };
-  delete normalized.type;
-  delete normalized.props;
-
-  const extra: A2UIComponent[] = [];
-  for (const key of structuralKeysForComponent(normalized.component)) {
-    const normalizedNested = normalizeNestedRefs(normalized[key], id);
-    if (normalizedNested.value !== undefined)
-      normalized[key] = normalizedNested.value;
-    extra.push(...normalizedNested.components);
-  }
-
-  return [normalized, ...extra];
-}
-
-function normalizeNestedRefs(
-  value: unknown,
-  parentId: string,
-): { value: unknown; components: A2UIComponent[] } {
-  if (Array.isArray(value)) {
-    const components: A2UIComponent[] = [];
-    const refs = value.map((item, index) => {
-      const normalized = normalizeNestedRefs(item, `${parentId}_${index}`);
-      components.push(...normalized.components);
-      return normalized.value;
-    });
-    return { value: refs, components };
-  }
-
-  if (isA2UIComponent(value)) {
-    const component = mergeProps(value);
-    const id = readString(component.id) ?? makeComponentId(component, parentId);
-    const flattened = flattenComponent({ ...component, id });
-    return { value: id, components: flattened };
-  }
-
-  return { value, components: [] };
-}
-
-function ensureRootComponent(
-  messages: A2UIMessage[],
-  defaultSurfaceId: string,
-): A2UIMessage[] {
-  const hasRoot = messages.some(
-    (message) =>
-      isRecord(message.updateComponents) &&
-      toArray(message.updateComponents.components).some(
-        (component) => isRecord(component) && component.id === "root",
-      ),
-  );
-  if (hasRoot) return messages;
-
-  const firstComponentId = messages
-    .flatMap((message) =>
-      isRecord(message.updateComponents)
-        ? toArray(message.updateComponents.components)
-        : [],
-    )
-    .find(
-      (component) => isRecord(component) && typeof component.id === "string",
-    );
-
-  const childId = isRecord(firstComponentId)
-    ? readString(firstComponentId.id)
-    : null;
-  if (!childId) return messages;
-
-  return [
-    ...messages,
-    {
-      version: "v0.9",
-      updateComponents: {
-        surfaceId: defaultSurfaceId,
-        components: [{ id: "root", component: "Stack", children: [childId] }],
-      },
-    },
-  ];
-}
-
-function inferSurfaceId(messages: A2UIMessage[]): string {
-  for (const message of messages) {
-    if (isRecord(message.createSurface)) {
-      const surfaceId = readString(message.createSurface.surfaceId);
-      if (surfaceId) return surfaceId;
-    }
-    if (isRecord(message.updateComponents)) {
-      const surfaceId = readString(message.updateComponents.surfaceId);
-      if (surfaceId) return surfaceId;
-    }
-    if (isRecord(message.updateDataModel)) {
-      const surfaceId = readString(message.updateDataModel.surfaceId);
-      if (surfaceId) return surfaceId;
-    }
-  }
-  return "main";
-}
-
-function mergeProps(component: A2UIComponent): A2UIComponent {
-  const props = isRecord(component.props) ? component.props : {};
-  return { ...component, ...props };
-}
-
-function readChildren(props: Record<string, unknown>, buildChild: BuildChild) {
-  return readRefs(props.children, buildChild);
-}
-
-function readRefs(value: unknown, buildChild: BuildChild): ReactNode {
-  const refs = toArray(value);
-  if (!refs.length) return null;
-  return refs.map((item, index) => {
-    if (typeof item === "string") return buildChild(item);
-    if (isA2UIComponent(item)) {
-      return (
-        <OpenUIComponent
-          key={readString(item.id) ?? index}
-          name={normalizeOpenUIComponentName(item.component ?? item.type)}
-          props={mergeProps(item)}
-          buildChild={buildChild}
-        />
-      );
-    }
-    return <span key={index}>{renderCell(item, buildChild)}</span>;
-  });
-}
-
-function readColumns(
-  props: Record<string, unknown>,
-  buildChild: BuildChild,
-  resolve: (value: unknown) => unknown[] = toArray,
-) {
-  const explicitColumns = resolve(props.columns ?? props.children);
-  if (explicitColumns.length) {
-    return explicitColumns
-      .map((column) => readColumn(column, buildChild))
-      .filter((column): column is { label: string; values: unknown[] } =>
-        Boolean(column),
-      );
-  }
-
-  const labels = toArray(props.labels ?? props.headers);
-  const rows = toArray(props.rows);
-  return labels.map((label, columnIndex) => ({
-    label: readText(label),
-    values: rows.map((row) => readCell(row, columnIndex)),
-  }));
-}
-
-function readColumn(column: unknown, buildChild: BuildChild) {
-  if (typeof column === "string") {
-    return { label: column, values: [] };
-  }
-  if (!isRecord(column)) return null;
-  const record = isA2UIComponent(column) ? mergeProps(column) : column;
-  if (
-    typeof record.id === "string" &&
-    !record.label &&
-    !record.data &&
-    !record.values
-  ) {
-    return { label: record.id, values: [buildChild(record.id)] };
-  }
-  return {
-    label: readText(record.label ?? record.title ?? record.name),
-    values: toArray(record.data ?? record.values ?? record.children),
-  };
-}
-
-function readOptionItems(value: unknown, buildChild: BuildChild) {
-  return toArray(value)
-    .map((item) => {
-      if (typeof item === "string") return { value: item, label: item };
-      if (!isRecord(item)) return null;
-      const record = isA2UIComponent(item) ? mergeProps(item) : item;
-      if (typeof record.id === "string" && !record.value && !record.label) {
-        return { value: record.id, label: buildChild(record.id) };
-      }
-      const valueText =
-        readString(record.value) ??
-        readString(record.name) ??
-        readText(record.label);
-      return {
-        value: valueText,
-        label: readText(record.label ?? record.text ?? valueText),
-      };
-    })
-    .filter((item): item is { value: string; label: ReactNode } =>
-      Boolean(item?.value),
-    );
-}
-
-function readTabItems(
-  value: unknown,
-): { value: string; trigger: ReactNode; content: unknown }[] {
-  const items: { value: string; trigger: ReactNode; content: unknown }[] = [];
-  for (const item of toArray(value)) {
-    if (!isRecord(item)) continue;
-    const record = isA2UIComponent(item) ? mergeProps(item) : item;
-    const valueText = readString(record.value) ?? readString(record.id);
-    if (!valueText) continue;
-    items.push({
-      value: valueText,
-      trigger: readText(
-        record.trigger ?? record.label ?? record.title ?? valueText,
-      ),
-      content: record.content ?? record.children,
-    });
-  }
-  return items;
-}
-
-function readImages(value: unknown): OpenUI.ImageItem[] {
-  return toArray(value)
-    .filter(isRecord)
-    .map((item) => ({
-      src: readString(item.src ?? item.url) ?? "",
-      alt: readString(item.alt ?? item.description) ?? "",
-      details: readString(item.details),
-    }))
-    .filter((item) => item.src);
-}
-
-function readTags(value: unknown): string[] {
-  return toArray(value)
-    .map((item) => readText(item))
-    .filter(Boolean);
-}
-
-function renderCell(value: unknown, buildChild: BuildChild): ReactNode {
-  if (typeof value === "string" && value.startsWith("#"))
-    return buildChild(value.slice(1));
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean")
-    return String(value);
-  if (isA2UIComponent(value)) {
-    return (
-      <OpenUIComponent
-        name={normalizeOpenUIComponentName(value.component ?? value.type)}
-        props={mergeProps(value)}
-        buildChild={buildChild}
-      />
-    );
-  }
-  if (isRecord(value) && typeof value.id === "string")
-    return buildChild(value.id);
-  if (value === null || value === undefined) return "";
-  return JSON.stringify(value);
-}
-
-/** Array props that can hold nested components, inline or by id. */
-const NESTED_PROPS = [
-  "children",
-  "data",
-  "points",
-  "series",
-  "slices",
-  "columns",
-  "items",
-];
-
-/**
- * Expand id references into the components they name — all the way down.
- *
- * A2UI nests by id, and how deeply is the model's choice: one payload put a
- * chart's series in `children`, the next put the series' points one level below
- * that, with no axis on the chart at all. Resolving a fixed number of levels
- * means every new depth is a fresh bug that presents identically — a chart that
- * silently renders nothing. Resolving to the bottom removes the whole class.
- *
- * Bounded on both axes that could hang it: `seen` breaks reference cycles on
- * the current path, and `depth` stops a pathological payload from walking
- * forever. Both limits are far above any real document.
- */
-function materializeRefs(
-  value: unknown,
-  index: Map<string, Record<string, unknown>>,
-  depth = 0,
-  seen: ReadonlySet<string> = new Set(),
-): unknown[] {
-  if (depth > 8) return toArray(value);
-  return toArray(value).map((item) => {
-    let record: unknown = item;
-    if (typeof item === "string") {
-      if (seen.has(item)) return item;
-      const resolved = index.get(item);
-      if (!resolved) return item;
-      record = resolved;
-      seen = new Set([...seen, item]);
-    }
-    if (!isRecord(record)) return record;
-    const expanded: Record<string, unknown> = { ...record };
-    for (const key of NESTED_PROPS) {
-      if (key in expanded) {
-        expanded[key] = materializeRefs(expanded[key], index, depth + 1, seen);
-      }
-    }
-    return expanded;
-  });
-}
-
-function buildChartData(
-  props: Record<string, unknown>,
-  resolve: (value: unknown) => unknown[] = toArray,
-) {
-  // `series` may be inline, or `children` may name sibling components by id.
-  const declared = resolve(props.series ?? props.children);
-  const rowsFromSeriesData = buildRowsFromSeriesData(declared);
-  if (rowsFromSeriesData.length) return rowsFromSeriesData;
-
-  // The axis arrives as `labels` or `categories` depending on how the model
-  // phrased it; reading only one leaves the chart with no axis, which the guard
-  // below then turns into no chart at all — and an orphaned heading above it.
-  const labels = toArray(props.labels ?? props.categories).map(readText);
-  const series = readSeries(declared);
-  // Labels alone are not data. Returning a row per label would clear the
-  // caller's `!data.length` guard while carrying no numeric key at all, and the
-  // chart would reserve a full-height plot to draw nothing in — which is how
-  // this surfaced: a category axis of sixteen sectors above an empty box.
-  if (series.length) {
-    return labels.map((label, index) => {
-      const row: Record<string, string | number> = { category: label };
-      for (const item of series) {
-        row[item.category] = Number(item.values[index] ?? 0);
-      }
-      return row;
-    });
-  }
-
-  // Last resort: the shapes above key on prop names the model has used so far,
-  // and it keeps inventing new ones. Rather than render nothing, scan the
-  // materialised subtree for records that pair a label with a number — which is
-  // what a data point is, whatever it happens to be called.
-  const scanned = scanForPoints([props]);
-  if (scanned.length) return scanned;
-
-  warnUnreadableChart(props);
-  return [];
-}
-
-/**
- * Pull (label, value) pairs out of an arbitrary materialised subtree.
- *
- * Deliberately last: it cannot tell which series a point belongs to, so a
- * multi-series chart flattens into one. That is a worse chart than the readers
- * above produce, and a much better outcome than no chart at all.
- */
-function scanForPoints(value: unknown): Record<string, string | number>[] {
-  const rows: Record<string, string | number>[] = [];
-  const walk = (node: unknown, depth: number) => {
-    if (depth > 6 || rows.length > 200) return;
-    for (const item of toArray(node)) {
-      if (!isRecord(item)) continue;
-      const label = readText(
-        item.label ?? item.category ?? item.name ?? item.x,
-      );
-      const numeric = readNumber(
-        item.value ?? item.y ?? item.amount ?? item.count,
-      );
-      if (label && numeric !== undefined)
-        rows.push({ category: label, value: numeric });
-      // Any array, not just the known nesting props: this path exists precisely
-      // for the case where the key is one nobody has seen before.
-      for (const nested of Object.values(item)) {
-        if (Array.isArray(nested)) walk(nested, depth + 1);
-      }
-    }
-  };
-  walk(value, 0);
-  return rows;
-}
-
-/**
- * A chart that resolves to no data removes itself, leaving whatever heading sat
- * above it stranded. That is a silent failure, and every instance so far cost a
- * screenshot and a trip through the session database to identify. Naming the
- * keys the payload actually carried turns the next unknown shape into a console
- * line instead.
- */
-function warnUnreadableChart(props: Record<string, unknown>): void {
-  if (!import.meta.env.DEV) return;
-  console.warn(
-    "[genui] chart had no readable data — keys:",
-    Object.keys(props).join(", "),
-  );
-}
-
-/** A record's nested arrays, in the order data is likeliest to live. */
-function nestedOf(record: Record<string, unknown>): unknown {
-  return record.data ?? record.points ?? record.children ?? record.series;
-}
-
-/** True when `record` directly holds things that look like plotted points. */
-function holdsPoints(record: Record<string, unknown>): boolean {
-  return toArray(nestedOf(record))
-    .filter(isRecord)
-    .some(
-      (point) =>
-        readText(point.category ?? point.name ?? point.label) !== "" &&
-        readNumber(point.value ?? point.y ?? point.data) !== undefined,
-    );
-}
-
-/**
- * Find the nodes that actually carry points, however they are wrapped.
- *
- * The model puts a series directly under the chart, or under one or more
- * grouping components first. Reading only the top level makes a wrapper look
- * like an empty series, so this descends until it finds nodes holding points.
- */
-function collectSeriesNodes(
-  value: unknown,
-  depth = 0,
-  out: Record<string, unknown>[] = [],
-): Record<string, unknown>[] {
-  if (depth > 8) return out;
-  for (const item of toArray(value).filter(isRecord)) {
-    const record = isA2UIComponent(item) ? mergeProps(item) : item;
-    if (holdsPoints(record)) out.push(record);
-    else collectSeriesNodes(nestedOf(record), depth + 1, out);
-  }
-  return out;
-}
-
-function buildRowsFromSeriesData(
-  value: unknown,
-): Record<string, string | number>[] {
-  const rows = new Map<string, Record<string, string | number>>();
-  // `value` arrives materialised; resolving again would restart the cycle
-  // guard from empty and re-enter any self-reference.
-  for (const item of collectSeriesNodes(toArray(value))) {
-    const record = isA2UIComponent(item) ? mergeProps(item) : item;
-    const seriesKey = readText(
-      record.category ?? record.name ?? record.label ?? "value",
-    );
-    // Already materialised at the entry point — resolving again here would
-    // restart the cycle guard from empty and re-enter a self-reference, turning
-    // a series that points at itself into a bogus zero-valued category.
-    const points = toArray(nestedOf(record));
-    let consumedNamedPoint = false;
-    for (const point of points) {
-      if (!isRecord(point)) continue;
-      const category = readText(point.category ?? point.name ?? point.label);
-      if (!category) continue;
-      const row = rows.get(category) ?? { category };
-      row[seriesKey] = readNumber(point.value ?? point.y ?? point.data) ?? 0;
-      rows.set(category, row);
-      consumedNamedPoint = true;
-    }
-    if (!consumedNamedPoint) continue;
-  }
-  return Array.from(rows.values());
-}
-
-function buildSliceData(props: Record<string, unknown>) {
-  const labels = toArray(props.labels).map(readText);
-  const values = toArray(props.values).map((value) => Number(value) || 0);
-  if (labels.length && values.length) {
-    return labels.map((label, index) => ({
-      category: label,
-      value: values[index] ?? 0,
-    }));
-  }
-  return toArray(props.slices ?? props.children)
-    .filter(isRecord)
-    .map((slice) => {
-      const record = isA2UIComponent(slice) ? mergeProps(slice) : slice;
-      return {
-        category: readText(record.category ?? record.label ?? record.name),
-        value: readNumber(record.value ?? record.data) ?? 0,
-      };
-    });
-}
-
-function buildScatterData(props: Record<string, unknown>) {
-  return toArray(props.datasets ?? props.series)
-    .filter(isRecord)
-    .map((dataset) => ({
-      name: readText(dataset.name ?? dataset.category),
-      data: toArray(dataset.points ?? dataset.values)
-        .filter(isRecord)
-        .map((point) => ({
-          x: readNumber(point.x) ?? 0,
-          y: readNumber(point.y) ?? 0,
-          z: readNumber(point.z),
-        })),
-    }));
-}
-
-function readSeries(value: unknown): { category: string; values: number[] }[] {
-  return toArray(value)
-    .filter(isRecord)
-    .map((item) => {
-      const record = isA2UIComponent(item) ? mergeProps(item) : item;
-      return {
-        category: readText(record.category ?? record.name ?? record.label),
-        values: toArray(record.values ?? record.data).map(
-          (point) => Number(point) || 0,
-        ),
-      };
-    })
-    .filter((item) => item.category);
-}
-
-function readCell(row: unknown, columnIndex: number): unknown {
-  if (Array.isArray(row)) return row[columnIndex];
-  if (isRecord(row)) return Object.values(row)[columnIndex];
-  return row;
-}
-
-function normalizeCatalogId(value: unknown): string {
-  const catalog = readString(value);
-  if (!catalog || catalog === LEGACY_CATALOG_ID || catalog === CATALOG_ID) {
-    return catalog ?? CATALOG_ID;
-  }
-  return CATALOG_ID;
-}
-
-function normalizeOpenUIComponentName(value: unknown): string {
-  if (typeof value !== "string" || !value) return "TextContent";
-  const aliases: Record<string, string> = {
-    Breadth: "MarketBreadth",
-    FinancialMetric: "FinanceMetric",
-    Heading: "TextContent",
-    IndexCard: "MarketIndexCard",
-    IndexGrid: "MarketIndexGrid",
-    IndustryRankingList: "DataList",
-    KPI: "Metric",
-    Leaderboard: "DataList",
-    List: "DataList",
-    ListBlock: "DataList",
-    ListItem: "DataListItem",
-    MarketIndices: "MarketIndexGrid",
-    Markdown: "MarkDownRenderer",
-    Paragraph: "TextContent",
-    RankedList: "DataList",
-    RankingList: "DataList",
-    SectorRankingList: "DataList",
-    StockIndexCard: "MarketIndexCard",
-    Title: "TextContent",
-  };
-  return aliases[value] ?? value;
-}
-
-function structuralKeysForComponent(value: unknown): string[] {
-  const name = normalizeOpenUIComponentName(value);
-  if (
-    [
-      "Stack",
-      "Row",
-      "Grid",
-      "Card",
-      "Section",
-      "DataList",
-      "MarketIndexGrid",
-    ].includes(name)
-  )
-    return ["children"];
-  if (name === "Form") return ["fields", "buttons", "children"];
-  if (name === "FormControl") return ["children"];
-  if (name === "Buttons") return ["buttons", "children"];
-  if (name === "Modal") return ["children"];
-  return [];
-}
-
-function makeComponentId(
-  component: A2UIComponent,
-  fallback = "component",
-): string {
-  return `${fallback}_${normalizeOpenUIComponentName(component.component ?? component.type).toLowerCase()}_${Math.random()
-    .toString(36)
-    .slice(2, 8)}`;
-}
-
-function looksLikeA2UIMessage(value: Record<string, unknown>): boolean {
-  return [
-    "createSurface",
-    "updateComponents",
-    "updateDataModel",
-    "deleteSurface",
-  ].some((key) => key in value);
-}
-
-function isA2UIComponent(value: unknown): value is A2UIComponent {
-  return (
-    isRecord(value) &&
-    (typeof value.component === "string" || typeof value.type === "string")
-  );
-}
-
-function toArray(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value;
-  if (value === undefined || value === null) return [];
-  return [value];
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function readDate(value: unknown): Date | undefined {
-  const text = readString(value);
-  if (!text) return undefined;
-  const date = new Date(text);
-  return Number.isNaN(date.getTime()) ? undefined : date;
-}
-
-function readNumber(value: unknown): number | undefined {
-  if (typeof value === "number") return value;
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
-}
-
-function readBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function readText(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean")
-    return String(value);
-  return JSON.stringify(value);
-}
-
-function readVariant(value: unknown): "card" | "sunk" | "clear" {
-  return value === "sunk" || value === "clear" ? value : "card";
-}
-
-function readCalloutVariant(
-  value: unknown,
-): "info" | "danger" | "warning" | "success" | "neutral" {
-  return value === "danger" ||
-    value === "warning" ||
-    value === "success" ||
-    value === "neutral"
-    ? value
-    : "info";
-}
-
-function readTextCalloutVariant(
-  value: unknown,
-): "neutral" | "info" | "warning" | "success" | "danger" {
-  return value === "info" ||
-    value === "warning" ||
-    value === "success" ||
-    value === "danger"
-    ? value
-    : "neutral";
-}
-
-function readButtonVariant(
-  value: unknown,
-): "primary" | "secondary" | "tertiary" {
-  return value === "secondary" || value === "tertiary" || value === "ghost"
-    ? value === "ghost"
-      ? "tertiary"
-      : value
-    : "primary";
-}
-
-function readTagVariant(
-  value: unknown,
-): "neutral" | "info" | "success" | "warning" | "danger" | undefined {
-  return value === "info" ||
-    value === "success" ||
-    value === "warning" ||
-    value === "danger" ||
-    value === "neutral"
-    ? value
-    : undefined;
-}
-
-function gapToCss(value: string): string {
-  const gapMap: Record<string, string> = {
-    none: "0",
-    xs: "var(--openui-space-xs)",
-    s: "var(--openui-space-s)",
-    m: "var(--openui-space-m)",
-    l: "var(--openui-space-l)",
-    xl: "var(--openui-space-xl)",
-    "2xl": "var(--openui-space-2xl)",
-  };
-  return gapMap[value] ?? gapMap.m;
-}
-
-function alignToCss(value: string): string {
-  const alignMap: Record<string, string> = {
-    baseline: "baseline",
-    center: "center",
-    end: "flex-end",
-    start: "flex-start",
-    stretch: "stretch",
-  };
-  return alignMap[value] ?? "stretch";
-}
-
-function justifyToCss(value: string): string {
-  const justifyMap: Record<string, string> = {
-    around: "space-around",
-    between: "space-between",
-    center: "center",
-    end: "flex-end",
-    evenly: "space-evenly",
-    start: "flex-start",
-  };
-  return justifyMap[value] ?? "flex-start";
 }
 
 function safeJsonParse(value: string): unknown {
@@ -2405,4 +35,391 @@ function safeJsonParse(value: string): unknown {
   } catch {
     return undefined;
   }
+}
+
+function looksLikeA2UIMessage(value: Record<string, unknown>): boolean {
+  return ["createSurface", "updateComponents", "updateDataModel", "deleteSurface"].some(
+    (key) => key in value,
+  );
+}
+
+function salvagePartialMessage(line: string): A2UIMessage | null {
+  const completed = completeJsonFragment(line);
+  if (!completed) return null;
+  const parsed = safeJsonParse(completed);
+  return isRecord(parsed) && looksLikeA2UIMessage(parsed) ? parsed : null;
+}
+
+function parseA2UIMessages(body: string): A2UIMessage[] {
+  const trimmed = body.trim();
+  if (!trimmed) return [];
+  const parsed = safeJsonParse(trimmed);
+  if (Array.isArray(parsed)) return parsed.filter(isRecord);
+  if (isRecord(parsed) && Array.isArray(parsed.messages)) return parsed.messages.filter(isRecord);
+  if (isRecord(parsed) && looksLikeA2UIMessage(parsed)) return [parsed];
+
+  const messages: A2UIMessage[] = [];
+  for (const rawLine of trimmed.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line.startsWith("{")) continue;
+    const value = safeJsonParse(line);
+    if (isRecord(value)) messages.push(value);
+    else {
+      const partial = salvagePartialMessage(line);
+      if (partial) messages.push(partial);
+    }
+  }
+  return messages;
+}
+
+function collectComponentDataRefs(body: string): Map<string, GenUIComponentDataRef[]> {
+  const bySurface = new Map<string, Map<string, GenUIComponentDataRef>>();
+  for (const message of parseA2UIMessages(body)) {
+    const update = message.updateComponents;
+    if (!isRecord(update) || typeof update.surfaceId !== "string" || !Array.isArray(update.components)) continue;
+    const existing = bySurface.get(update.surfaceId) ?? new Map<string, GenUIComponentDataRef>();
+    for (const raw of update.components) {
+      if (!isRecord(raw) || typeof raw.id !== "string" || typeof raw.component !== "string") continue;
+      if (isRecord(raw.dataRefs)) {
+        for (const [inputKey, ref] of Object.entries(raw.dataRefs)) {
+          if (!inputKey) continue;
+          existing.set(`${raw.id}:${inputKey}`, {
+            componentId: raw.id,
+            component: raw.component,
+            inputKey,
+            ref,
+          });
+        }
+      }
+    }
+    if (existing.size) bySurface.set(update.surfaceId, existing);
+  }
+  return new Map(
+    Array.from(bySurface, ([surfaceId, refs]) => [surfaceId, Array.from(refs.values())]),
+  );
+}
+
+/** Data refs belong to the Renderer/Host contract, not the visual component
+ * schema. Remove them before validating or processing component props. */
+function withoutComponentDataRefs(messages: A2UIMessage[]): A2UIMessage[] {
+  return messages.map((message) => {
+    const update = message.updateComponents;
+    if (!isRecord(update) || !Array.isArray(update.components)) return message;
+    const components = update.components.map((raw) => {
+      if (!isRecord(raw) || !("dataRefs" in raw)) return raw;
+      const { dataRefs: _dataRefs, ...component } = raw;
+      return component;
+    });
+    return { ...message, updateComponents: { ...update, components } };
+  });
+}
+
+function dropDuplicateCreateSurface(messages: A2UIMessage[]): A2UIMessage[] {
+  const seen = new Set<string>();
+  return messages.filter((message) => {
+    if (!isRecord(message.createSurface)) return true;
+    const id = message.createSurface.surfaceId;
+    if (typeof id !== "string" || !seen.has(id)) {
+      if (typeof id === "string") seen.add(id);
+      return true;
+    }
+    return false;
+  });
+}
+
+function dropRepeatedDocument(body: string): string {
+  const text = body.trimEnd();
+  const firstLineEnd = text.indexOf("\n");
+  if (firstLineEnd < 0) return body;
+  const head = text.slice(0, firstLineEnd);
+  let from = firstLineEnd;
+  for (;;) {
+    const at = text.indexOf(`\n${head}`, from);
+    if (at < 0) return body;
+    const first = text.slice(0, at);
+    const second = text.slice(at + 1);
+    if (first.startsWith(second)) return first;
+    from = at + 1;
+  }
+}
+
+function hasPartialTrailingLine(body: string): boolean {
+  const line = body.trimEnd().split(/\r?\n/).at(-1)?.trim();
+  if (!line) return false;
+  return safeJsonParse(line) === undefined;
+}
+
+function withoutUnreadyComponents(messages: A2UIMessage[], trailingIsPartial: boolean): A2UIMessage[] {
+  const known = new Set(effectiveA2UIComponentNames());
+  const trailingIndex = trailingIsPartial ? messages.length - 1 : -1;
+  const declared = new Set<string>();
+
+  messages.forEach((message, messageIndex) => {
+    if (!isRecord(message.updateComponents) || !Array.isArray(message.updateComponents.components)) return;
+    for (const component of message.updateComponents.components) {
+      if (!isRecord(component) || typeof component.id !== "string") continue;
+      if (messageIndex === trailingIndex && !known.has(String(component.component ?? ""))) continue;
+      declared.add(component.id);
+    }
+  });
+  if (declared.size === 0) return [];
+
+  return messages.map((message, messageIndex) => {
+    const update = message.updateComponents;
+    if (!isRecord(update) || !Array.isArray(update.components)) return message;
+    const components = update.components
+      .filter((component) =>
+        isRecord(component) &&
+        typeof component.id === "string" &&
+        typeof component.component === "string" &&
+        (messageIndex !== trailingIndex || known.has(component.component)),
+      )
+      .flatMap((component) => {
+        if (!isRecord(component) || !Array.isArray(component.children)) return component;
+        const children = component.children.filter(
+          (child) => typeof child !== "string" || declared.has(child),
+        );
+        // The streamed root normally arrives before any child definitions.
+        // Feeding that parent to web-core makes it narrate its internal
+        // "[Loading root...]" placeholder. Hold it until at least one named
+        // child has arrived; the product-level generation skeleton covers the
+        // wait without leaking protocol text.
+        if (trailingIsPartial && component.children.length > 0 && children.length === 0) {
+          return [];
+        }
+        return [{
+          ...component,
+          children,
+        }];
+      });
+    return { ...message, updateComponents: { ...update, components } };
+  });
+}
+
+/**
+ * Validate model-authored component props independently before giving the
+ * document to A2UI's all-or-nothing processor. One invalid sibling must not
+ * make an otherwise useful dashboard completely blank. During streaming the
+ * unfinished trailing component is already filtered above; this pass handles
+ * complete but schema-incompatible components (including older revisions).
+ */
+function withoutInvalidComponents(messages: A2UIMessage[]): {
+  messages: A2UIMessage[];
+  rejected: Array<{ id: string; component: string; reason: string }>;
+} {
+  const schemas = new Map(
+    effectiveA2UIComponents().map((implementation) => [
+      implementation.name,
+      implementation.schema,
+    ]),
+  );
+  const rejected: Array<{ id: string; component: string; reason: string }> = [];
+  const rejectedIds = new Set<string>();
+  for (const message of messages) {
+    const update = message.updateComponents;
+    if (!isRecord(update) || !Array.isArray(update.components)) continue;
+    for (const raw of update.components) {
+      if (!isRecord(raw)) continue;
+      const id = typeof raw.id === "string" ? raw.id : "";
+      const component = typeof raw.component === "string" ? raw.component : "";
+      const schema = schemas.get(component);
+      const { id: _id, component: _component, ...props } = raw;
+      const result = schema?.safeParse(props);
+      if (result?.success) continue;
+      rejectedIds.add(id);
+      rejected.push({
+        id,
+        component,
+        reason: result?.error?.issues?.map((issue) =>
+          `${issue.path.join(".") || "props"}: ${issue.message}`,
+        ).join("; ") ?? "component is not registered",
+      });
+    }
+  }
+  if (!rejectedIds.size) return { messages, rejected };
+
+  return {
+    rejected,
+    messages: messages.flatMap((message) => {
+      const update = message.updateComponents;
+      if (!isRecord(update) || !Array.isArray(update.components)) return [message];
+      const components = update.components
+        .filter((raw) => !isRecord(raw) || !rejectedIds.has(String(raw.id ?? "")))
+        .map((raw) => {
+          if (!isRecord(raw) || !Array.isArray(raw.children)) return raw;
+          return {
+            ...raw,
+            children: raw.children.filter(
+              (child) => typeof child !== "string" || !rejectedIds.has(child),
+            ),
+          };
+        });
+      // An empty update still makes the web-core surface point at the missing
+      // first/root id, which renders its internal "[Loading root...]" text and
+      // then disappears on the next byte. Keep that expected streaming gap as
+      // no surface at all; the outer generation skeleton already represents it.
+      return components.length
+        ? [{ ...message, updateComponents: { ...update, components } }]
+        : [];
+    }),
+  };
+}
+
+/** Model compilers sometimes use the protocol's weighted-child notation as
+ * `{id, weight}`. The current web-core validator accepts only child ids; keep
+ * the intended relationship and move the optional weight onto the child. */
+function normalizeWeightedChildren(messages: A2UIMessage[]): A2UIMessage[] {
+  return messages.map((message) => {
+    const update = message.updateComponents;
+    if (!isRecord(update) || !Array.isArray(update.components)) return message;
+    const weights = new Map<string, number>();
+    const components = update.components.map((raw) => {
+      if (!isRecord(raw) || !Array.isArray(raw.children)) return raw;
+      const children = raw.children.flatMap((child) => {
+        if (typeof child === "string") return [child];
+        if (!isRecord(child) || typeof child.id !== "string") return [];
+        if (typeof child.weight === "number" && child.weight > 0) {
+          weights.set(child.id, child.weight);
+        }
+        return [child.id];
+      });
+      return { ...raw, children };
+    }).map((raw) => {
+      if (!isRecord(raw) || typeof raw.id !== "string") return raw;
+      const weight = weights.get(raw.id);
+      return weight === undefined || raw.weight !== undefined
+        ? raw
+        : { ...raw, weight };
+    });
+    return { ...message, updateComponents: { ...update, components } };
+  });
+}
+
+function buildSurfaces(
+  body: string,
+  liveMessages: A2UIMessage[] = [],
+  suppressIncompleteWarnings = false,
+): SurfaceModel<ReactComponentImplementation>[] {
+  const deduped = dropRepeatedDocument(body);
+  const ready = withoutUnreadyComponents(
+    dropDuplicateCreateSurface(parseA2UIMessages(deduped)),
+    hasPartialTrailingLine(deduped),
+  );
+  const sanitized = withoutInvalidComponents(
+    normalizeWeightedChildren(withoutComponentDataRefs(ready)),
+  );
+  const messages = [
+    ...sanitized.messages,
+    ...liveMessages,
+  ];
+  if (!messages.length) return [];
+  const hasComponents = messages.some((message) =>
+    isRecord(message.updateComponents) &&
+    Array.isArray(message.updateComponents.components) &&
+    message.updateComponents.components.length > 0,
+  );
+  if (!hasComponents) return [];
+  if (import.meta.env.DEV && sanitized.rejected.length && !suppressIncompleteWarnings) {
+    console.warn(
+      "[a2ui] skipped invalid component(s)",
+      JSON.stringify(sanitized.rejected),
+    );
+  }
+  const processor = createValuzMessageProcessor();
+  try {
+    processor.processMessages(messages as never);
+  } catch (error) {
+    // Streaming JSON is intentionally completed best-effort before all required
+    // fields have arrived. Keep the last good surface without reporting those
+    // expected intermediate validation failures as application warnings.
+    if (import.meta.env.DEV && !suppressIncompleteWarnings) {
+      console.warn("[a2ui] failed to render payload", error);
+    }
+    return [];
+  }
+  return Array.from(processor.model.surfacesMap.values());
+}
+
+function GenerationSkeleton() {
+  return (
+    <div data-slot="a2ui-generation-skeleton" aria-hidden className="min-w-0 space-y-4">
+      <div className="space-y-2"><Skeleton className="h-6 w-56 max-w-full" /><Skeleton className="h-3.5 w-36 max-w-full" /></div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {[0, 1, 2].map((index) => <div key={index} className="space-y-2.5 rounded-xl border border-surface-border p-4"><Skeleton className="h-4 w-24 max-w-full" /><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-4/5" /></div>)}
+      </div>
+    </div>
+  );
+}
+
+function GenerationTail() {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    let parent = element.parentElement;
+    while (parent) {
+      const overflow = getComputedStyle(parent).overflowY;
+      if ((overflow === "auto" || overflow === "scroll") && parent.scrollHeight > parent.clientHeight) {
+        if (parent.scrollHeight - parent.scrollTop - parent.clientHeight > 240) return;
+        break;
+      }
+      parent = parent.parentElement;
+    }
+    element.scrollIntoView({ block: "end", behavior: "smooth" });
+  });
+  return <div ref={ref} data-slot="a2ui-generation-tail" className="flex items-center gap-2 px-1 py-3"><Skeleton className="h-3 w-32" /></div>;
+}
+
+export function A2UIRenderer({ body, status, hostParams }: A2UIRendererProps) {
+  const version = useSyncExternalStore(
+    subscribeA2UIComponents,
+    getA2UIRegistryVersion,
+    getA2UIRegistryVersion,
+  );
+  const [liveMessages, setLiveMessages] = useState<A2UIMessage[]>([]);
+  useEffect(() => setLiveMessages([]), [body]);
+
+  const hostParamsKey = hostParams
+    ? JSON.stringify(Object.keys(hostParams).sort().map((key) => [key, hostParams[key]]))
+    : "";
+  useEffect(() => {
+    const factory = getGenUIDataHost();
+    if (!factory) return;
+    const handles = Array.from(collectComponentDataRefs(body), ([surfaceId, dataRefs]) =>
+      factory({
+        surfaceId,
+        dataRefs,
+        push: (message) => setLiveMessages((previous) => [...previous, message]),
+        ...(hostParams ? { host: hostParams } : {}),
+      }),
+    ).filter(Boolean);
+    return () => handles.forEach((handle) => handle?.stop());
+    // hostParamsKey is the stable representation of hostParams.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [body, version, hostParamsKey]);
+
+  const built = useMemo(
+    () => buildSurfaces(body, liveMessages, status === "running"),
+    [body, version, liveMessages, status],
+  );
+  // 流式过程中某一帧解析不出 surface 时，沿用上一帧的成品，避免画面闪空。
+  // 这是"渲染期派生状态"，不是 ref 的用途：写/读 ref 会在并发渲染下失准
+  // （react-hooks/refs）。用 state + 渲染期 setState（React 会立刻以新
+  // state 重跑函数体再提交）表达同一意图。`built` 来自 useMemo，同一次
+  // 渲染身份稳定，可直接用它做守卫，不会自触发循环。
+  const [lastGood, setLastGood] = useState<{
+    body: string;
+    surfaces: SurfaceModel<ReactComponentImplementation>[];
+  }>({ body: "", surfaces: [] });
+  if (built.length && lastGood.surfaces !== built) setLastGood({ body, surfaces: built });
+  const inherits = lastGood.surfaces.length > 0 && body.startsWith(lastGood.body);
+  const surfaces = built.length || status !== "running" || !inherits ? built : lastGood.surfaces;
+
+  if (!surfaces.length) return status === "running" ? <GenerationSkeleton /> : null;
+  return (
+    <div data-slot="a2ui-renderer">
+      {surfaces.map((surface) => <ValuzA2UISurface key={surface.id} surface={surface} />)}
+      {status === "running" ? <GenerationTail /> : null}
+    </div>
+  );
 }

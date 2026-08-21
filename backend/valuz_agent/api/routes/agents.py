@@ -45,7 +45,7 @@ EffortLevel = Literal["low", "medium", "high", "xhigh", "max"]
 
 # Mirrors kernel ``RuntimeProvider`` (``kernel.src.core.types``). Validated at
 # the API boundary so a bad value is rejected at write time, not at dispatch.
-RuntimeProvider = Literal["claude_agent", "codex", "deepagents"]
+RuntimeProvider = Literal["claude_agent", "codex", "deepagents", "deepseek_harness"]
 
 
 # ---------------------------------------------------------------------------

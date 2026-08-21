@@ -58,7 +58,7 @@ export const ChatPage = () => {
               <div className="flex items-center gap-3">
                 <h2 className="text-sm font-semibold">Chat</h2>
                 {sessionStatus && (
-                  <Badge variant="outline" className="text-[10px]">
+                  <Badge variant="outline" className="text-micro">
                     {sessionStatus}
                   </Badge>
                 )}

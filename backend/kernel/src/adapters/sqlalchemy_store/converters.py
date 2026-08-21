@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from src.adapters.sqlalchemy_store.models import (
     EventModel,
@@ -25,6 +25,7 @@ from src.core.types import (
     MessageStatus,
     ModelProvider,
     ModelSettings,
+    RuntimeProvider,
     Session,
     StopReason,
     UserInterrupt,
@@ -42,7 +43,10 @@ _VALID_PERMISSION_MODES = {"default", "auto_review", "full_access"}
 _VALID_SESSION_MODES = {"default", "plan", "goal"}
 _VALID_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 _VALID_SESSION_STATUSES = {"created", "idle", "running", "terminated"}
-_VALID_RUNTIME_PROVIDERS = {"claude_agent", "codex", "deepagents"}
+# Derived from the canonical Literal so a new runtime member can never be
+# silently coerced away by this read-path validator again (a stale copy here
+# rewrote every loaded deepseek_harness session to deepagents).
+_VALID_RUNTIME_PROVIDERS = set(get_args(RuntimeProvider))
 _VALID_MESSAGE_STATUSES = {"running", "completed", "errored", "cancelled"}
 
 
@@ -80,7 +84,7 @@ def _validate_session_status(
 
 def _validate_runtime_provider(
     value: str,
-) -> Literal["claude_agent", "codex", "deepagents"]:
+) -> RuntimeProvider:
     """Coerce stored runtime_provider; defensive default for legacy rows.
 
     The DB CHECK constraint guards new writes, so this fallback only
@@ -208,8 +212,8 @@ def dict_to_agent_config(data: dict[str, Any] | None) -> AgentConfig | None:
         skills=tuple(data.get("skills") or []),
         mcp_servers=tuple(dict_to_mcp(d) for d in (data.get("mcp_servers") or [])),
         permission_mode=_validate_permission_mode(data.get("permission_mode", "full_access")),
-        max_turns=data.get("max_turns", 50),
-        max_cost_usd=data.get("max_cost_usd", 10.0),
+        max_turns=data.get("max_turns", 1000),
+        max_cost_usd=data.get("max_cost_usd", 500.0),
         effort=_validate_effort(data.get("effort")),
         thinking=data.get("thinking"),
         metadata=data.get("metadata") or {},

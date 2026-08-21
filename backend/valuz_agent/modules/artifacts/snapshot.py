@@ -129,7 +129,7 @@ def stage_snapshot_bytes(
 ) -> StagedSnapshot:
     """Same as ``stage_snapshot``, for a deliverable that arrives as content.
 
-    Generated documents (A2UI/OpenUI JSON) have no source file to copy — the
+    Generated documents (A2UI JSON) have no source file to copy — the
     model produced them into a tool result. They still get a snapshot on disk
     for the reason at the top of this module: a version the agent cannot
     ``Read`` is a version it cannot revise, and "generate the next version of

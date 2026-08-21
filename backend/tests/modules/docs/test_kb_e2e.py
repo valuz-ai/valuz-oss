@@ -32,7 +32,7 @@ from valuz_agent.modules.docs.service import (
 
 
 class FakeParser:
-    def parse_sync(self, file_path: str):
+    def parse_sync(self, file_path: str, options=None):
         from valuz_agent.ports.parser_backend import ParseResult
 
         return ParseResult(
@@ -46,10 +46,10 @@ class FakeDocsRuntime:
         self.preview_dir = None
         self.runtime_id = None
 
-    def search_sync(self, query, doc_scope_ids, top_k=5):
+    def search_sync(self, query, doc_scope_ids, top_k=5, doc_paths=None):
         return []
 
-    async def search(self, query, doc_scope_ids, top_k=5):
+    async def search(self, query, doc_scope_ids, top_k=5, doc_paths=None):
         return []
 
 
@@ -146,7 +146,9 @@ def _run_bg_work_inline(service: DocumentLibraryService) -> None:
 
         service._pending.append(_work)  # type: ignore[attr-defined]
 
-    def _inline_reindex(doc_ids: list[str], task_id: str) -> None:
+    def _inline_reindex(
+        doc_ids: list[str], task_id: str, user_id: str = "local-test-owner"
+    ) -> None:
         async def _work() -> None:
             task = await service._ds.get_import_task("local-test-owner", task_id)
             if task is None:
@@ -479,7 +481,7 @@ class TestRescan:
             def __init__(self) -> None:
                 self.pdf_pick = "light_local"
 
-            def parse_sync(self, file_path: str):
+            def parse_sync(self, file_path: str, options=None):
                 from valuz_agent.ports.parser_backend import ParseResult
 
                 # Emit the engine name that ``_engine_to_plugin_id``
@@ -958,7 +960,7 @@ class TestManagedKbRoot:
 
         # Managed root lives under <data_dir>/kb/<kb_id>; point data_dir at
         # tmp so the test never touches the real ~/.valuz-oss tree.
-        def _kb_root(_user_id: str) -> Path:
+        def _kb_root(_user_id: str, _kind: str = "normal") -> Path:
             path = tmp_path / "kb"
             path.mkdir(parents=True, exist_ok=True)
             return path
@@ -977,7 +979,7 @@ class TestManagedKbRoot:
     ) -> None:
         from valuz_agent.modules.docs import service as docs_service
 
-        def _kb_root(_user_id: str) -> Path:
+        def _kb_root(_user_id: str, _kind: str = "normal") -> Path:
             path = tmp_path / "kb"
             path.mkdir(parents=True, exist_ok=True)
             return path

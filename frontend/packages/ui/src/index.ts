@@ -1,9 +1,4 @@
 import "./styles/project.css";
-// OpenUI component styles (namespaced: ``:root`` ``--openui-*`` tokens +
-// ``.openui-*`` classes only — no global resets, so it doesn't touch Valuz's
-// design system). Required by ``<Renderer>``; without it the generated UI mounts
-// as bare DOM with undefined CSS vars and renders invisible.
-import "@openuidev/react-ui/styles/index.css";
 
 export * from "./components/CommandPalette";
 export * from "./components/Composer";
@@ -19,6 +14,7 @@ export * from "./components/common/ErrorBoundary";
 export * from "./components/common/ActionCardGrid";
 export * from "./components/common/BackLink";
 export * from "./components/common/DeleteConfirmDialog";
+export * from "./components/common/ForkIcon";
 export * from "./components/common/DialogField";
 export * from "./components/common/EmptyState";
 export * from "./components/common/FormDialog";
@@ -26,6 +22,7 @@ export * from "./components/common/FormField";
 export * from "./components/common/IconBox";
 export * from "./components/common/PageHeader";
 export * from "./components/common/PageLoader";
+export * from "./components/common/PluginBadge";
 export * from "./components/common/PermissionRequestDialog";
 export * from "./components/common/SearchInput";
 export * from "./components/common/SettingsNav";
@@ -39,6 +36,7 @@ export * from "./components/common/LogViewer";
 export * from "./components/common/OfflineBanner";
 export * from "./components/common/ServiceDashboard";
 export * from "./components/shared/CategorizedList";
+export * from "./components/shared/ModelSelectionHint";
 export * from "./components/conversation/AssistantMessage";
 export * from "./components/conversation/AttachmentMenu";
 export * from "./components/conversation/ConversationHeader";
@@ -66,6 +64,7 @@ export * from "./components/conversation/diff-aggregator";
 export * from "./components/conversation/TurnDiffSummaryCard";
 export * from "./components/conversation/TypingIndicator";
 export * from "./components/conversation/ConversationTurnList";
+export * from "./components/conversation/ConversationIndexRail";
 export * from "./components/conversation/UserMessageBubble";
 export * from "./components/conversation/SessionContextPanel";
 export * from "./components/knowledge/DocumentDetailPanel";

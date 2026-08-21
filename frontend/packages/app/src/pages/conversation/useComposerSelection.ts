@@ -27,10 +27,9 @@ type ComposerSelectionParams = {
  * the runtime / provider / model / effort / permission / connector /
  * skill selections, the Settings-default seed effect, the
  * runtime-availability repair effect, the connector fetch +
- * ``toggleConnector``, the locked-session mirror effect, and
- * ``handleSwitchModel`` (+ the retry-count / model-unlock state it
- * writes). Bodies, comments and dependency arrays are moved verbatim
- * from ``ConversationPage``. The two override effects that read
+ * ``toggleConnector``, the locked-session mirror effect, and the
+ * per-turn retry counts. Bodies, comments and dependency arrays are
+ * moved verbatim from ``ConversationPage``. The two override effects that read
  * ``useComposerConfig`` outputs (seed-from-brain and provider
  * auto-pick) stay in the page — moving them here would create a
  * call-order cycle between the two hooks.
@@ -102,7 +101,6 @@ export function useComposerSelection({
     }
   }, [runtimeList, selectedRuntimeId, defaultsLoading]);
   const [retryCounts, setRetryCounts] = useState<Record<string, number>>({});
-  const [modelSelectorUnlocked, setModelSelectorUnlocked] = useState(false);
 
   // ADR-013 approval mode. ``full_access`` matches the host's backend
   // default — preserves prior behaviour for users who don't touch the
@@ -171,14 +169,6 @@ export function useComposerSelection({
   const [selectedComposerSkill, setSelectedComposerSkill] =
     useState<SkillView | null>(null);
 
-  const handleSwitchModel = useCallback((turnId: string) => {
-    setRetryCounts((prev) => {
-      const next = { ...prev, [turnId]: (prev[turnId] ?? 0) + 1 };
-      return next;
-    });
-    setModelSelectorUnlocked(true);
-  }, []);
-
   // Mirror the kernel session's locked model/provider into the composer's
   // selector state so the UI shows what the session is actually using
   // (V5 freezes the model at session creation — picking a different one
@@ -242,7 +232,6 @@ export function useComposerSelection({
     runtimeList,
     retryCounts,
     setRetryCounts,
-    modelSelectorUnlocked,
     selectedPermissionMode,
     setSelectedPermissionMode,
     selectedEffort,
@@ -252,6 +241,5 @@ export function useComposerSelection({
     toggleConnector,
     selectedComposerSkill,
     setSelectedComposerSkill,
-    handleSwitchModel,
   };
 }

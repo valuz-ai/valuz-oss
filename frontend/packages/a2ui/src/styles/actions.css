@@ -1,0 +1,37 @@
+.va2-button { align-items: center; border: 1px solid transparent; border-radius: var(--va2-radius-md); cursor: pointer; display: inline-flex; font-size: 12px; font-weight: 500; gap: 8px; justify-content: center; line-height: 1; transition: background-color var(--va2-duration-fast) var(--va2-ease), border-color var(--va2-duration-fast) var(--va2-ease), color var(--va2-duration-fast) var(--va2-ease), transform var(--va2-duration-fast) var(--va2-ease); }
+.va2-button[data-size="sm"] { min-height: 28px; padding: 6px 10px; }
+.va2-button[data-size="default"] { min-height: 32px; padding: 8px 12px; }
+.va2-button[data-size="icon"] { height: 32px; padding: 0; width: 32px; }
+.va2-button[data-size="icon"] > span { clip: rect(0 0 0 0); clip-path: inset(50%); height: 1px; overflow: hidden; position: absolute; white-space: nowrap; width: 1px; }
+.va2-button[data-variant="default"] { background: var(--va2-brand); color: white; }
+.va2-button[data-variant="default"]:hover { background: var(--va2-brand-hover); }
+.va2-button[data-variant="outline"] { background: var(--va2-bg); border-color: var(--va2-border); box-shadow: var(--va2-shadow-outline); color: var(--va2-text); }
+.va2-button[data-variant="outline"]:hover { background: var(--va2-bg-muted); }
+.va2-button[data-variant="ghost"] { background: transparent; color: var(--va2-text-body); }
+.va2-button[data-variant="ghost"]:hover { background: var(--va2-bg-muted); color: var(--va2-text); }
+.va2-button[data-variant="destructive"] { background: var(--va2-danger-strong); color: white; }
+.va2-button[data-variant="destructive"]:hover { background: var(--va2-danger-hover); }
+.va2-button[data-variant="link"] { background: transparent; color: var(--va2-brand-text); padding-inline: 2px; text-decoration: underline; text-underline-offset: 4px; }
+.va2-button[data-full-width="true"] { width: 100%; }
+.va2-button:active:not(:disabled) { transform: translateY(1px); }
+.va2-button:disabled { cursor: not-allowed; opacity: 0.46; }
+
+.va2-button-group { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+.va2-button-group[data-align="center"] { justify-content: center; } .va2-button-group[data-align="end"] { justify-content: flex-end; } .va2-button-group[data-align="stretch"] > * { flex: 1; }
+.va2-button-group[data-attached="true"] { gap: 0; }
+.va2-button-group[data-attached="true"] .va2-button { border-radius: 0; }
+.va2-button-group[data-attached="true"] > :first-child .va2-button, .va2-button-group[data-attached="true"] > .va2-button:first-child { border-radius: var(--va2-radius-md) 0 0 var(--va2-radius-md); }
+.va2-button-group[data-attached="true"] > :last-child .va2-button, .va2-button-group[data-attached="true"] > .va2-button:last-child { border-radius: 0 var(--va2-radius-md) var(--va2-radius-md) 0; }
+
+.va2-followups h4 { color: var(--va2-text-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.035em; margin: 0 0 8px; text-transform: uppercase; }
+.va2-followups > div { display: grid; gap: 7px; }
+.va2-followups button { align-items: center; background: var(--va2-bg); border: 1px solid var(--va2-border); border-radius: var(--va2-radius-lg); cursor: pointer; display: flex; gap: 8px; padding: 10px 12px; text-align: left; transition: border-color var(--va2-duration-fast) var(--va2-ease), background-color var(--va2-duration-fast) var(--va2-ease); width: 100%; }
+.va2-followups button:hover { background: var(--va2-bg-soft); border-color: var(--va2-border-strong); }
+.va2-followups button > span { display: grid; flex: 1; gap: 1px; min-width: 0; }
+.va2-followups button strong { font-size: 13px; font-weight: 500; }
+.va2-followups button small { color: var(--va2-text-body); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.va2-followups button > svg:last-child { color: var(--va2-text-muted); }
+.va2-followups[data-layout="chips"] > div { display: flex; flex-wrap: wrap; }
+.va2-followups[data-layout="chips"] button { border-radius: var(--va2-radius-full); padding: 7px 10px; width: auto; }
+.va2-followups[data-layout="chips"] button small, .va2-followups[data-layout="chips"] button > svg:last-child { display: none; }
+.va2-followups[data-layout="grid"] > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }

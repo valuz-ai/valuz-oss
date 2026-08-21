@@ -110,8 +110,51 @@ install_backend() {
     # (pg / remote) is chosen at runtime from the settings page, so the driver
     # must be present in dev regardless of the current mode. Small dep; keeping
     # it avoids a "driver pruned" failure when the user flips to Postgres.
-    uv sync --extra dev --extra postgres
+    #
+    # ``tracing`` (langfuse) rides along for the same prune-proofing reason:
+    # activation is still env-gated (LANGFUSE_* in .env — see load_dotenv), so
+    # carrying the package costs nothing when tracing is off.
+    uv sync --extra dev --extra postgres --extra tracing
     ok "backend deps ready"
+    install_dsh_runtime
+}
+
+install_dsh_runtime() {
+    # The DeepSeek Harness runtime is a Node subprocess launched from the
+    # vendored closure (backend/vendor/dsh-runtime — pins + lockfile committed,
+    # node_modules fetched on demand). Only build-desktop.sh used to fetch it,
+    # so every dev checkout showed the runtime as unavailable until the user
+    # found scripts/vendor-dsh-runtime.sh by hand. Vendor it here, idempotently.
+    #
+    # Fail-open on purpose: a missing npm or an offline install leaves the dsh
+    # runtime unavailable (exactly today's behavior) without blocking the
+    # backend/frontend the other three runtimes need.
+    if [[ -n "${VALUZ_DSH_RUNTIME_BIN:-}" || -n "${VALUZ_DSH_ROOT:-}" ]]; then
+        # Explicit launch override (packaged bin / source checkout) — the
+        # closure is not what composition.py will use, don't fetch it.
+        return 0
+    fi
+    local vendor_dir="$BACKEND_DIR/vendor/dsh-runtime"
+    local entry="$vendor_dir/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js"
+    local installed_lock="$vendor_dir/node_modules/.package-lock.json"
+    # ``npm ci`` writes node_modules/.package-lock.json; a committed lockfile
+    # newer than it means the pins moved (e.g. git pull) → refresh.
+    if [[ -f "$entry" && -f "$installed_lock" \
+        && ! "$vendor_dir/package-lock.json" -nt "$installed_lock" ]]; then
+        return 0
+    fi
+    if ! command -v npm >/dev/null 2>&1; then
+        warn "npm not found — DeepSeek Harness runtime stays unavailable" \
+            "(install Node, then run scripts/vendor-dsh-runtime.sh)"
+        return 0
+    fi
+    info "vendoring dsh runtime closure (first run: ~30s)…"
+    if bash "$ROOT_DIR/scripts/vendor-dsh-runtime.sh" >/dev/null; then
+        ok "dsh runtime closure ready"
+    else
+        warn "dsh runtime vendoring failed — DeepSeek Harness runtime stays" \
+            "unavailable (run scripts/vendor-dsh-runtime.sh manually to see why)"
+    fi
 }
 
 start_backend() {
@@ -152,7 +195,26 @@ start_frontend() {
     PIDS+=("$!")
 }
 
+# ── Local env overrides ────────────────────────────────────────────────────
+# Export git-ignored .env files (repo root, then backend/ overriding) into the
+# launcher's environment so every child — the source backend AND the
+# Electron-managed backend in the unified-network flow — inherits them.
+# Primary use today: LANGFUSE_* to switch on the optional tracing bootstrap.
+load_dotenv() {
+    local env_file
+    for env_file in "$ROOT_DIR/.env" "$BACKEND_DIR/.env"; do
+        if [[ -f "$env_file" ]]; then
+            info "loading env from $env_file"
+            set -a
+            # shellcheck disable=SC1090
+            source "$env_file"
+            set +a
+        fi
+    done
+}
+
 # ── Dispatch ───────────────────────────────────────────────────────────────
+load_dotenv
 TARGET="${1:-all}"
 case "$TARGET" in
     all)

@@ -113,6 +113,7 @@ export const networkRuntimeLabel = (runtime: string): string =>
     codex: "Codex",
     claude: "Claude Code",
     deepagents: "Valuz Agent",
+    deepseek_harness: "DeepSeek Harness",
     provider_test: "Provider Test",
   })[runtime] ?? runtime;
 

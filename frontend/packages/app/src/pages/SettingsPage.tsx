@@ -11,6 +11,7 @@ import {
   Brain,
   Cpu,
   FileText,
+  FlaskConical,
   Globe,
   HardDrive,
   Info,
@@ -37,6 +38,13 @@ import { NetworkSection } from "./settings/NetworkSection";
 
 const SETTINGS_TAB_STORAGE_KEY = "valuz-settings-tab";
 
+const SETTINGS_TAB_ALIASES: Record<string, string> = {
+  appearance: "general",
+  shortcuts: "general",
+  memory: "personalization",
+  personalize: "personalization",
+};
+
 const TAB_ICON_MAP: Record<string, ReactNode> = {
   general: <Palette className="h-4 w-4" />,
   model: <Cpu className="h-4 w-4" />,
@@ -56,18 +64,16 @@ const TAB_ICON_MAP: Record<string, ReactNode> = {
   globe: <Globe className="h-4 w-4" />,
   browser: <Globe className="h-4 w-4" />,
   network: <Wifi className="h-4 w-4" />,
+  flask: <FlaskConical className="h-4 w-4" />,
 };
 
 const readStoredTab = (): string => {
   try {
     const raw = localStorage.getItem(SETTINGS_TAB_STORAGE_KEY);
-    if (raw === "appearance" || raw === "shortcuts") {
-      return "general";
-    }
-    if (raw === "memory" || raw === "personalize") return "personalization";
     if (raw) {
       const ids = useRegistryStore.getState().settingsSections.map((s) => s.id);
-      if (ids.includes(raw)) return raw;
+      const resolved = SETTINGS_TAB_ALIASES[raw] ?? raw;
+      if (ids.includes(resolved)) return resolved;
     }
   } catch {
     // ignore
@@ -105,6 +111,12 @@ export const SettingsPage = () => {
           ),
         label: t(section.label as Parameters<typeof t>[0]),
         desc: t(section.description as Parameters<typeof t>[0]),
+        group: section.group
+          ? {
+              id: section.group.id,
+              label: t(section.group.label as Parameters<typeof t>[0]),
+            }
+          : undefined,
       })),
     [settingsSections, t],
   );
@@ -117,9 +129,9 @@ export const SettingsPage = () => {
   const [tab, setTabState] = useState<string>(() => {
     const fromUrl = searchParams.get("tab");
     if (fromUrl) {
-      if (fromUrl === "memory") return "personalization";
+      const resolved = SETTINGS_TAB_ALIASES[fromUrl] ?? fromUrl;
       const ids = useRegistryStore.getState().settingsSections.map((s) => s.id);
-      if (ids.includes(fromUrl)) return fromUrl;
+      if (ids.includes(resolved)) return resolved;
     }
     return readStoredTab();
   });

@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   FilePenLine,
+  Loader2,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -25,10 +26,11 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  ForkIcon,
   cn,
 } from "@valuz/ui";
-import { OriginBadge } from "../../components/ExecutionLocationPicker";
 import { SlotRenderer } from "@valuz/core";
+import { canForkSession } from "./useTitleActions";
 import { SessionStatusPill } from "./SessionStatusPill";
 import type { useComposerConfig } from "./useComposerConfig";
 import type { useConversationHistory } from "./useConversationHistory";
@@ -54,10 +56,19 @@ type ConversationHeaderProps = {
   setTitleDeleting: Dispatch<SetStateAction<boolean>>;
   draftSendInFlight: boolean;
   effectiveTurns: ConversationTurn[];
-  selectedProjectOrigin: ComposerConfig["selectedProjectOrigin"];
+  /** Bring the loaded top of the conversation into view. Lent to the title
+   *  slot: an action there can switch the page into a mode whose per-turn
+   *  controls start at the first turn (share selection's checkboxes), and the
+   *  title is normally clicked from the bottom of a long transcript. */
+  scrollToTop: () => void;
   headerAgentSlug: string | null;
   agentNameBySlug: ComposerConfig["agentNameBySlug"];
   activeProject: ProjectDetail | null;
+  /** Whole-session fork (docs/design/session-fork.md). The item renders
+   *  only when ``canForkSession`` allows it and is disabled while a turn is
+   *  running or a fork is already in flight. */
+  onFork: () => void;
+  forkInFlight: boolean;
 };
 
 /**
@@ -86,10 +97,12 @@ export function ConversationHeader({
   setTitleDeleting,
   draftSendInFlight,
   effectiveTurns,
-  selectedProjectOrigin,
+  scrollToTop,
   headerAgentSlug,
   agentNameBySlug,
   activeProject,
+  onFork,
+  forkInFlight,
 }: ConversationHeaderProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -110,7 +123,7 @@ export function ConversationHeader({
                   onClick={() =>
                     navigate(`/tasks/${encodeURIComponent(fromTaskId)}`)
                   }
-                  className="inline-flex shrink-0 items-center gap-1 text-[13px] text-ink-meta transition-colors hover:text-ink-heading"
+                  className="inline-flex shrink-0 items-center gap-1 text-sm text-ink-meta transition-colors hover:text-ink-heading"
                 >
                   <ArrowLeft className="h-3.5 w-3.5" />
                   <span>
@@ -223,6 +236,21 @@ export function ConversationHeader({
                       <FilePenLine />
                       {t("sidebar.rename" as Parameters<typeof t>[0])}
                     </DropdownMenuItem>
+                    {canForkSession(selectedSession) && (
+                      <DropdownMenuItem
+                        disabled={
+                          forkInFlight || selectedSession?.status === "running"
+                        }
+                        onSelect={() => onFork()}
+                      >
+                        {forkInFlight ? (
+                          <Loader2 className="animate-spin" />
+                        ) : (
+                          <ForkIcon />
+                        )}
+                        {t("conversation.fork" as Parameters<typeof t>[0])}
+                      </DropdownMenuItem>
+                    )}
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
                       variant="destructive"
@@ -235,16 +263,6 @@ export function ConversationHeader({
                 </DropdownMenu>
               )
             ) : null}
-            {/* Host actions for THIS session (share, export…), placed next to
-                the title rather than in the app top bar: the top bar is shared
-                by every page, so a session-scoped control there would have to
-                keep proving which session it means. Rendered through the slot
-                registry — this package depends on ``@valuz/core``, unlike
-                ``@valuz/ui`` where the same need is served by a ReactNode prop. */}
-            <SlotRenderer
-              name="conversation.title.actions"
-              context={{ sessionId: selectedSessionId, session: selectedSession }}
-            />
             <SessionStatusPill
               // ``created`` is exactly the state a not-yet-minted session is
               // in: accepted, not running. It is the same pill the promoted
@@ -265,26 +283,41 @@ export function ConversationHeader({
               // flag doesn't carry.
               background={selectedSession?.background === true}
             />
-            {/* Execution origin (multi-target editions): where this
-                  session's backend lives. Locked at creation; renders
-                  nothing on single-target builds. */}
-            <OriginBadge
-              entityId={selectedSessionId}
-              kind="session"
-              // No session id to observe yet; the session is minted on the
-              // project's origin, so show that. ``origin`` short-circuits
-              // the lookup, and single-target builds still render nothing.
-              origin={
-                !selectedSessionId && draftSendInFlight
-                  ? selectedProjectOrigin
-                  : undefined
-              }
-            />
+            {/* No execution-origin badge here. The context bar attached to
+                the composer already names the location for this conversation,
+                and it is the surface that OWNS the choice — repeating it by
+                the title made the same fact compete with the session's own
+                identity. Origin badges stay where the reader is scanning many
+                rows (Activity, Projects, Conversations). */}
             {headerAgentSlug ? (
               <Badge variant="metaBrand" className="shrink-0">
                 <Bot className="h-3 w-3" />
                 {agentNameBySlug.get(headerAgentSlug) ?? headerAgentSlug}
               </Badge>
+            ) : null}
+            {selectedSession?.forked_from_session_id ? (
+              // Fork provenance chip (design doc D6): jump back to the
+              // source conversation. The source may since have been
+              // deleted — the target page's own not-found handling covers
+              // that; the chip is a hint, not a guarantee.
+              <button
+                type="button"
+                onClick={() =>
+                  navigate(
+                    `/conversation/${selectedSession.forked_from_session_id}`,
+                  )
+                }
+                title={t("conversation.forkedFrom" as Parameters<typeof t>[0])}
+                className="shrink-0"
+              >
+                <Badge
+                  variant="metaOutline"
+                  className="cursor-pointer transition-colors hover:bg-surface-soft"
+                >
+                  <ForkIcon className="h-3 w-3" />
+                  {t("conversation.forkedFrom" as Parameters<typeof t>[0])}
+                </Badge>
+              </button>
             ) : null}
             {selectedSession?.worktree ? (
               // Worktree attribution (creation-time snapshot). Greys out
@@ -312,6 +345,31 @@ export function ConversationHeader({
                 {activeProject.name}
               </Badge>
             ) : null}
+          </div>
+          {/* Host actions for THIS session (share, export…) — the row's right
+              end, opposite the identity cluster, rather than wedged between
+              the title and its status. Kept in this header rather than the app
+              top bar: that bar is shared by every page, so a session-scoped
+              control there would have to keep proving which session it means.
+              Rendered through the slot registry — this package depends on
+              ``@valuz/core``, unlike ``@valuz/ui`` where the same need is
+              served by a ReactNode prop. */}
+          <div className="flex shrink-0 items-center gap-2 pl-2">
+            <SlotRenderer
+              name="conversation.title.actions"
+              context={{
+                sessionId: selectedSessionId,
+                session: selectedSession,
+                scrollToTop,
+                // The WHOLE loaded transcript, not what is on screen. An action
+                // here can act on the conversation as a unit (share it, export
+                // it), and the only per-turn slot is rendered inside the
+                // virtualised list — so an overlay that collected turns from
+                // there saw the few rows the virtualizer had mounted and
+                // silently acted on those alone.
+                turns: effectiveTurns,
+              }}
+            />
           </div>
         </div>
       </header>

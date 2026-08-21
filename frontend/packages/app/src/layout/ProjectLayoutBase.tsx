@@ -7,7 +7,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, matchPath, useLocation, useNavigate } from "react-router-dom";
 import { initI18n } from "@valuz/shared/i18n";
 import {
   applyBrandColors,
@@ -19,6 +19,7 @@ import {
   useGlobalShortcuts,
   usePanelStore,
   useConnectorAlert,
+  SlotRenderer,
   refreshConnectorAlert,
   useRegistryStore,
   useRunningRuns,
@@ -32,6 +33,8 @@ import {
   type RunSummary,
   useDegradedListTargets,
   getExecutionTargets,
+  useExecutionTargetsRevision,
+  recordEntityOrigin,
 } from "@valuz/core";
 import {
   AppShell,
@@ -93,7 +96,9 @@ import {
   useProjectExecutionLocation,
 } from "../components/ProjectLocationFields";
 import { OriginIcon } from "../components/ExecutionLocationPicker";
-import { outletTransitionKey } from "./outlet-key";
+import { useForkSession } from "../hooks/use-fork-session";
+import { FORKABLE_RUNTIMES } from "../pages/conversation/useTitleActions";
+import { PreservedRouteOutlet } from "./PreservedRouteOutlet";
 import { resolveRightPanelAutoFold } from "./right-panel-autofold";
 import type { ProjectOutletContext } from "./types";
 
@@ -131,6 +136,7 @@ const NAV_ICON_MAP: Record<string, DesktopSidebarBottomItem["icon"]> = {
   settings: "settings",
   agents: "agents",
   connectors: "connectors",
+  plugins: "plugins",
   marketplace: "marketplace",
 };
 
@@ -181,10 +187,25 @@ export function ProjectLayoutBase({
   useGlobalShortcuts();
 
   const { t } = useTranslation();
+  const { fork: forkSession, forkingSessionId } = useForkSession();
   const branding = useBranding();
   const navItemsList = useNavItems();
   const navGroupsList = useNavGroups();
   const desktopRoutes = useRegistryStore((state) => state.desktopRoutes);
+  const routeIsOverlay = useMemo(
+    () =>
+      desktopRoutes.some(
+        (route) =>
+          route.layout === "project" &&
+          route.presentation === "overlay" &&
+          matchPath({ path: route.path, end: true }, location.pathname),
+      ),
+    [desktopRoutes, location.pathname],
+  );
+  const hasProjectAddMenuItems = useRegistryStore(
+    (state) =>
+      (state.slots["sidebar.projects.add.menu-items"]?.length ?? 0) > 0,
+  );
   const fetchSessions = useSessionStore((state) => state.fetchSessions);
   const openConversationProjectId = useSessionStore(
     (state) => state.activeProjectId,
@@ -229,6 +250,11 @@ export function ProjectLayoutBase({
   // Execution location for the create dialog (multi-target editions; inert
   // no-target state on single-backend builds).
   const execLocation = useProjectExecutionLocation();
+  // A target with its own directory chooser (remote desktop) turns the
+  // directory field into a picker even on platforms that cannot pick local
+  // folders themselves (browser builds).
+  const effectiveDirectoryFieldMode: DirectoryFieldMode =
+    execLocation.hasOwnDirectoryPicker ? "picker" : directoryFieldMode;
   // Initial members for the create dialog (shared with the projects-page
   // entry). Source candidates from the chosen target's backend so a cloud-
   // bound project only lists cloud-deployable agents.
@@ -267,6 +293,8 @@ export function ProjectLayoutBase({
   const handleOpenUpdateWindow = useCallback(() => {
     useUpdaterStore.getState().show();
   }, []);
+
+  const targetsRevision = useExecutionTargetsRevision();
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -346,13 +374,18 @@ export function ProjectLayoutBase({
     });
   }, [location.key]);
 
+  // ``targetsRevision`` re-runs these when the set a list fans out to changes.
+  // Targets land asynchronously (an edition resolves them from its control
+  // plane after the tree is painted), and these rails are otherwise fetched
+  // once on mount — so a desktop that becomes reachable a second after launch
+  // stayed missing from 项目 / 对话 until something remounted the page.
   useEffect(() => {
     void fetchProjects();
-  }, [fetchProjects]);
+  }, [fetchProjects, targetsRevision]);
 
   useEffect(() => {
     void fetchSessions();
-  }, [fetchSessions]);
+  }, [fetchSessions, targetsRevision]);
 
   useEffect(() => {
     void fetchAllTasks();
@@ -465,6 +498,16 @@ export function ProjectLayoutBase({
     };
   }, [refreshFinishedRuns]);
 
+  // Client-side session creations that never produce a ``run.finished``
+  // frame (today: fork — the new session is born idle WITH history) nudge
+  // the finished-runs window explicitly; without this the forked chat
+  // waits for the next unrelated turn to appear in the sidebar.
+  useEffect(() => {
+    const onRefresh = () => refreshFinishedRuns();
+    window.addEventListener("valuz-runs-refresh", onRefresh);
+    return () => window.removeEventListener("valuz-runs-refresh", onRefresh);
+  }, [refreshFinishedRuns]);
+
   // Per-project runs for the sidebar accordion. The global finished-runs
   // window above is ONE recency list shared with quick chats, so an install
   // with a few hundred of those pushes every project conversation past its
@@ -535,6 +578,13 @@ export function ProjectLayoutBase({
           : `/conversation/${encodeURIComponent(r.session_id)}`,
       kind: r.source_kind === "task" ? "task" : "chat",
       isRunning: liveSet.has(r.session_id),
+      // Whole-session fork availability (docs/design/session-fork.md D3):
+      // user chats on a fork-wired runtime, not currently running.
+      canFork:
+        r.source_kind !== "task" &&
+        r.origin === "user" &&
+        FORKABLE_RUNTIMES.has(r.runtime ?? "") &&
+        !liveSet.has(r.session_id),
       // Execution origin (multi-target editions; fan-out tags rows) — a
       // leading icon, not a pill, so the title keeps its width.
       leadingIcon: r.exec_origin ? (
@@ -614,7 +664,7 @@ export function ProjectLayoutBase({
     // A remote execution target has no access to this machine's paths — the
     // backend allocates a managed cwd and the picked folder uploads after.
     const managed =
-      directoryFieldMode === "managed" || execLocation.isRemoteTarget;
+      effectiveDirectoryFieldMode === "managed" || execLocation.isRemoteTarget;
     if (!trimmedName || (!managed && !trimmedPath)) return;
     setCreateError("");
     try {
@@ -657,11 +707,25 @@ export function ProjectLayoutBase({
   };
 
   const handleSelectDirectory = async () => {
-    const path = await platform.selectDirectory();
-    if (path) {
-      setNewRootPath(path);
+    const picked = await execLocation.selectDirectory();
+    if (!picked) return;
+    if (picked.existingProjectId) {
+      // The chosen directory is already a project on that target — open it
+      // instead of asking the backend for a duplicate binding (409).
+      const target = execLocation.effectiveTarget;
+      if (target) recordEntityOrigin(picked.existingProjectId, target.id);
+      setNewName("");
+      setNewRootPath("");
       setCreateError("");
+      memberPicker.reset();
+      execLocation.reset();
+      setCreateOpen(false);
+      await fetchProjects();
+      navigate(`/projects/${picked.existingProjectId}`);
+      return;
     }
+    setNewRootPath(picked.path);
+    setCreateError("");
   };
 
   // Multi-target degraded mode: one side of the list fan-out failing means
@@ -684,8 +748,11 @@ export function ProjectLayoutBase({
         route.path === location.pathname ||
         location.pathname.startsWith(`${route.path}/`),
     );
-    const raw = match?.label ?? branding.appName;
-    return t(raw as Parameters<typeof t>[0]);
+    // Route labels are i18n keys; the branding app name is a literal product
+    // string ("Valuz Team") and must not go through t() — it would log a
+    // "missing translation" warning on every unmatched route.
+    if (!match?.label) return branding.appName;
+    return t(match.label as Parameters<typeof t>[0]);
   }, [desktopRoutes, location.pathname, branding.appName, t]);
 
   const outletContext: ProjectOutletContext = {
@@ -946,6 +1013,11 @@ export function ProjectLayoutBase({
                 })
                 .catch(() => toast.error(t("sidebar.renameFailed")));
             }}
+            // Whole-session fork (docs/design/session-fork.md). Pending
+            // state + duplicate-click suppression live in the shared hook
+            // (#879); its runs-refresh event re-fetches the finished window.
+            onRecentFork={(sessionId) => void forkSession(sessionId)}
+            recentForkPendingId={forkingSessionId}
             onRecentDelete={(sessionId) => {
               // Optimistic local removal — the row disappears immediately
               // even though the backend round-trip is still in flight.
@@ -980,6 +1052,11 @@ export function ProjectLayoutBase({
             collapsed={sidebarCollapsed}
             onAddProject={() => setCreateOpen(true)}
             onImportProject={() => importInputRef.current?.click()}
+            projectAddMenuItems={
+              hasProjectAddMenuItems ? (
+                <SlotRenderer name="sidebar.projects.add.menu-items" />
+              ) : undefined
+            }
             onProjectOpenInFinder={(projectId) => {
               const ws = allProjects.find(
                 (project) => project.id === projectId,
@@ -1048,14 +1125,11 @@ export function ProjectLayoutBase({
             : null
         }
       >
-        <div
-          // Keyed so a page change replays the enter animation — except
-          // within the conversation family, which transitions in place
-          // (see ``outletTransitionKey``).
-          key={outletTransitionKey(location.pathname)}
-          className="h-full min-h-0 animate-page-enter"
-        >
-          <Outlet context={outletContext} />
+        <div className="relative h-full min-h-0">
+          <PreservedRouteOutlet
+            context={outletContext}
+            overlay={routeIsOverlay}
+          />
         </div>
       </AppShell>
       <AppToaster />
@@ -1096,7 +1170,7 @@ export function ProjectLayoutBase({
               createError ? (
                 <p className="text-xs text-destructive">{createError}</p>
               ) : null
-            ) : directoryFieldMode === "managed" ? (
+            ) : effectiveDirectoryFieldMode === "managed" ? (
               <div className="flex flex-col">
                 <label className="mb-[5px] text-xs font-medium text-foreground">
                   {t("project.projectDir")}
@@ -1116,7 +1190,7 @@ export function ProjectLayoutBase({
                   {t("project.projectDir")}
                 </label>
                 <div className="flex items-center gap-2">
-                  {directoryFieldMode === "picker" ? (
+                  {effectiveDirectoryFieldMode === "picker" ? (
                     <button
                       type="button"
                       className="flex h-8 flex-1 items-center rounded-lg border border-input bg-surface px-2.5 text-sm text-foreground transition-[border-color,box-shadow,color,background-color] hover:border-ring focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/20 focus-visible:outline-none"
@@ -1143,7 +1217,8 @@ export function ProjectLayoutBase({
                       className="flex-1"
                     />
                   )}
-                  {directoryFieldMode === "picker" || platform.isElectron ? (
+                  {effectiveDirectoryFieldMode === "picker" ||
+                  platform.isElectron ? (
                     <Button
                       type="button"
                       variant="outline"
@@ -1182,7 +1257,7 @@ export function ProjectLayoutBase({
               onClick={() => void handleCreateProject()}
               disabled={
                 !newName.trim() ||
-                (directoryFieldMode !== "managed" &&
+                (effectiveDirectoryFieldMode !== "managed" &&
                   !execLocation.isRemoteTarget &&
                   !newRootPath.trim())
               }

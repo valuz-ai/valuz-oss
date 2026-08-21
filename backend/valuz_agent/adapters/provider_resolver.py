@@ -83,7 +83,7 @@ logger = logging.getLogger(__name__)
 # ``src.core.types.ApiProtocol`` and
 # ``src.runtimes.factory.ALLOWED_PROTOCOLS_BY_RUNTIME`` keys.
 ApiProtocol = Literal["anthropic", "openai_completion", "openai_response", "gemini"]
-RuntimeProvider = Literal["claude_agent", "codex", "deepagents"]
+RuntimeProvider = Literal["claude_agent", "codex", "deepagents", "deepseek_harness"]
 
 
 class ProviderNotResolvable(RuntimeError):  # noqa: N818 — informational, not an Error subclass
@@ -97,7 +97,7 @@ class ProviderNotResolvable(RuntimeError):  # noqa: N818 — informational, not 
         self.reason = reason
 
 
-_VALID_RUNTIME_PROVIDERS: set[str] = {"claude_agent", "codex", "deepagents"}
+_VALID_RUNTIME_PROVIDERS: set[str] = {"claude_agent", "codex", "deepagents", "deepseek_harness"}
 
 
 # valuz user-facing hyphen form → kernel underscore form. The row stores
@@ -124,6 +124,7 @@ _RUNTIME_TO_DEFAULT_PROTOCOL: dict[RuntimeProvider, ApiProtocol] = {
     "claude_agent": "anthropic",
     "codex": "openai_response",
     "deepagents": "openai_completion",
+    "deepseek_harness": "openai_completion",
 }
 
 _ZHIPU_CODING_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4"
@@ -196,6 +197,20 @@ async def resolve_model_provider(
 
     api_protocol = _resolve_api_protocol(provider, model_id, runtime_provider)
     base_url = _resolve_base_url(provider, api_protocol)
+
+    if runtime_provider == "deepseek_harness" and base_url is None:
+        # ``None`` normally means "the runtime SDK's ambient first-party
+        # default" — but dsh's empty-endpoint fallback is DeepSeek's public
+        # API, which is only right for the DeepSeek channel (and that one
+        # always resolves a concrete URL above). Materialize the kind's own
+        # default so e.g. an OpenAI key posts to api.openai.com, not
+        # api.deepseek.com. Kinds with no default (blank ``compatible``)
+        # stay ``None`` and are rejected by the kernel factory.
+        from valuz_agent.modules.providers.service import _PROVIDER_MAP
+
+        descriptor = _PROVIDER_MAP.get(provider.provider_kind)
+        if descriptor is not None and descriptor.default_base_url:
+            base_url = descriptor.default_base_url
 
     api_key = _resolve_api_key(provider)
     if not api_key:
@@ -369,7 +384,8 @@ async def resolve_runtime_provider(
     Resolution order (highest priority first):
 
     1. ``request_runtime_id`` — user-supplied via the session-creation API.
-       Must be one of ``claude_agent`` / ``codex`` / ``deepagents``;
+       Must be one of ``claude_agent`` / ``codex`` / ``deepagents`` /
+       ``deepseek_harness``;
        otherwise raises ``ProviderNotResolvable``. This is the path the
        picker in the UI uses to override provider defaults.
     2. ``derive_runtime_provider(provider_kind)`` — built-in providers are

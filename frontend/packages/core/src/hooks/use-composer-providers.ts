@@ -4,7 +4,11 @@ import { getComposerCatalogAdapter } from "../edition/composer-catalog";
 
 /** Runtime identifiers used by the runtime filter. Server-resolved onto each
  *  model's ``runtimes`` — not re-derived here. */
-export type RuntimeProvider = "claude_agent" | "codex" | "deepagents";
+export type RuntimeProvider =
+  | "claude_agent"
+  | "codex"
+  | "deepagents"
+  | "deepseek_harness";
 
 export type ComposerProviderChannelStatus = "loading" | "ready" | "error";
 
@@ -135,6 +139,7 @@ export const useComposerProviders = (
               providerId: c.id,
               providerName: c.name,
               modelId: m.id,
+              selectionHint: m.selection_hint,
               isDefault: c.is_default && m.id === c.default_model,
               source: c.source,
             })),

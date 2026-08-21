@@ -99,40 +99,29 @@ def test_project_explicit_preflight_value_wins(
     assert "skipWebFetchPreflight" not in _build(root)
 
 
-# -- autoCompactWindow: from channel-declared max_input_tokens ---------------
+# -- autoCompactWindow: never injected from the declared window ------------
 
 
-def test_auto_compact_window_injected_at_fraction(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(SKIP_WEBFETCH_PREFLIGHT_ENV, raising=False)
-    settings = _build(None, ModelSettings(max_input_tokens=200_000))
-    assert settings["autoCompactWindow"] == 170_000  # 0.85 x 200k
-
-
-def test_auto_compact_window_absent_without_declaration(
+def test_declared_window_does_not_inject_auto_compact_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The channel-declared ``max_input_tokens`` travels as
+    ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` (env) and the CLI applies its own
+    compaction threshold inside it. Injecting ``autoCompactWindow`` here used
+    to make ``/context`` report ``0.85 x N`` as the window (``x / 850k`` for a
+    declared 1M) — the CLI treats that key as the effective window."""
     monkeypatch.delenv(SKIP_WEBFETCH_PREFLIGHT_ENV, raising=False)
+    for declared in (100_000, 200_000, 1_000_000, 2_000_000):
+        assert "autoCompactWindow" not in _build(None, ModelSettings(max_input_tokens=declared))
     assert "autoCompactWindow" not in _build(None)
     assert "autoCompactWindow" not in _build(None, ModelSettings(effort="high"))
 
 
-def test_auto_compact_window_clamped_to_cli_max(monkeypatch: pytest.MonkeyPatch) -> None:
-    # 0.85 x 2M = 1.7M exceeds the CLI's documented 1M ceiling.
-    monkeypatch.delenv(SKIP_WEBFETCH_PREFLIGHT_ENV, raising=False)
-    settings = _build(None, ModelSettings(max_input_tokens=2_000_000))
-    assert settings["autoCompactWindow"] == 1_000_000
-
-
-def test_auto_compact_window_skipped_below_cli_floor(monkeypatch: pytest.MonkeyPatch) -> None:
-    # 0.85 x 100k = 85k is below the CLI's 100k floor; emitting the floor
-    # would place the trigger PAST the real window, so skip entirely.
-    monkeypatch.delenv(SKIP_WEBFETCH_PREFLIGHT_ENV, raising=False)
-    assert "autoCompactWindow" not in _build(None, ModelSettings(max_input_tokens=100_000))
-
-
-def test_project_explicit_auto_compact_window_wins(
+def test_project_explicit_auto_compact_window_is_left_to_the_project(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A project's own ``autoCompactWindow`` is loaded through
+    ``setting_sources`` — the harness layer never repeats or overrides it."""
     monkeypatch.delenv(SKIP_WEBFETCH_PREFLIGHT_ENV, raising=False)
     root = _write_project_settings(tmp_path, {"autoCompactWindow": 120_000})
     assert "autoCompactWindow" not in _build(root, ModelSettings(max_input_tokens=200_000))

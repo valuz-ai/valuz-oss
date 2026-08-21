@@ -31,3 +31,21 @@ def test_legacy_row_without_field_deserializes_to_none() -> None:
     # A row persisted before the field existed has no key → None, not a crash.
     legacy = {"name": "s", "url": "https://x/mcp", "transport": "http", "headers": {}}
     assert dict_to_mcp(legacy).tool_timeout_sec is None
+
+
+def test_tool_timeout_sec_crosses_kernel_http_schema() -> None:
+    from app._validators import validate_mcp_servers
+    from app.serializers import mcp_to_schema
+
+    source = McpHttpServerConfig(
+        name="reportify",
+        url="https://mcp.reportify.cn/search/mcp",
+        tool_timeout_sec=600.0,
+    )
+
+    schema = mcp_to_schema(source)
+    assert schema.tool_timeout_sec == 600.0
+
+    restored = validate_mcp_servers([schema])[0]
+    assert isinstance(restored, McpHttpServerConfig)
+    assert restored.tool_timeout_sec == 600.0

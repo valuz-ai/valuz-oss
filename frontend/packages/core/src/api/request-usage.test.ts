@@ -38,6 +38,12 @@ describe("frontend backend API transport", () => {
     const offenders = collectSourceFiles(frontendRoot)
       .filter((file) => !file.endsWith("/packages/core/src/api/request.ts"))
       .filter((file) => !file.includes("/apps/desktop/src/main/"))
+      // Electron-main network relays call their loopback control plane and
+      // model upstreams; they are not renderer requests to the Valuz backend.
+      .filter(
+        (file) =>
+          !file.includes("/packages/desktop-network-egress/src/main/"),
+      )
       .filter((file) => {
         const source = stripComments(readFileSync(file, "utf8"));
         return /\bfetch\s*\(/.test(source) && /\/v1\//.test(source);

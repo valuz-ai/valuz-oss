@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -37,8 +38,13 @@ from valuz_agent.modules.tasks.datastore import (
     TaskSessionDatastore,
     pick_lead_run,
 )
-from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
-from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
+from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.modules.tasks.lease import (
+    ActorLease,
+    acquire_actor_lease,
+    load_actor_lease_states,
+)
+from valuz_agent.modules.tasks import mailbox_store
 from valuz_agent.modules.tasks.member_state import (
     reconcile,
 )
@@ -54,19 +60,16 @@ logger = logging.getLogger(__name__)
 class RecoveryService:
     """Startup sweep + user stop/resume.
 
-    Registry keystone in ``_recover_one_task``: each resumable member is
-    re-seeded via ``registry.add_member`` (no dispatch epoch on the recovery
-    branch) BEFORE its actor loop respawns — mirroring ``dispatch_async``.
+    A resumed member needs no re-seeding: its run row is still ``active``,
+    which is what every process reads to know the member is live.
     """
 
     def __init__(
         self,
         *,
-        registry: LiveMemberRegistry,
         actor_runner: ActorRunner,
         coordination: CoordinationService,
     ) -> None:
-        self._members = registry
         self._actor = actor_runner
         self._coordination = coordination
 
@@ -92,6 +95,18 @@ class RecoveryService:
         recovered = 0
         for task_id, project_id, user_id in active:
             try:
+                # This sweep is cross-owner and unconditional, so with several
+                # host processes every one of them used to re-drive every active
+                # task — N lead loops, N× model spend, competing plan CAS
+                # writes. ``_recover_one_task`` takes the lead session's lease
+                # before respawning anything, so a task someone else is running
+                # is left alone there.
+                #
+                # There used to be an advisory pre-check here as well, keyed by
+                # task id. The lease is keyed by session now, and resolving the
+                # lead session is exactly the first thing the authoritative
+                # path does — so the pre-check bought one skipped query at the
+                # cost of a second answer to the same question.
                 if await self._recover_one_task(task_id, project_id, user_id=user_id):
                     recovered += 1
             except Exception:  # noqa: BLE001
@@ -101,6 +116,16 @@ class RecoveryService:
                 "recover_active_tasks: reconciled + re-drove %d active task(s)", recovered
             )
         return recovered
+
+    async def adopt_orphaned_task(self, task_id: str, project_id: str, user_id: str) -> bool:
+        """Take over one task whose driver died. True when this process has it.
+
+        Same machine as the boot sweep, exposed for the health monitor: boot
+        recovery only ever runs once, so a task orphaned AFTER it (or during the
+        window where the dead driver's lease had not yet expired) has no other
+        way back. The lease acquisition inside decides who wins.
+        """
+        return await self._recover_one_task(task_id, project_id, user_id=user_id)
 
     async def _recover_one_task(
         self,
@@ -164,6 +189,15 @@ class RecoveryService:
                         Path(run.run_dir) if run.run_dir else Path(),
                         "idle",
                         agent_slug=run.agent_slug or "",
+                        # The member's own run row bounds what may be attributed
+                        # to it. Under a shared project cwd ``run_dir`` IS the
+                        # whole project, so omitting this (as this call did)
+                        # means "every file here is yours". Observed on qa: this
+                        # path, reached because the watchdog adopted an orphaned
+                        # task, wrote two members a 56-file manifest apiece —
+                        # the same list for both, including reports written
+                        # three and five days earlier.
+                        since_epoch=(run.created_at or 0) / 1000.0,
                         user_id=user_id,
                     )
                 if rec.run_status:
@@ -234,15 +268,79 @@ class RecoveryService:
             except Exception:  # noqa: BLE001
                 pass
 
-        # Re-drive (outside the DB txn): register the lead mailbox, deliver any
-        # completed members' results, respawn resumable members (kernel run_turn
-        # on the persisted session), then respawn the lead with a reconcile brief.
-        mailbox_registry.register(lead_session_id)
-        for member_sid, manifest in member_done:
-            mailbox_registry.put(
-                lead_session_id,
-                InboxMsg(kind="member_done", from_session=member_sid, payload=manifest),
+        # Everything above is read + reconcile and safely repeatable. Everything
+        # below RESPAWNS: kernel evictions, member actor loops driving real
+        # turns, then the lead. Take the task's lease first, and give up if a
+        # peer holds it.
+        #
+        # The advisory check in ``recover_active_tasks`` cannot cover this: at a
+        # cold boot NOBODY holds a lease yet, so every worker passes it, and
+        # without an authoritative acquisition here each of them would respawn
+        # the same members — duplicate turns, duplicate model spend — before the
+        # lead loops raced for ownership. The lease travels into the lead loop
+        # so it does not re-acquire and fence the recovery that spawned it.
+        lease = await acquire_actor_lease(session_id=lead_session_id, task_id=task_id)
+        if lease is None:
+            logger.info(
+                "recover: task %s is already being driven — leaving it alone", task_id
             )
+            return False
+        try:
+            return await self._respawn(
+                task_id=task_id,
+                project_id=project_id,
+                user_id=user_id,
+                lead_session_id=lead_session_id,
+                lease=lease,
+                member_done=member_done,
+                resume_members=resume_members,
+                summary=summary,
+                lead_instruction=lead_instruction,
+                evict=_evict_runtime,
+            )
+        except BaseException:
+            # We hold the task but are not going to drive it — hand it back now
+            # rather than making the next driver wait out the TTL.
+            await lease.release()
+            raise
+
+    async def _respawn(
+        self,
+        *,
+        task_id: str,
+        project_id: str,
+        user_id: str,
+        lead_session_id: str,
+        lease: ActorLease,
+        member_done: list[tuple[str, MemberManifest]],
+        resume_members: list[tuple[str, str, str, str, str]],
+        summary: list[str],
+        lead_instruction: str | None,
+        evict: Any,
+    ) -> bool:
+        """Side-effectful half of recovery, run under the task's lease.
+
+        Split out so the lease can wrap it as one unit: register the lead
+        mailbox, deliver any completed members' results, respawn resumable
+        members (kernel ``run_turn`` on the persisted session), then respawn the
+        lead with a reconcile brief.
+        """
+        _evict_runtime = evict
+        for member_sid, manifest in member_done:
+            # Durable: a restart re-seeds results for a lead whose loop may
+            # come up in a different process than this one.
+            async with async_unit_of_work() as db:
+                await mailbox_store.enqueue(
+                    db,
+                    session_id=lead_session_id,
+                    task_id=task_id,
+                    project_id=project_id,
+                    user_id=user_id,
+                    kind="member_done",
+                    from_session=member_sid,
+                    origin="recovery-reseed",
+                    payload=dict(manifest),
+                )
         for member_sid, brief, m_run_dir, m_slug, m_key in resume_members:
             await _evict_runtime(member_sid)
             resume_prompt = brief or t("task.brief.memberResumeDefault")
@@ -267,7 +365,6 @@ class RecoveryService:
                 task_id=task_id,
                 project_id=project_id,
                 user_id=user_id,
-                registry=self._members,
             )
         await _evict_runtime(lead_session_id)
         # Localized: this is the lead's USER-turn prompt on resume, and a model
@@ -300,6 +397,7 @@ class RecoveryService:
             task_id=task_id,
             project_id=project_id,
             user_id=user_id,
+            lease=lease,
         )
         return True
 
@@ -354,6 +452,19 @@ class RecoveryService:
             ]
             for sid in member_sids:
                 await run_ds.update_run_by_session(session_id=sid, status="paused")
+            # The lead's own run too. Its loop leaves through the
+            # externally-managed exit, which skips finalize by design — the
+            # terminal state belongs to whoever stopped it — so nothing else
+            # ever settles this row. Observed on qa: a task ``stopped`` for
+            # twelve minutes, its lease correctly released, and its lead run
+            # still reading ``active``. Anything judging liveness from the run
+            # index rather than the lease saw a runner that had long since
+            # gone. ``paused`` is the same word the members get, and it is the
+            # resumable one.
+            if lead_session_id and lead_pick is not None and lead_pick.status == "active":
+                await run_ds.update_run_by_session(
+                    session_id=lead_session_id, status="paused"
+                )
             # Park only the running member's node (``in_progress`` = a live
             # member session, the one we're halting) → ``paused`` so the panel
             # stops spinning it. Leave ``in_review`` (member finished, awaiting
@@ -419,10 +530,9 @@ class RecoveryService:
             await self._interrupt_kernel_session(sid, user_id=user_id)
         if lead_session_id is not None:
             await self._interrupt_kernel_session(lead_session_id, user_id=user_id)
-        self._coordination.broadcast_shutdown(task_id)
-        if lead_session_id is not None:
-
-            mailbox_registry.put(lead_session_id, InboxMsg(kind="shutdown"))
+        # The lead reads the paused task on its own poll, from whichever
+        # process runs it — which the queued ``shutdown`` this replaced could
+        # only manage when that happened to be this one.
         return True
 
     async def resume_task(
@@ -637,26 +747,33 @@ class RecoveryService:
                 subtask_key=subtask_key,
             )
 
+        # The interrupt only reaches a member MID-TURN. An idle one, parked
+        # between turns, learns it was cancelled from its own run row on the
+        # next poll — bounded by the inbox poll rather than by its 10-minute
+        # idle TTL, and without depending on which process it runs in.
         await self._interrupt_kernel_session(session_id, user_id=user_id)
-        # The interrupt only reaches a member MID-TURN. An idle member (waiting
-        # on its mailbox between turns) would otherwise sit out its full idle
-        # TTL (10 min) before exiting — and the user already cancelled it.
-        mailbox_registry.put(session_id, InboxMsg(kind="shutdown"))
-        self._members.discard_member(task_id, session_id)
         if lead_session_id:
-            mailbox_registry.put(
-                lead_session_id,
-                InboxMsg(
+            async with async_unit_of_work() as db:
+                # Anything still queued for the member it just stopped would be
+                # read by nobody; cancel it in the same breath as telling the
+                # lead, so the two cannot disagree.
+                await mailbox_store.cancel_pending(db, session_id=session_id)
+                await mailbox_store.enqueue(
+                    db,
+                    session_id=lead_session_id,
+                    task_id=task_id,
+                    project_id=project_id,
+                    user_id=user_id,
                     kind="member_done",
                     from_session=session_id,
+                    origin="member-stopped",
                     payload={
                         "agent": agent_slug,
                         "status": "cancelled",
                         "summary": t("task.summaryUserStopped"),
                         "artifacts": [],
                     },
-                ),
-            )
+                )
         return True
 
 
@@ -667,8 +784,13 @@ class RecoveryService:
 # process stays up (uncaught loop crash, failed finalize) would sit ``active``
 # forever with nothing dispatched. This periodic sweep is the same concern as
 # the rest of this module — notice a dead lead, make the task resumable — on a
-# timer instead of at boot. Liveness signal: the lead's mailbox registration
-# (the loop registers on entry, unregisters in its ``finally``); a task must
+# timer instead of at boot.
+#
+# Liveness signal: the task's LEASE (``tasks/lease.py``) — shared state, so it
+# answers for every host process. It used to be the lead's mailbox
+# registration, which is process-local: with more than one process this sweep
+# read every sibling's healthy lead as dead and blocked live tasks mid-run.
+# A task with no lease row is UNKNOWN, never dead. On top of that a task must
 # look dead for ``confirm_sweeps`` consecutive sweeps before we act, and the
 # intervention is deliberately minimal: ``blocked`` + notification, never a
 # respawn.
@@ -689,6 +811,10 @@ def _parse_duration_env(name: str, default: timedelta) -> timedelta:
     except (ValueError, IndexError):
         logger.warning("task health monitor: bad duration %s=%r, using default", name, raw)
         return default
+
+
+# What the monitor needs from recovery: adopt this task, tell me if you got it.
+RecoverOne = Callable[[str, str, str], Awaitable[bool]]
 
 
 @dataclass(frozen=True)
@@ -717,12 +843,26 @@ class TaskHealthConfig:
 
 
 class TaskHealthMonitor:
-    def __init__(self, config: TaskHealthConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: TaskHealthConfig | None = None,
+        *,
+        recover_one: RecoverOne | None = None,
+    ) -> None:
         self._config = config or TaskHealthConfig.from_env()
         self._running = False
         self._task: asyncio.Task[None] | None = None
         # task_id → consecutive dead-looking sweep count.
         self._suspect: dict[str, int] = {}
+        # Tasks this process has already tried to adopt. ONE attempt per task
+        # per process, deliberately: a task whose lead dies again immediately
+        # would otherwise be respawned every few sweeps forever, which is the
+        # failure mode a watchdog must not have. The fleet gets one attempt per
+        # process — bounded, small, and self-limiting, because a task that keeps
+        # dying exhausts the attempt everywhere and then gets blocked. Cleared
+        # whenever the task looks alive again, so a LATER outage is retried.
+        self._revive_attempted: set[str] = set()
+        self._recover_one: RecoverOne | None = recover_one
 
     async def startup(self) -> None:
         if not self._config.enabled:
@@ -749,6 +889,7 @@ class TaskHealthMonitor:
                 pass
             self._task = None
         self._suspect.clear()
+        self._revive_attempted.clear()
         logger.info("task health monitor: stopped")
 
     async def _tick_loop(self) -> None:
@@ -782,6 +923,15 @@ class TaskHealthMonitor:
             # full-row scan plus one list_runs per active task.
             candidates = await TaskDatastore(db).list_active_lead_bindings()
 
+        # Liveness is the LEASE, and only the lease. It used to be read
+        # alongside ``mailbox_registry.is_owned``, which is process-local and
+        # therefore reported every sibling process's healthy lead as dead —
+        # this sweep then blocked it mid-run. Now every actor loop holds a
+        # lease on its own session, so one shared answer serves all processes
+        # and the second, lying opinion is gone.
+        leases = await load_actor_lease_states([sid for *_, sid in candidates if sid])
+        now = now_ms()
+
         acted: list[str] = []
         live_task_ids: set[str] = set()
         for task_id, user_id, project_id, lead_session_id in candidates:
@@ -790,14 +940,21 @@ class TaskHealthMonitor:
                 # No lead run at all — nothing this monitor can safely do; leave
                 # it to boot recovery / user action.
                 self._suspect.pop(task_id, None)
+                self._revive_attempted.discard(task_id)
                 continue
-            if mailbox_registry.is_owned(lead_session_id):
-                # Live lead loop (running a turn, or parked on its mailbox
-                # awaiting member_done / a user question) — healthy. OWNED,
-                # not merely registered: a box pre-seeded for a loop that
-                # never started would otherwise read as healthy forever, and
-                # this monitor exists to catch exactly that task.
+            lease = leases.get(lead_session_id)
+            if lease is None:
+                # No lease row: nobody has claimed this task under the lease
+                # scheme. Either it predates the table or its driver is still on
+                # an older build mid-rollout. UNKNOWN is not dead — refusing to
+                # act is what makes this change safe to roll out gradually.
                 self._suspect.pop(task_id, None)
+                self._revive_attempted.discard(task_id)
+                continue
+            if lease.is_live(now):
+                # Someone, here or elsewhere, is running the lead.
+                self._suspect.pop(task_id, None)
+                self._revive_attempted.discard(task_id)
                 continue
             # Dead-looking: the loop has exited but the task is still active.
             n = self._suspect.get(task_id, 0) + 1
@@ -810,9 +967,29 @@ class TaskHealthMonitor:
                     self._config.confirm_sweeps,
                 )
                 continue
-            # Confirmed zombie across ``confirm_sweeps`` — mark blocked so it
-            # surfaces + becomes user-resumable.
+            # Confirmed dead. Before declaring it stuck, TRY TO TAKE IT OVER —
+            # boot recovery cannot have, and nothing else will.
+            #
+            # ``recover_active_tasks`` runs once, at startup, and stands down on
+            # any task whose lead lease is still live. That is right when a peer
+            # is driving it, and wrong in the one case it matters: a process
+            # killed outright (OOM, node loss, a pod deleted past its grace
+            # period) leaves its lease HELD for the rest of its 90s TTL. Fresh
+            # processes come up inside that window, every one of them stands
+            # down, and by the time the lease expires the only sweep that would
+            # have adopted the task has already run. The task then sat ``active``
+            # with a dead lead until a human resumed it — observed on qa, on a
+            # task killed mid-run by an ordinary deploy.
+            #
+            # So the watchdog adopts it instead: the lease is expired, which is
+            # exactly the condition ``acquire_actor_lease`` needs, and the
+            # respawn is the same idempotent reconcile boot recovery would have
+            # done. Blocking is what happens when that fails.
             self._suspect.pop(task_id, None)
+            if task_id not in self._revive_attempted:
+                self._revive_attempted.add(task_id)
+                if await self._try_revive(task_id, project_id, user_id):
+                    continue
             marked = await self._mark_blocked(task_id, user_id, project_id, lead_session_id)
             if marked:
                 acted.append(task_id)
@@ -821,7 +998,40 @@ class TaskHealthMonitor:
         # between sweeps) so the map doesn't grow unbounded.
         for stale in [tid for tid in self._suspect if tid not in live_task_ids]:
             self._suspect.pop(stale, None)
+        for stale in [tid for tid in self._revive_attempted if tid not in live_task_ids]:
+            self._revive_attempted.discard(stale)
         return acted
+
+    async def _try_revive(self, task_id: str, project_id: str, user_id: str) -> bool:
+        """Adopt a task whose driver died. True when this process now drives it.
+
+        Deliberately the SAME entry point boot recovery uses — reconcile, then
+        respawn under a freshly acquired lease — so there is one respawn path
+        and not a second, subtly different one that only the watchdog exercises.
+        The lease acquisition inside it is the arbiter: if a peer got there
+        first, this returns False and we fall through to blocking, which the
+        pre-write liveness re-check in ``_mark_blocked`` then declines to do.
+
+        Never raises: a watchdog that dies on a bad task stops watching all of
+        them.
+        """
+        recover = self._recover_one
+        if recover is None:  # pragma: no cover - resolved lazily below
+            from valuz_agent.modules.tasks.orchestrator import task_orchestrator
+
+            recover = task_orchestrator.recovery.adopt_orphaned_task
+        try:
+            revived = await recover(task_id, project_id, user_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("task health monitor: revive failed for task %s", task_id)
+            return False
+        if revived:
+            logger.warning(
+                "task health monitor: task %s adopted — its driver died and boot "
+                "recovery could not take it (lease still held at the time)",
+                task_id,
+            )
+        return bool(revived)
 
     async def _mark_blocked(
         self, task_id: str, user_id: str, project_id: str, lead_session_id: str
@@ -833,9 +1043,11 @@ class TaskHealthMonitor:
             task = await task_ds.get_task_by_project(user_id, project_id, task_id)
             if task is None or task.status != "active":
                 return False
-            # Double-check liveness right before writing — the loop may have
-            # re-registered (a resume landed) in the sweep gap.
-            if mailbox_registry.is_owned(lead_session_id):
+            # Double-check liveness right before writing — a driver may have
+            # taken the task over (a resume landed, or a peer picked it up) in
+            # the sweep gap. Both oracles, for the same reason as in the sweep.
+            lease = (await load_actor_lease_states([lead_session_id])).get(lead_session_id)
+            if lease is None or lease.is_live(now_ms()):
                 return False
             reason = (
                 "The lead stopped without finishing the task (the process "

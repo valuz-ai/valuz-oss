@@ -67,7 +67,9 @@ def _make_claude_runtime():  # noqa: ANN202
     rt._map_hooks = lambda: {}
     rt._build_settings = lambda: '{"x":1}'
     rt._build_sandbox_settings = lambda: None
-    rt._build_model_provider_env = lambda: None
+    # Mirrors the real signature — the runtime passes the session through so
+    # per-session headers (X-Valuz-Session-Id) reach the provider env.
+    rt._build_model_provider_env = lambda session=None: None
     return rt
 
 

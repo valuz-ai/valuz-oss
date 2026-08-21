@@ -61,7 +61,7 @@ export const ProjectModeSelector: FC<ProjectModeSelectorProps> = ({
             <span className="text-xs text-ink-body">{mode.description}</span>
             <span
               className={cn(
-                "inline-flex h-5 items-center rounded-[4px] px-2 py-0 text-[10px] font-medium",
+                "inline-flex h-5 items-center rounded-sm px-2 py-0 text-micro font-medium",
                 mode.id === "hybrid"
                   ? "bg-brand-100 text-brand-700"
                   : "bg-surface-soft text-ink-muted",

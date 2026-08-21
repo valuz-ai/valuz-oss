@@ -61,16 +61,28 @@ async def _get_marketplace_service(
 ) -> MarketplaceService:
     from valuz_agent.modules.connectors.datastore import ConnectorDatastore
     from valuz_agent.modules.connectors.service import ConnectorService
+    from valuz_agent.modules.plugins.datastore import PluginDatastore
+    from valuz_agent.modules.plugins.service import PluginService
 
     connector_svc = ConnectorService(ConnectorDatastore(db))
     agent_svc = AgentService(db, connector_service=connector_svc)
+    installs = MarketplaceInstallStore(db)
+    index = _market_index_client()
+    plugin_svc = PluginService(
+        datastore=PluginDatastore(db),
+        skill_service=skill_service,
+        connector_service=connector_svc,
+        market=index,
+        installs=installs,
+    )
     return MarketplaceService(
-        index=_market_index_client(),
+        index=index,
         skill_service=skill_service,
         agent_service=agent_svc,
         pack_service=AgentPackService(agent_svc),
-        installs=MarketplaceInstallStore(db),
+        installs=installs,
         connector_service=connector_svc,
+        plugin_service=plugin_svc,
     )
 
 
@@ -81,7 +93,7 @@ async def _get_marketplace_service(
 
 @router.get("/v1/marketplace/categories", response_model=MarketplaceCategoryList)
 async def list_marketplace_categories(
-    kind: Literal["skill", "agent", "connector"] = Query(...),
+    kind: Literal["skill", "agent", "connector", "plugin"] = Query(...),
     user_id: str = Depends(get_current_user_id),
     svc: MarketplaceService = Depends(_get_marketplace_service),
 ) -> MarketplaceCategoryList:
@@ -92,18 +104,24 @@ async def list_marketplace_categories(
 
 @router.get("/v1/marketplace/items", response_model=MarketplaceItemList)
 async def list_marketplace_items(
-    type: Literal["skill", "agent_template", "agent_team_template", "connector"] = Query(...),
+    type: Literal["skill", "agent_template", "agent_team_template", "connector", "plugin"] = Query(
+        ...
+    ),
     category: str | None = Query(default=None),
     subcategory: str | None = Query(default=None),
-    source: Literal["skillhub", "valuz_official", "modelscope"] | None = Query(default=None),
+    # Open string (see ``models.MarketplaceSource``): the index decides which
+    # sources exist; an unknown filter simply matches nothing upstream.
+    source: str | None = Query(default=None, max_length=64),
     q: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=30, ge=1, le=100),
+    composition: Literal["skills_only", "with_connectors"] | None = Query(default=None),
     user_id: str = Depends(get_current_user_id),
     svc: MarketplaceService = Depends(_get_marketplace_service),
 ) -> MarketplaceItemList:
     """Paged browse over one item type, served entirely by the market index.
-    `degraded` marks an index outage."""
+    `degraded` marks an index outage. ``composition`` filters ``type=plugin``
+    (skill suites vs plugins with connectors)."""
     return await svc.list_items(
         user_id,
         type_=type,
@@ -113,6 +131,7 @@ async def list_marketplace_items(
         q=q,
         page=page,
         page_size=page_size,
+        composition=composition,
     )
 
 

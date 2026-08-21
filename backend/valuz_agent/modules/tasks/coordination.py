@@ -2,17 +2,17 @@
 
 await_member_results (in-turn mailbox drain, heartbeat-sliced) · the
 role callbacks the ActorRunner binds as its ``ActorCoordinator``
-(notify_lead_member_idle / lead_idle_with_no_pending / session_still_working)
-· broadcast_shutdown, the atomic halt primitive.
+(notify_lead_member_idle / lead_idle_with_no_pending / session_still_working).
 
 Text DELIVERY (send_to_member / inject_into_task / goal revision) lives in
 ``messaging`` — callers import it directly; there is no wrapper here.
 
-CRITICAL invariant: ``broadcast_shutdown`` must stay a plain ``def`` — the
-single ``drain_members`` pop and the per-member puts may not be separated by
-an ``await``, or a concurrently spawned member is dropped. ``await`` inside a
-sync function is a SyntaxError, so the compiler enforces it (as it does for
-``DispatcherService._spawn_member``, the other half of the race).
+There used to be a ``stop_tracking_members`` here, and a spawn/halt race
+around it: members were tracked in a per-process set, so halting a task had to
+pop that set without an ``await`` in between or a member spawned concurrently
+was dropped. Live membership is now a query over the run rows, which
+``dispatch`` writes before it returns — the set is gone, and with it the race,
+the sync-only invariant, and the halt-time bookkeeping.
 """
 
 # ruff: noqa: I001
@@ -25,20 +25,20 @@ from typing import Any
 
 from valuz_agent.adapters import kernel_client
 from valuz_agent.adapters.agent_resolver import resolve_agent_display_name
-from valuz_agent.adapters.data_reader import data_reader
 from valuz_agent.infra.db import async_unit_of_work
+from valuz_agent.infra.lifecycle import is_draining
 from valuz_agent.modules.tasks import planning
 from valuz_agent.modules.tasks.manifest import collect_manifest_safe
 from valuz_agent.modules.tasks.task_state import NON_REVIEWABLE_DONE
-from valuz_agent.modules.tasks.events import record_subtask_failed
+from valuz_agent.modules.tasks.member_probe import _member_result
 from valuz_agent.modules.tasks.datastore import (
     TaskDatastore,
     TaskEventDatastore,
     TaskSessionDatastore,
+    pick_lead_run,
 )
-from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
-from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
-from valuz_agent.modules.tasks.member_state import classify_member
+from valuz_agent.modules.tasks import mailbox_store, member_probe, notifier
+from valuz_agent.modules.tasks.mailbox import InboxMsg
 from valuz_agent.modules.tasks.plan import PlanError, TaskPlan
 
 logger = logging.getLogger(__name__)
@@ -68,32 +68,9 @@ _PROBE_EVERY_N_SLICES = 4
 _MAX_AWAIT_WINDOW_S = 600.0
 
 
-def _member_result(
-    subtask_key: str | None,
-    session_id: str,
-    agent: str | None,
-    *,
-    status: str,
-    summary: str = "",
-    artifacts: list[Any] | None = None,
-) -> dict[str, Any]:
-    """The member-result entry shape await_members / heartbeat hand the lead —
-    one spelling, three producers."""
-    return {
-        "subtask_key": subtask_key,
-        "session_id": session_id,
-        "agent": agent or "",
-        "status": status,
-        "summary": summary,
-        "artifacts": artifacts or [],
-    }
-
-
 class CoordinationService:
     """Lead ↔ member coordination; the ActorRunner's typed ``ActorCoordinator``."""
 
-    def __init__(self, *, registry: LiveMemberRegistry) -> None:
-        self._members = registry
 
     # ------------------------------------------------------------------
     # await_members (v0.14) — turn-内阻塞收集并行 member 结果
@@ -129,7 +106,6 @@ class CoordinationService:
         # instead of raising KeyError (which would return empty instantly and
         # make the lead think members are stuck). ``dispatch`` already
         # registers it; this is belt-and-suspenders. Idempotent.
-        mailbox_registry.register(lead_session_id)
 
         # Load the plan + the set of subtask keys that currently have a
         # dispatched, in-flight member (an "active" subtask run). We need both to
@@ -208,6 +184,11 @@ class CoordinationService:
         awaiting_user_break = False
         pending_probe: list[dict[str, Any]] = []
         slices_waited = 0
+        # Keys whose kernel session was already seen stopped in an EARLIER
+        # slice. Loop-local on purpose: it is one wait's bookkeeping, and the
+        # last thing this module needs is another dict that outlives what it
+        # describes.
+        seen_terminal: set[str] = set()
 
         while True:
             if mode == "all" and target and target.issubset(collected.keys()):
@@ -222,19 +203,73 @@ class CoordinationService:
             # terminal but whose member_done never reached the mailbox (bad-case
             # #3 online window). Synthesize their result so the lead doesn't hang.
             slice_timeout = min(_HEARTBEAT_S, remaining)
-            try:
-                msg = await mailbox_registry.get(lead_session_id, timeout=slice_timeout)
-            except TimeoutError:
+            # A user instruction, a goal revision or a member's report — from
+            # whichever process wrote it. This wait is where it matters most:
+            # the lead is inside a turn, parked on members that may run for
+            # minutes, and the preempt below exists so it can react now.
+            if not await self.actor_still_wanted(
+                session_id=lead_session_id,
+                role="lead",
+                task_id=task_id,
+                project_id=project_id,
+                user_id=user_id,
+            ):
+                # The task was paused or finished while we waited. Stop
+                # collecting and let the turn end; the loop reads the same
+                # state and leaves.
+                #
+                # This used to require seeing a ``shutdown`` message and
+                # putting it BACK, because the actor loop reads the same
+                # inbox between turns and would otherwise never see it. A
+                # fact can be read twice.
+                break
+            # Same rule as the between-turns wait: never claim what a
+            # shutdown will discard. The drain marks rows ``consumed``, and
+            # a turn being torn down cannot act on what it took.
+            durable = (
+                [] if is_draining() else await self._drain_durable_inbox(lead_session_id)
+            )
+            # Exactly one, and handled below. Draining a batch meant parking
+            # the rest somewhere between iterations, and that somewhere was a
+            # module-level dict keyed by session that nothing ever emptied.
+            msg = durable[0] if durable else None
+            if msg is None:
                 slices_waited += 1
+                # Let the REAL delivery win. The backstop reads durable state,
+                # so it sees a member as finished the instant its kernel session
+                # goes terminal — while that member is still inside
+                # ``notify_lead_member_idle`` scanning its run directory.
+                # Synthesizing there does not just duplicate work: the lead
+                # reviews the synthesized result and moves on, and the real
+                # ``member_done`` lands in a mailbox nobody is draining.
+                #
+                # The grace for that is now counted PER MEMBER — one slice from
+                # the pass that first sees a given key stop. It used to be one
+                # slice from the start of the whole wait, which is not the same
+                # thing at all: a lead that dispatches and then waits minutes
+                # has burned the grace ~25 slices before its first member even
+                # finishes, so the backstop won every race. Measured in
+                # production: 2 of 3 members settled by the backstop 1.7s and
+                # 2.6s after finishing, their own reports arriving later and
+                # dropped as duplicates — with WORSE data, because the backstop
+                # attributed 29 and 31 artifacts to them (files from three
+                # earlier days, and each other's output).
+                #
+                # A member that genuinely died without delivering is still
+                # caught, one slice after it stops — which is what a backstop
+                # is for.
                 pending_now = (target - set(collected.keys())) if target else set()
-                collected.update(
-                    await self._heartbeat_pending(
+                if pending_now:
+                    beat = await member_probe.heartbeat_pending(
                         task_id=task_id,
                         project_id=project_id,
                         pending_keys=pending_now,
                         user_id=user_id,
+                        # Only settle what we already saw stop LAST time round.
+                        settle_keys=pending_now & seen_terminal,
                     )
-                )
+                    collected.update(beat.settled)
+                    seen_terminal |= beat.terminal
                 # Parked-member probe: a member sitting on an AskUserQuestion
                 # keeps its kernel session ``running``, so from here it is
                 # indistinguishable from a long tool call — unless we ask the
@@ -245,7 +280,7 @@ class CoordinationService:
                 # turn and be woken by the eventual member_done).
                 still_pending = (target - set(collected.keys())) if target else set()
                 if still_pending and slices_waited % _PROBE_EVERY_N_SLICES == 0:
-                    probe = await self._probe_pending_members(
+                    probe = await member_probe.probe_pending_members(
                         task_id=task_id, pending_keys=still_pending, user_id=user_id
                     )
                     if (
@@ -256,21 +291,11 @@ class CoordinationService:
                         pending_probe = probe
                         awaiting_user_break = True
                         break
+                # Nothing to act on. Park on the doorbell for what used to be
+                # the blocking read's timeout — same cadence, but a ring now
+                # cuts it short instead of being ignored.
+                await notifier.wait_for_ring(lead_session_id, slice_timeout)
                 continue
-            except KeyError:
-                break
-            if msg.kind == "shutdown":
-                # Put it BACK before leaving. ``await_member_results`` runs
-                # inside the lead's turn and drains the same inbox the actor
-                # loop reads between turns, so consuming a shutdown here would
-                # swallow the only signal that tells the loop to stop — the
-                # lead would finish this turn and keep looping on a task that
-                # ``stop_task`` / ``finish_task`` already halted. (It survived
-                # this long only because ``stop_task`` ALSO interrupts the
-                # kernel turn, which happens to end the loop by another route;
-                # ``finish_task``'s own broadcast had no such backstop.)
-                mailbox_registry.put(lead_session_id, msg)
-                break
             if msg.kind in ("text", "revise_goal"):
                 # VALUZ-CHATPLAN S5: user inject via chat, OR a goal revision
                 # (both are authoritative user intent). Capture + break so the
@@ -321,7 +346,7 @@ class CoordinationService:
             # bare key list left it unable to distinguish "still building" from
             # "dead", which is how leads end up stopping healthy tasks.
             if not pending_probe:
-                pending_probe = await self._probe_pending_members(
+                pending_probe = await member_probe.probe_pending_members(
                     task_id=task_id, pending_keys=set(pending), user_id=user_id
                 )
             out["pending_status"] = pending_probe
@@ -366,219 +391,172 @@ class CoordinationService:
             out["preempted_by_inject"] = True
         return out
 
-    async def _heartbeat_pending(
-        self,
-        *,
-        task_id: str,
-        project_id: str,
-        pending_keys: set[str],
-        user_id: str,
-    ) -> dict[str, dict[str, Any]]:
-        """Backstop for bad-case #3 (VALUZ-RESUME §5.4): a member whose kernel
-        session went terminal but whose ``member_done`` never reached the lead's
-        mailbox (delivery window / crash before finalize).
+    @staticmethod
+    async def actor_still_wanted(
+        *, session_id: str, role: str, task_id: str, project_id: str, user_id: str
+    ) -> bool:
+        """Does this actor still have work it is supposed to be doing?
 
-        For each still-pending subtask key, check the kernel session; if terminal
-        (end_turn → completed, error → failed) persist the run/node disposition
-        and return a synthesized collection entry so the lead's wait completes.
-        ``running``/resumable members are left pending (resume is a restart
-        concern, not an online-wait one).
+        Stopping an actor is a STATE TRANSITION, not a message. ``stop_task``,
+        ``finish_task`` and ``stop_member`` all write durably before anything
+        else — a terminal task status, a parked run row — so the loop can just
+        look, and looking works from any process.
+
+        It used to be told instead, by a ``shutdown`` queued in its inbox. Two
+        different consumers read that inbox (the loop between turns, and
+        ``await_member_results`` inside one), so the message had to be put BACK
+        by whichever one saw it first or the stop was swallowed. And the box is
+        shared across incarnations, so a stop meant for one loop could reach
+        the loop that replaced it. Neither problem exists for a fact you read.
+
+        Errs toward KEEP RUNNING: a failed read is not a stop order, and
+        halting a healthy actor because the database hiccuped would be a worse
+        outcome than one extra turn.
         """
-        if not pending_keys:
-            return {}
-        out: dict[str, dict[str, Any]] = {}
-        async with async_unit_of_work() as db:
-            run_ds = TaskSessionDatastore(db)
-            task_ds = TaskDatastore(db)
-            event_ds = TaskEventDatastore(db)
-            runs_by_key = {
-                r.subtask_key: r
-                for r in await run_ds.list_runs(user_id, task_id)
-                if r.kind == "subtask" and r.subtask_key and r.status == "active"
-            }
-            if not any(k in runs_by_key for k in pending_keys):
-                return {}  # nothing in-flight for these keys — don't touch the plan
-            task = await task_ds.get_task_by_project(user_id, project_id, task_id)
-            # Node mutations are recorded as (key, fields, only_from) and
-            # applied inside persist_plan's CAS closure against the fresh plan.
-            mutations: list[tuple[str, dict[str, Any], tuple[str, ...] | None]] = []
-            for key in pending_keys:
-                run = runs_by_key.get(key)
-                if run is None:
-                    continue
-                ks = await data_reader().get_session(user_id, run.session_id)
-                if getattr(ks, "status", None) == "running":
-                    continue  # genuinely in flight — keep waiting
-                disp = classify_member(
-                    getattr(ks, "status", None) if ks is not None else None,
-                    getattr(ks, "stop_reason", None) if ks is not None else None,
-                )
-                if disp == "completed":
-                    manifest = await collect_manifest_safe(
-                        run.session_id,
-                        Path(run.run_dir) if run.run_dir else Path(),
-                        "idle",
-                        agent_slug=run.agent_slug or "",
-                        user_id=user_id,
-                    )
-                    await run_ds.update_run_by_session(
-                        session_id=run.session_id, status="completed", result_manifest=manifest
-                    )
-                    mutations.append((key, {"status": "in_review"}, ("in_progress", "rework")))
-                    out[key] = _member_result(
-                        key,
-                        run.session_id,
-                        run.agent_slug,
-                        status=manifest.get("status", "completed"),
-                        summary=manifest.get("summary", ""),
-                        artifacts=manifest.get("artifacts", []),
-                    )
-                elif disp == "failed":
-                    await run_ds.update_run_by_session(session_id=run.session_id, status="archived")
-                    mutations.append(
-                        (
-                            key,
-                            {
-                                "status": "rework",
-                                "review_feedback": "member session errored (heartbeat)",
-                            },
-                            ("in_progress", "in_review", "rework", "paused"),
-                        )
-                    )
-                    # Same emitter as every other failure path — without it a
-                    # heartbeat-detected failure reworked the node invisibly.
-                    agent_name = await resolve_agent_display_name(
-                        project_id, run.agent_slug or "", user_id
-                    )
-                    await record_subtask_failed(
-                        event_ds,
-                        user_id=user_id,
-                        project_id=project_id,
-                        task_id=task_id,
-                        session_id=run.session_id,
-                        agent_slug=run.agent_slug or "",
-                        agent_name=agent_name,
-                        subtask_key=key,
-                        summary="member session errored",
-                        reason="heartbeat_detected",
-                    )
-                    out[key] = _member_result(
-                        key,
-                        run.session_id,
-                        run.agent_slug,
-                        status="failed",
-                        summary="member session errored",
-                    )
-            if mutations and task is not None:
-
-                def _apply(p: TaskPlan) -> bool:
-                    changed = False
-                    for key, fields, only_from in mutations:
-                        n = p.get(key)
-                        if n is None or (only_from and n.status not in only_from):
-                            continue
-                        p.update_node(key, **fields)
-                        changed = True
-                    return changed
-
-                await planning.persist_plan_best_effort(
-                    task_ds,
-                    event_ds,
-                    task,
-                    mutate=_apply,
-                    actor="system",
-                    session_id=None,
-                    user_id=user_id,
-                    diverges="probed member outcomes not reflected on their nodes "
-                    f"({', '.join(k for k, _, _ in mutations)})",
-                )
-        return out
-
-    async def _probe_pending_members(
-        self,
-        *,
-        task_id: str,
-        pending_keys: set[str],
-        user_id: str,
-    ) -> list[dict[str, Any]]:
-        """READ-ONLY live status of still-pending members: ``awaiting_user``
-        (parked on an AskUserQuestion — nothing moves until the user answers),
-        ``running``, or the kernel status as-is. Never touches plan or runs —
-        that is ``_heartbeat_pending``'s job.
-        """
-        if not pending_keys:
-            return []
         try:
             async with async_unit_of_work(commit=False) as db:
-                runs_by_key = {
-                    r.subtask_key: r
-                    for r in await TaskSessionDatastore(db).list_runs(user_id, task_id)
-                    if r.kind == "subtask" and r.subtask_key and r.status == "active"
-                }
+                if role == "lead":
+                    task = await TaskDatastore(db).get_task_by_project(
+                        user_id, project_id, task_id
+                    )
+                    # Absent is not halted: a task read that comes back empty
+                    # mid-flight is far more likely to be a scoping mistake
+                    # than a deletion, and the idle TTL bounds us anyway.
+                    return task is None or task.status == "active"
+                run = await TaskSessionDatastore(db).get_run(session_id)
+                return run is None or run.status == "active"
         except Exception:  # noqa: BLE001
-            logger.debug("probe_pending_members: run listing failed", exc_info=True)
+            logger.debug("could not read stop state for %s — assuming it stands", session_id)
+            return True
+
+    async def member_already_settled(
+        self, *, task_id: str, project_id: str, member_session_id: str, user_id: str
+    ) -> bool:
+        """Is there still work here for the lead, or has this member been dealt with?
+
+        Answers from DURABLE state, not from what the mailbox happens to hold:
+        a ``member_done`` can be produced by several paths (the member's own
+        notify, recovery re-seeding, stop_member) and any of them can repeat.
+        The only question worth asking is whether the lead still owes this
+        member a turn.
+
+        Settled means either the task itself has ended, or the member's plan
+        node has moved past the point where a wake-up would change anything.
+        ``in_review`` counts as NOT settled: the lead has yet to review it.
+        """
+        async with async_unit_of_work(commit=False) as db:
+            row = await TaskDatastore(db).get_task_by_project(user_id, project_id, task_id)
+            if row is None:
+                return True  # nothing left to drive
+            if row.status != "active":
+                return True  # finished / stopped / blocked — a turn changes nothing
+            run = (
+                await TaskSessionDatastore(db).get_run(member_session_id)
+                if member_session_id
+                else None
+            )
+        if run is None or not run.subtask_key:
+            return False  # unknown member — let the lead see it rather than swallow it
+        node = TaskPlan.from_dict(row.plan).get(run.subtask_key)
+        if node is None:
+            return False
+        return node.status in ("done", "failed")
+
+    async def recover_crashed_members(
+        self, *, task_id: str, project_id: str, user_id: str
+    ) -> int:
+        """Members whose process died before they could record finishing.
+
+        **This is crash recovery, not a delivery backstop — do not delete it.**
+
+        It was written when the mailbox was in-process and a result could be
+        posted into a queue nobody read; the durable mailbox
+        (``mailbox_store``) took that job over, and it is tempting to conclude
+        this became redundant. It did not, and an earlier design note of ours
+        said otherwise and was wrong.
+
+        What it covers is a case no delivery mechanism can: the member's loop
+        never ran its ``finalize_actor`` at all — pod evicted, process killed,
+        unhandled exception — so it left NOTHING behind. There is no fact to
+        have enqueued atomically with, because the fact was never written. The
+        only witness is the kernel session, which lives outside these tables;
+        ``_heartbeat_pending`` reads it, writes the run row and plan node the
+        dead member owed, and reports the result the lead is waiting on.
+
+        Without it, a lead waits out its full idle TTL on a member that will
+        never speak again.
+
+        Results are ENQUEUED, not returned. Recovery reconstructs facts, and a
+        fact goes in the mailbox like any other — so the loop keeps one
+        formatting path, one delivery path, and no way to be handed a batch it
+        must find somewhere to park. It also brings this in line with the rule
+        the rest of the module follows: the enqueue rides the same transaction
+        as the run row and plan node it settles, so there is no window where a
+        member has been marked finished but nobody has been told.
+
+        Returns how many it recovered, for the log.
+        """
+        async with async_unit_of_work(commit=False) as db:
+            row = await TaskDatastore(db).get_task_by_project(user_id, project_id, task_id)
+        if row is None:
             return []
-        asks = await self._pending_asks_by_session(user_id)
-        out: list[dict[str, Any]] = []
-        for key in sorted(pending_keys):
-            run = runs_by_key.get(key)
-            if run is None:
-                continue
-            kernel_status: str | None = None
-            try:
-                ks = await data_reader().get_session(user_id, run.session_id)
-                kernel_status = getattr(ks, "status", None) if ks is not None else None
-            except Exception:  # noqa: BLE001
-                logger.debug(
-                    "probe_pending_members: session read failed for %s",
-                    run.session_id,
-                    exc_info=True,
+        pending = {n.key for n in TaskPlan.from_dict(row.plan).nodes if n.status == "in_progress"}
+        if not pending:
+            return []
+        # No ``settle_keys`` here: between turns there is no in-turn delivery to
+        # lose a race to, and a member that crashed without reporting is exactly
+        # what this call exists to find. The in-turn wait is the one that has to
+        # hold back.
+        collected = (
+            await member_probe.heartbeat_pending(
+                task_id=task_id, project_id=project_id, pending_keys=pending, user_id=user_id
+            )
+        ).settled
+        if not collected:
+            return 0
+        lead = pick_lead_run(await self._runs(user_id, task_id))
+        if lead is None:
+            return 0
+        async with async_unit_of_work() as db:
+            for entry in collected.values():
+                await mailbox_store.enqueue(
+                    db,
+                    session_id=lead.session_id,
+                    task_id=task_id,
+                    project_id=project_id,
+                    user_id=user_id,
+                    kind="member_done",
+                    from_session=str(entry.get("session_id") or ""),
+                    origin="reconcile",
+                    payload=dict(entry),
                 )
-            question = asks.get(run.session_id)
-            entry: dict[str, Any] = {
-                "subtask_key": key,
-                "session_id": run.session_id,
-                "agent": getattr(run, "agent_slug", "") or "",
-                "state": "awaiting_user" if question is not None else (kernel_status or "unknown"),
-            }
-            if question:
-                entry["question"] = question
-            out.append(entry)
-        return out
+        await mailbox_store.ring_for(lead.session_id)
+        return len(collected)
 
     @staticmethod
-    async def _pending_asks_by_session(user_id: str | None) -> dict[str, str]:
-        """Map session_id → first pending clarifying-question text, from the
-        decision inbox. Best-effort: an unwired aggregator (tests, early boot)
-        just means no ask detection, never a failed await."""
+    async def _runs(user_id: str, task_id: str):
+        async with async_unit_of_work(commit=False) as db:
+            return await TaskSessionDatastore(db).list_runs(user_id, task_id)
+
+    @staticmethod
+    async def _drain_durable_inbox(session_id: str) -> list[InboxMsg]:
+        """Cross-process messages for this actor. Never raises.
+
+        A failed read must not end the wait: the lead is mid-turn with members
+        in flight, and turning a transient DB error into "no results" would
+        have it conclude the members produced nothing.
+        """
         try:
-            # Lazy import — decisions is a sibling MODULE (its service API, not
-            # its datastore), so this is a sanctioned cross-module call; the
-            # import stays lazy only to keep the boot import graph flat.
-            # Best-effort by design: an unwired aggregator raises, and this
-            # method must degrade to "no ask detected", never fail the await.
-            from valuz_agent.modules.decisions.aggregator import get_decision_aggregator
-
-            entries = await get_decision_aggregator().snapshot(user_id or "")
+            # ONE. The caller uses ``durable[0]`` and has nowhere to put the
+            # rest — claiming a batch would mark them consumed and then drop
+            # them on the floor. (It did, briefly: two member results arrived,
+            # one was collected.)
+            return await mailbox_store.drain(session_id, limit=1)
         except Exception:  # noqa: BLE001
-            return {}
-        out: dict[str, str] = {}
-        for e in entries:
-            if e.session_id in out:
-                continue
-            questions = (e.question_payload or {}).get("questions") or []
-            first = questions[0] if questions else {}
-            text = str(first.get("question") or "").strip() if isinstance(first, dict) else ""
-            out[e.session_id] = text[:200] or "(question pending)"
-        return out
+            logger.debug("durable inbox read failed for %s, still waiting", session_id)
+            return []
 
-    # ------------------------------------------------------------------
-    # actor-loop role callbacks (driven by ActorRunner via the bound host)
-    # ------------------------------------------------------------------
-
-    async def notify_lead_member_idle(
-        self, session_id: str, status: str, user_id: str
-    ) -> None:
+    async def notify_lead_member_idle(self, session_id: str, status: str, user_id: str) -> None:
         """After a member turn: ``member_done`` to the lead's inbox + a
         ``subtask_reported`` timeline event. Best-effort — a missing lead inbox
         (lead already finished) drops the mailbox message.
@@ -597,7 +575,12 @@ class CoordinationService:
             agent_slug = run.agent_slug or ""
             run_dir = Path(run.run_dir) if run.run_dir else Path()
 
-        since = self._members.dispatch_started_at(session_id)
+        # The member's own run row IS the dispatch timestamp. It used to come
+        # from a per-process dict, which returned 0.0 on any process that had
+        # not served this member's dispatch — and ``since_epoch=0`` means
+        # "include every file" (manifest.py), so under a shared cwd a member's
+        # artifact list quietly filled up with files it never wrote.
+        since = (run.created_at or 0) / 1000.0
         manifest = await collect_manifest_safe(
             session_id,
             run_dir,
@@ -615,17 +598,27 @@ class CoordinationService:
         # (``_heartbeat_pending`` / ``_probe_pending_members``) filter on
         # ``status == "active"``, so the member read as never-dispatched. The
         # lead then burned its whole await window and eventually parked the task.
-        # Mailbox delivery must run on the event loop (asyncio.Queue is not
-        # thread-safe), which it does — this is a plain call.
+        # It gets its OWN unit of work rather than riding the timeline write
+        # below for exactly that reason. It is not yet joined to the write that
+        # settles this run either — that settle happens in the loop's
+        # ``finally``, and pairing the two is what finally lets
+        # ``recover_crashed_members`` retire (see R5 in
+        # docs/design/task-delivery-and-control.md). Until then this leg is
+        # durable but not atomic with the fact it reports.
         if lead_session_id:
-            mailbox_registry.put(
-                lead_session_id,
-                InboxMsg(
+            async with async_unit_of_work() as db:
+                await mailbox_store.enqueue(
+                    db,
+                    session_id=lead_session_id,
+                    task_id=task_id,
+                    project_id=project_id,
+                    user_id=user_id,
                     kind="member_done",
                     from_session=session_id,
-                    payload=manifest,
-                ),
-            )
+                    origin="member-idle",
+                    payload=dict(manifest),
+                )
+            await mailbox_store.ring_for(lead_session_id)
 
         # Timeline bookkeeping — on its own unit of work so a failure here costs
         # a row in the log, never the delivery above.
@@ -668,8 +661,9 @@ class CoordinationService:
         included). When none holds, the lead is done — break now so
         ``finalize_actor`` closes the task immediately instead of after 30min.
         """
-        if self._members.has_live_members(task_id):
-            return False  # a member is still running — keep waiting for its result
+        async with async_unit_of_work(commit=False) as db:
+            if await TaskSessionDatastore(db).has_active_members(task_id):
+                return False  # a member is still running — keep waiting for its result
         if lead_session_id and await self._session_has_background_work(lead_session_id):
             # The lead spawned a ``run_in_background`` subagent. Its own turn
             # genuinely ended, but the work has NOT — and when the task finishes
@@ -677,9 +671,7 @@ class CoordinationService:
             # close the task out from under work that is still running.
             return False
         async with async_unit_of_work(commit=False) as db:
-            task = await TaskDatastore(db).get_task_by_project(
-                user_id, project_id, task_id
-            )
+            task = await TaskDatastore(db).get_task_by_project(user_id, project_id, task_id)
             if task is None or task.status != "active":
                 return True  # already closed (finish_task/stop) — let the loop end
             try:
@@ -714,20 +706,6 @@ class CoordinationService:
     # ------------------------------------------------------------------
     # shutdown broadcast — the atomic shutdown primitive
     # ------------------------------------------------------------------
-
-    def broadcast_shutdown(self, task_id: str) -> None:
-        """Tell every still-running member of a task to finalize after its turn.
-
-        Public on purpose — finalization and recovery are its callers, and a
-        load-bearing cross-service contract must not hide behind a private
-        name. MUST stay a plain ``def``: the single ``drain_members`` pop and
-        the per-member puts may not be separated by an ``await``, or a
-        concurrently spawned member is dropped (compiler-enforced; pinned by
-        test_spawn_atomicity).
-        """
-
-        for member_sid in self._members.drain_members(task_id):
-            mailbox_registry.put(member_sid, InboxMsg(kind="shutdown"))
 
 
 __all__ = ["CoordinationService"]

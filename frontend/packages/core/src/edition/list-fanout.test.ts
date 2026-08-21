@@ -35,6 +35,22 @@ describe("getListFanOutTargets", () => {
     setExecutionTargets([LOCAL, CLOUD]);
     expect(getListFanOutTargets().map((t) => t.id)).toEqual(["local", "cloud"]);
   });
+
+  it("skips narrow-grant targets — they cannot be enumerated", () => {
+    // Fanning out to one only yields a refusal, which would pin the
+    // "list may be incomplete" banner on forever.
+    setExecutionTargets([
+      { id: "local", labelKey: "l", baseUrl: "http://local" },
+      { id: "cloud", labelKey: "c", baseUrl: "http://cloud" },
+      {
+        id: "device:owner-mac",
+        labelKey: "d",
+        baseUrl: "http://relay/owner-mac",
+        selectable: false,
+      },
+    ]);
+    expect(getListFanOutTargets().map((t) => t.id)).toEqual(["local", "cloud"]);
+  });
 });
 
 describe("fanOutTargets", () => {
@@ -124,6 +140,78 @@ describe("fanOutTargets", () => {
 
       // Backend recovers: the next probe clears the banner without any list
       // surface having refreshed.
+      cloudHealthy = true;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DEGRADED_REPROBE_MS + 1);
+      });
+      expect(result.current).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the banner when a degraded target leaves the registry", async () => {
+    // A target nobody fans out to any more cannot be making the list
+    // incomplete, and naming it points the user at something they can no
+    // longer see. Dropping below two targets is the same case: the
+    // single-backend fast path answers on its own.
+    vi.useFakeTimers();
+    try {
+      setExecutionTargets([LOCAL, CLOUD]);
+      const { result } = renderHook(() => useDegradedListTargets());
+      await act(async () => {
+        await fanOutTargets((target) =>
+          target.id === "cloud"
+            ? Promise.reject(new Error("down"))
+            : Promise.resolve("ok"),
+        );
+      });
+      expect(result.current).toEqual(["cloud"]);
+
+      setExecutionTargets([LOCAL]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DEGRADED_REPROBE_MS + 1);
+      });
+      expect(result.current).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps recovering after a tick that had nothing to probe", async () => {
+    // Regression: the timer callback clears ``_reprobeTimer`` before running
+    // the probe, so an early return that skipped rescheduling ended recovery
+    // for the rest of the session — the banner then survived the outage it
+    // was reporting.
+    vi.useFakeTimers();
+    try {
+      setExecutionTargets([LOCAL, CLOUD]);
+      let cloudHealthy = false;
+      const fetchOne = (target: { id: string }) =>
+        target.id === "cloud" && !cloudHealthy
+          ? Promise.reject(new Error("down"))
+          : Promise.resolve("ok");
+      const { result } = renderHook(() => useDegradedListTargets());
+      await act(async () => {
+        await fanOutTargets(fetchOne);
+      });
+      expect(result.current).toEqual(["cloud"]);
+
+      // Target disappears, comes back still broken.
+      setExecutionTargets([LOCAL]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DEGRADED_REPROBE_MS + 1);
+      });
+      expect(result.current).toEqual([]);
+
+      setExecutionTargets([LOCAL, CLOUD]);
+      await act(async () => {
+        await fanOutTargets(fetchOne);
+      });
+      expect(result.current).toEqual(["cloud"]);
+
+      // The timer must still be live, so recovery clears it with no list
+      // surface refreshing.
       cloudHealthy = true;
       await act(async () => {
         await vi.advanceTimersByTimeAsync(DEGRADED_REPROBE_MS + 1);

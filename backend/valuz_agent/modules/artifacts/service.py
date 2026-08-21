@@ -28,6 +28,7 @@ import os
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +38,7 @@ from valuz_agent.modules.artifacts.models import (
     REVISION_STATUS_READY,
     STORAGE_KIND_FILE,
     STORAGE_KIND_INLINE,
+    ArtifactBindingRow,
     ArtifactKind,
 )
 
@@ -79,7 +81,7 @@ class DeliveryRequest:
     #: The file to record. Mutually exclusive with ``content``: a request
     #: carries a path OR the bytes themselves, never both.
     abs_path: Path | None = None
-    #: The second input form. A generated document (A2UI/OpenUI JSON) exists
+    #: The second input form. A generated document (A2UI JSON) exists
     #: only as a tool result — there is no file to point at, and asking the
     #: producer to write one first would put a temp-file dance in front of
     #: every generation. ``file_name`` names it; the snapshot still lands on
@@ -427,3 +429,89 @@ async def bind_host_revision(
         artifact_id=row.artifact_id,
         artifact_revision_id=row.artifact_revision_id,
     )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Cross-module read/maintenance surface
+#
+# Sibling modules (genui, sessions, worktrees) used to construct
+# ``ArtifactDatastore`` directly, which is the coupling the module boundary
+# contract forbids. These helpers own their own unit of work — matching the
+# call sites they replaced — so ``ArtifactDatastore`` and ``Scope`` stay
+# private to this module.
+# ──────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class BoundHostRevision:
+    """What a host slot currently shows, resolved in one read."""
+
+    artifact_revision_id: str | None
+    artifact: Any
+    document_inline: str | None
+    file_path: str
+
+
+async def load_bound_host_revision(
+    user_id: str,
+    *,
+    host_type: str,
+    host_id: str,
+    slot: str = "main",
+) -> BoundHostRevision | None:
+    """The artifact + document a host slot is bound to, or ``None`` if unbound.
+
+    Resolved inside a single unit of work so the binding, its revision and the
+    revision's content describe the same moment — a generation that started
+    from a half-torn read would announce the wrong base revision.
+    """
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.artifacts.datastore import ArtifactDatastore
+
+    async with async_unit_of_work(commit=False) as db:
+        ds = ArtifactDatastore(db)
+        binding = await ds.get_binding(user_id, host_type, host_id, slot)
+        if binding is None:
+            return None
+        revision = await ds.get_revision(user_id, binding.artifact_revision_id)
+        artifact = await ds.get_artifact(user_id, binding.artifact_id)
+        content = (
+            await ds.get_content(user_id, revision.content_id) if revision is not None else None
+        )
+        return BoundHostRevision(
+            artifact_revision_id=binding.artifact_revision_id,
+            artifact=artifact,
+            document_inline=content.content_inline if content is not None else None,
+            file_path=str(getattr(revision, "abs_path", "") or ""),
+        )
+
+
+async def list_artifact_host_bindings(user_id: str, artifact_id: str) -> list[ArtifactBindingRow]:
+    """Every host slot currently showing a revision of this artifact."""
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.artifacts.datastore import ArtifactDatastore
+
+    async with async_unit_of_work(commit=False) as db:
+        return await ArtifactDatastore(db).list_bindings_for_artifact(user_id, artifact_id)
+
+
+async def count_scope_artifacts(user_id: str, project_id: str, worktree: str) -> int:
+    """How many live artifacts a project/worktree scope holds."""
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.artifacts.datastore import ArtifactDatastore, Scope
+
+    async with async_unit_of_work(commit=False) as db:
+        return await ArtifactDatastore(db).count_scope_artifacts(
+            Scope(user_id=user_id, project_id=project_id, worktree=worktree)
+        )
+
+
+async def archive_scope_artifacts(user_id: str, project_id: str, worktree: str) -> int:
+    """Retire every artifact in a scope whose files have just been deleted."""
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.artifacts.datastore import ArtifactDatastore, Scope
+
+    async with async_unit_of_work() as db:
+        return await ArtifactDatastore(db).archive_scope(
+            Scope(user_id=user_id, project_id=project_id, worktree=worktree)
+        )

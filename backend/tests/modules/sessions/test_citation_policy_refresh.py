@@ -7,8 +7,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from valuz_agent.ports.message_context import HostRef
-
 from valuz_agent.adapters.system_prompt_builder import (
     CITATION_POLICY_REVISION,
     ensure_citation_system_policy,
@@ -19,6 +17,7 @@ from valuz_agent.ports.citation_quality import (
     CitationQualityPolicySnapshot,
 )
 from valuz_agent.ports.extensions import ext
+from valuz_agent.ports.message_context import HostRef
 
 
 def _session(*, skill_path: str | None = None, current_policy: bool = False) -> SimpleNamespace:

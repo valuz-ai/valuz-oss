@@ -132,8 +132,25 @@ def release_single_writer_lock() -> None:
         _lock_fd = None
 
 
+def is_lock_held() -> bool:
+    """Does THIS process hold the writer lock?
+
+    A true answer is a proof of single-process exclusivity for the data dir:
+    the lock is taken before anything else at startup and a second backend is
+    refused outright. ``infra.execution_lease`` reads it to skip per-key lease
+    renewal on the desktop shape, where the flock has already settled the
+    question the lease exists to answer.
+
+    False says nothing either way — the lock is skipped on Postgres and behind
+    ``VALUZ_SKIP_WRITER_LOCK`` — so callers must treat it as "cannot prove
+    exclusivity" and fall back to real coordination.
+    """
+    return _lock_fd is not None
+
+
 __all__ = [
     "AnotherInstanceRunning",
     "acquire_single_writer_lock",
+    "is_lock_held",
     "release_single_writer_lock",
 ]

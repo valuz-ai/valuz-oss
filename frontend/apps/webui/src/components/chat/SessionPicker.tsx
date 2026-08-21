@@ -94,7 +94,7 @@ const SessionRow = ({
         <MessageSquare className="mt-0.5 size-3.5 shrink-0 opacity-60" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{title}</div>
-          <div className="truncate text-[11px] opacity-60">
+          <div className="truncate text-2xs opacity-60">
             {session.status}
           </div>
         </div>

@@ -44,7 +44,9 @@ backend/
 Two SQLite files under `~/.valuz-oss/`: the host's `valuz.db` (the
 `valuz_*`-prefixed business tables + `alembic_version_host`) and the kernel's
 own `kernel.db` (the 3 unprefixed kernel tables `sessions` / `messages` /
-`events`, its langgraph checkpoint tables, and `alembic_version`). The split
+`events` and `alembic_version`; the DeepAgents runtime's langgraph checkpoints
+live in a sibling `deepagents_checkpoints.db` — or a file-based checkpoint tree
+in the cloud sandbox — never in `kernel.db`). The split
 (config `kernel_db_url`, default-on for SQLite) lets a sandboxed/remote kernel
 own its file and gives `make dev` + `make dev-sandbox` one shared history; an
 explicit `database_url` (Postgres) co-locates both instead. `kernel.db` is the
@@ -333,9 +335,39 @@ logs land under `.ai/dev/{backend,frontend}.log`.
   producer-declared per ADR-011) ONLY for gateway aliases the SDK/CLI
   per-model defaults can't know; the host snapshots it into kernel
   `ModelSettings.max_input_tokens` at session create and each runtime derives
-  its auto-compaction trigger (deepagents langchain `profile`, claude
-  `autoCompactWindow`, codex `model_context_window` +
-  `model_auto_compact_token_limit`). Never guess it from a model name.
+  the runtime's WINDOW declaration — the compaction *threshold* stays the
+  runtime's own (deepagents langchain `profile`, whose middleware applies its
+  0.85; claude `CLAUDE_CODE_MAX_CONTEXT_TOKENS` in the CLI env, never
+  `autoCompactWindow` — the CLI reports that key as the window in `/context`;
+  codex `model_context_window`, whose auto-compact limit codex derives at 90%
+  and clamps any explicit value to). Never guess it from a model name.
+- **`usage_update` carries ONE TURN's increment**, never a running total. A
+  `Message` row is the durable per-turn record that every usage surface sums
+  (session panel, monthly rollup, task usage, billing meter), so a runtime
+  whose SDK reports a cumulative counter must difference two snapshots before
+  emitting: claude differences the CLI's process-wide `modelUsage` accumulator
+  (`ClaudeAgentRuntime._usage_delta_payload`, baseline dropped with the CLI
+  subprocess), codex differences `ThreadTokenUsage.total` across the turn
+  (`_TurnUsageTracker`; the pre-turn baseline is recovered from the first
+  notification's `total - last`, so nothing crosses a turn boundary). A turn
+  is NOT one model request — every runtime here can call the model several
+  times per turn, so an SDK's per-request view has to be accumulated, not
+  latched. Add/subtract rules for the per-model breakdown live in
+  `src/core/usage.py` — counters accumulate, `contextWindow`/`canonicalModel`
+  and friends do not. Note that the CLI's accumulator also counts requests it
+  never writes to its transcript (conversation-title generation, ~540 input
+  tokens a session), so kernel totals legitimately exceed a `.jsonl` replay.
+- **The four flat token fields are DISJOINT** — `input_tokens` is the
+  *uncached* prompt, with cache hits in `cache_read_tokens` / writes in
+  `cache_write_tokens`, and `output_tokens` already contains reasoning
+  tokens. Consumers add all four up, so any bucket that is a *subset*
+  upstream must be subtracted out in the runtime: codex's
+  `cached_input_tokens` ⊂ `input_tokens` and `reasoning_output_tokens` ⊂
+  `output_tokens` (its `total_tokens = input + output` is the proof);
+  LangChain's `usage_metadata.input_tokens` is the sum of every input bucket
+  with `input_token_details.cache_read` / `cache_creation` inside it.
+  Anthropic's shape is natively disjoint and dsh declares disjointness in its
+  `TokenUsage` contract, so those two pass through.
 - **`rg`** (ripgrep) is a runtime helper for `integrations/docs_embedded`,
   located via the `VALUZ_RG_PATH` env the Electron sidecar sets to the packaged
   `libexec/rg`. The binary is vendored per platform at

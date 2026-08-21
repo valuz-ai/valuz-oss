@@ -40,7 +40,7 @@ export const SetupStepCard: FC<SetupStepCardProps> = ({
       </div>
 
       <div className="flex flex-col gap-1">
-        <span className="text-[10px] uppercase tracking-wide text-ink-muted">
+        <span className="text-micro uppercase tracking-wide text-ink-muted">
           {eyebrow}
         </span>
         <span className="text-sm font-medium text-ink-title">{title}</span>

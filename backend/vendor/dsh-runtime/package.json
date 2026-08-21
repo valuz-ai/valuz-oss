@@ -1,0 +1,21 @@
+{
+  "name": "valuz-dsh-runtime",
+  "private": true,
+  "description": "Valuz deploy root for the DeepSeek Harness (dsh) SDK runtime. This manifest IS the plugin closure the deepseek_harness kernel runtime can mount: packaged-bin.js resolves bare Cordis plugins from the node_modules this file materializes, so adding a plugin to the distribution means adding one dependency line here and refreshing the lockfile (scripts/vendor-dsh-runtime.sh). Only the pins are committed; node_modules is fetched at build time (npm ci) and staged into the desktop bundle's libexec, run under Electron-as-node (same pattern as vendor/chrome-devtools-mcp). Unlike the upstream deepseek-harness-runtime-bin closure, this one includes @deepseek-ai/dsh-mcp-client — without it every session carrying MCP servers fails to boot.",
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-agent-spine-demo": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-bash-local": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-compaction-basic": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-fs-local": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-fs-observation-policy": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm-deepseek": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-mcp-client": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-sdk-jsonrpc-demo": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-sdk-jsonrpc-server": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-subprocess-local": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-token-meter": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tool-fs": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tool-todo": "0.1.0-rc.6"
+  }
+}

@@ -40,6 +40,7 @@ from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 # Side-effect imports — each ``modules/*/models.py`` declares its tables
 # against the shared Base. We pull them in here so ``target_metadata``
 # reflects the full host schema at autogenerate time.
+import valuz_agent.infra.execution_lease  # noqa: F401,E402
 import valuz_agent.modules.agents.models  # noqa: F401,E402
 import valuz_agent.modules.artifacts.models  # noqa: F401,E402
 import valuz_agent.modules.automations.models  # noqa: F401,E402
@@ -49,6 +50,7 @@ import valuz_agent.modules.docs.models  # noqa: F401,E402
 import valuz_agent.modules.marketplace.install_store  # noqa: F401,E402
 import valuz_agent.modules.notifications.models  # noqa: F401,E402
 import valuz_agent.modules.parser.models  # noqa: F401,E402
+import valuz_agent.modules.plugins.models  # noqa: F401,E402
 import valuz_agent.modules.projects.models  # noqa: F401,E402
 import valuz_agent.modules.providers.models  # noqa: F401,E402
 import valuz_agent.modules.sessions.models  # noqa: F401,E402

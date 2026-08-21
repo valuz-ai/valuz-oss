@@ -175,3 +175,49 @@ async def test_startup_shutdown_is_idempotent(_db):
     await sched.startup()  # second startup is a no-op while running
     await sched.shutdown()
     await sched.shutdown()  # second shutdown is harmless
+
+
+async def test_a_peer_process_claim_blocks_a_duplicate_submit(_db, monkeypatch):
+    """Regression: the tick read due rows with no claim at all.
+
+    It runs in EVERY host process, and ``_process_row`` calls
+    ``handler.submit`` — an external side effect. So N processes each submitted
+    the same parse job to the remote service and billed for it. Latent while no
+    cloud handler is registered; the defect is not, and it is the same shape as
+    the task and drain bugs.
+
+    Ticks are driven by hand rather than through the ``scheduler`` fixture:
+    that one starts the background loop, and the lease is deliberately a
+    CROSS-process guard — two ticks inside one process are not what it covers
+    (``mailbox_registry.claim`` semantics: a later acquisition by the same
+    holder renews). Letting the loop run would measure that gap instead of the
+    one under test.
+
+    The peer takes the real lease under a different holder id — the only thing
+    that distinguishes two processes here.
+    """
+    from valuz_agent.infra import execution_lease as lease_mod
+    from valuz_agent.modules.parser.polling import POLLING_LEASE_SCOPE
+
+    handler = _FakeHandler()
+    handler.outcomes = [PollSucceeded(raw={"k": "v"})]
+    sched = PollingScheduler(handlers=[handler])
+    task_id = await sched.enqueue("parser.fake", {"file": "x"}, user_id=OWNER)
+
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "peer-process")
+    peer = await lease_mod.acquire_lease(scope=POLLING_LEASE_SCOPE, key=task_id)
+    assert peer is not None
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "our-process")
+
+    for _ in range(3):
+        await sched._tick()
+    assert handler.submit_calls == 0, (
+        "the peer holds this row — we must not submit it a second time"
+    )
+
+    # Once the peer is done, this process picks the row up as usual.
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "peer-process")
+    await peer.release()
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "our-process")
+    await sched._tick()
+    assert handler.submit_calls == 1

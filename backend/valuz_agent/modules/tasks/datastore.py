@@ -718,6 +718,51 @@ class TaskSessionDatastore:
             .first()
         )
 
+    async def active_member_sessions(self, task_id: str) -> list[str]:
+        """Session ids of *task_id*'s members that are still running.
+
+        The shared answer to "does this task have live members". It used to be
+        a per-process dict on the orchestrator, populated by whichever process
+        happened to serve the ``dispatch`` HTTP call — so every OTHER process
+        saw a task with no members at all. Three decisions read it, and one of
+        them (the ``finish_task(stopped)`` guard) had no second opinion to fall
+        back on, which meant the guard simply did not fire when the lead's tool
+        call landed anywhere but the member's own process.
+
+        No owner filter, and none is possible: ``task_id`` already scopes the
+        rows and the callers are loops, not user queries. ``dispatch`` writes
+        the run ``active`` before it returns, so this is authoritative from the
+        moment a member exists.
+        """
+        return list(
+            (
+                await self._db.execute(
+                    select(TaskSessionRow.session_id).where(
+                        TaskSessionRow.task_id == task_id,
+                        TaskSessionRow.kind == "subtask",
+                        TaskSessionRow.status == "active",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    async def has_active_members(self, task_id: str) -> bool:
+        """Does *task_id* have any member run still ``active``? See above."""
+        found = (
+            await self._db.execute(
+                select(TaskSessionRow.session_id)
+                .where(
+                    TaskSessionRow.task_id == task_id,
+                    TaskSessionRow.kind == "subtask",
+                    TaskSessionRow.status == "active",
+                )
+                .limit(1)
+            )
+        ).first()
+        return found is not None
+
     async def next_sequence(self, task_id: str) -> int:
         """Next run sequence for *task_id* (per-task counter; no owner filter —
         ``task_id`` already scopes it and it returns a number, not rows)."""

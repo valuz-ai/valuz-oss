@@ -119,12 +119,12 @@ export const ApprovalResolvedStrip = memo(function ApprovalResolvedStrip({
       )}
     >
       {Icon ? <Icon className="h-3.5 w-3.5 shrink-0" /> : null}
-      <span className="flex-1 truncate text-[12px] font-medium">
+      <span className="flex-1 truncate text-xs font-medium">
         {label}
         {suffix}
       </span>
       {resolvedAtLabel ? (
-        <span className="shrink-0 text-[11px] text-ink-meta/80">
+        <span className="shrink-0 text-2xs text-ink-meta/80">
           {resolvedAtLabel}
         </span>
       ) : null}

@@ -146,16 +146,18 @@ def _build_doc_service(db: Any, user_id: str) -> Any:  # type: ignore[no-untyped
     """
     from valuz_agent.infra.eventbus import event_bus
     from valuz_agent.infra.fs_registry import fs_registry
-    from valuz_agent.integrations.docs_embedded import EmbeddedDocsRuntime
     from valuz_agent.integrations.parser_light_local import LightLocalParser
     from valuz_agent.modules.docs.datastore import DocumentDatastore
     from valuz_agent.modules.docs.service import DocumentLibraryService
+    from valuz_agent.ports.docs_runtime import get_docs_runtime
 
-    preview_dir = fs_registry.docs_preview_dir(user_id)
     return DocumentLibraryService(
         datastore=DocumentDatastore(db),
         parser=LightLocalParser(),
-        docs_runtime=EmbeddedDocsRuntime(preview_dir=preview_dir),
+        # The agent's ``doc_search`` must reach the same index the HTTP surface
+        # does — binding the runtime in only one of the two would make the tool
+        # and the UI disagree about what the library contains.
+        docs_runtime=get_docs_runtime(user_id),
         event_bus=event_bus,
         scan_state_dir=fs_registry.docs_scan_state_dir(user_id),
     )

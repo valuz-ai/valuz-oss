@@ -31,11 +31,18 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from valuz_agent.modules.tasks import planning
-from valuz_agent.modules.tasks.mailbox import mailbox_registry
+from valuz_agent.modules.tasks import mailbox_store, messaging, planning
+from valuz_agent.modules.tasks.actor_runner import ActorRunner
+from valuz_agent.modules.tasks.lease import load_actor_lease_states
+from valuz_agent.modules.tasks.mailbox import InboxMsg
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
 from valuz_agent.modules.tasks.plan import TaskPlan
+
+# Several tests below park a lead until a member result arrives. Delivery is
+# durable now, so it lands on the loop's inbox poll (ACTOR_INBOX_POLL_S, 5s)
+# rather than instantly through an in-process queue. Their budgets reflect that
+# cadence; R4's notifier is what removes the wait, not a smaller number here.
 
 OWNER = "local-test-owner"
 LEAD = "lead-sess"
@@ -100,7 +107,8 @@ def loop_env(db_factory, tmp_path, monkeypatch):
 
         async def resolve_project_env(self, _db: Any, **_kw: Any) -> TaskProjectEnv:
             return TaskProjectEnv(
-                project_row=SimpleNamespace(id=PROJECT), project_cwd=tmp_path,
+                project_row=SimpleNamespace(id=PROJECT),
+                project_cwd=tmp_path,
                 instructions_md=None,
             )
 
@@ -156,9 +164,8 @@ def loop_env(db_factory, tmp_path, monkeypatch):
 
     monkeypatch.setattr(type(orch.actor), "run_turn", _scripted_turn)
     yield SimpleNamespace(orch=orch, state=state, tmp_path=tmp_path, db_factory=db_factory)
-
-    for sid in [LEAD, *state.members]:
-        mailbox_registry.unregister(sid)
+    # No teardown: each test gets its own tmp database, and there is no longer
+    # a process-wide queue registry to unwind.
 
 
 def _plan(db_factory) -> TaskPlan:
@@ -191,10 +198,7 @@ def _events(db_factory) -> list[str]:
 def _runs(db_factory) -> dict[str, str]:
     db = db_factory()
     try:
-        return {
-            r.session_id: r.status
-            for r in db.execute(select(TaskSessionRow)).scalars()
-        }
+        return {r.session_id: r.status for r in db.execute(select(TaskSessionRow)).scalars()}
     finally:
         db.close()
 
@@ -274,7 +278,7 @@ def test_dispatch_report_review_finish_through_the_real_loop(loop_env) -> None:
                 idle_ttl=2.0,
                 user_id=OWNER,
             ),
-            timeout=10,
+            timeout=25,
         )
         # The member loop was spawned by dispatch as a sibling task; give it
         # room to finish so its own finalize lands before we assert.
@@ -306,9 +310,17 @@ def test_dispatch_report_review_finish_through_the_real_loop(loop_env) -> None:
     runs = _runs(loop_env.db_factory)
     assert runs["mem-1"] == "completed"
     assert runs[LEAD] == "completed"
-    # Both loops released their mailboxes on exit.
-    assert not mailbox_registry.is_registered("mem-1")
-    assert not mailbox_registry.is_registered(LEAD)
+    # Boxes outlive their loops now — nothing drops one on the way out, which
+    # is what made a stale teardown able to pop the box a resumed loop was
+    # reading. What must be true is that both loops left cleanly: nothing
+    # queued, and neither still holds the right to run its session.
+    assert not asyncio.run(mailbox_store.has_pending("mem-1"))
+    assert not asyncio.run(mailbox_store.has_pending(LEAD))
+    # Only the LEAD's lease is asserted: this test awaits the lead loop, and
+    # the member's teardown finishes on its own schedule — asserting its
+    # release here would be a race, not a guarantee.
+    held = asyncio.run(load_actor_lease_states([LEAD]))
+    assert held[LEAD].state == "released", "the lead must hand its session back"
 
 
 def test_lead_with_nothing_outstanding_exits_without_waiting(loop_env) -> None:
@@ -384,15 +396,19 @@ def test_shutdown_broadcast_ends_the_member_loop_and_leaves_its_run_parked(
         assert await orch.recovery.stop_task(TASK, PROJECT, user_id=OWNER) is True
 
         # The parked member must exit promptly on the broadcast — no TTL wait.
+        # "Exited" is the lease being handed back: the mailbox is no longer an
+        # ownership record, so its box outlives the loop that read it.
         for _ in range(100):
-            if not mailbox_registry.is_registered("mem-1"):
+            states = await load_actor_lease_states(["mem-1"])
+            if "mem-1" not in states or states["mem-1"].state == "released":
                 break
             await asyncio.sleep(0.02)
 
     asyncio.run(_run())
 
     assert _task_status(loop_env.db_factory) == "paused"
-    assert not mailbox_registry.is_registered("mem-1"), (
+    final = asyncio.run(load_actor_lease_states(["mem-1"]))
+    assert "mem-1" not in final or final["mem-1"].state == "released", (
         "the shutdown broadcast must wake a member parked between turns"
     )
     assert _runs(loop_env.db_factory)["mem-1"] == "paused", (
@@ -449,10 +465,10 @@ def test_member_result_reaches_a_lead_that_is_mid_park(loop_env) -> None:
                 role="lead",
                 task_id=TASK,
                 project_id=PROJECT,
-                idle_ttl=5.0,
+                idle_ttl=12.0,
                 user_id=OWNER,
             ),
-            timeout=10,
+            timeout=25,
         )
 
     asyncio.run(_run())
@@ -519,10 +535,10 @@ def test_lead_wake_up_restates_the_task_goal(loop_env) -> None:
                 role="lead",
                 task_id=TASK,
                 project_id=PROJECT,
-                idle_ttl=5.0,
+                idle_ttl=12.0,
                 user_id=OWNER,
             ),
-            timeout=10,
+            timeout=25,
         )
 
     asyncio.run(_run())
@@ -569,3 +585,221 @@ def test_last_assistant_text_reads_the_tail_not_the_head(monkeypatch) -> None:
     out = asyncio.run(manifest_mod.last_assistant_text(OWNER, "s1"))
     assert out == "newest"
     assert called.get("turn_limit"), "the tail window must be turn-bounded"
+
+
+def test_every_turn_logs_where_its_prompt_came_from(loop_env, caplog) -> None:
+    """Each turn must name its own trigger in the log.
+
+    A turn is otherwise anonymous: the log shows work happening but never why
+    it started. That gap has a cost on record — a regression that re-ran a
+    finished task from its original goal took hours to pin down, because
+    proving WHICH producer woke the lead meant correlating DB turn rows with
+    log timestamps by hand. Several distinct producers emit ``member_done``
+    (a live member going idle, the durable reconcile backstop, a cancelled
+    member, recovery re-seeding after a restart), so the kind alone cannot
+    answer it; the label has to name the producer.
+    """
+    orch, state = loop_env.orch, loop_env.state
+
+    asyncio.run(
+        planning.plan_task(
+            task_id=TASK,
+            project_id=PROJECT,
+            user_id=OWNER,
+            lead_session_id=LEAD,
+            subtasks=[{"key": "a", "title": "A", "agent": "worker"}],
+        )
+    )
+
+    async def _turn_1(_prompt: str) -> str:
+        await orch.dispatcher.dispatch_async(
+            task_id=TASK,
+            project_id=PROJECT,
+            lead_session_id=LEAD,
+            subtask_key="a",
+            user_id=OWNER,
+        )
+        return "idle"
+
+    async def _turn_2(_prompt: str) -> str:
+        await orch.finalization.finish_task(
+            task_id=TASK,
+            project_id=PROJECT,
+            lead_session_id=LEAD,
+            summary="done",
+            status="stopped",
+            user_id=OWNER,
+        )
+        return "idle"
+
+    state.script[LEAD] = [_turn_1, _turn_2]
+
+    async def _run() -> None:
+        await asyncio.wait_for(
+            orch.actor.run_actor_loop(
+                session_id=LEAD,
+                initial_prompt="go",
+                role="lead",
+                task_id=TASK,
+                project_id=PROJECT,
+                idle_ttl=12.0,
+                user_id=OWNER,
+            ),
+            timeout=25,
+        )
+
+    with caplog.at_level("INFO", logger="valuz_agent.modules.tasks.actor_runner"):
+        asyncio.run(_run())
+
+    # Scoped to the LEAD session: the dispatched member runs its own loop and
+    # logs its own turns, which is itself part of the point — every actor is
+    # attributable, so the lines have to be separable per session.
+    origins = [
+        line.split("←", 1)[1].strip()
+        for line in caplog.messages
+        if line.startswith(f"actor loop {LEAD} ") and "←" in line
+    ]
+    assert len(origins) == 2, f"expected one log line per lead turn, got {origins}"
+    assert origins[0].startswith("initial"), (
+        f"turn 1 is the kickoff prompt, not a mailbox wake-up (got {origins[0]})"
+    )
+    # The producer, not just the kind: a live member going idle must not read
+    # the same as the reconcile backstop firing for an already-finished member.
+    assert origins[1].startswith("member_done/member-idle<"), (
+        "turn 2 must name the producer that woke the lead, so an unexpected "
+        f"turn can be traced to its source (got {origins[1]})"
+    )
+
+
+@pytest.mark.parametrize(
+    ("msg", "expected"),
+    [
+        (
+            InboxMsg(kind="text", origin="user-inject", from_session="abcdef123456"),
+            "text/user-inject<abcdef12>",
+        ),
+        (
+            InboxMsg(kind="member_done", origin="reconcile", from_session="ff00"),
+            "member_done/reconcile<ff00>",
+        ),
+        (InboxMsg(kind="revise_goal", origin="goal-revised"), "revise_goal/goal-revised"),
+        # An untagged producer degrades to the bare kind rather than inventing one.
+        (InboxMsg(kind="text", from_session="deadbeefcafe"), "text<deadbeef>"),
+    ],
+)
+def test_origin_label_names_the_producer(msg, expected) -> None:
+    assert ActorRunner._origin_label(msg) == expected
+
+
+def test_a_lead_runs_an_instruction_written_by_another_process(loop_env) -> None:
+    """The whole delivery path, through the real loop.
+
+    ``inject_into_task`` is called without touching the mailbox registry — the
+    state of every host process but the one driving the lead. It has to become
+    a turn anyway, with its envelope intact.
+    """
+    orch, state = loop_env.orch, loop_env.state
+    prompts: list[str] = []
+
+    async def _turn_1(_prompt: str) -> str:
+        await messaging.inject_into_task(
+            task_id=TASK,
+            project_id=PROJECT,
+            text="add the STAR market hot sectors",
+            from_session_id="chat-sess",
+            user_id=OWNER,
+        )
+        return "idle"
+
+    async def _turn_2(prompt: str) -> str:
+        prompts.append(prompt)
+        await orch.finalization.finish_task(
+            task_id=TASK,
+            project_id=PROJECT,
+            lead_session_id=LEAD,
+            summary="done",
+            status="stopped",
+            user_id=OWNER,
+        )
+        return "idle"
+
+    state.script[LEAD] = [_turn_1, _turn_2]
+
+    asyncio.run(
+        asyncio.wait_for(
+            orch.actor.run_actor_loop(
+                session_id=LEAD,
+                initial_prompt="go",
+                role="lead",
+                task_id=TASK,
+                project_id=PROJECT,
+                idle_ttl=30.0,
+                user_id=OWNER,
+            ),
+            timeout=20,
+        )
+    )
+
+    assert prompts, "the lead never woke on the injected instruction"
+    assert "add the STAR market hot sectors" in prompts[0]
+    assert '<user-instruction source="chat">' in prompts[0], (
+        "the envelope must survive the durable round trip — it is what marks "
+        "the text as authoritative user intent"
+    )
+
+
+def test_a_lead_does_not_finalize_while_a_message_is_unread(loop_env) -> None:
+    """The early exit has to consult the durable inbox, not just the queue.
+
+    A lead with nothing outstanding finalizes at once rather than parking for
+    its 30-minute TTL. That check read the in-process queue, which cannot see
+    a message another process wrote, so the task would complete with the
+    user's instruction unread.
+    """
+    orch, state = loop_env.orch, loop_env.state
+    seen: list[str] = []
+
+    async def _turn_1(_prompt: str) -> str:
+        # Nothing dispatched: idle with no pending by every in-process measure.
+        await messaging.inject_into_task(
+            task_id=TASK,
+            project_id=PROJECT,
+            text="one more thing",
+            from_session_id="chat-sess",
+            user_id=OWNER,
+        )
+        return "idle"
+
+    async def _turn_2(prompt: str) -> str:
+        seen.append(prompt)
+        await orch.finalization.finish_task(
+            task_id=TASK,
+            project_id=PROJECT,
+            lead_session_id=LEAD,
+            summary="done",
+            status="stopped",
+            user_id=OWNER,
+        )
+        return "idle"
+
+    state.script[LEAD] = [_turn_1, _turn_2]
+
+    asyncio.run(
+        asyncio.wait_for(
+            orch.actor.run_actor_loop(
+                session_id=LEAD,
+                initial_prompt="go",
+                role="lead",
+                task_id=TASK,
+                project_id=PROJECT,
+                idle_ttl=30.0,
+                user_id=OWNER,
+            ),
+            timeout=20,
+        )
+    )
+
+    assert seen, (
+        "the lead finalized with an unread message — the early exit only asked its own process"
+    )
+    assert "one more thing" in seen[0]

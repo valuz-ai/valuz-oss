@@ -22,6 +22,20 @@
 
 import { useSyncExternalStore } from "react";
 
+/**
+ * Which glyph the picker / origin badge draws for a target. Editions may set
+ * it explicitly; otherwise it is inferred from the id (see
+ * {@link executionTargetIconKind}).
+ *
+ * - ``local`` — this machine's own backend;
+ * - ``cloud`` — the shared cloud backend;
+ * - ``device`` — another desktop reached through the remote-control relay.
+ */
+export type ExecutionTargetIcon = "local" | "cloud" | "device";
+
+/** Id prefix editions use for remote-desktop targets (``device:<device id>``). */
+export const DEVICE_TARGET_ID_PREFIX = "device:";
+
 export interface ExecutionTarget {
   /** Stable id — also used as the row ``origin`` tag (e.g. "local"/"cloud"). */
   id: string;
@@ -36,14 +50,119 @@ export interface ExecutionTarget {
    * upload instead of a directory picker.
    */
   remote?: boolean;
+  /** Glyph override; inferred from ``id`` when omitted. */
+  icon?: ExecutionTargetIcon;
+  /**
+   * ``false`` = the edition holds only narrow handles into this target: it can
+   * route requests for entities that already live there (labels, icons and
+   * base URLs all resolve), but it can neither create there nor enumerate it.
+   * The "where should this run" pickers skip it AND list fan-out leaves it
+   * alone — asking such a target for "your sessions" is refused by
+   * construction, which would otherwise show up as a permanent "partially
+   * unreachable" banner.
+   *
+   * The case: a session on someone else's machine reached through a grant
+   * that only permits that session's verbs. Without this flag the target has
+   * to stay unregistered, and then every label lookup for its entities falls
+   * back to the default target — a conversation running elsewhere claims to
+   * run locally. Defaults to ``true`` when omitted.
+   */
+  selectable?: boolean;
+  /**
+   * Edition-provided directory chooser for a target whose filesystem is NOT
+   * this machine's but can still be browsed (a remote desktop reached
+   * through the relay). When set, the create-project / create-KB dialogs
+   * show their normal directory field and call this instead of the
+   * platform's native picker; ``remote`` then no longer forces the managed
+   * cwd + upload flow (see {@link targetUsesManagedCwd}). Resolves to
+   * ``null`` when the user cancels.
+   */
+  selectDirectory?: () => Promise<ExecutionTargetDirectory | null>;
+}
+
+/**
+ * Result of {@link ExecutionTarget.selectDirectory}. When the picked
+ * directory is already bound to a project on that target, the edition
+ * reports it so the dialog can open that project instead of creating a
+ * duplicate (the backend rejects a second binding of the same root with 409).
+ */
+export interface ExecutionTargetDirectory {
+  path: string;
+  existingProjectId?: string;
+  existingProjectName?: string;
+}
+
+/**
+ * True when creating on ``target`` must use the managed-cwd + initial-upload
+ * flow: the backend is remote AND cannot offer its own directory chooser.
+ * ``undefined`` (single-target builds) → false.
+ */
+/** Targets the user may pick when creating something (see {@link ExecutionTarget.selectable}). */
+export function selectableExecutionTargets(
+  targets: readonly ExecutionTarget[],
+): ExecutionTarget[] {
+  return targets.filter((target) => target.selectable !== false);
+}
+
+export function targetUsesManagedCwd(target: ExecutionTarget | null | undefined): boolean {
+  return target?.remote === true && typeof target.selectDirectory !== "function";
+}
+
+/**
+ * Resolve the glyph kind for a target id: an explicit ``icon`` on the
+ * registered target wins, then ``"cloud"`` → cloud, ``device:*`` → device,
+ * anything else (``"local"``, unknown ids) → local. Pure — safe to call
+ * outside React and for ids that are not registered (stale origin tags).
+ */
+export function executionTargetIconKind(
+  targetId: string,
+  target?: ExecutionTarget | null,
+): ExecutionTargetIcon {
+  const registered = target ?? _targets.find((t) => t.id === targetId);
+  if (registered?.icon) return registered.icon;
+  if (targetId === "cloud") return "cloud";
+  if (targetId.startsWith(DEVICE_TARGET_ID_PREFIX)) return "device";
+  return "local";
 }
 
 let _targets: ExecutionTarget[] = [];
 const _listeners = new Set<() => void>();
 
+// Editions re-register on every presence poll, so the array identity churns
+// constantly. Lists that fan out must react to the set CHANGING, not to it
+// being re-announced — hence a fingerprint over exactly what fan-out reads.
+let _revision = 0;
+let _fingerprint = "";
+
+function fanOutFingerprint(targets: readonly ExecutionTarget[]): string {
+  return targets
+    .map((t) => `${t.id}|${t.baseUrl ?? ""}|${t.selectable === false ? 0 : 1}`)
+    .join(",");
+}
+
 export function setExecutionTargets(targets: ExecutionTarget[]): void {
   _targets = [...targets];
+  const fingerprint = fanOutFingerprint(_targets);
+  if (fingerprint !== _fingerprint) {
+    _fingerprint = fingerprint;
+    _revision += 1;
+  }
   for (const fn of _listeners) fn();
+}
+
+/**
+ * Bumps whenever the set a list call would fan out to changes — a desktop
+ * came online, a grant was approved, a target went away.
+ *
+ * Lists are fetched once on mount, but targets arrive asynchronously (an
+ * edition resolves them from its control plane after the tree is already
+ * painted). Without this, a machine that becomes reachable one second after
+ * launch stays invisible in 项目 / 对话 until something happens to remount the
+ * page: invalidating the response cache is not enough, because nothing asks
+ * again.
+ */
+export function getExecutionTargetsRevision(): number {
+  return _revision;
 }
 
 export function getExecutionTargets(): ExecutionTarget[] {
@@ -54,6 +173,36 @@ export function getDefaultExecutionTarget(): ExecutionTarget | undefined {
   return _targets.find((t) => t.isDefault) ?? _targets[0];
 }
 
+/**
+ * Which target an entity belongs to when nobody observed one.
+ *
+ * origin is a client-side observation, so it is ``undefined`` for anything the
+ * index never saw — and a single-backend build registers no targets at all,
+ * leaving nothing to fall back to. Consumers still have to answer "where does
+ * this run", and until now they each hardcoded ``"local"``. That is right for
+ * OSS, whose one backend is a sidecar on the user's own machine, and wrong for
+ * a browser-only edition whose one backend IS the cloud execution plane —
+ * there, no local runtime exists to name.
+ *
+ * The base URL is unaffected either way: the value names the target that the
+ * module-default api base already points at, so routing resolves to the same
+ * backend it would have without it.
+ */
+export type RuntimeLocation = "local" | "cloud";
+
+let _defaultRuntimeLocation: RuntimeLocation = "local";
+
+/** Declare the build's default location (editions call this at boot). */
+export function setDefaultRuntimeLocation(location: RuntimeLocation): void {
+  if (_defaultRuntimeLocation === location) return;
+  _defaultRuntimeLocation = location;
+  for (const fn of _listeners) fn();
+}
+
+export function getDefaultRuntimeLocation(): RuntimeLocation {
+  return _defaultRuntimeLocation;
+}
+
 function subscribe(fn: () => void): () => void {
   _listeners.add(fn);
   return () => _listeners.delete(fn);
@@ -62,4 +211,18 @@ function subscribe(fn: () => void): () => void {
 /** Reactive view for creation entries (selector renders when length > 1). */
 export function useExecutionTargets(): ExecutionTarget[] {
   return useSyncExternalStore(subscribe, getExecutionTargets);
+}
+
+/** Reactive {@link getExecutionTargetsRevision} — use it as an effect dep to
+ *  refetch a fanned-out list when the target set changes. */
+export function useExecutionTargetsRevision(): number {
+  return useSyncExternalStore(subscribe, getExecutionTargetsRevision);
+}
+
+/**
+ * Reactive form of {@link getDefaultRuntimeLocation} — an edition may declare
+ * it from runtime config that lands after the tree has already rendered.
+ */
+export function useDefaultRuntimeLocation(): RuntimeLocation {
+  return useSyncExternalStore(subscribe, getDefaultRuntimeLocation);
 }

@@ -48,6 +48,7 @@ import { useProjectOutlet } from "@valuz/app/layout";
 import { SkillAddDialog, SkillEditDialog } from "@valuz/app/components";
 import { useTranslation } from "@valuz/core";
 import { isCloudOnlyResource } from "./agent-list-state";
+import { usePluginMemberships } from "../components/plugins/use-plugin-memberships";
 
 type AddSkillDialogMode = "link" | "upload";
 type ResourceRefreshEvent = CustomEvent<{ resourceType?: string }>;
@@ -88,8 +89,7 @@ function toCardSkill(s: SkillView) {
     description: s.description,
     tags: s.tags,
     source: (s.scope === "official" ? "official" : "custom") as
-      | "official"
-      | "custom",
+      "official" | "custom",
     locked: s.is_locked ?? false,
     version: s.version != null ? `v${s.version}` : "–",
     versionNumber: s.version ?? null,
@@ -206,8 +206,7 @@ function badgeForCategory(
 export const SkillsPage = () => {
   const { t } = useTranslation();
   const hasCopyMenuItems = useRegistryStore(
-    (state) =>
-      (state.slots["resource.skill.copy.menu-items"]?.length ?? 0) > 0,
+    (state) => (state.slots["resource.skill.copy.menu-items"]?.length ?? 0) > 0,
   );
   const navigate = useNavigate();
   const {
@@ -310,17 +309,14 @@ export const SkillsPage = () => {
   // Draft-first (no pre-created session): land on the same draft page as
   // 新对话 so the composer's default-agent pick + agent switching work; the
   // session is minted with the skill-creator context on the first send.
-  const skillCreatorDraftUrl = useCallback(
-    (context: SkillCreationContext) => {
-      const params = new URLSearchParams({ mode: "skill-creator" });
-      params.set("skill_kind", context.kind);
-      if (context.kind === "project" && context.project_id) {
-        params.set("skill_project", context.project_id);
-      }
-      return `/conversation/new?${params.toString()}`;
-    },
-    [],
-  );
+  const skillCreatorDraftUrl = useCallback((context: SkillCreationContext) => {
+    const params = new URLSearchParams({ mode: "skill-creator" });
+    params.set("skill_kind", context.kind);
+    if (context.kind === "project" && context.project_id) {
+      params.set("skill_project", context.project_id);
+    }
+    return `/conversation/new?${params.toString()}`;
+  }, []);
 
   const handleStartAiCreate = useCallback(() => {
     navigate(skillCreatorDraftUrl({ kind: "skills_library" }));
@@ -431,9 +427,7 @@ export const SkillsPage = () => {
       const matching = filteredSkills
         .filter(
           (s) =>
-            !isCloudOnlyResource(s) &&
-            !assigned.has(s.id) &&
-            cat.filter(s),
+            !isCloudOnlyResource(s) && !assigned.has(s.id) && cat.filter(s),
         )
         .sort(cat.sort);
       if (matching.length > 0) return matching[0];
@@ -445,9 +439,19 @@ export const SkillsPage = () => {
   }, [filteredSkills, categories]);
   const currentSkill =
     skills.find(
-      (s) => s.id === activeSkillId && !isCloudOnlyResource(s),
+      (s) =>
+        (s.id === activeSkillId ||
+          (!!activeSkillId && !!s.slug && s.slug === activeSkillId)) &&
+        !isCloudOnlyResource(s),
     ) ?? firstVisibleSkill;
   const effectiveActiveId = currentSkill?.id ?? null;
+
+  // Plugin ownership badges (D6): one batched lookup per catalog load.
+  const skillSlugs = useMemo(
+    () => skills.map((s) => s.slug ?? s.name),
+    [skills],
+  );
+  const pluginBadgeFor = usePluginMemberships("skill", skillSlugs);
 
   const { canDelete: canDeleteSkill } = useResourceGuard({
     source: currentSkill?.source,
@@ -598,18 +602,14 @@ export const SkillsPage = () => {
           hasCopyMenuItems ? (
             <ResourceCopyMenuItemSlot
               resourceType="skill"
-              resource={
-                currentSkill as unknown as Record<string, unknown>
-              }
+              resource={currentSkill as unknown as Record<string, unknown>}
             />
           ) : undefined
         }
         headerActions={
           <ResourceDetailActionSlot
             resourceType="skill"
-            resource={
-              currentSkill as unknown as Record<string, unknown>
-            }
+            resource={currentSkill as unknown as Record<string, unknown>}
           />
         }
       />,
@@ -633,11 +633,13 @@ export const SkillsPage = () => {
           magnifier expands an inline input next to it, and Esc / blur-
           while-empty collapses it back. Add icon opens the create
           dialog directly. */}
-      <header className="flex h-12 shrink-0 items-center gap-2 px-5">
-        <span className="shrink-0 whitespace-nowrap text-base font-semibold text-ink-heading">
-          {t("sidebar.skills" as Parameters<typeof t>[0])}
-        </span>
-        <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
+      <header className="flex shrink-0 items-center justify-between gap-4 h-15 px-5">
+        <div className="flex min-w-0 flex-col justify-center">
+          <span className="text-base font-semibold leading-5 text-ink-heading">
+            {t("sidebar.skills" as Parameters<typeof t>[0])}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-brand transition-colors hover:bg-brand-light/60 hover:text-brand"
@@ -744,6 +746,7 @@ export const SkillsPage = () => {
                   <SkillCard
                     skill={toCardSkill(skill)}
                     originBadge={badgeForCategory(categoryId, skill, t)}
+                    pluginBadge={pluginBadgeFor(skill.slug ?? skill.name)}
                     active={!cloudOnly && isSelected}
                     onClick={() => {
                       if (!cloudOnly) setActiveSkillId(skill.id);
@@ -773,9 +776,7 @@ export const SkillsPage = () => {
                         ) : null}
                         <ResourceActionSlot
                           resourceType="skill"
-                          resource={
-                            skill as unknown as Record<string, unknown>
-                          }
+                          resource={skill as unknown as Record<string, unknown>}
                         />
                       </div>
                     }

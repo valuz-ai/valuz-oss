@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertCircle,
   ArrowUp,
@@ -129,6 +130,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "./ui/tooltip";
+import { ModelSelectionHint } from "./shared/ModelSelectionHint";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -208,7 +210,7 @@ const buildChipNode = (skill: SkillSearchItem): HTMLElement => {
   chip.contentEditable = "false";
   chip.dataset.skillName = skill.name;
   chip.className =
-    "mr-0.5 inline-flex h-5 items-center gap-1 rounded-[4px] bg-brand-100 px-2 py-0 text-2xs text-brand-700 align-middle select-none";
+    "mr-0.5 inline-flex h-5 items-center gap-1 rounded-sm bg-brand-100 px-2 py-0 text-2xs text-brand-700 align-middle select-none";
   chip.innerHTML = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg><span>${skill.name}</span>`;
   return chip;
 };
@@ -217,6 +219,7 @@ export interface ModelSelectorItem {
   providerId: string;
   providerName: string;
   modelId: string;
+  selectionHint?: string | null;
   isDefault: boolean;
   source?: string;
 }
@@ -238,6 +241,19 @@ export interface RuntimeSelectorItem {
   unavailableReason?: string | null;
 }
 
+
+/** Tag palette, shared with the resource library so one agent looks the same
+ *  wherever it is listed: 分享 teal, 远程 green, anything else neutral. */
+const AGENT_BADGE_TONE: Record<string, string> = {
+  shared:
+    "bg-[color-mix(in_oklab,var(--accent-teal)_14%,var(--background))] text-[color-mix(in_oklab,var(--accent-teal)_62%,var(--foreground))]",
+  remote: "bg-success-light text-success-text",
+};
+
+function agentBadgeClass(tone: string | undefined): string {
+  return tone ? (AGENT_BADGE_TONE[tone] ?? "bg-surface-soft text-ink-meta") : "bg-surface-soft text-ink-meta";
+}
+
 export interface ComposerAgentItem {
   /** Project-local agent handle (the ``agent_slug``). */
   slug: string;
@@ -247,6 +263,18 @@ export interface ComposerAgentItem {
   runtimeLabel: string;
   /** Model id / label shown as subtext. */
   modelLabel: string;
+  /**
+   * Execution target this agent runs on. Set by editions for agents hosted
+   * elsewhere; the conversation follows the agent when one is picked.
+   */
+  execTargetId?: string;
+  /**
+   * Short chip shown next to the name — where this agent runs, when that is
+   * not "here". Derived from the execution-target registry, so the edition
+   * owns the wording.
+   */
+  badgeLabel?: string;
+  badgeTone?: "shared" | "remote";
 }
 
 export interface ComposerProjectItem {
@@ -627,6 +655,8 @@ export const Composer = ({
 
   const [modelOpen, setModelOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
+  const agentRef = useRef<HTMLDivElement>(null);
+  const agentMenuRef = useRef<HTMLDivElement>(null);
   // Drill-in for the per-conversation brain override (agent popover). ``null``
   // shows the agent list + the three override rows; a value shows that field's
   // option list. Reset whenever the popover closes.
@@ -656,13 +686,46 @@ export const Composer = ({
     // Measure to the conversation column's right edge, not the viewport — a
     // right-hand context panel sits beyond it and must not be drawn over, so
     // the nested menus flip left when the panel leaves no room.
-    const main = el.closest("main");
+    const main = agentRef.current?.closest("main");
     const rightEdge = main
       ? main.getBoundingClientRect().right
       : window.innerWidth;
     const roomRight = rightEdge - rect.right;
     setSubmenuSide(roomRight >= needRight ? "right" : "left");
   }, []);
+  const positionAgentPopover = useCallback(
+    (el: HTMLDivElement | null) => {
+      agentMenuRef.current = el;
+      if (!el || !agentRef.current) return;
+
+      const triggerRect = agentRef.current.getBoundingClientRect();
+      const menuWidth = el.offsetWidth || 260;
+      const viewportMargin = 8;
+      const gap = 4;
+      const maxLeft = Math.max(
+        viewportMargin,
+        window.innerWidth - menuWidth - viewportMargin,
+      );
+      const left = Math.min(
+        Math.max(viewportMargin, triggerRect.right - menuWidth),
+        maxLeft,
+      );
+
+      el.style.left = `${left}px`;
+      if (menuDir === "down") {
+        el.style.top = `${triggerRect.bottom + gap}px`;
+        el.style.bottom = "auto";
+      } else {
+        el.style.top = "auto";
+        el.style.bottom = `${Math.max(
+          viewportMargin,
+          window.innerHeight - triggerRect.top + gap,
+        )}px`;
+      }
+      measureAgentPopover(el);
+    },
+    [measureAgentPopover, menuDir],
+  );
   // Lay out a nested flyout (a 三级 runtime/model/effort picker, or the Agent
   // roster): cap its height at a fixed maximum, but snap that cap DOWN to the
   // last whole row so the bottom item is shown in full rather than sliced in
@@ -728,7 +791,6 @@ export const Composer = ({
       setAgentListMenuOpen(false);
     }
   }, [agentOpen]);
-  const agentRef = useRef<HTMLDivElement>(null);
   const [projectOpen, setProjectOpen] = useState(false);
   const projectRef = useRef<HTMLDivElement>(null);
   const [runtimeOpen, setRuntimeOpen] = useState(false);
@@ -1192,13 +1254,37 @@ export const Composer = ({
   useEffect(() => {
     if (!agentOpen) return;
     const handler = (e: MouseEvent) => {
-      if (agentRef.current && !agentRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        !agentRef.current?.contains(target) &&
+        !agentMenuRef.current?.contains(target)
+      ) {
         setAgentOpen(false);
       }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [agentOpen]);
+
+  useEffect(() => {
+    if (!agentOpen) return;
+    let raf = 0;
+    const schedule = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        positionAgentPopover(agentMenuRef.current);
+      });
+    };
+    schedule();
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, true);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("scroll", schedule, true);
+    };
+  }, [agentOpen, positionAgentPopover]);
 
   useEffect(() => {
     if (!projectOpen) return;
@@ -1290,7 +1376,8 @@ export const Composer = ({
     PERMISSION_LABELS[effectivePermissionMode].label;
   const selectedPermissionShortLabel =
     PERMISSION_LABELS[effectivePermissionMode].shortLabel;
-  const isDeepAgents = selectedRuntimeId === "deepagents";
+  const runtimeLacksAutoReview =
+    selectedRuntimeId === "deepagents" || selectedRuntimeId === "deepseek_harness";
 
   // EFFORT_LABELS — visible labels for the reasoning-budget selector
   // (kernel V5+bba3014 ``ModelSettings.effort``). No "Default" slot:
@@ -1333,6 +1420,11 @@ export const Composer = ({
   // pair so the trigger reads sensibly. The host is expected to settle
   // selectedProviderId/selectedModelId to a real value before the user
   // sends a turn — there is no "send with no model" path anymore.
+  //
+  // The collapsed trigger (and every other "current selection" readout that
+  // reuses this label) shows the plain model name. Provider selection hints
+  // such as a points multiplier are only rendered next to each option inside
+  // the open list, where the user is actually comparing models.
   const selectedModelLabel =
     (selectedModelId
       ? (() => {
@@ -1538,7 +1630,7 @@ export const Composer = ({
               )}
               data-empty={currentValue ? undefined : ""}
               className={cn(
-                "min-h-[44px] max-h-[180px] w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent px-2 text-[13px] leading-[1.55] text-ink-heading focus:outline-none",
+                "min-h-[44px] max-h-[180px] w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent px-2 text-sm leading-[1.55] text-ink-heading focus:outline-none",
                 "data-[empty]:before:pointer-events-none data-[empty]:before:text-ink-body data-[empty]:before:content-[attr(data-placeholder)]",
               )}
               onInput={handleEditorInput}
@@ -1903,7 +1995,7 @@ export const Composer = ({
                       .filter((mode) => PERMISSION_META[mode].visible)
                       .map((mode) => {
                         const selected = effectivePermissionMode === mode;
-                        const disabled = mode === "auto_review" && isDeepAgents;
+                        const disabled = mode === "auto_review" && runtimeLacksAutoReview;
                         const item = PERMISSION_LABELS[mode];
                         const meta = PERMISSION_META[mode];
                         const ItemIcon = meta.icon;
@@ -1934,7 +2026,7 @@ export const Composer = ({
                               <span className="truncate text-[12.5px] leading-[18px]">
                                 {item.label}
                               </span>
-                              <span className="truncate text-[11px] leading-[15px] text-ink-meta">
+                              <span className="truncate text-2xs leading-[15px] text-ink-meta">
                                 {item.hint}
                               </span>
                             </span>
@@ -1951,7 +2043,7 @@ export const Composer = ({
                                   <span className="block">{button}</span>
                                 </TooltipTrigger>
                                 <TooltipContent side="right">
-                                  {t("conversation.deepAgentsNoAutoReview")}
+                                  {t("conversation.runtimeNoAutoReview")}
                                 </TooltipContent>
                               </Tooltip>
                             </TooltipProvider>
@@ -2180,7 +2272,7 @@ export const Composer = ({
                               the task detail page uses (TaskContextPanel
                               + sub-sidebar). */}
                           {mode === "task" && (
-                            <span className="inline-flex h-4 shrink-0 items-center rounded-[4px] bg-brand-light px-1 text-[10px] leading-none font-normal text-brand-700">
+                            <span className="inline-flex h-4 shrink-0 items-center rounded-sm bg-brand-light px-1 text-micro leading-none font-normal text-brand-700">
                               {t("task.runLead" as Parameters<typeof t>[0])}
                             </span>
                           )}
@@ -2201,14 +2293,15 @@ export const Composer = ({
                           )}
                         </span>
                       </button>
-                      {agentOpen && canOpen && (
-                        <div
-                          ref={measureAgentPopover}
-                          className={cn(
-                            "absolute right-0 z-50 min-w-[260px] rounded-lg border border-surface-border bg-surface shadow-lg",
-                            menuVClass,
-                          )}
-                        >
+                      {agentOpen &&
+                        canOpen &&
+                        typeof document !== "undefined" &&
+                        createPortal(
+                          <div
+                            ref={positionAgentPopover}
+                            data-slot="composer-agent-menu"
+                            className="fixed z-[100] min-w-[260px] rounded-lg border border-surface-border bg-surface shadow-lg"
+                          >
                           <div
                             className={cn(
                               "p-1",
@@ -2366,8 +2459,19 @@ export const Composer = ({
                                               }}
                                             >
                                               <span className="flex min-w-0 flex-1 flex-col">
-                                                <span className="truncate text-[12.5px] text-ink-heading">
-                                                  {a.name}
+                                                <span className="flex min-w-0 items-center gap-1.5">
+                                                  <span className="truncate text-[12.5px] text-ink-heading">
+                                                    {a.name}
+                                                  </span>
+                                                  {/* Same tag as the other
+                                                      agent list below — this
+                                                      one is the popover users
+                                                      actually open. */}
+                                                  {a.badgeLabel && (
+                                                    <span className={`shrink-0 rounded-sm px-1 py-0 text-micro leading-[1.4] ${agentBadgeClass(a.badgeTone)}`}>
+                                                      {a.badgeLabel}
+                                                    </span>
+                                                  )}
                                                 </span>
                                                 <span className="truncate text-2xs text-ink-meta">
                                                   {a.runtimeLabel} ·{" "}
@@ -2432,8 +2536,15 @@ export const Composer = ({
                                     }}
                                   >
                                     <span className="flex min-w-0 flex-1 flex-col">
-                                      <span className="truncate text-[12.5px] text-ink-heading">
-                                        {a.name}
+                                      <span className="flex min-w-0 items-center gap-1.5">
+                                        <span className="truncate text-[12.5px] text-ink-heading">
+                                          {a.name}
+                                        </span>
+                                        {a.badgeLabel && (
+                                          <span className={`shrink-0 rounded-sm px-1 py-0 text-micro leading-[1.4] ${agentBadgeClass(a.badgeTone)}`}>
+                                            {a.badgeLabel}
+                                          </span>
+                                        )}
                                       </span>
                                       <span className="truncate text-2xs text-ink-meta">
                                         {a.runtimeLabel} · {a.modelLabel}
@@ -2636,12 +2747,21 @@ export const Composer = ({
                                                       setAgentSubmenu(null);
                                                     }}
                                                   >
-                                                    <span className="truncate text-ink-heading">
+                                                    <span className="min-w-0 flex-1 truncate text-ink-heading">
                                                       {modelLabel(m.modelId)}
                                                     </span>
-                                                    {sel && (
-                                                      <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
-                                                    )}
+                                                    {/* Hint (e.g. points multiplier) sits in
+                                                        its own right-aligned column, and the
+                                                        check slot is always reserved so the
+                                                        numbers line up across rows. */}
+                                                    <ModelSelectionHint
+                                                      hint={m.selectionHint}
+                                                    />
+                                                    <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                                                      {sel && (
+                                                        <Check className="h-3.5 w-3.5 text-ink-heading" />
+                                                      )}
+                                                    </span>
                                                   </button>
                                                 );
                                               })}
@@ -2701,8 +2821,9 @@ export const Composer = ({
                                 </button>
                               </div>
                             )}
-                        </div>
-                      )}
+                          </div>,
+                          document.body,
+                        )}
                     </>
                   );
                 })()}
@@ -2941,9 +3062,19 @@ export const Composer = ({
                                           </span>
                                         )}
                                       </span>
-                                      {selected && (
-                                        <Check className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
-                                      )}
+                                      {/* Hint (e.g. points multiplier) is a
+                                          right-aligned column of its own; the
+                                          check slot is always reserved so the
+                                          numbers line up whether or not a row
+                                          is selected. */}
+                                      <ModelSelectionHint
+                                        hint={item.selectionHint}
+                                      />
+                                      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                                        {selected && (
+                                          <Check className="h-3.5 w-3.5 text-ink-heading" />
+                                        )}
+                                      </span>
                                     </button>
                                   );
                                 })(),
@@ -3012,7 +3143,7 @@ export const Composer = ({
                                 </button>
                               );
                             })}
-                            <div className="mx-1.5 mt-1 border-t border-[color:var(--fg-3)] px-2 pt-1.5 pb-0.5 text-[11px] text-ink-meta">
+                            <div className="mx-1.5 mt-1 border-t border-[color:var(--fg-3)] px-2 pt-1.5 pb-0.5 text-2xs text-ink-meta">
                               {t("effort.hint" as Parameters<typeof t>[0])}
                             </div>
                           </div>

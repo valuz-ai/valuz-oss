@@ -40,9 +40,8 @@ from valuz_agent.modules.tasks.events import (
     record_subtask_failed,
     record_subtask_stopped,
 )
-from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
 from valuz_agent.modules.tasks.manifest import collect_manifest_safe, last_assistant_text
-from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
+from valuz_agent.modules.tasks import mailbox_store
 from valuz_agent.modules.tasks.models import TaskRow
 from valuz_agent.modules.tasks.plan import PlanError, TaskPlan
 
@@ -52,19 +51,17 @@ logger = logging.getLogger(__name__)
 class FinalizationService:
     """Terminal writes + actor-loop finalize callbacks (the ``ActorFinalizer``).
 
-    Built once at the composition root with the shared registry, ActorRunner
-    and CoordinationService — same collaborators as LifecycleService, other
-    half of the old class.
+    Built once at the composition root with the ActorRunner and
+    CoordinationService — same collaborators as LifecycleService, other half
+    of the old class.
     """
 
     def __init__(
         self,
         *,
-        registry: LiveMemberRegistry,
         actor_runner: ActorRunner,
         coordination: CoordinationService,
     ) -> None:
-        self._members = registry
         self._actor = actor_runner
         self._coordination = coordination
 
@@ -144,16 +141,36 @@ class FinalizationService:
             task = await task_ds.get_task_by_project(user_id, project_id, task_id)
             if task is None or task.status != "active":
                 return  # already closed by finish_task / stop / intervene
-            if self._members.has_live_members(task_id):
+            if await TaskSessionDatastore(db).has_active_members(task_id):
                 return  # members still running — not the lead's terminal moment
 
             try:
                 # Shared predicate (TaskPlan.unresolved_keys) — ``paused`` counts
                 # as outstanding, so a task halted mid-flight whose parked node
                 # was never re-dispatched can no longer be closed ``completed``.
-                unresolved = TaskPlan.from_dict(task.plan).unresolved_keys()
+                plan_obj = TaskPlan.from_dict(task.plan)
+                unresolved = plan_obj.unresolved_keys()
+                planned = len(plan_obj.nodes)
             except PlanError:
                 unresolved = []
+                planned = 0
+
+            if planned == 0:
+                # A lead that never planned and never dispatched did the work
+                # itself — or delegated with the runtime's OWN subagent tool,
+                # whose children this task can neither see nor collect. Either
+                # way the task is about to close with an empty plan and no
+                # member runs, which reads downstream as a task that had nothing
+                # to do. It is not an error and must not block the close; it IS
+                # the signal that the lead never took the lead role, and it was
+                # completely silent until someone read a transcript by hand.
+                logger.warning(
+                    "task %s closed with an EMPTY PLAN (lead %s, agent runs "
+                    "alone): the lead never called plan_task/dispatch — check "
+                    "whether its playbook lost to the agent's own instructions",
+                    task_id,
+                    lead_session_id,
+                )
 
             # A turn can ERROR yet still leave session.status == "idle" — the
             # failure lives in stop_reason (e.g. a skill-materialization crash,
@@ -365,9 +382,21 @@ class FinalizationService:
             )
             return
 
-        # Drop from the live-member set and write the terminal run record.
-        self._members.discard_member(task_id, session_id)
-        since = self._members.pop_dispatch_started(session_id)
+        # Write the terminal run record. Membership itself needs no bookkeeping
+        # here: this run row is about to stop being ``active``, which IS the
+        # answer ``has_active_members`` gives every process.
+        #
+        # The member's own run row is also its dispatch timestamp, used under a
+        # shared cwd to attribute artifacts by mtime. It used to come from a
+        # per-process dict that returned 0.0 anywhere the dispatch had not been
+        # served — and ``since_epoch=0`` means "include every file", so a
+        # member's artifact list quietly filled with files it never wrote.
+        # Recovery used to pass 0.0 deliberately for a respawned member; the run
+        # row is a strictly better lower bound there too, since nothing the
+        # member writes can predate its own row.
+        async with async_unit_of_work(commit=False) as db:
+            member_run = await TaskSessionDatastore(db).get_run(session_id)
+        since = (member_run.created_at or 0) / 1000.0 if member_run is not None else 0.0
 
         # User-cancelled turn (conversation-page stop / kernel interrupt) — the
         # user-stop path, NOT the failure path. Converges with ``stop_member``:
@@ -558,21 +587,28 @@ class FinalizationService:
                 agent_name=agent_name,
                 subtask_key=key,
             )
-
-        if lead_session_id:
-            mailbox_registry.put(
-                lead_session_id,
-                InboxMsg(
+            # Inside the same transaction as parking the node and recording the
+            # stop: a lead told its member was cancelled while the plan still
+            # says otherwise (or the reverse) is a task that cannot be reasoned
+            # about from the outside.
+            await mailbox_store.cancel_pending(db, session_id=session_id)
+            if lead_session_id:
+                await mailbox_store.enqueue(
+                    db,
+                    session_id=lead_session_id,
+                    task_id=task_id,
+                    project_id=project_id,
+                    user_id=user_id,
                     kind="member_done",
                     from_session=session_id,
+                    origin="member-interrupted",
                     payload={
                         "agent": agent_slug,
                         "status": "cancelled",
                         "summary": t("task.reworkUserInterrupted"),
                         "artifacts": [],
                     },
-                ),
-            )
+                )
 
     # ------------------------------------------------------------------
     # finish_task
@@ -623,13 +659,15 @@ class FinalizationService:
         # is indistinguishable from a hang, the lead "tries a few times" and
         # stops the whole task). Name the live subtasks so the lead can check
         # or stop them individually; ``force=True`` overrides deliberately.
-        if final_status == "stopped" and not force and self._members.has_live_members(task_id):
+        live_keys: list[str] = []
+        if final_status == "stopped" and not force:
             async with async_unit_of_work(commit=False) as db:
                 live_keys = sorted(
                     r.subtask_key
                     for r in await TaskSessionDatastore(db).list_runs(user_id, task_id)
                     if r.kind == "subtask" and r.subtask_key and r.status == "active"
                 )
+        if live_keys:
             return {
                 "ok": False,
                 "error": (
@@ -735,11 +773,25 @@ class FinalizationService:
                 exc_info=True,
             )
 
-        # v2: tell any still-running members to finalize, and break the lead's
-        # own actor loop after this turn (no-op for sync/v1 — no live mailboxes).
+        # Park any member still marked active. A member reads its OWN run row
+        # to know it was stopped, and ``finish_task`` settles only the lead's —
+        # so without this, ``finish_task(stopped, force=True)``, the one path
+        # that ends a task while members are deliberately still running, would
+        # leave them running until their idle TTL.
+        #
+        # It used to be a ``shutdown`` queued per member, which reached only the
+        # ones sharing this process. Writing the state reaches all of them.
+        async with async_unit_of_work() as db:
+            run_ds = TaskSessionDatastore(db)
+            for run in await run_ds.list_runs(user_id, task_id):
+                if run.kind == "subtask" and run.status == "active":
+                    await run_ds.update_run_by_session(
+                        session_id=run.session_id, status="paused", ended_at=now_ms()
+                    )
+                    await mailbox_store.cancel_pending(db, session_id=run.session_id)
 
-        self._coordination.broadcast_shutdown(task_id)
-        mailbox_registry.put(lead_session_id, InboxMsg(kind="shutdown"))
+        # The task is terminal now, which is what the lead's own loop reads to
+        # know it is done. This only drops the lead's in-process tracking.
 
         # Task-worktree teardown (design §5): drop the task's worktree iff
         # it holds no work worth keeping (fail-closed inside). Work left

@@ -38,13 +38,14 @@ def _make_session(*, mcp_servers):
     )
 
 
-def _trio(token: str, *, base: str):
+def _trio(token: str, *, base: str, tool_timeout_sec: float | None = None):
     trio = tuple(
         McpHttpServerConfigSchema(
             name=name,
             url=f"{base}/{slug}/mcp",
             transport="http",
             headers={"X-Valuz-Internal": token, "X-Valuz-Session-Id": "sess-1"},
+            tool_timeout_sec=tool_timeout_sec,
         )
         for name, slug in (
             ("valuz_docs", "docs"),
@@ -57,6 +58,7 @@ def _trio(token: str, *, base: str):
         url=f"{base}/toolkit/base/mcp",
         transport="http",
         headers={"X-Valuz-Internal": token, "X-Valuz-Session-Id": "sess-1"},
+        tool_timeout_sec=tool_timeout_sec,
     )
     return (*trio, harness)
 
@@ -76,7 +78,15 @@ def _current_trio(token: str):
     up-to-date" (see ``test_noop_when_token_already_current``); using the
     legacy base here would make every field EXCEPT the token differ, forcing
     a PATCH the test asserts must NOT happen."""
-    return _trio(token, base="http://127.0.0.1:8000/_internal/mcp")
+    from valuz_agent.adapters.capability_resolver import (
+        _INTERNAL_MCP_TOOL_TIMEOUT_SEC,
+    )
+
+    return _trio(
+        token,
+        base="http://127.0.0.1:8000/_internal/mcp",
+        tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
+    )
 
 
 def _patch_client(monkeypatch, session):

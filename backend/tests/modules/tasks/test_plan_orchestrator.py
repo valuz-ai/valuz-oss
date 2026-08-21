@@ -17,6 +17,7 @@ import valuz_agent.boot.kernel  # noqa: F401
 from sqlalchemy import select
 from valuz_agent.adapters import kernel_client as kernel_client_mod
 from valuz_agent.modules.tasks import launcher as launcher_mod
+from valuz_agent.modules.tasks import mailbox_store, member_probe
 from valuz_agent.modules.tasks import planning
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
@@ -931,10 +932,39 @@ def test_auto_finalize_noop_when_already_finalized(db_factory, tmp_path) -> None
     assert _events(db_factory) == []  # no duplicate terminal event appended
 
 
+def _seed_live_member(db_factory, task_id="t1", session_id="m1", subtask_key="s1") -> None:
+    """One member run row, ``active`` — the shared answer to "a member is running".
+
+    Membership used to be a set on the orchestrator, so a test could declare a
+    live member without one existing. Every process now reads the run rows, so
+    the row IS the declaration.
+    """
+    from valuz_agent.modules.tasks.models import TaskSessionRow
+
+    db = db_factory()
+    try:
+        db.add(
+            TaskSessionRow(
+                user_id=OWNER,
+                project_id="w1",
+                task_id=task_id,
+                session_id=session_id,
+                agent_slug="worker",
+                sequence=99,
+                kind="subtask",
+                subtask_key=subtask_key,
+                status="active",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
 def test_auto_finalize_noop_when_members_in_flight(db_factory, tmp_path) -> None:
     _make_task(db_factory, tmp_path)
     orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"m1"})  # a member is still running
+    _seed_live_member(db_factory)  # a member is still running
     asyncio.run(
         orch.finalization._auto_finalize_lead_task(
             lead_session_id="lead-sess",
@@ -958,7 +988,7 @@ def test_lead_idle_with_no_pending_true_when_clean(db_factory, tmp_path) -> None
 def test_lead_idle_with_no_pending_false_when_member_in_flight(db_factory, tmp_path) -> None:
     _make_task(db_factory, tmp_path)
     orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"m1"})
+    _seed_live_member(db_factory)
     idle = orch.coordination.lead_idle_with_no_pending("t1", "w1", user_id=OWNER)
     assert asyncio.run(idle) is False
 
@@ -989,7 +1019,7 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
 ) -> None:
     from types import SimpleNamespace
 
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
+    from valuz_agent.modules.tasks import mailbox_store
     from valuz_agent.modules.tasks.models import TaskSessionRow
     from valuz_agent.modules.tasks.plan import TaskPlan
 
@@ -1106,14 +1136,16 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
         assert ("sB", "subtask") in spawned  # resumable member respawned
         assert ("lead-s", "lead") in spawned  # lead re-driven
         assert ("sA", "subtask") not in spawned and ("sC", "subtask") not in spawned
-        assert mailbox_registry.has_pending("lead-s")  # completed A's member_done queued
+        # Recovery re-seeds the completed member's result into the lead's DURABLE
+        # inbox: the lead's loop may come up in a different process than this.
+        assert asyncio.run(mailbox_store.has_pending("lead-s"))
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 # ---------------------------------------------------------------------------
 # S4 — Layer 2: user stop / resume (stop_task / resume_task / stop_member)
-# S3 — online heartbeat (_heartbeat_pending)
+# S3 — online heartbeat (member_probe.heartbeat_pending)
 # ---------------------------------------------------------------------------
 
 
@@ -1191,7 +1223,6 @@ def test_stop_task_pauses_members_and_cascade_interrupts(db_factory, tmp_path, m
         members=[("A", "backend", "sA", "in_progress"), ("B", "frontend", "sB", "in_progress")],
     )
     orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"sA", "sB"})
     interrupted: list[str] = []
 
     async def _fake_interrupt(sid: str, user_id: str | None = None) -> None:
@@ -1230,7 +1261,6 @@ def test_resume_task_only_paused_flips_active_and_redrives(
 ) -> None:
     from types import SimpleNamespace
 
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
 
     _seed_lead_and_members(
         db_factory,
@@ -1269,7 +1299,7 @@ def test_resume_task_only_paused_flips_active_and_redrives(
         assert ("lead-s", "lead") in spawned
         assert ("sA", "subtask") in spawned  # paused member resumed
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_resume_task_noop_when_active(db_factory, tmp_path) -> None:
@@ -1383,7 +1413,6 @@ def test_resume_task_with_instruction_embeds_brief_and_logs_event(
     step (":intervene action=resume text=…" / chat inject on a halted task)."""
     from types import SimpleNamespace
 
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
 
     _seed_lead_and_members(
         db_factory, tmp_path, members=[], task_status="stopped", run_status="completed"
@@ -1411,7 +1440,7 @@ def test_resume_task_with_instruction_embeds_brief_and_logs_event(
         payload = _event_payload(db_factory, "user_inject")
         assert payload == {"text": "先核对数据再继续", "via": "resume"}
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_resume_task_accepts_legacy_failed(db_factory, tmp_path, monkeypatch) -> None:
@@ -1421,7 +1450,6 @@ def test_resume_task_accepts_legacy_failed(db_factory, tmp_path, monkeypatch) ->
     resume exactly like blocked (datastore tolerates the unknown source)."""
     from types import SimpleNamespace
 
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
 
     _seed_lead_and_members(
         db_factory, tmp_path, members=[], task_status="failed", run_status="archived"
@@ -1445,7 +1473,7 @@ def test_resume_task_accepts_legacy_failed(db_factory, tmp_path, monkeypatch) ->
         assert _task_row(db_factory).status == "active"
         assert ("lead-s", "lead") in spawned
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_resume_task_rejects_abandoned(db_factory, tmp_path) -> None:
@@ -1462,31 +1490,33 @@ def test_resume_task_rejects_abandoned(db_factory, tmp_path) -> None:
 def test_stop_member_rejects_run_reworks_node_and_notifies_lead(
     db_factory, tmp_path, monkeypatch
 ) -> None:
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
+    from valuz_agent.modules.tasks import mailbox_store
     from valuz_agent.modules.tasks.plan import TaskPlan
 
     _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
     orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"sB"})
 
     async def _fake_interrupt(sid: str, user_id: str | None = None) -> None:
         assert user_id == OWNER
         pass
 
     orch._recovery._interrupt_kernel_session = _fake_interrupt  # type: ignore[method-assign]
-    mailbox_registry.register("lead-s")
     try:
         assert asyncio.run(orch.recovery.stop_member("sB", user_id=OWNER)) is True
         runs = _runs(db_factory)
         assert runs["sB"] == "rejected"
         plan = TaskPlan.from_dict(db_factory().query(TaskRow).filter_by(id="t1").one().plan)
         assert plan.get("B").status == "rework"
-        assert "sB" not in orch._members.live_members("t1")
-        assert mailbox_registry.has_pending("lead-s")
-        msg = mailbox_registry._boxes["lead-s"].get_nowait()
+        assert asyncio.run(mailbox_store.has_pending("lead-s"))
+        # The cancellation reaches the lead through its durable inbox: the
+        # lead's loop may well be in another process than the one that served
+        # the stop request.
+        drained = asyncio.run(mailbox_store.drain("lead-s", limit=32))
+        assert len(drained) == 1
+        msg = drained[0]
         assert msg.kind == "member_done" and msg.payload["status"] == "cancelled"
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_heartbeat_pending_synthesizes_terminal_completed(
@@ -1518,13 +1548,16 @@ def test_heartbeat_pending_synthesizes_terminal_completed(
     orch = TaskOrchestrator()
 
     out = asyncio.run(
-        orch.coordination._heartbeat_pending(
+        member_probe.heartbeat_pending(
             task_id="t1", project_id="w1", pending_keys={"B", "C"}, user_id=OWNER
         )
     )
 
-    assert set(out.keys()) == {"B"}  # only the terminal member synthesized
-    assert out["B"]["status"] == "completed"
+    assert set(out.settled) == {"B"}  # only the terminal member synthesized
+    assert out.settled["B"]["status"] == "completed"
+    # Reported separately from what it acted on, so a caller can grant a grace
+    # period per member: C is still running, so it is not terminal either.
+    assert out.terminal == {"B"}
     runs = _runs(db_factory)
     assert runs["sB"] == "completed"
     plan = TaskPlan.from_dict(db_factory().query(TaskRow).filter_by(id="t1").one().plan)
@@ -1541,7 +1574,6 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
 
     from valuz_agent.api.routes import tasks as tasks_route
     from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
     from valuz_agent.modules.tasks.plan import TaskPlan
 
     _seed_lead_and_members(
@@ -1550,7 +1582,6 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
         members=[("A", "backend", "sA", "in_progress"), ("B", "frontend", "sB", "in_progress")],
     )
     orch = tasks_route.task_orchestrator
-    orch._members.set_members("t1", {"sA", "sB"})
 
     interrupted: list[str] = []
     spawned: list[tuple[str, str]] = []
@@ -1608,12 +1639,8 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
         assert ("lead-s", "lead") in spawned
         assert ("sA", "subtask") in spawned and ("sB", "subtask") in spawned
 
-    try:
-        asyncio.run(_run())
-        assert _task_row(db_factory).status == "active"
-    finally:
-        mailbox_registry.unregister("lead-s")
-        orch._members.set_members("t1", set())
+    asyncio.run(_run())
+    assert _task_row(db_factory).status == "active"
 
 
 def test_pause_distinct_from_stop_and_parks_nodes(db_factory, tmp_path, monkeypatch) -> None:
@@ -1623,12 +1650,10 @@ def test_pause_distinct_from_stop_and_parks_nodes(db_factory, tmp_path, monkeypa
     (``in_progress`` → ``paused``) so the right-rail panel stops spinning."""
     from valuz_agent.api.routes import tasks as tasks_route
     from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
     from valuz_agent.modules.tasks.plan import TaskPlan
 
     _seed_lead_and_members(db_factory, tmp_path, members=[("A", "backend", "sA", "in_progress")])
     orch = tasks_route.task_orchestrator
-    orch._members.set_members("t1", {"sA"})
 
     async def _noop_interrupt(_sid: str, user_id: str | None = None) -> None:
         assert user_id == OWNER
@@ -1652,11 +1677,7 @@ def test_pause_distinct_from_stop_and_parks_nodes(db_factory, tmp_path, monkeypa
             )
         assert r2.status == "stopped"
 
-    try:
-        asyncio.run(_run())
-    finally:
-        mailbox_registry.unregister("lead-s")
-        orch._members.set_members("t1", set())
+    asyncio.run(_run())
 
 
 def test_intervene_noop_raises_409_instead_of_false_success(
@@ -1675,7 +1696,6 @@ def test_intervene_noop_raises_409_instead_of_false_success(
 
     from valuz_agent.api.routes import tasks as tasks_route
     from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
 
     _seed_lead_and_members(db_factory, tmp_path, members=[], task_status="active")
     orch = tasks_route.task_orchestrator
@@ -1714,7 +1734,7 @@ def test_intervene_noop_raises_409_instead_of_false_success(
     try:
         asyncio.run(_run())
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_resume_evicts_kernel_runtime_before_respawn(db_factory, tmp_path, monkeypatch) -> None:
@@ -1729,7 +1749,6 @@ def test_resume_evicts_kernel_runtime_before_respawn(db_factory, tmp_path, monke
 
     import app.dependencies as appdeps
 
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
 
     _seed_lead_and_members(
         db_factory,
@@ -1773,7 +1792,7 @@ def test_resume_evicts_kernel_runtime_before_respawn(db_factory, tmp_path, monke
         assert "lead-s" in evicted and "sA" in evicted  # both evicted on resume
         assert "lead-s" in spawned and "sA" in spawned
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_lead_shutdown_exit_skips_auto_finalize(monkeypatch) -> None:
@@ -2751,30 +2770,31 @@ def test_finalize_actor_skips_parked_member_run(db_factory, tmp_path, monkeypatc
         db.close()
 
 
-def test_stop_member_wakes_idle_member_with_shutdown(db_factory, tmp_path) -> None:
+def test_stop_member_parks_the_run_the_member_reads(db_factory, tmp_path) -> None:
     """The kernel interrupt only reaches a member MID-TURN. An idle member
     (parked on its mailbox between turns) must still exit immediately on
     stop_member — without the shutdown message it sat out its full 10-minute
     idle TTL after the user already cancelled it."""
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
+    from valuz_agent.modules.tasks import mailbox_store
 
     _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
     orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"sB"})
 
     async def _fake_interrupt(sid: str, user_id: str | None = None) -> None: ...
 
     orch._recovery._interrupt_kernel_session = _fake_interrupt  # type: ignore[method-assign]
-    mailbox_registry.register("lead-s")
-    mailbox_registry.register("sB")  # the idle member's live inbox
     try:
         assert asyncio.run(orch.recovery.stop_member("sB", user_id=OWNER)) is True
-        assert mailbox_registry.has_pending("sB"), "idle member must be told to shut down"
-        msg = mailbox_registry._boxes["sB"].get_nowait()
-        assert msg.kind == "shutdown"
+        # The member learns it was cancelled from its OWN run row, which this
+        # call parks. A queued message could only have reached it while its
+        # loop happened to share this process — which is why the stop that
+        # ends a member was the one least able to cross one.
+        assert not asyncio.run(mailbox_store.has_pending("sB")), "a stop is not a message"
+        assert _runs(db_factory)["sB"] == "rejected", (
+            "and the fact it reads must be written before we return"
+        )
     finally:
-        mailbox_registry.unregister("lead-s")
-        mailbox_registry.unregister("sB")
+        pass
 
 
 def test_review_refuses_never_dispatched_node(db_factory, tmp_path) -> None:
@@ -2868,3 +2888,488 @@ def test_modify_plan_cannot_stamp_failed(db_factory, tmp_path) -> None:
         )
     )
     assert "error" in res and "illegal subtask transition" in res["error"]
+
+
+def test_recover_crashed_members_resolves_pending_from_the_store(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """The between-turns backstop, end to end against the real store.
+
+    This is the half that was missing. `_heartbeat_pending` only ever ran while
+    the lead sat INSIDE `await_members`; parked on its mailbox between turns it
+    consulted nothing. So a `member_done` posted into another process's queue —
+    which is what happens whenever `dispatch` lands on a different host process
+    than the lead loop — was simply never seen, the lead slept out its whole
+    idle TTL, and auto-finalize blocked the task for "unresolved subtasks" with
+    every member already finished.
+
+    Here the mailbox is not involved at all: the plan says `in_progress`, the
+    kernel says the session is done, and the lead must learn it from the store.
+    """
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(
+        db_factory,
+        tmp_path,
+        members=[("B", "frontend", "sB", "in_progress"), ("C", "qa", "sC", "in_progress")],
+    )
+    sessions = {
+        "sB": SimpleNamespace(status="idle", stop_reason={"type": "end_turn"}),
+        "sC": SimpleNamespace(status="running", stop_reason=None),
+    }
+    monkeypatch.setattr(
+        kernel_client_mod, "get_session", _as_async(lambda _uid, sid: sessions.get(sid))
+    )
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    monkeypatch.setattr(
+        manifest_mod,
+        "collect_manifest",
+        _as_async(lambda *a, **k: {"status": "completed", "summary": "ok"}),
+    )
+    orch = TaskOrchestrator()
+
+    recovered = asyncio.run(
+        orch.coordination.recover_crashed_members(
+            task_id="t1", project_id="w1", user_id=OWNER
+        )
+    )
+    assert recovered == 1, "one member had died; the other is still running"
+
+    # It ENQUEUES rather than returning a batch, so the result travels the same
+    # path as every other message and there is nothing for a caller to park.
+    msgs = asyncio.run(mailbox_store.drain("lead-s", limit=10))
+    assert [m.kind for m in msgs] == ["member_done"]
+    assert msgs[0].from_session == "sB"
+    assert msgs[0].payload["status"] == "completed"
+    # The one still running is left alone — a backstop must not invent results.
+    assert all(m.from_session != "sC" for m in msgs)
+
+
+def test_recover_crashed_members_is_quiet_when_nothing_is_pending(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """A lead parked with no in-flight member must not pay for a kernel probe."""
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(
+        db_factory, tmp_path, members=[("B", "frontend", "sB", "done")]
+    )
+    probes: list[str] = []
+
+    async def _get_session(_uid, sid):
+        probes.append(sid)
+        return SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+
+    monkeypatch.setattr(kernel_client_mod, "get_session", _get_session)
+    orch = TaskOrchestrator()
+
+    msgs = asyncio.run(
+        orch.coordination.recover_crashed_members(
+            task_id="t1", project_id="w1", user_id=OWNER
+        )
+    )
+    assert msgs == []
+    assert probes == []
+
+
+# ---------------------------------------------------------------------------
+# Duplicate member_done: the wasted-turn bug measured on qa.
+# ---------------------------------------------------------------------------
+
+
+def test_member_already_settled_says_yes_for_a_reviewed_member(
+    db_factory, tmp_path
+) -> None:
+    """A member the lead already approved must not earn another turn.
+
+    This is the qa case: the in-turn backstop synthesized the result while the
+    member was still collecting its manifest, the lead reviewed and moved on,
+    and the real ``member_done`` then arrived to wake it for work already done.
+    """
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "done")])
+    orch = TaskOrchestrator()
+    assert asyncio.run(
+        orch.coordination.member_already_settled(
+            task_id="t1", project_id="w1", member_session_id="sB", user_id=OWNER
+        )
+    )
+
+
+def test_member_awaiting_review_is_not_settled(db_factory, tmp_path) -> None:
+    """``in_review`` still owes the lead a review — waking it is the point."""
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_review")])
+    orch = TaskOrchestrator()
+    assert not asyncio.run(
+        orch.coordination.member_already_settled(
+            task_id="t1", project_id="w1", member_session_id="sB", user_id=OWNER
+        )
+    )
+
+
+def test_a_finished_task_settles_every_member(db_factory, tmp_path) -> None:
+    """Both wasted turns on qa landed AFTER ``task_completed``.
+
+    ``finish_task``'s shutdown was queued behind the stale results, and the
+    mailbox is FIFO, so the loop burned a turn on each before reading it.
+    """
+    _seed_lead_and_members(
+        db_factory, tmp_path, members=[("B", "frontend", "sB", "in_review")],
+        task_status="completed",
+    )
+    orch = TaskOrchestrator()
+    assert asyncio.run(
+        orch.coordination.member_already_settled(
+            task_id="t1", project_id="w1", member_session_id="sB", user_id=OWNER
+        )
+    )
+
+
+def test_an_unknown_member_is_never_swallowed(db_factory, tmp_path) -> None:
+    """No run row → surface it. Dropping is the dangerous direction here."""
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    orch = TaskOrchestrator()
+    assert not asyncio.run(
+        orch.coordination.member_already_settled(
+            task_id="t1", project_id="w1", member_session_id="who-dis", user_id=OWNER
+        )
+    )
+
+
+def test_the_backstop_does_not_settle_a_member_it_just_saw_stop(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """The backstop must not race the member's own report.
+
+    It reads durable state, so it sees a member as finished the moment its
+    kernel session goes terminal — while that member is still inside
+    ``notify_lead_member_idle`` collecting a manifest off the filesystem.
+    Synthesizing there strands the real ``member_done`` in a mailbox nobody
+    drains, and hands the lead a worse result: measured in production, the
+    backstop's manifest carried 29 and 31 artifacts, including files written on
+    three earlier days and the other members' output.
+
+    So it OBSERVES on the first pass and may only SETTLE on a later one.
+    """
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    monkeypatch.setattr(
+        kernel_client_mod,
+        "get_session",
+        _as_async(
+            lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+        ),
+    )
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    monkeypatch.setattr(
+        manifest_mod, "collect_manifest",
+        _as_async(lambda *a, **k: {"status": "completed", "summary": "ok"}),
+    )
+    monkeypatch.setattr("valuz_agent.modules.tasks.coordination._HEARTBEAT_S", 0.01)
+
+    orch = TaskOrchestrator()
+    settled: list[str] = []
+    real = member_probe.heartbeat_pending
+
+    async def _watching(**kw):
+        outcome = await real(**kw)
+        settled.extend(outcome.settled)
+        return outcome
+
+    monkeypatch.setattr(member_probe, "heartbeat_pending", _watching)
+
+    # A window of exactly one pass: it may look, it may not act.
+    asyncio.run(
+        orch.coordination.await_member_results(
+            lead_session_id="lead-s", project_id="w1", task_id="t1",
+            timeout_s=0.01, user_id=OWNER,
+        )
+    )
+    assert settled == [], "the first pass that sees a member stop belongs to its own report"
+    assert _runs(db_factory)["sB"] == "active", "and nothing may be written for it yet"
+
+
+def test_recovery_attributes_only_what_the_member_wrote(db_factory, tmp_path, monkeypatch) -> None:
+    """The reconcile path bounds artifacts by the member's own run row too.
+
+    It was the last of the four manifest call sites written without
+    ``since_epoch``, and the one the watchdog reaches when it adopts an
+    orphaned task — so the fix that made adoption common also made this bug
+    common. Observed on qa: two members handed the same 56-file manifest,
+    including reports written three and five days before the task existed.
+    """
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    monkeypatch.setattr(
+        kernel_client_mod,
+        "get_session",
+        _as_async(
+            lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+        ),
+    )
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    seen: dict[str, float] = {}
+
+    async def _capture(_sid, _run_dir, _status, *, since_epoch, **_kw):
+        seen["since_epoch"] = since_epoch
+        return {"status": "completed", "summary": "ok", "artifacts": []}
+
+    monkeypatch.setattr(manifest_mod, "collect_manifest", _capture)
+
+    orch = TaskOrchestrator()
+
+    async def _noop(*_a, **_kw) -> None: ...
+
+    monkeypatch.setattr(orch._recovery, "_interrupt_kernel_session", _noop)
+    monkeypatch.setattr(orch._actor, "run_actor_loop", _noop)
+
+    asyncio.run(orch.recovery.adopt_orphaned_task("t1", "w1", OWNER))
+
+    run_created_ms = next(
+        r.created_at
+        for r in db_factory().query(TaskSessionRow).filter_by(task_id="t1", session_id="sB")
+    )
+    assert seen.get("since_epoch") == pytest.approx(run_created_ms / 1000.0), (
+        "recovery must bound artifacts by the member's own run row, not by 0 — "
+        f"got {seen.get('since_epoch')!r}"
+    )
+
+
+def test_manifest_collection_refuses_to_guess_the_attribution_window() -> None:
+    """``since_epoch`` must stay required — a default is how this keeps happening.
+
+    It defaulted to ``0.0``, meaning "every file under run_dir belongs to this
+    member". Under a shared project cwd that is never true, and THREE of the
+    four call sites were written without it over time — each found separately,
+    months apart, each after it had already written wrong data. An omission
+    that is indistinguishable from a deliberate "attribute everything" cannot
+    have a default; the signature is the only thing that catches the fourth.
+    """
+    import inspect
+
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    for fn in (manifest_mod.collect_manifest, manifest_mod.collect_manifest_safe):
+        param = inspect.signature(fn).parameters["since_epoch"]
+        assert param.default is inspect.Parameter.empty, (
+            f"{fn.__name__} grew a default attribution window — a caller that "
+            "forgets it silently claims the whole directory"
+        )
+
+
+def test_the_backstop_attributes_only_what_the_member_wrote(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """The backstop must bound artifacts by the member's own run row.
+
+    Under a shared project cwd, artifacts are attributed by mtime, and
+    ``since_epoch=0`` means "every file here is yours". The delivery path has
+    always passed the member's dispatch time; this path omitted it, and it is
+    the path that usually wins the race — so the wrong manifest was the common
+    one. Production, one task: two members came back with 29 and 31 artifacts,
+    including reports written on three earlier days and each other's output.
+    """
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    monkeypatch.setattr(
+        kernel_client_mod,
+        "get_session",
+        _as_async(
+            lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+        ),
+    )
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    seen: dict[str, float] = {}
+
+    async def _capture(_sid, _run_dir, _status, *, since_epoch=0.0, **_kw):
+        seen["since_epoch"] = since_epoch
+        return {"status": "completed", "summary": "ok", "artifacts": []}
+
+    monkeypatch.setattr(manifest_mod, "collect_manifest", _capture)
+
+    asyncio.run(
+        member_probe.heartbeat_pending(
+            task_id="t1", project_id="w1", pending_keys={"B"}, user_id=OWNER
+        )
+    )
+
+    run_created_ms = next(
+        r.created_at
+        for r in db_factory().query(TaskSessionRow).filter_by(task_id="t1", session_id="sB")
+    )
+    assert seen.get("since_epoch") == pytest.approx(run_created_ms / 1000.0), (
+        "artifacts must be bounded by the member's own run row, not by 0 — "
+        f"got {seen.get('since_epoch')!r}"
+    )
+
+
+def test_the_grace_is_per_member_not_per_wait(db_factory, tmp_path, monkeypatch) -> None:
+    """A lead already deep in a wait must still give a NEW member its grace.
+
+    This is the one the old spelling got wrong, and it is the common case. The
+    grace used to be "the first slice of this ``await_members`` call", so a lead
+    that dispatched three members and waited three minutes had burned it ~25
+    slices before the first member even finished — and the backstop then won
+    every race. Production, 3 members: 2 were settled by the backstop 1.7s and
+    2.6s after finishing, their own reports arriving later and being dropped as
+    duplicates.
+
+    Here ``B`` is already finished (so passes accumulate against it) while ``C``
+    only stops later. ``C`` must still get a pass of grace of its own.
+    """
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(
+        db_factory,
+        tmp_path,
+        members=[("B", "frontend", "sB", "in_progress"), ("C", "qa", "sC", "in_progress")],
+    )
+    stopped: set[str] = {"sB"}  # B is done from the start; C stops on demand
+
+    def _session(_uid, sid):
+        if sid in stopped:
+            return SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+        return SimpleNamespace(status="running", stop_reason=None)
+
+    monkeypatch.setattr(kernel_client_mod, "get_session", _as_async(_session))
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    monkeypatch.setattr(
+        manifest_mod, "collect_manifest",
+        _as_async(lambda *a, **k: {"status": "completed", "summary": "ok"}),
+    )
+
+    passes = 0
+    real = member_probe.heartbeat_pending
+    settled_when: dict[str, int] = {}
+
+    async def _watching(**kw):
+        nonlocal passes
+        passes += 1
+        if passes == 3:
+            stopped.add("sC")  # C finishes deep into the wait
+        outcome = await real(**kw)
+        for key in outcome.settled:
+            settled_when.setdefault(key, passes)
+        return outcome
+
+    monkeypatch.setattr(member_probe, "heartbeat_pending", _watching)
+    monkeypatch.setattr("valuz_agent.modules.tasks.coordination._HEARTBEAT_S", 0.01)
+
+    orch = TaskOrchestrator()
+    asyncio.run(
+        orch.coordination.await_member_results(
+            lead_session_id="lead-s", project_id="w1", task_id="t1",
+            mode="all", timeout_s=0.4, user_id=OWNER,
+        )
+    )
+
+    assert settled_when.get("B") == 2, (
+        f"B stopped before pass 1, so it is settled on pass 2 (got {settled_when})"
+    )
+    assert settled_when.get("C", 0) >= 4, (
+        "C only stopped during pass 3, so pass 3 may observe it and pass 4 settle it — "
+        f"a wait already 3 passes deep must not skip C's grace (got {settled_when})"
+    )
+
+
+def test_the_backstop_still_fires_for_a_member_that_never_delivers(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """The grace above must not turn the backstop off — only make it second."""
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    monkeypatch.setattr(
+        kernel_client_mod,
+        "get_session",
+        _as_async(
+            lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+        ),
+    )
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    monkeypatch.setattr(
+        manifest_mod, "collect_manifest",
+        _as_async(lambda *a, **k: {"status": "completed", "summary": "ok"}),
+    )
+    monkeypatch.setattr("valuz_agent.modules.tasks.coordination._HEARTBEAT_S", 0.01)
+
+    orch = TaskOrchestrator()
+    out = asyncio.run(
+        orch.coordination.await_member_results(
+            lead_session_id="lead-s2", project_id="w1", task_id="t1",
+            timeout_s=0.06, user_id=OWNER,
+        )
+    )
+    assert out.get("collected"), "a member that never delivers must still be caught"
+
+
+def test_finish_task_parks_members_that_are_still_running(db_factory, tmp_path) -> None:
+    """A task cannot end while leaving its members running.
+
+    A member reads its OWN run row to know it was stopped, and finish_task
+    settles only the lead's. Without parking them here,
+    ``finish_task(stopped, force=True)`` — the one path that deliberately ends
+    a task while members are live — would leave every one of them running
+    until its idle TTL.
+
+    It used to queue a ``shutdown`` per member, which reached only the ones
+    whose loops shared the process that ran finish_task.
+    """
+    _seed_lead_and_members(
+        db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")]
+    )
+    orch = TaskOrchestrator()
+
+    assert _runs(db_factory)["sB"] == "active", "precondition: the member is running"
+
+    asyncio.run(
+        orch.finalization.finish_task(
+            task_id="t1",
+            project_id="w1",
+            lead_session_id="lead-s",
+            summary="done enough",
+            status="stopped",
+            force=True,
+            user_id=OWNER,
+        )
+    )
+
+    assert _runs(db_factory)["sB"] == "paused", (
+        "the member must be able to read that it was stopped — it has no other "
+        "way to find out"
+    )
+
+
+def test_stop_task_parks_the_lead_run_as_well(db_factory, tmp_path) -> None:
+    """A stopped task must not leave a run row claiming its lead is alive.
+
+    The lead's loop leaves through the externally-managed exit, which skips
+    finalize by design — the terminal state belongs to whoever stopped it — so
+    nothing else ever settles this row. Observed on qa: a task `stopped` for
+    twelve minutes, its lease correctly released, its lead run still `active`.
+    Anything reading the run index for liveness rather than the lease saw a
+    runner that had long since gone.
+    """
+    _seed_lead_and_members(
+        db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")]
+    )
+    orch = TaskOrchestrator()
+
+    async def _no_interrupt(_sid: str, user_id: str | None = None) -> None: ...
+
+    orch._recovery._interrupt_kernel_session = _no_interrupt  # type: ignore[method-assign]
+    assert asyncio.run(orch.recovery.stop_task("t1", "w1", user_id=OWNER)) is True
+
+    runs = _runs(db_factory)
+    assert runs["sB"] == "paused", "members were already parked"
+    assert runs["lead-s"] == "paused", (
+        "and the lead must be too — nothing else will ever settle it"
+    )

@@ -15,7 +15,7 @@ import re
 import time
 import uuid
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -57,15 +57,6 @@ from claude_agent_sdk.types import (
     SystemPromptPreset,
     ToolPermissionContext,
 )
-from claude_agent_sdk.types import (
-    McpHttpServerConfig as SdkMcpHttpServerConfig,
-)
-from claude_agent_sdk.types import (
-    McpSSEServerConfig as SdkMcpSSEServerConfig,
-)
-from claude_agent_sdk.types import (
-    McpStdioServerConfig as SdkMcpStdioServerConfig,
-)
 from src.core.agent_config import AgentConfig
 from src.core.approval_rule_matcher import (
     ClaudePermissionUpdateRuleMatcher,
@@ -91,23 +82,24 @@ from src.core.events import (
     EventSink,
 )
 from src.core.hooks import Hooks
-from src.core.mcp_source_metadata import adapt_mcp_source_result
+from src.core.mcp_source_metadata import (
+    adapt_mcp_source_result,
+    unwrap_mcp_source_content_transport,
+)
 from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
 from src.core.tools import ExecContext, ToolDef, ToolKit, ToolResult
 from src.core.types import (
-    AUTO_COMPACT_WINDOW_FRACTION,
     BudgetExhausted,
     EndTurn,
     Error,
-    McpServerConfig,
-    McpStdioServerConfig,
     ModelProvider,
     ModelSettings,
     Session,
     UserMessage,
     is_bare_completion,
 )
+from src.core.usage import diff_model_usage
 
 # Approval bridge — pure helpers live in ``approval_bridge.py``; we
 # re-export them here so existing call sites importing from
@@ -119,8 +111,12 @@ from src.runtimes.claude_agent.approval_bridge import (
     _build_pending_payload,
     _classify_subject,
 )
-from src.runtimes.interruption import describe_exception, is_runtime_interruption
-from src.runtimes.mcp_env import resolve_stdio_env
+from src.runtimes.claude_agent.mcp_proxy import ClaudeMcpSourceProxy
+from src.runtimes.interruption import (
+    absorb_interrupt_cancellations,
+    describe_exception,
+    is_runtime_interruption,
+)
 from src.runtimes.network_egress import (
     ModelIngressDescriptor,
     claude_api_key_credential_gate,
@@ -397,6 +393,12 @@ class ClaudeAgentRuntime:
         self.egress_descriptor = egress_descriptor
         self._client: ClaudeSDKClient | None = None
         self._active_client: ClaudeSDKClient | None = None
+        self._mcp_source_proxies: list[ClaudeMcpSourceProxy] = []
+        # Last cumulative usage snapshot echoed by the CLI, kept so every
+        # ``usage_update`` we emit carries a disjoint increment. Cleared
+        # with the client: a fresh CLI process restarts its accumulator at
+        # zero, so the next snapshot IS the delta.
+        self._usage_snapshot: dict[str, Any] | None = None
         # tool_use ids for TodoWrite calls in the current turn — used to
         # drop the matching ToolResultBlock from the outbound stream.
         self._todo_tool_use_ids: set[str] = set()
@@ -438,6 +440,12 @@ class ClaudeAgentRuntime:
         # iterator unblocks even when ``receive_response().__anext__`` is
         # waiting on the SDK subprocess for the next chunk.
         self._active_task: asyncio.Task[Any] | None = None
+        # How many times ``interrupt()`` cancelled ``_active_task`` during the
+        # current turn. ``run()`` swallows the injected ``CancelledError`` and
+        # then ``uncancel()``s exactly this many times so the turn task does
+        # not carry a stale cancellation count into later turns it drives
+        # (see ``absorb_interrupt_cancellations``).
+        self._interrupt_cancels = 0
         # Idle-stream drainer: consumes SDK messages BETWEEN turns so
         # background-task lifecycle pushes (task_updated / task_notification)
         # and the CLI's spontaneous wake-up turns are processed live instead
@@ -467,6 +475,13 @@ class ClaudeAgentRuntime:
         # selected by the retrieval tool; entries are consumed by the matching
         # ToolResultBlock and reset at each user turn.
         self._citation_tool_result_sidecars: dict[str, str] = {}
+        # ``private_citation_tool_content`` may replace repeated source data
+        # with JSON pointers into the canonical compacted projection. Claude's
+        # MCP bridge wraps that projection in a text content block before the
+        # matching ToolResultBlock reaches us, so retain the exact pointer
+        # root alongside the private sidecar. This is internal registration
+        # state only and is removed before the event is persisted/broadcast.
+        self._citation_tool_result_model_contents: dict[str, Any] = {}
         self._citation_compaction_enabled: bool = True
         self._citation_raw_documents: dict[str, dict[str, Any]] = {}
         self._citation_document_metadata: dict[str, dict[str, Any]] = {}
@@ -547,6 +562,16 @@ class ClaudeAgentRuntime:
         # binds to that fresh id. Consumed (and cleared) by the next
         # ``_build_options`` call.
         self._fork_next_spawn: bool = False
+        # Native fork anchor for the turn in flight: ``{"provider":
+        # "claude_agent", "native_session_id": ..., "message_uuid": ...}``.
+        # ``message_uuid`` is the transcript-entry uuid of the LAST
+        # main-chain stream message seen this turn (last write wins) —
+        # the anchor ``claude_agent_sdk.fork_session(up_to_message_id=...)``
+        # slices on. Read-and-cleared by the orchestrator
+        # (``consume_turn_anchor``) into
+        # ``Message.metadata["runtime_native"]`` — the message-granularity
+        # fork seam (docs/design/session-fork.md).
+        self._turn_anchor: dict[str, Any] | None = None
         # Phase 3 — approve_for_session matcher. Uses the SDK's
         # ``ToolPermissionContext.suggestions`` to derive pattern-grammar
         # rules (``Bash(npm test:*)``, ``Edit(src/**/*.ts)``,
@@ -592,6 +617,65 @@ class ClaudeAgentRuntime:
     def update_sink(self, sink: EventSink) -> None:
         self.event_sink = sink
 
+    def consume_turn_anchor(self) -> dict[str, Any] | None:
+        """Return and clear the native anchor captured by the last ``run()``.
+
+        Read-and-clear so a turn that streams no main-chain message
+        (spawn failure, immediate error) cannot inherit a stale anchor
+        from the previous message.
+        """
+        anchor, self._turn_anchor = self._turn_anchor, None
+        return anchor
+
+    async def fork_session(
+        self,
+        session: Session,
+        *,
+        source_native_session_id: str,
+        anchor: str | None = None,
+    ) -> str:
+        """Branch a source SDK session into this session's native session.
+
+        Uses the SDK's OFFLINE transcript transform
+        (``claude_agent_sdk.fork_session`` — a public export since 0.2.x,
+        absent from the sessions docs): it slices the source transcript at
+        ``anchor`` (a transcript ``message_uuid``, inclusive; ``None`` =
+        full copy), re-mints UUIDs preserving the ``parentUuid`` chain,
+        and writes a NEW session file — no CLI process, the new native id
+        returns synchronously, and the source is never mutated. The first
+        Send resumes the new id through the normal spawn path.
+
+        Deliberately NOT the spawn-time ``--resume-session-at`` /
+        ``resume_session_at`` route (SDK PR #1198): the CLI only reports
+        the forked session id in the ``init`` message of the FIRST QUERY
+        (probe-verified: no init arrives on a bare connect), so spawn-time
+        slicing cannot satisfy the eager fork contract — reserve those
+        options for a future same-session rewind feature. Also distinct
+        from ``_fork_next_spawn``, the permission-mode workaround that
+        forks only at the tail and rewrites this session's own id.
+        """
+        try:
+            from claude_agent_sdk import fork_session as sdk_fork_session
+        except ImportError as exc:  # pragma: no cover — pinned SDK ships it
+            raise NotImplementedError(
+                "claude_agent native fork needs claude_agent_sdk.fork_session "
+                f"(not exported by the installed SDK): {exc}"
+            ) from exc
+
+        directory = self.workspace_root or session.cwd or None
+        # Sync, filesystem-only transform — keep it off the event loop.
+        result = await asyncio.to_thread(
+            sdk_fork_session,
+            source_native_session_id,
+            directory=directory,
+            up_to_message_id=anchor,
+        )
+        new_id = str(result.session_id)
+        # Same internal backfill as the init-message capture — no API
+        # write channel involved.
+        session.runtime_session_id = new_id
+        return new_id
+
     async def prepare(self, session: Session) -> None:
         """Claude prewarming is deferred until its client lifecycle is isolated."""
         del session
@@ -632,12 +716,14 @@ class ClaudeAgentRuntime:
         self._workflow_pollers = []
         self._active_workflows = []
         self._citation_tool_result_sidecars = {}
+        self._citation_tool_result_model_contents = {}
         self._citation_raw_documents = {}
         self._citation_document_metadata = {}
         self._cur_session_id = session.id
         self._egress_turn_attempt_id = uuid.uuid4().hex
         self._egress_first_model_event_recorded = False
         self._cancelled = False
+        self._interrupt_cancels = 0
         # Reset stderr buffer so any ``session_error`` from this turn
         # carries only this turn's CLI output, not noise from prior
         # successful turns rolling in the deque.
@@ -708,12 +794,19 @@ class ClaudeAgentRuntime:
         except asyncio.CancelledError:
             # interrupt() called task.cancel() to unblock the SDK iterator
             # when it was waiting on the subprocess for the next chunk.
+            # Swallowing it ends the turn as a user cancel; balancing the
+            # cancel count keeps this task honest for the turns it drives
+            # next (queue drain / actor loop) — a stale ``cancelling() > 0``
+            # made ``_stop_idle_drainer`` mistake a later drainer teardown
+            # for its own cancellation and fail a completed turn.
             session.status = "idle"
             session.stop_reason = Error(
                 category="user_interrupt",
                 retry_status="terminal",
                 message="cancelled",
             )
+            absorb_interrupt_cancellations(self._interrupt_cancels)
+            self._interrupt_cancels = 0
             await self._destroy_client()
 
         except Exception as exc:
@@ -952,7 +1045,7 @@ class ClaudeAgentRuntime:
                     await self.event_sink.emit(
                         Event(
                             type="usage_update",
-                            data=_build_usage_payload(self.model, msg),
+                            data=self._usage_delta_payload(msg),
                         )
                     )
                     continue
@@ -981,15 +1074,16 @@ class ClaudeAgentRuntime:
         if task is None or task.done():
             return
         task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            # Re-raise ONLY if it is *this* coroutine being cancelled;
-            # the drainer's own cancellation lands here as a plain result.
-            if (cur := asyncio.current_task()) is not None and cur.cancelling():
-                raise
-        except Exception:
-            logger.debug("claude_agent: idle drainer teardown failed", exc_info=True)
+        # ``asyncio.wait`` never re-raises the DRAINER's cancellation into this
+        # coroutine — only a genuine cancellation of the current task
+        # propagates out of it. (The previous ``await task`` +
+        # ``current_task().cancelling()`` discriminator misfired whenever the
+        # turn task carried a stale cancel count from an earlier swallowed
+        # interrupt, surfacing the drainer's own CancelledError as a turn
+        # failure right after a completed answer.)
+        await asyncio.wait({task})
+        if not task.cancelled() and (exc := task.exception()) is not None:
+            logger.debug("claude_agent: idle drainer teardown failed: %r", exc)
 
     async def _drain_idle_stream(self, session: Session) -> None:
         """Between-turns consumer: background-task pushes + wake-up turns.
@@ -1010,7 +1104,7 @@ class ClaudeAgentRuntime:
                     await self.event_sink.emit(
                         Event(
                             type="usage_update",
-                            data=_build_usage_payload(self.model, msg),
+                            data=self._usage_delta_payload(msg),
                         )
                     )
                     await self.event_sink.emit(
@@ -1383,6 +1477,7 @@ class ClaudeAgentRuntime:
         task = self._active_task
         if task is not None and not task.done():
             task.cancel()
+            self._interrupt_cancels += 1
 
     async def close(self) -> None:
         await self._destroy_client()
@@ -1394,6 +1489,10 @@ class ClaudeAgentRuntime:
         self._bracket_open = False
         self._open_bracket_is_wakeup = False
         self._pending_wakeups = 0
+        # The CLI process owns the cumulative usage counter this runtime
+        # differences against; a rebuilt CLI starts it at zero again, so a
+        # baseline that outlived its process would swallow the next turn.
+        self._usage_snapshot = None
         # Background processes die with the CLI subprocess — flush a terminal
         # event for each so the persisted stream never claims a task is
         # running on a dead runtime. Best-effort: destroy may run during
@@ -1425,6 +1524,59 @@ class ClaudeAgentRuntime:
             finally:
                 self._client = None
                 self._active_client = None
+        proxies = getattr(self, "_mcp_source_proxies", [])
+        self._mcp_source_proxies = []
+        if proxies:
+            await asyncio.gather(*(proxy.close() for proxy in proxies), return_exceptions=True)
+
+    def _usage_delta_payload(self, result_msg: Any) -> dict[str, Any]:
+        """Turn the CLI's cumulative usage counter into THIS turn's increment.
+
+        The Claude CLI keeps one per-model usage accumulator for the whole
+        process (``Ot.modelUsage``, reset only by a conversation reset) and
+        echoes it on every ``result`` message. Persisting that snapshot as
+        the turn's usage made every message row carry "everything spent so
+        far", so summing rows — which is exactly what the session panel, the
+        monthly rollup and the billing meter do — recounted earlier turns:
+        a 3-turn session reported ~3x its real input tokens, and a turn that
+        issued no request at all (a local slash command) reported a full
+        copy of the previous turn's total.
+
+        Differencing against the last snapshot makes every emitted
+        ``usage_update`` a disjoint increment, which also makes the two
+        snapshots a single turn can produce (an interleaved wake-up turn
+        plus our own result) additive instead of double-counted. A counter
+        that moved backwards means the CLI restarted or reset its
+        conversation mid-flight; drop the stale baseline and take the fresh
+        snapshot whole rather than clamping the turn to zero.
+        """
+        snapshot = _build_cumulative_usage_snapshot(self.model, result_msg)
+        previous = self._usage_snapshot
+        self._usage_snapshot = snapshot
+        if previous is not None and any(
+            int(snapshot.get(field) or 0) < int(previous.get(field) or 0)
+            for field in _FLAT_USAGE_FIELDS
+        ):
+            previous = None
+
+        delta: dict[str, Any] = {
+            field: max(0, int(snapshot.get(field) or 0) - int((previous or {}).get(field) or 0))
+            for field in _FLAT_USAGE_FIELDS
+        }
+        per_model = snapshot.get("model_usage")
+        if isinstance(per_model, dict):
+            base = (previous or {}).get("model_usage")
+            delta["model_usage"] = diff_model_usage(
+                base if isinstance(base, dict) else None, per_model
+            )
+        else:
+            delta["model_usage"] = per_model
+        if "cost_usd" in snapshot:
+            cost = float(snapshot.get("cost_usd") or 0.0) - float(
+                (previous or {}).get("cost_usd") or 0.0
+            )
+            delta["cost_usd"] = max(0.0, cost)
+        return delta
 
     def _on_stderr_line(self, line: str) -> None:
         """Callback wired into ``ClaudeAgentOptions.stderr``. Pushes the
@@ -1674,8 +1826,12 @@ class ClaudeAgentRuntime:
         if sdk_tools:
             mcp["harness"] = create_sdk_mcp_server(name="harness", tools=sdk_tools)
 
+        proxies: list[ClaudeMcpSourceProxy] = []
         for cfg in session.mcp_servers:
-            mcp[cfg.name] = _to_sdk_mcp_server(cfg)
+            proxy = ClaudeMcpSourceProxy(cfg)
+            proxies.append(proxy)
+            mcp[cfg.name] = proxy.sdk_config()
+        self._mcp_source_proxies = proxies
 
         # ``allowed_tools`` is the Claude SDK's *approval-bypass* list
         # (it lowers to ``--allowedTools`` on the CLI). Tools matched
@@ -1752,7 +1908,7 @@ class ClaudeAgentRuntime:
         # process environment; repeat only the non-secret loopback routing
         # fields in ``--settings`` so a project cannot bypass the registered
         # capability by replacing ANTHROPIC_BASE_URL.
-        model_env = self._build_model_provider_env()
+        model_env = self._build_model_provider_env(session=session)
         forced_egress_env: dict[str, str] | None = None
         if self._egress_enabled_for_spawn and model_env is not None:
             forced_egress_env = {
@@ -1888,20 +2044,26 @@ class ClaudeAgentRuntime:
         omitted.
 
         The workspace's own settings are read once up front so each harness
-        default can defer to an explicit project value. Three defaults today:
+        default can defer to an explicit project value. Two defaults today:
 
         - dynamic workflows / ``/deep-research`` (``enableWorkflows``), which
           the ``setting_sources=["project"]`` scoping otherwise drops (it
           lives in the user surface; see ``_WORKFLOW_SETTINGS``);
         - ``skipWebFetchPreflight`` when the deployment opts in via
           ``VALUZ_SKIP_WEBFETCH_PREFLIGHT`` (see
-          ``SKIP_WEBFETCH_PREFLIGHT_ENV``);
-        - ``autoCompactWindow`` when the session carries a channel-declared
-          ``max_input_tokens`` (gateway aliases the CLI's per-model tuning
-          can't know). The trigger is ``AUTO_COMPACT_WINDOW_FRACTION`` of
-          the input window, clamped to the CLI's documented 100k–1M range —
-          a sub-100k trigger is skipped entirely (emitting the 100k floor
-          would place the trigger past the real window).
+          ``SKIP_WEBFETCH_PREFLIGHT_ENV``).
+
+        Deliberately NOT ``autoCompactWindow``. The harness used to inject
+        ``0.85 x max_input_tokens`` here; the CLI treats that key as "how
+        full the context may get before compaction" and reports it as the
+        window in ``/context`` (``Tokens: x / 850k`` for a declared 1M),
+        which reads as a wrong window even though the model window was
+        right. The channel-declared window travels as
+        ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` instead
+        (``_build_model_provider_env``) and the CLI applies its own tuned
+        compaction threshold inside it — the same policy it uses for every
+        model it knows — so a project's / user's ``autoCompactWindow`` is
+        the only thing that ever narrows it.
 
         Keep each a true *default*: inject it only when the project hasn't set
         the key, so a project's explicit value loaded through
@@ -1927,11 +2089,6 @@ class ClaudeAgentRuntime:
             settings.update(_WORKFLOW_SETTINGS)
         if _skip_webfetch_preflight_enabled() and "skipWebFetchPreflight" not in project:
             settings["skipWebFetchPreflight"] = True
-        max_input_tokens = self.model_settings.max_input_tokens if self.model_settings else None
-        if max_input_tokens and "autoCompactWindow" not in project:
-            window = int(max_input_tokens * AUTO_COMPACT_WINDOW_FRACTION)
-            if window >= 100_000:
-                settings["autoCompactWindow"] = min(window, 1_000_000)
         return json.dumps(settings) if settings else None
 
     def _build_model_provider_env(self, session: Session | None = None) -> dict[str, str] | None:
@@ -1954,6 +2111,21 @@ class ClaudeAgentRuntime:
           may be unavailable behind a gateway); cleared on the first-party
           path so it keeps the default.
         * ``ANTHROPIC_AUTH_TOKEN`` — the per-session api_key.
+        * ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` — the session's channel-declared
+          ``max_input_tokens``. For a gateway / custom model id the CLI
+          cannot resolve to a Claude model it otherwise *assumes* a window
+          for the id (its generic 200k default), so its auto-compaction
+          would be measured against the wrong size. Declaring the real
+          window is the Claude analog of codex's ``model_context_window``;
+          the compaction threshold itself is left to the CLI (its own tuned
+          headroom below the window, the same policy it applies to every
+          model it knows). Documented semantics (model-config "Correct the
+          window for a gateway or custom model ID"): applies directly to an
+          id that neither starts with ``claude-`` nor contains ``[1m]``; a
+          ``claude-`` / resolvable Claude id keeps the CLI's own tuning (the
+          variable is a no-op there unless ``DISABLE_COMPACT`` is set), and
+          an unresolvable ``[1m]`` id keeps the CLI's assumed 1M window.
+          Only set when declared — never guessed from the model name.
         * Non-Claude model aliases additionally rewrite the SDK's
           ``ANTHROPIC_DEFAULT_*_MODEL`` family so the CLI doesn't
           short-circuit to its built-in Claude defaults when running
@@ -2006,6 +2178,11 @@ class ClaudeAgentRuntime:
                 merged["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] = "1"
             else:
                 merged.pop("CLAUDE_CODE_DISABLE_ADVISOR_TOOL", None)
+            if session is not None:
+                # Tag gateway LLM requests with the session id so the gateway
+                # can stamp session_id on gateway_debit ledger rows.
+                # ANTHROPIC_CUSTOM_HEADERS format: "Name: Value" lines joined by "\n".
+                merged["ANTHROPIC_CUSTOM_HEADERS"] = f"X-Valuz-Session-Id: {session.id}"
         else:
             # If a previous env carried a stale base_url (e.g. parent
             # shell exported one for an unrelated workflow), wipe it so
@@ -2016,6 +2193,10 @@ class ClaudeAgentRuntime:
             # advisor-off flag so the first-party path gets the default
             # (advisor on) rather than silently honoring a parent export.
             merged.pop("CLAUDE_CODE_DISABLE_ADVISOR_TOOL", None)
+        model_settings = getattr(self, "model_settings", None)
+        max_input_tokens = getattr(model_settings, "max_input_tokens", None)
+        if isinstance(max_input_tokens, int) and max_input_tokens > 0:
+            merged["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(max_input_tokens)
         if self.model_provider is None:
             # Native subscription credentials remain in Claude Code's own
             # credential store. In particular, do not materialize
@@ -2213,6 +2394,21 @@ class ClaudeAgentRuntime:
             hooks is not None and hooks._handlers.get("after_tool")
         ):
 
+            def post_tool_output(tool_name: str, value: Any) -> SyncHookJSONOutput:
+                if tool_name.startswith("mcp__"):
+                    return SyncHookJSONOutput(
+                        hookSpecificOutput={
+                            "hookEventName": "PostToolUse",
+                            "updatedMCPToolOutput": value,
+                        }
+                    )
+                return SyncHookJSONOutput(
+                    hookSpecificOutput={
+                        "hookEventName": "PostToolUse",
+                        "updatedToolOutput": value,
+                    }
+                )
+
             async def post_tool_use(
                 input_data: HookInput, tool_use_id: str | None, context: HookContext
             ) -> SyncHookJSONOutput:
@@ -2220,11 +2416,18 @@ class ClaudeAgentRuntime:
                 tool_name = str(data.get("tool_name") or "")
                 tool_response = data.get("tool_response", "")
                 if hooks is not None and hooks._handlers.get("after_tool"):
+                    _, _, hook_tool_response = unwrap_mcp_source_content_transport(tool_response)
                     await hooks.fire(
                         "after_tool",
                         tool_name=tool_name,
                         input=data.get("tool_input", {}),
-                        result=ToolResult(content=str(tool_response)),
+                        result=ToolResult(
+                            content=str(
+                                hook_tool_response
+                                if hook_tool_response is not None
+                                else tool_response
+                            )
+                        ),
                     )
                 if not self._citation_compaction_enabled:
                     return SyncHookJSONOutput()
@@ -2242,9 +2445,19 @@ class ClaudeAgentRuntime:
                     if persisted_tool_response is not None
                     else tool_response
                 )
+                (
+                    transport_descriptor,
+                    transport_structured_content,
+                    restored_tool_response,
+                ) = unwrap_mcp_source_content_transport(effective_tool_response)
+                source_content_transport_handled = restored_tool_response is not None
+                if source_content_transport_handled:
+                    effective_tool_response = restored_tool_response
                 source_adaptation = adapt_mcp_source_result(
                     effective_tool_response,
                     tool_name=tool_name or None,
+                    descriptor=transport_descriptor,
+                    structured_content=transport_structured_content,
                 )
                 source_metadata_handled = source_adaptation is not None
                 if source_adaptation is not None and source_adaptation.resource_kinds != {
@@ -2303,17 +2516,7 @@ class ClaudeAgentRuntime:
                                 ensure_ascii=False,
                                 separators=(",", ":"),
                             )
-                        output_key = (
-                            "updatedMCPToolOutput"
-                            if tool_name.startswith("mcp__")
-                            else "updatedToolOutput"
-                        )
-                        return SyncHookJSONOutput(
-                            hookSpecificOutput={
-                                "hookEventName": "PostToolUse",
-                                output_key: visible,
-                            }
-                        )
+                        return post_tool_output(tool_name, visible)
                 if not source_metadata_handled:
                     augmented_indexed_content = augment_indexed_document_evidence(
                         effective_tool_response,
@@ -2347,18 +2550,34 @@ class ClaudeAgentRuntime:
                     <= _MAX_PERSISTED_CITATION_CONTENT_BYTES
                 ):
                     self._citation_tool_result_sidecars[tool_use_id] = private_citation_content
+                    self._citation_tool_result_model_contents[tool_use_id] = (
+                        compacted if compacted is not None else model_projection
+                    )
                 if compacted is None:
+                    if source_content_transport_handled:
+                        return post_tool_output(tool_name, effective_tool_response)
                     return SyncHookJSONOutput()
-                output_key = (
-                    "updatedMCPToolOutput" if tool_name.startswith("mcp__") else "updatedToolOutput"
-                )
-                hook_output: dict[str, Any] = {
-                    "hookEventName": "PostToolUse",
-                    output_key: compacted,
-                }
-                return SyncHookJSONOutput(
-                    hookSpecificOutput=hook_output,
-                )
+                visible_output: Any = compacted
+                if source_content_transport_handled and tool_name.startswith("mcp__"):
+                    # Claude's SDK-MCP control bridge gives PostToolUse a list
+                    # of MCP content blocks and requires replacements to keep
+                    # that outer shape.  Source adaptation works on the
+                    # restored structured payload, so serialize its model
+                    # projection back into one ordinary compatibility block.
+                    # Returning the mapping directly makes the CLI call
+                    # ``reduce`` on a non-list and converts a successful tool
+                    # call into a runtime failure.
+                    visible_output = [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                compacted,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        }
+                    ]
+                return post_tool_output(tool_name, visible_output)
 
             sdk_hooks["PostToolUse"] = [HookMatcher(hooks=[post_tool_use])]
 
@@ -2778,6 +2997,28 @@ class ClaudeAgentRuntime:
 
     # -- Message conversion --
 
+    def _note_turn_anchor(self, session: Session, message: Any) -> None:
+        """Track the fork anchor from a main-chain stream message.
+
+        ``message.uuid`` is the transcript-entry uuid — what
+        ``fork_session(up_to_message_id=...)`` slices on. Sidechain
+        messages (``parent_tool_use_id`` set) are skipped: forked
+        transcripts drop sidechains, so their uuids are not valid
+        anchors. Last write wins, so at end of turn the anchor is the
+        turn's final main-chain transcript entry.
+        """
+        uuid_value = getattr(message, "uuid", None)
+        if not uuid_value or getattr(message, "parent_tool_use_id", None) is not None:
+            return
+        native_session_id = session.runtime_session_id
+        if not native_session_id:
+            return
+        self._turn_anchor = {
+            "provider": "claude_agent",
+            "native_session_id": str(native_session_id),
+            "message_uuid": str(uuid_value),
+        }
+
     async def _handle_message(self, session: Session, message: Any) -> None:
         if isinstance(message, StreamEvent):
             # ``parent_tool_use_id`` is set when this stream event was
@@ -2945,6 +3186,7 @@ class ClaudeAgentRuntime:
         elif isinstance(message, AssistantMessage):
             if not getattr(self, "_egress_first_model_event_recorded", False):
                 await self._record_egress_model_first_event()
+            self._note_turn_anchor(session, message)
             # ``parent_tool_use_id`` is set when this message was produced
             # INSIDE a subagent (Task/Agent tool run). Thread it onto every
             # emitted event so downstream consumers can tell out-of-band
@@ -3008,6 +3250,7 @@ class ClaudeAgentRuntime:
                     )
 
         elif isinstance(message, SdkUserMessage):
+            self._note_turn_anchor(session, message)
             content = message.content
             if isinstance(content, list):
                 # Same subagent attribution as AssistantMessage above: tool
@@ -3032,8 +3275,24 @@ class ClaudeAgentRuntime:
                             result_content,
                             tool_use_id=block.tool_use_id,
                         )
+                        model_contents = getattr(
+                            self,
+                            "_citation_tool_result_model_contents",
+                            {},
+                        )
+                        citation_model_content = model_contents.pop(
+                            block.tool_use_id,
+                            None,
+                        )
                         citation_extra = (
-                            {"_citation_content": citation_content}
+                            {
+                                "_citation_content": citation_content,
+                                **(
+                                    {"_citation_model_content": citation_model_content}
+                                    if citation_model_content is not None
+                                    else {}
+                                ),
+                            }
                             if citation_content is not None
                             else {}
                         )
@@ -3118,7 +3377,7 @@ class ClaudeAgentRuntime:
                             message=_result_error_message(message),
                         )
 
-            usage_payload = _build_usage_payload(self.model, message)
+            usage_payload = self._usage_delta_payload(message)
             await self.event_sink.emit(Event(type="usage_update", data=usage_payload))
 
             num_turns = message.num_turns or 1
@@ -3225,7 +3484,7 @@ def _stringify_tool_result_content(content: Any) -> str:
         return str(content)
 
 
-def _iter_tool_response_mappings(value: Any):  # noqa: ANN202
+def _iter_tool_response_mappings(value: Any) -> Iterator[Mapping[str, Any]]:
     if isinstance(value, str):
         try:
             parsed = json.loads(value)
@@ -3298,6 +3557,15 @@ def _load_persisted_tool_result_content(
         return None
 
 
+# The cross-runtime flat token fields every ``usage_update`` carries.
+_FLAT_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+)
+
+
 def _normalize_anthropic_usage(raw: Any) -> dict[str, int]:
     """Project the Anthropic-native usage shape onto our four flat fields.
 
@@ -3330,12 +3598,19 @@ def _normalize_anthropic_usage(raw: Any) -> dict[str, int]:
     }
 
 
-def _build_usage_payload(default_model: str, result_msg: Any) -> dict[str, Any]:
-    """Build the ``usage_update`` event payload from a ResultMessage.
+def _build_cumulative_usage_snapshot(default_model: str, result_msg: Any) -> dict[str, Any]:
+    """Project a ResultMessage's usage onto our payload shape, AS REPORTED.
 
     Aggregate fields are the totals across all models that participated in
     the run (e.g. main agent + sub-agents). ``model_usage`` retains the
     SDK-native per-model breakdown so consumers can do per-model attribution.
+
+    What the SDK reports here is **cumulative for the CLI process**, not this
+    turn: the CLI records every model request (including ones it never writes
+    to the transcript, e.g. conversation-title generation) into one global
+    per-model accumulator and echoes that accumulator on every ``result``
+    message. Callers must difference two snapshots before emitting a
+    ``usage_update`` — see ``ClaudeAgentRuntime._usage_delta_payload``.
     """
     raw_usage = getattr(result_msg, "usage", None) or {}
     raw_model_usage = getattr(result_msg, "model_usage", None)
@@ -3363,53 +3638,3 @@ def _build_usage_payload(default_model: str, result_msg: Any) -> dict[str, Any]:
     if cost is not None:
         payload["cost_usd"] = float(cost)
     return payload
-
-
-def _apply_tool_timeout(entry: dict[str, Any], cfg: McpServerConfig) -> None:
-    """Carry ``tool_timeout_sec`` into the CLI's per-server idle timeout.
-
-    The Claude CLI aborts a silent MCP tool call after its own default
-    (300s) and tells the operator to set a per-server ``timeout`` in ms. A
-    generation tool legitimately runs longer than that with nothing to say
-    in between (``generate_ui`` streams a whole document from a model), so a
-    server that declared a tool timeout must have it honoured here — codex
-    already maps the same field onto its own config. The SDK forwards this
-    dict verbatim into ``--mcp-config``, so an extra key reaches the CLI
-    even though its TypedDict does not name one.
-    """
-    timeout_sec = getattr(cfg, "tool_timeout_sec", None)
-    if isinstance(timeout_sec, (int, float)) and timeout_sec > 0:
-        entry["timeout"] = int(float(timeout_sec) * 1000)
-
-
-def _to_sdk_mcp_server(
-    cfg: McpServerConfig,
-) -> SdkMcpHttpServerConfig | SdkMcpSSEServerConfig | SdkMcpStdioServerConfig:
-    """Translate kernel `McpServerConfig` to the SDK's wire-format dict."""
-    if isinstance(cfg, McpStdioServerConfig):
-        stdio: SdkMcpStdioServerConfig = {
-            "type": "stdio",
-            "command": cfg.command,
-            "args": list(cfg.args),
-        }
-        # Only include ``env`` when the user supplied something — once the
-        # SDK forwards an env dict, the Claude CLI uses it as-is for the
-        # MCP child, replacing the parent env entirely. Omitting lets the
-        # CLI inherit naturally (HOME / PATH / etc.), which ``npx``-style
-        # commands depend on.
-        env = resolve_stdio_env(cfg)
-        if env is not None:
-            stdio["env"] = env
-        _apply_tool_timeout(stdio, cfg)
-        return stdio
-    if cfg.transport == "sse":
-        sse: SdkMcpSSEServerConfig = {"type": "sse", "url": cfg.url}
-        if cfg.headers:
-            sse["headers"] = dict(cfg.headers)
-        _apply_tool_timeout(sse, cfg)
-        return sse
-    http: SdkMcpHttpServerConfig = {"type": "http", "url": cfg.url}
-    if cfg.headers:
-        http["headers"] = dict(cfg.headers)
-    _apply_tool_timeout(http, cfg)
-    return http

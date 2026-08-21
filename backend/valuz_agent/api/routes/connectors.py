@@ -15,6 +15,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.api.deps import get_current_user_id
+from valuz_agent.i18n import get_locale, get_request_locale, parse_accept_language
 from valuz_agent.infra.db import async_unit_of_work, get_async_session
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.connectors.catalog import load_catalog
@@ -801,27 +802,20 @@ class OAuthCallbackResult(BaseModel):
     error: str | None = None
 
 
-_SUPPORTED_LOCALES = ("zh-CN", "en-US")
 
 
 def _parse_accept_language(header: str | None) -> str:
-    """Pick the best supported locale from an ``Accept-Language`` header.
+    """Locale for this catalog read.
 
-    Returns one of ``_SUPPORTED_LOCALES``; defaults to ``zh-CN``. Ignores
-    q-values — the desktop client sends a single token, so first-match wins.
+    Thin wrapper over :func:`valuz_agent.i18n.parse_accept_language` (this
+    module owned the only copy of that logic until the locale became
+    request-scoped). Falls back to the request locale bound by
+    ``LocaleMiddleware`` — same answer for an HTTP caller, and a sane one for
+    the in-process MCP server, which has no header at all.
     """
-    if not header:
-        return "zh-CN"
-    for raw in header.split(","):
-        tag = raw.split(";")[0].strip()
-        if tag in _SUPPORTED_LOCALES:
-            return tag
-        # Match language part only ("en" → "en-US")
-        prefix = tag.split("-")[0].lower()
-        for supported in _SUPPORTED_LOCALES:
-            if supported.split("-")[0].lower() == prefix:
-                return supported
-    return "zh-CN"
+    if header:
+        return parse_accept_language(header)
+    return get_request_locale() or get_locale()
 
 
 def _localize(value: object, locale: str) -> str | None:

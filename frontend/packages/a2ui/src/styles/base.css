@@ -1,0 +1,31 @@
+.valuz-a2ui {
+  box-sizing: border-box;
+  color: var(--va2-text);
+  font-family: var(--va2-font);
+  font-size: 14px;
+  line-height: 1.7;
+  min-width: 0;
+}
+
+.valuz-a2ui *,
+.valuz-a2ui *::before,
+.valuz-a2ui *::after {
+  box-sizing: border-box;
+}
+
+.valuz-a2ui button,
+.valuz-a2ui input,
+.valuz-a2ui select,
+.valuz-a2ui textarea {
+  color: inherit;
+  font: inherit;
+}
+
+.valuz-a2ui button:focus-visible,
+.valuz-a2ui input:focus-visible,
+.valuz-a2ui select:focus-visible,
+.valuz-a2ui textarea:focus-visible,
+.valuz-a2ui a:focus-visible {
+  outline: 2px solid var(--va2-brand);
+  outline-offset: 2px;
+}

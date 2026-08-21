@@ -3,7 +3,7 @@ import { DeleteConfirmDialog, BackgroundTaskStrip } from "@valuz/ui";
 import { useProjectOutlet } from "@valuz/app/layout";
 import { ArtifactSplitPane } from "../../components/ArtifactSplitPane";
 import { useProjectHandoff } from "./useProjectHandoff";
-import { useTitleActions } from "./useTitleActions";
+import { canForkSession, useTitleActions } from "./useTitleActions";
 import { useContextPanel } from "./useContextPanel";
 import {
   useConversationOrchestration,
@@ -33,6 +33,11 @@ export interface ConversationViewProps {
    *  session, so the embedding host can persist the id. Unused by ``page``
    *  (the URL is the persistence). */
   onSessionCreated?: (sessionId: string) => void;
+  /** Embedded hosts may persist a session id beyond the lifetime of the
+   *  backend/database it came from. When that id is confirmed missing (404),
+   *  the panel asks its host to discard the id and falls back to a fresh
+   *  draft. Page routes intentionally keep their explicit not-found state. */
+  onSessionUnavailable?: (sessionId: string) => void;
   /** ``panel``-variant "starter" affordance — fills the composer draft with
    *  this text once, then calls ``onPrefillConsumed``. */
   prefillDraft?: string | null;
@@ -93,6 +98,7 @@ function useOrchestration(
     conversationInstanceKey,
     promotingSessionIdRef,
     onSessionPromoted,
+    onSessionUnavailable: props.onSessionUnavailable,
     directoryFieldMode,
     hostRef: props.hostRef,
     createDefaults: props.createDefaults,
@@ -144,6 +150,9 @@ function ConversationViewPage(props: ConversationViewProps) {
     setTitleDeleting,
     titleDeleteInFlight,
     handleTitleDeleteConfirm,
+    forkInFlight,
+    forkingMessageId,
+    handleFork,
   } = useTitleActions({ selectedSessionId: core.selectedSessionId });
 
   // Context panel — the JSX-producing ``contextPanelNode`` memo and the
@@ -211,10 +220,12 @@ function ConversationViewPage(props: ConversationViewProps) {
             setTitleDeleting={setTitleDeleting}
             draftSendInFlight={core.draftSendInFlight}
             effectiveTurns={core.effectiveTurns}
-            selectedProjectOrigin={core.selectedProjectOrigin}
+            scrollToTop={() => core.scrollToTurnIndex(0)}
             headerAgentSlug={core.headerAgentSlug}
             agentNameBySlug={core.agentNameBySlug}
             activeProject={core.activeProject}
+            onFork={() => void handleFork()}
+            forkInFlight={forkInFlight}
           />
 
           <ConversationBody
@@ -234,11 +245,11 @@ function ConversationViewPage(props: ConversationViewProps) {
             postRunVerificationActive={core.postRunVerificationActive}
             error={core.error}
             handleRetry={core.handleRetry}
-            handleSwitchModel={core.handleSwitchModel}
             retryCounts={core.retryCounts}
             containerHeight={core.containerHeight}
             skillsBySlug={core.skillsBySlug}
             handleTurnListVirtualApiReady={core.handleTurnListVirtualApiReady}
+            scrollToTurnIndex={core.scrollToTurnIndex}
             renderToolCall={core.renderToolCall}
             isToolCardFoldable={core.isToolCardFoldable}
             revealInFinder={core.revealInFinder}
@@ -249,6 +260,11 @@ function ConversationViewPage(props: ConversationViewProps) {
             hasPendingProjectSend={hasPendingProjectSend}
             startingRuntime={core.startingRuntime}
             emptyStateOverride={props.emptyState}
+            canForkFromTurn={canForkSession(core.selectedSession)}
+            forkInFlight={forkInFlight}
+            forkingMessageId={forkingMessageId}
+            onForkFromTurn={(messageId) => void handleFork(messageId)}
+            activeTurnIndex={core.activeTurnIndex}
           />
 
           <ApprovalTray
@@ -270,83 +286,82 @@ function ConversationViewPage(props: ConversationViewProps) {
               leaving the composer live invites sending a message in a mode
               where that makes no sense. */}
           {composerSuppressed ? null : (
-          <ComposerPane
-            showScrollBottom={core.showScrollBottom}
-            handleScrollToBottom={core.handleScrollToBottom}
-            displayBusy={core.displayBusy}
-            selectedSession={core.selectedSession}
-            rosterEmpty={core.rosterEmpty}
-            channelLoaded={core.channelLoaded}
-            hasChannel={core.hasChannel}
-            channelsPending={core.channelsPending}
-            agentPending={core.agentPending}
-            setupPending={core.setupPending}
-            refreshChannels={core.refreshChannels}
-            refreshAgents={core.refreshAgents}
-            createAgentOpen={core.createAgentOpen}
-            setCreateAgentOpen={core.setCreateAgentOpen}
-            setAgentLibraryRevision={core.setAgentLibraryRevision}
-            setSelectedAgentSlug={core.setSelectedAgentSlug}
-            setComposerTouched={core.setComposerTouched}
-            selectedSessionId={core.selectedSessionId}
-            queue={core.queue}
-            isBusy={core.isBusy}
-            queueDispatching={core.queueDispatching}
-            queuePaused={core.queuePaused}
-            handleEditQueued={core.handleEditQueued}
-            handleDeleteQueued={core.handleDeleteQueued}
-            handleResumeQueue={core.handleResumeQueue}
-            handleSteerQueued={core.handleSteerQueued}
-            conversationInstanceKey={core.conversationInstanceKey}
-            draft={core.draft}
-            setDraft={core.setDraft}
-            isProjectProject={core.isProjectProject}
-            effectiveAgentSlug={core.effectiveAgentSlug}
-            handleSend={handleSend}
-            interruptRef={core.interruptRef}
-            sessionAttachments={core.sessionAttachments}
-            handleRemoveSessionAttachment={core.handleRemoveSessionAttachment}
-            composerAgents={core.composerAgents}
-            sessionAgentSlug={core.sessionAgentSlug}
-            selectedAgentSlug={core.selectedAgentSlug}
-            execBarLocked={core.execBarLocked}
-            sessionExecOrigin={core.sessionExecOrigin}
-            execTargetId={core.execTargetId}
-            setExecTargetId={core.setExecTargetId}
-            setSelectedProviderId={core.setSelectedProviderId}
-            setSelectedModelId={core.setSelectedModelId}
-            projects={core.projects}
-            selectedProjectId={core.selectedProjectId}
-            setSelectedProjectId={core.setSelectedProjectId}
-            setSelectedComposerSkill={core.setSelectedComposerSkill}
-            execBarProjects={core.execBarProjects}
-            providerTarget={core.providerTarget}
-            panelSetCollapsed={core.panelSetCollapsed}
-            composerProviders={core.composerProviders}
-            selectedProviderId={core.selectedProviderId}
-            selectedModelId={core.selectedModelId}
-            composerRuntimes={core.composerRuntimes}
-            selectedRuntimeId={core.selectedRuntimeId}
-            setSelectedRuntimeId={core.setSelectedRuntimeId}
-            selectedPermissionMode={core.selectedPermissionMode}
-            setSelectedPermissionMode={core.setSelectedPermissionMode}
-            isNewSession={core.isNewSession}
-            id={core.id}
-            selectedEffort={core.selectedEffort}
-            setSelectedEffort={core.setSelectedEffort}
-            modelSelectorUnlocked={core.modelSelectorUnlocked}
-            selectedAgentSkillItems={core.selectedAgentSkillItems}
-            composerMentionSkills={core.composerMentionSkills}
-            availableSkills={core.availableSkills}
-            handleOpenKbPicker={core.handleOpenKbPicker}
-            handleLocalFilesAttach={core.handleLocalFilesAttach}
-            connectorOptions={core.connectorOptions}
-            selectedMcpSlugs={core.selectedMcpSlugs}
-            toggleConnector={core.toggleConnector}
-            parsingConfirmOpen={core.parsingConfirmOpen}
-            setParsingConfirmOpen={core.setParsingConfirmOpen}
-            performSend={core.performSend}
-          />
+            <ComposerPane
+              showScrollBottom={core.showScrollBottom}
+              handleScrollToBottom={core.handleScrollToBottom}
+              displayBusy={core.displayBusy}
+              selectedSession={core.selectedSession}
+              rosterEmpty={core.rosterEmpty}
+              channelLoaded={core.channelLoaded}
+              hasChannel={core.hasChannel}
+              channelsPending={core.channelsPending}
+              agentPending={core.agentPending}
+              setupPending={core.setupPending}
+              refreshChannels={core.refreshChannels}
+              refreshAgents={core.refreshAgents}
+              createAgentOpen={core.createAgentOpen}
+              setCreateAgentOpen={core.setCreateAgentOpen}
+              setAgentLibraryRevision={core.setAgentLibraryRevision}
+              setSelectedAgentSlug={core.setSelectedAgentSlug}
+              setComposerTouched={core.setComposerTouched}
+              selectedSessionId={core.selectedSessionId}
+              queue={core.queue}
+              isBusy={core.isBusy}
+              queueDispatching={core.queueDispatching}
+              queuePaused={core.queuePaused}
+              handleEditQueued={core.handleEditQueued}
+              handleDeleteQueued={core.handleDeleteQueued}
+              handleResumeQueue={core.handleResumeQueue}
+              handleSteerQueued={core.handleSteerQueued}
+              conversationInstanceKey={core.conversationInstanceKey}
+              draft={core.draft}
+              setDraft={core.setDraft}
+              isProjectProject={core.isProjectProject}
+              effectiveAgentSlug={core.effectiveAgentSlug}
+              handleSend={handleSend}
+              interruptRef={core.interruptRef}
+              sessionAttachments={core.sessionAttachments}
+              handleRemoveSessionAttachment={core.handleRemoveSessionAttachment}
+              composerAgents={core.composerAgents}
+              sessionAgentSlug={core.sessionAgentSlug}
+              selectedAgentSlug={core.selectedAgentSlug}
+              execBarLocked={core.execBarLocked}
+              sessionExecOrigin={core.sessionExecOrigin}
+              execTargetId={core.execTargetId}
+              setExecTargetId={core.setExecTargetId}
+              setSelectedProviderId={core.setSelectedProviderId}
+              setSelectedModelId={core.setSelectedModelId}
+              projects={core.projects}
+              selectedProjectId={core.selectedProjectId}
+              setSelectedProjectId={core.setSelectedProjectId}
+              setSelectedComposerSkill={core.setSelectedComposerSkill}
+              execBarProjects={core.execBarProjects}
+              providerTarget={core.providerTarget}
+              panelSetCollapsed={core.panelSetCollapsed}
+              composerProviders={core.composerProviders}
+              selectedProviderId={core.selectedProviderId}
+              selectedModelId={core.selectedModelId}
+              composerRuntimes={core.composerRuntimes}
+              selectedRuntimeId={core.selectedRuntimeId}
+              setSelectedRuntimeId={core.setSelectedRuntimeId}
+              selectedPermissionMode={core.selectedPermissionMode}
+              setSelectedPermissionMode={core.setSelectedPermissionMode}
+              isNewSession={core.isNewSession}
+              id={core.id}
+              selectedEffort={core.selectedEffort}
+              setSelectedEffort={core.setSelectedEffort}
+              selectedAgentSkillItems={core.selectedAgentSkillItems}
+              composerMentionSkills={core.composerMentionSkills}
+              availableSkills={core.availableSkills}
+              handleOpenKbPicker={core.handleOpenKbPicker}
+              handleLocalFilesAttach={core.handleLocalFilesAttach}
+              connectorOptions={core.connectorOptions}
+              selectedMcpSlugs={core.selectedMcpSlugs}
+              toggleConnector={core.toggleConnector}
+              parsingConfirmOpen={core.parsingConfirmOpen}
+              setParsingConfirmOpen={core.setParsingConfirmOpen}
+              performSend={core.performSend}
+            />
           )}
         </div>
       </ArtifactSplitPane>
@@ -401,11 +416,11 @@ function ConversationViewPanel(props: ConversationViewProps) {
         postRunVerificationActive={core.postRunVerificationActive}
         error={core.error}
         handleRetry={core.handleRetry}
-        handleSwitchModel={core.handleSwitchModel}
         retryCounts={core.retryCounts}
         containerHeight={core.containerHeight}
         skillsBySlug={core.skillsBySlug}
         handleTurnListVirtualApiReady={core.handleTurnListVirtualApiReady}
+        scrollToTurnIndex={core.scrollToTurnIndex}
         renderToolCall={core.renderToolCall}
         isToolCardFoldable={core.isToolCardFoldable}
         revealInFinder={core.revealInFinder}
@@ -490,7 +505,6 @@ function ConversationViewPanel(props: ConversationViewProps) {
         id={core.id}
         selectedEffort={core.selectedEffort}
         setSelectedEffort={core.setSelectedEffort}
-        modelSelectorUnlocked={core.modelSelectorUnlocked}
         selectedAgentSkillItems={core.selectedAgentSkillItems}
         composerMentionSkills={core.composerMentionSkills}
         availableSkills={core.availableSkills}

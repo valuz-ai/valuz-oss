@@ -46,15 +46,12 @@ async def owner_allowed_roots(user_id: str) -> list[Path]:
     except Exception:  # noqa: BLE001 — a broken managed root must not 500 resolve
         pass
 
-    from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.modules.projects.datastore import ProjectDatastore
+    from valuz_agent.modules.projects.service import project_root_paths
 
-    async with async_unit_of_work(commit=False) as db:
-        rows = await ProjectDatastore(db).list_projects(user_id)
-    for row in rows:
-        if row.kind == "project" and row.root_path:
+    for _project_id, kind, root_path in await project_root_paths(user_id):
+        if kind == "project" and root_path:
             try:
-                roots.append(_root_path(user_id, row.root_path).resolve())
+                roots.append(_root_path(user_id, root_path).resolve())
             except Exception:  # noqa: BLE001
                 continue
     return roots

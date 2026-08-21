@@ -129,7 +129,7 @@ async def test_conversation_trust_and_coverage_defaults(db) -> None:
     assert await preferences.get_conversation_verification_enabled(db, user_id=_OWNER) is False
     assert (
         await preferences.get_conversation_task_coverage_enabled(db, user_id=_OWNER)
-        is True
+        is False
     )
 
 
@@ -168,7 +168,7 @@ async def test_preferences_route_disabling_citations_preserves_verification(
 
     assert result.conversation_citations_enabled is False
     assert result.conversation_verification_enabled is True
-    assert result.conversation_task_coverage_enabled is True
+    assert result.conversation_task_coverage_enabled is False
 
 
 async def test_preferences_route_enabling_verification_preserves_citations_setting(
@@ -193,7 +193,7 @@ async def test_preferences_route_enabling_verification_preserves_citations_setti
 
     assert result.conversation_citations_enabled is False
     assert result.conversation_verification_enabled is True
-    assert result.conversation_task_coverage_enabled is True
+    assert result.conversation_task_coverage_enabled is False
 
 
 async def test_preferences_route_accepts_audit_only_combination(
@@ -217,7 +217,7 @@ async def test_preferences_route_accepts_audit_only_combination(
 
     assert result.conversation_citations_enabled is False
     assert result.conversation_verification_enabled is True
-    assert result.conversation_task_coverage_enabled is True
+    assert result.conversation_task_coverage_enabled is False
 
 
 async def test_preferences_route_toggles_task_coverage_independently(

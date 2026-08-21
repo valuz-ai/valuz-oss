@@ -1,8 +1,6 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@openuidev/react-ui/Modal", () => ({ Modal: () => null }));
-
 import { A2UIRenderer } from "./A2UIRenderer";
 
 /**
@@ -22,11 +20,11 @@ import { A2UIRenderer } from "./A2UIRenderer";
 
 const ONE_COPY = [
   JSON.stringify({
-    version: "v0.9",
-    createSurface: { surfaceId: "main", catalogId: "openui" },
+    version: "v0.9.1",
+    createSurface: { surfaceId: "main", catalogId: "https://valuz.io/a2ui/catalogs/base/v1" },
   }),
   JSON.stringify({
-    version: "v0.9",
+    version: "v0.9.1",
     updateComponents: {
       surfaceId: "main",
       components: [
@@ -46,10 +44,23 @@ const textAt = (body: string): string => {
   return (container.textContent ?? "").replace(/\s+/g, " ").trim();
 };
 
-const frames = (body: string, count: number): string[] =>
-  Array.from({ length: count }, (_, i) =>
-    textAt(body.slice(0, Math.round((body.length * (i + 1)) / count))),
+const frames = (body: string, count: number): string[] => {
+  const { container, rerender, unmount } = render(
+    <A2UIRenderer body="" status="running" />,
   );
+  const result: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    rerender(
+      <A2UIRenderer
+        body={body.slice(0, Math.round((body.length * (i + 1)) / count))}
+        status="running"
+      />,
+    );
+    result.push((container.textContent ?? "").replace(/\s+/g, " ").trim());
+  }
+  unmount();
+  return result;
+};
 
 describe("A2UI progressive paint", () => {
   it("should never narrate a half-written component name to the user", () => {
@@ -143,7 +154,7 @@ describe("A2UI progressive paint", () => {
     // A continuation of the SAME document that the processor cannot build —
     // an update aimed at a surface that was never created.
     const breaks = `${ONE_COPY}\n${JSON.stringify({
-      version: "v0.9",
+      version: "v0.9.1",
       updateComponents: {
         surfaceId: "never-created",
         components: [{ id: "x", component: "TextContent", text: "y" }],
@@ -155,6 +166,26 @@ describe("A2UI progressive paint", () => {
     expect(
       container.querySelector('[data-slot="a2ui-generation-skeleton"]'),
     ).toBe(null);
+  });
+
+  it("should not log expected validation failures for incomplete streaming JSON", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { rerender } = render(<A2UIRenderer body={ONE_COPY} status="running" />);
+    const breaks = `${ONE_COPY}\n${JSON.stringify({
+      version: "v0.9.1",
+      updateComponents: {
+        surfaceId: "never-created",
+        components: [{ id: "x", component: "TextContent", text: "y" }],
+      },
+    })}`;
+
+    rerender(<A2UIRenderer body={breaks} status="running" />);
+
+    expect(warn).not.toHaveBeenCalledWith(
+      "[a2ui] failed to render payload",
+      expect.anything(),
+    );
+    warn.mockRestore();
   });
 
   it("should let a run that ENDS empty render nothing", () => {

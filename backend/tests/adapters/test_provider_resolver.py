@@ -189,6 +189,54 @@ async def test_api_key_provider_without_base_url_falls_through_to_first_party() 
     assert result.api_key == "sk-test"
 
 
+async def test_deepseek_harness_materializes_descriptor_default_base_url() -> None:
+    """For ``runtime_provider="deepseek_harness"`` a ``None`` base_url is
+    NOT left for the runtime to default: dsh's own empty-endpoint fallback
+    is DeepSeek's public API, wrong for any other channel's key. The
+    resolver fills the kind's ``default_base_url`` (here: OpenAI's) so the
+    key posts to its own endpoint."""
+    provider = _FakeProvider(
+        id="ch-openai",
+        name="OpenAI",
+        provider_kind="openai",
+        auth_type="api_key",
+        base_url=None,
+        credential_source="secret_ref",
+        secret_ref="channel/custom",
+    )
+    result = await resolve_model_provider(
+        provider_id="ch-openai",
+        model_id="gpt-5.4",
+        providers=_FakeProviderDatastore([provider]),
+        runtime_provider="deepseek_harness",
+    )
+    assert result is not None
+    assert result.base_url == "https://api.openai.com/v1"
+
+
+async def test_deepseek_harness_blank_compatible_channel_stays_none() -> None:
+    """A blank ``compatible`` row has no kind default to materialize — the
+    resolver leaves ``None`` and the kernel factory rejects it with an
+    actionable error at session creation."""
+    provider = _FakeProvider(
+        id="ch-blank",
+        name="Blank custom",
+        provider_kind="compatible",
+        auth_type="api_key",
+        base_url=None,
+        credential_source="secret_ref",
+        secret_ref="channel/custom",
+    )
+    result = await resolve_model_provider(
+        provider_id="ch-blank",
+        model_id="any",
+        providers=_FakeProviderDatastore([provider]),
+        runtime_provider="deepseek_harness",
+    )
+    assert result is not None
+    assert result.base_url is None
+
+
 async def test_api_key_provider_without_credentials_still_raises() -> None:
     """The api_key requirement is preserved — only base_url became
     Optional in the upgrade."""

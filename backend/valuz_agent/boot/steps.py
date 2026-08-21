@@ -59,9 +59,7 @@ def guard_source_run_data_dir() -> None:
             "or set VALUZ_DATA_DIR. To operate on the packaged store on purpose, "
             "set VALUZ_ALLOW_PACKAGED_DATA_DIR=1."
         )
-    if settings.log_file_path.expanduser().resolve().parent == (
-        packaged_root / "logs"
-    ).resolve():
+    if settings.log_file_path.expanduser().resolve().parent == (packaged_root / "logs").resolve():
         raise RuntimeError(
             "refusing to start: this backend runs from source but its log dir "
             f"resolves to {PACKAGED_DATA_DIR / 'logs'} — the packaged app's logs "
@@ -339,6 +337,19 @@ async def colocate_kernel_history() -> None:
         await colocate_kernel_history_into_host_db()
     except Exception:  # noqa: BLE001 — insert-only migration must never break boot
         logging.getLogger(__name__).warning("kernel-history co-locate skipped", exc_info=True)
+
+
+def init_tracing() -> None:
+    """Langfuse tracing bootstrap — no-op unless the LANGFUSE_* env is set
+    and the optional ``tracing`` extra is installed (see ``src.core.tracing``).
+
+    Runs in the HOST process: covers the in-process kernel (desktop/local).
+    The standalone sandbox kernel initializes itself in
+    ``kernel/app/dependencies.init_dependencies``.
+    """
+    from src.core.tracing import init_tracing as _init_tracing
+
+    _init_tracing()
 
 
 def initialize_network_egress() -> None:
@@ -706,9 +717,7 @@ async def purge_tasks_of_deleted_projects() -> None:
 
     try:
         async with async_unit_of_work(commit=False) as db:
-            live = {
-                pid for pid in (await db.execute(select(ProjectRow.id))).scalars().all()
-            }
+            live = {pid for pid in (await db.execute(select(ProjectRow.id))).scalars().all()}
             orphans: dict[str, list[str]] = {}
             for task_id, user_id, project_id in (
                 await db.execute(select(TaskRow.id, TaskRow.user_id, TaskRow.project_id))
@@ -1108,3 +1117,12 @@ async def shutdown_kernel() -> None:
     # exits after this hook, but tests and embedded hosts may initialize the
     # backend again in the same interpreter.
     configure_network_egress(None)
+
+
+def shutdown_tracing() -> None:
+    """Flush + stop Langfuse tracing. Runs AFTER ``shutdown_kernel`` so every
+    runtime has stopped emitting spans before the final flush. No-op when
+    tracing was never enabled."""
+    from src.core.tracing import shutdown_tracing as _shutdown_tracing
+
+    _shutdown_tracing()

@@ -73,6 +73,9 @@ interface PixelRect {
   height: number;
 }
 
+const PDF_HIGHLIGHT_HORIZONTAL_PADDING = 4;
+const PDF_HIGHLIGHT_VERTICAL_PADDING = 3;
+
 export function mapNormalizedPdfRects(
   rects: NormalizedRectV1[] | undefined,
   width: number,
@@ -100,6 +103,32 @@ export function mapNormalizedPdfRects(
         height: rect.height * height,
       },
     ];
+  });
+}
+
+export function padPdfHighlightRects(
+  rects: PixelRect[],
+  pageWidth: number,
+  pageHeight: number,
+): PixelRect[] {
+  if (pageWidth <= 0 || pageHeight <= 0) return [];
+  return rects.flatMap((rect) => {
+    const left = Math.max(
+      0,
+      rect.left - PDF_HIGHLIGHT_HORIZONTAL_PADDING,
+    );
+    const top = Math.max(0, rect.top - PDF_HIGHLIGHT_VERTICAL_PADDING);
+    const right = Math.min(
+      pageWidth,
+      rect.left + rect.width + PDF_HIGHLIGHT_HORIZONTAL_PADDING,
+    );
+    const bottom = Math.min(
+      pageHeight,
+      rect.top + rect.height + PDF_HIGHLIGHT_VERTICAL_PADDING,
+    );
+    return right > left && bottom > top
+      ? [{ left, top, width: right - left, height: bottom - top }]
+      : [];
   });
 }
 
@@ -342,7 +371,9 @@ function PdfPage({
         rects = textLayerRects(indexes, layer.textDivs, pageRef.current);
         status = rects.length ? "located-fallback" : "page-only";
       }
-      setHighlightRects(rects);
+      setHighlightRects(
+        padPdfHighlightRects(rects, viewport.width, viewport.height),
+      );
       setLocateStatus(status);
       if (location) onLocated(pageNumber, status);
     };

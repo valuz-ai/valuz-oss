@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { EgressBootstrap } from "../network/control-server";
+import type { EgressBootstrap } from "@valuz/desktop-network-egress/contracts";
 
 // Vite bundles the Electron main process as ESM (vite.main.config.ts
 // formats:['es']), so the CommonJS ``__dirname`` global is undefined at
@@ -375,6 +375,34 @@ function resolveCdtEntry(): string | null {
 }
 
 /**
+ * Locate the bundled DeepSeek Harness runtime entry (vendored npm closure
+ * staged at libexec/dsh-runtime/node_modules/...). Same Electron-as-node
+ * contract as chrome-devtools-mcp: the backend runs ``node <entry>`` where
+ * "node" is this Electron binary under ELECTRON_RUN_AS_NODE=1.
+ *
+ * Returns null when not bundled (dev), so the backend falls back to the
+ * dev-checkout vendor tree / VALUZ_DSH_ROOT source mode.
+ */
+function resolveDshRuntimeEntry(): string | null {
+  const rel = path.join(
+    "dsh-runtime",
+    "node_modules",
+    "@deepseek-ai",
+    "dsh-sdk-jsonrpc-demo",
+    "lib",
+    "packaged-bin.js",
+  );
+
+  const bundled = path.join(process.resourcesPath, "libexec", rel);
+  if (fs.existsSync(bundled)) return bundled;
+
+  const devEntry = path.join(__dirname, "..", "..", "resources", "libexec", rel);
+  if (fs.existsSync(devEntry)) return devEntry;
+
+  return null;
+}
+
+/**
  * Build spawn arguments for dev-mode fallback (uv run python -m valuz_agent).
  */
 function buildDevSpawnArgs(port: number): {
@@ -483,6 +511,17 @@ export const startSidecar = async (
     env.VALUZ_NODE_PATH = process.execPath;
     env.VALUZ_NODE_IS_ELECTRON = "1";
     env.VALUZ_CDT_ENTRY = cdtEntry;
+  }
+
+  // Point the kernel's deepseek_harness runtime at the staged dsh closure,
+  // run under the same Electron-as-node contract as the browser engine.
+  // Entry absent (dev) → the backend falls back to the dev vendor tree /
+  // VALUZ_DSH_ROOT source mode.
+  const dshEntry = resolveDshRuntimeEntry();
+  if (dshEntry) {
+    env.VALUZ_NODE_PATH = process.execPath;
+    env.VALUZ_NODE_IS_ELECTRON = "1";
+    env.VALUZ_DSH_RUNTIME_ENTRY = dshEntry;
   }
 
   if (serverBinary) {

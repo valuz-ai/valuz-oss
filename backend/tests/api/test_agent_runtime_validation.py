@@ -15,7 +15,7 @@ from valuz_agent.api.routes.agents import (
     UpdateAgentRequest,
 )
 
-VALID_RUNTIMES = ("claude_agent", "codex", "deepagents")
+VALID_RUNTIMES = ("claude_agent", "codex", "deepagents", "deepseek_harness")
 INVALID_RUNTIMES = ("claude-agent", "Claude_Agent", "openai", "", "claude")
 
 

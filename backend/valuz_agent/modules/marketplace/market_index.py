@@ -288,8 +288,11 @@ class MarketIndexClient:
         page: int = 1,
         page_size: int = 30,
         locale: str,
+        composition: str | None = None,
     ) -> dict[str, Any]:
-        """``MarketplaceItemList`` shape — one page of a normalized catalog."""
+        """``MarketplaceItemList`` shape — one page of a normalized catalog.
+        ``composition`` (``skills_only`` / ``with_connectors``) only applies to
+        ``type=plugin`` and is passed through as-is."""
         params: dict[str, Any] = {
             "type": type_,
             "page": page,
@@ -304,6 +307,8 @@ class MarketIndexClient:
             params["source"] = source
         if q:
             params["q"] = q
+        if composition is not None:
+            params["composition"] = composition
         cache_key = f"items:{sorted(params.items())}"
         hit = self._cached(cache_key)
         if hit is not None:

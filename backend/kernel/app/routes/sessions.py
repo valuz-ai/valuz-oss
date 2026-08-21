@@ -23,9 +23,11 @@ from app.schemas import (
     EventWindowData,
     EventWindowResponse,
     FinalizeSessionRequest,
+    ForkSessionRequest,
     ModelProviderInputSchema,
     ModelProviderUpdateSchema,
     ModelSettingsSchema,
+    PrepareRuntimeRequest,
     SessionListResponse,
     SessionResponse,
     SetSessionModeRequest,
@@ -67,6 +69,13 @@ from src.core.orchestrator import (
     SessionNotFoundError,
     SessionOrchestrator,
 )
+from src.core.session_fork import (
+    MissingNativeAnchorError,
+    build_forked_session,
+    collect_history,
+    copy_history,
+    resolve_native_fork_source,
+)
 from src.runtimes.factory import validate_api_protocol
 from sse_starlette.sse import EventSourceResponse
 
@@ -93,20 +102,24 @@ async def create_session(
     agent = _agent_config_from_schema(body.agent_config)
     validate_registered_tools(list(agent.tools))
 
-    # DeepAgents needs an explicit langchain model client at runtime, so
-    # both ``model`` and ``model_provider`` are required when chosen.
-    # ClaudeAgent / Codex fall back to ambient SDK credentials and accept
-    # both fields empty.
-    if body.runtime_provider == "deepagents":
+    # DeepAgents needs an explicit langchain model client at runtime, and
+    # deepseek_harness passes model + credentials to its subprocess env at
+    # initialize — both ``model`` and ``model_provider`` are required when
+    # either is chosen. ClaudeAgent / Codex fall back to ambient SDK
+    # credentials and accept both fields empty.
+    if body.runtime_provider in ("deepagents", "deepseek_harness"):
         if not body.model.strip():
             raise HTTPException(
                 status_code=400,
-                detail="model is required when runtime_provider is 'deepagents'.",
+                detail=f"model is required when runtime_provider is {body.runtime_provider!r}.",
             )
         if body.model_provider is None:
             raise HTTPException(
                 status_code=400,
-                detail="model_provider is required when runtime_provider is 'deepagents'.",
+                detail=(
+                    "model_provider is required when runtime_provider is "
+                    f"{body.runtime_provider!r}."
+                ),
             )
 
     # ``permission_mode`` is sunk to the session per D9: agent holds the
@@ -115,10 +128,16 @@ async def create_session(
     # ``permission_mode`` is sunk to the session: the embedded snapshot
     # holds the default; the request value wins when provided.
     permission_mode = body.permission_mode or agent.permission_mode
-    if body.runtime_provider == "deepagents" and permission_mode == "auto_review":
+    if (
+        body.runtime_provider in ("deepagents", "deepseek_harness")
+        and permission_mode == "auto_review"
+    ):
         raise HTTPException(
             status_code=400,
-            detail="auto_review is not supported for deepagents; use default or full_access.",
+            detail=(
+                f"auto_review is not supported for {body.runtime_provider}; "
+                "use default or full_access."
+            ),
         )
 
     provider = (
@@ -158,6 +177,116 @@ async def create_session(
     )
     await store.save_session(session)
     return {"data": _session_to_data(session)}
+
+
+@router.post("/{session_id}/fork", status_code=201, response_model=SessionResponse)
+async def fork_session(
+    session_id: str,
+    body: ForkSessionRequest,
+    store: StoreDep,
+    orchestrator: OrchestratorDep,
+    owner: OwnerDep,
+) -> dict[str, Any]:
+    """Fork an owned session into a new, independent session.
+
+    HTTP validation + composition only — the copy mechanics live in
+    ``src.core.session_fork`` (see docs/design/session-fork.md). Server-side
+    copy in the ``import_canonical_message`` mold: the caller supplies only
+    the anchor, never history content.
+
+    Ordering is native-fork-first: after validation the runtime's
+    ``fork_session`` (via ``orchestrator.fork_session``) must succeed before
+    any kernel row is written — a failed native fork therefore leaves
+    nothing to roll back. The kernel history is then copied, and the new
+    session row is saved LAST as the commit point (messages/events without
+    a session row are invisible; the cleanup delete covers the rare
+    mid-copy failure). The fork is non-destructive: the source session is
+    never written.
+    """
+    source = await store.load_session(owner, session_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    anchor = None
+    if body.message_id is not None:
+        anchor = await store.load_message(owner, body.message_id)
+        if anchor is None:
+            raise HTTPException(status_code=404, detail="Anchor message not found")
+        if anchor.session_id != session_id:
+            raise HTTPException(
+                status_code=409, detail="Anchor message belongs to a different session"
+            )
+        if anchor.status == "running":
+            raise HTTPException(status_code=409, detail="Anchor message is still running")
+    elif source.status == "running":
+        # A whole-session fork anchors at the moving tail — refuse while a
+        # turn is in flight (codex also rejects forking an in-progress
+        # turn). Forking a COMPLETED message of a running session is fine.
+        raise HTTPException(
+            status_code=409,
+            detail="Session is running; fork a completed message or wait for the turn to end",
+        )
+
+    try:
+        fork_source = resolve_native_fork_source(source, anchor)
+    except MissingNativeAnchorError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    try:
+        messages = await collect_history(
+            store,
+            owner,
+            session_id,
+            until_message_id=anchor.id if anchor is not None else None,
+        )
+    except LookupError as exc:  # pragma: no cover — load_message succeeded above
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    forked = build_forked_session(
+        source,
+        anchor_message_id=anchor.id if anchor is not None else None,
+        caller_metadata=body.metadata,
+        copied_messages=messages,
+    )
+
+    if fork_source is not None:
+        # Native fork FIRST — nothing is persisted yet, so a refused fork
+        # (bad turn id, in-progress turn, missing source rollout) costs
+        # nothing. On success ``forked.runtime_session_id`` carries the new
+        # native id and the runtime stays warm for the first Send.
+        # ``fork_source`` is None only for a never-ran source (plain config
+        # copy — works for every runtime, no native thread involved).
+        try:
+            await orchestrator.fork_session(
+                owner,
+                forked,
+                source_native_session_id=fork_source.native_session_id,
+                anchor=fork_source.anchor,
+                runtime_context=body.runtime_context,
+            )
+        except NotImplementedError as exc:
+            # Rollout gate expressed by the runtime itself: codex is wired
+            # up; claude_agent / deepagents raise until design doc P1/P2
+            # land — at which point this route needs no change.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Native thread fork failed: {exc}",
+            ) from exc
+
+    try:
+        await copy_history(store, owner, messages, forked.id)
+        await store.save_session(forked)
+    except Exception:
+        # Rare mid-copy failure: sweep the orphaned rows (cascade delete
+        # works keyed on session_id even before the session row exists)
+        # and drop the warm runtime; the native fork artifact is inert.
+        await store.delete_session(owner, forked.id)
+        await orchestrator.cleanup(forked.id)
+        raise
+
+    return {"data": _session_to_data(forked)}
 
 
 def _normalize_base_url(raw: str | None) -> str | None:
@@ -280,10 +409,16 @@ async def update_session(
     if body.model_settings is not None:
         session.model_settings = _model_settings_from_schema(body.model_settings)
     if body.permission_mode is not None:
-        if session.runtime_provider == "deepagents" and body.permission_mode == "auto_review":
+        if (
+            session.runtime_provider in ("deepagents", "deepseek_harness")
+            and body.permission_mode == "auto_review"
+        ):
             raise HTTPException(
                 status_code=400,
-                detail="auto_review is not supported for deepagents; use default or full_access.",
+                detail=(
+                    f"auto_review is not supported for {session.runtime_provider}; "
+                    "use default or full_access."
+                ),
             )
         session.permission_mode = body.permission_mode
     if body.cwd is not None:
@@ -326,12 +461,12 @@ async def set_session_mode(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if body.mode != "default" and session.runtime_provider == "deepagents":
+    if body.mode != "default" and session.runtime_provider in ("deepagents", "deepseek_harness"):
         raise HTTPException(
             status_code=400,
             detail=(
-                f"mode={body.mode!r} is not supported on deepagents sessions "
-                "(no native plan/goal primitive)."
+                f"mode={body.mode!r} is not supported on {session.runtime_provider} "
+                "sessions (no native plan/goal primitive)."
             ),
         )
 
@@ -375,10 +510,15 @@ async def prepare_session_runtime(
     session_id: str,
     owner: OwnerDep,
     orchestrator: OrchestratorDep,
+    body: PrepareRuntimeRequest | None = None,
 ) -> dict[str, Any]:
     """Initialize a session runtime without dispatching a model turn."""
     try:
-        await orchestrator.prepare_runtime(owner, session_id)
+        await orchestrator.prepare_runtime(
+            owner,
+            session_id,
+            runtime_context=body.runtime_context if body is not None else None,
+        )
     except SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
     return {"data": {"ready": True}}

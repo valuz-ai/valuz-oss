@@ -115,6 +115,53 @@ bash scripts/build-desktop.sh --skip-backend --skip-cli # 仅迭代 Electron
 **CLI**（Go 构建 `valuz` 二进制）、**前端**（Vite + electron-builder 产出 `.app` 与 DMG，
 命名为 `valuz-<edition>-<platform>-<arch>`）。
 
+### Docker 自托管
+
+仓库根目录的 [`compose.yaml`](compose.yaml) 会构建并启动完整的浏览器版部署：
+FastAPI 服务 `valuz-oss-backend` 与 nginx 服务 `valuz-oss-webui`。后端启动时会自动执行
+数据库迁移；nginx 会将 WebUI 的同源 `/api` 请求（包括 SSE 流和文件上传）转发到后端。
+
+需要安装 Docker Engine 与 Docker Compose v2。在仓库根目录执行：
+
+```bash
+docker compose up --build --detach
+docker compose ps
+```
+
+打开 <http://localhost:8080>。开始对话前，请先在 WebUI 的设置页面配置模型服务与 API Key。
+如需更换 WebUI 在本机暴露的端口：
+
+```bash
+VALUZ_WEBUI_PORT=18080 docker compose up --build --detach
+```
+
+默认只监听 `127.0.0.1`。OSS 本地部署不会额外提供公网用户认证，请勿直接暴露到互联网。
+如需远程访问，应放在带认证的反向代理后；仅在网络边界已妥善保护时设置
+`VALUZ_WEBUI_BIND`。
+
+常用生命周期命令：
+
+```bash
+docker compose logs --follow backend
+docker compose up --detach                 # 使用已有镜像启动
+docker compose down                        # 停止容器，保留用户数据
+docker compose down --volumes              # 同时删除全部 Valuz Docker 数据
+```
+
+用户配置、数据库、上传文件和凭据保存在 `valuz-data` 卷中，项目工作区保存在
+`valuz-workspaces` 卷中。如果需要从宿主机直接访问项目文件，可在 `compose.yaml` 中将后者
+替换为宿主机绝对路径的 bind mount。
+
+如只需构建镜像而不启动 Compose：
+
+```bash
+docker build --file backend/Dockerfile --tag valuz-oss-backend:latest .
+docker build --file frontend/apps/webui/Dockerfile --tag valuz-oss-webui:latest .
+```
+
+WebUI 镜像默认使用 `BACKEND_URL=http://backend:8000`；在其他 Docker 网络中使用时，可以在
+容器启动时覆盖该环境变量。整个流程不需要 CI 配置，也不依赖商业版 edition 源码。
+
 ## 许可
 
 Valuz OSS 采用 **Open Core** 模式：本仓库中的单租户工作站开源、免费。

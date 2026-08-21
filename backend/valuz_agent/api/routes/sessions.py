@@ -413,6 +413,34 @@ async def prepare_session_runtime(
     return {"ready": True}
 
 
+class ForkSessionBody(BaseModel):
+    """Body for ``POST /v1/sessions/{id}/fork`` (openapi ``forkSession``)."""
+
+    message_id: str | None = None
+
+
+@router.post("/{session_id}/fork", status_code=201)
+async def fork_session(
+    session_id: str,
+    body: ForkSessionBody | None = None,
+    user_id: str = Depends(get_current_user_id),
+    svc: SessionService = Depends(get_session_service),
+) -> SessionDetail:
+    """Fork a session into a new independent one (docs/design/session-fork.md).
+
+    With ``message_id`` the fork cuts inclusively at that message; without
+    it the whole session forks at its current tail. Synchronous by design
+    (D5): the runtime-native fork runs inside this call, so errors surface
+    here — 409 invalid anchor / turn in flight, 422 runtime unsupported,
+    502 native fork failed (nothing created).
+    """
+    return await svc.fork_session(
+        session_id,
+        message_id=body.message_id if body is not None else None,
+        user_id=user_id,
+    )
+
+
 class QueuedInputCreate(BaseModel):
     prompt: str
     provider_id: str | None = None
@@ -958,6 +986,7 @@ def _spawn_attachment_parse(
 
     async def _run() -> None:
         from valuz_agent.infra.db import async_unit_of_work
+        from valuz_agent.ports.parser_backend import ParseOptions
         from valuz_agent.ports.parser_plugin import ParserPluginMode
 
         parsed_path: str | None = None
@@ -974,12 +1003,15 @@ def _spawn_attachment_parse(
             src_path = _resolve_file_key_path(user_id, source)
             if src_path is None:
                 raise FileNotFoundError(f"attachment source not found: {source}")
+            # Ownership stamp for durable side-effects (polling rows,
+            # valuz-oss#841); local parsers ignore it.
+            parse_options = ParseOptions(user_id=user_id)
             if router.plugin_mode_for(src_path) == ParserPluginMode.ASYNC_POLL:
-                result = await router.parse(src_path)
+                result = await router.parse(src_path, parse_options)
             else:
                 # Bound concurrent CPU-bound local parses (see semaphore note).
                 async with _LOCAL_PARSE_SEMAPHORE:
-                    result = await asyncio.to_thread(router.parse_sync, src_path)
+                    result = await asyncio.to_thread(router.parse_sync, src_path, parse_options)
             parsed_path, parse_status, engine, error_message = _write_parse_result(
                 result, session_id, base_name, user_id
             )

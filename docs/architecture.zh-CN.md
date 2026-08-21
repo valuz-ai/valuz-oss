@@ -138,8 +138,10 @@ OAuth 页面，以及对外的 HTTP 接口。宿主自有的表以 `valuz_*` 为
 ## 3. 数据层
 
 宿主与内核使用 `~/.valuz-oss/` 下的**两个独立 SQLite 文件**：宿主的 `valuz.db`
-（`valuz_*` 业务表）与内核自有的 `kernel.db`（`sessions` / `messages` / `events`、
-其 langgraph checkpoint 表，以及内核 `alembic_version`）。这一拆分让沙箱/远程内核独占
+（`valuz_*` 业务表）与内核自有的 `kernel.db`（`sessions` / `messages` / `events`
+以及内核 `alembic_version`；DeepAgents runtime 的 langgraph checkpoint 存放在同目录
+的独立文件 `deepagents_checkpoints.db`——云沙箱下则是文件式 checkpoint 目录树——
+而非 `kernel.db`）。这一拆分让沙箱/远程内核独占
 自己的文件，并让进程内（`make dev`）与沙箱（`make dev-sandbox`）内核共享同一份 session
 历史；若显式设置 `database_url`（如共享 Postgres）则两层仍共置于同一存储。两层都完全运行
 在 `aiosqlite` 之上的**异步**模式，WAL 日志加上 `busy_timeout` 保证并发访问安全。

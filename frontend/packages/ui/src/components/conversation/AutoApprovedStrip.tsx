@@ -153,16 +153,16 @@ export const AutoApprovedStrip = memo(function AutoApprovedStrip({
       )}
     >
       <Sparkles className="h-3.5 w-3.5 shrink-0 text-ink-muted" />
-      <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-[12px] text-ink-muted">
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-xs text-ink-muted">
         <span className="truncate font-mono">{mainLabel}</span>
         {ruleSuffix ? (
-          <span className="shrink-0 text-[11px] text-ink-meta/70">
+          <span className="shrink-0 text-2xs text-ink-meta/70">
             {ruleSuffix}
           </span>
         ) : null}
       </span>
       {resolvedAtLabel ? (
-        <span className="shrink-0 text-[11px] text-ink-meta/80">
+        <span className="shrink-0 text-2xs text-ink-meta/80">
           {resolvedAtLabel}
         </span>
       ) : null}

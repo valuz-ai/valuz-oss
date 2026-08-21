@@ -169,7 +169,7 @@ export const ScheduledTaskTable = ({
         {collapsed ? null : (
           <>
             {/* Header row — hidden on mobile */}
-            <div className="hidden border-b border-[#f7f8fa] px-5 py-2 text-[12px] font-medium text-[#6E7481] md:grid md:grid-cols-[2fr_1.1fr_1.1fr_0.8fr_0.7fr_72px] dark:border-surface-border dark:text-ink-body">
+            <div className="hidden border-b border-[#f7f8fa] px-5 py-2 text-xs font-medium text-[#6E7481] md:grid md:grid-cols-[2fr_1.1fr_1.1fr_0.8fr_0.7fr_72px] dark:border-surface-border dark:text-ink-body">
               <div>{t("cron.taskColumn")}</div>
               <div className="text-center">{t("cron.triggerColumn")}</div>
               <div className="text-center">{t("cron.timezoneColumn")}</div>

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 
-from valuz_agent.modules.tasks.mailbox import MailboxRegistry
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 from valuz_agent.modules.tasks.plan import TaskPlan
 from valuz_agent.modules.tasks.purge import purge_project_tasks, purge_tasks
@@ -87,50 +86,6 @@ def _counts(db_factory, task_id: str) -> tuple[int, int, int]:
 # ---------------------------------------------------------------------------
 # The liveness oracle
 # ---------------------------------------------------------------------------
-
-
-def test_a_box_with_no_reader_is_not_a_live_session() -> None:
-    """``register`` is non-owning, so "a box exists" cannot mean "someone reads it".
-
-    This is the whole bug in one assertion: three subsystems asked
-    ``is_registered`` whether the lead loop was alive, and a box pre-seeded for
-    a loop that never started answered yes for the life of the process.
-    """
-    reg = MailboxRegistry()
-    reg.register("s1")
-
-    assert reg.is_registered("s1") is True
-    assert reg.is_owned("s1") is False, (
-        "a pre-seeded box has no reader — reporting it as live blinds the "
-        "watchdog that exists to catch exactly this task"
-    )
-
-    token = reg.claim("s1")
-    assert reg.is_owned("s1") is True
-    reg.release("s1", token)
-    assert reg.is_owned("s1") is False
-
-
-def test_an_unclaimed_box_stays_unowned_forever() -> None:
-    """Nothing reclaims it — which is fine, as long as nobody calls it alive.
-
-    ``release`` cannot drop a box that was never claimed (the token guard sees
-    no claim and returns), and ``unregister`` has no production caller. The fix
-    is not to reclaim the box but to stop reading its existence as liveness.
-    """
-    reg = MailboxRegistry()
-    reg.register("s1")
-    reg.release("s1", 12345)  # a stale token from some other loop
-
-    assert reg.is_registered("s1") is True, "still unreclaimed — by design"
-    assert reg.is_owned("s1") is False, "and still, correctly, not alive"
-
-
-# ---------------------------------------------------------------------------
-# Purge
-# ---------------------------------------------------------------------------
-
-
 def test_purge_removes_the_task_and_everything_indexed_under_it(db_factory) -> None:
     _seed(db_factory, task_id="t-purge")
     assert _counts(db_factory, "t-purge") == (1, 1, 1)

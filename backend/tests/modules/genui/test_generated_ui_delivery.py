@@ -21,9 +21,9 @@ from valuz_agent.modules.genui.protocol import extract_a2ui_document
 from valuz_agent.modules.genui.tools import _document_file_name, _parse_target_host
 from valuz_agent.ports.ui_artifact import UiArtifactTargetHost
 
-_CREATE = '{"version":"v0.9","createSurface":{"surfaceId":"main","catalogId":"openui"}}'
+_CREATE = '{"version":"v0.9.1","createSurface":{"surfaceId":"main","catalogId":"https://valuz.io/a2ui/catalogs/base/v1"}}'
 _COMPONENTS = (
-    '{"version":"v0.9","updateComponents":{"surfaceId":"main","components":'
+    '{"version":"v0.9.1","updateComponents":{"surfaceId":"main","components":'
     '[{"id":"root","component":"Text","text":"hello"}]}}'
 )
 DOC = f"{_CREATE}\n{_COMPONENTS}"
@@ -171,34 +171,31 @@ def test_no_host_anywhere_is_still_none() -> None:
 
 
 class TestRepeatedDocument:
-    """A turn's canonical text is the join of every model-end segment, so a run
-    that emits the document twice hands back both copies byte for byte."""
+    """A repeated surface declaration is a replacement, not another page."""
 
     def test_stores_a_repeated_document_once(self) -> None:
-        doc = "\n".join(
-            [
-                json.dumps({"version": "v0.9", "createSurface": {"surfaceId": "main"}}),
-                json.dumps(
-                    {
-                        "version": "v0.9",
-                        "updateComponents": {
-                            "surfaceId": "main",
-                            "components": [{"id": "root", "component": "Stack"}],
-                        },
-                    }
-                ),
-            ]
+        messages = [
+            {"version": "v0.9.1", "createSurface": {"surfaceId": "main"}},
+            {
+                "version": "v0.9.1",
+                "updateComponents": {
+                    "surfaceId": "main",
+                    "components": [{"id": "root", "component": "Stack"}],
+                },
+            },
+        ]
+        doc = "\n".join(json.dumps(message) for message in messages)
+        canonical = "\n".join(
+            json.dumps(message, separators=(",", ":")) for message in messages
         )
 
-        assert extract_a2ui_document(f"{doc}\n{doc}") == doc
+        assert extract_a2ui_document(f"{doc}\n{doc}") == canonical
 
-    def test_keeps_a_second_declaration_that_differs(self) -> None:
-        # Only an exact repeat is dropped; two DIFFERENT versions are a real
-        # restart and picking a winner is not this function's call.
-        first = json.dumps({"version": "v0.9", "createSurface": {"surfaceId": "main"}})
+    def test_keeps_the_final_declaration_when_the_model_revises_it(self) -> None:
+        first = json.dumps({"version": "v0.9.1", "createSurface": {"surfaceId": "main"}})
         components = json.dumps(
             {
-                "version": "v0.9",
+                "version": "v0.9.1",
                 "updateComponents": {
                     "surfaceId": "main",
                     "components": [{"id": "root", "component": "Stack"}],
@@ -207,7 +204,7 @@ class TestRepeatedDocument:
         )
         other = json.dumps(
             {
-                "version": "v0.9",
+                "version": "v0.9.1",
                 "updateComponents": {
                     "surfaceId": "main",
                     "components": [{"id": "root", "component": "Card"}],
@@ -216,7 +213,76 @@ class TestRepeatedDocument:
         )
         raw = "\n".join([first, components, first, other])
 
-        assert extract_a2ui_document(raw) == raw
+        expected = "\n".join(
+            json.dumps(json.loads(line), separators=(",", ":"))
+            for line in (first, other)
+        )
+        assert extract_a2ui_document(raw) == expected
+
+    def test_preserves_distinct_surfaces(self) -> None:
+        first = json.dumps(
+            {"version": "v0.9.1", "createSurface": {"surfaceId": "main"}}
+        )
+        second = json.dumps(
+            {"version": "v0.9.1", "createSurface": {"surfaceId": "detail"}}
+        )
+        components = json.dumps(
+            {
+                "version": "v0.9.1",
+                "updateComponents": {
+                    "surfaceId": "detail",
+                    "components": [{"id": "root", "component": "Stack"}],
+                },
+            }
+        )
+
+        expected = "\n".join(
+            json.dumps(json.loads(line), separators=(",", ":"))
+            for line in (first, second, components)
+        )
+        assert extract_a2ui_document("\n".join((first, second, components))) == expected
+
+    def test_revising_a_secondary_surface_does_not_drop_the_main_surface(self) -> None:
+        main = [
+            {"version": "v0.9.1", "createSurface": {"surfaceId": "main"}},
+            {
+                "version": "v0.9.1",
+                "updateComponents": {
+                    "surfaceId": "main",
+                    "components": [{"id": "root", "component": "Stack"}],
+                },
+            },
+        ]
+        old_detail = [
+            {"version": "v0.9.1", "createSurface": {"surfaceId": "detail"}},
+            {
+                "version": "v0.9.1",
+                "updateComponents": {
+                    "surfaceId": "detail",
+                    "components": [
+                        {"id": "root", "component": "TextContent", "text": "old"}
+                    ],
+                },
+            },
+        ]
+        new_detail = [
+            {"version": "v0.9.1", "createSurface": {"surfaceId": "detail"}},
+            {
+                "version": "v0.9.1",
+                "updateComponents": {
+                    "surfaceId": "detail",
+                    "components": [
+                        {"id": "root", "component": "TextContent", "text": "new"}
+                    ],
+                },
+            },
+        ]
+        raw = "\n".join(json.dumps(message) for message in main + old_detail + new_detail)
+        expected = "\n".join(
+            json.dumps(message, separators=(",", ":")) for message in main + new_detail
+        )
+
+        assert extract_a2ui_document(raw) == expected
 
 
 class _FakeArtifactDatastore:
@@ -234,10 +300,52 @@ class _FakeArtifactDatastore:
     async def get_artifact(self, *args: object) -> object | None:
         return type(self).artifact
 
+    async def get_revision(self, *args: object) -> object | None:
+        return getattr(type(self), "revision", None)
+
+    async def get_content(self, *args: object) -> object | None:
+        return getattr(type(self), "content", None)
+
 
 @asynccontextmanager
 async def _fake_uow(commit: bool = False) -> AsyncIterator[None]:
     yield None
+
+
+async def test_host_context_loads_the_complete_bound_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from valuz_agent.infra import db as infra_db
+    from valuz_agent.modules.artifacts import datastore as ds_mod
+    from valuz_agent.modules.genui.tools import _load_host_generation_context
+
+    document = (
+        '{"version":"v0.9.1","createSurface":{"surfaceId":"main"}}\n'
+        '{"version":"v0.9.1","updateComponents":{"surfaceId":"main",'
+        '"components":[{"id":"root","component":"Stack"}]}}'
+    )
+    _FakeArtifactDatastore.binding = SimpleNamespace(
+        artifact_id="art_A", artifact_revision_id="rev_11"
+    )
+    _FakeArtifactDatastore.artifact = SimpleNamespace(id="art_A")
+    _FakeArtifactDatastore.revision = SimpleNamespace(
+        id="rev_11", content_id="content_11", abs_path=None
+    )
+    _FakeArtifactDatastore.content = SimpleNamespace(content_inline=document)
+    monkeypatch.setattr(ds_mod, "ArtifactDatastore", _FakeArtifactDatastore)
+    monkeypatch.setattr(infra_db, "async_unit_of_work", _fake_uow)
+
+    context = await _load_host_generation_context(
+        "u1",
+        UiArtifactTargetHost(
+            host_type="finance.research-desk", host_id="desk", slot="main"
+        ),
+    )
+
+    assert context is not None
+    assert context.expected_revision_id == "rev_11"
+    assert context.bound_artifact is _FakeArtifactDatastore.artifact
+    assert context.current_document == document
 
 
 async def test_hosted_regeneration_appends_to_the_bound_lineage(
@@ -300,13 +408,13 @@ async def test_hosted_regeneration_appends_to_the_bound_lineage(
             host_type="finance.research-desk", host_id="desk", slot="main"
         ),
         request="req",
-        document='{"version":"v0.9","updateComponents":{"surfaceId":"s","components":[{"id":"root"}]}}',
+        document='{"version":"v0.9.1","updateComponents":{"surfaceId":"s","components":[{"id":"root"}]}}',
     )
 
     assert seen["scope"] == lineage_scope.scope
     assert seen["scope_cwd"] == lineage_scope.cwd
     request = seen["request"]
-    assert getattr(request, "artifact_id") == "art_A"
+    assert request.artifact_id == "art_A"
     assert "rev_12" in trailer
     assert '"expected_revision_id": "rev_11"' in trailer or "rev_11" in trailer
 
@@ -364,8 +472,8 @@ async def test_unresolvable_lineage_scope_falls_back_to_the_session(
             host_type="finance.research-desk", host_id="desk", slot="main"
         ),
         request="req",
-        document='{"version":"v0.9","updateComponents":{"surfaceId":"s","components":[{"id":"root"}]}}',
+        document='{"version":"v0.9.1","updateComponents":{"surfaceId":"s","components":[{"id":"root"}]}}',
     )
 
     assert seen["scope"] == session_scope.scope
-    assert getattr(seen["request"], "artifact_id") is None
+    assert seen["request"].artifact_id is None

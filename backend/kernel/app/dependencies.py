@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
-from typing import Annotated
+from typing import Annotated, Any
 
 from app.config import AppConfig
 from fastapi import Header, HTTPException
@@ -21,6 +21,7 @@ from src.core.claim_normalization import ClaimNormalizerPort
 from src.core.claim_normalizer import build_session_claim_normalizer
 from src.core.orchestrator import SessionOrchestrator
 from src.core.semantic_verifier import build_session_semantic_verifier
+from src.core.tracing import init_tracing, shutdown_tracing
 from src.core.types import Session
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,36 @@ _runtime_store: RuntimeStore | None = None
 # ``get_owner_id`` keeps using the trusted ``X-Valuz-Owner-Id`` header. A SaaS
 # overlay binds a real verifier via ``set_token_verifier``.
 _token_verifier: TokenVerifier = NullTokenVerifier()
+# The DataService bearer — the ONE config value that expires while the process
+# runs (a short-lived JWT), so it is held here rather than read off the frozen
+# ``AppConfig`` snapshot the store was built from. See ``set_data_api_token``.
+_data_api_token: str = ""
+
+
+def set_data_api_token(token: str) -> None:
+    """Rotate the DataService credential in place — no restart, no rebuild.
+
+    Every other value in ``AppConfig`` is fixed for the life of the process;
+    this one is a JWT that EXPIRES. Once it does, the sandbox's dual-write to
+    the host 401s, and because the local sqlite is the runtime authority
+    nothing surfaces to the user while the durable mirror silently stops.
+
+    Restarting to pick up a new one is not an acceptable answer: the kernel
+    owns the in-flight turn and the ``run_in_background`` processes hanging off
+    it, so a restart is user-visible data loss. Replacing the whole sandbox is
+    worse — it is a cold boot, and where the runtime databases live on a
+    per-scope shared mount it also puts two kernels on one database.
+
+    The credential is therefore a rotatable value with a single writer here and
+    a single reader in ``_build_durable_store``'s hook, which resolves it per
+    request. Rotation is a pointer swap: in-flight requests keep the token they
+    already read, the next one uses the new one. Deliberately NOT plumbed
+    through ``AppConfig`` — rebuilding that snapshot would hand every other
+    component a new object while they hold captured copies of the old one,
+    which is a half-applied config, not a credential refresh.
+    """
+    global _data_api_token  # noqa: PLW0603 — module-level rotatable, by design
+    _data_api_token = token
 
 
 async def _session_semantic_verifier_factory(
@@ -70,6 +101,10 @@ async def init_dependencies(config: AppConfig) -> None:
     """
     global _engine, _session_factory, _store, _orchestrator  # noqa: PLW0603
     global _durable_engine, _runtime_store  # noqa: PLW0603
+    # Langfuse tracing bootstrap — no-op unless the LANGFUSE_* env is set and
+    # the ``tracing`` extra is installed. Runs here for the STANDALONE kernel
+    # (cloud sandbox); the in-process host initializes it in its own lifespan.
+    init_tracing()
     # Model A: the LOCAL store ALWAYS exists (local-first). The kernel keeps its
     # own SQLite/PG via this engine; when a durable backend is configured
     # (remote DataService / central PG) every write is mirrored through it
@@ -142,6 +177,9 @@ async def shutdown_dependencies() -> None:
         await _engine.dispose()
     if _durable_engine:
         await _durable_engine.dispose()
+    # Flush buffered Langfuse spans AFTER the orchestrator (and thus every
+    # runtime subprocess) has stopped emitting. No-op when tracing is off.
+    shutdown_tracing()
     _engine = None
     _durable_engine = None
     _session_factory = None
@@ -225,11 +263,63 @@ async def _ensure_durable_schema(engine: AsyncEngine) -> None:
 
     Idempotent (``create_all`` is checkfirst): ``sessions`` / ``messages`` /
     ``events``, ready to receive the RuntimeStore's dual-writes.
+
+    ``create_all`` never ALTERs an existing table, so schema evolution of the
+    durable copy needs its own reconcile step: kernel alembic migrates only
+    the kernel's local database, and a durable seeded before a constraint
+    change keeps the old DDL forever — a mirror write the local store accepts
+    is then silently rejected here (best-effort mirror), and every host read
+    of that row 404s. ``_reconcile_sessions_runtime_check`` repairs the one
+    known drift of that kind in place.
     """
     from src.adapters.sqlalchemy_store.models import Base
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    async with engine.begin() as conn:
+        await conn.run_sync(_reconcile_sessions_runtime_check)
+
+
+# The current runtime_provider CHECK body — keep in sync with
+# ``src.adapters.sqlalchemy_store.models`` and the latest kernel alembic
+# revision that touches ``ck_sessions_runtime_provider`` (0004).
+_SESSIONS_RUNTIME_CHECK = (
+    "runtime_provider IN ('claude_agent', 'codex', 'deepagents', 'deepseek_harness')"
+)
+
+
+def _reconcile_sessions_runtime_check(conn: Any) -> None:
+    """Widen a stale ``ck_sessions_runtime_provider`` on the durable in place.
+
+    A durable created before kernel revision 0004 still carries the
+    three-value constraint and rejects ``deepseek_harness`` mirror writes.
+    Detection reads the live constraint via the SQLAlchemy inspector;
+    the rebuild reuses alembic's batch machinery (SQLite: copy-and-swap;
+    Postgres: plain ALTERs) — the same proven path the 0004 migration runs
+    on the kernel-local database. No-op when the constraint is current or
+    absent (pre-CHECK schemas never enforced the enum).
+    """
+    import sqlalchemy as sa
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    inspector = sa.inspect(conn)
+    if "sessions" not in inspector.get_table_names():
+        return
+    try:
+        checks = inspector.get_check_constraints("sessions")
+    except NotImplementedError:  # dialect without check reflection — leave as-is
+        return
+    current = next((c for c in checks if c.get("name") == "ck_sessions_runtime_provider"), None)
+    if current is None or "deepseek_harness" in str(current.get("sqltext", "")):
+        return
+    logger.info("durable sessions CHECK predates deepseek_harness — rebuilding constraint in place")
+    ops = Operations(MigrationContext.configure(conn))
+    with ops.batch_alter_table("sessions") as batch:
+        batch.drop_constraint("ck_sessions_runtime_provider", type_="check")
+        batch.create_check_constraint(
+            "ck_sessions_runtime_provider", sa.text(_SESSIONS_RUNTIME_CHECK)
+        )
 
 
 def _build_durable_store(config: AppConfig) -> StorePort | None:
@@ -267,12 +357,14 @@ def _build_durable_store(config: AppConfig) -> StorePort | None:
     if not config.data_api_url:
         raise RuntimeError("KERNEL_STORE=remote requires VALUZ_DATA_API_URL")
     _ensure_remote_backend(config.data_api_kind)
-    token = config.data_api_token or ""
+    set_data_api_token(config.data_api_token or "")
 
     async def _access_token() -> str:
-        # Static token from env for now; a refresh hook (re-mint short-lived
-        # JWT from the host) plugs in here later.
-        return token
+        # Resolved at CALL time, never captured. ``RemoteStoreHttp`` asks this
+        # hook on every request, so reading the live value here is the whole
+        # mechanism behind :func:`set_data_api_token` — see its docstring for
+        # why a restart is not an acceptable way to pick up a new credential.
+        return _data_api_token
 
     return build_remote_store(
         kind=config.data_api_kind,

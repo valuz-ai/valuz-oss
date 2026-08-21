@@ -32,11 +32,19 @@
  */
 
 import { useSyncExternalStore } from "react";
-import { getExecutionTargets, type ExecutionTarget } from "./execution-targets";
+import {
+  getExecutionTargets,
+  selectableExecutionTargets,
+  type ExecutionTarget,
+} from "./execution-targets";
 
 /** Targets to fan a list call out to; [] = single-backend fast path. */
 export function getListFanOutTargets(): ExecutionTarget[] {
-  const targets = getExecutionTargets();
+  // Unselectable targets are narrow grants (see ExecutionTarget.selectable):
+  // they answer for the entities the edition already holds, not for "list
+  // everything you have". Fanning out to one only ever yields a refusal, and
+  // a refusal here is what raises the "list may be incomplete" banner.
+  const targets = selectableExecutionTargets(getExecutionTargets());
   return targets.length >= 2 ? targets : [];
 }
 
@@ -113,10 +121,19 @@ function fetchTarget<T>(
  * so a timed-out target actually tears down the connection; callers that
  * ignore it still get the timeout, just without the abort.
  */
+/**
+ * Ask several targets the same GET and collect what answers.
+ *
+ * ``only`` narrows the set — a caller may know that some targets cannot hold
+ * anything new (the agent library, where a sibling runtime of the same account
+ * would just repeat it). Failures are then reported for that subset alone, so
+ * a target nobody asked is never announced as degraded.
+ */
 export async function fanOutTargets<T>(
   fetchOne: FanOutFetch<T>,
+  only?: readonly ExecutionTarget[],
 ): Promise<FanOutOutcome<T>> {
-  const targets = getListFanOutTargets();
+  const targets = only ? [...only] : getListFanOutTargets();
   if (targets.length > 0) {
     // Remembered so the degraded re-probe can replay the same request shape
     // (auth, params) against the failed targets. GET-only surfaces, so a
@@ -137,7 +154,9 @@ export async function fanOutTargets<T>(
       firstError ??= result.reason;
     }
   });
-  publishDegradedTargets(failedTargets);
+  // A narrowed fan-out speaks only for what it asked: it must not clear a
+  // degradation another list observed on a target it skipped.
+  if (!only || failedTargets.length > 0) publishDegradedTargets(failedTargets);
   if (values.length === 0 && failedTargets.length > 0) {
     throw firstError;
   }
@@ -180,11 +199,32 @@ function scheduleReprobe(): void {
  * that answer are removed from the degraded set (real list content follows
  * with the next regular refresh). Still-failed targets keep the banner and
  * the next probe stays scheduled.
+ *
+ * Every exit has to leave recovery running or cancelled deliberately — an
+ * early return that simply drops the timer strands the banner forever, which
+ * is the exact failure the active-recovery design above exists to prevent.
  */
 async function runReprobe(): Promise<void> {
+  const registered = getListFanOutTargets();
+  // A target that has left the registry — or a drop back to the
+  // single-backend fast path, where ``getListFanOutTargets`` returns [] — is
+  // no longer fanned out to, so the list cannot be missing its content. Drop
+  // those ids instead of naming a target the user can no longer see.
+  const stillListed = _degraded.filter((id) =>
+    registered.some((t) => t.id === id),
+  );
+  if (stillListed.length !== _degraded.length) {
+    publishDegradedTargets(stillListed);
+  }
   const fetchOne = _lastFanOut;
-  const failed = getListFanOutTargets().filter((t) => _degraded.includes(t.id));
-  if (!fetchOne || failed.length === 0) return;
+  const failed = registered.filter((t) => _degraded.includes(t.id));
+  if (!fetchOne || failed.length === 0) {
+    // Nothing to probe on this tick. ``scheduleReprobe`` runs from the timer
+    // callback that already cleared ``_reprobeTimer``, so returning without
+    // rescheduling would end recovery permanently and strand the banner.
+    if (_degraded.length > 0) scheduleReprobe();
+    return;
+  }
   const settled = await Promise.allSettled(
     failed.map((target) => fetchTarget(fetchOne, target)),
   );

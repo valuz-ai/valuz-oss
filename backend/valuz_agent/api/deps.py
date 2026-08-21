@@ -11,7 +11,6 @@ from fastapi import Depends
 from valuz_agent.infra import auth_context
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.eventbus import event_bus
-from valuz_agent.integrations.docs_embedded import EmbeddedDocsRuntime
 from valuz_agent.integrations.skills_filesystem import FilesystemSkillSource
 from valuz_agent.integrations.skills_official import OfficialSkillSource
 from valuz_agent.modules.agents.datastore import ProjectMemberDatastore
@@ -46,6 +45,7 @@ from valuz_agent.modules.tasks.datastore import (
     TaskEventDatastore,
     TaskSessionDatastore,
 )
+from valuz_agent.ports.docs_runtime import get_docs_runtime
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -211,8 +211,7 @@ async def get_document_service() -> AsyncGenerator[DocumentLibraryService, None]
 
     user_id = get_current_user_id()
     async with async_unit_of_work() as db:
-        preview_dir = fs_registry.docs_preview_dir(user_id)
-        docs_runtime = EmbeddedDocsRuntime(preview_dir=preview_dir)
+        docs_runtime = get_docs_runtime(user_id)
         # ``ParserRouter`` reads its routing config from an immutable snapshot
         # resolved here (one async read per request) instead of opening a sync
         # session per parse.

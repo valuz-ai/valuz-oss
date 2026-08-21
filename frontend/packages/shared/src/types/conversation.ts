@@ -18,7 +18,7 @@ export interface PrototypeToolCall {
   /** Tool-scoped reasoning stream (``tool.call.thinking_delta``, live-only —
    * the ephemeral generate_ui session's thinking forwarded onto the calling
    * session). Accumulated separately from ``output`` on purpose: output IS
-   * the tool's result stream (e.g. OpenUI code) and must not be polluted. */
+   * the tool's result stream (e.g. A2UI JSONL) and must not be polluted. */
   thinking?: string;
 }
 
@@ -130,6 +130,21 @@ export interface ConversationTurn {
    *  label so a system interruption is not misattributed to the user ("用户取消
    *  了当前对话"). Optional: absent is treated as ``false``. */
   interrupted?: boolean;
+  /** The run stopped because the runtime hit one of its per-run budgets
+   *  (``stop_reason.type === "budget_exhausted"``). NOT an error and NOT a
+   *  cancel: the turn is recorded as completed, so without an explicit marker
+   *  a ``max_cost`` stop renders as an empty assistant area with no
+   *  explanation — the CLI rejects the query before any model call, so the
+   *  turn has no blocks at all. Rendered as a visible notice with a retry
+   *  affordance. ``"unknown"`` = the stop reason said ``budget_exhausted``
+   *  but carried no reason we recognize; still surfaced, just without naming
+   *  a cause. Optional: absent = the turn ended within budget. */
+  budgetHalt?: "max_cost" | "max_turns" | "unknown";
+  /** Whether this turn's message carries a runtime-native fork anchor
+   *  (terminal ``session.update`` frames stamp it). ``false`` disables
+   *  "Fork from here"; ``undefined`` = recorded before the signal existed —
+   *  keep the affordance, the server 409 backstops. */
+  forkAnchor?: boolean;
   attachments?: ConversationTurnAttachment[];
   /** Unix epoch milliseconds (UTC). */
   userTimestamp?: number;

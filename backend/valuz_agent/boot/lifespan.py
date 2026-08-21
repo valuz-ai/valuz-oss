@@ -45,6 +45,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await steps.bootstrap_schema()
     await steps.configure_i18n()
     await steps.colocate_kernel_history()  # seed valuz.db durable from kernel.db (one-time)
+    # Langfuse tracing BEFORE the kernel: the client + LangChain handler
+    # must exist before the first turn runs. Env-gated no-op by default.
+    steps.init_tracing()
     await steps.init_kernel(app)
     await steps.bind_data_service(app)
     steps.install_binding_change_listener()
@@ -90,4 +93,5 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await steps.stop_mcp_session_managers(app)
     await steps.dispose_data_service(app)
     await steps.shutdown_kernel()
+    steps.shutdown_tracing()  # final span flush — after every emitter stopped
     parent_watchdog.stop_parent_watchdog()

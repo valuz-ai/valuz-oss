@@ -35,7 +35,7 @@ export const SessionStatusPill = ({
   if (cancelled) {
     return (
       <span
-        className="flex h-5 shrink-0 items-center gap-1 rounded-[4px] bg-surface-soft px-2 py-0 text-2xs text-ink-meta"
+        className="flex h-5 shrink-0 items-center gap-1 rounded-sm bg-surface-soft px-2 py-0 text-2xs text-ink-meta"
         title="session status: cancelled"
       >
         {/* One label for a stopped conversation everywhere: matches the
@@ -82,7 +82,7 @@ export const SessionStatusPill = ({
         : "bg-surface-soft text-ink-meta";
   return (
     <span
-      className={`flex h-5 shrink-0 items-center gap-1 rounded-[4px] px-2 py-0 text-2xs ${cls}`}
+      className={`flex h-5 shrink-0 items-center gap-1 rounded-sm px-2 py-0 text-2xs ${cls}`}
       title={`session status: ${status ?? "idle"}${
         effective === "background" ? " (background task running)" : ""
       }`}

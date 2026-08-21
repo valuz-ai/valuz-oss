@@ -5,7 +5,7 @@ import logging
 import mimetypes
 import os
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,7 +13,7 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.infra.eventbus import EventBus
-from valuz_agent.infra.fs_registry import fs_registry
+from valuz_agent.infra.fs_registry import KB_KIND_DEFAULT, fs_registry
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.docs.datastore import DocumentDatastore
 from valuz_agent.modules.docs.errors import (
@@ -31,7 +31,7 @@ from valuz_agent.modules.docs.models import (
     ProjectKbBindingRow,
 )
 from valuz_agent.ports.docs_runtime import DocsRuntimePort
-from valuz_agent.ports.parser_backend import ParserBackend, ParseResult
+from valuz_agent.ports.parser_backend import ParseOptions, ParserBackend, ParseResult
 
 logger = logging.getLogger(__name__)
 
@@ -495,6 +495,7 @@ class DocumentLibraryService:
         root_path: str | None = None,
         parser_routing: str = "local_only",
         auto_discover: bool = False,
+        kind: str = KB_KIND_DEFAULT,
     ) -> KbDetail:
         kb_id = uuid.uuid4().hex
         if root_path and root_path.strip():
@@ -505,7 +506,9 @@ class DocumentLibraryService:
             # Managed root (cloud / headless parity): allocate
             # ``kb_root/{id}/`` so the KB works without a caller-supplied
             # local directory, which a remote backend could not reach.
-            root = fs_registry.kb_root(user_id) / kb_id
+            # ``kind`` lets an embedding host route classes of KB to
+            # different roots (default: the single ``<data_dir>/kb``).
+            root = fs_registry.kb_root(user_id, kind) / kb_id
             root.mkdir(parents=True, exist_ok=True)
         root_str = str(root)
         if await self._ds.kb_root_path_exists(user_id, root_str):
@@ -515,6 +518,7 @@ class DocumentLibraryService:
             id=kb_id,
             name=name,
             root_path=root_str,
+            kind=kind,
             parser_routing=parser_routing,
             auto_discover=auto_discover,
         )
@@ -971,7 +975,7 @@ class DocumentLibraryService:
                 total_items=len(queued_ids),
             )
             await self._ds.create_import_task(user_id, reindex_task)
-            self._schedule_background_reindex(queued_ids, reindex_task.id)
+            self._schedule_background_reindex(queued_ids, reindex_task.id, user_id)
 
         self._bus.publish("kb.rescanned", kb_id=kb_id)
         return _task_to_result(task)
@@ -1045,7 +1049,9 @@ class DocumentLibraryService:
 
         threading.Thread(target=_runner, name="docs-bg-rescan", daemon=True).start()
 
-    def _schedule_background_reindex(self, doc_ids: list[str], task_id: str) -> None:
+    def _schedule_background_reindex(
+        self, doc_ids: list[str], task_id: str, user_id: str
+    ) -> None:
         """Spawn a daemon thread that reindexes ``doc_ids`` using a
         fresh DB session (the request's session is closed when the
         HTTP handler returns).
@@ -1062,6 +1068,18 @@ class DocumentLibraryService:
         Owner is derived from the loaded task row — no ambient ContextVar is
         read or set here.
         """
+        from valuz_agent.ports.extensions import ext
+
+        # A deployment that parses elsewhere takes the documents here. It may
+        # decline (the OSS default always does), in which case we spawn the
+        # thread below exactly as before.
+        try:
+            if ext.docs_reindex_dispatcher.dispatch(user_id, doc_ids, task_id):
+                return
+        except Exception:  # noqa: BLE001 — a broken dispatcher must not strand
+            # the documents; fall through to the in-process path.
+            logger.exception("docs reindex dispatch failed; parsing in-process")
+
         import asyncio
         import threading
 
@@ -1168,7 +1186,7 @@ class DocumentLibraryService:
             total_items=len(document_ids),
         )
         await self._ds.create_import_task(user_id, task)
-        self._schedule_background_reindex(document_ids, task.id)
+        self._schedule_background_reindex(document_ids, task.id, user_id)
         return _task_to_result(task)
 
     async def _run_reindex_loop(self, document_ids: list[str], task: DocumentImportTaskRow) -> None:
@@ -1195,7 +1213,7 @@ class DocumentLibraryService:
             row.status = "processing"
             await self._ds.update(row)
 
-            result = self._parser_parse_sync(row.source_path)
+            result = self._parser_parse_sync(row.source_path, user_id)
 
             # ── Record per-plugin attempt history on the doc + task ──
             # ``fallback_from`` is set by ``ParserRouter`` when it
@@ -1301,6 +1319,39 @@ class DocumentLibraryService:
 
     # ── Search ────────────────────────────────────────────────────────
 
+    async def _contribute_shared_scope(
+        self, user_id: str, scope_ids: list[str]
+    ) -> tuple[list[str], dict[str, str]]:
+        """Union in documents shared with ``user_id`` by the host.
+
+        Each contributed id is re-authorized under the owner the host named,
+        exactly like the pre-authorized branch — the host decides *who may
+        read*, this still decides *whether the row is readable* (it exists and
+        is ready). A contributor that fails is logged and ignored: a shared
+        library being briefly invisible is recoverable, a search that dies is
+        not.
+        """
+        from valuz_agent.ports.extensions import ext
+
+        try:
+            extra = await ext.docs_scope_contributor(user_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("docs scope contributor failed; using own scope only")
+            return scope_ids, {}
+
+        owner_of: dict[str, str] = {}
+        merged = list(scope_ids)
+        seen = set(scope_ids)
+        for owner_id, doc_id in extra:
+            if doc_id in seen:
+                continue
+            row = await self._ds.get_by_id(owner_id, doc_id)
+            if row is not None and row.status == "ready":
+                merged.append(doc_id)
+                seen.add(doc_id)
+                owner_of[doc_id] = owner_id
+        return merged, owner_of
+
     async def search_docs(
         self,
         user_id: str,
@@ -1311,8 +1362,40 @@ class DocumentLibraryService:
         document_ids: list[str] | None = None,
         knowledge_base_ids: list[str] | None = None,
         authorized_document_ids: list[str] | None = None,
+        authorized_documents: Sequence[tuple[str, str]] | None = None,
     ) -> list[DocSearchHit]:
-        if authorized_document_ids is not None:
+        """Search documents the caller is allowed to see.
+
+        Scope comes from exactly one of three sources, in precedence order:
+
+        1. ``authorized_documents`` — ``(owner_user_id, doc_id)`` pairs a host
+           pre-authorized server-side. Each id is re-authorized under **its own
+           owner**, which is what makes shared collections (documents another
+           user uploaded) reachable. The trust boundary is the calling host
+           code, which must have done its own membership check first; this
+           parameter is never populated from model or tool input.
+        2. ``authorized_document_ids`` — caller-owned ids (document-research
+           sessions). Re-authorized under ``user_id``.
+        3. project bindings (the default).
+
+        ``document_ids`` narrowing applies to all three. ``folder_ids``
+        narrowing resolves within the **caller's own** folders, so cross-owner
+        callers should narrow with ``document_ids`` instead.
+        """
+        # doc_id -> owning user id. Only populated for pre-authorized
+        # cross-owner scope; every other path is caller-owned.
+        owner_of: dict[str, str] = {}
+        if authorized_documents is not None:
+            # Pre-authorized cross-owner scope. Re-authorize every id through
+            # this datastore under the owner the host supplied — never accept
+            # model-supplied ids, and never widen to a whole owner.
+            scope_ids = []
+            for owner_id, doc_id in dict.fromkeys(authorized_documents):
+                row = await self._ds.get_by_id(owner_id, doc_id)
+                if row is not None and row.status == "ready":
+                    scope_ids.append(doc_id)
+                    owner_of[doc_id] = owner_id
+        elif authorized_document_ids is not None:
             # Document-research sessions carry an exact, owner-authorized
             # server-side scope. Re-authorize every id through this datastore;
             # do not depend on project bindings and never accept model-supplied
@@ -1328,6 +1411,15 @@ class DocumentLibraryService:
                 project_id,
                 knowledge_base_ids=knowledge_base_ids,
             )
+            # Documents shared with this caller by a deployment that has such a
+            # notion (team libraries, subscriptions). Additive: a member still
+            # sees their own project-bound documents. Not applied to either
+            # pre-authorized branch above — those scopes are exact by
+            # construction and widening one would defeat the point.
+            scope_ids, contributed_owners = await self._contribute_shared_scope(
+                user_id, scope_ids
+            )
+            owner_of.update(contributed_owners)
         if not scope_ids:
             return []
 
@@ -1345,27 +1437,29 @@ class DocumentLibraryService:
 
         doc_paths: dict[str, str] = {}
         doc_names: dict[str, str] = {}
-        uid = user_id
         for did in scope_ids:
-            row = await self._ds.get_by_id(uid, did)
+            # Cross-owner hits resolve under their own owner — both the row
+            # lookup and the preview path, whose containment check is scoped
+            # to that owner's data dir.
+            owner = owner_of.get(did, user_id)
+            row = await self._ds.get_by_id(owner, did)
             if row:
                 doc_names[did] = row.source_filename
                 if row.preview_text_path:
-                    local = _resolve_data_file_path(user_id, row.preview_text_path)
+                    local = _resolve_data_file_path(owner, row.preview_text_path)
                     if local:
                         doc_paths[did] = str(local)
 
-        from valuz_agent.integrations.docs_embedded import EmbeddedDocsRuntime
-
-        if isinstance(self._docs_rt, EmbeddedDocsRuntime):
-            results = self._docs_rt.search_sync(
-                query,
-                scope_ids,
-                top_k,
-                doc_paths=doc_paths or None,
-            )
-        else:
-            results = await self._docs_rt.search(query, scope_ids, top_k)
+        # Single path through the ``DocsRuntimePort`` contract — no
+        # runtime-class special-casing (valuz-oss#838). The embedded runtime
+        # wraps its blocking ripgrep search in ``asyncio.to_thread``
+        # internally; alternative runtimes receive the same arguments.
+        results = await self._docs_rt.search(
+            query,
+            scope_ids,
+            top_k,
+            doc_paths=doc_paths or None,
+        )
 
         return [
             DocSearchHit(
@@ -1738,7 +1832,10 @@ class DocumentLibraryService:
         target.write_text(markdown, encoding="utf-8")
         return key
 
-    def _parser_parse_sync(self, file_path: str) -> ParseResult:
+    def _parser_parse_sync(self, file_path: str, user_id: str | None = None) -> ParseResult:
+        # ``user_id`` is the document owner — ASYNC_POLL backends stamp it on
+        # their durable polling rows (valuz-oss#841); local parsers ignore it.
+        options = ParseOptions(user_id=user_id)
         # Fast path: any backend that exposes ``parse_sync`` is invoked
         # directly without an event loop. ``LightLocalParser`` is the
         # production case; in-memory test fakes (``FakeParser``) also
@@ -1746,8 +1843,10 @@ class DocumentLibraryService:
         # — using ``hasattr`` keeps the service decoupled from concrete
         # classes (was an ``isinstance(LightLocalParser)`` check before,
         # which forced every alternative parser through the async path).
+        # The duck-typed contract mirrors ``ParserBackend.parse``:
+        # ``parse_sync(file_path, options=None)``.
         if hasattr(self._parser, "parse_sync"):
-            return self._parser.parse_sync(file_path)
+            return self._parser.parse_sync(file_path, options)
 
         import asyncio
 
@@ -1761,4 +1860,4 @@ class DocumentLibraryService:
                 markdown="*Cannot run async parser in sync context*",
                 metadata={"error": "async_not_supported"},
             )
-        return asyncio.run(self._parser.parse(file_path))
+        return asyncio.run(self._parser.parse(file_path, options))

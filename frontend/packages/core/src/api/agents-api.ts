@@ -1,6 +1,11 @@
 import type { EffortLevel } from "@valuz/shared";
 import { createFetchJson } from "./fetch-json";
 import { resolveApiBase } from "./base-resolver";
+import {
+  DEVICE_TARGET_ID_PREFIX,
+  getDefaultExecutionTarget,
+} from "../edition/execution-targets";
+import { fanOutTargets, getListFanOutTargets } from "../edition/list-fanout";
 import { invalidateRequestCache } from "./request";
 
 let _apiBase =
@@ -39,6 +44,24 @@ export interface Agent {
   deletable: boolean;
   /** Preset icon key or uploaded asset URL (08-agents-module v2); null = unset. */
   avatar: string | null;
+  /**
+   * Execution target this agent runs on, when it is not "wherever you are".
+   * An edition can list an agent that only exists on another backend (a
+   * colleague's desktop reached through a relay, say); picking it in the
+   * composer moves the conversation there instead of failing with "agent not
+   * found" against the local backend. Absent = runs on the active target.
+   */
+  exec_target_id?: string;
+  /**
+   * Short tag for the composer row (e.g. 分享), set by whoever produced the
+   * row. Deriving it from ``exec_target_id`` alone means silently rendering
+   * nothing whenever that target has not been registered yet — a race the
+   * reader experiences as "the tag is missing".
+   */
+  badge_label?: string;
+  /** Palette for {@link badge_label} — "shared" / "remote" match the library's
+   *  own tags, so the same agent reads the same in both places. */
+  badge_tone?: "shared" | "remote";
 }
 
 /** One派驻 of an agent — the project (project) it's deployed into. */
@@ -221,15 +244,66 @@ function invalidateAgents(projectId?: string | null): void {
 }
 
 export const agentsApi = {
-  listAgents(
+  /**
+   * The agent library.
+   *
+   * Multi-target editions fan out over MACHINES: another desktop has its own
+   * library, and "what can I run" is the union. Rows answered by a non-default
+   * target carry ``exec_target_id``, which is what makes picking one in the
+   * composer move the conversation to that machine instead of failing with
+   * "agent not found" locally.
+   *
+   * Unlike projects and sessions, a sibling runtime of the SAME account (an
+   * edition's cloud execution plane) is skipped: it materializes the account's
+   * own library, so fanning out to it lists every agent a second time under a
+   * different target rather than finding new ones. Only ``device:*`` targets
+   * hold a library this one has never seen.
+   *
+   * Slugs are NOT deduplicated across targets: two machines may both have an
+   * "sde", and they are different agents with different instructions. The
+   * caller distinguishes them by ``exec_target_id``.
+   *
+   * ``options.baseUrl`` addresses one specific target, so it opts out of the
+   * fan-out (that is how the fan-out asks each target, and how the composer
+   * reads a single machine's library).
+   */
+  async listAgents(
     source?: string,
     options?: ListAgentsOptions,
   ): Promise<{ agents: Agent[] }> {
     const params = source ? `?source=${encodeURIComponent(source)}` : "";
-    return fetchJson(`/v1/agents${params}`, {
-      baseUrl: options?.baseUrl,
-      cache: options?.fresh ? undefined : AGENTS_LIST_CACHE,
-    });
+    const cache = options?.fresh ? undefined : AGENTS_LIST_CACHE;
+    const machines = options?.baseUrl
+      ? []
+      : getListFanOutTargets().filter(
+          (target) =>
+            target.isDefault || target.id.startsWith(DEVICE_TARGET_ID_PREFIX),
+        );
+    const targets = machines.length >= 2 ? machines : [];
+    if (targets.length === 0) {
+      return fetchJson(`/v1/agents${params}`, {
+        baseUrl: options?.baseUrl,
+        cache,
+      });
+    }
+    const defaultTargetId = getDefaultExecutionTarget()?.id;
+    const outcome = await fanOutTargets(
+      (target, signal) =>
+        fetchJson<{ agents: Agent[] }>(`/v1/agents${params}`, {
+          baseUrl: target.baseUrl,
+          cache,
+          signal,
+        }),
+      targets,
+    );
+    const merged: Agent[] = [];
+    for (const { target, value } of outcome.values) {
+      const elsewhere = target.id !== defaultTargetId;
+      for (const agent of value.agents) {
+        merged.push(elsewhere ? { ...agent, exec_target_id: target.id } : agent);
+      }
+    }
+    return { agents: merged };
   },
 
   getAgent(slug: string): Promise<Agent> {

@@ -17,14 +17,39 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from valuz_agent.infra.db import async_unit_of_work
+from valuz_agent.modules.tasks import mailbox_store
 from valuz_agent.modules.tasks.datastore import (
     TaskDatastore,
     TaskEventDatastore,
     TaskSessionDatastore,
     pick_lead_run,
 )
-from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
+
+
+def wrap_user_instruction(text: str) -> str:
+    """Envelope marking chat text as authoritative user intent.
+
+    The lead recognises this tag (COMMITTED_LEAD_PLAYBOOK §8) and typically
+    turns it into modify_plan + dispatch, or a rework.
+    """
+    return f'<user-instruction source="chat">\n{text}\n</user-instruction>'
+
+
+def wrap_goal_revision(new_goal: str) -> str:
+    """Envelope for a revised goal, carrying the goal-mode caveat."""
+    return (
+        '<goal-revised source="user">\n'
+        "The task goal has been revised by the user to:\n\n"
+        f"{new_goal}\n\n"
+        "Re-evaluate your current plan against this revised goal. If the plan has "
+        "drifted, use modify_plan to adjust, then continue; call finish_task only "
+        "when the REVISED goal is met. (Goal-mode auto-completion may still track "
+        "the original goal — treat this revision as authoritative.)\n"
+        "</goal-revised>"
+    )
 
 
 async def send_to_member(
@@ -56,19 +81,6 @@ async def send_to_member(
             ),
         }
 
-    delivered = mailbox_registry.put(
-        to_session_id,
-        InboxMsg(kind="text", text=text, from_session=from_session_id),
-    )
-    if not delivered:
-        return {
-            "delivered": False,
-            "error": (
-                f"member session {to_session_id!r} is not running "
-                "(already finished or never started)"
-            ),
-        }
-
     async with async_unit_of_work() as db:
         # ``subtask_message`` is the lead → member direction only. The member →
         # lead counterpart is ``subtask_reported`` (coordination.py); the two
@@ -84,6 +96,21 @@ async def send_to_member(
             session_id=to_session_id,
             payload={"direction": "lead->member", "text": text},
         )
+        # Same transaction as the record of it: a message that exists in the
+        # timeline but not in the member's inbox is precisely the gap the
+        # repair mechanisms were invented to paper over.
+        await mailbox_store.enqueue(
+            db,
+            session_id=to_session_id,
+            task_id=task_id,
+            project_id=project_id,
+            user_id=user_id,
+            kind="text",
+            text=text,
+            from_session=from_session_id,
+            origin="lead-send",
+        )
+    await mailbox_store.ring_for(to_session_id)
     return {"delivered": True, "session_id": to_session_id}
 
 
@@ -164,48 +191,38 @@ async def inject_into_task(
         }
 
     lead_session_id = lead_run.session_id
-    wrapped = f'<user-instruction source="chat">\n{text}\n</user-instruction>'
-    # OWNED, not merely registered. ``put`` succeeds whenever a box exists, and
-    # a box can exist with no loop reading it (a sender pre-seeded it for a lead
-    # that then failed to start). That reported ``delivered`` and wrote a
-    # ``user_inject`` event while the message sat in a queue nobody drains —
-    # strictly worse than LEAD_OFFLINE, which the caller can act on.
-    delivered = mailbox_registry.is_owned(lead_session_id) and mailbox_registry.put(
-        lead_session_id,
-        InboxMsg(kind="text", text=wrapped, from_session=from_session_id),
-    )
-
     async with async_unit_of_work() as db:
-        event_ds = TaskEventDatastore(db)
-        if delivered:
-            await event_ds.append_event(
-                user_id,
-                project_id=project_id,
-                task_id=task_id,
-                type="user_inject",
-                actor=from_session_id,
-                session_id=lead_session_id,
-                payload={"text": text, "lead_session_id": lead_session_id},
-            )
-        else:
-            await event_ds.append_event(
-                user_id,
-                project_id=project_id,
-                task_id=task_id,
-                type="user_inject_dropped",
-                actor=from_session_id,
-                session_id=lead_session_id,
-                payload={"text": text, "reason": "LEAD_OFFLINE"},
-            )
+        await TaskEventDatastore(db).append_event(
+            user_id,
+            project_id=project_id,
+            task_id=task_id,
+            type="user_inject",
+            actor=from_session_id,
+            session_id=lead_session_id,
+            payload={"text": text, "lead_session_id": lead_session_id},
+        )
+        await mailbox_store.enqueue(
+            db,
+            session_id=lead_session_id,
+            task_id=task_id,
+            project_id=project_id,
+            user_id=user_id,
+            kind="text",
+            text=wrap_user_instruction(text),
+            from_session=from_session_id,
+            origin="user-inject",
+        )
+    await mailbox_store.ring_for(lead_session_id)
 
     return {
-        "delivered": delivered,
+        "delivered": True,
         "lead_session_id": lead_session_id,
-        "reason": None if delivered else "LEAD_OFFLINE",
+        "reason": None,
     }
 
 
 async def notify_lead_goal_revised(
+    db: AsyncSession,
     *,
     task_id: str,
     project_id: str,
@@ -216,40 +233,40 @@ async def notify_lead_goal_revised(
 
     MVP for the "push, not pull" goal-revision gap: the goal is the lead's
     initial brief AND its goal-mode loop condition, both baked into the session
-    at spawn — a bare ``task.goal`` DB write never reaches a running lead. We
-    deliver a ``revise_goal`` mailbox message so the lead re-orients on its next
-    turn boundary (and preempts an in-flight ``await_member_results``); the lead
-    decides autonomously how to fold it in. Best-effort: a finished/offline lead
-    returns ``delivered=False`` — the DB goal is still updated by the caller.
+    at spawn — a bare ``task.goal`` DB write is pull-only and never reaches a
+    running lead. The message makes it push; the lead re-orients at its next
+    turn boundary and decides autonomously how to fold it in.
 
-    The wrapper surfaces the goal-mode caveat to the lead: the kernel's
-    auto-completion may still track the ORIGINAL goal, so this revision is
-    declared authoritative.
+    Takes ``db`` so the revision and the ``task.goal`` update its caller writes
+    commit together. They must: a goal row updated without the lead hearing
+    about it is the worst available outcome, because the task then LOOKS
+    redirected while the lead keeps pursuing the old objective. That is what
+    happened whenever this request landed on a host process other than the one
+    driving the lead — which was most of the time.
+
+    The wrapper surfaces the goal-mode caveat: the kernel's auto-completion may
+    still track the ORIGINAL goal, so the revision is declared authoritative.
     """
 
-    async with async_unit_of_work(commit=False) as db:
-        runs = await TaskSessionDatastore(db).list_runs(user_id, task_id)
+    runs = await TaskSessionDatastore(db).list_runs(user_id, task_id)
     lead_run = pick_lead_run(runs)
     if lead_run is None:
         return {"delivered": False, "lead_session_id": None, "reason": "NO_LEAD"}
 
     lead_session_id = lead_run.session_id
-    wrapped = (
-        '<goal-revised source="user">\n'
-        "The task goal has been revised by the user to:\n\n"
-        f"{new_goal}\n\n"
-        "Re-evaluate your current plan against this revised goal. If the plan has "
-        "drifted, use modify_plan to adjust, then continue; call finish_task only "
-        "when the REVISED goal is met. (Goal-mode auto-completion may still track "
-        "the original goal — treat this revision as authoritative.)\n"
-        "</goal-revised>"
-    )
-    delivered = mailbox_registry.put(
-        lead_session_id,
-        InboxMsg(kind="revise_goal", text=wrapped, payload={"goal": new_goal}),
+    await mailbox_store.enqueue(
+        db,
+        session_id=lead_session_id,
+        task_id=task_id,
+        project_id=project_id,
+        user_id=user_id,
+        kind="revise_goal",
+        text=wrap_goal_revision(new_goal),
+        origin="goal-revised",
+        payload={"goal": new_goal},
     )
     return {
-        "delivered": delivered,
+        "delivered": True,
         "lead_session_id": lead_session_id,
-        "reason": None if delivered else "LEAD_OFFLINE",
+        "reason": None,
     }

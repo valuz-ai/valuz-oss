@@ -396,6 +396,18 @@ _LEAD_PROTOCOL_TAIL = """\
    re-running) before dispatching, reviewing or finishing — never assume the
    pre-restart state still holds."""
 
+_LEAD_PRECEDENCE_NOTE = """\
+THIS SECTION OVERRIDES EVERYTHING BELOW wherever they disagree about planning
+or delegation. The instructions that follow describe how this agent works on
+its own; they were not written for a task lead. In particular: any planning,
+todo-list or sub-agent guidance further down — and any built-in todo / Task /
+Agent tool your runtime offers — does NOT apply here. Work you plan or delegate
+that way is invisible to the task: it produces no plan, no members, no results
+anyone can collect, and the task cannot be completed from it. Follow those
+instructions for HOW to do the work; follow this section for how the work is
+planned, split up and finished.
+"""
+
 DISPATCH_PLAYBOOK = (
     """\
 ## Dispatch Playbook (lead session only)
@@ -404,6 +416,7 @@ You are the lead for this Task. Drive the WHOLE task in this one turn —
 dispatch, collect, review, repeat — until you call finish_task.
 
 """
+    + _LEAD_PRECEDENCE_NOTE
     + _LEAD_GOAL_BUDGET_NOTE
     + """
 
@@ -440,6 +453,7 @@ will reject it because the plan is non-empty). Drive execution in this one
 turn until finish_task.
 
 """
+    + _LEAD_PRECEDENCE_NOTE
     + _LEAD_GOAL_BUDGET_NOTE
     + """
 
@@ -930,6 +944,7 @@ async def build_member_session(
     plan_pre_committed: bool = False,
     worktree_notice: str | None = None,
     user_id: str,
+    task_title: str | None = None,
 ) -> CreateSessionRequest | None:
     """Construct the kernel create-session request for a dispatch member or lead.
 
@@ -956,7 +971,7 @@ async def build_member_session(
         instructions = [deployment global preamble +] agent.instructions
                        + project_prompt
                        + (DISPATCH_PLAYBOOK if is_lead else "") + brief
-        metadata["valuz"] = {project_id, agent_slug, task_id, run_kind}
+        metadata["valuz"] = {project_id, agent_slug, task_id, task_title, run_kind}
         runtime_provider, model, skills, mcp_servers, permission_mode from agent
     """
     member_row = await members.get(user_id, project_id, agent_slug)
@@ -1098,17 +1113,36 @@ async def build_member_session(
     prompt_snapshot = await resolve_global_instructions(user_id) if inherits_global else None
     instructions = assemble_session_instructions(
         [
+            ("authorization-boundary", AUTHORIZATION_BOUNDARY_INSTRUCTIONS),
+            # Lead-only, and ahead of the standing instructions on purpose.
+            # These two are what make the session a task LEAD rather than an
+            # ordinary run of the agent, and they used to come last. Measured on
+            # a real qa lead: a 49,939-character prompt of which the user's own
+            # global instructions were 39,710 (79.5%) — carrying their own
+            # "## Task Planning" section at 10.2% — while the playbook that
+            # forbids planning any other way started at 82.6%. The lead followed
+            # the guidance it met first, planned with the runtime's built-in
+            # todo tool, delegated with the built-in subagent tool, and never
+            # wrote a plan or dispatched anyone. The task closed with an empty
+            # plan. An instruction that arrives after its competitor, 40k
+            # characters in, is not an instruction.
+            #
+            # The standing instructions still apply — the playbook says so, and
+            # says which of the two wins where they disagree. They just no
+            # longer get to define the session's job before it does.
+            #
+            # Roster before playbook: the playbook says the members are listed
+            # "above".
+            ("member-roster", roster_block),
+            ("task-playbook", playbook_block),
             (
                 "global-instructions",
                 prompt_snapshot.content if prompt_snapshot is not None else "",
             ),
-            ("authorization-boundary", AUTHORIZATION_BOUNDARY_INSTRUCTIONS),
             ("agent-instructions", agent.instructions or ""),
             ("project-instructions", project_prompt),
             ("memory", mem_block),
-            ("member-roster", roster_block),
             ("available-skills", skills_block),
-            ("task-playbook", playbook_block),
             # Task-level worktree (design §5): every session of the task
             # shares one worktree cwd; the notice keeps the agent from
             # wandering back into the main workspace or force-pushing.
@@ -1227,6 +1261,10 @@ async def build_member_session(
         "project_id": project_id,
         "agent_slug": agent_slug,
         "task_id": task_id,
+        # Snapshot the durable Task label into every lead/member execution
+        # session.  Consumers can attribute model use without an extra task
+        # lookup or a separate control-plane metadata request.
+        **({"task_title": task_title} if task_title else {}),
         "run_kind": run_kind,
         # Composer reads locked_provider_id from valuz metadata to match
         # the session's locked (provider, model) pair.

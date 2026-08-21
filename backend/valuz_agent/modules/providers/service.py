@@ -609,6 +609,9 @@ def _derive_compatible_protocols(row: ProviderRow) -> list[str]:
     compatibility: DeepSeek / Zhipu / Moonshot / MiniMax expose both
     ``/v1/chat/completions`` (→ ``openai-completion`` for DeepAgents)
     and ``/anthropic/v1/messages`` (→ ``anthropic`` for claude_agent).
+    DeepSeek additionally serves the OpenAI Responses wire natively for
+    its whole lineup (→ ``openai-response`` for codex), per
+    https://api-docs.deepseek.com/quick_start/agent_integrations/codex.
 
     Subscription providers pin to their CLI's wire shape:
       * claude-subscription → ``["anthropic"]``
@@ -636,9 +639,14 @@ def _derive_compatible_protocols(row: ProviderRow) -> list[str]:
 
     # Built-in dual-protocol descriptor (DeepSeek / Zhipu / Moonshot /
     # MiniMax) → speaks anthropic via /anthropic + openai-completion
-    # via /v1.
+    # via /v1. DeepSeek also serves the Responses wire on the same
+    # base_url (whole lineup — see docstring), so codex derives for its
+    # models through the normal ``runtimes_for`` rule. ``anthropic``
+    # stays first so ``effective_protocol`` is unchanged.
     descriptor = _PROVIDER_MAP.get(row.provider_kind)
     if descriptor and descriptor.supports_protocol_selection:
+        if row.provider_kind == "deepseek":
+            return ["anthropic", "openai-completion", "openai-response"]
         return ["anthropic", "openai-completion"]
 
     # Subscription providers — pinned by descriptor.runtime_provider.
@@ -700,10 +708,17 @@ def _resolve_models(row: ProviderRow) -> list[LLMModel]:
                 continue
             raw_label = item.get("label") or item.get("display_name")
             label = raw_label if isinstance(raw_label, str) and raw_label.strip() else None
+            raw_selection_hint = item.get("selection_hint")
+            selection_hint = (
+                raw_selection_hint
+                if isinstance(raw_selection_hint, str) and raw_selection_hint.strip()
+                else None
+            )
             models.append(
                 LLMModel(
                     id=mid,
                     label=label or fallback_labels.get(mid),
+                    selection_hint=selection_hint,
                     max_input_tokens=_coerce_max_input_tokens(item.get("max_input_tokens")),
                 )
             )
@@ -731,22 +746,6 @@ def declared_model_max_input_tokens(row: ProviderRow, model_id: str) -> int | No
     return None
 
 
-# Per-MODEL codex capability on built-in channels. Codex requires the
-# Responses wire, and channel-level derivation (``runtimes_for`` over
-# ``compatible_protocols``) cannot express "this upstream serves the
-# Responses API for exactly one model". DeepSeek is that case today:
-# only ``deepseek-v4-flash`` integrates with codex (``deepseek-v4-pro``
-# announced to follow) — see
-# https://api-docs.deepseek.com/quick_start/agent_integrations/codex.
-# OSS is the producer of its built-in channels, so it declares the
-# capability per model (ADR-011 ``LLMModel.runtimes``); the declaration
-# is appended AFTER the derived set so the channel's existing default
-# runtime (``runtimes[0]`` → one-click pick) stays unchanged.
-_CODEX_CAPABLE_MODELS_BY_KIND: dict[str, frozenset[str]] = {
-    "deepseek": frozenset({"deepseek-v4-flash"}),
-}
-
-
 def _models_with_runtimes(row: ProviderRow, compatible: list[str]) -> list[LLMModel]:
     """Resolve a row's models and stamp each with the runtimes it can drive.
 
@@ -757,34 +756,25 @@ def _models_with_runtimes(row: ProviderRow, compatible: list[str]) -> list[LLMMo
     row resolves to no models but carries a seeded ``default_model`` (a legacy
     api-key anchor), one synthetic model row is emitted so the picker still
     surfaces it — and every model row carries a truthful ``runtimes``.
-    Models listed in ``_CODEX_CAPABLE_MODELS_BY_KIND`` for the row's kind
-    additionally get ``codex`` appended to the derived set.
     """
     # Lazy import: ``model_options`` imports the provider schemas, so importing
     # it at module load would cycle (mirrors ``provider_resolver``).
     from valuz_agent.modules.settings.model_options import runtimes_for
 
     ch_runtimes = tuple(runtimes_for(compatible, provider_kind=row.provider_kind))
-    codex_capable = _CODEX_CAPABLE_MODELS_BY_KIND.get(row.provider_kind, frozenset())
-
-    def _derived(model_id: str) -> tuple[str, ...]:
-        if model_id in codex_capable and "codex" not in ch_runtimes:
-            return (*ch_runtimes, "codex")
-        return ch_runtimes
 
     stamped = [
         LLMModel(
             id=m.id,
             label=m.label,
-            runtimes=(m.runtimes if m.runtimes is not None else _derived(m.id)),
+            selection_hint=m.selection_hint,
+            runtimes=(m.runtimes if m.runtimes is not None else ch_runtimes),
             max_input_tokens=m.max_input_tokens,
         )
         for m in _resolve_models(row)
     ]
     if not stamped and row.default_model:
-        stamped.append(
-            LLMModel(id=row.default_model, label=None, runtimes=_derived(row.default_model))
-        )
+        stamped.append(LLMModel(id=row.default_model, label=None, runtimes=ch_runtimes))
     return stamped
 
 
@@ -807,6 +797,7 @@ def _stamp_contributed_runtimes(ch: LLMChannel) -> LLMChannel:
         else LLMModel(
             id=m.id,
             label=m.label,
+            selection_hint=m.selection_hint,
             runtimes=ch_runtimes,
             max_input_tokens=m.max_input_tokens,
         )

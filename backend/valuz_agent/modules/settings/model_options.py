@@ -48,8 +48,9 @@ _SUBSCRIPTION_KINDS: frozenset[str] = frozenset({"claude-subscription", "codex-s
 
 # Preferred runtime when a model can run on more than one. Onboarding's one-click
 # pick uses ``default_runtime``; this order is the tie-break. claude_agent first
-# (richest reasoning), then codex, then the generic deepagents.
-_RUNTIME_PRIORITY: tuple[str, ...] = ("claude_agent", "codex", "deepagents")
+# (richest reasoning), then codex, then the generic deepagents, then
+# deepseek_harness (chat-completions channels; never the one-click default).
+_RUNTIME_PRIORITY: tuple[str, ...] = ("claude_agent", "codex", "deepagents", "deepseek_harness")
 
 # provider_kind → the CLI tool the client probes / launches for login.
 _CLI_TOOL_BY_KIND: dict[str, str] = {
@@ -101,6 +102,21 @@ def runtimes_for(
     ):
         out.add("deepagents")
 
+    # deepseek_harness: any non-subscription channel speaking the
+    # chat-completions wire — protocol-scoped, exactly like codex on the
+    # Responses wire above. The dsh adapter posts a plain
+    # ``${base_url}/chat/completions`` body (the same convention the
+    # deepagents client uses), honors the channel's endpoint via
+    # $DEEPSEEK_BASE_URL, and parses standard streaming chunks, so it is
+    # not limited to DeepSeek's own channel or models. (DeepSeek-dialect
+    # extras — ``thinking`` / ``reasoning_effort`` — only go on the wire
+    # when the agent sets effort; clear effort on a model that rejects
+    # them, same per-model rule as deepagents.)
+    if provider_kind not in _SUBSCRIPTION_KINDS and (
+        protos & set(RUNTIME_REGISTRY["deepseek_harness"].supported_protocols)
+    ):
+        out.add("deepseek_harness")
+
     return [r for r in _RUNTIME_PRIORITY if r in out]
 
 
@@ -117,6 +133,9 @@ class ModelOption(BaseModel):
     # Display label, disambiguated within its provider (so two genuinely
     # different models that share a name don't read identically).
     label: str
+    # Presentation-only suffix shown by model pickers, never part of the model
+    # label persisted or rendered by readonly surfaces.
+    selection_hint: str | None = None
     # Every runtime this model can run on (priority-ordered).
     runtimes: list[str]
     # Preferred runtime for a one-click pick. Always ``runtimes[0]``.
@@ -235,6 +254,7 @@ def _build_raw_provider(
                 model_id=m.id,
                 provider_id=p.id,
                 label=m.label or m.id,
+                selection_hint=m.selection_hint,
                 runtimes=runtimes,
                 default_runtime=runtimes[0],
                 is_current_default=(p.id == current.provider_id and m.id == current.model),

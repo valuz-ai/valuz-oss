@@ -1516,6 +1516,63 @@ paths:
         "409":
           description: A model runtime is still active
 
+  /v1/system/network-egress/activity:
+    get:
+      summary: Inspect active model runs for a desktop ownership change
+      operationId: getDesktopNetworkEgressActivity
+      tags: [system]
+      description: |
+        Loopback desktop-control endpoint. Reads only the process-local runtime
+        registry; it never queries owner-scoped user data and is authorized by
+        the memory-only desktop capability delivered over sidecar stdin.
+      parameters:
+        - name: X-Valuz-Desktop-Token
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Active model session ids in this backend process
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DesktopNetworkEgressActivityResponse"
+        "401":
+          description: Desktop control capability missing or invalid
+
+  /v1/system/network-egress/interrupt:
+    post:
+      summary: Interrupt confirmed active model runs before changing ownership
+      operationId: interruptDesktopNetworkEgressActivity
+      tags: [system]
+      description: |
+        Loopback desktop-control endpoint. Interrupts only session ids that are
+        currently active in this backend process. The caller must first obtain
+        explicit user confirmation; this endpoint performs no implicit broad
+        cancellation.
+      parameters:
+        - name: X-Valuz-Desktop-Token
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DesktopNetworkEgressInterruptRequest"
+      responses:
+        "200":
+          description: Per-session interruption outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DesktopNetworkEgressInterruptResponse"
+        "401":
+          description: Desktop control capability missing or invalid
+
   # ── Browser (managed chrome-devtools daemon; Settings panel) ──────────
 
   /v1/browser/status:
@@ -2897,6 +2954,49 @@ paths:
         "404":
           description: Session not found
 
+  /v1/sessions/{session_id}/fork:
+    post:
+      summary: Fork a session into a new independent session
+      operationId: forkSession
+      tags: [sessions]
+      description: |
+        Duplicates the session — configuration, kernel history, and the
+        runtime-native thread — into a new session and returns it. With
+        ``message_id`` the fork cuts inclusively at that message
+        (message-granularity fork); without it the whole session is forked
+        at its current tail. Non-destructive: the source session is never
+        modified. See docs/design/session-fork.md.
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForkSessionRequest"
+      responses:
+        "201":
+          description: The forked session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDetail"
+        "404":
+          description: Session or anchor message not found
+        "409":
+          description: |
+            Invalid anchor (recorded before anchor persistence, still
+            running, or belongs to another session), or a whole-session
+            fork was requested while a turn is in flight
+        "422":
+          description: Fork is not supported for this session's runtime yet
+        "502":
+          description: The runtime-native fork failed; nothing was created
+
   /v1/sessions/{session_id}/queue:
     get:
       summary: List queued follow-up inputs for a session
@@ -3627,7 +3727,7 @@ paths:
         - in: query
           name: kind
           required: true
-          schema: {type: string, enum: [skill, agent, connector]}
+          schema: {type: string, enum: [skill, agent, connector, plugin]}
       responses:
         "200":
           description: Categories listed
@@ -3653,7 +3753,7 @@ paths:
         - in: query
           name: type
           required: true
-          schema: {type: string, enum: [skill, agent_template, agent_team_template, connector]}
+          schema: {type: string, enum: [skill, agent_template, agent_team_template, connector, plugin]}
         - in: query
           name: category
           required: false
@@ -3665,7 +3765,13 @@ paths:
         - in: query
           name: source
           required: false
-          schema: {type: string, enum: [skillhub, valuz_official, modelscope]}
+          description: "Open string — the index decides which sources exist (known today: skillhub, valuz_official, modelscope, redskill, plugin). Unknown values match nothing."
+          schema: {type: string, maxLength: 64}
+        - in: query
+          name: composition
+          required: false
+          description: "`type=plugin` only — `skills_only` (skill suites) or `with_connectors`."
+          schema: {type: string, enum: [skills_only, with_connectors]}
         - in: query
           name: q
           required: false
@@ -3763,6 +3869,302 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+
+  # ------------------------------------------------------------------
+  # Plugins — the Agent Plugins (1.0.0) install unit: skills + MCP servers.
+  # Members are ordinary library skills / connectors; membership is
+  # many-to-many and uninstall is reference-counted.
+  # ------------------------------------------------------------------
+
+  /v1/plugins:
+    get:
+      summary: List installed plugins
+      operationId: listPlugins
+      tags: [plugins]
+      responses:
+        "200":
+          description: Installed plugins with their members
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginList"
+
+  /v1/plugins/memberships:
+    get:
+      summary: Which plugins each library skill / connector belongs to
+      operationId: getPluginMemberships
+      tags: [plugins]
+      description: |
+        Library card badges. Every requested slug is present in the result,
+        with an empty list when the resource belongs to no plugin.
+      parameters:
+        - in: query
+          name: kind
+          required: true
+          schema: {type: string, enum: [skill, connector]}
+        - in: query
+          name: slugs
+          required: false
+          description: Comma-separated library slugs.
+          schema: {type: string}
+      responses:
+        "200":
+          description: Slug → plugins map
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: array
+                  items: {$ref: "#/components/schemas/PluginMembershipRef"}
+
+  /v1/plugins/preview:
+    post:
+      summary: Dry-run a plugin install
+      operationId: previewPlugin
+      tags: [plugins]
+      description: |
+        Loads the source (same inputs as install) and reports the manifest,
+        the detected layout, the members and which of them conflict with the
+        library — no side effects. Used to show the conflict prompt before
+        installing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PluginInstallRequest"
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: {type: string, format: binary, description: "The plugin zip."}
+                on_conflict: {type: string, enum: [skip, overwrite]}
+      responses:
+        "200":
+          description: Preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginPreview"
+        "400":
+          description: Bad archive / unusable source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "422":
+          description: Not a plugin / fatally invalid manifest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /v1/plugins/install:
+    post:
+      summary: Install a plugin
+      operationId: installPlugin
+      tags: [plugins]
+      description: |
+        Install from an uploaded zip (multipart `file`), a local directory or
+        zip `path`, an http(s) `url`, or a marketplace item id
+        (`market:plugin:<slug>`). Accepts the Agent Plugins layout AND the
+        `.claude-plugin/` / `.codebuddy-plugin/` layouts (auto-detected;
+        `source` becomes `claude_plugin` / `codebuddy_plugin`). Re-installing a
+        same-name plugin from the same source is an update; a same-name plugin
+        from another source is a 409. Per member: absent → install; present &
+        same content → link only; present & different → `on_conflict` `skip`
+        (default; link + `content_differs`) or `overwrite`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PluginInstallRequest"
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: {type: string, format: binary, description: "The plugin zip."}
+                on_conflict: {type: string, enum: [skip, overwrite]}
+      responses:
+        "200":
+          description: Installed / updated / already installed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginInstallResult"
+        "400":
+          description: Bad archive / unusable source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "409":
+          description: Same-name plugin installed from another source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "422":
+          description: Not a plugin / fatally invalid manifest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "502":
+          description: Download failed (url / market source)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /v1/plugins/{plugin_id}:
+    get:
+      summary: Get one installed plugin
+      operationId: getPlugin
+      tags: [plugins]
+      parameters:
+        - in: path
+          name: plugin_id
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Plugin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginView"
+        "404":
+          description: Unknown plugin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      summary: Uninstall a plugin (reference-counted members)
+      operationId: uninstallPlugin
+      tags: [plugins]
+      description: |
+        Removes the plugin and its package. Each member skill / connector is
+        removed only when this plugin installed it and no other plugin still
+        references it; members referenced elsewhere or that existed before any
+        plugin linked them (`standalone`) are kept.
+      parameters:
+        - in: path
+          name: plugin_id
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Removed / kept member summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginUninstallResult"
+        "404":
+          description: Unknown plugin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /v1/plugins/{plugin_id}/enable:
+    post:
+      summary: Enable a plugin and the members it disabled
+      operationId: enablePlugin
+      tags: [plugins]
+      description: Re-enables only the members this plugin's disable turned off; members the user disabled individually stay disabled.
+      parameters:
+        - in: path
+          name: plugin_id
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Plugin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginView"
+
+  /v1/plugins/{plugin_id}/disable:
+    post:
+      summary: Disable a plugin and all its members
+      operationId: disablePlugin
+      tags: [plugins]
+      parameters:
+        - in: path
+          name: plugin_id
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Plugin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginView"
+
+  /v1/plugins/{plugin_id}/update:
+    post:
+      summary: Update a plugin from its source
+      operationId: updatePlugin
+      tags: [plugins]
+      description: |
+        Re-installs from `source_ref` (market item / URL / local directory)
+        with a member diff: unchanged members are left alone, the plugin's own
+        unmodified members are refreshed, user-modified or foreign members
+        follow `on_conflict`, members the new version no longer declares are
+        released (reference-counted). A one-off zip upload has no source to
+        re-fetch (400).
+      parameters:
+        - in: path
+          name: plugin_id
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PluginUpdateRequest"
+      responses:
+        "200":
+          description: Updated / already up to date
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginInstallResult"
+        "400":
+          description: Source cannot be re-fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /v1/plugins/{plugin_id}/export:
+    get:
+      summary: Export a plugin as an Agent Plugins layout zip
+      operationId: exportPlugin
+      tags: [plugins]
+      description: |
+        Root `plugin.json` + `skills/<slug>/` (current library content) +
+        `mcp.json` (when the plugin declares servers); Valuz-specific data
+        (legacy component directories of a `.claude-plugin` /
+        `.codebuddy-plugin` import) rides under `io.valuz.agent/`.
+      parameters:
+        - in: path
+          name: plugin_id
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Zip archive
+          content:
+            application/zip:
+              schema: {type: string, format: binary}
 
   /v1/notifications:
     get:
@@ -4524,6 +4926,17 @@ components:
         role: {type: string, description: "One-line responsibility."}
         lead: {type: boolean}
         skill_count: {type: integer, nullable: true}
+    MarketplacePluginMember:
+      type: object
+      description: "One member of a plugin item — a skill or an MCP server / connector it declares."
+      required: [kind, slug, name]
+      properties:
+        kind: {type: string, enum: [skill, connector]}
+        slug: {type: string}
+        name: {type: string}
+        description: {type: string, nullable: true}
+        meta_version: {type: string, nullable: true, description: "Skill `metadata.version` (display only)."}
+        path: {type: string, nullable: true, description: "Location inside the package (`skills/<slug>` / `mcp.json#<name>`)."}
     MarketplaceConnectorRequirement:
       type: object
       required: [name, requirement]
@@ -4631,11 +5044,11 @@ components:
         id: {type: string}
         type:
           type: string
-          enum: [skill, agent_template, agent_team_template, connector]
+          enum: [skill, agent_template, agent_team_template, connector, plugin]
         source:
           type: string
-          enum: [skillhub, valuz_official, modelscope]
-        source_ref: {type: string, description: "SkillHub slug / template id / pack id."}
+          description: "Open string, NOT an enum: where the item comes from is data the index grows over time (known today: skillhub, valuz_official, modelscope, redskill, plugin — `plugin` marks members extracted from a plugin package). Clients MUST render unknown sources with a generic label; a closed enum here once broke every old client the moment a new source shipped."
+        source_ref: {type: string, description: "SkillHub slug / template id / pack id / plugin name."}
         title: {type: string}
         subtitle: {type: string, nullable: true, description: "Agent role line; null for skills."}
         description: {type: string}
@@ -4647,20 +5060,32 @@ components:
           items: {type: string}
         badges:
           type: array
+          description: "Clients drop badge values they do not know; the index may add badges without a client release."
           items: {$ref: "#/components/schemas/MarketplaceBadge"}
         stats:
           $ref: "#/components/schemas/MarketplaceStats"
         version: {type: string, nullable: true}
         runtime: {type: string, nullable: true, description: "Agent templates only."}
         skill_count: {type: integer, nullable: true}
+        connector_count: {type: integer, nullable: true, description: "Plugins only — declared MCP servers."}
+        composition:
+          type: string
+          nullable: true
+          enum: [skills_only, with_connectors]
+          description: "Plugins only — derived from the package contents, never authored."
         members:
           type: array
           nullable: true
-          description: "Team templates only — brief roster for card avatars."
-          items: {$ref: "#/components/schemas/MarketplaceTeamMember"}
+          description: |
+            Team templates — brief roster for card avatars (MarketplaceTeamMember).
+            Plugin DETAILS — the skill / connector member list (MarketplacePluginMember).
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/MarketplaceTeamMember"
+              - $ref: "#/components/schemas/MarketplacePluginMember"
         install_target:
           type: string
-          enum: [skill_library, agent_library, agent_library_project, connector_library]
+          enum: [skill_library, agent_library, agent_library_project, connector_library, plugin_library]
         installed: {type: boolean}
         locked: {type: boolean, default: false, description: "Present but not installable (e.g. official skill requires Reportify)."}
     MarketplaceItemDetail:
@@ -4712,6 +5137,10 @@ components:
               nullable: true
               allOf:
                 - $ref: "#/components/schemas/MarketplaceConnectorConfig"
+            plugin_manifest:
+              type: object
+              nullable: true
+              description: "Plugins — the package's `plugin.json` object (Agent Plugins 1.0.0 manifest)."
             install_manifest:
               type: object
               nullable: true
@@ -4720,8 +5149,9 @@ components:
                 index: skill -> {download_url, sha256?, size_bytes?};
                 agent_template -> an AgentTemplateDef-shaped object;
                 agent_team_template -> a pack manifest object (skill deps
-                rewritten to {slug, source: "url", download_url}). Only the
-                market index sets this field.
+                rewritten to {slug, source: "url", download_url});
+                plugin -> {download_url, sha256?, size_bytes?} of the Agent
+                Plugins layout zip. Only the market index sets this field.
     MarketplaceItemList:
       type: object
       required: [items, total, page, page_size, degraded]
@@ -4764,9 +5194,175 @@ components:
         status:
           type: string
           enum: [installed, already_installed]
-        installed_ref: {type: string, nullable: true, description: "Resulting library slug (skill or agent) or pack id."}
+        installed_ref: {type: string, nullable: true, description: "Resulting library slug (skill or agent), pack id or plugin name."}
         created: {type: integer, nullable: true, description: "Team installs — roles newly created."}
         skipped: {type: integer, nullable: true, description: "Team installs — roles already present."}
+    PluginAuthor:
+      type: object
+      properties:
+        name: {type: string, nullable: true}
+        email: {type: string, nullable: true}
+        url: {type: string, nullable: true}
+    PluginMember:
+      type: object
+      description: "One member (skill / connector) of an installed plugin."
+      required: [kind, slug, name, content_hash, installed, content_differs]
+      properties:
+        kind: {type: string, enum: [skill, connector]}
+        slug: {type: string, description: "Library slug (skill directory name / connector slug)."}
+        name: {type: string}
+        description: {type: string, nullable: true}
+        meta_version: {type: string, nullable: true, description: "Skill `metadata.version` (display only)."}
+        content_hash: {type: string, description: "Content hash the plugin declares for this member."}
+        installed: {type: boolean, description: "The resource currently exists in the library."}
+        content_differs: {type: boolean, description: "The library copy differs from what the plugin declares."}
+    PluginView:
+      type: object
+      required: [id, name, keywords, source, composition, enabled, members, skill_count, connector_count, root_path, installed_at, updated_at]
+      properties:
+        id: {type: string}
+        name: {type: string, description: "`plugin.json.name` — unique per user."}
+        version: {type: string, nullable: true}
+        description: {type: string, nullable: true}
+        author:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/PluginAuthor"
+        homepage: {type: string, nullable: true}
+        repository: {type: string, nullable: true}
+        license: {type: string, nullable: true}
+        keywords:
+          type: array
+          items: {type: string}
+        source:
+          type: string
+          enum: [market, local_dir, zip, url, claude_plugin, codebuddy_plugin]
+        source_ref: {type: string, nullable: true, description: "Market item id / directory path / URL."}
+        composition:
+          type: string
+          enum: [skills_only, with_connectors]
+        enabled: {type: boolean}
+        members:
+          type: array
+          items: {$ref: "#/components/schemas/PluginMember"}
+        skill_count: {type: integer}
+        connector_count: {type: integer}
+        root_path: {type: string, description: "PLUGIN_ROOT on disk."}
+        installed_at: {type: string, description: "ISO-8601 UTC."}
+        updated_at: {type: string, description: "ISO-8601 UTC."}
+        update_available: {type: boolean, nullable: true}
+    PluginSkippedMember:
+      type: object
+      required: [kind, slug, reason]
+      properties:
+        kind: {type: string, enum: [skill, connector, skills, mcp]}
+        slug: {type: string}
+        reason: {type: string}
+    PluginConflictMember:
+      type: object
+      required: [kind, slug]
+      properties:
+        kind: {type: string, enum: [skill, connector]}
+        slug: {type: string}
+    PluginInstallResult:
+      type: object
+      required: [plugin, status, skipped, conflicts, warnings]
+      properties:
+        plugin: {$ref: "#/components/schemas/PluginView"}
+        status:
+          type: string
+          enum: [installed, updated, already_installed]
+        skipped:
+          type: array
+          description: "Components the loader rejected (with the reason) — spec §11.3 failure isolation."
+          items: {$ref: "#/components/schemas/PluginSkippedMember"}
+        conflicts:
+          type: array
+          description: "Members whose library copy differs and were linked without overwriting."
+          items: {$ref: "#/components/schemas/PluginConflictMember"}
+        warnings:
+          type: array
+          items: {type: string}
+    PluginPreview:
+      type: object
+      required: [manifest, format, composition, members, conflicts, skipped, warnings]
+      properties:
+        manifest: {type: object, description: "The normalized `plugin.json` object."}
+        format:
+          type: string
+          enum: [agent_plugins, claude_plugin, codebuddy_plugin]
+        composition:
+          type: string
+          enum: [skills_only, with_connectors]
+        members:
+          type: array
+          items: {$ref: "#/components/schemas/PluginMember"}
+        conflicts:
+          type: array
+          items: {$ref: "#/components/schemas/PluginConflictMember"}
+        skipped:
+          type: array
+          items: {$ref: "#/components/schemas/PluginSkippedMember"}
+        warnings:
+          type: array
+          items: {type: string}
+        existing:
+          type: string
+          nullable: true
+          enum: [same_source, other_source]
+          description: "A same-name plugin is already installed (install = update / would 409)."
+    PluginInstallRequest:
+      type: object
+      description: "Exactly one of `path` / `url` / `market_item_id` (or a multipart `file`)."
+      properties:
+        path: {type: string, nullable: true, description: "Local plugin directory (or zip file)."}
+        url: {type: string, nullable: true, description: "http(s) URL of a plugin zip."}
+        market_item_id: {type: string, nullable: true, description: "`market:plugin:<slug>`."}
+        on_conflict:
+          type: string
+          enum: [skip, overwrite]
+          default: skip
+    PluginUpdateRequest:
+      type: object
+      properties:
+        on_conflict:
+          type: string
+          enum: [skip, overwrite]
+          default: skip
+    PluginUninstallResult:
+      type: object
+      required: [removed_members, kept_members]
+      properties:
+        removed_members:
+          type: array
+          items:
+            type: object
+            required: [kind, slug]
+            properties:
+              kind: {type: string, enum: [skill, connector]}
+              slug: {type: string}
+        kept_members:
+          type: array
+          items:
+            type: object
+            required: [kind, slug, reason]
+            properties:
+              kind: {type: string, enum: [skill, connector]}
+              slug: {type: string}
+              reason: {type: string, enum: [referenced_by_other_plugin, standalone]}
+    PluginList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/PluginView"}
+    PluginMembershipRef:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
     ExportCollection:
       type: object
       description: "Optional display header to brand the exported group."
@@ -5034,7 +5630,7 @@ components:
         name: {type: string}
         description: {type: string, default: ""}
         instructions: {type: string, default: ""}
-        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents]}
+        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents, deepseek_harness]}
         model: {type: string, default: claude-sonnet-4-6}
         skills:
           type: array
@@ -5056,7 +5652,7 @@ components:
         name: {type: string, nullable: true}
         description: {type: string, nullable: true}
         instructions: {type: string, nullable: true}
-        runtime: {type: string, nullable: true, enum: [claude_agent, codex, deepagents]}
+        runtime: {type: string, nullable: true, enum: [claude_agent, codex, deepagents, deepseek_harness]}
         model: {type: string, nullable: true}
         skills:
           type: array
@@ -5136,7 +5732,7 @@ components:
         agent_slug: {type: string, nullable: true}
         name: {type: string}
         instructions: {type: string, default: ""}
-        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents]}
+        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents, deepseek_harness]}
         model: {type: string, default: claude-sonnet-4-6}
         provider_id: {type: string, nullable: true}
         effort: {type: string, nullable: true, enum: [low, medium, high, xhigh, max]}
@@ -5206,7 +5802,7 @@ components:
         name: {type: string}
         instructions: {type: string}
         description: {type: string, default: ""}
-        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents]}
+        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents, deepseek_harness]}
         model: {type: string, default: claude-sonnet-4-6}
         effort: {type: string, nullable: true, enum: [low, medium, high, xhigh, max]}
         skills:
@@ -6349,7 +6945,7 @@ components:
           description: Unix epoch milliseconds (UTC). Format via new Date(ms).
         runtime_provider:
           type: string
-          enum: [claude_agent, codex, deepagents]
+          enum: [claude_agent, codex, deepagents, deepseek_harness]
           default: deepagents
           description: |
             Kernel runtime stamped at session creation. Surfaced so the
@@ -6401,6 +6997,14 @@ components:
             creation time, not liveness — the worktree may have been
             removed since; ``GET /v1/projects/{id}/worktrees`` is the
             source of truth for what still exists.
+        forked_from_session_id:
+          type: string
+          nullable: true
+          description: |
+            Fork provenance (docs/design/session-fork.md): the source
+            session this one was forked from. null for sessions that
+            are not forks. The source may since have been deleted —
+            treat as a navigation hint, not a guarantee.
         background:
           type: boolean
           default: false
@@ -6591,7 +7195,7 @@ components:
       properties:
         id:
           type: string
-          enum: [claude_agent, codex, deepagents]
+          enum: [claude_agent, codex, deepagents, deepseek_harness]
           description: |
             Internal runtime enum — matches kernel
             ``Session.runtime_provider``. Stable wire identifier even
@@ -6612,6 +7216,7 @@ components:
               * claude_agent → [anthropic]
               * codex → [openai-response]
               * deepagents → [anthropic, openai-completion, gemini]
+              * deepseek_harness → [openai-completion]
         requires_binary:
           type: string
           nullable: true
@@ -6661,6 +7266,44 @@ components:
             type: string
         prewarm_failed_session_ids:
           type: array
+          items:
+            type: string
+
+    DesktopNetworkEgressActivityResponse:
+      type: object
+      required: [active_session_ids]
+      properties:
+        active_session_ids:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+
+    DesktopNetworkEgressInterruptRequest:
+      type: object
+      required: [session_ids]
+      properties:
+        session_ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+
+    DesktopNetworkEgressInterruptResponse:
+      type: object
+      required: [interrupted_session_ids, inactive_session_ids]
+      properties:
+        interrupted_session_ids:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+        inactive_session_ids:
+          type: array
+          uniqueItems: true
           items:
             type: string
 
@@ -6737,7 +7380,7 @@ components:
           type: array
           items:
             type: string
-            enum: [claude_agent, codex, deepagents]
+            enum: [claude_agent, codex, deepagents, deepseek_harness]
           description: Runtime ids the host can currently dispatch to.
         warnings:
           type: array
@@ -6774,7 +7417,7 @@ components:
         runtime_id:
           type: string
           nullable: true
-          enum: [claude_agent, codex, deepagents, null]
+          enum: [claude_agent, codex, deepagents, deepseek_harness, null]
           description: |
             Optional explicit Runtime Agent for this session. Allowed
             values match the kernel's ``Session.runtime_provider`` enum.
@@ -7014,6 +7657,18 @@ components:
           maxLength: 64
           default: main
           description: Render seat within the host. First iteration uses ``main``.
+
+    ForkSessionRequest:
+      type: object
+      properties:
+        message_id:
+          type: string
+          nullable: true
+          description: |
+            Anchor message to fork through (inclusive). The message must
+            carry a runtime-native fork anchor
+            (``metadata.runtime_native``). Omitted — the whole session is
+            forked at its current tail.
 
     SessionMessageRequest:
       type: object

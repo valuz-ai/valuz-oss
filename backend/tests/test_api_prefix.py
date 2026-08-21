@@ -131,3 +131,55 @@ def test_none_falls_back_to_settings(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_prefix_is_parsed_and_normalized(raw: object, expected: list[str]) -> None:
     """Accepts a comma-separated string or a list; normalises + dedups entries."""
     assert Settings(api_prefix=raw).api_prefix == expected
+
+
+def test_edition_always_on_mcp_mounts_under_each_base_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A spec that carries its app is mounted through the built-ins' own seam.
+
+    The resolver advertises an edition server as ``{backend_base_url}{path}/mcp``
+    — the same shape as the built-ins — so it needs the same mounting. An
+    edition that mounted by hand in ``register_api`` and covered only the bare
+    path shipped a spec whose advertised URL 404'd under every prefixed
+    deployment, which is the whole reason the factory lives on the spec.
+    """
+    from valuz_agent.ports.extensions import ext
+    from valuz_agent.ports.mcp_always_on import AlwaysOnMcpServerSpec
+
+    async def _app(scope, receive, send) -> None:  # pragma: no cover - never called
+        raise AssertionError("route table inspection only")
+
+    monkeypatch.setattr(
+        ext,
+        "always_on_mcp_specs",
+        [
+            AlwaysOnMcpServerSpec(
+                name="valuz_finance",
+                path="/_internal/mcp/finance",
+                app_factory=lambda: _app,
+            )
+        ],
+    )
+
+    mounts = _mount_paths(create_app(api_prefix=["", "/valuz-backend"]))
+
+    assert "/_internal/mcp/finance" in mounts
+    assert "/valuz-backend/_internal/mcp/finance" in mounts
+
+
+def test_edition_spec_without_a_factory_mounts_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Back-compat: an edition still mounting its own app in ``register_api``
+    keeps that arrangement — the spec alone must not conjure a mount."""
+    from valuz_agent.ports.extensions import ext
+    from valuz_agent.ports.mcp_always_on import AlwaysOnMcpServerSpec
+
+    monkeypatch.setattr(
+        ext,
+        "always_on_mcp_specs",
+        [AlwaysOnMcpServerSpec(name="valuz_finance", path="/_internal/mcp/finance")],
+    )
+
+    assert "/_internal/mcp/finance" not in _mount_paths(create_app())

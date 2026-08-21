@@ -102,7 +102,7 @@ FALLBACK_FONT_SIZE = "default"
 # runtime falls through to its SDK default. ``"off"`` from the legacy
 # 4-value enum is normalized to ``None`` on read for back-compat.
 EFFORT_VALUES = ("low", "medium", "high", "xhigh", "max")
-RUNTIME_VALUES = ("claude_agent", "codex", "deepagents")
+RUNTIME_VALUES = ("claude_agent", "codex", "deepagents", "deepseek_harness")
 
 
 # ── factory defaults (ext.model_defaults) ────────────────────────────
@@ -439,7 +439,7 @@ async def get_conversation_task_coverage_enabled(
     return await _read_bool(
         db,
         KEY_CONVERSATION_TASK_COVERAGE_ENABLED,
-        True,
+        False,
         user_id=user_id,
     )
 

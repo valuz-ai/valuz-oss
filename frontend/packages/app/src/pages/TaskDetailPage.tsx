@@ -58,6 +58,7 @@ import {
   type TaskEvent,
   type TaskTokenUsage,
   recordEntityOrigin,
+  useDefaultRuntimeLocation,
   useEntityOrigin,
 } from "@valuz/core";
 import type { FileTreeNode } from "@valuz/ui";
@@ -780,12 +781,13 @@ export const TaskDetailPage = () => {
   });
   // Startup phase for the follow-up turn header, mirroring the conversation
   // page: while the lead's runtime is coming up the header names that rather
-  // than claiming to process. OSS registers no execution targets, so the
-  // origin is undefined there and this always reads "local".
+  // than claiming to process. A single-backend build observes no origin, so it
+  // falls back to whatever that build declared its one backend to be.
   const leadExecOrigin = useEntityOrigin(leadSessionId, "session");
+  const defaultRuntimeLocation = useDefaultRuntimeLocation();
   const followUpStartingRuntime: RuntimeStartLocation | null =
     followUp.awaitingRuntime
-      ? leadExecOrigin === "cloud"
+      ? (leadExecOrigin ?? defaultRuntimeLocation) === "cloud"
         ? "cloud"
         : "local"
       : null;
@@ -1159,6 +1161,15 @@ export const TaskDetailPage = () => {
 
   const { task, events } = detail;
   const isActive = task.status === "active";
+  // A task is addressable the moment it is registered — its lead comes up
+  // behind the kickoff response, because starting one provisions a sandbox for
+  // a brand-new scope (a cold instance, ~17s on the cloud backend). So this
+  // page opens on a task that legitimately has no runs and no events yet, and
+  // "no events" would read as "nothing is happening" when the truth is "it is
+  // starting". The poller above swaps this out for the real timeline the
+  // moment the lead lands. A halted/terminal task with an empty timeline is
+  // NOT starting — it never got there, and its own state bar says so.
+  const isStarting = isActive && events.length === 0 && detail.runs.length === 0;
   const isPaused = task.status === "paused";
   // ``blocked`` is the failed-but-resumable terminal (lead turn errored — e.g.
   // an API/socket drop — or unresolved subtasks). Surface a retry/继续 entry
@@ -1197,11 +1208,19 @@ export const TaskDetailPage = () => {
     <>
       <div className="mb-3 flex items-center gap-2">
         <ListTodo className="h-3.5 w-3.5 text-[#6b63e8]" />
-        <h2 className="text-[14px] font-semibold text-[#131313]">
+        <h2 className="text-base font-semibold text-[#131313]">
           {t("task.eventsTitle")}
         </h2>
       </div>
-      {events.length === 0 ? (
+      {isStarting ? (
+        <div className="flex items-start gap-2 text-xs text-ink-meta">
+          <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
+          <span>
+            <span className="text-ink-body">{t("task.starting")}</span>
+            <span className="ml-1">{t("task.startingHint")}</span>
+          </span>
+        </div>
+      ) : events.length === 0 ? (
         <p className="text-xs text-ink-meta">{t("task.noEvents")}</p>
       ) : (
         <ol className="flex flex-col gap-4">
@@ -1302,7 +1321,7 @@ export const TaskDetailPage = () => {
                   {taskPending.length > 1 && (
                     <Badge
                       variant="warning"
-                      className="px-1.5 py-0 text-[10px] leading-4"
+                      className="px-1.5 py-0 text-micro leading-4"
                     >
                       {taskPending.length}
                     </Badge>
@@ -1353,6 +1372,15 @@ export const TaskDetailPage = () => {
       onCopyContent={handleArtifactCopy}
       onOpenExternal={handleArtifactOpenExternal}
     >
+      {/* THIS surface owns its scroll. It used to lean on the AppShell's own
+          scroll box, which stopped working the moment the page moved inside
+          ``ArtifactSplitPane``: the split's content column is a viewport-height
+          panel carrying an inline ``overflow: hidden`` (so a drag can never
+          spill one column into the other). That clips FIRST, so the shell's
+          box never sees overflowing content and never grows a scrollbar — the
+          timeline was simply cut off at the fold, with no wheel or bar to
+          reach the rest. */}
+      <div className="h-full overflow-y-auto">
       {/* In-flight: ``min-h-full`` lets the wrapper fill the scrolling viewport
           so the sticky action bar can pin to its bottom edge even when content
           is short (``mt-auto`` on the bar pushes it down). Completed:
@@ -1412,7 +1440,7 @@ export const TaskDetailPage = () => {
             <h1 className="text-[18px] font-semibold leading-6 text-ink-heading">
               {task.title}
             </h1>
-            <div className="mt-2 flex flex-wrap items-center text-[11px] font-normal leading-4">
+            <div className="mt-2 flex flex-wrap items-center text-2xs font-normal leading-4">
               <span
                 className={cn(
                   "inline-flex items-center gap-1",
@@ -1447,7 +1475,7 @@ export const TaskDetailPage = () => {
               )}
               <span className="mx-3 h-3 w-px bg-[#f3f4f6]" />
               <span className="inline-flex items-center gap-1.5 text-[#898f9c]">
-                <span className="inline-flex h-4 shrink-0 items-center rounded-[4px] bg-brand-light px-1 text-[10px] font-normal leading-none text-brand-700">
+                <span className="inline-flex h-4 shrink-0 items-center rounded-sm bg-brand-light px-1 text-micro font-normal leading-none text-brand-700">
                   Lead
                 </span>
                 {leadAgentName ?? task.lead_agent_slug}
@@ -1471,7 +1499,7 @@ export const TaskDetailPage = () => {
               <ClampText
                 text={task.goal}
                 t={t}
-                className="text-[12px] leading-5 text-[#131313]"
+                className="text-xs leading-5 text-[#131313]"
               />
             )}
             {/* Attachment chips — files staged by the user when launching
@@ -1505,7 +1533,7 @@ export const TaskDetailPage = () => {
           <button
             type="button"
             onClick={() => setRunTimelineOpen((v) => !v)}
-            className="mt-4 flex w-full items-center gap-1.5 rounded-md text-[12px] text-ink-meta transition-colors hover:text-ink-heading focus-visible:outline-none focus-visible:ring-[1px] focus-visible:ring-ring/50"
+            className="mt-4 flex w-full items-center gap-1.5 rounded-md text-xs text-ink-meta transition-colors hover:text-ink-heading focus-visible:outline-none focus-visible:ring-[1px] focus-visible:ring-ring/50"
             aria-expanded={runTimelineOpen}
           >
             <ChevronRight
@@ -1569,7 +1597,7 @@ export const TaskDetailPage = () => {
               show the basename so long project-relative paths don't
               dominate the row. */}
             {deliverableOpen && (
-              <div className="overflow-hidden rounded-[8px] border border-[#e6e7e9] bg-white">
+              <div className="overflow-hidden rounded-lg border border-[#e6e7e9] bg-white">
                 {completionInfo.artifacts.length > 0 && (
                   // ``max-h-[240px] overflow-y-auto`` caps the artifact list
                   // so a 30-file deliverable doesn't push the summary
@@ -1589,7 +1617,7 @@ export const TaskDetailPage = () => {
                           >
                             <span
                               className={cn(
-                                "flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px]",
+                                "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
                                 artifactIconBgClassName(basename),
                               )}
                             >
@@ -1602,13 +1630,13 @@ export const TaskDetailPage = () => {
                             </span>
                             <div className="flex min-w-0 flex-1 flex-col justify-center">
                               <span
-                                className="truncate text-[13px] font-semibold leading-5 text-[#1f2937]"
+                                className="truncate text-sm font-semibold leading-5 text-[#1f2937]"
                                 title={absolute}
                               >
                                 {basename}
                               </span>
                               {leadAgentName && (
-                                <span className="relative -top-0.5 text-[11px] leading-4 text-[#9aa3b2]">
+                                <span className="relative -top-0.5 text-2xs leading-4 text-[#9aa3b2]">
                                   {t(
                                     "task.artifactBy" as Parameters<
                                       typeof t
@@ -1638,11 +1666,11 @@ export const TaskDetailPage = () => {
                 >
                   <summary className="flex h-12 cursor-pointer items-center gap-3 px-4 text-left list-none [&::-webkit-details-marker]:hidden">
                     <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[#98a1b2] transition-transform group-open/d:rotate-90" />
-                    <span className="min-w-0 flex-1 text-[13px] font-semibold leading-5 text-[#131313]">
+                    <span className="min-w-0 flex-1 text-sm font-semibold leading-5 text-[#131313]">
                       {t("task.completionSummary" as Parameters<typeof t>[0])}
                     </span>
                   </summary>
-                  <div className="whitespace-pre-wrap px-3 pb-3 pt-0 text-[12px] leading-6 text-ink-body">
+                  <div className="whitespace-pre-wrap px-3 pb-3 pt-0 text-xs leading-6 text-ink-body">
                     {completionInfo.summary}
                   </div>
                 </details>
@@ -1662,7 +1690,7 @@ export const TaskDetailPage = () => {
           // an invisible 0-height scroll box. Sizing to content lets the turns
           // render and the page scroll instead.
           <section className="mt-6 flex w-full flex-col">
-            <div className="mb-3 flex shrink-0 items-center gap-2 text-[12px] font-medium text-ink-heading">
+            <div className="mb-3 flex shrink-0 items-center gap-2 text-xs font-medium text-ink-heading">
               <span className="h-px flex-1 bg-surface-border" />
               {t("task.followUp.heading")}
               <span className="h-px flex-1 bg-surface-border" />
@@ -1719,7 +1747,7 @@ export const TaskDetailPage = () => {
               <div className="flex items-center justify-end px-2 pb-2">
                 <Button
                   size="sm"
-                  className="text-[12px]"
+                  className="text-xs"
                   onClick={() => void handleFollowUpSend()}
                   disabled={followUp.sending || !followUpDraft.trim()}
                   loading={followUp.sending}
@@ -1819,7 +1847,7 @@ export const TaskDetailPage = () => {
             <Button
               size="sm"
               variant="outline"
-              className="text-[12px]"
+              className="text-xs"
               onClick={() =>
                 void runIntervene({ action: "pause" }, "task.paused")
               }
@@ -1832,7 +1860,7 @@ export const TaskDetailPage = () => {
             <Button
               size="sm"
               variant="destructive"
-              className="bg-[#f54b4b] text-[12px] hover:bg-[#f54b4b]/90 focus-visible:ring-[#f54b4b]/20"
+              className="bg-[#f54b4b] text-xs hover:bg-[#f54b4b]/90 focus-visible:ring-[#f54b4b]/20"
               onClick={() =>
                 void runIntervene({ action: "stop" }, "task.stopped")
               }
@@ -2018,6 +2046,7 @@ export const TaskDetailPage = () => {
         </DialogContent>
       </Dialog>
       </div>
+      </div>
     </ArtifactSplitPane>
   );
 };
@@ -2202,7 +2231,7 @@ function ClampText({
               e.stopPropagation();
               setExpanded((v) => !v);
             }}
-            className="text-[11px] font-medium text-brand transition-colors hover:text-brand/80"
+            className="text-2xs font-medium text-brand transition-colors hover:text-brand/80"
           >
             {t(
               (expanded ? "common.collapse" : "common.expand") as Parameters<
@@ -2285,18 +2314,18 @@ function EventBody({
       }
     >
       <div className="flex items-center gap-2">
-        <span className="text-[12px] font-semibold leading-5 text-ink-heading">
+        <span className="text-xs font-semibold leading-5 text-ink-heading">
           {actorLabel}
         </span>
-        <span className="text-[11px] font-semibold leading-5 text-ink-meta">
+        <span className="text-2xs font-semibold leading-5 text-ink-meta">
           {t(meta.labelKey as Parameters<typeof t>[0])}
         </span>
         <span className="ml-auto flex min-w-[112px] items-center justify-end gap-2 text-right opacity-0 transition-opacity group-hover:opacity-100">
-          <span className="text-[11px] tabular-nums text-ink-meta">
+          <span className="text-2xs tabular-nums text-ink-meta">
             {formatEventTime(evt.created_at)}
           </span>
           {clickable && (
-            <span className="text-[11px] text-brand">
+            <span className="text-2xs text-brand">
               {t("task.viewSession" as Parameters<typeof t>[0])}
             </span>
           )}
@@ -2306,7 +2335,7 @@ function EventBody({
         <ClampText
           text={detail}
           t={t}
-          className="mt-1 text-[12px] leading-5 text-ink-body"
+          className="mt-1 text-xs leading-5 text-ink-body"
         />
       )}
     </div>
@@ -2369,18 +2398,18 @@ function GroupedEventCard({
       }
     >
       <div className="flex items-center gap-2">
-        <span className="text-[12px] font-semibold leading-5 text-ink-heading">
+        <span className="text-xs font-semibold leading-5 text-ink-heading">
           {spawnActor}
         </span>
-        <span className="text-[11px] font-semibold leading-5 text-ink-meta">
+        <span className="text-2xs font-semibold leading-5 text-ink-meta">
           {t(spawnMeta.labelKey as Parameters<typeof t>[0])}
         </span>
         <span className="ml-auto flex min-w-[112px] items-center justify-end gap-2 text-right opacity-0 transition-opacity group-hover:opacity-100">
-          <span className="text-[11px] tabular-nums text-ink-meta">
+          <span className="text-2xs tabular-nums text-ink-meta">
             {formatEventTime(spawn.created_at)}
           </span>
           {clickable && (
-            <span className="text-[11px] text-brand">
+            <span className="text-2xs text-brand">
               {t("task.viewSession" as Parameters<typeof t>[0])}
             </span>
           )}
@@ -2390,12 +2419,12 @@ function GroupedEventCard({
         <ClampText
           text={spawnDetail}
           t={t}
-          className="mt-1 text-[12px] leading-5 text-ink-body"
+          className="mt-1 text-xs leading-5 text-ink-body"
         />
       )}
       <div
         className={cn(
-          "mt-2 inline-flex h-5 items-center rounded-[4px] px-2 py-0 text-[10px] leading-4",
+          "mt-2 inline-flex h-5 items-center rounded-sm px-2 py-0 text-micro leading-4",
           outcome
             ? "bg-emerald-50 text-emerald-700"
             : "bg-surface-soft text-ink-meta",

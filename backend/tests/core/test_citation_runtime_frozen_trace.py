@@ -57,6 +57,17 @@ def _source(
 
 
 _FROZEN_PRIMARY_TRACE = (
+    # The retrieval this trace is frozen from. Post-run verification is gated on
+    # the turn having brought external information in, and that verdict is made
+    # at ``tool_use`` — either from the MCP name shape or, for a bare-named
+    # tool like this one, from the explicit ``external`` flag (see
+    # ``_MessageObserverSink._tool_event_is_external``). The evidence events
+    # below are this tool's output, so the fixture has to declare the call that
+    # produced them.
+    Event(
+        type="tool_use",
+        data={"id": "src-1", "name": "frozen_source_tool", "input": {}, "external": True},
+    ),
     _source(
         "ev_doc_revenue_2026",
         source_id="doc-annual-2026",
@@ -189,9 +200,15 @@ async def test_frozen_trace_preserves_messages_and_aggregates_turn_sources() -> 
     sidecar_events = [
         event for event in sink.events if event.type == "assistant_message_sidecar"
     ]
+    # Selected by type, not by position: the trace is edited over time and a
+    # positional index silently starts pointing at a different event.
+    frozen_assistant_texts = [
+        event.data["text"]
+        for event in _FROZEN_PRIMARY_TRACE
+        if event.type == "assistant_message"
+    ]
     assert [event.data["text"] for event in assistant_events] == [
-        _FROZEN_PRIMARY_TRACE[4].data["text"],
-        _FROZEN_PRIMARY_TRACE[7].data["text"],
+        *frozen_assistant_texts,
         coverage_text,
     ]
     assert sink.events.index(assistant_events[-1]) < sink.events.index(sidecar_events[0])

@@ -35,7 +35,7 @@ export const ConnectionStatusBadge = ({
   return (
     <Badge
       variant={variant}
-      className="gap-1.5 px-2.5 py-1 text-[11px] font-medium"
+      className="gap-1.5 px-2.5 py-1 text-2xs font-medium"
       data-testid="connection-status"
     >
       {(connection.state === "connecting" ||

@@ -1,10 +1,12 @@
 import { useCallback, useMemo } from "react";
 import {
   getDefaultExecutionTarget,
+  useDefaultRuntimeLocation,
   useEntityOrigin,
   useComposerProviderChannelState,
   useComposerAgentLibrary,
   useComposerProviders,
+  useTranslation,
   type ExecutionTarget,
   type MemberWithAgent,
   type ProjectDetail,
@@ -100,18 +102,23 @@ export function useComposerConfig({
   // The route id is authoritative during navigation. ``selectedSessionId``
   // intentionally lags until session detail resolves, so preferring it here
   // would briefly query the previous conversation's execution target.
+  const { t } = useTranslation();
+  const defaultRuntimeLocation = useDefaultRuntimeLocation();
   const providerSessionId = id !== NEW_SESSION_ID ? id : null;
   const sessionExecOrigin = useEntityOrigin(providerSessionId, "session");
   const selectedProviderProject = projects.find(
     (project) => project.id === selectedProjectId,
   );
+  // An unobserved project still resolves to a target — but to the build's
+  // default one, never to the temp-chat chip: a project conversation follows
+  // its project, and the chip only ever spoke for a chip-less quick chat.
   const selectedProjectOrigin = selectedProviderProject
-    ? (selectedProviderProject.exec_origin ?? "local")
+    ? (selectedProviderProject.exec_origin ?? defaultRuntimeLocation)
     : undefined;
   const providerTargetId =
-    id !== NEW_SESSION_ID
+    (id !== NEW_SESSION_ID
       ? sessionExecOrigin
-      : (selectedProjectOrigin ?? execTargetId);
+      : (selectedProjectOrigin ?? execTargetId)) ?? defaultRuntimeLocation;
   const providerTarget =
     executionTargets.find((target) => target.id === providerTargetId) ??
     getDefaultExecutionTarget();
@@ -119,8 +126,8 @@ export function useComposerConfig({
   // echoes ``message.user`` (which it writes at run() entry, i.e. once the
   // runtime is actually up). ``pendingUserMessage`` tracks exactly that
   // window, so it doubles as the phase flag. The location only picks the
-  // wording — OSS registers no execution targets, so ``providerTargetId`` is
-  // undefined there and this always reads "local".
+  // wording — a single-backend build observes no origin, so this reads
+  // whatever that build declared its one backend to be.
   const startingRuntime: RuntimeStartLocation | null = pendingUserMessage
     ? providerTargetId === "cloud"
       ? "cloud"
@@ -196,6 +203,36 @@ export function useComposerConfig({
   // chip: 临时对话 → the "我的" library (``myAgents``); a project → its
   // 派驻 member roster (``projectAgents``). Runtime ids are mapped to their
   // display names so the dropdown reads "Claude Agent · mimo-v2.5-pro".
+  // Label of the target an agent declares, when it is somewhere else than the
+  // conversation currently runs. Undefined otherwise — no chip for the
+  // ordinary "runs where you are" case.
+  // An agent that runs somewhere else says WHAT it is, not which box it sits
+  // in: 分享 (a host lent you this one agent) vs 远程 (your own other desktop),
+  // the same two words the library groups by. The device name is already on
+  // the location chip below the composer, so repeating it here — often a long
+  // hostname — only crowded the row.
+  const agentTargetBadge = useCallback(
+    (agentTargetId: string | undefined): string | undefined => {
+      if (!agentTargetId || agentTargetId === providerTargetId) return undefined;
+      const target = executionTargets.find((t) => t.id === agentTargetId);
+      if (!target) return undefined;
+      return t(
+        target.selectable === false ? "agent.sharedGroup" : "agent.remoteGroup",
+      );
+    },
+    [executionTargets, providerTargetId, t],
+  );
+
+  const agentTargetTone = useCallback(
+    (agentTargetId: string | undefined): "shared" | "remote" | undefined => {
+      if (!agentTargetId || agentTargetId === providerTargetId) return undefined;
+      const target = executionTargets.find((t) => t.id === agentTargetId);
+      if (!target) return undefined;
+      return target.selectable === false ? "shared" : "remote";
+    },
+    [executionTargets, providerTargetId],
+  );
+
   const composerAgents = useMemo<ComposerAgentItem[]>(() => {
     if (isTempConversation) {
       // Pin the built-in Valurion to the top of
@@ -211,6 +248,15 @@ export function useComposerConfig({
           runtimeList.find((r) => r.id === a.runtime)?.display_name ??
           a.runtime,
         modelLabel: modelLabel(a.model),
+        // Agents that live on another backend carry it — picking one moves
+        // the conversation there (see ComposerPane's onAgentChange). The chip
+        // names that place, so the dropdown says where a pick would run
+        // instead of silently relocating the draft.
+        execTargetId: a.exec_target_id,
+        // The row's own tag wins: it is a fact about the agent, not about
+        // whether its target happens to be registered right now.
+        badgeLabel: a.badge_label || agentTargetBadge(a.exec_target_id),
+        badgeTone: a.badge_tone ?? agentTargetTone(a.exec_target_id),
       }));
     }
     return projectAgents.map((m) => ({
@@ -223,7 +269,14 @@ export function useComposerConfig({
         "",
       modelLabel: modelLabel(m.agent?.model ?? ""),
     }));
-  }, [isTempConversation, myAgents, projectAgents, runtimeList]);
+  }, [
+    agentTargetBadge,
+    agentTargetTone,
+    isTempConversation,
+    myAgents,
+    projectAgents,
+    runtimeList,
+  ]);
 
   // The brain (runtime / model / provider / effort) of the currently bound
   // agent. It seeds the override controls' defaults; an untouched override

@@ -26,11 +26,33 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Callable
+from contextvars import ContextVar, Token
 from pathlib import Path
 
 from valuz_agent.generated.i18n_keys import I18nKey  # noqa: TCH004
 
+# The locales the product ships, most-preferred first. Anything a client asks
+# for outside this set resolves to ``SUPPORTED_LOCALES[0]``.
+SUPPORTED_LOCALES: tuple[str, ...] = ("zh-CN", "en-US")
+
+# Locale for a code path that knows nothing: no request, no pushed locale, no
+# provider. NOTE this deliberately differs from
+# ``modules.settings.preferences.FALLBACK_LOCALE`` ("zh-CN", the locale a user
+# with no stored preference is reported as having). Reconciling the two would
+# change the default language of everything rendered outside a request —
+# scheduler runs, notifications, and the agent-pack instructions that are
+# rendered once and persisted onto the agent row — so it is a separate product
+# decision, not part of making requests honour their own language.
 _FALLBACK_LOCALE = "en-US"
+
+# Locale of the request being served, bound by the HTTP layer from
+# ``Accept-Language`` (see ``api.middleware.locale``). It takes precedence over
+# the process-wide pushed locale: one backend process serves many users (cloud
+# webui) and, on the desktop, the pushed locale is only refreshed at startup —
+# which the commercial build skips entirely
+# (``VALUZ_INITIALIZE_USER_CONTENT_ON_STARTUP=false``), so the client's own
+# header is the only reliable statement of what language to answer in.
+_request_locale: ContextVar[str | None] = ContextVar("valuz_request_locale", default=None)
 
 # Lazily-loaded, process-wide cache. Key = locale code, value = flat key→string.
 _loaded: dict[str, dict[str, str]] = {}
@@ -127,7 +149,47 @@ def clear_locale_cache() -> None:
     _pushed_locale = None
 
 
+def parse_accept_language(header: str | None) -> str:
+    """Pick the best supported locale from an ``Accept-Language`` header.
+
+    Returns one of :data:`SUPPORTED_LOCALES`, defaulting to the first entry
+    for a missing or unsupported header — the same default the clients
+    themselves use. q-values are ignored: clients send a single token, so
+    first match wins.
+    """
+    default = SUPPORTED_LOCALES[0]
+    if not header:
+        return default
+    for raw in header.split(","):
+        tag = raw.split(";")[0].strip()
+        if tag in SUPPORTED_LOCALES:
+            return tag
+        prefix = tag.split("-")[0].lower()  # "en" → "en-US"
+        for supported in SUPPORTED_LOCALES:
+            if supported.split("-")[0].lower() == prefix:
+                return supported
+    return default
+
+
+def set_request_locale(value: str | None) -> Token[str | None]:
+    """Bind the locale of the request being served. Returns the token to hand
+    back to :func:`reset_request_locale` when the request finishes."""
+    return _request_locale.set(value or None)
+
+
+def reset_request_locale(token: Token[str | None]) -> None:
+    _request_locale.reset(token)
+
+
+def get_request_locale() -> str | None:
+    """The locale bound for this request, if any. ``None`` outside a request."""
+    return _request_locale.get()
+
+
 def _current_locale() -> str:
+    request_locale = _request_locale.get()
+    if request_locale is not None:
+        return request_locale
     if _pushed_locale is not None:
         return _pushed_locale
     if _default_locale_provider is not None:

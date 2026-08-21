@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from valuz_agent.api.middleware import (
     ErrorHandlerMiddleware,
+    LocaleMiddleware,
     TimingMiddleware,
 )
 from valuz_agent.api.routes.activity import router as activity_router
@@ -35,6 +36,7 @@ from valuz_agent.api.routes.notifications import router as notifications_router
 from valuz_agent.api.routes.onboarding import router as onboarding_router
 from valuz_agent.api.routes.parser import settings_router as parser_settings_router
 from valuz_agent.api.routes.parser import system_router as parser_system_router
+from valuz_agent.api.routes.plugins import router as plugins_router
 from valuz_agent.api.routes.projects import router as projects_router
 from valuz_agent.api.routes.providers import router as providers_router
 from valuz_agent.api.routes.resources import router as resources_router
@@ -135,6 +137,9 @@ def create_app(
     # per-request ContextVars with a reset boundary, with deps in ``kwargs``).
     _auth_cls, _auth_kwargs = ext.auth_middleware
     app.add_middleware(_auth_cls, **_auth_kwargs)
+    # Outside auth, inside Timing: the locale must be bound before any handler
+    # (or any ``t()`` inside auth failures) renders text.
+    app.add_middleware(LocaleMiddleware)
     app.add_middleware(TimingMiddleware)
     app.add_middleware(
         CORSMiddleware,
@@ -174,6 +179,7 @@ def create_app(
     api.include_router(agents_router)
     api.include_router(agent_templates_router)
     api.include_router(marketplace_router)
+    api.include_router(plugins_router)
     api.include_router(tasks_router)
     api.include_router(analytics_router)
     api.include_router(resources_router)
@@ -280,6 +286,20 @@ def create_app(
 
     _mount_internal("/_internal/mcp/toolkit/base", build_toolkit_mcp_asgi("base"))
     _mount_internal("/_internal/mcp/toolkit/lead", build_toolkit_mcp_asgi("lead"))
+
+    # Edition-registered always-on servers, through the same seam. The resolver
+    # advertises them as ``{backend_base_url}{path}/mcp`` — the identical shape
+    # it uses for the built-ins above — so they need the identical mounting, and
+    # an edition mounting by hand in ``register_api`` has to rediscover that.
+    # One that mounted at the bare path only shipped a spec whose advertised URL
+    # 404'd under every prefixed deployment. Specs registered before
+    # ``create_app`` (i.e. in ``register_capabilities``) are picked up here;
+    # a spec without a factory is an edition that still mounts its own.
+    from valuz_agent.ports.extensions import ext
+
+    for _spec in ext.always_on_mcp_specs:
+        if _spec.app_factory is not None:
+            _mount_internal(_spec.path, _spec.app_factory())
 
     # Startup/shutdown orchestration lives in ``boot/lifespan.py`` (bound via
     # ``lifespan=lifespan`` above). The startup order is load-bearing; see the

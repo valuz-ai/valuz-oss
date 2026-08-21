@@ -1,5 +1,7 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
+import { DropdownMenuItem } from "../components/ui/dropdown-menu";
 import { DesktopSidebar } from "./DesktopSidebar";
 
 describe("DesktopSidebar", () => {
@@ -102,5 +104,24 @@ describe("DesktopSidebar", () => {
 
     expect(screen.queryByText("项目")).toBeNull();
     expect(screen.getAllByRole("link").length).toBeGreaterThan(0);
+  });
+
+  it("renders extension items in the project add dropdown", async () => {
+    render(
+      <DesktopSidebar
+        activePath="/projects"
+        projectGroups={[]}
+        bottomItems={[]}
+        onAddProject={() => {}}
+        onImportProject={() => {}}
+        projectAddMenuItems={
+          <DropdownMenuItem>组织内导入</DropdownMenuItem>
+        }
+      />,
+    );
+
+    await userEvent.click(screen.getByLabelText("添加项目"));
+
+    expect(await screen.findByText("组织内导入")).toBeTruthy();
   });
 });

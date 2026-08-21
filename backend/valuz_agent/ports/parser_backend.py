@@ -7,6 +7,12 @@ class ParseOptions:
     max_pages: int | None = None
     extract_tables: bool = True
     extract_images: bool = False
+    # Owner of the document being parsed. Not a parse-behavior flag: backends
+    # that persist durable side-effects (e.g. ASYNC_POLL rows on the
+    # ``PollingScheduler``) must stamp ownership explicitly — ambient user
+    # context is banned (valuz-oss#96). Callers that know the owner should
+    # always set it.
+    user_id: str | None = None
 
 
 @dataclass

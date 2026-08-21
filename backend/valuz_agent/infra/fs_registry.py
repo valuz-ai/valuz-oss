@@ -29,7 +29,10 @@ via ``project_cwd()``.
 
 from __future__ import annotations
 
+import secrets
 import tempfile
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -38,6 +41,31 @@ from valuz_agent.ports.workspace import LocalWorkspaceHandle, WorkspaceHandle
 
 ProjectKind = Literal["chat", "project"]
 SkillSource = Literal["claude", "codex"]
+
+# ``project_root`` subdirectory per project kind. Chats and projects are kept
+# apart because they grow at completely different rates: a project is created
+# deliberately, while a chat directory is minted for EVERY quick chat and every
+# scheduled-automation run.
+MANAGED_SUBDIR: dict[str, str] = {"project": "projects", "chat": "chats"}
+
+# Alphabet for the managed directory code. Uppercase CONSONANTS only: the code
+# is user-visible in a file browser, and dropping vowels means a draw can never
+# spell a word (or an obscenity) at the 8-character length used here.
+MANAGED_CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXYZ"
+MANAGED_CODE_LENGTH = 8
+# Attempts before giving up on finding an unused code. 21**8 ≈ 3.8e10 per day
+# directory, so a second attempt is already improbable — this only exists so a
+# genuinely wedged filesystem raises instead of looping.
+_MANAGED_CODE_ATTEMPTS = 16
+
+# The only KB class OSS itself creates. ``KnowledgeBaseRow.kind`` is a neutral
+# discriminator so embedding hosts can distinguish classes of knowledge base
+# (and route them to different roots) without OSS growing any opinion about
+# what those classes mean.
+KB_KIND_DEFAULT = "normal"
+
+# ``(user_id, kind) -> root directory``. See ``FsRegistry.set_kb_root_resolver``.
+KbRootResolver = Callable[[str, str], Path | str]
 
 
 def _to_async_url(url: str) -> str:
@@ -60,6 +88,9 @@ class FsRegistry:
         # Read-only bundled trees an overlay/edition declared — see
         # ``register_system_skill_root``. Never written to.
         self._extra_system_skill_roots: list[Path] = []
+        # Optional per-KB-class root routing — see ``set_kb_root_resolver``.
+        # ``None`` (OSS default) means every KB lives under ``<data_dir>/kb``.
+        self._kb_root_resolver: KbRootResolver | None = None
 
     # ---- FS-1 / FS-2 — data root + secrets ----
 
@@ -177,10 +208,16 @@ class FsRegistry:
 
         - ``kind="project"``: caller-supplied ``root_path`` is used as-is. The
           path must already be absolute; it is not created.
-        - ``kind="chat"``: a managed cwd is allocated under the configured
-          user-visible project root and created on demand. Deployments that
+        - ``kind="chat"``: the stored ``root_path`` when the row has one (every
+          chat project created since the dated layout landed), otherwise the
+          LEGACY derivation ``<project_root>/<project_id>``. Deployments that
           need user scoping can set ``VALUZ_USER_PROJECT_ROOT`` to a template
           such as ``~/Valuz/{user_id}``.
+
+        The legacy branch is load-bearing, not dead code: chat rows written
+        before the cutover have ``root_path IS NULL`` and their directories are
+        still on disk under the flat layout. ``root_path`` being set is exactly
+        the new-vs-old discriminator — there is no migration and no flag.
         """
         if kind == "project":
             if not root_path:
@@ -190,9 +227,61 @@ class FsRegistry:
                 raise ValueError(f"project root_path must be absolute: {root_path}")
             return path
 
+        if root_path:
+            path = Path(root_path).expanduser()
+            if not path.is_absolute():
+                raise ValueError(f"chat root_path must be absolute: {root_path}")
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+
         path = self.project_root(user_id) / project_id
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def allocate_managed_project_dir(
+        self, user_id: str, kind: ProjectKind, *, now: datetime | None = None
+    ) -> Path:
+        """Allocate + create a fresh managed workspace directory.
+
+        ``<project_root>/{projects|chats}/YYYY/MM/dd/<CODE>`` where ``CODE`` is
+        :data:`MANAGED_CODE_LENGTH` random uppercase consonants.
+
+        The code is deliberately NOT derived from the project id. The old layout
+        was ``<project_root>/<project_id>``, and because that path was
+        recomputable from a row id, callers grew the habit of rebuilding it
+        instead of reading the stored ``root_path`` — the cloud cwd bridge did
+        exactly that, and it is why a layout change can break the sandbox data
+        path. An unguessable directory name makes the stored path the only way
+        to reach a workspace, so the habit cannot come back.
+
+        The date segment comes from the LOCAL time of whoever calls this (the
+        host process). On a desktop install that is the user's own timezone; a
+        container gets whatever ``TZ`` the deployment sets. The value is frozen
+        into ``root_path`` at creation and never recomputed, so a later timezone
+        change cannot move an existing workspace.
+        """
+        stamp = now or datetime.now().astimezone()
+        parent = (
+            self.project_root(user_id)
+            / MANAGED_SUBDIR[kind]
+            / f"{stamp.year:04d}"
+            / f"{stamp.month:02d}"
+            / f"{stamp.day:02d}"
+        )
+        parent.mkdir(parents=True, exist_ok=True)
+        for _ in range(_MANAGED_CODE_ATTEMPTS):
+            code = "".join(
+                secrets.choice(MANAGED_CODE_ALPHABET) for _ in range(MANAGED_CODE_LENGTH)
+            )
+            candidate = parent / code
+            try:
+                # exist_ok=False IS the collision check — an atomic mkdir also
+                # makes two processes racing for the same code safe.
+                candidate.mkdir()
+            except FileExistsError:
+                continue
+            return candidate
+        raise RuntimeError(f"could not allocate a managed {kind} directory under {parent}")
 
     def project_root(self, user_id: str) -> Path:
         """Return the app-visible root for managed project workspaces.
@@ -257,17 +346,36 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def kb_root(self, user_id: str) -> Path:
+    def kb_root(self, user_id: str, kind: str = KB_KIND_DEFAULT) -> Path:
         """Return (and create) the knowledge-base root directory.
 
         ``<data_dir>/kb`` — the single home for KB content, replacing the
         legacy stray ``~/.valuz/kb`` path. Routed through the registry so KB
         writes share the same audit / sandbox boundary as every other host
         write. Created on demand.
+
+        ``kind`` is the knowledge base's class (``KnowledgeBaseRow.kind``).
+        OSS only ever uses ``"normal"`` and always returns the single root;
+        a host that manages several KB classes can register a resolver via
+        :meth:`set_kb_root_resolver` to route them to distinct directories.
         """
-        path = self.data_dir(user_id) / "kb"
+        resolver = self._kb_root_resolver
+        if resolver is not None:
+            path = Path(resolver(user_id, kind))
+        else:
+            path = self.data_dir(user_id) / "kb"
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def set_kb_root_resolver(self, resolver: KbRootResolver | None) -> None:
+        """Install (or clear) the KB root resolver.
+
+        The resolver receives ``(user_id, kind)`` and returns the root
+        directory for that class of knowledge base; ``kb_root`` still does
+        the ``mkdir``. Passing ``None`` restores the default single-root
+        behavior. Intended for hosts embedding valuz — OSS never sets one.
+        """
+        self._kb_root_resolver = resolver
 
     # ---- FS-7 — skill-creator staging (project-cwd-keyed) ----
     #
@@ -583,7 +691,7 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    # ---- FS-14 — generative-UI scratch cwd (openui-generative-ui §5) ----
+    # ---- FS-14 — generative-UI scratch cwd ----
     #
     # ONE fixed cwd shared by every ephemeral generate_ui session. Runtimes key
     # per-project artifacts on the session cwd (claude-agent-sdk keeps
@@ -593,6 +701,42 @@ class FsRegistry:
 
     def generative_ui_cwd(self, user_id: str) -> Path:
         path = self.data_dir(user_id) / "generative-ui"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    # ---- FS-16 — Agent Plugins (docs: agent-plugins-support design) ----
+    #
+    #   plugins/<name>/        → PLUGIN_ROOT (the installed package, replaced on update)
+    #   plugins-data/<name>/   → PLUGIN_DATA (client-managed persistent state — MUST
+    #                            survive updates; spec §9.1)
+    #
+    # ``name`` is a spec-conformant plugin name (lowercase a-z0-9.-, no "..") and
+    # therefore a single safe path segment; the guard below is defensive.
+
+    @staticmethod
+    def _plugin_segment(name: str) -> str:
+        if not name or "/" in name or "\\" in name or name in (".", "..") or ".." in name:
+            raise ValueError(f"invalid plugin name: {name!r}")
+        return name
+
+    def plugins_root(self, user_id: str) -> Path:
+        path = self.data_dir(user_id) / "plugins"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def plugin_root(self, user_id: str, name: str) -> Path:
+        """PLUGIN_ROOT for one installed plugin (NOT created — the installer
+        materializes it atomically)."""
+        return self.plugins_root(user_id) / self._plugin_segment(name)
+
+    def plugins_data_root(self, user_id: str) -> Path:
+        path = self.data_dir(user_id) / "plugins-data"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def plugin_data_dir(self, user_id: str, name: str) -> Path:
+        """PLUGIN_DATA for one installed plugin (created, writable)."""
+        path = self.plugins_data_root(user_id) / self._plugin_segment(name)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -631,4 +775,4 @@ class FsRegistry:
 
 fs_registry = FsRegistry()
 
-__all__ = ["FsRegistry", "fs_registry"]
+__all__ = ["KB_KIND_DEFAULT", "FsRegistry", "KbRootResolver", "fs_registry"]

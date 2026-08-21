@@ -10,6 +10,18 @@ import {
   SettingsSection,
 } from "@valuz/ui";
 import { useRunningRuns, useTranslation } from "@valuz/core";
+import {
+  DESKTOP_CAPABILITIES_CHANNEL,
+  NETWORK_EGRESS_CONTRACT_VERSION,
+  NETWORK_EGRESS_CHANNELS,
+  NETWORK_EGRESS_EVENTS,
+  type DesktopCapabilities,
+  type EgressManagerStatus,
+  type EgressSnapshot,
+  type NetworkEgressCapability,
+  type PublicEgressMode,
+  type RuntimePhaseRecord,
+} from "@valuz/desktop-network-egress/contracts";
 import { buildEgressDiagnosticsExport } from "./network-diagnostics";
 import {
   currentNetworkSnapshots,
@@ -21,51 +33,7 @@ import {
   shouldShowNetworkDiagnosticsAction,
 } from "./network-presentation";
 
-type EgressMode = "auto" | "direct" | "off";
-type SelectableEgressMode = Exclude<EgressMode, "direct">;
-type Health = "unknown" | "healthy" | "degraded" | "failed";
-
-interface EgressStatus {
-  mode: EgressMode;
-  enabled: boolean;
-  started: boolean;
-  emergencyOverride: boolean;
-  snapshotCount: number;
-  diagnosticEventCount: number;
-  lastErrorCode?: string;
-}
-
-interface EgressSnapshot {
-  activeTurn: boolean;
-  requestActive?: boolean;
-  runtime: string;
-  frontend: string;
-  targetOrigin: string;
-  mode: EgressMode;
-  route: string;
-  health: Health;
-  source?: string;
-  redactedProxy?: string;
-  resolveMs?: number;
-  connectMs?: number;
-  responseStatus?: number;
-  responseMs?: number;
-  firstByteMs?: number;
-  totalMs?: number;
-  reconnectCount: number;
-  fallbackCount: number;
-  lastErrorCode?: string;
-  updatedAt: number;
-}
-
-interface RuntimePhase {
-  clientId?: string;
-  turnAttemptId?: string;
-  phase?: string;
-  observedAt?: number;
-  runtime?: string;
-  targetOrigin?: string;
-}
+type Health = EgressSnapshot["health"];
 
 interface DesktopBridge {
   invoke<T>(channel: string, payload?: Record<string, unknown>): Promise<T>;
@@ -96,12 +64,15 @@ const healthBadgeVariant: Record<
 export const NetworkSection = () => {
   const { t } = useTranslation();
   const { count: activeRunCount } = useRunningRuns();
-  const [status, setStatus] = useState<EgressStatus | null>(null);
+  const [status, setStatus] = useState<EgressManagerStatus | null>(null);
   const [snapshots, setSnapshots] = useState<EgressSnapshot[]>([]);
   const [diagnostics, setDiagnostics] = useState<unknown[]>([]);
-  const [runtimePhases, setRuntimePhases] = useState<RuntimePhase[]>([]);
+  const [runtimePhases, setRuntimePhases] = useState<RuntimePhaseRecord[]>([]);
+  const [capability, setCapability] =
+    useState<NetworkEgressCapability | null>(null);
+  const [capabilityChecked, setCapabilityChecked] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [busyMode, setBusyMode] = useState<SelectableEgressMode | null>(null);
+  const [busyMode, setBusyMode] = useState<PublicEgressMode | null>(null);
 
   const load = useCallback(async (silent = false) => {
     const desktop = bridge();
@@ -112,10 +83,12 @@ export const NetworkSection = () => {
     try {
       const [nextStatus, nextSnapshots, nextDiagnostics, nextPhases] =
         await Promise.all([
-          desktop.invoke<EgressStatus>("egress_get_status"),
-          desktop.invoke<EgressSnapshot[]>("egress_get_snapshots"),
-          desktop.invoke<unknown[]>("egress_get_diagnostics"),
-          desktop.invoke<RuntimePhase[]>("egress_get_runtime_phases"),
+          desktop.invoke<EgressManagerStatus>(NETWORK_EGRESS_CHANNELS.getStatus),
+          desktop.invoke<EgressSnapshot[]>(NETWORK_EGRESS_CHANNELS.getSnapshots),
+          desktop.invoke<unknown[]>(NETWORK_EGRESS_CHANNELS.getDiagnostics),
+          desktop.invoke<RuntimePhaseRecord[]>(
+            NETWORK_EGRESS_CHANNELS.getRuntimePhases,
+          ),
         ]);
       setStatus(nextStatus);
       setSnapshots(nextSnapshots);
@@ -129,15 +102,63 @@ export const NetworkSection = () => {
   }, [t]);
 
   useEffect(() => {
-    void load();
     const desktop = bridge();
-    if (!desktop) return;
+    if (!desktop) {
+      setCapabilityChecked(true);
+      setLoading(false);
+      return;
+    }
+    let disposed = false;
+    let subscribed = false;
+    let poll: number | undefined;
     const onChange = () => void load(true);
-    desktop.on("egress-status-changed", onChange);
-    const poll = window.setInterval(() => void load(true), 3_000);
+    const initialize = async () => {
+      try {
+        const capabilities = await desktop.invoke<DesktopCapabilities>(
+          DESKTOP_CAPABILITIES_CHANNEL,
+        );
+        if (disposed) return;
+        const networkEgress = capabilities?.networkEgress;
+        if (
+          capabilities?.schemaVersion !== 1 ||
+          networkEgress?.contractVersion !== NETWORK_EGRESS_CONTRACT_VERSION
+        ) {
+          // A host that speaks another capability contract is unsupported,
+          // not partially compatible. Never probe handlers whose payloads may
+          // have changed; show the same honest downgrade as an older host with
+          // no capability endpoint.
+          setCapability(null);
+          setCapabilityChecked(true);
+          setLoading(false);
+          return;
+        }
+        setCapability(networkEgress);
+        setCapabilityChecked(true);
+        if (!networkEgress.available) {
+          setLoading(false);
+          return;
+        }
+      } catch {
+        if (!disposed) {
+          setCapability(null);
+          setCapabilityChecked(true);
+          setLoading(false);
+        }
+        return;
+      }
+      await load();
+      if (disposed) return;
+      desktop.on(NETWORK_EGRESS_EVENTS.statusChanged, onChange);
+      subscribed = true;
+      poll = window.setInterval(() => void load(true), 3_000);
+    };
+    void initialize();
     return () => {
-      window.clearInterval(poll);
-      desktop.off("egress-status-changed", onChange);
+      disposed = true;
+      if (poll !== undefined) window.clearInterval(poll);
+      if (subscribed) {
+        desktop.off(NETWORK_EGRESS_EVENTS.statusChanged, onChange);
+      }
     };
   }, [load]);
 
@@ -166,9 +187,17 @@ export const NetworkSection = () => {
         Boolean(status?.lastErrorCode),
     );
 
-  const changeMode = async (mode: SelectableEgressMode) => {
+  const changeMode = async (mode: PublicEgressMode) => {
     const desktop = bridge();
-    if (!desktop || !status || status.mode === mode) return;
+    if (
+      !desktop ||
+      !status ||
+      status.mode === mode ||
+      !capability?.policy.userConfigurable ||
+      !capability.policy.allowedModes.includes(mode)
+    ) {
+      return;
+    }
     const interruptActiveRuns = activeRunCount > 0;
     if (
       interruptActiveRuns &&
@@ -189,10 +218,10 @@ export const NetworkSection = () => {
     }
     setBusyMode(mode);
     try {
-      const next = await desktop.invoke<EgressStatus>("egress_set_mode", {
-        mode,
-        interruptActiveRuns,
-      });
+      const next = await desktop.invoke<EgressManagerStatus>(
+        NETWORK_EGRESS_CHANNELS.setMode,
+        { mode, interruptActiveRuns },
+      );
       setStatus(next);
       toast.success(
         mode === "off"
@@ -202,15 +231,14 @@ export const NetworkSection = () => {
       await load();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      toast.error(
-        message.includes("blocked_by_active_runs")
-          ? t("settings.network.activeRunsBlocked")
-          : message.includes("interrupt_failed")
-            ? t("settings.network.activeRunsInterruptFailed")
+      const errorKey = message.includes("blocked_by_active_runs")
+        ? "settings.network.activeRunsBlocked"
+        : message.includes("interrupt_failed")
+          ? "settings.network.activeRunsInterruptFailed"
           : message.includes("locked_by_environment")
-            ? t("settings.network.environmentLocked")
-            : t("settings.network.changeFailed"),
-      );
+            ? "settings.network.environmentLocked"
+            : "settings.network.changeFailed";
+      toast.error(t(errorKey));
     } finally {
       setBusyMode(null);
     }
@@ -248,6 +276,27 @@ export const NetworkSection = () => {
     );
   }
 
+  if (capabilityChecked && !capability?.available) {
+    return (
+      <SettingsSection
+        title={t("settings.network.title")}
+        desc={t("settings.network.desc")}
+      >
+        <p className="text-sm text-ink-meta">
+          {t("settings.network.canaryDisabled")}
+        </p>
+      </SettingsSection>
+    );
+  }
+
+  const canSelectMode = capability?.policy.userConfigurable === true;
+  const showAutoMode =
+    capability?.policy.allowedModes.includes("auto") ||
+    status?.mode === "auto" ||
+    status?.mode === "direct";
+  const showOffMode =
+    capability?.policy.allowedModes.includes("off") || status?.mode === "off";
+
   return (
     <SettingsSection
       title={t("settings.network.title")}
@@ -271,52 +320,57 @@ export const NetworkSection = () => {
           </div>
           <Card className="rounded-xl shadow-xs">
             <CardContent className="divide-y divide-surface-border py-1">
-              <SettingsRow
-                className="px-0"
-                label={t("settings.network.autoLabel")}
-                desc={t("settings.network.autoDesc")}
-              >
-                {managedMode ? (
-                  <Badge variant="brand">
-                    {t("settings.network.current")}
-                  </Badge>
-                ) : (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={
-                      !status ||
-                      status.emergencyOverride ||
-                      busyMode !== null
-                    }
-                    loading={busyMode === "auto"}
-                    onClick={() => void changeMode("auto")}
-                  >
-                    {t("settings.network.useAuto")}
-                  </Button>
-                )}
-              </SettingsRow>
-              <SettingsRow
-                className="px-0"
-                label={t("settings.network.offLabel")}
-                desc={t("settings.network.offDesc")}
-              >
-                {status?.mode === "off" ? (
-                  <Badge variant="warning">
-                    {t("settings.network.current")}
-                  </Badge>
-                ) : (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={!status || busyMode !== null}
-                    loading={busyMode === "off"}
-                    onClick={() => void changeMode("off")}
-                  >
-                    {t("settings.network.enableCompatibility")}
-                  </Button>
-                )}
-              </SettingsRow>
+              {showAutoMode && (
+                <SettingsRow
+                  className="px-0"
+                  label={t("settings.network.autoLabel")}
+                  desc={t("settings.network.autoDesc")}
+                >
+                  {managedMode ? (
+                    <Badge variant="brand">
+                      {t("settings.network.current")}
+                    </Badge>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={
+                        !status ||
+                        !canSelectMode ||
+                        status.emergencyOverride ||
+                        busyMode !== null
+                      }
+                      loading={busyMode === "auto"}
+                      onClick={() => void changeMode("auto")}
+                    >
+                      {t("settings.network.useAuto")}
+                    </Button>
+                  )}
+                </SettingsRow>
+              )}
+              {showOffMode && (
+                <SettingsRow
+                  className="px-0"
+                  label={t("settings.network.offLabel")}
+                  desc={t("settings.network.offDesc")}
+                >
+                  {status?.mode === "off" ? (
+                    <Badge variant="warning">
+                      {t("settings.network.current")}
+                    </Badge>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!status || !canSelectMode || busyMode !== null}
+                      loading={busyMode === "off"}
+                      onClick={() => void changeMode("off")}
+                    >
+                      {t("settings.network.enableCompatibility")}
+                    </Button>
+                  )}
+                </SettingsRow>
+              )}
             </CardContent>
           </Card>
           {activeRunCount > 0 && (

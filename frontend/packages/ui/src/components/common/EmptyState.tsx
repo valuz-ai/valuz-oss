@@ -77,12 +77,12 @@ export const EmptyState = ({
         <IconBox
           size="lg"
           variant="default"
-          className="mx-auto mb-3 rounded-[10px] text-ink-muted [&_svg:not([class*='size-'])]:size-5"
+          className="mx-auto mb-3 rounded-xl text-ink-muted [&_svg:not([class*='size-'])]:size-5"
         >
           {icon}
         </IconBox>
       )}
-      <b className="block text-[13px] font-semibold text-ink-heading">{text}</b>
+      <b className="block text-sm font-semibold text-ink-heading">{text}</b>
       {description && (
         <p className="mt-1 mb-3 text-xs leading-[1.6] text-ink-body">
           {description}

@@ -53,8 +53,7 @@ async def resolve_delivery_scope(user_id: str, session_id: str) -> DeliveryScope
     session. It is reported rather than papered over.
     """
     from valuz_agent.adapters.data_reader import data_reader
-    from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.modules.projects.datastore import ProjectDatastore
+    from valuz_agent.modules.projects.service import project_row_by_id
 
     session = await data_reader().get_session(user_id, session_id)
     if session is None:
@@ -66,8 +65,7 @@ async def resolve_delivery_scope(user_id: str, session_id: str) -> DeliveryScope
         logger.warning("deliver: session %s carries no project id", session_id)
         raise ScopeUnavailableError("this session has no project — cannot record deliverables")
 
-    async with async_unit_of_work(commit=False) as db:
-        project_row = await ProjectDatastore(db).get_by_id(user_id, project_id)
+    project_row = await project_row_by_id(user_id, project_id)
     if project_row is None:
         raise ScopeUnavailableError("this session's project no longer exists")
 
@@ -120,17 +118,14 @@ async def resolve_artifact_scope(
     but a recorded page beats a refusal; the fallback is logged there).
     """
 
-    from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.modules.projects.datastore import ProjectDatastore
-    from valuz_agent.modules.projects.service import project_cwd_by_id
+    from valuz_agent.modules.projects.service import project_cwd_by_id, project_row_by_id
 
     project_id = str(getattr(artifact, "project_id", "") or "")
     worktree = str(getattr(artifact, "worktree", "") or SHARED_CWD)
     if not project_id:
         return None
 
-    async with async_unit_of_work(commit=False) as db:
-        project_row = await ProjectDatastore(db).get_by_id(user_id, project_id)
+    project_row = await project_row_by_id(user_id, project_id)
     if project_row is None:
         return None
 

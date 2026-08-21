@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  AlertTriangle,
   Check,
   ChevronRight,
   Copy,
@@ -36,6 +37,7 @@ import { ToolCallCard } from "../ToolCallCard";
 import { ErrorMessageCard } from "./ErrorMessageCard";
 import { FileUploadMessage } from "./FileUploadMessage";
 import { TurnDiffSummaryCard } from "./TurnDiffSummaryCard";
+import { formatTurnTime } from "./turn-time";
 import {
   aggregateTurnFileChanges,
   type TurnDiffSummary,
@@ -51,6 +53,7 @@ import type {
 } from "@valuz/shared";
 import {
   assetUrl,
+  modelLabel,
   summarizeSegmentPhrase,
   type ProcessingItem,
   type ToolCategory,
@@ -131,6 +134,9 @@ const MessageActions = ({
           <RotateCw className="h-3.5 w-3.5" />
         </button>
       ) : null}
+      {/* Host actions (share, …) sit with the other icon buttons; the token
+          readout is a number, not an action, so it trails the row. */}
+      {extraActions}
       {tokenUsage && tokenUsage.totalTokens > 0 ? (
         <Popover>
           <PopoverTrigger asChild>
@@ -232,8 +238,12 @@ const MessageActions = ({
                     )}
                     {": "}
                   </span>
+                  {/* Runtime usage reports raw model ids (gateway aliases,
+                      dated vendor ids). Show the same public name every other
+                      surface shows — ``modelLabel`` falls back to the id when
+                      the backend never labelled it. */}
                   <span className="break-all">
-                    {tokenUsage.models.join(", ")}
+                    {tokenUsage.models.map((m) => modelLabel(m)).join(", ")}
                   </span>
                 </div>
               ) : null}
@@ -241,7 +251,6 @@ const MessageActions = ({
           </PopoverContent>
         </Popover>
       ) : null}
-      {extraActions}
     </div>
   );
 };
@@ -319,10 +328,14 @@ const formatDuration = (elapsedMs: number | undefined): string => {
  * ``"cloud"`` is unreachable in a plain OSS build: it is derived from the
  * session's execution origin, and origin comes from the ``entity-origin``
  * edition seam, which OSS leaves unregistered (see
- * ``core/src/edition/entity-origin.ts``). Single-backend OSS therefore always
- * reads ``"local"``; a multi-target edition registers the adapter and this
- * turns two-valued. The value name matches the target id it comes from
- * (``"cloud"``), so there is one word for the concept end to end. */
+ * ``core/src/edition/entity-origin.ts``). With no observation to read, the host
+ * falls back to the build's declared default location
+ * (``core/src/edition/execution-targets.ts``), which OSS leaves at ``"local"``
+ * — its one backend is a sidecar on this machine. A multi-target edition
+ * registers the adapter and this turns two-valued; a browser-only edition
+ * whose single backend is the cloud declares that instead. The value name
+ * matches the target id it comes from (``"cloud"``), so there is one word for
+ * the concept end to end. */
 export type RuntimeStartLocation = "local" | "cloud";
 
 /** Header text for the pre-run phase: the message is sent but the runtime is
@@ -772,23 +785,6 @@ function buildTrailingCitationContext(
   };
 }
 
-const formatTurnTime = (ms: number | undefined): string => {
-  if (!ms) return "";
-  const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return "";
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mi = String(d.getMinutes()).padStart(2, "0");
-  const now = new Date();
-  const sameDay =
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate();
-  if (sameDay) return `${hh}:${mi}`;
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${mm}-${dd} ${hh}:${mi}`;
-};
-
 const UserMessageActions = ({
   text,
   timestamp,
@@ -815,7 +811,7 @@ const UserMessageActions = ({
   return (
     <div className="mt-0.5 flex items-center gap-1">
       {formatted ? (
-        <span className="px-1 text-[11px] text-ink-muted opacity-0 transition-opacity group-hover:opacity-100">
+        <span className="px-1 text-2xs text-ink-muted opacity-0 transition-opacity group-hover:opacity-100">
           {formatted}
         </span>
       ) : null}
@@ -871,7 +867,7 @@ const UserMessageBody = ({
     parts.push(
       <span
         key={`s-${key++}`}
-        className="mr-0.5 inline-flex h-5 items-center gap-1 rounded-[4px] border border-brand/20 bg-brand-100 px-2 py-0 text-2xs text-brand-700 align-middle select-none"
+        className="mr-0.5 inline-flex h-5 items-center gap-1 rounded-sm border border-brand/20 bg-brand-100 px-2 py-0 text-2xs text-brand-700 align-middle select-none"
       >
         <Zap className="h-3 w-3" />
         {entry?.name ?? slug}
@@ -890,7 +886,6 @@ interface TurnRowProps {
   postRunVerificationActive: boolean;
   skillsBySlug?: Record<string, { name: string }>;
   onRetry?: (turnId: string) => void;
-  onSwitchModel?: (turnId: string) => void;
   retryCount: number;
   /** Optional override for rendering a tool block. Returning ``null``
    * (or omitting the prop) falls back to the generic ToolCallCard.
@@ -902,6 +897,14 @@ interface TurnRowProps {
    * Returning null adds nothing, so OSS renders exactly as before.
    */
   renderTurnActions?: (turn: ConversationTurn) => ReactNode | null;
+  /**
+   * External state ``renderTurnActions`` depends on, folded into the memo
+   * comparator. Non-latest rows only re-render when their ``turn`` object
+   * changes, so action-row state living OUTSIDE the turn (e.g. an in-flight
+   * fork's pending spinner — #879) is invisible to them unless the host
+   * changes this value. Any change re-renders every row.
+   */
+  turnActionsKey?: string | null;
   /**
    * Host control rendered at the START of a turn, before its messages.
    *
@@ -940,7 +943,6 @@ const TurnRow = memo(
     postRunVerificationActive,
     skillsBySlug,
     onRetry,
-    onSwitchModel,
     retryCount,
     renderToolCall,
     renderTurnActions,
@@ -970,6 +972,19 @@ const TurnRow = memo(
       : turn.interrupted
         ? t("conversation.runtimeInterrupted")
         : null;
+    // A budget stop is neither a cancel nor an error, and the kernel records
+    // the turn as COMPLETED — so it gets its own notice instead of the quiet
+    // grey line. It must stay legible even when it is the ONLY thing in the
+    // turn: a ``max_cost`` stop is rejected by the CLI before any model call,
+    // leaving zero blocks, which used to render as an unexplained blank reply.
+    const budgetLabel =
+      turn.budgetHalt === "max_cost"
+        ? t("conversation.budgetHaltCost" as Parameters<typeof t>[0])
+        : turn.budgetHalt === "max_turns"
+          ? t("conversation.budgetHaltTurns" as Parameters<typeof t>[0])
+          : turn.budgetHalt === "unknown"
+            ? t("conversation.budgetHaltUnknown" as Parameters<typeof t>[0])
+            : null;
     const actionText = assistantText || interruptLabel || "";
 
     // Turn-level meta: total elapsed (max of any block's elapsedMs) and
@@ -1196,12 +1211,12 @@ const TurnRow = memo(
                 still take a ``space-y-3`` gap and the row would visibly shift
                 when the label appeared. */}
             {headerLabel === null ? null : (
-              <div className="font-sans text-[13px] leading-[1.6] text-[#6e7481]">
+              <div className="font-sans text-sm leading-[1.6] text-[#6e7481]">
                 {headerFoldable ? (
                   <button
                     type="button"
                     onClick={() => setTurnFolded((value) => !value)}
-                    className="inline-flex items-center py-1 text-left text-[13px] font-normal text-[#6e7481] transition-colors hover:text-[#525860]"
+                    className="inline-flex items-center py-1 text-left text-sm font-normal text-[#6e7481] transition-colors hover:text-[#525860]"
                     aria-expanded={!turnFolded}
                   >
                     <span>{headerLabel}</span>
@@ -1213,7 +1228,7 @@ const TurnRow = memo(
                     />
                   </button>
                 ) : (
-                  <div className="inline-flex items-center py-1 text-[13px] font-normal text-[#6e7481]">
+                  <div className="inline-flex items-center py-1 text-sm font-normal text-[#6e7481]">
                     <span>{headerLabel}</span>
                   </div>
                 )}
@@ -1334,13 +1349,19 @@ const TurnRow = memo(
             />
 
             {postRunVerificationActive ? (
-              <div className="flex items-center pt-0.5" role="status" aria-live="polite">
-                <div className="inline-flex items-center gap-1.5 rounded-full border border-surface-border bg-surface-soft/80 px-2.5 py-1 text-[12px] leading-5 text-ink-muted">
+              <div
+                className="flex items-center pt-0.5"
+                role="status"
+                aria-live="polite"
+              >
+                <div className="inline-flex items-center gap-1.5 rounded-full border border-surface-border bg-surface-soft/80 px-2.5 py-1 text-xs leading-5 text-ink-muted">
                   <LoaderCircle
                     className="h-3.5 w-3.5 shrink-0 animate-spin"
                     aria-hidden="true"
                   />
-                  <span>{t("conversation.verifyingAndGeneratingCitations")}</span>
+                  <span>
+                    {t("conversation.verifyingAndGeneratingCitations")}
+                  </span>
                 </div>
               </div>
             ) : null}
@@ -1352,14 +1373,24 @@ const TurnRow = memo(
             ) : null}
 
             {interruptLabel ? (
-              <div className="py-1.5 text-[13px] italic text-ink-muted">
+              <div className="py-1.5 text-sm italic text-ink-muted">
                 {interruptLabel}
+              </div>
+            ) : null}
+
+            {budgetLabel ? (
+              <div className="my-1.5 flex items-start gap-2 rounded-lg border border-warning-border bg-warning-light px-3 py-2 text-sm text-warning-text">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{budgetLabel}</span>
               </div>
             ) : null}
 
             {!inFlight &&
             !turn.failedMessage &&
-            (assistantText || turn.cancelled || turn.interrupted) ? (
+            (assistantText ||
+              turn.cancelled ||
+              turn.interrupted ||
+              turn.budgetHalt) ? (
               <MessageActions
                 text={actionText}
                 onRetry={onRetry ? () => onRetry(turn.id) : undefined}
@@ -1373,9 +1404,6 @@ const TurnRow = memo(
                 message={turn.failedMessage}
                 retryCount={retryCount}
                 onRetry={onRetry ? () => onRetry(turn.id) : undefined}
-                onSwitchModel={
-                  onSwitchModel ? () => onSwitchModel(turn.id) : undefined
-                }
               />
             ) : null}
           </div>
@@ -1385,7 +1413,11 @@ const TurnRow = memo(
   },
   (prev, next) => {
     if (!prev.isLatest && !next.isLatest) {
-      return prev.turn === next.turn && prev.retryCount === next.retryCount;
+      return (
+        prev.turn === next.turn &&
+        prev.retryCount === next.retryCount &&
+        prev.turnActionsKey === next.turnActionsKey
+      );
     }
     return false;
   },
@@ -1401,7 +1433,6 @@ interface ConversationTurnListProps {
   loading: boolean;
   error: string | null;
   onRetry?: (turnId: string) => void;
-  onSwitchModel?: (turnId: string) => void;
   retryCounts?: Record<string, number>;
   lastTurnMinHeight?: number;
   skillsBySlug?: Record<string, { name: string }>;
@@ -1412,6 +1443,14 @@ interface ConversationTurnListProps {
   renderToolCall?: (tool: PrototypeToolCall) => ReactNode | null;
   /** See ``TurnRowProps.renderTurnActions``. */
   renderTurnActions?: (turn: ConversationTurn) => ReactNode | null;
+  /**
+   * External state ``renderTurnActions`` depends on, folded into the memo
+   * comparator. Non-latest rows only re-render when their ``turn`` object
+   * changes, so action-row state living OUTSIDE the turn (e.g. an in-flight
+   * fork's pending spinner — #879) is invisible to them unless the host
+   * changes this value. Any change re-renders every row.
+   */
+  turnActionsKey?: string | null;
   /**
    * Host control rendered at the START of a turn, before its messages.
    *
@@ -1464,13 +1503,13 @@ export function ConversationTurnList({
   loading,
   error,
   onRetry,
-  onSwitchModel,
   retryCounts,
   lastTurnMinHeight,
   skillsBySlug,
   onVirtualApiReady,
   renderToolCall,
   renderTurnActions,
+  turnActionsKey,
   renderTurnLeading,
   isToolCardFoldable,
   onRevealFile,
@@ -1637,10 +1676,10 @@ export function ConversationTurnList({
                     }
                     skillsBySlug={skillsBySlug}
                     onRetry={onRetry}
-                    onSwitchModel={onSwitchModel}
                     retryCount={retryCounts?.[turn.id] ?? 0}
                     renderToolCall={renderToolCall}
                     renderTurnActions={renderTurnActions}
+                    turnActionsKey={turnActionsKey}
                     renderTurnLeading={renderTurnLeading}
                     isToolCardFoldable={isToolCardFoldable}
                     onRevealFile={onRevealFile}

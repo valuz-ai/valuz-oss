@@ -17,6 +17,7 @@ itself.
 # ruff: noqa: I001
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -31,9 +32,7 @@ from valuz_agent.ports.message_context import HostRef
 logger = logging.getLogger(__name__)
 
 
-async def _stamp_turn_host_ref(
-    user_id: str, session_id: str, host_ref: HostRef
-) -> None:
+async def _stamp_turn_host_ref(user_id: str, session_id: str, host_ref: HostRef) -> None:
     """Persist the turn's declared host under ``metadata.valuz.host_ref``.
 
     Read by tools that must act on the host the user is looking at
@@ -57,9 +56,7 @@ async def _stamp_turn_host_ref(
         return
     valuz["host_ref"] = stamped
     metadata["valuz"] = valuz
-    await kernel_client.update_session(
-        user_id, session_id, UpdateSessionRequest(metadata=metadata)
-    )
+    await kernel_client.update_session(user_id, session_id, UpdateSessionRequest(metadata=metadata))
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +296,39 @@ async def run_session_to_idle(
             final_status = "terminated"
             encountered_error = True
             turn_error = exc
+            # The kernel never accepted this turn, so it never wrote the
+            # ``user_message`` that opens the turn's event bracket. Write it
+            # here, BEFORE the failure is recorded, or the turn is unassembleable:
+            # the client rebuilds the transcript purely from events, so with no
+            # user message the failure has nothing to attach to (it renders above
+            # the user's own bubble) and the optimistic bubble is never retired
+            # (the "starting runtime" header counts up forever). Ordering matters
+            # — the event is anchored on append, so it has to land first.
+            if isinstance(exc, kernel_client.TurnNotStartedError):
+                try:
+                    from app.schemas import EventPayload
+
+                    await kernel_client.append_event(
+                        user_id,
+                        session_id,
+                        EventPayload(
+                            type="user_message",
+                            data={
+                                "message": content,
+                                "attachments": [
+                                    {"source_path": source, "parsed_path": parsed}
+                                    for source, parsed in attachment_specs
+                                ],
+                            },
+                        ),
+                    )
+                except Exception:  # noqa: BLE001 — best effort; never mask the real failure
+                    logger.warning(
+                        "run_session_to_idle: could not record the user message for the "
+                        "unstarted turn on session %s",
+                        session_id,
+                        exc_info=True,
+                    )
             try:
                 await kernel_client.emit_live_event(
                     user_id,
@@ -312,6 +342,24 @@ async def run_session_to_idle(
             except Exception:  # noqa: BLE001
                 pass
 
+    except asyncio.CancelledError as exc:
+        # A ``CancelledError`` reaching this frame means the turn was
+        # INTERRUPTED — this task was cancelled mid-turn (host teardown, an
+        # in-process supervisor) or a runtime teardown let a cancellation
+        # slip out — never that the model or a tool failed. Classify it like
+        # the runtimes' own ``user_interrupt`` / ``interrupted`` stop reasons
+        # (``_INTERRUPT_CATEGORIES``): the session settles idle and
+        # resumable, and the durable marker is an interruption the client
+        # renders as a quiet line — NOT a ``run.failed`` card with retry /
+        # switch-model plus a failure notification, which is what the generic
+        # ``type(exc).__name__`` mapping below used to produce for a turn
+        # whose answer had already completed.
+        logger.warning(
+            "run_session_to_idle: turn interrupted (CancelledError) for session %s",
+            session_id,
+        )
+        final_status = "interrupted"
+        turn_error = exc
     except BaseException as exc:  # noqa: BLE001
         logger.exception("run_session_to_idle: unexpected error for session %s", session_id)
         final_status = "terminated"

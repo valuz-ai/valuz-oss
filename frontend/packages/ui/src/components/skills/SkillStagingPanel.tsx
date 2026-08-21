@@ -171,7 +171,7 @@ export const SkillStagingPanel = ({
             {t("skill.generatedSkills")}
           </span>
           {slugs.length > 0 && (
-            <span className="inline-flex h-5 items-center rounded-[4px] bg-surface-soft px-1.5 py-0 text-2xs text-ink-meta">
+            <span className="inline-flex h-5 items-center rounded-sm bg-surface-soft px-1.5 py-0 text-2xs text-ink-meta">
               {slugs.length}
             </span>
           )}
@@ -228,13 +228,13 @@ export const SkillStagingPanel = ({
                           {s.name}
                         </span>
                         {s.version != null && (
-                          <span className="inline-flex h-5 items-center rounded-[4px] bg-surface-soft px-1.5 py-0 text-2xs text-ink-meta">
+                          <span className="inline-flex h-5 items-center rounded-sm bg-surface-soft px-1.5 py-0 text-2xs text-ink-meta">
                             v{s.version}
                           </span>
                         )}
                         <span
                           className={cn(
-                            "inline-flex h-5 items-center rounded-[4px] bg-surface-soft px-1.5 py-0 text-2xs",
+                            "inline-flex h-5 items-center rounded-sm bg-surface-soft px-1.5 py-0 text-2xs",
                             conflictTone[s.conflictKind],
                           )}
                         >

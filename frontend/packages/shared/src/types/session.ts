@@ -75,6 +75,12 @@ export interface SessionListItem {
    * backend also populates `worktree.exists` (liveness, computed on read).
    */
   worktree?: WorktreeRef | null;
+  /**
+   * Fork provenance (docs/design/session-fork.md): the source session this
+   * one was forked from. `null` for sessions that are not forks. The source
+   * may since have been deleted — a navigation hint, not a guarantee.
+   */
+  forked_from_session_id?: string | null;
   /** Unix epoch milliseconds (UTC). Format via `new Date(ms)`. */
   updated_at: number;
   /**

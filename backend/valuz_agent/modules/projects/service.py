@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from valuz_agent.adapters import kernel_client
 from valuz_agent.infra.eventbus import EventBus
-from valuz_agent.infra.fs_registry import fs_registry
+from valuz_agent.infra.fs_registry import ProjectKind, fs_registry
 from valuz_agent.modules.artifacts.snapshot import ARTIFACT_DIR_NAME
 from valuz_agent.modules.automations.datastore import AutomationDatastore
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
@@ -254,6 +254,22 @@ async def project_brief_by_id(user_id: str, project_id: str) -> tuple[str, str, 
     return (row.kind, row.name, row.instructions_md)
 
 
+async def project_row_by_id(user_id: str, project_id: str) -> ProjectRow | None:
+    """Return the owner-scoped project row, or ``None`` if it no longer exists.
+
+    Sibling modules that must hand a whole project to another collaborator —
+    ``worktrees.resolve_session_cwd`` takes a ``ProjectRowLike`` — need the row
+    itself, not a projection. Serving it here keeps the datastore private to
+    this module (the boundary contract) while ``ProjectRow`` stays a plain
+    domain type from ``projects.models``.
+    """
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.projects.datastore import ProjectDatastore
+
+    async with async_unit_of_work(commit=False) as db:
+        return await ProjectDatastore(db).get_by_id(user_id, project_id)
+
+
 class ProjectService:
     def __init__(
         self,
@@ -283,7 +299,12 @@ class ProjectService:
         existing = await self._ds.get_chat_project(user_id)
         if existing:
             return
-        row = ProjectRow(name="Chat", kind="chat", sort_order=0)
+        row = ProjectRow(
+            name="Chat",
+            kind="chat",
+            sort_order=0,
+            root_path=_managed_project_root(user_id, "chat"),
+        )
         await self._ds.create(user_id, row)
 
     async def create_chat_project_for_session(self, user_id: str, name: str = "Chat") -> ProjectRow:
@@ -291,10 +312,15 @@ class ProjectService:
 
         Each call creates a NEW ``ProjectRow(kind="chat")`` and mirrors it
         into a dedicated kernel project + agent (1:1 by id). The kernel
-        project gets its own cwd under ``fs_registry.project_root(user_id)`` via
-        ``fs_registry.project_cwd``, so every chat session runs in an
+        project gets its own cwd under ``<project_root>/chats/YYYY/MM/dd/``,
+        allocated here and STORED on the row, so every chat session runs in an
         isolated directory and can't trip over files written by sibling
         chats.
+
+        Chats get their own top-level subdir (sibling to ``projects/``) because
+        one is minted per quick chat and per scheduled-automation run — mixing
+        them into the project tree would bury the handful of directories a user
+        actually created under thousands of ephemeral ones.
 
         Callers:
         - ``SessionService.send_message`` (quick-chat) — default ``name="Chat"``
@@ -307,7 +333,12 @@ class ProjectService:
         for chat-skills configuration, which is global across all chat
         sessions, not bound to any single chat project's id.
         """
-        row = ProjectRow(name=name, kind="chat", sort_order=100)
+        row = ProjectRow(
+            name=name,
+            kind="chat",
+            sort_order=100,
+            root_path=_managed_project_root(user_id, "chat"),
+        )
         await self._ds.create(user_id, row)
         return row
 
@@ -365,7 +396,7 @@ class ProjectService:
             if existing:
                 raise ValueError(f"Directory already bound to project '{existing.name}'")
         else:
-            resolved_root = _managed_project_root(user_id, new_id)
+            resolved_root = _managed_project_root(user_id, "project")
         _write_relative_file(_root_path(user_id, resolved_root), PROJECT_ROOT_MARKER, b"")
         row = ProjectRow(
             id=new_id,
@@ -427,7 +458,7 @@ class ProjectService:
             # Imported projects without a user-picked folder get a managed
             # cwd under fs_registry.project_root(user_id) (mirrors chat projects) so
             # they're still cross-machine portable.
-            resolved_root = _managed_project_root(user_id, new_id)
+            resolved_root = _managed_project_root(user_id, "project")
         _write_relative_file(_root_path(user_id, resolved_root), PROJECT_ROOT_MARKER, b"")
         row = ProjectRow(
             id=new_id,
@@ -660,7 +691,7 @@ class ProjectService:
             )
             return [_node_to_dict(n) for n in nodes]
         else:
-            root = fs_registry.project_cwd(user_id, project_id, "chat")
+            root = fs_registry.project_cwd(user_id, project_id, "chat", row.root_path)
         if not root.exists():
             return []
         nodes = _walk_dir(root, depth=depth, include_hidden=include_hidden)
@@ -703,8 +734,14 @@ class ProjectService:
         return target.relative_to(root).as_posix()
 
 
-def _managed_project_root(user_id: str, project_id: str) -> str:
-    return str((fs_registry.project_root(user_id) / project_id).resolve())
+def _managed_project_root(user_id: str, kind: ProjectKind = "project") -> str:
+    """Allocate a fresh managed workspace and return its absolute path.
+
+    The result is STORED on the row (``ProjectRow.root_path``); nothing
+    recomputes it, which is what lets old rows keep their pre-cutover flat
+    directories while new ones get the dated layout.
+    """
+    return str(fs_registry.allocate_managed_project_dir(user_id, kind).resolve())
 
 
 def _normalize_explicit_root(root_path: str) -> str:
@@ -784,7 +821,7 @@ def _project_root(user_id: str, row: ProjectRow, project_id: str) -> Path:
         if not row.root_path:
             raise ValueError("Project has no root path")
         return _root_path(user_id, row.root_path)
-    return fs_registry.project_cwd(user_id, project_id, "chat").resolve()
+    return fs_registry.project_cwd(user_id, project_id, "chat", row.root_path).resolve()
 
 
 def _extension(name: str) -> str:

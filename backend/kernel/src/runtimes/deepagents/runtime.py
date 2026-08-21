@@ -57,6 +57,7 @@ from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
 from src.core.task_coverage_continuation import TASK_COVERAGE_NOOP_TOOL_NAME
 from src.core.tools import ExecContext, ToolDef, ToolKit, ToolResult
+from src.core.tracing import langchain_config_overlay
 from src.core.types import (
     EndTurn,
     Error,
@@ -80,9 +81,14 @@ from src.runtimes.deepagents.middleware import (
     CitationEvidenceCompactionMiddleware,
     InvalidToolCallPairMiddleware,
     ToolErrorTolerantMiddleware,
+    WindowsPathVirtualizerMiddleware,
     citation_artifact_content,
 )
-from src.runtimes.interruption import describe_exception, is_runtime_interruption
+from src.runtimes.interruption import (
+    absorb_interrupt_cancellations,
+    describe_exception,
+    is_runtime_interruption,
+)
 from src.runtimes.mcp_env import resolve_stdio_env
 from src.runtimes.network_egress import ForwardProxyDescriptor, record_runtime_egress_phase
 
@@ -464,6 +470,15 @@ def _build_local_shell_backend(workspace_root: str | None) -> LocalShellBackend:
 DEEPAGENTS_TODO_TOOL_NAME = "write_todos"
 
 
+def _session_gateway_headers(session: Session) -> dict[str, str]:
+    """Build headers to forward to the gateway on each LLM call.
+
+    ``X-Valuz-Session-Id`` tags gateway_debit ledger rows with the session.
+    Ignored by first-party providers (api.openai.com / api.anthropic.com).
+    """
+    return {"X-Valuz-Session-Id": str(session.id)}
+
+
 def _session_evidence_binding_enabled(session: Session) -> bool:
     """Whether the model needs the minimal private Evidence binding protocol."""
 
@@ -514,7 +529,22 @@ class DeepAgentsRuntime:
         self._checkpointer: Any | None = None
         self._checkpointer_cm: Any | None = None
         self._active_task: asyncio.Task[Any] | None = None
+        # ``interrupt()`` cancels of ``_active_task`` this turn; balanced by
+        # ``run()`` after it swallows the injected ``CancelledError`` (see
+        # ``absorb_interrupt_cancellations``).
+        self._interrupt_cancels = 0
         self._cancelled: bool = False
+        # Native fork anchor for the turn most recently completed:
+        # ``{"provider": "deepagents", "thread_id": ..., "checkpoint_id":
+        # ..., "parent_checkpoint_id": ...}``. ``checkpoint_id`` is the
+        # langgraph checkpoint the turn settled on; ``parent_checkpoint_id``
+        # is the pre-input checkpoint (``None`` on a fresh thread). Set only
+        # on a cleanly-completed graph turn — bare completions have no
+        # checkpoints and cancelled turns have no settled checkpoint.
+        # Read-and-cleared by the orchestrator (``consume_turn_anchor``)
+        # into ``Message.metadata["runtime_native"]`` — the
+        # message-granularity fork seam (docs/design/session-fork.md).
+        self._turn_anchor: dict[str, Any] | None = None
         # One immutable Evidence namespace per user turn, shared by the main
         # agent and every nested subagent.  The graph and its middleware live
         # across turns, so ``run`` resets this object instead of replacing it.
@@ -534,9 +564,11 @@ class DeepAgentsRuntime:
         # change ``interrupt_on`` for an already-built graph (cold-reload
         # semantics, mirrors Claude/Codex). ``_mcp_tool_names`` is the
         # set tracked at graph construction so subject classification can
-        # tell MCP-origin tools from harness/built-in ones (langchain-mcp
-        # tool names don't carry server prefixes — membership is the only
-        # signal we have).
+        # tell MCP-origin tools from runtime built-ins. The separate
+        # ``_external_mcp_tool_names`` set excludes the host harness so the
+        # orchestrator only gates post-run checks on external information.
+        # langchain-mcp tool names don't carry server prefixes, so membership
+        # is the only signal available at event-emission time.
         # 3-tuple: ``(decision, message, modified_input)``. The 3rd slot
         # is set only when ``decision == "approve_with_changes"`` —
         # ``submit_action``'s validator pair guarantees it; carries the
@@ -570,6 +602,7 @@ class DeepAgentsRuntime:
         self._applied_effort: str | None = None
         self._applied_citation_mode: bool | None = None
         self._mcp_tool_names: set[str] = set()
+        self._external_mcp_tool_names: set[str] = set()
         # Per-session callable injected by the orchestrator via
         # ``set_session_rule_finder``. Closes over (session_id, cache,
         # this runtime's matcher) so this runtime can check the kernel
@@ -638,6 +671,64 @@ class DeepAgentsRuntime:
     def update_sink(self, sink: EventSink) -> None:
         self.event_sink = sink
 
+    def consume_turn_anchor(self) -> dict[str, Any] | None:
+        """Return and clear the native anchor captured by the last ``run()``.
+
+        Read-and-clear so a turn that never settles on a checkpoint
+        (bare completion, cancel, graph failure) cannot inherit a stale
+        anchor from the previous message.
+        """
+        anchor, self._turn_anchor = self._turn_anchor, None
+        return anchor
+
+    async def fork_session(
+        self,
+        session: Session,
+        *,
+        source_native_session_id: str,
+        anchor: str | None = None,
+    ) -> str:
+        """Branch a source langgraph thread into this session's thread.
+
+        Copies the source thread's checkpoint rows into a NEW thread keyed
+        by this session's id — so the standard ``thread_id == session.id``
+        binding holds for forks with zero special-casing. ``anchor`` is a
+        turn-end checkpoint id (``runtime_native.checkpoint_id``); the copy
+        walks the ``parent_checkpoint_id`` chain from it, so the new
+        thread's latest checkpoint IS the anchor and later turns are
+        excluded. Tail fork (``anchor=None``) copies the whole thread; a
+        source with no checkpoints (bare completion / never ran) copies
+        zero rows, which is legal there and a ``ValueError`` with an
+        anchor. Pure store re-keying — no graph compile, no model client,
+        and the source thread is never written.
+
+        Only the sqlite backend is wired: the file backend is retired
+        (local and cloud both run sqlite), so fork fails loud there
+        instead of copying a store nothing reads.
+        """
+        if _checkpoint_backend() != "sqlite":
+            raise NotImplementedError(
+                "deepagents fork supports the sqlite checkpoint backend only "
+                "(the file backend is retired)."
+            )
+        from src.runtimes.deepagents.checkpoint_fork import fork_sqlite_thread
+
+        new_thread_id = str(session.id)
+        copied = await fork_sqlite_thread(
+            self.checkpoint_db,
+            source_native_session_id,
+            new_thread_id,
+            anchor_checkpoint_id=anchor,
+        )
+        logger.info(
+            "deepagents fork: copied %d checkpoints from thread %s to %s",
+            copied,
+            source_native_session_id,
+            new_thread_id,
+        )
+        session.runtime_session_id = new_thread_id
+        return new_thread_id
+
     async def prepare(self, session: Session) -> None:
         """DeepAgents has no external CLI cold start to prepare separately."""
         del session
@@ -658,6 +749,7 @@ class DeepAgentsRuntime:
 
         session.status = "running"
         self._cancelled = False
+        self._interrupt_cancels = 0
         self._cur_session_id = session.id
         self._egress_turn_attempt_id = uuid.uuid4().hex
         if not self._continuing_same_user_turn:
@@ -705,9 +797,17 @@ class DeepAgentsRuntime:
                 "configurable": {"thread_id": str(thread_id)},
                 "recursion_limit": MAIN_GRAPH_RECURSION_LIMIT,
             }
+            # Langfuse tracing (empty overlay unless active): the shared
+            # LangChain callback handler must ride in the CALL-TIME config —
+            # same reason as ``recursion_limit`` above.
+            stream_config.update(
+                langchain_config_overlay(session_id=session.id, user_id=session.user_id)
+            )
             known_citation_tool_messages: set[str] = set()
+            start_checkpoint_id: str | None = None
             if not bare:
                 initial_state = await graph.aget_state(stream_config)
+                start_checkpoint_id = _state_checkpoint_id(initial_state)
                 known_citation_tool_messages = {
                     key
                     for key, _tool_name, _model_content, _private_content in (
@@ -743,6 +843,11 @@ class DeepAgentsRuntime:
             # forever should fail visibly, not loop forever.
             max_resume_iters = 32
             saw_model_event = False
+            # The state snapshot the turn settled on — feeds the fork
+            # anchor below. Stays ``None`` for bare completions (no
+            # checkpointer) and for turns cancelled before the first
+            # ``aget_state``.
+            settled_state: Any = None
             for _resume_iter in range(max_resume_iters):
                 if self._cancelled:
                     break
@@ -826,6 +931,11 @@ class DeepAgentsRuntime:
                                         "id": run_id,
                                         "name": tool_name,
                                         "input": _jsonify(data.get("input", {}) or {}),
+                                        **(
+                                            {"external": True}
+                                            if tool_name in self._external_mcp_tool_names
+                                            else {}
+                                        ),
                                     },
                                 )
                             )
@@ -870,6 +980,7 @@ class DeepAgentsRuntime:
                 # the turn or it paused on an interrupt. Snapshot state to
                 # find out which.
                 state = await graph.aget_state(stream_config)
+                settled_state = state
                 for key, tool_name, model_content, citation_content in _state_citation_artifacts(
                     state
                 ):
@@ -941,6 +1052,14 @@ class DeepAgentsRuntime:
                 )
             else:
                 session.stop_reason = EndTurn()
+                checkpoint_id = _state_checkpoint_id(settled_state)
+                if checkpoint_id:
+                    self._turn_anchor = {
+                        "provider": "deepagents",
+                        "thread_id": str(thread_id),
+                        "checkpoint_id": checkpoint_id,
+                        "parent_checkpoint_id": start_checkpoint_id,
+                    }
 
             session.status = "idle"
             await self._emit_usage_update(usage_totals)
@@ -952,6 +1071,8 @@ class DeepAgentsRuntime:
                 retry_status="terminal",
                 message="cancelled",
             )
+            absorb_interrupt_cancellations(self._interrupt_cancels)
+            self._interrupt_cancels = 0
         except Exception as exc:
             session.status = "idle"
             if is_runtime_interruption(exc):
@@ -1056,6 +1177,7 @@ class DeepAgentsRuntime:
         task = self._active_task
         if task is not None and not task.done():
             task.cancel()
+            self._interrupt_cancels += 1
 
     async def submit_action(
         self,
@@ -1505,6 +1627,7 @@ class DeepAgentsRuntime:
             "middleware": [
                 InvalidToolCallPairMiddleware(),
                 ToolErrorTolerantMiddleware(),
+                WindowsPathVirtualizerMiddleware(self.workspace_root),
                 CitationEvidenceCompactionMiddleware(
                     # Evidence Registry is shared infrastructure.  Always
                     # publish trusted source metadata to the Host; Citation
@@ -1640,6 +1763,7 @@ class DeepAgentsRuntime:
                 model_name=self.model,
                 timeout=None,
                 stop=None,
+                default_headers=_session_gateway_headers(session),
             )
             if self.model_provider.base_url is not None:
                 kwargs["base_url"] = self.model_provider.base_url
@@ -1716,6 +1840,10 @@ class DeepAgentsRuntime:
             # `usage_update` event has real numbers.
             stream_usage=True,
             extra_body=extra_body,
+            # Forward session identity to the gateway so gateway_debit rows
+            # are tagged with this conversation's session_id and title. Ignored by
+            # first-party providers (api.openai.com etc.).
+            default_headers=_session_gateway_headers(session),
         )
         egress_descriptor = getattr(self, "egress_descriptor", None)
         if egress_descriptor is not None:
@@ -1814,6 +1942,7 @@ class DeepAgentsRuntime:
         uses ``http`` — translate here. Returns an empty list when no MCP
         servers are configured or the adapter is unavailable.
         """
+        self._external_mcp_tool_names = set()
         if not session.mcp_servers:
             return []
         try:
@@ -1909,6 +2038,7 @@ class DeepAgentsRuntime:
             return_exceptions=True,
         )
         tools: list[Any] = []
+        external_tool_names: set[str] = set()
         for name, result in zip(names, results, strict=True):
             if isinstance(result, asyncio.CancelledError):
                 raise result
@@ -1916,6 +2046,11 @@ class DeepAgentsRuntime:
                 logger.warning("mcp server %r unavailable — skipping its tools: %s", name, result)
                 continue
             tools.extend(result)
+            if name not in {"harness", "harness_toolkit"}:
+                external_tool_names.update(
+                    tool.name for tool in result if isinstance(getattr(tool, "name", None), str)
+                )
+        self._external_mcp_tool_names = external_tool_names
         return tools
 
     # -- Tool conversion --
@@ -1995,6 +2130,7 @@ class DeepAgentsRuntime:
                 ),
                 "middleware": [
                     InvalidToolCallPairMiddleware(),
+                    WindowsPathVirtualizerMiddleware(self.workspace_root),
                     CitationEvidenceCompactionMiddleware(
                         evidence_registry=self._turn_evidence_registry,
                         citation_artifact_emitter=self._emit_citation_evidence,
@@ -2028,8 +2164,12 @@ class DeepAgentsRuntime:
                 else sub_def.prompt
             ),
         }
+        # Subagent ``middleware`` is additive (appended to deepagents' default
+        # stack), so always carry the Windows-path normalizer; the citation
+        # pair stays gated on the protocol as before.
+        entry["middleware"] = [WindowsPathVirtualizerMiddleware(self.workspace_root)]
         if citation_protocol:
-            entry["middleware"] = [
+            entry["middleware"] += [
                 InvalidToolCallPairMiddleware(),
                 CitationEvidenceCompactionMiddleware(
                     evidence_registry=self._turn_evidence_registry,
@@ -2207,8 +2347,21 @@ def _extract_full_thinking(output: Any) -> str:
 def _extract_usage(output: Any) -> dict[str, int] | None:
     """Project LangChain's ``UsageMetadata`` onto our four flat token fields.
 
-    LangChain has no notion of cache_write/creation, so cache_write_tokens
-    is always zero on the deepagents path.
+    LangChain's ``input_tokens`` is the SUM of every input bucket — its own
+    ``total_tokens`` is ``input_tokens + output_tokens`` — and
+    ``input_token_details.cache_read`` / ``cache_creation`` are subsets of it.
+    The cross-runtime contract is the opposite: the four flat fields are
+    DISJOINT, because every usage surface adds them up (session panel,
+    monthly rollup, task usage, billing meter). Passing LangChain's total
+    through unchanged therefore counted the cached prefix twice — on a real
+    session, a turn with 77,859 prompt tokens of which 75,904 were cache hits
+    was reported as 153,763, +97%, and dragged the displayed cache hit rate
+    down from 97.5% to 49.4%. Subtract the cached buckets out, the same way
+    the codex runtime does with ``cached_input_tokens``.
+
+    The ``response_metadata`` fallback below carries no cache detail at all,
+    so its ``prompt_tokens`` is reported as fully uncached — nothing to
+    subtract, and no double count either.
     """
     if output is None:
         return None
@@ -2221,7 +2374,7 @@ def _extract_usage(output: Any) -> dict[str, int] | None:
             cache_read = int(details.get("cache_read", 0) or 0)
             cache_write = int(details.get("cache_creation", 0) or 0)
         return {
-            "input_tokens": int(metadata.get("input_tokens", 0)),
+            "input_tokens": max(0, int(metadata.get("input_tokens", 0)) - cache_read - cache_write),
             "output_tokens": int(metadata.get("output_tokens", 0)),
             "cache_read_tokens": cache_read,
             "cache_write_tokens": cache_write,
@@ -2244,6 +2397,22 @@ def _output_is_error(output: Any) -> bool:
     if status == "error":
         return True
     return False
+
+
+def _state_checkpoint_id(state: Any) -> str | None:
+    """Extract the langgraph checkpoint id a ``StateSnapshot`` points at.
+
+    ``aget_state`` returns the id under ``config["configurable"]
+    ["checkpoint_id"]``; a fresh thread (no checkpoints yet) has none.
+    """
+    config = getattr(state, "config", None)
+    if not isinstance(config, dict):
+        return None
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return None
+    value = configurable.get("checkpoint_id")
+    return str(value) if value else None
 
 
 def _state_citation_artifacts(state: Any) -> list[tuple[str, str | None, Any, str]]:

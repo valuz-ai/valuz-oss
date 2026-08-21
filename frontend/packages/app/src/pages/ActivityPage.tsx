@@ -26,6 +26,7 @@ import {
   type SessionEventDTO,
 } from "@valuz/shared";
 import { ActivityFeedList } from "@valuz/app/components";
+import { useForkSession } from "../hooks/use-fork-session";
 import { useProjectOutlet } from "@valuz/app/layout";
 import { OriginBadge } from "../components/ExecutionLocationPicker";
 
@@ -195,7 +196,7 @@ const RunningCard = ({
       className="flex h-[226px] flex-col overflow-hidden rounded-xl bg-card p-4 pt-5 text-left shadow-[var(--shadow-1)] transition-colors hover:bg-surface-soft"
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="inline-flex min-w-0 items-center gap-1 text-[11px] text-ink-meta">
+        <span className="inline-flex min-w-0 items-center gap-1 text-2xs text-ink-meta">
           <ScopeIcon className="h-3 w-3 shrink-0" strokeWidth={2} />
           <span className="truncate">{sourceLabel}</span>
           {elapsed && (
@@ -267,8 +268,12 @@ export const ActivityPage = () => {
   const historyFeed = useActivityFeed({ tab: filter, pollMs: 4000 });
 
   useEffect(() => {
-    setHeader(<PageHeader title={t(tk("nav.activity"))} />);
-    setHeaderClassName("h-auto px-5 py-5");
+    setHeader(
+      <PageHeader
+        title={t(tk("nav.activity"))}
+      />,
+    );
+    setHeaderClassName("h-15 px-5");
     // Drop the AppShell's default vertical padding for this page —
     // the page already self-manages bottom space (``pb-12``) and the outer ``py-7`` was
     // adding double breathing room that stranded the history list
@@ -339,6 +344,12 @@ export const ActivityPage = () => {
   };
   const openTask = (id: string): void => {
     navigate(`/tasks/${encodeURIComponent(id)}`);
+  };
+  // Whole-session fork (docs/design/session-fork.md). Pending state +
+  // duplicate-click suppression live in the shared hook (#879).
+  const { fork: forkSession, forkingSessionId } = useForkSession();
+  const handleForkSession = (id: string): void => {
+    void forkSession(id);
   };
   const handleRenameConfirm = (id: string, name: string): void => {
     void (async () => {
@@ -422,7 +433,6 @@ export const ActivityPage = () => {
   // Render
   // ──────────────────────────────────────────────────────────────
 
-
   return (
     <div className="mx-auto max-w-[760px] pb-12">
       {/* Toolbar — line-tab filter shared with project home / conversation
@@ -472,6 +482,8 @@ export const ActivityPage = () => {
           onOpenTask={openTask}
           onRenameConfirm={handleRenameConfirm}
           onDeleteSession={(id, title) => setDeletingChat({ id, title })}
+          onForkSession={handleForkSession}
+          forkPendingSessionId={forkingSessionId}
           emptyLabel={t(tk("activity.noHistory"))}
         />
       </section>

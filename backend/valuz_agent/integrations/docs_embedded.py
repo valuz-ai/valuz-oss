@@ -329,12 +329,15 @@ class EmbeddedDocsRuntime:
         query: str,
         doc_scope_ids: list[str],
         top_k: int = 5,
+        doc_paths: dict[str, str] | None = None,
     ) -> list[SearchResult]:
         # ``search_sync`` runs ripgrep (subprocess) + a pure-Python fallback
         # scan — both blocking. Doc search is an MCP tool the agent calls
         # mid-turn, so running it inline would freeze the whole event loop for
         # the duration of the search. Push it to a worker thread.
-        return await asyncio.to_thread(self.search_sync, query, doc_scope_ids, top_k)
+        return await asyncio.to_thread(
+            self.search_sync, query, doc_scope_ids, top_k, doc_paths
+        )
 
     async def health(self) -> DocsHealthSnapshot:
         if self._preview_dir and self._preview_dir.exists():

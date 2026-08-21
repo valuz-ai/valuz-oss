@@ -253,7 +253,7 @@ export const TaskContextPanel = ({
                         {agent?.name ?? slug}
                       </span>
                       {isLead && (
-                        <span className="inline-flex h-4 shrink-0 items-center rounded-[4px] bg-brand-light px-1 text-[10px] font-normal leading-none text-brand-700">
+                        <span className="inline-flex h-4 shrink-0 items-center rounded-sm bg-brand-light px-1 text-micro font-normal leading-none text-brand-700">
                           {t("task.runLead")}
                         </span>
                       )}
@@ -552,7 +552,7 @@ function SubtaskStatusChip({ status }: { status: string }) {
   if (status === "active" || status === "completed") return null;
   return (
     <span
-      className={`inline-flex h-5 items-center rounded-[4px] px-1.5 py-0 text-2xs font-medium ${m.cls}`}
+      className={`inline-flex h-5 items-center rounded-sm px-1.5 py-0 text-2xs font-medium ${m.cls}`}
     >
       {t(m.key as Parameters<typeof t>[0])}
     </span>
@@ -635,7 +635,7 @@ function PlanReviewPopover({
                     </span>
                     <SubtaskStatusChip status={task.status} />
                     {task.attempts !== undefined && task.attempts > 1 && (
-                      <span className="inline-flex h-5 items-center rounded-[4px] bg-amber-100 px-1.5 py-0 text-2xs font-medium text-amber-700">
+                      <span className="inline-flex h-5 items-center rounded-sm bg-amber-100 px-1.5 py-0 text-2xs font-medium text-amber-700">
                         {t(
                           "task.panel.planRowAttempts" as Parameters<
                             typeof t

@@ -95,7 +95,7 @@ export const ExecutionLog = ({ rows, onSessionClick }: ExecutionLogProps) => {
           const logKey = row.id;
           const output = row.output.trim();
           const canOpenSession = Boolean(row.sessionId && onSessionClick);
-          const rowClassName = `w-full rounded-[12px] px-3 py-3.5 text-left transition-colors hover:bg-[#f7f8fa] dark:hover:bg-surface-muted ${
+          const rowClassName = `w-full rounded-2xl px-3 py-3.5 text-left transition-colors hover:bg-[#f7f8fa] dark:hover:bg-surface-muted ${
             canOpenSession ? "cursor-pointer" : ""
           }`;
           const rowContent = (
@@ -127,7 +127,7 @@ export const ExecutionLog = ({ rows, onSessionClick }: ExecutionLogProps) => {
 
                   {row.taskTitle ? (
                     <div
-                      className="mt-1 truncate text-[11px] text-ink-meta"
+                      className="mt-1 truncate text-2xs text-ink-meta"
                       title={row.taskTitle}
                     >
                       {"→ "}
@@ -156,7 +156,7 @@ export const ExecutionLog = ({ rows, onSessionClick }: ExecutionLogProps) => {
                 </div>
               </div>
 
-              <div className="mt-2 flex items-center gap-2 text-[11px] text-ink-body sm:hidden">
+              <div className="mt-2 flex items-center gap-2 text-2xs text-ink-body sm:hidden">
                 <span>{row.time}</span>
                 <span className="h-1 w-1 rounded-full bg-surface-border" />
                 <span>{row.duration}</span>

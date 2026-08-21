@@ -22,6 +22,7 @@ async def execution_runtime() -> AsyncIterator[None]:
 
     host = cast(FastAPI, SimpleNamespace(state=SimpleNamespace()))
     steps.configure_structured_logging()
+    steps.init_tracing()  # env-gated no-op; before the kernel, same as web boot
     await steps.init_kernel(host)
     await steps.bind_data_service(host)
     steps.install_binding_change_listener()
@@ -30,6 +31,7 @@ async def execution_runtime() -> AsyncIterator[None]:
     finally:
         await steps.dispose_data_service(host)
         await steps.shutdown_kernel()
+        steps.shutdown_tracing()  # final span flush — after every emitter stopped
 
 
 __all__ = ["execution_runtime"]

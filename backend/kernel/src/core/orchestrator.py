@@ -19,6 +19,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -45,12 +46,14 @@ from src.core.task_coverage_continuation import (
     build_task_coverage_noop_tool,
 )
 from src.core.time_utils import now_ms
+from src.core.tracing import TurnTracingSink, start_turn_trace, turn_trace_context
 from src.core.types import (
     Error,
     Message,
     Session,
     UserMessage,
 )
+from src.core.usage import merge_model_usage
 from src.core.workspace import bootstrap_session_workspace
 
 # Per-session callable injected into runtimes that wire ``approve_for_session``.
@@ -122,44 +125,29 @@ def _is_task_coverage_meta_response(text: str) -> bool:
 
 
 class _TaskCoverageProtocolSink:
-    """Hide the coverage pass's protocol machinery: the private no-gap tool
-    and the pass's own reasoning stream.
+    """Keep the entire coverage pass private until its text is classified.
 
     Every event that flows through this sink belongs to the COVERAGE
     continuation, so the classification the UI cannot make ("is this trailing
     thinking just the completeness check?") is definitional here. The pass's
-    ``thinking`` / ``thinking_delta`` events are meta-reasoning about whether
-    the answer is complete — never user-facing content — so they are dropped
-    at the source; a silent no-op therefore streams NOTHING (previously the
-    transcript still grew a trailing 思考中 segment). A real supplement's
-    visible assistant text still streams unchanged, and an assistant message
-    such as ``(empty)`` is *not* interpreted or suppressed; it remains
-    visible. A no-gap pass can be silent only when the Runtime calls the
-    turn-scoped private tool supplied by ``run_task_coverage``.
+    reasoning and tool telemetry are internal verification machinery. Tool
+    results are still ingested by the observer so a genuine supplement can
+    cite newly collected Evidence, but they never create user-visible tool
+    cards. Assistant text is held until the pass ends: meta-responses are
+    dropped, while a genuine supplement is then published unchanged.
     """
-
-    # Visible characters after which held-back text is presumed a genuine
-    # supplement and flushed; meta-refusals are one short sentence, so the
-    # streaming penalty for a real continuation is at most this prefix.
-    _FLUSH_THRESHOLD_CHARS = 200
 
     def __init__(self, inner: EventSink) -> None:
         self._inner = inner
         self._private_tool_ids: set[str] = set()
         self.no_gap_declared = False
-        # Held-back visible-text events until the pass proves substantive
-        # (real tool call / enough text) or ``finalize`` classifies them.
+        # Coverage is an optional post-run verification pass. Hold all of its
+        # text until the terminal classification instead of guessing from a
+        # length threshold or from whether the verifier called another tool.
         self._held: list[Event] = []
-        self._held_delta_chars = 0
         self._held_message_texts: list[str] = []
-        self._passthrough = False
-
-    def _held_visible_len(self) -> int:
-        message_len = max((len(text) for text in self._held_message_texts), default=0)
-        return max(self._held_delta_chars, message_len)
 
     async def _flush_held(self) -> None:
-        self._passthrough = True
         held = self._held
         self._held = []
         for event in held:
@@ -169,7 +157,7 @@ class _TaskCoverageProtocolSink:
         """Classify held-back pass text: meta-refusal (or empty) → drop it and
         treat the pass as the silent no-op the protocol demanded; anything
         else is a real supplement and flushes downstream."""
-        if self._passthrough or not self._held:
+        if not self._held:
             return
         combined = " ".join(
             self._held_message_texts
@@ -210,21 +198,23 @@ class _TaskCoverageProtocolSink:
             and tool_id in self._private_tool_ids
         ):
             return
-        if event.type in {"text_delta", "assistant_message"} and not self._passthrough:
+        if event.type in {"text_delta", "assistant_message"}:
             self._held.append(event)
             text = str(event.data.get("text") or "")
-            if event.type == "text_delta":
-                self._held_delta_chars += len(text)
-            else:
+            if event.type == "assistant_message":
                 self._held_message_texts.append(text)
-            if self._held_visible_len() > self._FLUSH_THRESHOLD_CHARS:
-                await self._flush_held()
             return
         if event.type in {"tool_use", "tool_result"}:
-            # A real (non-private) tool call is substantive work — whatever
-            # text preceded it is part of a genuine continuation.
-            await self._flush_held()
-        elif event.type == "session_idle":
+            # Coverage tools are verifier implementation details. Let the
+            # observer register their names/Evidence without persisting or
+            # broadcasting a tool card.
+            ingest = getattr(self._inner, "emit_private_task_coverage_event", None)
+            if callable(ingest):
+                await ingest(event)
+            return
+        if event.type in {"tool_input_delta", "tool_output_delta"}:
+            return
+        if event.type == "session_idle":
             # The idle event closes the observer's coverage-segment window;
             # settle the held text FIRST so a real supplement is attributed
             # to the pass and a meta-refusal vanishes with the correct
@@ -407,9 +397,9 @@ def _session_task_coverage_enabled(session: Session) -> bool:
     metadata = session.metadata if isinstance(session.metadata, dict) else {}
     valuz = metadata.get("valuz")
     if not isinstance(valuz, dict):
-        return True
+        return False
     value = valuz.get("task_coverage_enabled")
-    return value if isinstance(value, bool) else True
+    return value if isinstance(value, bool) else False
 
 
 def _session_task_coverage_policy(session: Session) -> dict[str, Any] | None:
@@ -486,7 +476,7 @@ class _MessageObserverSink:
         citation_verification_enabled: bool = True,
         semantic_verifier: SemanticVerifierPort | None = None,
         claim_normalizer: ClaimNormalizerPort | None = None,
-        task_coverage_enabled: bool = True,
+        task_coverage_enabled: bool = False,
     ) -> None:
         self._inner = inner
         self._message_id = message_id
@@ -515,6 +505,7 @@ class _MessageObserverSink:
         self._post_run_verification_completed = False
 
         self._tool_names: dict[str, str] = {}
+        self._external_tool_called = False
         self._evidence_registry = EvidenceRegistry(
             allowed_document_ids=allowed_document_ids,
         )
@@ -548,11 +539,31 @@ class _MessageObserverSink:
             tool_name = event.data.get("name")
             if isinstance(tool_use_id, str) and isinstance(tool_name, str):
                 self._tool_names[tool_use_id] = tool_name
+                if self._tool_event_is_external(event.data, tool_name):
+                    self._external_tool_called = True
+                # A runtime emits ``session_idle`` before ``run()`` returns.
+                # When task coverage is already disabled, that idle event
+                # finalizes Citation/Audit immediately, so waiting for the
+                # outer orchestrator to inspect ``called_tool`` is too late.
+                # Disable the prose sidecars at the attempted GenUI call — the
+                # user explicitly chose structural output, even if validation
+                # later rejects it.
+                if self._matches_tool_name(tool_name, "generate_ui"):
+                    self.skip_post_run_verification_for_generated_ui()
 
         elif event.type == "tool_result":
+            tool_use_id = event.data.get("id")
+            tool_name = self._tool_names.get(tool_use_id) if isinstance(tool_use_id, str) else None
             event = self._register_and_redact_tool_result(event)
 
         elif event.type == "session_idle":
+            # Citation verification and Task Coverage are useful only after
+            # the primary turn brought external information into the answer.
+            # A session may expose host tools through MCP as an implementation
+            # detail; those local tools must not trigger expensive post-run
+            # model passes.
+            if not self._external_tool_called:
+                self._citation_verification_enabled = False
             raw_turns = event.data.get("num_turns")
             if isinstance(raw_turns, int) and raw_turns > 0:
                 self.num_turns += raw_turns
@@ -615,7 +626,17 @@ class _MessageObserverSink:
                 self.usage = {key: self.usage.get(key, 0) + value for key, value in current.items()}
             raw_model_usage = event.data.get("model_usage")
             if isinstance(raw_model_usage, dict):
-                self.model_usage = copy.deepcopy(raw_model_usage)
+                # Every ``usage_update`` is one disjoint increment, so a turn
+                # that produces several of them (claude interleaving a
+                # wake-up turn's result before its own) must ADD the
+                # per-model breakdowns the same way the flat fields above
+                # are added — overwriting would leave ``model_usage``
+                # describing only the last fragment of the turn.
+                self.model_usage = (
+                    copy.deepcopy(raw_model_usage)
+                    if self.model_usage is None
+                    else merge_model_usage(self.model_usage, raw_model_usage)
+                )
 
         elif event.type == "todo_update":
             raw_todos = event.data.get("todos")
@@ -647,6 +668,7 @@ class _MessageObserverSink:
         tool_use_id = event.data.get("id")
         tool_name = self._tool_names.get(tool_use_id) if isinstance(tool_use_id, str) else None
         citation_content = event.data.get("_citation_content")
+        citation_model_content = event.data.get("_citation_model_content")
         visible_content = event.data.get("content")
         compacted_content = compact_citation_tool_content(visible_content)
         private_projection = (
@@ -660,22 +682,54 @@ class _MessageObserverSink:
             else None
         )
         self._evidence_registry.register_tool_projection(
-            compacted_content if compacted_content is not None else visible_content,
+            (
+                citation_model_content
+                if citation_model_content is not None
+                else compacted_content
+                if compacted_content is not None
+                else visible_content
+            ),
             private_projection,
             tool_name=tool_name,
             trusted_private=(private_projection is not None or compacted_content is not None),
         )
-        if "_citation_content" not in event.data and compacted_content is None:
+        if (
+            "_citation_content" not in event.data
+            and "_citation_model_content" not in event.data
+            and compacted_content is None
+        ):
             return event
         return Event(
             type=event.type,
             data={
-                key: (compacted_content if key == "content" else value)
+                key: (
+                    compacted_content
+                    if key == "content" and compacted_content is not None
+                    else value
+                )
                 for key, value in event.data.items()
-                if key != "_citation_content"
+                if key not in {"_citation_content", "_citation_model_content"}
             },
             timestamp=event.timestamp,
         )
+
+    async def emit_private_task_coverage_event(self, event: Event) -> None:
+        """Ingest hidden Coverage tool events without creating transcript UI.
+
+        A genuine supplement may depend on a tool invoked by the verifier, so
+        its Evidence must enter the same turn-local Registry before assistant
+        text is published. The tool call/result itself is post-run protocol
+        telemetry and deliberately never reaches ``self._inner``.
+        """
+
+        if event.type == "tool_use":
+            tool_use_id = event.data.get("id")
+            tool_name = event.data.get("name")
+            if isinstance(tool_use_id, str) and isinstance(tool_name, str):
+                self._tool_names[tool_use_id] = tool_name
+            return
+        if event.type == "tool_result":
+            self._register_and_redact_tool_result(event)
 
     async def _publish_runtime_assistant(self, event: Event) -> bool:
         text = str(event.data.get("text") or event.data.get("content") or "")
@@ -797,6 +851,74 @@ class _MessageObserverSink:
 
     def mark_task_coverage_unavailable(self, *, reason: str) -> None:
         self.task_coverage = {"status": "unavailable", "reason": reason}
+
+    def called_tool(self, name: str) -> bool:
+        """Whether the primary run attempted a named tool call.
+
+        This intentionally keys off ``tool_use`` rather than ``tool_result``:
+        once GenUI compilation was attempted, neither its structural output nor
+        its failure message benefits from prose coverage/citation post-processing.
+        """
+
+        return any(
+            self._matches_tool_name(tool_name, name) for tool_name in self._tool_names.values()
+        )
+
+    def called_external_tool(self) -> bool:
+        """Whether the primary run attempted an external data/tool call."""
+
+        return self._external_tool_called
+
+    @staticmethod
+    def _tool_event_is_external(data: dict[str, Any], tool_name: str) -> bool:
+        """Classify a canonical ``tool_use`` event at the kernel boundary.
+
+        Runtimes that lose MCP server names (currently DeepAgents) stamp the
+        explicit boolean. Claude/DeepSeek names MCP tools
+        ``mcp__<server>__<tool>`` and Codex uses ``<server>/<tool>``; the
+        harness servers are local implementation details while every other
+        session-configured MCP is external. Runtime-native web search/fetch
+        also imports external information even though it is not MCP.
+        """
+
+        explicit = data.get("external")
+        if isinstance(explicit, bool):
+            return explicit
+
+        if tool_name.casefold() in {
+            "web_search",
+            "websearch",
+            "web_fetch",
+            "webfetch",
+        }:
+            return True
+
+        internal_servers = {"harness", "harness_toolkit"}
+        if tool_name.startswith("mcp__"):
+            parts = tool_name.split("__", 2)
+            return len(parts) >= 3 and parts[1] not in internal_servers
+        if "/" in tool_name:
+            server_name = tool_name.split("/", 1)[0]
+            return server_name not in internal_servers
+        return False
+
+    @staticmethod
+    def _matches_tool_name(tool_name: str, name: str) -> bool:
+        return (
+            tool_name == name or tool_name.endswith(f"__{name}") or tool_name.endswith(f"/{name}")
+        )
+
+    def skip_post_run_verification_for_generated_ui(self) -> None:
+        """The A2UI artifact is not a prose research answer.
+
+        A generate_ui attempt returns structural output or a structural
+        validation error. Neither benefits from prose citation projection or
+        claim audit, and the calling Agent's acknowledgement has no evidence
+        value to verify.
+        """
+
+        self._citation_enabled = False
+        self._citation_verification_enabled = False
 
     def mark_task_coverage_no_gap(self) -> None:
         """Record a structured private no-gap result without adding text."""
@@ -1163,8 +1285,20 @@ class SessionOrchestrator:
             if session_id not in self._active:
                 await self._evict_runtime(session_id)
 
-    async def prepare_runtime(self, user_id: str, session_id: str) -> None:
-        """Warm one session runtime without dispatching a model request."""
+    async def prepare_runtime(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        runtime_context: dict[str, str] | None = None,
+    ) -> None:
+        """Warm one session runtime without dispatching a model request.
+
+        ``runtime_context`` is the same opaque per-operation context a turn
+        carries. Warming builds a real runtime (codex opens its app-server
+        thread), so a stored credential that is a runtime-context marker must
+        be materialized here exactly as it is for a turn.
+        """
         if session_id in self._active:
             return
         session, agent = await self._load_session(user_id, session_id)
@@ -1176,6 +1310,7 @@ class SessionOrchestrator:
             _DiscardEventSink(),
             session.cwd,
             user_id=user_id,
+            runtime_context=runtime_context,
         )
         try:
             await runtime.prepare(session)
@@ -1185,6 +1320,47 @@ class SessionOrchestrator:
         # Codex thread/start allocates ``runtime_session_id`` during prepare;
         # persist it now so a later cache eviction resumes the same thread.
         await self._store.save_session(session)
+
+    async def fork_session(
+        self,
+        user_id: str,
+        session: Any,
+        *,
+        source_native_session_id: str,
+        anchor: str | None = None,
+        runtime_context: dict[str, str] | None = None,
+    ) -> str:
+        """Create *session*'s native thread by forking a source thread.
+
+        Drives ``RuntimePort.fork_session`` through the standard runtime
+        factory — the only sanctioned way to obtain a correctly-configured
+        provider client. *session* is the NEW session object and need not
+        be persisted yet: the fork route calls this BEFORE any kernel rows
+        exist, so a native-fork failure leaves nothing to roll back. On
+        success ``session.runtime_session_id`` carries the new native id
+        (also returned) and the runtime stays warm in the cache for the
+        first Send; persistence is the caller's commit point. On failure
+        the half-built runtime is evicted and the error propagates.
+        """
+        bootstrap_session_workspace(session.cwd, session.agent_config.name or None)
+        runtime = await self._ensure_runtime(
+            session.id,
+            session.agent_config,
+            session,
+            _DiscardEventSink(),
+            session.cwd,
+            user_id=user_id,
+            runtime_context=runtime_context,
+        )
+        try:
+            return await runtime.fork_session(
+                session,
+                source_native_session_id=source_native_session_id,
+                anchor=anchor,
+            )
+        except Exception:
+            await self._evict_runtime(session.id)
+            raise
 
     def set_semantic_verifier_factory(
         self,
@@ -1343,6 +1519,8 @@ class SessionOrchestrator:
         user_id: str,
         session_id: str,
         user_message: UserMessage,
+        *,
+        runtime_context: dict[str, str] | None = None,
     ) -> Message:
         """Execute one conversation turn.
 
@@ -1429,6 +1607,22 @@ class SessionOrchestrator:
         # count without changing the canonical assistant_message/thinking
         # record.
         coalesced: EventSink = DeltaCoalescingSink(persist_then_live)
+        # Langfuse tracing (all no-ops unless active). The attribution scope
+        # covers the WHOLE turn — every span created below (TurnTrace
+        # observations, deepagents' LangChain handler spans) inherits
+        # user/session/message. ``turn_trace`` is the event-driven flavor
+        # (claude_agent/codex; None otherwise): its tap slots UNDER the
+        # observer so spans are built from the same stream that persists —
+        # runtimes carry zero tracing code. Closed in the ``finally`` below.
+        trace_scope = ExitStack()
+        trace_scope.enter_context(
+            turn_trace_context(user_id=user_id, session_id=session_id, message_id=message.id)
+        )
+        turn_trace = start_turn_trace(
+            runtime_provider=session.runtime_provider, prompt=current_task_prompt
+        )
+        if turn_trace is not None:
+            coalesced = TurnTracingSink(coalesced, turn_trace)
         citation_enabled = _session_citation_enabled(session)
         citation_verification_enabled = _session_citation_verification_enabled(session)
         semantic_verifier: SemanticVerifierPort | None = None
@@ -1480,6 +1674,7 @@ class SessionOrchestrator:
                 observer,
                 session.cwd,
                 user_id=user_id,
+                runtime_context=runtime_context,
             )
         except EgressRegistrationError as exc:
             # The desktop and non-model APIs remain usable when the egress
@@ -1558,7 +1753,22 @@ class SessionOrchestrator:
                 )
             )
             await runtime.run(session, user_message)
-            if task_coverage_enabled and getattr(session.stop_reason, "type", None) == "end_turn":
+            skip_genui_post_run = observer.called_tool("generate_ui")
+            if skip_genui_post_run:
+                observer.skip_post_run_verification_for_generated_ui()
+                logger.info(
+                    "post-run coverage/citation/audit skipped after generate_ui "
+                    "attempt "
+                    "message=%s session=%s",
+                    message.id,
+                    session.id,
+                )
+            if (
+                task_coverage_enabled
+                and not skip_genui_post_run
+                and observer.called_external_tool()
+                and getattr(session.stop_reason, "type", None) == "end_turn"
+            ):
                 if not bool(getattr(runtime, "supports_native_continuation", False)):
                     observer.mark_task_coverage_unavailable(
                         reason="runtime-native-continuation-unsupported"
@@ -1584,6 +1794,28 @@ class SessionOrchestrator:
                             ),
                             no_op_tool=build_task_coverage_noop_tool(),
                         )
+                    except asyncio.CancelledError:
+                        # The primary answer is already complete; the
+                        # continuation is an optional enhancement. A
+                        # CancelledError here is either a genuine
+                        # cancellation of this task (host teardown — let it
+                        # propagate) or a stray one raised by the runtime's
+                        # own client rebuild/teardown. Only the former shows
+                        # up as a live cancel request on the current task;
+                        # anything else must not turn a finished turn into a
+                        # "run failed".
+                        session.status = primary_status
+                        session.stop_reason = primary_stop_reason
+                        current = asyncio.current_task()
+                        if current is not None and current.cancelling():
+                            raise
+                        logger.warning(
+                            "task_coverage continuation cancelled message=%s session=%s; "
+                            "preserving primary",
+                            message.id,
+                            session.id,
+                        )
+                        await observer.abort_task_coverage_continuation(reason="cancelled")
                     except Exception:  # noqa: BLE001 — optional enhancement is fail-open
                         logger.exception(
                             "task_coverage continuation failed message=%s session=%s; "
@@ -1609,6 +1841,21 @@ class SessionOrchestrator:
             await observer.ensure_partial_assistant_message()
             await observer.finalize_sidecars()
             await observer.release_session_idle()
+            # Native per-turn fork anchor (codex turn id / Claude transcript
+            # uuid / deepagents checkpoint id), captured by the runtime during
+            # ``run()``. Consumed AFTER the optional coverage continuation so
+            # the anchor reflects the LAST native turn this Message drove.
+            # ``getattr`` keeps runtimes (and test fakes) without the hook
+            # working unchanged. Persisted under
+            # ``metadata["runtime_native"]`` — the message-granularity fork
+            # seam (docs/design/session-fork.md).
+            consume_anchor = getattr(runtime, "consume_turn_anchor", None)
+            turn_has_fork_anchor = False
+            if callable(consume_anchor):
+                anchor = consume_anchor()
+                if anchor:
+                    message.metadata = {**message.metadata, "runtime_native": dict(anchor)}
+                    turn_has_fork_anchor = True
             # finalize must run BEFORE save_session — it writes session.todos
             # (and message.todos) from the observer's last todo_update payload;
             # saving first would persist a stale snapshot.
@@ -1638,11 +1885,32 @@ class SessionOrchestrator:
             await observer.emit(
                 Event(
                     type="session_update",
-                    data={"status": session.status, "message_id": message.id},
+                    data={
+                        "status": session.status,
+                        "message_id": message.id,
+                        # Whether this message carries a runtime-native fork
+                        # anchor — the wire signal "Fork from here" keys its
+                        # enabled state on (docs/design/session-fork.md §6.5).
+                        # Absent on events recorded before this field existed;
+                        # consumers treat absent as unknown (keep enabled,
+                        # server 409 is the backstop).
+                        "fork_anchor": turn_has_fork_anchor,
+                    },
                 )
             )
             return message
         finally:
+            if turn_trace is not None:
+                stop = session.stop_reason
+                category = getattr(stop, "category", None)
+                # End BEFORE the scope closes so the usage generation is
+                # still created inside the attribution context.
+                turn_trace.end(
+                    error=f"{category}: {getattr(stop, 'message', '') or ''}".rstrip(": ")
+                    if category
+                    else None
+                )
+            trace_scope.close()
             self._active.pop(session_id, None)
             self._active_message.pop(session_id, None)
             # Mark the runtime freshly-used at turn END too, not just at entry.
@@ -1767,6 +2035,7 @@ class SessionOrchestrator:
         workspace_root: str,
         *,
         user_id: str | None = None,
+        runtime_context: dict[str, str] | None = None,
     ) -> RuntimePort:
         from src.runtimes.factory import create_runtime
         from src.runtimes.network_egress import (
@@ -1790,11 +2059,14 @@ class SessionOrchestrator:
                     self._runtime_owners[session_id] = user_id
                 return cached
 
-            egress_descriptor = await prepare_runtime_egress(session_id, session)
+            from src.core.runtime_context import materialize_runtime_context
+
+            runtime_session = materialize_runtime_context(session, runtime_context)
+            egress_descriptor = await prepare_runtime_egress(session_id, runtime_session)
             try:
                 runtime = create_runtime(
                     agent,
-                    session,
+                    runtime_session,
                     sink,
                     workspace_root=workspace_root,
                     egress_descriptor=egress_descriptor,

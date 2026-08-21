@@ -401,7 +401,7 @@ export function BindChatDialog({
                               type="button"
                               disabled={saving !== null}
                               onClick={() => setDeleteTarget(chat)}
-                              className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-red-50 hover:text-red-600"
+                              className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-error-light hover:text-error-text"
                               aria-label={t(
                                 "project.deleteChat" as Parameters<typeof t>[0],
                               )}

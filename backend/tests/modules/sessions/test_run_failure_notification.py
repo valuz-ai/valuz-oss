@@ -81,6 +81,22 @@ def test_conversation_failure_ingests_run_failed(db_factory) -> None:
     assert n.action == "none"
 
 
+@pytest.mark.parametrize("category", ["interrupted", "user_interrupt"])
+def test_interruption_categories_do_not_notify(db_factory, category: str) -> None:
+    """An interrupted turn (user stop / host teardown / a cancelled task) is
+    resumable intent, not a failure — no ``run_failed`` badge or OS notification.
+    Regression: an escaped ``CancelledError`` used to fan out into one."""
+    session = _conversation_session()
+    asyncio.run(
+        _project_conversation_run_result(
+            session, OWNER, "chat-sess", _error_event("turn interrupted", category=category)
+        )
+    )
+    entries, unread = asyncio.run(notification_service.snapshot(OWNER))
+    assert entries == []
+    assert unread == 0
+
+
 def test_clean_turn_resolves_prior_failure(db_factory) -> None:
     session = _conversation_session()
 

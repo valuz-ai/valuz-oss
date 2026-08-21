@@ -16,10 +16,16 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from valuz_agent.infra.database import Base
+from valuz_agent.infra.execution_lease import ExecutionLeaseRow
 from valuz_agent.modules.agents.models import AgentRow, ProjectMemberRow
 from valuz_agent.modules.notifications.models import NotificationRow
 from valuz_agent.modules.projects.models import ProjectRow
-from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
+from valuz_agent.modules.tasks.models import (
+    TaskEventRow,
+    TaskMailboxRow,
+    TaskRow,
+    TaskSessionRow,
+)
 
 # Every task test that touches the DB wants the same three tables. Creating all
 # of them unconditionally is cheaper than each module deciding, and removes the
@@ -34,6 +40,9 @@ _TASK_TABLES = [
     TaskRow.__table__,
     TaskEventRow.__table__,
     TaskSessionRow.__table__,
+    # The actors' durable inbox. Every loop reads it at each idle tick, so it
+    # is not optional for any test that runs a loop.
+    TaskMailboxRow.__table__,
     ProjectMemberRow.__table__,
     # ``resolve_agent_display_names`` joins membership → library agent to stamp
     # ``agent_name`` into every event payload and plan snapshot.
@@ -45,6 +54,10 @@ _TASK_TABLES = [
     # Project deletion cascades into the task tables, so the delete path — and
     # the boot sweep that purges tasks whose project is gone — both read this.
     ProjectRow.__table__,
+    # Execution ownership: the actor loop acquires one before driving and the
+    # health watchdog reads it as its liveness oracle. Shared infra table, not
+    # a task table — the same primitive serves other subsystems.
+    ExecutionLeaseRow.__table__,
 ]
 
 
@@ -73,3 +86,61 @@ def db_factory(tmp_path, monkeypatch):
         async_sessionmaker(bind=async_engine, expire_on_commit=False),
     )
     return sessionmaker(bind=sync_engine, expire_on_commit=False)
+
+
+# ---------------------------------------------------------------------------
+# Delivery, for tests
+# ---------------------------------------------------------------------------
+
+
+async def deliver_async(
+    session_id, msg, *, task_id="t1", project_id="w1", user_id="local-test-owner"
+):
+    """Put a message where an actor will actually find it.
+
+    Tests used to call ``mailbox_registry.put``, which is gone along with the
+    registry: messages live in ``valuz_task_mailbox`` and waking is a separate,
+    payload-free ring. Writing to a process-local queue would now be simulating
+    a path production does not have.
+    """
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.tasks import mailbox_store
+
+    async with async_unit_of_work() as db:
+        await mailbox_store.enqueue(
+            db,
+            session_id=session_id,
+            task_id=task_id,
+            project_id=project_id,
+            user_id=user_id,
+            kind=msg.kind,
+            text=msg.text,
+            from_session=msg.from_session,
+            origin=msg.origin,
+            payload=dict(msg.payload or {}),
+        )
+    await mailbox_store.ring_for(session_id)
+
+
+def deliver(session_id, msg, **kw):
+    """``deliver_async`` for a test that is not already on an event loop."""
+    import asyncio
+
+    asyncio.run(deliver_async(session_id, msg, **kw))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_notifier():
+    """A ring remembered by one test must not wake the next one's wait.
+
+    The notifier is a module-level singleton and remembers rings that arrived
+    with nobody parked — deliberately, so a ring landing between a check and a
+    park is not lost. Across tests that is just leakage, and it showed up as an
+    order-dependent failure: a stale ring made a later wait return instantly,
+    the loop took an extra slice, and a backstop fired that the test was
+    asserting stayed out.
+    """
+    from valuz_agent.modules.tasks import notifier as _notifier_mod
+
+    _notifier_mod.bind_notifier(_notifier_mod.InProcessNotifier())
+    yield

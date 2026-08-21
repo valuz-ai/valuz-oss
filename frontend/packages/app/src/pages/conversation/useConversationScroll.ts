@@ -59,6 +59,10 @@ export function useConversationScroll({
     scrollToTurnTop: (index: number) => void;
   } | null>(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
+  // Index of the turn whose top has most recently passed the viewport
+  // top — i.e. the one the reader is on. Drives the message index rail's
+  // highlight; nothing else needs it, so it stays local to this cluster.
+  const [activeTurnIndex, setActiveTurnIndex] = useState(0);
 
   // Scroll to bottom
   const handleScrollToBottom = useCallback(() => {
@@ -75,6 +79,22 @@ export function useConversationScroll({
     },
     [],
   );
+
+  // Bring a turn's top (its user message) to the top of the viewport.
+  //
+  // Exposed for host surfaces that put the page into a mode whose controls
+  // live at the turn's top — share selection is the case that needed it: the
+  // checkbox sits beside the user message, so entering selection from a reply
+  // footer far below it ticked something the owner could not see. Deferred a
+  // frame because the caller is typically mid-state-change (the mode's own
+  // chrome grows the rows); ``scrollToTurnTop`` then corrects iteratively.
+  const scrollToTurnIndex = useCallback((index: number) => {
+    if (index < 0) return;
+    keepCurrentTurnAtTopRef.current = false;
+    requestAnimationFrame(() => {
+      turnListVirtualApiRef.current?.scrollToTurnTop(index);
+    });
+  }, []);
 
   // Show the scroll-to-bottom affordance whenever there's overflow not
   // currently in view — either because the user scrolled up (scroll
@@ -95,6 +115,21 @@ export function useConversationScroll({
         const next = distanceFromBottom > 120;
         return prev === next ? prev : next;
       });
+      // Which turn is at the viewport top. Rides this recompute rather
+      // than a listener of its own — it needs exactly the same triggers
+      // (scroll, resize, fold/unfold mutations, the 250ms fallback), and
+      // virtualization keeps the row count in the DOM to ~10, so the
+      // rect reads are cheap.
+      const containerTop = el.getBoundingClientRect().top;
+      let active = 0;
+      el.querySelectorAll<HTMLElement>("[data-index]").forEach((row) => {
+        const idx = Number(row.dataset.index);
+        if (Number.isNaN(idx)) return;
+        if (row.getBoundingClientRect().top - containerTop <= 24) {
+          active = Math.max(active, idx);
+        }
+      });
+      setActiveTurnIndex((prev) => (prev === active ? prev : active));
     };
     recompute();
     el.addEventListener("scroll", recompute, { passive: true });
@@ -520,8 +555,10 @@ export function useConversationScroll({
 
   return {
     showScrollBottom,
+    activeTurnIndex,
     containerHeight,
     handleScrollToBottom,
     handleTurnListVirtualApiReady,
+    scrollToTurnIndex,
   };
 }

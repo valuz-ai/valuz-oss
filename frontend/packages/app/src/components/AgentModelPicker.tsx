@@ -17,6 +17,7 @@ import {
   SelectLabel,
   SelectTrigger,
   SelectValue,
+  ModelSelectionHint,
 } from "@valuz/ui";
 import { useI18n } from "@valuz/ui";
 import { modelLabel } from "@valuz/shared";
@@ -161,7 +162,10 @@ export const AgentModelPicker = ({
               key={COMPOSITE(m.providerId, m.modelId)}
               value={COMPOSITE(m.providerId, m.modelId)}
             >
-              {modelLabel(m.modelId)}
+              <span className="min-w-0 flex-1 truncate">
+                {modelLabel(m.modelId)}
+              </span>
+              <ModelSelectionHint hint={m.selectionHint} />
             </SelectItem>
           ))}
         </SelectGroup>
@@ -200,6 +204,8 @@ export const AgentModelPicker = ({
       <SelectTrigger size="sm" className="h-8 w-[200px] text-xs">
         {selectedRow ? (
           <span className="truncate text-ink-heading">
+            {/* Collapsed trigger: plain name only — the selection hint
+                (e.g. a points multiplier) lives on the option rows. */}
             {modelLabel(selectedRow.modelId)}
           </span>
         ) : (

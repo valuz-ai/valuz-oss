@@ -38,6 +38,7 @@ from app.schemas import (  # noqa: E402
     EventPayload,
     EventWindowData,
     FinalizeSessionRequest,
+    ForkSessionRequest,
     ImportMessageRequest,
     MessageData,
     SessionData,
@@ -406,6 +407,20 @@ class HttpKernelClient:
         )
         return MessageData(**result["data"])
 
+    async def fork_session(
+        self,
+        user_id: str,
+        session_id: str,
+        req: ForkSessionRequest,
+    ) -> SessionData:
+        result = await self._request(
+            "POST",
+            f"{self._prefix}/v1/sessions/{session_id}/fork",
+            json_body=req.model_dump(mode="json"),
+            owner=user_id,
+        )
+        return SessionData(**result["data"])
+
     async def submit_action(
         self, user_id: str, session_id: str, req: SubmitActionRequest
     ) -> dict[str, Any]:
@@ -428,10 +443,16 @@ class HttpKernelClient:
         except KernelSessionNotFoundError:
             return
 
-    async def prepare_runtime(self, user_id: str, session_id: str) -> None:
+    async def prepare_runtime(
+        self,
+        user_id: str,
+        session_id: str,
+        runtime_context: dict[str, str] | None = None,
+    ) -> None:
         await self._request(
             "POST",
             f"{self._prefix}/v1/sessions/{session_id}/prepare",
+            json_body={"runtime_context": runtime_context},
             owner=user_id,
         )
 
@@ -442,6 +463,7 @@ class HttpKernelClient:
         text: str,
         attachments: list[dict[str, Any]] | None = None,
         additional_context: str = "",
+        runtime_context: dict[str, str] | None = None,
     ) -> MessageData:
         import websockets
 
@@ -464,13 +486,15 @@ class HttpKernelClient:
         url = f"{ws_base}{self._prefix}/v1/sessions/{session_id}/run"
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
         headers["X-Valuz-Owner-Id"] = user_id
-        payload = {
+        payload: dict[str, Any] = {
             "message": {
                 "text": text,
                 "attachments": attachments or [],
                 "additional_context": additional_context,
             }
         }
+        if runtime_context is not None:
+            payload["runtime_context"] = runtime_context
         try:
             # The run channel carries a whole agent turn, which can legitimately
             # go quiet for long stretches (a slow tool call, a model streaming

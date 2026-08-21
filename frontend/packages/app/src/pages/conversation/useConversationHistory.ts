@@ -2,6 +2,7 @@ import { useCallback, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { Location } from "react-router-dom";
 import {
+  ApiError,
   getEntityOrigin,
   mergeEventWindow,
   parseActionResolved,
@@ -58,6 +59,8 @@ export interface PendingApprovalEntry {
 type ConversationHistoryParams = {
   /** Route param (``/conversation/{id}``), defaulted to ``NEW_SESSION_ID``. */
   id: string;
+  /** Only embedded hosts opt into recovering a stale persisted id. */
+  onSessionUnavailable?: (sessionId: string) => void;
   location: Location;
   searchParams: URLSearchParams;
   panelSetCollapsed: (collapsed: boolean) => void;
@@ -112,6 +115,7 @@ type ConversationHistoryParams = {
  */
 export function useConversationHistory({
   id,
+  onSessionUnavailable,
   location,
   searchParams,
   panelSetCollapsed,
@@ -610,19 +614,38 @@ export function useConversationHistory({
           ) {
             await refreshEvents(sessionDetail.id);
           }
-        } catch {
+        } catch (cause) {
           if (!isCurrent()) return;
-          // 404 / network — render the page in "no session" state and
-          // surface an error banner. Don't fall back to the sentinel
-          // because that would silently move the user off the URL they
-          // typed / clicked.
           setSessionTriggerMode(null);
           setSessionAgentSlug(null);
-          setSelectedProjectId(null);
           setSessions([]);
           selectedSessionIdRef.current = null;
           setSelectedSessionId(null);
-          setError("Session not found.");
+          if (cause instanceof ApiError && cause.status === 404) {
+            if (onSessionUnavailable) {
+              // Embedded panels persist their session id outside the route.
+              // A confirmed 404 means the stored id is stale (for example
+              // after switching backend environments), so let the host clear
+              // it and re-bootstrap the ordinary draft state. Network errors
+              // deliberately do not take this path: a transient outage must
+              // never discard a resumable conversation.
+              setSelectedProjectId("chat-default");
+              await refreshEvents(null);
+              setDraftBootstrapSettled(true);
+              onSessionUnavailable(id);
+            } else {
+              // An explicit page URL must not silently become a new session.
+              setSelectedProjectId(null);
+              setError("Session not found.");
+            }
+          } else {
+            setSelectedProjectId(null);
+            setError(
+              cause instanceof Error
+                ? cause.message
+                : "Failed to load session.",
+            );
+          }
         }
       } catch (cause) {
         if (!isCurrent()) return;
@@ -635,7 +658,13 @@ export function useConversationHistory({
         }
       }
     },
-    [id, location.state, refreshEvents, searchParams],
+    [
+      id,
+      location.state,
+      onSessionUnavailable,
+      refreshEvents,
+      searchParams,
+    ],
   );
 
   return { refreshEvents, loadOlderTurns, refreshActiveSession, bootstrap };

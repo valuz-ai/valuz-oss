@@ -29,10 +29,14 @@ import {
   PopoverTrigger,
   SegmentedControl,
 } from "@valuz/ui";
-import { ResourceActionSlot } from "../components/ResourceActionSlot";
+import {
+  ResourceActionSlot,
+  ResourceTitleBadgeSlot,
+} from "../components/ResourceActionSlot";
 import {
   agentsApi,
   projectsApi,
+  useExecutionTargetsRevision,
   usePanelStore,
   useResourceCategories,
   useTranslation,
@@ -44,39 +48,68 @@ import type { ResourceCategory } from "@valuz/shared";
 import { useProjectOutlet } from "@valuz/app/layout";
 import { pickAgentIcon } from "../components/agent-icons";
 import { AgentDetailView } from "../components/AgentDetailView";
+import { RemoteAgentDetail } from "../components/RemoteAgentDetail";
 import { CreateAgentDialog } from "../components/CreateAgentDialog";
 import { ImportPackDialog } from "../components/ImportPackDialog";
 import { ExportPackDialog } from "../components/ExportPackDialog";
 import {
-  compareAgentsWithValurionFirst,
+  agentRowId,
+  agentTargetKind,
   isCloudOnlyAgent,
+  compareAgentsWithValurionFirst,
+  isRemoteAgentRow,
+  runsOnAnotherTarget,
   isSystemAgent,
 } from "./agent-list-state";
 
 /** Keep the always-present built-in agent separate from portable agents. */
-function buildAgentCategories(
+export function buildAgentCategories(
   t: ReturnType<typeof useTranslation>["t"],
 ): ResourceCategory<Agent>[] {
+  // Agents that live somewhere else get their own two groups rather than
+  // joining 内置 / 自定义 / 官方: every machine ships the same built-ins, so
+  // mixed in they read as duplicates of the local rows with nothing to tell
+  // them apart. The split is by HOW you got them — your own other desktop
+  // (远程) versus one agent a host opened to you (开放).
+  const isLocal = (a: Agent) => agentTargetKind(a) === "local";
   return [
     {
       id: "system",
       label: t("agent.groupSystem" as Parameters<typeof t>[0]),
       order: 0,
-      filter: isSystemAgent,
+      filter: (a: Agent) => isLocal(a) && isSystemAgent(a),
       sort: compareAgentsWithValurionFirst,
     },
     {
       id: "custom",
       label: t("agent.groupCustom" as Parameters<typeof t>[0]),
       order: 1,
-      filter: (a: Agent) => !isSystemAgent(a) && a.source !== "official",
+      filter: (a: Agent) =>
+        isLocal(a) && !isSystemAgent(a) && a.source !== "official",
       sort: compareAgentsWithValurionFirst,
     },
     {
       id: "official",
       label: t("agent.groupOfficial" as Parameters<typeof t>[0]),
       order: 2,
-      filter: (a: Agent) => !isSystemAgent(a) && a.source === "official",
+      filter: (a: Agent) =>
+        isLocal(a) && !isSystemAgent(a) && a.source === "official",
+      sort: compareAgentsWithValurionFirst,
+    },
+    {
+      id: "remote",
+      label: t("agent.remoteGroup"),
+      order: 3,
+      filter: (a: Agent) => agentTargetKind(a) === "remote",
+      sort: compareAgentsWithValurionFirst,
+    },
+    {
+      id: "shared",
+      label: t("agent.sharedGroup"),
+      order: 4,
+      // An edition that models "somebody opened this to me" more precisely
+      // replaces this category by id (useResourceCategories merges by id).
+      filter: (a: Agent) => agentTargetKind(a) === "shared",
       sort: compareAgentsWithValurionFirst,
     },
   ];
@@ -111,13 +144,20 @@ export const AgentsPage = () => {
   const navigate = useNavigate();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
-  const [projectMembers, setProjectMembers] = useState<ProjectAgentMember[]>([]);
+  const [projectMembers, setProjectMembers] = useState<ProjectAgentMember[]>(
+    [],
+  );
   const [loading, setLoading] = useState(true);
   const [activeSlug, setActiveSlug] = useState<string | null>(null);
+  // A row from another machine cannot be "the active slug": slugs resolve
+  // against THIS machine's library, so it would land on a local namesake or on
+  // nothing — which is why clicking one used to bounce back to the default
+  // agent a moment later. Hold the row itself instead.
+  const [activeRemote, setActiveRemote] = useState<Agent | null>(null);
   const [activeProjectMemberKey, setActiveProjectMemberKey] = useState<
     string | null
   >(null);
-  const [listView, setListView] = useState<AgentListView>("project");
+  const [listView, setListView] = useState<AgentListView>("all");
   const [collapsedProjectGroups, setCollapsedProjectGroups] = useState<
     Set<string>
   >(new Set());
@@ -166,6 +206,8 @@ export const AgentsPage = () => {
 
   /* -- Data loading -- */
 
+  const targetsRevision = useExecutionTargetsRevision();
+
   const mountedRef = useRef(true);
   const loadData = useCallback(async () => {
     try {
@@ -173,8 +215,18 @@ export const AgentsPage = () => {
         agentsApi.listAgents(),
         projectsApi.list(),
       ]);
-      const projectRows = projectRes.projects.filter((w) => w.kind === "project");
-      const agentsBySlug = new Map(agentRes.agents.map((a) => [a.slug, a]));
+      const projectRows = projectRes.projects.filter(
+        (w) => w.kind === "project",
+      );
+      // Project members are deployments on THIS machine, so they resolve
+      // against this machine's library. Indexing every row by slug let a
+      // remote namesake (the fan-out appends those after the local ones)
+      // overwrite the local agent and take over its row.
+      const agentsBySlug = new Map(
+        agentRes.agents
+          .filter((a) => !runsOnAnotherTarget(a))
+          .map((a) => [a.slug, a]),
+      );
       const memberResults = await Promise.all(
         projectRows.map(async (project) => {
           try {
@@ -219,7 +271,10 @@ export const AgentsPage = () => {
     return () => {
       mountedRef.current = false;
     };
-  }, [loadData]);
+    // Machines register asynchronously, so refetch when the set changes —
+    // otherwise a desktop that comes online after this page mounted never
+    // contributes its library (same rule as the sidebar rails).
+  }, [loadData, targetsRevision]);
 
   /* -- Layout: split panel -- */
 
@@ -245,8 +300,10 @@ export const AgentsPage = () => {
   /* -- Derived state -- */
 
   const visibleAgents = agents;
+  // Bulk actions and local edit paths only ever apply to agents that live on
+  // THIS machine — never to catalog entries or to another target's library.
   const localAgents = useMemo(
-    () => agents.filter((agent) => !isCloudOnlyAgent(agent)),
+    () => agents.filter((agent) => !isRemoteAgentRow(agent)),
     [agents],
   );
 
@@ -280,20 +337,25 @@ export const AgentsPage = () => {
       .filter(({ members }) => members.length > 0);
   }, [projectMembers, projects]);
 
+
   const unassignedAgents = useMemo(() => {
     const deployed = new Set(projectMembers.map((member) => member.sourceSlug));
     return agents
       .filter((agent) => !deployed.has(agent.slug))
+      // Agents that live on another machine are not part of THIS machine's
+      // project layout at all — they are grouped on the 全部 Agent tab
+      // (buildAgentCategories: 远程 / 开放).
+      .filter((agent) => !runsOnAnotherTarget(agent))
       .sort(compareAgentsWithValurionFirst);
   }, [agents, projectMembers]);
+
 
   // Keep the detail panel stable across tab switches: honour the explicit
   // selection if it still exists, otherwise fall back to the first agent in
   // the active tab (then any agent at all).
-  const currentAgent =
-    localAgents.find((a) => a.slug === activeSlug) ??
-    localAgents[0] ??
-    null;
+  const currentAgent = activeRemote
+    ? activeRemote
+    : (localAgents.find((a) => a.slug === activeSlug) ?? localAgents[0] ?? null);
   const effectiveActiveSlug = currentAgent?.slug ?? null;
   const effectiveProjectMemberKey =
     activeProjectMemberKey ??
@@ -323,13 +385,20 @@ export const AgentsPage = () => {
     }
     setRightPanel(
       <div className="h-full overflow-y-auto">
-        {/* key by slug: remount on agent change so per-agent dialog/draft
+        {/* key by row: remount on agent change so per-agent dialog/draft
             state (delete confirm, edits, deploy) never leaks across agents. */}
-        <AgentDetailView
-          key={currentAgent.slug}
-          slug={currentAgent.slug}
-          onChanged={loadData}
-        />
+        {runsOnAnotherTarget(currentAgent) ? (
+          <RemoteAgentDetail
+            key={agentRowId(currentAgent)}
+            agent={currentAgent}
+          />
+        ) : (
+          <AgentDetailView
+            key={currentAgent.slug}
+            slug={currentAgent.slug}
+            onChanged={loadData}
+          />
+        )}
       </div>,
     );
     return () => setRightPanel(null);
@@ -351,10 +420,14 @@ export const AgentsPage = () => {
       opts?: { deploymentCount?: number },
     ) => {
       const AgentIcon = agentIcons.get(agent.slug) ?? Bot;
-      const cloudOnly = isCloudOnlyAgent(agent);
+      const cloudOnly = isRemoteAgentRow(agent);
+      const elsewhere = runsOnAnotherTarget(agent);
       const isChecked = checked.has(agent.slug);
-      const deploymentCount =
-        opts?.deploymentCount ?? deploymentCountBySlug.get(agent.slug) ?? 0;
+      // Deployments are indexed by slug on THIS machine; another target's
+      // agent would borrow a local namesake's count.
+      const deploymentCount = elsewhere
+        ? 0
+        : (opts?.deploymentCount ?? deploymentCountBySlug.get(agent.slug) ?? 0);
       return (
         <div
           className={`group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors select-none ${
@@ -383,12 +456,16 @@ export const AgentsPage = () => {
                 {agent.name}
               </div>
               {isSystemAgent(agent) && (
-                <span className="inline-flex h-5 shrink-0 items-center rounded-[4px] bg-brand-light px-1.5 py-0 text-[10px] leading-none text-brand">
+                <span className="inline-flex h-5 shrink-0 items-center rounded-sm bg-brand-light px-1.5 py-0 text-micro leading-none text-brand">
                   {t("agent.systemBadge" as Parameters<typeof t>[0])}
                 </span>
               )}
+              <ResourceTitleBadgeSlot
+                resourceType="agent"
+                resource={agent as unknown as Record<string, unknown>}
+              />
               {deploymentCount > 0 && (
-                <span className="inline-flex h-5 shrink-0 items-center rounded-[4px] bg-surface-soft px-1.5 py-0 text-[10px] leading-none text-ink-meta">
+                <span className="inline-flex h-5 shrink-0 items-center rounded-sm bg-surface-soft px-1.5 py-0 text-micro leading-none text-ink-meta">
                   {t("agent.deployedInProjects" as Parameters<typeof t>[0], {
                     count: deploymentCount,
                   })}
@@ -441,14 +518,7 @@ export const AgentsPage = () => {
         </div>
       );
     },
-    [
-      agentIcons,
-      checked,
-      deploymentCountBySlug,
-      openCopy,
-      selecting,
-      t,
-    ],
+    [agentIcons, checked, deploymentCountBySlug, openCopy, selecting, t],
   );
 
   /* -- Render -- */
@@ -456,11 +526,13 @@ export const AgentsPage = () => {
   return (
     <div className="relative flex h-full flex-col">
       {/* Page header -- title left, count badge + add button right. */}
-      <header className="flex h-12 shrink-0 items-center gap-2 px-5">
-        <span className="shrink-0 whitespace-nowrap text-base font-semibold text-ink-heading">
-          {t("agent.title")}
-        </span>
-        <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
+      <header className="flex shrink-0 items-center justify-between gap-4 h-15 px-5">
+        <div className="flex min-w-0 flex-col justify-center">
+          <span className="text-base font-semibold leading-5 text-ink-heading">
+            {t("agent.title")}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-brand transition-colors hover:bg-brand-light/60 hover:text-brand"
@@ -511,7 +583,9 @@ export const AgentsPage = () => {
                 <Plus className="h-4 w-4" />
                 {t("agent.createAgent" as Parameters<typeof t>[0])}
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => importInputRef.current?.click()}>
+              <DropdownMenuItem
+                onSelect={() => importInputRef.current?.click()}
+              >
                 <Download className="h-4 w-4" />
                 {t("agent.pack.import" as Parameters<typeof t>[0])}
               </DropdownMenuItem>
@@ -534,20 +608,20 @@ export const AgentsPage = () => {
               }}
               options={[
                 {
-                  value: "project",
-                  label: t(
-                    "agent.viewByProject" as Parameters<typeof t>[0],
-                    "按项目",
-                  ),
-                  icon: Folder,
-                },
-                {
                   value: "all",
                   label: t(
                     "agent.viewAll" as Parameters<typeof t>[0],
                     "全部 Agent",
                   ),
                   icon: Bot,
+                },
+                {
+                  value: "project",
+                  label: t(
+                    "agent.viewByProject" as Parameters<typeof t>[0],
+                    "按项目",
+                  ),
+                  icon: Folder,
                 },
               ]}
               className="mb-4 h-9"
@@ -650,9 +724,11 @@ export const AgentsPage = () => {
                         <div className="flex flex-col gap-3">
                           {unassignedAgents.map((agent) => (
                             <div
-                              key={agent.slug}
+                              key={`${agent.exec_target_id ?? ""}:${agent.slug}`}
                               onClick={() => {
-                                if (isCloudOnlyAgent(agent)) return;
+                                // Same slug can exist on several machines; a
+                                // detail view here would open the local one.
+                                if (isRemoteAgentRow(agent)) return;
                                 if (selecting) {
                                   if (!isSystemAgent(agent)) {
                                     toggleChecked(agent.slug);
@@ -663,7 +739,7 @@ export const AgentsPage = () => {
                                 setActiveProjectMemberKey(null);
                               }}
                               className={
-                                isCloudOnlyAgent(agent)
+                                isRemoteAgentRow(agent)
                                   ? "cursor-default"
                                   : "cursor-pointer"
                               }
@@ -686,14 +762,30 @@ export const AgentsPage = () => {
               <CategorizedList
                 items={visibleAgents}
                 categories={categories}
-                selectedId={effectiveActiveSlug}
-                getId={(a: Agent) => a.slug}
+                // Rows, not slugs: the bucketing dedupes on this id, and a
+                // remote agent shares its slug with the local namesake.
+                getId={agentRowId}
+                selectedId={
+                  activeRemote
+                    ? agentRowId(activeRemote)
+                    : effectiveActiveSlug
+                      ? `local:${effectiveActiveSlug}`
+                      : null
+                }
                 onSelect={(a: Agent) => {
+                  if (runsOnAnotherTarget(a)) {
+                    // Selectable, but read-only: its instructions and
+                    // resources live on that machine.
+                    setActiveRemote(a);
+                    setActiveProjectMemberKey(null);
+                    return;
+                  }
                   if (isCloudOnlyAgent(a)) return;
                   if (selecting) {
                     if (!isSystemAgent(a)) toggleChecked(a.slug);
                     return;
                   }
+                  setActiveRemote(null);
                   setActiveSlug(a.slug);
                   setActiveProjectMemberKey(null);
                 }}
@@ -726,9 +818,7 @@ export const AgentsPage = () => {
             {visibleAgents.length <= AGENT_MARKETPLACE_GUIDE_MAX_COUNT && (
               <button
                 type="button"
-                onClick={() =>
-                  navigate("/marketplace?tab=agents&from=agents")
-                }
+                onClick={() => navigate("/marketplace?tab=agents&from=agents")}
                 className="mt-5 flex w-full items-center gap-2 border-t border-surface-border px-1 pt-4 text-left text-xs font-medium text-ink-body transition-colors hover:text-brand"
               >
                 <Store className="h-4 w-4 shrink-0 text-brand" />
@@ -791,7 +881,9 @@ export const AgentsPage = () => {
               type="button"
               onClick={toggleSelecting}
               className="flex h-6 w-6 items-center justify-center rounded-md text-ink-meta transition-colors hover:bg-surface-soft hover:text-ink-body"
-              aria-label={t("agent.pack.cancelSelect" as Parameters<typeof t>[0])}
+              aria-label={t(
+                "agent.pack.cancelSelect" as Parameters<typeof t>[0],
+              )}
             >
               <X className="h-3.5 w-3.5" />
             </button>

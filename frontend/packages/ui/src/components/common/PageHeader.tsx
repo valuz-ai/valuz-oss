@@ -17,17 +17,16 @@ export const PageHeader = ({
 }: PageHeaderProps) => (
   <div
     data-slot="page-header"
-    className={cn(
-      "flex w-full items-center justify-between gap-4",
-      className,
-    )}
+    className={cn("flex w-full items-center justify-between gap-4", className)}
   >
-    <div className="flex min-w-0 flex-col justify-center gap-1">
-      <span className="text-base font-semibold text-ink-heading">
+    <div className="flex min-w-0 flex-col justify-center">
+      <span className="text-base font-semibold leading-5 text-ink-heading">
         {title}
       </span>
       {description && (
-        <span className="truncate text-xs text-ink-body">{description}</span>
+        <span className="truncate text-xs leading-4 text-ink-body">
+          {description}
+        </span>
       )}
     </div>
     {action && <div className="shrink-0">{action}</div>}

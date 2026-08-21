@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Link2, Plus, Search, Store, Trash2 } from "lucide-react";
 import {
@@ -42,6 +42,7 @@ import {
 import type { ConnectorAddMode } from "@valuz/app/components";
 import { reauthorizePayload, shouldReauthorize } from "./connector-reconnect";
 import { isCloudOnlyResource } from "./agent-list-state";
+import { usePluginMemberships } from "../components/plugins/use-plugin-memberships";
 
 /* ── Status labels ──────────────────────────────────────────────── */
 
@@ -162,6 +163,9 @@ export const ConnectorsPage = () => {
     setMainClassName,
   } = useProjectOutlet();
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
+  const [searchParams] = useSearchParams();
+  // ``?connector=<slug>`` deep link (e.g. from a plugin's member list).
+  const connectorParam = searchParams.get("connector");
 
   const [connectors, setConnectors] = useState<ConnectorItem[]>([]);
   const [catalog, setCatalog] = useState<CatalogFlat[]>([]);
@@ -325,15 +329,26 @@ export const ConnectorsPage = () => {
     return unifiedList.find((entry) => !isCloudOnlyResource(entry)) ?? null;
   }, [unifiedList, categories]);
 
+  const deepLinkKey = useMemo(() => {
+    if (!connectorParam) return null;
+    const match = connectors.find((c) => c.slug === connectorParam);
+    return match ? `installed:${match.id}` : null;
+  }, [connectorParam, connectors]);
+
   const effectiveKey =
     activeKey &&
     unifiedList.some(
       (e) => entryKey(e) === activeKey && !isCloudOnlyResource(e),
     )
       ? activeKey
-      : firstEntry
-        ? entryKey(firstEntry)
-        : null;
+      : (deepLinkKey ?? (firstEntry ? entryKey(firstEntry) : null));
+
+  // Plugin ownership badges (D6): one batched lookup per list load.
+  const connectorSlugs = useMemo(
+    () => connectors.map((c) => c.slug),
+    [connectors],
+  );
+  const pluginBadgeFor = usePluginMemberships("connector", connectorSlugs);
 
   const selectedEntry = useMemo(
     () => unifiedList.find((e) => entryKey(e) === effectiveKey) ?? null,
@@ -593,15 +608,19 @@ export const ConnectorsPage = () => {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-2 px-5">
-        <span className="shrink-0 whitespace-nowrap text-base font-semibold text-ink-heading">
-          {t("connector.title")}
-        </span>
-        <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
+      <header className="flex shrink-0 items-center justify-between gap-4 h-15 px-5">
+        <div className="flex min-w-0 flex-col justify-center">
+          <span className="text-base font-semibold leading-5 text-ink-heading">
+            {t("connector.title")}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-brand transition-colors hover:bg-brand-light/60 hover:text-brand"
-            onClick={() => navigate("/marketplace?tab=connectors&from=connectors")}
+            onClick={() =>
+              navigate("/marketplace?tab=connectors&from=connectors")
+            }
           >
             <Store className="h-3.5 w-3.5" />
             {t("marketplace.title" as Parameters<typeof t>[0])}
@@ -678,6 +697,7 @@ export const ConnectorsPage = () => {
                     <ConnectorListItem
                       name={c.display_name}
                       iconUrl={entry.iconUrl}
+                      pluginBadge={pluginBadgeFor(c.slug)}
                       status={c.status}
                       statusLabel={
                         STATUS_LABEL_KEY[c.status]

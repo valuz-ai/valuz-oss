@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -210,6 +211,12 @@ def test_codex_uses_local_ingress_without_exposing_real_upstream() -> None:
     )
     assert f'model_providers.harness.base_url="{local}"' in overrides
     assert "shell_environment_policy.ignore_default_excludes=false" in overrides
+    assert 'shell_environment_policy.inherit="core"' in overrides
+    assert "allow_login_shell=false" in overrides
+    assert (
+        'shell_environment_policy.filters.HARNESS_CODEX_PROVIDER_API_KEY="exclude"'
+        in overrides
+    )
     assert 'mcp_servers.env_probe.env_vars=["VALUZ_USER_PROXY"]' in overrides
     assert not any('HARNESS_CODEX_PROVIDER_API_KEY"]' in value for value in overrides)
     assert not any("gateway.example" in value for value in overrides)
@@ -246,6 +253,7 @@ def test_codex_subscription_uses_native_auth_through_local_ingress() -> None:
     assert "model_providers.harness.supports_websockets=false" in overrides
     assert not any("model_providers.harness.env_key" in value for value in overrides)
     assert "shell_environment_policy.ignore_default_excludes=false" not in overrides
+    assert "allow_login_shell=false" not in overrides
     # No Valuz credential is introduced on the subscription path, so an
     # identically named user variable remains governed by Codex's own policy.
     assert 'mcp_servers.env_probe.env_vars=["HARNESS_CODEX_PROVIDER_API_KEY"]' in overrides
@@ -282,14 +290,20 @@ def test_bundled_codex_accepts_subscription_ingress_config() -> None:
         client.initialize()
 
 
-def test_bundled_codex_shell_policy_scrubs_model_key_but_preserves_other_env() -> None:
+def test_bundled_codex_core_shell_policy_scrubs_secrets_but_preserves_core_env() -> None:
     codex_bin = _resolve_codex_bin()
     if codex_bin is None:
         pytest.skip("bundled codex binary unavailable")
     config = CodexConfig(
         codex_bin=codex_bin,
-        config_overrides=("shell_environment_policy.ignore_default_excludes=false",),
+        config_overrides=(
+            "shell_environment_policy.ignore_default_excludes=false",
+            'shell_environment_policy.inherit="core"',
+            "allow_login_shell=false",
+            'shell_environment_policy.filters.HARNESS_CODEX_PROVIDER_API_KEY="exclude"',
+        ),
         env={
+            **os.environ,
             "HARNESS_CODEX_PROVIDER_API_KEY": "model-secret",
             "VALUZ_USER_PROXY": "preserved",
         },
@@ -305,7 +319,9 @@ def test_bundled_codex_shell_policy_scrubs_model_key_but_preserves_other_env() -
                     (
                         "import os; print("
                         "os.environ.get('HARNESS_CODEX_PROVIDER_API_KEY', 'unset')"
-                        "+ '|' + os.environ.get('VALUZ_USER_PROXY', 'unset'))"
+                        "+ '|' + os.environ.get('VALUZ_USER_PROXY', 'unset')"
+                        "+ '|' + ('set' if os.environ.get('HOME') else 'unset')"
+                        "+ '|' + ('set' if os.environ.get('PATH') else 'unset'))"
                     ),
                 ],
                 "timeoutMs": 5_000,
@@ -313,7 +329,7 @@ def test_bundled_codex_shell_policy_scrubs_model_key_but_preserves_other_env() -
         )
 
     assert isinstance(result, dict)
-    assert result["stdout"].strip() == "unset|preserved"
+    assert result["stdout"].strip() == "unset|unset|set|set"
 
 
 def test_bundled_codex_mcp_process_does_not_inherit_model_key(tmp_path: Path) -> None:

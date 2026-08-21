@@ -335,7 +335,7 @@ export function MarketplaceImportDialog({
             <div className="min-w-0 flex-1">
               <div className="mb-1.5 flex flex-wrap gap-1.5">
                 {item.type === "skill" ? null : (
-                  <span className="rounded border border-surface-border bg-surface-soft px-1.5 py-px font-mono text-[10px] text-ink-meta">
+                  <span className="rounded border border-surface-border bg-surface-soft px-1.5 py-px font-mono text-micro text-ink-meta">
                     {typeLabel}
                   </span>
                 )}
@@ -470,10 +470,10 @@ function MetaRow({ meta }: { meta: { k: string; v: string }[] }) {
     <div className="mb-4 flex flex-wrap gap-x-6 gap-y-2">
       {meta.map((m) => (
         <div key={m.k}>
-          <div className="mb-0.5 font-mono text-[10px] uppercase tracking-wider text-ink-meta">
+          <div className="mb-0.5 font-mono text-micro uppercase tracking-wider text-ink-meta">
             {m.k}
           </div>
-          <div className="text-[13px] text-ink-heading">{m.v}</div>
+          <div className="text-sm text-ink-heading">{m.v}</div>
         </div>
       ))}
     </div>
@@ -521,11 +521,11 @@ function InstallProgressCard({
             <div className="text-[12.5px] font-semibold text-ink-heading">
               {tr("marketplace.installProgressTitle")}
             </div>
-            <div className="font-mono text-[11px] tabular-nums text-brand">
+            <div className="font-mono text-2xs tabular-nums text-brand">
               {Math.round(progress)}%
             </div>
           </div>
-          <div className="mt-1 text-[12px] leading-relaxed text-ink-body">{hint}</div>
+          <div className="mt-1 text-xs leading-relaxed text-ink-body">{hint}</div>
         </div>
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-surface-border/70">
@@ -583,7 +583,7 @@ function SkillOverviewCard({ view, tr }: { view: MarketplaceItemDetail; tr: Tr }
         {tr("marketplace.modalSkillOverview")}
       </SectionTitle>
       {needsApiKey ? (
-        <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-relaxed text-amber-900">
+        <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
           <KeyRound className="mt-0.5 h-3.5 w-3.5 flex-none" />
           <div>
             <span className="font-medium">{tr("marketplace.badgeRequiresApiKey")}</span>
@@ -591,7 +591,7 @@ function SkillOverviewCard({ view, tr }: { view: MarketplaceItemDetail; tr: Tr }
           </div>
         </div>
       ) : null}
-      <div className="text-[13px] leading-relaxed text-ink-body">
+      <div className="text-sm leading-relaxed text-ink-body">
         {view.description || tr("marketplace.modalSkillOverviewNone")}
       </div>
       {tags.length ? (
@@ -599,7 +599,7 @@ function SkillOverviewCard({ view, tr }: { view: MarketplaceItemDetail; tr: Tr }
           {tags.slice(0, 8).map((tag) => (
             <span
               key={tag}
-              className="rounded-md border border-surface-border bg-surface-soft px-2 py-1 text-[11px] text-ink-meta"
+              className="rounded-md border border-surface-border bg-surface-soft px-2 py-1 text-2xs text-ink-meta"
             >
               {tag}
             </span>
@@ -657,7 +657,7 @@ function FileStructureCard({
           <Folder className="h-3.5 w-3.5 text-ink-meta" />
           {tr("marketplace.modalFilesPreview")}
         </SectionTitle>
-        <span className="text-[11px] tabular-nums text-ink-muted">
+        <span className="text-2xs tabular-nums text-ink-muted">
           {tr("marketplace.modalFilesCount", { count: total })}
         </span>
       </div>
@@ -678,17 +678,17 @@ function FileStructureCard({
                   <span className="min-w-0 truncate font-mono text-xs text-ink-heading">
                     {row.label}
                   </span>
-                  <span className="text-[11px] tabular-nums text-ink-muted">
+                  <span className="text-2xs tabular-nums text-ink-muted">
                     {tr("marketplace.modalFilesCount", { count: row.count })}
                   </span>
                   {row.size != null ? (
-                    <span className="text-[11px] tabular-nums text-ink-muted">
+                    <span className="text-2xs tabular-nums text-ink-muted">
                       {formatSize(row.size)}
                     </span>
                   ) : null}
                 </div>
                 {row.examples.length ? (
-                  <div className="mt-0.5 truncate font-mono text-[11px] text-ink-muted">
+                  <div className="mt-0.5 truncate font-mono text-2xs text-ink-muted">
                     {row.examples.join(" · ")}
                   </div>
                 ) : null}
@@ -723,7 +723,7 @@ function EvaluationReportCard({ view, tr }: { view: MarketplaceItemDetail; tr: T
             <span className="ml-1 text-xs font-normal text-ink-meta">/ 5</span>
           </div>
           {report.rating ? (
-            <div className="mt-1 text-[11px] font-medium text-brand">{report.rating}</div>
+            <div className="mt-1 text-2xs font-medium text-brand">{report.rating}</div>
           ) : null}
         </div>
       </div>
@@ -747,7 +747,7 @@ function EvaluationReportCard({ view, tr }: { view: MarketplaceItemDetail; tr: T
                     {dimension.label}
                   </span>
                   {dimension.score != null ? (
-                    <span className="text-[11px] tabular-nums text-ink-meta">
+                    <span className="text-2xs tabular-nums text-ink-meta">
                       {dimension.score.toFixed(1)}
                     </span>
                   ) : null}
@@ -885,7 +885,7 @@ function AgentBody({
               >
                 <Link2 className="h-3.5 w-3.5 flex-none text-ink-meta" />
                 <span className="flex-1 text-[12.5px] text-ink-heading">{c.name}</span>
-                <span className="rounded bg-surface-soft px-1.5 py-px text-[10px] font-medium text-ink-meta">
+                <span className="rounded bg-surface-soft px-1.5 py-px text-micro font-medium text-ink-meta">
                   {tr(connectorTagKey[c.requirement])}
                 </span>
               </div>
@@ -912,7 +912,7 @@ function TeamBody({ view, tr }: { view: MarketplaceItemDetail; tr: Tr }) {
           <div className="flex flex-col gap-2">
             {view.workflow.map((step, index) => (
               <div key={step} className="flex gap-2.5">
-                <span className="flex h-5 w-5 flex-none items-center justify-center rounded-full bg-brand-light text-[11px] font-semibold text-brand-700">
+                <span className="flex h-5 w-5 flex-none items-center justify-center rounded-full bg-brand-light text-2xs font-semibold text-brand-700">
                   {index + 1}
                 </span>
                 <span className="text-[12.5px] leading-relaxed text-ink-body">{step}</span>
@@ -941,9 +941,9 @@ function TeamBody({ view, tr }: { view: MarketplaceItemDetail; tr: Tr }) {
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
-                  <span className="text-[13px] font-semibold text-ink-heading">{m.name}</span>
+                  <span className="text-sm font-semibold text-ink-heading">{m.name}</span>
                   <span
-                    className="rounded px-1.5 py-px text-[10px] font-medium"
+                    className="rounded px-1.5 py-px text-micro font-medium"
                     style={
                       m.lead
                         ? { background: "var(--brand-light)", color: "var(--brand-700)" }
@@ -956,7 +956,7 @@ function TeamBody({ view, tr }: { view: MarketplaceItemDetail; tr: Tr }) {
                 <div className="mt-0.5 truncate text-[11.5px] text-ink-body">{m.role}</div>
               </div>
               {m.skill_count != null ? (
-                <span className="text-[11px] tabular-nums text-ink-muted">
+                <span className="text-2xs tabular-nums text-ink-muted">
                   {tr("marketplace.memberSkills", { count: m.skill_count })}
                 </span>
               ) : null}
@@ -1028,7 +1028,7 @@ function TeamActivationBody({
                 : "border-surface-border bg-surface text-ink-body hover:border-brand/40"
             }`}
           >
-            <div className="text-[13px] font-semibold">
+            <div className="text-sm font-semibold">
               {tr("marketplace.teamLaunchNewProject")}
             </div>
             <div className="mt-1 text-[11.5px] text-ink-meta">
@@ -1048,7 +1048,7 @@ function TeamActivationBody({
                 : "border-surface-border bg-surface text-ink-body hover:border-brand/40"
             }`}
           >
-            <div className="text-[13px] font-semibold">
+            <div className="text-sm font-semibold">
               {tr("marketplace.teamLaunchExistingProject")}
             </div>
             <div className="mt-1 text-[11.5px] text-ink-meta">
@@ -1122,7 +1122,7 @@ function TeamActivationBody({
                   {member.name}
                 </span>
                 {member.lead ? (
-                  <span className="rounded bg-brand-light px-1.5 py-px text-[10px] font-medium text-brand-700">
+                  <span className="rounded bg-brand-light px-1.5 py-px text-micro font-medium text-brand-700">
                     {tr("marketplace.roleLead")}
                   </span>
                 ) : null}

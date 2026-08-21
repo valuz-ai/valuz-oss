@@ -197,6 +197,19 @@ dev = [
 postgres = [
     "asyncpg>=0.29",
 ]
+# Langfuse LLM observability (self-hosted or cloud). Opt-in: the default
+# local-first deployment never traces, so the desktop bundle stays lean.
+# Activation ALSO requires the LANGFUSE_BASE_URL/PUBLIC_KEY/SECRET_KEY env —
+# with the extra installed but no env, ``src.core.tracing`` stays a no-op.
+# langfuse>=4.14 — v4 line (``propagate_attributes``; v3's ``update_trace``
+# APIs are gone). ONLY langfuse: claude_agent/codex turns are traced from
+# the kernel's own cross-runtime event stream (``TurnTrace`` — no SDK
+# instrumentation package; openinference's claude instrumentor only spans
+# ``receive_response()``, which our runtime never calls), and deepagents
+# uses langfuse's own LangChain callback handler.
+tracing = [
+    "langfuse>=4.14",
+]
 
 [tool.uv]
 # ``openai-codex-cli-bin`` — the version-pinned codex binary that

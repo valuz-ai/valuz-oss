@@ -7,15 +7,338 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-08-21
+
+### Added
+
+- **The agent library is a union across execution targets** — on editions that
+  reach more than one machine, the library lists every reachable machine's
+  agents, grouped by where they came from, in the ALL tab too. A row keeps its
+  own identity once two machines are listed (a slug is not a row id), an agent
+  from elsewhere is selectable and stays selected, and a target that cannot be
+  picked as a destination is still routable for the rows it owns
+  (#957 @St0neWan9, #959 @St0neWan9, #960 @St0neWan9, #961 @St0neWan9,
+  #963 @St0neWan9, #964 @St0neWan9, #965 @St0neWan9, #967 @St0neWan9).
+- **An edition can contribute projects no execution target lists** — a narrow
+  grant opens exactly one project on someone else's machine, and the list
+  fan-out cannot ask that host for its projects; the project the agent works in
+  now appears anyway (#968 @St0neWan9).
+- **Agent rows say where they came from** — the composer's agent lists carry the
+  row's own tag, in the library's palette, so an agent from elsewhere states
+  what it is rather than where it sits (#970 @St0neWan9, #973 @St0neWan9,
+  #974 @St0neWan9, #975 @St0neWan9).
+- **A read-only detail page for an agent someone shared with you** — it reads
+  like a local agent's header (names, not ids), a rule separates the header from
+  the activity list, and an overlay can inject sections beneath it
+  (#976 @St0neWan9, #977 @St0neWan9, #978 @St0neWan9, #979 @St0neWan9,
+  #980 @St0neWan9).
+- **Remote-desktop execution targets** — a distinct glyph for a remote desktop
+  target, plus an edition-aware directory chooser (#931 @St0neWan9).
+- **Message index rail** — a rail pinned to the left of the transcript for
+  jumping between messages in a long conversation (#934 @St0neWan9).
+- **`deepseek_harness` derives per protocol** — any non-subscription channel
+  speaking the chat-completions wire offers it, mirroring how Codex derives for
+  any Responses-wire channel, instead of only the `deepseek` provider kind
+  (#966 @jiaoqsh).
+- **MCP source provenance in citations** — reads `dev.valuz/source-metadata`
+  while preserving the legacy `cn.valuz/citation-source` descriptor, and fails
+  closed when the two conflict (#972 @St0neWan9).
+- **Opaque per-turn runtime context** — a runtime-context port whose marker
+  values materialize only in the runtime's session copy, leaving persisted
+  session snapshots untouched (#947 @homeant); a task's title is snapshotted
+  into its lead and member execution sessions so billing attribution needs no
+  extra lookup (#950 @homeant).
+- **`CLAUDE_CODE_MAX_CONTEXT_TOKENS`** — the declared context window is exported
+  to the Claude Agent runtime (#941 @jiaoqsh).
+- **Date-partitioned managed workspace directories** — managed project and chat
+  workspaces move off a flat `<project_root>/<project_id>` layout to dated,
+  unguessable directories (#943 @Ready22Race).
+
+### Changed
+
+- **The project grid is the knowledge grid** — the project list renders the same
+  tile cards, on the same measured grid, as the knowledge page; both size from
+  one shared rule (#981 @St0neWan9). The marketplace's single-agent card footer
+  lines up with the team card the same way (#945 @St0neWan9).
+- **Each runtime owns its compaction threshold** — the host declares the context
+  window and stops dictating when to compact (#946 @jiaoqsh).
+- **Task creation returns as soon as the task is registered** — the lead starts
+  behind the response instead of holding the HTTP request for the whole bring-up
+  (#937 @Ready22Race).
+
+### Fixed
+
+- **Turns silently dropped when the runtime budget was exhausted** — messages
+  near the end of a long conversation produced no output, no error and no label
+  (#971 @tutu).
+- **Usage accounting per turn** — Claude's `usage_update` carries one turn rather
+  than the running total, and every model request in a turn is counted with each
+  token bucket counted once (#955 @jiaoqsh, #956 @jiaoqsh).
+- **Sessions** — a user message is recorded for a turn that never started
+  (#951 @Ready22Race); the runtime context is carried on fork and prepare, not
+  only on run (#952 @Ready22Race); a one-time reconciliation backfills the
+  legacy project-session index before activity and history reads
+  (#958 @zhourongyu); `task_id` rides the session detail so "Fork from here" is
+  decided by one predicate and stays hidden inside a task's sessions
+  (#939 @Ready22Race, #940 @Ready22Race).
+- **A swallowed interrupt no longer fails a later completed turn** as
+  `CancelledError` (#936 @jiaoqsh).
+- **In-workspace Windows absolute paths** are accepted by the DeepAgents file
+  tools (#969 @jiaoqsh).
+- **i18n** — each request is answered in the language it asked for
+  (#942 @St0neWan9); route labels are i18n keys (#954 @St0neWan9); the page-title
+  fallback stops passing the branding app name through `t()` (#935 @St0neWan9).
+- **The degraded re-probe could stop for the rest of the session** (#938
+  @St0neWan9).
+- **Editing an agent's instructions** is no longer reverted by a background
+  re-fetch while you type (#944 @St0neWan9).
+- **The desktop splash progress advances continuously** instead of jumping
+  (#948 @St0neWan9).
+- **The dead "Switch model" action** is gone from the conversation error card
+  (#949 @Ready22Race).
+
+### Docs & Chore
+
+- **Release pipeline** — CI purges the CDN after overwriting a live manifest
+  (#930 @St0neWan9), a purge failure can no longer fail the release
+  (#953 @St0neWan9), a recovery workflow rebuilds the single-arch versioned mac
+  manifests (#933 @St0neWan9), and the rollback runbook is corrected so
+  rollback is actually safe (#932 @St0neWan9).
+- Agents test fixture satisfies `ExecutionTarget` (#962 @St0neWan9).
+
+## [0.4.2] - 2026-08-18
+
+### Added
+
+- **Agent Plugins** — plugins are a first-class install unit per the Agent
+  Plugins 1.0.0 spec (`plugin.json` + `skills/` + optional `mcp.json`): a
+  skills-only plugin is a "skill suite", one with MCP servers a "plugin with
+  connectors". New `/v1/plugins` API (preview / install from zip, directory,
+  URL or market item / enable / disable / update / reference-counted uninstall /
+  export / memberships), `.claude-plugin` / `.codebuddy-plugin` compat readers
+  that materialize the normalized layout, marketplace item type `plugin`
+  (`market:plugin:<slug>`, `composition` filter, source `plugin`), the
+  `/plugins` library page, market tabs and plugin badges on skill / connector
+  cards (#908 @St0neWan9).
+- **One resource page for plugins, skills and connectors** — the three library
+  surfaces share a single page and consistent headers instead of three
+  near-identical layouts (#925 @St0neWan9).
+- **DataService credential rotation without a restart** — the kernel picks up a
+  rotated credential in place, so re-keying no longer costs a process cycle
+  (#923 @Ready22Race).
+- **Per-session gateway headers** — DeepAgents and Claude Agent forward
+  `X-Valuz-Session-Id` to the gateway (via `ANTHROPIC_CUSTOM_HEADERS` for Claude),
+  so gateway-side logs can be traced back to a session (#919 @homeant,
+  #921 @homeant).
+- **Model selection hints in the pickers** — the hint that explains why a model
+  is or is not selectable now renders where the choice is made (#902 @homeant).
+- **Close a document preview with the platform shortcut** — Cmd+W on macOS,
+  Ctrl+W elsewhere (#900 @St0neWan9).
+- **RedSkill marketplace source** — `MarketplaceSource` accepts `redskill` (the
+  Xiaohongshu RedSkill store the commercial control plane now ingests) and the
+  market card's source pill labels it (#907 @St0neWan9).
+- **Marketplace infinite scroll** — the market list loads the next page as you
+  reach the end instead of behind a "load more" button (#927 @St0neWan9).
+
+### Changed
+
+- **Reusable desktop network egress capability** — the Electron-owned egress
+  manager moved into its own workspace package and now exposes versioned
+  renderer/main contracts, edition policy injection and capability negotiation,
+  so overlay desktops can reuse the same network path without copying the
+  runtime (#909 @zhourongyu).
+- **Post-run checks are gated on external tools** — citation verification and
+  Task Coverage only run when the turn actually brought external information
+  into the answer. A session may expose host tools over MCP as an
+  implementation detail, and those local calls no longer trigger an expensive
+  post-run model pass (#901 @St0neWan9).
+- **Marketplace tab order** — the top-level tabs now read agents → plugins →
+  skills → connectors (plugins moved next to agents) (#918 @St0neWan9).
+- **Marketplace `source` is an open string** — where a market item comes from is
+  data the index grows over time; the client no longer validates it against a
+  closed enum (which made the whole skills tab fail the moment the index
+  published a source an older build had not heard of). Unknown sources render
+  with a generic pill, unknown badges are dropped, and an index page is parsed
+  item by item so a row this build cannot render (new `type` / `install_target`)
+  is skipped instead of failing the page. Plugin-package members are labelled
+  source `plugin` (was `pluginmarket`) (#911 @St0neWan9).
+- **Agents page default view** — the view switcher lists "All agents" first and
+  opens on it by default; "By project" is the second tab (#906 @St0neWan9).
+- **Only `X-Valuz-Session-Id` is forwarded** — the companion `Session-Title`
+  header was dropped from both the DeepAgents and Claude Agent paths; a title is
+  user content and does not belong in a transport header (#921 @homeant).
+
+### Fixed
+
+- **Window title fallback no longer goes through i18n** — on routes without a
+  registered label the layout used the branding app name as an i18n key
+  (`[i18n] missing translation for key "Valuz Team"` on every navigation);
+  the literal product name is now used directly (#935 @St0neWan9).
+- **Codex no longer leaks MCP secrets into process state** — five related fixes:
+  secrets are kept out of the process argv (#913) and the app-server argv (#914),
+  the tool shell is isolated from runtime secrets (#915), referenced secrets are
+  excluded from that shell (#916), and login-shell secret restoration is blocked
+  so a user's profile cannot put them back (#917 @zhourongyu).
+- **Safe desktop network ownership changes** — activity checks and confirmed
+  interrupts use the memory-only desktop control capability instead of
+  owner-scoped user APIs, and a late task race rolls the selected mode back
+  rather than restarting an active backend (#910 @zhourongyu).
+- **Incompatible egress contracts are rejected** — a renderer and main process on
+  mismatched contract versions now fail the negotiation instead of proceeding on
+  assumptions (#912 @zhourongyu).
+- **Task crash backstop no longer outraces delivery** — the backstop that exists
+  to cover a crashed member could fire before that member's result was
+  delivered, failing work that had in fact completed (#922 @Ready22Race).
+- **Task manifest attribution** — the fourth manifest call site now attributes
+  like the other three, and the window is no longer defaulted when a caller did
+  not state one (#924 @Ready22Race).
+- **A2UI catalog array shapes** — array element object shapes are expanded in the
+  catalog, so the compiler sees the fields it is expected to bind (#926
+  @St0neWan9).
+- **Project pages survive overlay routes** — an overlay route no longer replaces
+  the project page underneath it (#899 @St0neWan9).
+- **Model selection hints stay on the option rows** — they were showing on the
+  collapsed trigger, where the choice is not being made (#903 @St0neWan9).
+- **Desktop close shortcut** — with no preview open, Ctrl+W on Windows/Linux fell
+  through to closing the only window and quit the app; it is now a no-op there,
+  while macOS keeps Cmd+W's window-close meaning and an open preview still closes
+  first everywhere (#904 @St0neWan9).
+- **Desktop window controls** — a maximized window on Windows/Linux showed two
+  outward arrows ("enlarge") where Windows draws the restore glyph; the control
+  now draws `ChromeRestore` — a square in the lower-left with a second square's
+  edges behind it (#898 @St0neWan9).
+
+### Docs & Chore
+
+- **The quality gates are green again** — ruff, eslint, the design audit, the
+  module boundary contract and both test suites (backend 4313, frontend 1191)
+  all pass. Two of the design audit's own rules were misfiring: token/theme files
+  were counted as their own debt, and PR references written in code comments
+  parse as valid hex colours, inflating the colour count on their own. The remaining overage
+  was paid down with exact-equivalent design tokens, so no rendered pixel
+  changes. Ten cross-module datastore imports now go through the owning module's
+  service or a new `ports/effective_resource_sources` (#928 @St0neWan9).
+
+## [0.4.1] - 2026-08-14
+
+### Added
+
+- **DeepSeek Harness (dsh) — a fourth kernel runtime** — the harness joins Claude
+  Agent, Codex Agent and Valuz Agent as a selectable runtime (#894 @jiaoqsh), and
+  its turns are traced into Langfuse like the others (#895 @jiaoqsh).
+- **Unified desktop model network egress** — an Electron-main egress manager gives
+  supported model clients the desktop's proxy/PAC routing through loopback model
+  ingress, without touching tool shells, MCP servers or browser traffic; Settings
+  offers Valuz-managed vs. model-client-managed connections with live status and
+  redacted diagnostics (#833 @zhourongyu).
+- **Session and message fork** — fork a session or an individual message across all
+  three runtimes (#871 @jiaoqsh), with pending state and duplicate-click
+  suppression on every fork entry point (#881 @jiaoqsh).
+- **Docker self-hosting stack for OSS** — run the workstation headless from
+  compose (#862 @St0neWan9).
+- **Optional Langfuse tracing for agent turns** (#834 @jiaoqsh), plus a tracing
+  extra and `.env` loading in the dev launcher (#836 @jiaoqsh).
+- **A pluggable knowledge base** — `DocsRuntimePort` is genuinely swappable
+  (#843), with a KB root resolver extension point and a knowledge-base kind
+  column (#844), pre-authorized cross-owner scope injection for `search_docs`
+  (#845), a bindable document-retrieval runtime (#851), and reindex dispatch plus
+  shared-scope contribution seams (#852 @Ready22Race).
+- **A2UI standalone theme-aware component system** (#858 @St0neWan9), normalized
+  component data contracts (#883 @St0neWan9), and a round of GenUI runtime and
+  research-reading UX refinements (#896 @St0neWan9).
+- **GenUI generation past the output-token cap** — a capped generation continues
+  and the parts are merged (#816 @St0neWan9), with A2UI generation and rendering
+  hardened overall (#870 @St0neWan9).
+- **GenUI blocks aligned with OpenUI semantics** — chart series palette tokens
+  that end multi-series colour collision (#846), bar charts, `AspectRatio` and
+  `VisualFirstCard` (#848), and surfaces, hovers and chart chrome (#853
+  @hanjixin). The A2UI renderer stack is now lazy-loaded, cutting the main bundle
+  by 43% (#850 @hanjixin).
+- **Citation & evidence** — search retrieval metadata is validated (#814), an
+  anchor-verified claim normalizer supports bounded partials (#817), and
+  substantive search summaries register as derived evidence (#819 @St0neWan9).
+- **Durable task actor delivery** — actor messages survive a process boundary
+  (#875), and a doorbell wakes parked actors while `finish_task` parks its
+  members (#884 @Ready22Race).
+- **v10 resource control seams** for runtime control (#798 @homeant).
+- **Codex for every DeepSeek model** — the per-model allowlist is retired
+  (#873 @jiaoqsh).
+- **Host extension surface** — a project add-menu slot (#864 @hanjixin),
+  conversation turn/title slots that get the scroll their mode needs (#837
+  @St0neWan9), and `session_id` threaded into `_kernel_for` so task session ids
+  reach kernel metadata (#859 @Ready22Race).
+
+### Changed
+
+- **Task coordination reworked around state instead of messages** — one lease per
+  actor, and stopping stops being a message (#878); stopping becomes a state the
+  actor reads (#882); `MailboxRegistry` is retired in favour of one message per
+  drain with no buffer (#888); member probing is split out of coordination and
+  the lead run parks on block (#889); the mailbox drain batch size is a required
+  argument (#890); and membership is a query, orphans get adopted, and the lead
+  reads its role first (#891 @Ready22Race).
+
+### Fixed
+
+- **Tasks** — a cross-process execution lease ensures exactly one process drives a
+  task (#863) and the lease renewer is hardened while draining (#865); the lead no
+  longer burns a model turn on a member it already handled (#867), "keep waiting"
+  no longer re-runs the last prompt (#868), a session you no longer drive is not
+  finalized (#872), the in-turn preempt and wait read the durable inbox and hear
+  the doorbell (#876, #885), and buffer reclamation, a stopped lead's run row and
+  a drifting deadline are corrected (#869, #886 @Ready22Race). The task detail
+  page got its scroll back (#866 @Ready22Race).
+- **Citations** — unsourced statements are marked instead of dropped (#818); a
+  half-written binding no longer flashes `[blocked]` (#821); a document chunk may
+  supersede its own provider summary (#822); unknowns are no longer reported as
+  defects (#823); collection addresses and markers stay out of the reader's way
+  (#824) and every marker lands on the statement it belongs to (#825); audit
+  coverage and post-run verification are preserved (#828); precise evidence is
+  preferred without truncation (#829); proven numeric conflicts are corrected
+  (#830); sidecars are reconciled at turn completion (#815); and evidence audit
+  and presentation improved overall (#835 @St0neWan9).
+- **GenUI** — generation `max_tokens` plus an env-tunable harness tool timeout
+  (#812), and a truncated generation's valid prefix is salvaged rather than
+  discarded (#813 @St0neWan9).
+- **Conversation** — the closing bubble carries the whole answer instead of its
+  last segment (#874 @St0neWan9), the tool-output content block is unwrapped
+  before being read (#877), the title slot receives the whole loaded transcript
+  (#854), an edition can declare where its single backend runs (#849
+  @Ready22Race), and share sits with the actions while the token readout trails
+  them (#832 @St0neWan9).
+- **Files & prompts** — a `valuz-file` ref with a surplus slash no longer resolves
+  outside its own project (#892), and the file link is taught once, correctly,
+  reverting the parser guesswork (#893 @Ready22Race).
+- The runs sidebar's project window is scoped with a `project_id` filter
+  (#831 @St0neWan9).
+- Skill discovery works again under DeepAgents `virtual_mode` (#826
+  @Ready22Race), and cloud skill discovery is isolated from the host home
+  directory (#860 @homeant).
+- The document owner is threaded into the `ASYNC_POLL` enqueue (#842
+  @Ready22Race), and edition always-on MCP servers mount under every
+  `api_prefix` (#855 @Ready22Race).
+- The renderer build gets a raised Node heap (#811 @St0neWan9), `@a2ui/react`
+  declares the React floor it actually requires (#820 @St0neWan9), and conflict
+  markers committed into `files-api.ts` are removed (#887 @Ready22Race).
+
+### Docs & Chore
+
+- The release process now requires maintainer confirmation of the version number
+  before tagging (#810 @St0neWan9).
+- GenUI block styling/interaction standards, a component template and a CSS audit
+  guard are codified (#857 @hanjixin).
+- Test coverage for the full kernel summarization offload path (#827) and the
+  docs offload guard's `doc_paths` fake (#847 @Ready22Race).
+- Regenerated i18n key types so the checked-in types match the locale files.
+
 ## [0.4.0] - 2026-08-08
 
 ### Added
 
-- **Generative UI block system** — a dedicated block package wired into OpenUI
-  Lang and A2UI: 49+ blocks with edition injection and per-call scope, a
-  backend block registry port (`ext.genui_blocks`), typed vocabulary
-  signatures, the chart family migrated to recharts, and
-  `GENERATIVE_UI_LAYOUT_CSS` exported for out-of-card hosts
+- **A2UI component system** — a standalone A2UI v0.9.1 component package with
+  edition injection and per-call scope, a backend component registry port,
+  typed schemas, analytical tables, provenance controls and a comprehensive
+  chart family
   (#733, #745, #751, #771, #779, #782 @St0neWan9).
 - **Generative UI live data** — data-binding mode (channel, resolver, grammar),
   the live-data host seam where refs start an edition host and pushes

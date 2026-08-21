@@ -114,6 +114,13 @@ DataService 对每个请求的 **owner** 来自**验签过的不透明 bearer �
 
 - **沙箱只持有短时凭证** + DataService URL。它**永不**拿到 DB DSN、驱动或 PG 凭证
   ——凭证只在 host 上(DataService 的后端配置)。
+- 「短时」意味着它会在 **kernel 运行期间过期**,所以它是可就地轮换的:`RemoteStore`
+  通过**每次调用**的 `access_token` hook 解析 bearer,`dependencies.set_data_api_token`
+  在其背后换值,`POST /internal/credentials/refresh` 让 host 从外部触发(host 先把新值
+  写进 config gate 那个文件,这样之后若真的重启也仍是最新的)。**不要**靠重启 kernel 或
+  替换沙箱来轮换:kernel 持有进行中的 turn 以及挂在它下面的 `run_in_background` 进程。
+  刷新只应用一个白名单——无差别重读会让进程拿到全新的 `os.environ`,而其它组件手里
+  还是启动时捕获的旧值。
 - 在 **remote PG** 后端上,**行级安全(RLS)**是 DB 侧兜底:DataService 按事务从
   验签 token 把 `app.current_user_id` 注入(`SET LOCAL`),并以**非 owner 角色**连接,
   即使 app 层漏了过滤,RLS 策略仍然生效。

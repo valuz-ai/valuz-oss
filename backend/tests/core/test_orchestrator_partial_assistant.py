@@ -44,6 +44,26 @@ def _observer(
     )
 
 
+#: ``turn_phase`` is host lifecycle metadata marking the post-run verification
+#: window (``_MessageObserverSink._begin_post_run_verification``) — "never
+#: assistant-authored content". The assertions below are about what the RUNTIME
+#: authored and whether a sidecar replaced it, so the markers are filtered out
+#: instead of being baked into every expected list.
+_LIFECYCLE_EVENT_TYPES = {"turn_phase"}
+
+
+def _authored_types(sink: _RecordingSink) -> list[str]:
+    """Event types excluding host lifecycle markers, in order."""
+    return [event.type for event in sink.events if event.type not in _LIFECYCLE_EVENT_TYPES]
+
+
+def _assert_only_lifecycle_extras(sink: _RecordingSink, expected: list[str]) -> None:
+    """The authored stream is exactly ``expected``; any extra is a known marker."""
+    assert _authored_types(sink) == expected
+    extras = {event.type for event in sink.events} - set(expected)
+    assert extras <= _LIFECYCLE_EVENT_TYPES, f"unexpected event types: {sorted(extras)}"
+
+
 def _evidence_payload() -> str:
     return json.dumps(
         {
@@ -66,6 +86,19 @@ def _evidence_payload() -> str:
                 "locator": {"kind": "chunk", "chunkId": "chunk-revenue"},
             }
         }
+    )
+
+
+async def _mark_external_document_tool_called(observer: _MessageObserverSink) -> None:
+    await observer.emit(
+        Event(
+            type="tool_use",
+            data={
+                "id": "external-document-tool",
+                "name": "mcp__valuz_docs__document_search",
+                "input": {},
+            },
+        )
     )
 
 
@@ -145,8 +178,151 @@ async def test_each_runtime_assistant_is_published_before_its_sidecar() -> None:
     assert len(observer.citation_bundle["citations"]) == 1
 
 
+async def test_claude_private_projection_uses_canonical_pointer_root() -> None:
+    sink, observer = _observer(citation_enabled=True)
+    quote = "Revenue was 100 USD in 2026 Q2."
+    handle = "ev_revenue_2026_q2"
+    canonical_projection = {
+        "data": {
+            "chunks": [
+                {
+                    "text": quote,
+                    "evidenceHandle": handle,
+                    "citationLink": f"[source](evidence://{handle})",
+                }
+            ]
+        }
+    }
+    private_projection = json.dumps(
+        {
+            "_valuz_evidence": [
+                {
+                    "source": {
+                        "sourceId": "doc-revenue-2026-q2",
+                        "providerId": "valuz-data",
+                        "documentId": "doc-revenue-2026-q2",
+                        "sourceType": "document",
+                        "title": "Quarterly results",
+                        "retrievedAt": "2026-08-04T00:00:00Z",
+                    },
+                    "evidence": {
+                        "contentHash": f"sha256:{hashlib.sha256(quote.encode()).hexdigest()}",
+                        "quoteRef": "/data/chunks/0/text",
+                    },
+                    "locator": {"chunkId": "chunk-revenue"},
+                }
+            ],
+            "_valuz_evidence_format": 1,
+        }
+    )
+    visible_wrapper = json.dumps([{"type": "text", "text": json.dumps(canonical_projection)}])
+
+    await observer.emit(
+        Event(type="tool_use", data={"id": "tool-1", "name": "mcp__valuz-data__chunks"})
+    )
+    await observer.emit(
+        Event(
+            type="tool_result",
+            data={
+                "id": "tool-1",
+                "content": visible_wrapper,
+                "_citation_content": private_projection,
+                "_citation_model_content": canonical_projection,
+            },
+        )
+    )
+    await observer.emit(
+        Event(
+            type="assistant_message",
+            data={"text": f"{quote} [source](evidence://{handle})."},
+        )
+    )
+    await observer.emit(Event(type="session_idle", data={"num_turns": 1}))
+
+    tool_result = next(event for event in sink.events if event.type == "tool_result")
+    assert tool_result.data["content"] == visible_wrapper
+    assert "_citation_content" not in tool_result.data
+    assert "_citation_model_content" not in tool_result.data
+    sidecar = next(event for event in sink.events if event.type == "assistant_message_sidecar")
+    citation = sidecar.data["citation_bundle"]["citations"][0]
+    assert citation["source"]["providerId"] == "valuz-data"
+    assert citation["source"]["title"] == "Quarterly results"
+
+
+async def test_chunk_citation_inherits_title_and_url_from_same_document() -> None:
+    sink, observer = _observer(citation_enabled=True)
+    document_id = "filing-2026-q1"
+    rich = {
+        "_valuz_evidence": {
+            "evidenceHandle": "ev_summary_2026_q1",
+            "source": {
+                "sourceId": document_id,
+                "providerId": "valuz-data",
+                "documentId": document_id,
+                "sourceType": "document",
+                "sourceCategory": "document_summary",
+                "title": "Acme 2026 Q1 filing",
+                "canonicalUrl": "https://example.com/filing-2026-q1",
+                "publishedAt": "2026-04-30T00:00:00Z",
+                "retrievedAt": "2026-08-21T00:00:00Z",
+            },
+            "evidence": {
+                "kind": "text",
+                "quote": "Acme published its first-quarter filing.",
+                "snippet": "Acme published its first-quarter filing.",
+                "capturedAt": "2026-08-21T00:00:00Z",
+            },
+            "locator": {"kind": "external", "fragment": "provider-summary"},
+        }
+    }
+    chunk = {
+        "_valuz_evidence": {
+            "evidenceHandle": "ev_chunk_2026_q1",
+            "source": {
+                "sourceId": document_id,
+                "providerId": "valuz-data",
+                "documentId": document_id,
+                "documentVersion": "sha256:content",
+                "sourceType": "document",
+                "sourceCategory": "document_chunk",
+                "title": "Document",
+                "canonicalUrl": "",
+                "retrievedAt": "2026-08-21T00:01:00Z",
+            },
+            "evidence": {
+                "kind": "text",
+                "quote": "Revenue was 100 USD in 2026 Q1.",
+                "snippet": "Revenue was 100 USD in 2026 Q1.",
+                "capturedAt": "2026-08-21T00:01:00Z",
+            },
+            "locator": {"kind": "chunk", "chunkId": "chunk-1"},
+        }
+    }
+
+    await observer.emit(Event(type="citation_evidence", data={"content": json.dumps(rich)}))
+    await observer.emit(Event(type="citation_evidence", data={"content": json.dumps(chunk)}))
+    await observer.emit(
+        Event(
+            type="assistant_message",
+            data={
+                "text": ("Revenue was 100 USD in 2026 Q1 [source](evidence://ev_chunk_2026_q1).")
+            },
+        )
+    )
+    await observer.emit(Event(type="session_idle", data={"num_turns": 1}))
+
+    sidecar = next(event for event in sink.events if event.type == "assistant_message_sidecar")
+    citation = sidecar.data["citation_bundle"]["citations"][0]
+    assert citation["source"]["title"] == "Acme 2026 Q1 filing"
+    assert citation["source"]["canonicalUrl"] == "https://example.com/filing-2026-q1"
+    assert citation["source"]["publishedAt"] == "2026-04-30T00:00:00Z"
+    assert citation["source"]["documentVersion"] == "sha256:content"
+    assert citation["locator"] == {"kind": "chunk", "chunkId": "chunk-1"}
+
+
 async def test_auto_binding_stays_in_sidecar_and_never_rewrites_runtime_message() -> None:
     sink, observer = _observer(citation_enabled=True, verification_enabled=True)
+    await _mark_external_document_tool_called(observer)
     await observer.emit(
         Event(
             type="citation_evidence",
@@ -172,6 +348,7 @@ async def test_auto_binding_stays_in_sidecar_and_never_rewrites_runtime_message(
 
 async def test_final_recap_reuses_verified_binding_from_prior_assistant_message() -> None:
     sink, observer = _observer(citation_enabled=True, verification_enabled=True)
+    await _mark_external_document_tool_called(observer)
     handle = "ev_msft_q3_throughput_12345678"
     await observer.emit(
         Event(
@@ -191,12 +368,8 @@ async def test_final_recap_reuses_verified_binding_from_prior_assistant_message(
                             },
                             "evidence": {
                                 "kind": "text",
-                                "quote": (
-                                    "Fairwater 提前六周投产，推理吞吐量提升40%。"
-                                ),
-                                "snippet": (
-                                    "Fairwater 提前六周投产，推理吞吐量提升40%。"
-                                ),
+                                "quote": ("Fairwater 提前六周投产，推理吞吐量提升40%。"),
+                                "snippet": ("Fairwater 提前六周投产，推理吞吐量提升40%。"),
                                 "capturedAt": "2026-08-08T00:00:00Z",
                             },
                             "locator": {
@@ -254,6 +427,7 @@ async def test_final_recap_reuses_materialized_collection_binding_from_prior_mes
         verification_enabled=True,
         citation_quality_policy=policy,
     )
+    await _mark_external_document_tool_called(observer)
     data = {
         "items": [
             {
@@ -276,48 +450,49 @@ async def test_final_recap_reuses_materialized_collection_binding_from_prior_mes
             type="citation_evidence",
             data={
                 "tool_name": "stock_quote",
-                "content": json.dumps({
-                    "data": data,
-                    "_valuz_evidence": [
-                        {
-                            "version": 1,
-                            "kind": "structured-evidence-collection",
-                            "collectionHandle": collection_handle,
-                            "source": {
-                                "sourceId": "reportify-stock-quote:GOOGL",
-                                "providerId": "reportify",
-                                "sourceType": "dataset",
-                                "sourceCategory": "market_data",
-                                "title": "Reportify · stock_quote",
-                                "retrievedAt": "2026-08-08T00:00:00Z",
-                            },
-                            "common": {
-                                "datasetId": "reportify.stock_quote",
-                                "toolName": "stock_quote",
-                                "capturedAt": "2026-08-08T00:00:00Z",
-                            },
-                            "addressing": {
-                                "mode": "json-pointer",
-                                "contentRoot": "/data",
-                                "itemsPointer": "/data/items",
-                                "identityFields": ["/symbol", "/date"],
-                                "allowedPathRoots": ["/data"],
-                            },
-                            "semantics": {
-                                "entity": {"symbol": "/symbol"},
-                                "asOf": {"date": "/date"},
-                                "metric": {
-                                    "mode": "field-name",
-                                    "valueRoots": [""],
+                "content": json.dumps(
+                    {
+                        "data": data,
+                        "_valuz_evidence": [
+                            {
+                                "version": 1,
+                                "kind": "structured-evidence-collection",
+                                "collectionHandle": collection_handle,
+                                "source": {
+                                    "sourceId": "reportify-stock-quote:GOOGL",
+                                    "providerId": "reportify",
+                                    "sourceType": "dataset",
+                                    "sourceCategory": "market_data",
+                                    "title": "Reportify · stock_quote",
+                                    "retrievedAt": "2026-08-08T00:00:00Z",
                                 },
-                            },
-                            "contentHash": (
-                                "sha256:"
-                                + hashlib.sha256(raw_hash.encode()).hexdigest()
-                            ),
-                        }
-                    ],
-                }),
+                                "common": {
+                                    "datasetId": "reportify.stock_quote",
+                                    "toolName": "stock_quote",
+                                    "capturedAt": "2026-08-08T00:00:00Z",
+                                },
+                                "addressing": {
+                                    "mode": "json-pointer",
+                                    "contentRoot": "/data",
+                                    "itemsPointer": "/data/items",
+                                    "identityFields": ["/symbol", "/date"],
+                                    "allowedPathRoots": ["/data"],
+                                },
+                                "semantics": {
+                                    "entity": {"symbol": "/symbol"},
+                                    "asOf": {"date": "/date"},
+                                    "metric": {
+                                        "mode": "field-name",
+                                        "valueRoots": [""],
+                                    },
+                                },
+                                "contentHash": (
+                                    "sha256:" + hashlib.sha256(raw_hash.encode()).hexdigest()
+                                ),
+                            }
+                        ],
+                    }
+                ),
             },
         )
     )
@@ -354,7 +529,7 @@ async def test_sidecar_failure_never_removes_or_replaces_runtime_message(
     await observer.emit(Event(type="assistant_message", data={"text": original}))
     await observer.emit(Event(type="session_idle", data={"num_turns": 1}))
 
-    assert [event.type for event in sink.events] == ["assistant_message", "session_idle"]
+    _assert_only_lifecycle_extras(sink, ["assistant_message", "session_idle"])
     assert sink.events[0].data["text"] == original
     assert observer.assistant_text == original
 
@@ -421,7 +596,7 @@ async def test_sidecar_computation_runs_off_the_event_loop(monkeypatch: Any) -> 
     release.set()
     await finalize_task
 
-    assert [event.type for event in sink.events] == ["assistant_message", "session_idle"]
+    _assert_only_lifecycle_extras(sink, ["assistant_message", "session_idle"])
 
 
 async def test_partial_after_canonical_message_is_persisted_separately() -> None:

@@ -297,6 +297,7 @@ class TaskSessionResolver:
         env: TaskProjectEnv,
         project_id: str,
         task_id: str,
+        task_title: str,
         agent_slug: str,
         cwd: str,
         brief: str,
@@ -344,6 +345,7 @@ class TaskSessionResolver:
             plan_pre_committed=plan_pre_committed,
             worktree_notice=worktree_notice,
             user_id=user_id,
+            task_title=task_title,
             **_provider_resolver_deps(db),
         )
         if session is None:
@@ -366,6 +368,7 @@ class TaskSessionResolver:
         env: TaskProjectEnv,
         project_id: str,
         task_id: str,
+        task_title: str,
         agent_slug: str,
         run_dir: str,
         brief: str,
@@ -406,6 +409,7 @@ class TaskSessionResolver:
             goal_mode=True,
             worktree_notice=worktree_notice,
             user_id=user_id,
+            task_title=task_title,
             **_provider_resolver_deps(db),
         )
         if session is None:

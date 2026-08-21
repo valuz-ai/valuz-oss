@@ -80,7 +80,7 @@ const Section = ({
 }) => {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="overflow-hidden rounded-[10px] border border-surface-border bg-surface-soft">
+    <div className="overflow-hidden rounded-xl border border-surface-border bg-surface-soft">
       <button
         type="button"
         className="flex h-10 w-full items-center gap-2 px-3 transition-colors hover:bg-surface-muted/60"

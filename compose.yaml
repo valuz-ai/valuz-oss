@@ -1,0 +1,56 @@
+name: valuz-oss
+
+services:
+  backend:
+    image: valuz-oss-backend:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      VALUZ_DATA_DIR: /data/valuz
+      VALUZ_LOG_FILE_PATH: /data/valuz/logs/backend.log
+      VALUZ_USER_PROJECT_ROOT: /workspace
+      VALUZ_USER_SKILLS_DIR: /data/agents/skills
+      VALUZ_BACKUP_ROOT: /data/backups
+      VALUZ_DISABLE_LOGIN_PATH: "1"
+    volumes:
+      - valuz-data:/data
+      - valuz-workspaces:/workspace
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/system/status', timeout=3)
+      interval: 10s
+      timeout: 5s
+      start_period: 90s
+      retries: 12
+    stop_grace_period: 30s
+
+  webui:
+    image: valuz-oss-webui:latest
+    build:
+      context: .
+      dockerfile: frontend/apps/webui/Dockerfile
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${VALUZ_WEBUI_BIND:-127.0.0.1}:${VALUZ_WEBUI_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+volumes:
+  valuz-data:
+  valuz-workspaces:

@@ -4,6 +4,7 @@ import {
   type BrowserWindow,
   type MenuItemConstructorOptions,
 } from "electron";
+import { DESKTOP_PREVIEW_CLOSE_REQUESTED } from "@valuz/shared";
 import { t } from "@valuz/shared/i18n";
 import {
   getCliInstallStatus,
@@ -27,6 +28,14 @@ export const buildAppMenu = ({
   // in-app language — Electron would otherwise auto-label role items in the
   // OS locale, leaving the expanded menus out of sync with the UI.
   const tl = (key: string) => t(key as Parameters<typeof t>[0]);
+  const requestPreviewOrWindowClose = () => {
+    getMainWindow()?.webContents.send(DESKTOP_PREVIEW_CLOSE_REQUESTED);
+  };
+  const closeMenuItem: MenuItemConstructorOptions = {
+    label: tl("menu.close"),
+    accelerator: "CmdOrCtrl+W",
+    click: requestPreviewOrWindowClose,
+  };
 
   const appSubmenu: MenuItemConstructorOptions[] = [
     { role: "about", label: tl("menu.about") },
@@ -92,9 +101,7 @@ export const buildAppMenu = ({
           },
         },
         separator,
-        isMac
-          ? { role: "close", label: tl("menu.close") }
-          : { role: "quit", label: tl("menu.quit") },
+        isMac ? closeMenuItem : { role: "quit", label: tl("menu.quit") },
       ],
     },
     {
@@ -126,7 +133,7 @@ export const buildAppMenu = ({
           ]
         : [
             { role: "minimize", label: tl("menu.minimize") },
-            { role: "close", label: tl("menu.close") },
+            closeMenuItem,
           ],
     },
     {

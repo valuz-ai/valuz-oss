@@ -89,6 +89,8 @@ async def list_activity(
         tab = "all"
     limit = max(1, min(limit, 100))
     cur = _decode(cursor) if cursor else None
+    if _want_sessions(tab):
+        await project_index.ensure_legacy_session_index(user_id)
     # Inclusive ``<= cursor.sort_at`` via the strict-``<`` datastores (ms ints).
     before_ts = (cur[0] + 1) if cur is not None else None
 

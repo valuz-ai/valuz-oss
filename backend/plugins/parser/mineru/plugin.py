@@ -151,7 +151,9 @@ class _MineruBackend(ParserBackend):
         token = self._secrets.resolve(self._config.secret_ref)
         if not token:
             raise RuntimeError("MinerU API token is not configured")
-        del options  # MinerU doesn't honour our generic ParseOptions today
+        # Only ``user_id`` is honoured from the generic ParseOptions today —
+        # it stamps ownership on the durable polling rows (valuz-oss#841).
+        user_id = options.user_id if options else None
 
         # PDFs over MinerU's 200-page cap get pre-split into 199-page
         # parts and parsed sequentially — keeps configured-cloud usage
@@ -163,11 +165,11 @@ class _MineruBackend(ParserBackend):
         from valuz_agent.modules.parser.splitter import split_and_parse_async
 
         async def _parse_one(path: Path) -> ParseResult:
-            return await self._submit_one(path, token)
+            return await self._submit_one(path, token, user_id)
 
         return await split_and_parse_async(Path(file_path), _DESCRIPTOR.split_policy, _parse_one)
 
-    async def _submit_one(self, file_path, token: str) -> ParseResult:  # type: ignore[no-untyped-def]
+    async def _submit_one(self, file_path, token: str, user_id: str | None = None) -> ParseResult:  # type: ignore[no-untyped-def]
         """Submit a single file (or split part) to MinerU and await
         the polling scheduler. Used by ``parse`` after splitting."""
         payload = {
@@ -175,7 +177,7 @@ class _MineruBackend(ParserBackend):
             "token": token,
             "options": dict(self._config.options),
         }
-        task_id = await self._scheduler.enqueue(MINERU_HANDLER_KIND, payload)
+        task_id = await self._scheduler.enqueue(MINERU_HANDLER_KIND, payload, user_id=user_id)
         result = await self._scheduler.await_task(task_id)
         return ParseResult(
             markdown=result.markdown,

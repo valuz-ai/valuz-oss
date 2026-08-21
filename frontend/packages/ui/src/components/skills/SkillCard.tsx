@@ -3,6 +3,7 @@ import { Lock } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { useI18n } from "../../hooks/use-i18n";
 import { Badge } from "../ui/badge";
+import { PluginBadge, type PluginBadgeInfo } from "../common/PluginBadge";
 import { Card } from "../ui/card";
 import { CardContent } from "../ui/card";
 import { getSkillIconStyle } from "./skill-icon-style";
@@ -48,6 +49,9 @@ export interface SkillCardProps {
    * keep their current visuals.
    */
   originBadge?: SkillOriginBadge;
+  /** Plugin ownership chip ("插件：X +n") — omitted when the skill belongs to
+   * no plugin (D6). */
+  pluginBadge?: PluginBadgeInfo | null;
   active?: boolean;
   onClick?: () => void;
   /** Optional action slot rendered at the trailing edge of the card row. */
@@ -71,6 +75,7 @@ const ORIGIN_BADGE_TONE: Record<
 export const SkillCard = ({
   skill,
   originBadge,
+  pluginBadge,
   active,
   onClick,
   actions,
@@ -119,7 +124,7 @@ export const SkillCard = ({
                   <Badge
                     variant="metaBrand"
                     className={cn(
-                      "h-4 px-1 text-[10px] leading-4",
+                      "h-4 px-1 text-micro leading-4",
                       ORIGIN_BADGE_TONE[originBadge.tone ?? "default"],
                     )}
                   >
@@ -128,13 +133,13 @@ export const SkillCard = ({
                 ) : sourceLabel ? (
                   <Badge
                     variant="metaNeutral"
-                    className="h-4 px-1 text-[10px] leading-4"
+                    className="h-4 px-1 text-micro leading-4"
                   >
                     {sourceLabel}
                   </Badge>
                 ) : null}
                 {skill.locked ? (
-                  <span className="inline-flex items-center gap-0.5 rounded-[4px] border border-surface-border px-1 py-0 text-[10px] leading-4 text-ink-meta">
+                  <span className="inline-flex items-center gap-0.5 rounded-sm border border-surface-border px-1 py-0 text-micro leading-4 text-ink-meta">
                     <Lock className="h-2.5 w-2.5" /> {t("skill.needsLogin")}
                   </span>
                 ) : null}
@@ -147,6 +152,9 @@ export const SkillCard = ({
               >
                 v{skill.versionNumber}
               </Badge>
+            ) : null}
+            {pluginBadge ? (
+              <PluginBadge name={pluginBadge.name} more={pluginBadge.more} />
             ) : null}
           </div>
           <div className="mb-2 truncate font-mono text-2xs text-ink-meta">
@@ -165,7 +173,7 @@ export const SkillCard = ({
                 <Badge
                   key={tag}
                   variant="metaOutline"
-                  className="h-4 px-1 text-[10px] font-normal leading-4 text-ink-body"
+                  className="h-4 px-1 text-micro font-normal leading-4 text-ink-body"
                 >
                   {tag}
                 </Badge>

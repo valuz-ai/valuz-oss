@@ -96,7 +96,6 @@ type ComposerPaneProps = {
   setSelectedEffort: Dispatch<
     SetStateAction<"low" | "medium" | "high" | "xhigh" | "max" | null>
   >;
-  modelSelectorUnlocked: boolean;
   selectedAgentSkillItems: ComposerConfig["selectedAgentSkillItems"];
   composerMentionSkills: ComposerConfig["composerMentionSkills"];
   availableSkills: SkillView[];
@@ -185,7 +184,6 @@ export function ComposerPane({
   id,
   selectedEffort,
   setSelectedEffort,
-  modelSelectorUnlocked,
   selectedAgentSkillItems,
   composerMentionSkills,
   availableSkills,
@@ -361,6 +359,24 @@ export function ComposerPane({
           agentLocked={selectedSession != null}
           onAgentChange={(slug) => {
             setSelectedAgentSlug(slug);
+            // An agent that lives on another backend brings its location with
+            // it: follow it, or the draft would be sent to a backend that has
+            // never heard of this agent. Same resets as picking that location
+            // by hand — provider/model ids are backend-local, and a project
+            // belongs to one backend.
+            const agentTarget = slug
+              ? composerAgents.find((a) => a.slug === slug)?.execTargetId
+              : undefined;
+            if (agentTarget && agentTarget !== execTargetId) {
+              setExecTargetId(agentTarget);
+              setSelectedProviderId(null);
+              setSelectedModelId(null);
+              const current = projects.find((w) => w.id === selectedProjectId);
+              if (current && (current.exec_origin ?? "local") !== agentTarget) {
+                setSelectedProjectId("chat-default");
+                setSelectedComposerSkill(null);
+              }
+            }
             // Switching to an agent re-seeds runtime/model/effort from that
             // agent's brain. Picking "Default" (slug = null) keeps whatever
             // you already chose in the rows below — don't reset it.
@@ -477,11 +493,11 @@ export function ComposerPane({
           // picker the moment a session exists — including freshly-created
           // sessions (e.g. Skill Creator opens a session before the user
           // can type), where the previous ``turns.length > 0`` guard let
-          // the picker pretend it was effective. ``modelSelectorUnlocked``
-          // is the manual escape hatch the retry-with-different-model flow
-          // toggles via ``handleSwitchModel``. The same lock applies to
-          // ``runtime`` per ADR-006 + REP-107 — no mid-session swaps.
-          modelLocked={selectedSession != null && !modelSelectorUnlocked}
+          // the picker pretend it was effective. The lock has no escape
+          // hatch: nothing downstream can honour a mid-session swap, so an
+          // unlocked picker would only ever lie. The same lock applies to
+          // ``runtime`` per ADR-006 + REP-107.
+          modelLocked={selectedSession != null}
           onModelChange={(chId, mId) => {
             setSelectedProviderId(chId);
             setSelectedModelId(mId);

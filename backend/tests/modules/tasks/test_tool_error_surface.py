@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from valuz_agent.modules.tasks.outcome import Failure
 from valuz_agent.modules.tasks import gate
+from valuz_agent.modules.tasks.outcome import Failure
 from valuz_agent.modules.tasks.tools.handlers import _guarded
 
 

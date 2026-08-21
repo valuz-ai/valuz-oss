@@ -125,14 +125,32 @@ Operational recipes:
   manifest already point at `vX.Y.Z/...` which is immutable, so this just
   promotes the old manifest back to live):
   ```bash
-  for m in latest-mac.yml latest-linux-arm64.yml latest.yml; do
-    tccli cos CopyObject \
-      --bucket "$TENCENT_COS_BUCKET" \
-      --cos-path "oss/$m" \
-      --source-oss-path "oss/vX.Y.Z/$m"
+  # coscli, not tccli: COS has its own API surface and `tccli cos` exposes
+  # neither `CopyObject` nor these flags. coscli is installed by
+  # scripts/install-coscli.sh and reads ~/.cos.yaml (bucket alias "valuz").
+  for m in latest-linux-arm64.yml latest.yml; do
+    coscli cp "cos://valuz/oss/vX.Y.Z/$m" "cos://valuz/oss/$m" \
+      --meta "Cache-Control:max-age=60"
   done
+  # Then purge, or clients keep the current manifest until the edge TTL:
+  gh workflow run purge-cdn.yml --ref main \
+    -f paths="oss/latest-linux-arm64.yml oss/latest.yml"
   ```
-  CDN picks up the change within the manifest TTL (60–300s).
+  **`latest-mac.yml` is excluded on purpose.** Each mac job writes its own
+  arch-specific manifest to `oss/vX.Y.Z/`, and only the LIVE copy is later
+  replaced by `merge-mac-manifest`, so every versioned mac manifest up to and
+  including v0.4.2 is single-arch — promoting one back would hand every Apple
+  Silicon client the x86_64 build. Releases after that fix carry a merged
+  versioned copy and can be rolled back like the others; for older ones,
+  rebuild the merged manifest from the two per-arch artifacts instead.
+
+  **Do not count on the CDN expiring it for you.** Overwriting the origin does
+  not touch what the edge is already serving. This runbook used to claim
+  60–300s; in the v0.4.2 incident the edge held a stale manifest for over 25
+  minutes and only an explicit purge cleared it. The release pipeline now
+  purges every live manifest it overwrites (`scripts/purge-cdn.sh`, wired into
+  `upload-to-cos.sh` and `merge-mac-manifest`); `purge-cdn.yml` is the manual
+  door for when the origin is already right and only the edge is stale.
 - **Fix release notes after the fact** (GitHub release is mutable):
   `gh release edit vX.Y.Z --notes-file <notes> --title "Valuz X.Y.Z"`.
 

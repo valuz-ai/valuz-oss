@@ -140,7 +140,7 @@ export const SessionStreamView = ({
   return (
     <div
       ref={scrollRef}
-      className={`${heightClass} overflow-y-auto rounded-[10px] border border-surface-border bg-card`}
+      className={`${heightClass} overflow-y-auto rounded-xl border border-surface-border bg-card`}
     >
       <ConversationTurnList
         turns={turns}

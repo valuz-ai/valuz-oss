@@ -299,12 +299,12 @@ export const SkillDetailPage = () => {
               )}
               <div className="mt-2 flex flex-wrap gap-1">
                 {skill?.scope && (
-                  <Badge variant="metaOutline" className="text-[10px]">
+                  <Badge variant="metaOutline" className="text-micro">
                     {skill.scope}
                   </Badge>
                 )}
                 {skill?.tags?.map((tag) => (
-                  <Badge key={tag} variant="metaNeutral" className="text-[10px]">
+                  <Badge key={tag} variant="metaNeutral" className="text-micro">
                     {tag}
                   </Badge>
                 ))}
@@ -462,7 +462,7 @@ function FileTreeNode({
                 className="flex items-center gap-1.5 rounded px-1 py-0.5 text-xs text-ink-label hover:bg-surface-muted"
                 style={{ paddingLeft: `${depth * 14 + 4}px` }}
               >
-                <span className="shrink-0 text-[11px]">📁</span>
+                <span className="shrink-0 text-2xs">📁</span>
                 <span className="truncate">{file.name}/</span>
               </div>
               {file.children && (
@@ -482,10 +482,10 @@ function FileTreeNode({
             key={file.path}
             type="button"
             onClick={() => onSelect(file.path)}
-            className={`flex w-full items-center gap-1.5 rounded-[4px] px-1 py-0.5 text-left text-xs transition hover:bg-surface-muted ${selectedFile === file.path ? "bg-surface-soft text-ink-heading" : "text-ink-label"}`}
+            className={`flex w-full items-center gap-1.5 rounded-sm px-1 py-0.5 text-left text-xs transition hover:bg-surface-muted ${selectedFile === file.path ? "bg-surface-soft text-ink-heading" : "text-ink-label"}`}
             style={{ paddingLeft: `${depth * 14 + 22}px` }}
           >
-            <span className="shrink-0 text-[11px]">
+            <span className="shrink-0 text-2xs">
               {file.name.endsWith(".md")
                 ? "📝"
                 : file.name.endsWith(".json")

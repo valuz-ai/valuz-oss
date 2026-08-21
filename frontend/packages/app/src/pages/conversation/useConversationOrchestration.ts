@@ -61,6 +61,12 @@ import {
 } from "./useComposerSelection";
 import { useKbPickerState } from "./useKbPickerState";
 
+/** How often to re-read the durable while a send's optimistic pending is still
+ *  outstanding. Long enough that a normal turn (whose ``message.user`` echo
+ *  lands at run entry, well before the answer) never triggers it, short enough
+ *  that a turn which died before it started settles promptly. */
+const PENDING_RECONCILE_INTERVAL_MS = 15_000;
+
 export interface ConversationOrchestrationParams {
   /** ``page`` = the conversation route (may drive page chrome like the global
    *  right panel and consume navigation state); ``panel`` = embedded inside a
@@ -77,6 +83,8 @@ export interface ConversationOrchestrationParams {
    *  effect and ``useConversationHistory``'s bootstrap fast-path. */
   promotingSessionIdRef: { current: string | null };
   onSessionPromoted: (newId: string, opts?: { skillCreator?: boolean }) => void;
+  /** Panel-host recovery hook for a persisted session that now returns 404. */
+  onSessionUnavailable?: (sessionId: string) => void;
   /** Chrome-owned in the ``page`` variant (``useProjectOutlet()``); a fixed
    *  default in the ``panel`` variant (no project-layout outlet to read). */
   directoryFieldMode: DirectoryFieldMode;
@@ -128,6 +136,7 @@ export function useConversationOrchestration({
   conversationInstanceKey,
   promotingSessionIdRef,
   onSessionPromoted,
+  onSessionUnavailable,
   directoryFieldMode,
   hostRef,
   createDefaults,
@@ -356,8 +365,8 @@ export function useConversationOrchestration({
   );
   // Composer override state spine — runtime / provider / model / effort /
   // permission / connector / skill selections, their Settings-default and
-  // runtime-availability seeding, the locked-session mirror effect and
-  // ``handleSwitchModel`` — extracted to useComposerSelection. (The two
+  // runtime-availability seeding, the locked-session mirror effect and the
+  // per-turn retry counts — extracted to useComposerSelection. (The two
   // composer-override effects that read useComposerConfig outputs —
   // seed-from-brain and provider auto-pick — stay below.)
   const {
@@ -373,7 +382,6 @@ export function useConversationOrchestration({
     runtimeList,
     retryCounts,
     setRetryCounts,
-    modelSelectorUnlocked,
     selectedPermissionMode,
     setSelectedPermissionMode,
     selectedEffort,
@@ -383,7 +391,6 @@ export function useConversationOrchestration({
     toggleConnector,
     selectedComposerSkill,
     setSelectedComposerSkill,
-    handleSwitchModel,
   } = useComposerSelection({
     selectedSessionId,
     selectedAgentSlug,
@@ -975,6 +982,7 @@ export function useConversationOrchestration({
   const { refreshEvents, loadOlderTurns, refreshActiveSession, bootstrap } =
     useConversationHistory({
       id,
+      onSessionUnavailable,
       location,
       searchParams,
       panelSetCollapsed,
@@ -1012,6 +1020,30 @@ export function useConversationOrchestration({
       setSessions,
       setSelectedSessionId,
     });
+
+  // Safety net for a turn that dies before the kernel ever accepts it (a
+  // rejected cloud execution capability, a sandbox that won't allocate). Such
+  // a turn produces NO live frame — the host's live tap is a no-op with no
+  // instance to emit into — so the terminal handler in ``useSessionSubscription``
+  // never runs, nothing reconciles, and the optimistic pending sits there with
+  // the "starting runtime" header counting up indefinitely.
+  //
+  // Poll the durable instead of trusting the stream. The host records the
+  // turn's ``user_message`` + ``session_error`` there even when it never
+  // started (``turn_driver``), so ONE reconcile is enough to settle the view:
+  // the echo-release effect above sees the user message and retires the
+  // pending. Deliberately a re-read and nothing more — it never fabricates a
+  // terminal state, so a genuinely slow start (cloud cold-start legitimately
+  // runs tens of seconds) just re-reads, finds no echo, and keeps waiting.
+  useEffect(() => {
+    if (!pendingUserMessage) return;
+    const sessionId = selectedSessionIdRef.current;
+    if (!sessionId) return;
+    const handle = window.setInterval(() => {
+      void refreshActiveSession(sessionId);
+    }, PENDING_RECONCILE_INTERVAL_MS);
+    return () => window.clearInterval(handle);
+  }, [pendingUserMessage, refreshActiveSession]);
 
   useEffect(() => {
     const request = bootstrapGuardRef.current.start();
@@ -1313,9 +1345,11 @@ export function useConversationOrchestration({
   // ``sending`` release.
   const {
     showScrollBottom,
+    activeTurnIndex,
     containerHeight,
     handleScrollToBottom,
     handleTurnListVirtualApiReady,
+    scrollToTurnIndex,
   } = useConversationScroll({
     selectedSessionId,
     events,
@@ -1510,7 +1544,6 @@ export function useConversationOrchestration({
     performEnqueue,
     handleRetry,
     retryCounts,
-    handleSwitchModel,
     hasPendingProjectSend: false,
     handleSend: () => {
       if (!draft.trim()) return;
@@ -1537,8 +1570,10 @@ export function useConversationOrchestration({
     loadOlderTurns,
     containerHeight,
     showScrollBottom,
+    activeTurnIndex,
     handleScrollToBottom,
     handleTurnListVirtualApiReady,
+    scrollToTurnIndex,
     // tool cards
     isToolCardFoldable,
     renderToolCall,
@@ -1595,7 +1630,6 @@ export function useConversationOrchestration({
     setSelectedPermissionMode,
     selectedEffort,
     setSelectedEffort,
-    modelSelectorUnlocked,
     selectedAgentSkillItems,
     composerMentionSkills,
     availableSkills,

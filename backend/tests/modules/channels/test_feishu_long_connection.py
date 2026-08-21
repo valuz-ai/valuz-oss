@@ -190,6 +190,80 @@ async def test_feishu_runner_streams_the_answer_into_a_card() -> None:
 
 
 @pytest.mark.asyncio
+async def test_feishu_runner_keeps_every_segment_of_a_multi_step_answer() -> None:
+    """One ``assistant_message`` per segment: the card must close on the whole
+    answer, not on whatever the model said after its last tool call."""
+    config = FeishuLongConnectionConfig(
+        channel_instance_id="feishu-main",
+        owner_user_id="u1",
+        agent_slug="valuz-helper",
+        app_id="cli_app_1",
+        app_secret="app-secret",
+    )
+    inbound = InboundChannelMessage(
+        text="查一下这个账号",
+        context=inbound_from_sdk_event(_message_event(), config).context,
+        params={"query": "查一下这个账号", "content": "查一下这个账号"},
+        channel_context={"platform": "feishu"},
+    )
+    pushes: list[tuple[str, bool]] = []
+
+    async def dispatch(_message: InboundChannelMessage) -> ChannelIngressResult:
+        return ChannelIngressResult(
+            decision=AgentChannelRouteDecision(
+                kind=ChannelRouteDecisionKind.REUSE_SESSION,
+                agent_slug="valuz-helper",
+                project_id="project-1",
+                session_id="session-1",
+                reason="existing thread binding",
+            ),
+            session_id="session-1",
+        )
+
+    class _FakeCard:
+        async def push(self, content: str, *, final: bool) -> None:
+            pushes.append((content, final))
+
+    async def card_opener(
+        _config: FeishuLongConnectionConfig,
+        _message: InboundChannelMessage,
+    ):
+        return _FakeCard()
+
+    async def noop_reaction(*_args, **_kwargs):
+        return None
+
+    async def stream_session_events(_user_id: str, _session_id: str):
+        yield SimpleNamespace(type="text_delta", data={"text": "当前可用点数：30,187"})
+        yield SimpleNamespace(type="assistant_message", data={"text": "当前可用点数：30,187"})
+        yield SimpleNamespace(type="tool_use", data={"id": "toolu-1", "name": "clickhouse"})
+        # A subagent streams onto the same tap — it belongs to the tool card,
+        # not to the answer.
+        yield SimpleNamespace(
+            type="assistant_message",
+            data={"text": "扫表中", "parent_tool_use_id": "toolu-1"},
+        )
+        yield SimpleNamespace(
+            type="assistant_message", data={"text": "补一点：扣点是单条记录扣减。"}
+        )
+        yield SimpleNamespace(type="session_idle", data={"stop_reason": "end_turn"})
+
+    runner = FeishuLongConnectionRunner(
+        config,
+        dispatch=dispatch,
+        reply_sender=noop_reaction,
+        reaction_adder=noop_reaction,
+        reaction_remover=noop_reaction,
+        card_stream_opener=card_opener,
+        session_event_stream_factory=stream_session_events,
+    )
+
+    await runner._dispatch_event(inbound)
+
+    assert pushes[-1] == ("当前可用点数：30,187\n\n补一点：扣点是单条记录扣减。", True)
+
+
+@pytest.mark.asyncio
 async def test_feishu_runner_falls_back_to_text_when_card_unavailable() -> None:
     """An app without the cardkit permission still answers — the sink degrades
     to editing a plain text reply for the rest of the turn."""

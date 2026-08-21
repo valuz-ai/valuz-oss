@@ -16,6 +16,8 @@ the concrete services beats duck typing that once let delegators rot unnoticed.
 # ruff: noqa: I001
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
 from typing import Literal, Protocol
 
@@ -24,12 +26,27 @@ from valuz_agent.adapters.data_reader import data_reader
 from valuz_agent.infra.lifecycle import is_draining
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.tasks.datastore import TaskDatastore
+from valuz_agent.modules.tasks.lease import (
+    ACTOR_LEASE_RENEW_INTERVAL_S,
+    ActorLease,
+    acquire_actor_lease,
+)
 from valuz_agent.modules.tasks.task_state import NON_REVIEWABLE_DONE
-from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
+from valuz_agent.modules.tasks import mailbox_store, notifier
+from valuz_agent.modules.tasks.mailbox import InboxMsg
 from valuz_agent.modules.sessions.pre_turn import always_on_mcp_hook
 from valuz_agent.modules.sessions.turn_driver import _resolve_turn_status
 
 logger = logging.getLogger(__name__)
+
+
+class _StoppedExternally(Exception):  # noqa: N818
+    """This actor was stopped by someone else; the terminal state is theirs.
+
+    Raised out of the wait when the durable state says the actor is no longer
+    running — a paused task, a finished one, a cancelled member. It maps onto
+    the loop's existing externally-managed exit, which skips finalize.
+    """
 
 
 # ``member_done`` payload statuses that carry NO reviewable deliverable — the
@@ -52,6 +69,19 @@ MEMBER_IDLE_TTL_S = 600.0
 # pin an actor loop for the life of the process; generous enough that real
 # background work — which routinely outlasts one TTL — is never reaped.
 MAX_IDLE_EXTENSIONS = 6
+
+# How often a parked LEAD re-reads durable state while waiting on its mailbox.
+# Not a tuning knob for latency alone: it is the interval at which the loop
+# stops depending on cross-process message delivery at all (see
+# ``_await_wakeup``). Longer than the 8s used inside a turn — between turns
+# nobody is watching a cursor blink — but far short of the 30-minute idle TTL
+# that a dropped result used to cost.
+LEAD_RECONCILE_SLICE_S = 30.0
+# How often an actor looks in its DURABLE inbox. Far shorter than the reconcile
+# above, because this is one indexed lookup and the thing waiting on the other
+# end may be a person who just typed something. Both roles poll it: a member
+# receives follow-ups and rework the same way a lead receives instructions.
+ACTOR_INBOX_POLL_S = 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +119,18 @@ class ActorCoordinator(Protocol):
         """True when a lead has nothing left to wait for and should stop looping."""
         ...
 
+    async def member_already_settled(
+        self, *, task_id: str, project_id: str, member_session_id: str, user_id: str
+    ) -> bool:
+        """Has this member's work already been dealt with (or the task ended)?"""
+        ...
+
+    async def recover_crashed_members(
+        self, *, task_id: str, project_id: str, user_id: str
+    ) -> list[InboxMsg]:
+        """Members that finished without their ``member_done`` reaching us."""
+        ...
+
     async def session_still_working(self, session_id: str) -> bool:
         """True when the session is doing work THIS loop cannot see.
 
@@ -102,6 +144,25 @@ class ActorCoordinator(Protocol):
 # ---------------------------------------------------------------------------
 # ActorRunner
 # ---------------------------------------------------------------------------
+
+
+def _log_renewer_exit(task: asyncio.Task[None], *, task_id: str) -> None:
+    """Report a lease renewer that died on an unhandled exception.
+
+    Its silence is the dangerous part: no renewals means the lease expires
+    under a driver that is still working, and the next watchdog sweep blocks a
+    live task. Mirrors ``launcher._log_actor_exit``, for the same reason.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(
+            "task lease renewer for %s died on an unhandled exception — the lease "
+            "will expire under a live driver",
+            task_id,
+            exc_info=exc,
+        )
 
 
 class ActorRunner:
@@ -175,12 +236,18 @@ class ActorRunner:
         project_id: str,
         idle_ttl: float | None = None,
         user_id: str,
+        lease: ActorLease | None = None,
     ) -> None:
         """Persistent actor loop: run turn → idle → await mailbox → repeat.
 
         Replaces the one-shot ``run_session_to_idle`` for v2 sessions. The loop
         exits on shutdown message, idle-TTL expiry, max-turns, or a terminal
         turn status, then finalizes the session exactly once.
+
+        ``lease``: a lead lease the CALLER already holds (recovery/resume, which
+        must own the task before respawning its members). Adopted as-is —
+        acquiring again would bump the fence and evict the caller. Omitted
+        everywhere else, and then the loop acquires for itself.
         """
         from valuz_agent.modules.tasks import planning
 
@@ -196,12 +263,44 @@ class ActorRunner:
             if idle_ttl is not None
             else (LEAD_IDLE_TTL_S if role == "lead" else MEMBER_IDLE_TTL_S)
         )
-        claim_token = mailbox_registry.claim(session_id)
+        # THE RIGHT TO RUN THIS SESSION. One lease per actor, lead and member
+        # alike, keyed by session id and carrying a fence token that names this
+        # incarnation. Acquiring it revokes whichever loop held it before, so
+        # "someone took over" and "you were told to stop" are the same event
+        # and get the same handling: leave without finalizing.
+        #
+        # Members are leased too, unlike under the old task-scoped lease. A
+        # member's loop is every bit as capable of being resumed twice, and it
+        # is the only thing that can say whether a member session is live —
+        # which used to be a question about one process's memory.
+        fenced = asyncio.Event()
+        renewer: asyncio.Task[None] | None = None
+        if lease is None:
+            lease = await acquire_actor_lease(session_id=session_id, task_id=task_id)
+        if lease is None:
+            logger.info(
+                "actor loop %s (%s): session already has a live runner — exiting",
+                session_id,
+                role,
+            )
+            return
+        if lease.needs_renewal:
+            renewer = asyncio.create_task(
+                self._renew_lease(lease, session_id, fenced),
+                name=f"actor-lease-{session_id}",
+            )
+            # An unobserved renewer death is invisible until the lease has
+            # already expired, so say so at the moment it happens.
+            renewer.add_done_callback(functools.partial(_log_renewer_exit, task_id=task_id))
         # Read once: every lead wake-up restates it (see _with_goal_restated).
-        task_goal = (
-            await self._task_goal(task_id, project_id, user_id) if role == "lead" else ""
-        )
+        task_goal = await self._task_goal(task_id, project_id, user_id) if role == "lead" else ""
         prompt = initial_prompt
+        # Provenance of ``prompt``, logged before every turn. A turn is
+        # otherwise anonymous in the log: when one runs that nobody expected,
+        # the only way to ask WHY was to correlate DB turn rows against log
+        # timestamps by hand. Kept in lockstep with ``prompt`` — every
+        # assignment to one assigns the other.
+        prompt_origin = "initial"
         final_status = "idle"
         turns = 0
         # Did the loop exit because of a ``shutdown`` mailbox message (pause /
@@ -221,6 +320,21 @@ class ActorRunner:
                 if is_draining():
                     exited_on_shutdown = True
                     break
+                # Another process took this task over while we were mid-turn.
+                # Treat it exactly like a shutdown: leave WITHOUT finalizing,
+                # so we don't race the new driver into a terminal state.
+                if fenced.is_set():
+                    exited_on_shutdown = True
+                    break
+                logger.info(
+                    "actor loop %s (%s): task %s turn %d ← %s (%d chars)",
+                    session_id,
+                    role,
+                    task_id,
+                    turns + 1,
+                    prompt_origin,
+                    len(prompt),
+                )
                 final_status = await self.run_turn(session_id, prompt, user_id=user_id)
                 turns += 1
 
@@ -254,9 +368,12 @@ class ActorRunner:
                 # for 30 minutes before the idle-TTL fires _finalize_actor.
                 # NB: must check the mailbox is empty first, else a queued
                 # follow-up / member_done would be dropped.
+                # Asked of the TABLE, which is where messages live. This
+                # used to also consult a per-process queue, which could not see
+                # anything another process wrote.
                 if (
                     role == "lead"
-                    and not mailbox_registry.has_pending(session_id)
+                    and not await mailbox_store.has_pending(session_id)
                     and await coordinator.lead_idle_with_no_pending(
                         task_id, project_id, user_id=user_id, lead_session_id=session_id
                     )
@@ -268,45 +385,109 @@ class ActorRunner:
                     )
                     break
 
-                try:
-                    msg = await mailbox_registry.get(session_id, timeout=ttl)
-                except KeyError:
-                    # Our box was dropped externally — ownership moved (a newer
-                    # loop claimed the session). Exit as an externally-managed
-                    # shutdown; running auto-finalize here would fight the new
-                    # owner exactly like the pause→resume race.
-                    logger.info(
-                        "actor loop %s (%s): mailbox ownership moved — exiting",
-                        session_id,
-                        role,
-                    )
-                    exited_on_shutdown = True
-                    break
-                except TimeoutError:
-                    # The TTL measures silence on OUR mailbox — not session
-                    # idleness. A run_in_background subagent outlives the turn
-                    # and the CLI drives follow-up turns the loop never sees,
-                    # so ask before concluding (bounded by MAX_IDLE_EXTENSIONS
-                    # so a wedged session cannot pin the loop forever).
-                    if extensions < MAX_IDLE_EXTENSIONS and await coordinator.session_still_working(
-                        session_id
-                    ):
-                        extensions += 1
+                # Wait for something that WARRANTS a turn.
+                #
+                # This is an INNER loop, and that is load-bearing. The outer
+                # loop's next statement is ``run_turn(session_id, prompt)``,
+                # and ``prompt`` still holds the PREVIOUS turn's text — so a
+                # ``continue`` here does not mean "keep waiting", it means
+                # "re-run the last prompt". Both places that wanted to keep
+                # waiting used ``continue``, and in production that re-ran a
+                # finished task from its original goal: the user saw their own
+                # message sent a second time and the whole task done twice.
+                stop = False
+                wake: InboxMsg | None = None
+                while wake is None:
+                    try:
+                        msg = await self._await_wakeup(
+                            session_id=session_id,
+                            role=role,
+                            ttl=ttl,
+                            task_id=task_id,
+                            project_id=project_id,
+                            user_id=user_id,
+                            coordinator=coordinator,
+                            fenced=fenced,
+                        )
+                    except _StoppedExternally:
+                        exited_on_shutdown = True
+                        stop = True
+                        break
+                    except KeyError:
+                        # Our box was dropped externally — ownership moved (a
+                        # newer loop claimed the session). Exit as an
+                        # externally-managed shutdown; running auto-finalize
+                        # here would fight the new owner exactly like the
+                        # pause→resume race.
                         logger.info(
-                            "actor loop %s (%s) idle-TTL expired but the session is "
-                            "still working (background task) — extending (%d/%d)",
+                            "actor loop %s (%s): mailbox ownership moved — exiting",
                             session_id,
                             role,
-                            extensions,
-                            MAX_IDLE_EXTENSIONS,
+                        )
+                        exited_on_shutdown = True
+                        stop = True
+                        break
+                    except TimeoutError:
+                        # The TTL measures silence on OUR mailbox — not session
+                        # idleness. A run_in_background subagent outlives the
+                        # turn and the CLI drives follow-up turns the loop never
+                        # sees, so ask before concluding (bounded by
+                        # MAX_IDLE_EXTENSIONS so a wedged session cannot pin the
+                        # loop forever).
+                        if (
+                            extensions < MAX_IDLE_EXTENSIONS
+                            and await coordinator.session_still_working(session_id)
+                        ):
+                            extensions += 1
+                            logger.info(
+                                "actor loop %s (%s) idle-TTL expired but the session is "
+                                "still working (background task) — extending (%d/%d)",
+                                session_id,
+                                role,
+                                extensions,
+                                MAX_IDLE_EXTENSIONS,
+                            )
+                            continue
+                        logger.info("actor loop %s (%s) idle-TTL expired", session_id, role)
+                        stop = True
+                        break
+
+                    if (
+                        msg.kind == "member_done"
+                        and role == "lead"
+                        and await coordinator.member_already_settled(
+                            task_id=task_id,
+                            project_id=project_id,
+                            member_session_id=msg.from_session,
+                            user_id=user_id,
+                        )
+                    ):
+                        # Duplicate: the node is already settled, or the task
+                        # has ended. Several paths produce these messages (the
+                        # member's own notify, recovery re-seeding, stop_member)
+                        # and any of them can repeat — so the question asked is
+                        # the only one that matters: does the lead still owe
+                        # this member a turn?
+                        logger.info(
+                            "actor loop %s (lead): dropping a member_done for %s — "
+                            "already settled, no turn needed",
+                            session_id,
+                            msg.from_session,
                         )
                         continue
-                    logger.info("actor loop %s (%s) idle-TTL expired", session_id, role)
-                    break
+                    wake = msg
 
-                if msg.kind == "shutdown":
-                    exited_on_shutdown = True
+                if stop:
                     break
+                msg = wake
+
+                if role == "lead" and not task_goal:
+                    # The once-per-loop read failed (or the task had no goal
+                    # yet). Retry here rather than restating nothing for the
+                    # rest of this loop's life — wake-ups are infrequent, so
+                    # this costs one row read per member completion at most.
+                    task_goal = await self._task_goal(task_id, project_id, user_id)
+
                 if msg.kind == "member_done":
                     # Lead-side, single-actor (D7): flip the member's plan node
                     # to in_review so the lead reviews it (member-idle ≠ done).
@@ -328,12 +509,14 @@ class ActorRunner:
                             user_id=user_id,
                         )
                     prompt = self._format_member_done(msg)
+                    prompt_origin = self._origin_label(msg)
                     if role == "lead":
                         prompt = self._with_goal_restated(task_goal, prompt)
                 elif msg.kind == "revise_goal":
                     # The user REPLACED the goal — this text is the new
                     # objective, so it must NOT be prefixed with the old one.
                     prompt = msg.text
+                    prompt_origin = self._origin_label(msg)
                     if role == "lead":
                         task_goal = msg.text
                 else:  # "text" — an inject/follow-up: context, not a new goal
@@ -342,8 +525,10 @@ class ActorRunner:
                         if role == "lead"
                         else msg.text
                     )
+                    prompt_origin = self._origin_label(msg)
         finally:
-            mailbox_registry.release(session_id, claim_token)
+            if renewer is not None:
+                renewer.cancel()
             # When draining, skip the ENTIRE finalize. ``_finalize_actor`` touches
             # the kernel store (status flip) AND the host DB (lead auto-finalize /
             # member run record), both being torn down right now; running it spams
@@ -351,7 +536,42 @@ class ActorRunner:
             # boot recovery wants. Leave the session ``running`` / the task
             # ``active``; recovery resumes it. (A plain ``if`` — never ``return``
             # from a ``finally``, which would swallow a propagating CancelledError.)
-            if not is_draining():
+            # Do we still own the task? ``finalize_actor`` flips the KERNEL
+            # session status before it looks at ``via_shutdown``, so a fenced
+            # loop finalizing here lands on a session the new driver may be
+            # mid-turn on. ``via_shutdown`` only ever guarded the task-level
+            # auto-finalize; the kernel write was unconditional.
+            #
+            # Asked authoritatively rather than off ``fenced``: the renewer
+            # ticks every ``ACTOR_LEASE_RENEW_INTERVAL_S``, so a takeover in the
+            # last few seconds has not reached that event yet.
+            #
+            # ONLY a proven loss skips the finalize. If the check itself fails
+            # we cannot prove anything, so the pre-existing behaviour stands —
+            # a transient database error must not start leaving every normal
+            # exit unfinalized, which would hand healthy tasks to the watchdog.
+            still_ours = True
+            if lease is not None:
+                if fenced.is_set():
+                    still_ours = False
+                else:
+                    try:
+                        still_ours = await lease.renew()
+                    except Exception:  # noqa: BLE001
+                        logger.debug(
+                            "actor loop %s: could not confirm the lease before "
+                            "finalize — proceeding as owner",
+                            session_id,
+                        )
+            if not still_ours:
+                logger.warning(
+                    "actor loop %s (%s): task %s was taken over — skipping finalize so "
+                    "the new driver's session is left alone",
+                    session_id,
+                    role,
+                    task_id,
+                )
+            if not is_draining() and still_ours:
                 await finalizer.finalize_actor(
                     session_id=session_id,
                     last_content=prompt,
@@ -362,18 +582,268 @@ class ActorRunner:
                     via_shutdown=exited_on_shutdown,
                     user_id=user_id,
                 )
+            # LAST — strictly after finalize. ``finalize_actor`` writes the
+            # authoritative terminal state (kernel session status, and for a
+            # natural lead exit the task's own completed/blocked flip), so it
+            # must happen while we still own the task. Releasing first opened a
+            # window where a peer could acquire the lease and start driving,
+            # and this loop's finalize would then overwrite the new driver's
+            # state. Skipped when fenced: we no longer hold it (the guard makes
+            # it a no-op anyway) and the new driver's lease must not be touched.
+            if lease is not None and still_ours:
+                # Hand the task back so a peer — or this process after a
+                # restart — picks it up immediately instead of waiting out the
+                # TTL. Best-effort: the lease expires on its own, and a failure
+                # here must not mask the loop's own exit. Gated on the same
+                # answer as the finalize: releasing a lease we no longer hold
+                # would be a no-op anyway, but asking once keeps the two
+                # decisions from drifting apart.
+                try:
+                    await lease.release()
+                except Exception:  # noqa: BLE001
+                    logger.debug("actor loop %s: lease release failed", session_id)
+                notifier.forget(session_id)
+
+    @staticmethod
+    async def _drain_durable_inbox(session_id: str) -> list[InboxMsg]:
+        """Messages written for this actor by any process. Never raises.
+
+        A failed lookup must not end the wait: the caller is parked between
+        turns, and turning a transient DB error into a timeout would let the
+        idle-TTL finalize a task that is merely waiting.
+        """
+        try:
+            # ONE. Never claim more than the caller can hand over: leftovers
+            # need somewhere to live between iterations, and that somewhere was
+            # a module-level dict keyed by session which nothing ever emptied.
+            messages = await mailbox_store.drain(session_id, limit=1)
+        except Exception:  # noqa: BLE001
+            logger.debug("actor loop %s: durable inbox read failed, still waiting", session_id)
+            return []
+        if messages:
+            logger.info(
+                "actor loop %s: %d message(s) from the durable inbox — "
+                "written by another process",
+                session_id,
+                len(messages),
+            )
+        return messages
+
+    async def _await_wakeup(
+        self,
+        *,
+        session_id: str,
+        role: Literal["lead", "subtask"],
+        ttl: float,
+        task_id: str,
+        project_id: str,
+        user_id: str,
+        coordinator: ActorCoordinator,
+        fenced: asyncio.Event,
+    ) -> InboxMsg:
+        """Wait for the next inbox message, re-reading durable state as we go.
+
+        A lead used to park on ONE ``get(timeout=1800)``, which is only correct
+        if every ``member_done`` reaches THIS process's mailbox. It does not:
+        the lead's own ``dispatch`` is an HTTP tool call that lands on whichever
+        host process the load balancer picked, so the member it spawns can post
+        its result into a different process's queue — where ``put`` returns
+        False, unchecked, and the message is gone. The lead then slept out its
+        full idle TTL and auto-finalize blocked the task for "unresolved
+        subtasks": a task whose members had all finished.
+
+        Slicing the wait and reconciling durable run/plan state on each slice
+        removes the dependency. The mailbox stays the fast path; the store is
+        the truth. This is the same backstop ``await_member_results`` already
+        applies INSIDE a turn — the loop simply had none between turns.
+
+        Members keep the single long wait: they have no siblings to reconcile,
+        and their own results are what the lead is waiting for.
+
+        Raises ``TimeoutError`` when the full *ttl* elapses with nothing, and
+        propagates ``KeyError`` when the box is dropped (ownership moved) —
+        both exactly as the plain ``get`` did.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + ttl
+        next_reconcile = loop.time() + LEAD_RECONCILE_SLICE_S
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError
+            if not await coordinator.actor_still_wanted(
+                session_id=session_id,
+                role=role,
+                task_id=task_id,
+                project_id=project_id,
+                user_id=user_id,
+            ):
+                # Someone stopped this — the task was paused or finished, or
+                # this member was cancelled. The terminal state is written
+                # already and belongs to whoever wrote it, so leave without
+                # finalizing. This used to arrive as a ``shutdown`` message;
+                # it is a fact to read.
+                logger.info(
+                    "actor loop %s (%s): no longer wanted on task %s — standing down",
+                    session_id,
+                    role,
+                    task_id,
+                )
+                raise _StoppedExternally
+            if fenced.is_set():
+                # Our right to run this session was revoked — someone else
+                # holds the lease now. Leave the way a shutdown used to make us
+                # leave, but WITHOUT a message: a stop that travels as a queued
+                # message can be read by the loop that replaced us.
+                raise KeyError(session_id)
+            # NOT while draining. The drain CLAIMS — it flips rows to
+            # ``consumed`` — and the outer loop breaks on ``is_draining`` before
+            # it can run a turn, so anything taken here is taken and thrown
+            # away. Nothing re-creates a user instruction: crash recovery only
+            # re-synthesises member results from run rows. Leave it pending for
+            # whoever comes up after the deploy.
+            durable = (
+                [] if is_draining() else await self._drain_durable_inbox(session_id)
+            )
+            if durable:
+                return durable[0]
+            # Everything below only applies to a lead, and only settles a
+            # member that crashed — so it is the last thing tried, and reaching
+            # the end of the body means "nothing to act on, park".
+            if (
+                role == "lead"
+                # Teardown has started. Recovery WRITES (it settles run rows and
+                # flips plan nodes), and the reason the loop skips its finalize
+                # while draining is that a terminal write here fights the boot
+                # recovery meant to resume this task.
+                and not is_draining()
+                # Its own, slower cadence: unlike the inbox lookup it is neither
+                # cheap nor free of side effects.
+                and loop.time() >= next_reconcile
+            ):
+                next_reconcile = loop.time() + LEAD_RECONCILE_SLICE_S
+                try:
+                    recovered = await coordinator.recover_crashed_members(
+                        task_id=task_id, project_id=project_id, user_id=user_id
+                    )
+                except Exception:  # noqa: BLE001 — a failed backstop must not end the wait
+                    logger.exception(
+                        "actor loop %s: crash recovery failed, still waiting", session_id
+                    )
+                    recovered = 0
+                if recovered:
+                    logger.info(
+                        "actor loop %s (lead): %d member(s) recovered — their processes "
+                        "died before recording that they finished",
+                        session_id,
+                        recovered,
+                    )
+                    # It enqueued them; the next pass drains one, like any
+                    # other message. Nothing is handed back for us to park.
+                    continue
+
+            # Nothing to act on. Park until someone rings or the poll expires —
+            # the single blocking point in this loop, which is what keeps a
+            # body with several early exits from spinning.
+            # Recomputed, not reused: ``remaining`` was measured before three
+            # awaited round trips, and parking on a stale deadline overshoots
+            # the idle TTL by however long those took — precisely under the
+            # load where a bounded TTL matters.
+            left = deadline - loop.time()
+            if left <= 0:
+                raise TimeoutError
+            await self._park(session_id, min(ACTOR_INBOX_POLL_S, left))
+
+    @staticmethod
+    async def _park(session_id: str, seconds: float) -> None:
+        """Sleep until someone rings for this session, or *seconds* elapse.
+
+        The ring is an optimisation, never a dependency: everything the caller
+        needs is durable, and it re-reads it either way. A notifier that loses
+        signals, duplicates them, or dies entirely costs latency and nothing
+        else — which is why the transport is allowed to be best-effort.
+        """
+        await notifier.wait_for_ring(session_id, seconds)
+
+    @staticmethod
+    async def _renew_lease(lease: ActorLease, session_id: str, fenced: asyncio.Event) -> None:
+        """Keep this actor's lease alive; raise the fence if we lose it.
+
+        Runs as its own task on purpose: the loop spends most of its life
+        blocked inside ``run_turn`` (minutes) or parked on its inbox, so a
+        renewal folded into the loop body would starve and the lease would
+        expire under a perfectly healthy runner.
+
+        Losing it means someone else now runs this session. Setting the event
+        is ALL this does — the parked loop checks it on every inbox slice and
+        leaves on its own.
+
+        It used to also post a ``shutdown`` message to wake the loop, because
+        the wait had no other way to notice. That was a control signal sent
+        down a message channel, and both loops share one inbox, so the message
+        could be read by the loop that REPLACED the one it was meant to stop —
+        killing the wrong one and leaving the task undriven. The guard for that
+        was a process-local claim token; observing the fence instead removes
+        the message and the guard together.
+        """
+        if not lease.needs_renewal:
+            # Exclusivity was proven at acquisition (single-process deployment),
+            # so ``renew`` is a no-op that always succeeds — a loop waiting for
+            # it to fail would never exit. Nothing can fence us here either.
+            return
+        while True:
+            try:
+                await asyncio.sleep(ACTOR_LEASE_RENEW_INTERVAL_S)
+            except asyncio.CancelledError:
+                return
+            # EVERYTHING below is inside the guard, not just the renew call.
+            # This task dying silently is the worst outcome available here: the
+            # lease then expires under a driver that is perfectly healthy, and
+            # a peer's watchdog blocks a live task — exactly the bug the lease
+            # exists to prevent, re-entered through a different door. asyncio
+            # would only surface it as "Task exception was never retrieved" at
+            # GC, detached from the session it belonged to.
+            try:
+                if await lease.renew():
+                    continue
+                fenced.set()
+                logger.warning(
+                    "actor loop %s: lost its lease (taken over) — standing down",
+                    session_id,
+                )
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                # A transient DB failure is not eviction — the TTL spans several
+                # renewals, and ``renew`` itself stands the holder down once it
+                # can no longer prove ownership. Anything else is a bug here;
+                # log it loudly and keep renewing rather than leave a live
+                # driver silently unrenewed.
+                logger.exception(
+                    "task lease renewal iteration failed for %s; retrying", lease.key
+                )
+                continue
 
     @staticmethod
     async def _task_goal(task_id: str, project_id: str, user_id: str) -> str:
         """The task's goal text, read once per loop (best-effort)."""
         try:
             async with async_unit_of_work(commit=False) as db:
-                row = await TaskDatastore(db).get_task_by_project(
-                    user_id, project_id, task_id
-                )
+                row = await TaskDatastore(db).get_task_by_project(user_id, project_id, task_id)
                 return (row.goal or "").strip() if row is not None else ""
         except Exception:  # noqa: BLE001 — a wake-up must never fail on this
-            logger.debug("actor loop: goal read failed for task %s", task_id)
+            # NOT debug. An empty goal makes ``_with_goal_restated`` a no-op, and
+            # that function is load-bearing: without the restatement the kernel
+            # re-goals the lead to whatever the wake-up says ("review this
+            # result"), and goal-auto-exit fires the moment that trivial goal is
+            # met — the lead silently stops driving the real task. A read failure
+            # here is a correctness event, not a cosmetic one.
+            logger.warning(
+                "actor loop: goal read failed for task %s — wake-ups will not "
+                "restate the goal until it is read again",
+                task_id,
+            )
             return ""
 
     @staticmethod
@@ -397,6 +867,19 @@ class ActorRunner:
             "The goal above is unchanged — it is what you are still driving.\n\n"
             f"{body}"
         )
+
+    @staticmethod
+    def _origin_label(msg: InboxMsg) -> str:
+        """Compact provenance for the per-turn log: ``kind/producer<peer>``.
+
+        ``kind`` alone is not enough to explain a turn — several producers emit
+        ``member_done`` (a live member going idle, the durable reconcile
+        backstop, a cancelled member, recovery re-seeding after a restart), and
+        which one fired is exactly the question asked when an unexpected turn
+        shows up. Untagged producers degrade to the bare kind rather than lying.
+        """
+        label = f"{msg.kind}/{msg.origin}" if msg.origin else msg.kind
+        return f"{label}<{msg.from_session[:8]}>" if msg.from_session else label
 
     @staticmethod
     def _format_member_done(msg: InboxMsg) -> str:

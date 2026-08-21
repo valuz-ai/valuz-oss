@@ -95,9 +95,13 @@ def _contributed(compatible: str, models: list[LLMModel]) -> LLMChannel:
 
 
 def test_stamp_contributed_fills_none_runtimes() -> None:
-    ch = _contributed("openai-completion", [LLMModel(id="glm", label=None)])
+    ch = _contributed(
+        "openai-completion",
+        [LLMModel(id="glm", label=None, selection_hint="1.5×")],
+    )
     out = _stamp_contributed_runtimes(ch)
-    assert tuple(out.models[0].runtimes or ()) == ("deepagents",)
+    assert tuple(out.models[0].runtimes or ()) == ("deepagents", "deepseek_harness")
+    assert out.models[0].selection_hint == "1.5×"
 
 
 def test_stamp_contributed_openai_response_gets_codex() -> None:
@@ -121,25 +125,31 @@ def test_default_model_only_channel_synthesizes_a_model_row() -> None:
     assert "codex" in (item.models[0].runtimes or ())
 
 
-# ── Per-model codex capability on built-in channels ─────────────────────────
-# DeepSeek serves the Responses wire for exactly one model today
-# (deepseek-v4-flash); the channel stays chat-completions-derived, and the
-# codex capability is declared per model — appended last so the channel's
-# default runtime (runtimes[0]) is unchanged.
+# ── DeepSeek channel-level codex capability ──────────────────────────────────
+# DeepSeek serves the Responses wire natively for its whole lineup (see
+# https://api-docs.deepseek.com/quick_start/agent_integrations/codex), so the
+# unpinned channel derives openai-response and every model gets codex through
+# the normal derivation rule. This retired the v4-flash-only per-model
+# allowlist (_CODEX_CAPABLE_MODELS_BY_KIND) from PR #760.
 
 
-def test_deepseek_v4_flash_gets_codex_appended() -> None:
+def test_deepseek_channel_derives_codex_for_every_model() -> None:
     row = _row(
         provider_kind="deepseek",
         model_ids='["deepseek-v4-flash", "deepseek-v4-pro"]',
     )
-    by_id = {m.id: m for m in _row_to_list_item(row).models}
-    flash = tuple(by_id["deepseek-v4-flash"].runtimes or ())
-    channel_derived = tuple(by_id["deepseek-v4-pro"].runtimes or ())
-    # codex is APPENDED — the channel-derived prefix (and with it the
-    # default runtime, runtimes[0]) is unchanged.
-    assert flash == (*channel_derived, "codex")
-    assert "codex" not in channel_derived
+    item = _row_to_list_item(row)
+    assert item.compatible_protocols == [
+        "anthropic",
+        "openai-completion",
+        "openai-response",
+    ]
+    for m in item.models:
+        rts = tuple(m.runtimes or ())
+        assert "codex" in rts
+        # The channel's default runtime (runtimes[0] → one-click pick) is
+        # still claude_agent.
+        assert rts[0] == "claude_agent"
 
 
 def test_deepseek_synthetic_default_row_gets_codex() -> None:
@@ -153,8 +163,47 @@ def test_deepseek_synthetic_default_row_gets_codex() -> None:
     assert "codex" in (models[0].runtimes or ())
 
 
+def test_deepseek_pinned_row_protocol_still_wins() -> None:
+    # An explicit row pin narrows the channel to that wire — codex is not
+    # offered (documented "explicit wins" contract).
+    row = _row(
+        provider_kind="deepseek",
+        protocol="anthropic",
+        model_ids='["deepseek-v4-pro"]',
+    )
+    item = _row_to_list_item(row)
+    assert item.compatible_protocols == ["anthropic"]
+    assert "codex" not in (item.models[0].runtimes or ())
+
+
 def test_codex_capability_is_kind_scoped() -> None:
-    # The same model id on a custom (compatible) channel is NOT stamped —
-    # the declaration is about DeepSeek's own endpoint, not the name.
+    # The same model id on a custom (compatible) unpinned channel derives
+    # openai-completion only — Responses support is a property of DeepSeek's
+    # endpoint, not the model name.
     row = _row(provider_kind="compatible", model_ids='["deepseek-v4-flash"]')
     assert "codex" not in (_row_to_list_item(row).models[0].runtimes or ())
+
+
+def test_compatible_completion_channel_derives_harness_for_every_model() -> None:
+    # deepseek_harness is protocol-scoped (like codex on the Responses wire):
+    # every model of a chat-completions-speaking channel derives it, DeepSeek
+    # branding or not — the dsh adapter posts plain chat-completions to the
+    # channel's own endpoint.
+    row = _row(
+        provider_kind="compatible",
+        model_ids='["deepseek-ai/DeepSeek-V3.1", "glm-4-plus"]',
+    )
+    for m in _row_to_list_item(row).models:
+        rts = tuple(m.runtimes or ())
+        assert "deepseek_harness" in rts
+        # Never the one-click default — priority keeps deepagents first.
+        assert rts[0] != "deepseek_harness"
+
+
+def test_other_dual_protocol_kinds_do_not_derive_codex() -> None:
+    # openai-response is DeepSeek-specific; the other supports_protocol_selection
+    # built-ins keep the plain dual-protocol derivation.
+    row = _row(provider_kind="zhipu", model_ids='["glm-4-plus"]')
+    item = _row_to_list_item(row)
+    assert item.compatible_protocols == ["anthropic", "openai-completion"]
+    assert "codex" not in (item.models[0].runtimes or ())

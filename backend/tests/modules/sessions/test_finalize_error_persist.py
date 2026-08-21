@@ -80,3 +80,22 @@ def test_finalize_success_has_no_error_event(monkeypatch: Any) -> None:
     assert req.error_event is None
     assert req.stop_reason_type is None
     assert req.stop_reason_message is None
+
+
+def test_finalize_with_cancelled_error_records_an_interruption_marker(monkeypatch: Any) -> None:
+    """A cancellation is threaded through as ``error`` so the turn still gets a
+    durable terminal bracket on reload — but as the ``interrupted`` category the
+    client renders quietly, and WITHOUT stamping the session's stop_reason as an
+    error (the session stays a clean, resumable idle)."""
+    captured: dict[str, Any] = {}
+    _patch_common(monkeypatch, captured)
+
+    asyncio.run(run_orch._finalize_session("sess-1", "hi", "idle", error=asyncio.CancelledError()))
+
+    req = captured["req"]
+    assert req.status == "idle"
+    assert req.error_event is not None
+    assert req.error_event.type == "session_error"
+    assert req.error_event.data == {"category": "interrupted", "message": "turn interrupted"}
+    assert req.stop_reason_type is None
+    assert req.stop_reason_message is None

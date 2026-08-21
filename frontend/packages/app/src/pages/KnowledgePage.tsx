@@ -71,14 +71,11 @@ import { usePlatform } from "@valuz/app/platform";
 import { useTranslation, useResourceCategories } from "@valuz/core";
 import type { ResourceCategory } from "@valuz/shared";
 import { CreateKbDialog } from "../components";
+import { useCardGridColumns } from "../hooks/use-card-grid-columns";
+import { useKbTreePolling } from "../hooks/use-kb-tree-polling";
 import { OriginIcon } from "../components/ExecutionLocationPicker";
 
 type UiStatus = "ready" | "indexing" | "failed" | "queued" | "missing";
-
-const KB_CARD_MIN_WIDTH = 240;
-const KB_CARD_PREFERRED_MIN_WIDTH = 280;
-const KB_CARD_MAX_WIDTH = 360;
-const KB_CARD_GAP = 12;
 
 const KB_ICON_RULES: Array<{ keywords: string[]; icon: LucideIcon }> = [
   {
@@ -290,8 +287,12 @@ const uploadErrorMessage = (error: unknown, fallback: string): string => {
 
 export const KnowledgePage = ({
   directoryFieldMode = "picker",
+  managedRootAutoDiscovers = true,
 }: {
   directoryFieldMode?: DirectoryFieldMode;
+  /** See ``CreateKbDialog`` — whether a managed root is one the owning
+   * backend rescans on a timer. */
+  managedRootAutoDiscovers?: boolean;
 } = {}) => {
   const { t } = useTranslation();
   const { copyFiles } = usePlatform();
@@ -299,6 +300,9 @@ export const KnowledgePage = ({
   const [health, setHealth] = useState<DocsHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const kbIcons = useMemo(() => getUniqueKbIcons(kbs), [kbs]);
+  const { ref: kbGridRef, columns: kbGridColumns } = useCardGridColumns(
+    kbs.length,
+  );
   const kbCategories = useResourceCategories<KbListItem>(
     "kb",
     useMemo(() => buildKbCategories(t), [t]),
@@ -328,11 +332,13 @@ export const KnowledgePage = ({
   const [deleteDocOpen, setDeleteDocOpen] = useState(false);
 
   const [dragOver, setDragOver] = useState(false);
-  const [dropping, setDropping] = useState(false);
+  // Covers BOTH upload entry points — the header button and the drop zone.
+  // ``dropping`` used to exist for the drop path alone, and even there it was
+  // unreachable: ``handleDrop`` clears ``dragOver`` before setting it, and the
+  // only thing that read it lived inside the ``dragOver &&`` overlay.
+  const [uploading, setUploading] = useState(false);
   const dragCounterRef = useRef(0);
-  const kbGridRef = useRef<HTMLDivElement | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
-  const [kbGridWidth, setKbGridWidth] = useState(0);
 
   const {
     setRightPanel,
@@ -341,41 +347,6 @@ export const KnowledgePage = ({
     setContentInnerClassName,
   } = useProjectOutlet();
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
-
-  useEffect(() => {
-    const el = kbGridRef.current;
-    if (!el) return;
-
-    const updateWidth = () => setKbGridWidth(el.clientWidth);
-    updateWidth();
-
-    const ro = new ResizeObserver(updateWidth);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [loading, kbs.length, activeKb]);
-
-  const kbGridColumns = useMemo(() => {
-    if (kbGridWidth <= 0) {
-      return `repeat(auto-fill, ${KB_CARD_MAX_WIDTH}px)`;
-    }
-
-    const maxColumns = Math.max(
-      1,
-      Math.floor(
-        (kbGridWidth + KB_CARD_GAP) /
-          (KB_CARD_PREFERRED_MIN_WIDTH + KB_CARD_GAP),
-      ),
-    );
-    const columns = Math.min(kbs.length || 1, maxColumns);
-    const widthAtMaxColumns =
-      (kbGridWidth - KB_CARD_GAP * (columns - 1)) / columns;
-    const cardWidth = Math.max(
-      KB_CARD_MIN_WIDTH,
-      Math.min(KB_CARD_MAX_WIDTH, Math.floor(widthAtMaxColumns)),
-    );
-
-    return `repeat(${columns}, minmax(${KB_CARD_MIN_WIDTH}px, ${cardWidth}px))`;
-  }, [kbGridWidth, kbs.length]);
 
   // ── Load KB list ──────────────────────────────────────────────────
 
@@ -418,6 +389,49 @@ export const KnowledgePage = ({
       setTreeLoading(false);
     }
   }, []);
+
+  // Re-read the tree in place: same KB, same expansion, same selection.
+  //
+  // Deliberately not ``enterKb`` — that one resets ``expanded`` /
+  // ``selectedDoc`` / ``searchQuery``, which is right when the user opens a
+  // library and wrong when this fires underneath them every few seconds.
+  //
+  // Expanded folders are re-read too. Refreshing only the root would leave a
+  // document *inside* a folder frozen at "等待中" — the same bug one level
+  // down, and the harder one to notice.
+  const refreshTree = useCallback(async () => {
+    if (!activeKb) return;
+    const folderIds = [...expanded];
+    const [root, ...children] = await Promise.all([
+      kbApi.tree(activeKb.id),
+      ...folderIds.map((id) => kbApi.tree(activeKb.id, id)),
+    ]);
+    setRootNodes(root.nodes);
+    if (folderIds.length > 0) {
+      setChildrenMap((prev) => {
+        const next = { ...prev };
+        folderIds.forEach((id, i) => {
+          next[id] = children[i].nodes;
+        });
+        return next;
+      });
+    }
+  }, [activeKb, expanded]);
+
+  // Poll only while something is actually parsing; a settled library costs
+  // nothing. ``missing`` is terminal too — it means the source file is gone,
+  // which no amount of waiting fixes.
+  const treeIsSettling = useMemo(() => {
+    const inFlight = (n: KbTreeNode) =>
+      n.kind === "document" &&
+      (n.status === "queued" || n.status === "processing");
+    return (
+      rootNodes.some(inFlight) ||
+      Object.values(childrenMap).some((nodes) => nodes.some(inFlight))
+    );
+  }, [rootNodes, childrenMap]);
+
+  useKbTreePolling({ active: treeIsSettling, refresh: refreshTree });
 
   const exitKb = useCallback(() => {
     setActiveKb(null);
@@ -633,6 +647,10 @@ export const KnowledgePage = ({
   const uploadKbFiles = useCallback(
     async (files: File[]): Promise<void> => {
       if (!activeKb || files.length === 0) return;
+      // The header button's path had no progress state at all: a 3 MB PDF
+      // simply did nothing visible until the toast landed, which reads as a
+      // click that missed.
+      setUploading(true);
       try {
         await kbApi.uploadFiles(activeKb.id, files);
         toast.success(
@@ -647,8 +665,13 @@ export const KnowledgePage = ({
         // bare `catch {}` swallowed that and left the user guessing — which
         // was the whole point of making the rejection explicit.
         toast.error(
-          uploadErrorMessage(error, t("knowledge.importFailed" as Parameters<typeof t>[0])),
+          uploadErrorMessage(
+            error,
+            t("knowledge.importFailed" as Parameters<typeof t>[0]),
+          ),
         );
+      } finally {
+        setUploading(false);
       }
     },
     [activeKb, enterKb],
@@ -726,7 +749,7 @@ export const KnowledgePage = ({
       const files = Array.from(e.dataTransfer.files);
       if (files.length === 0) return;
 
-      setDropping(true);
+      setUploading(true);
       try {
         // Electron exposes ``File.path``; when present, copy the local
         // file straight into the KB root (fast — no upload). When absent
@@ -760,10 +783,13 @@ export const KnowledgePage = ({
         }
       } catch (error) {
         toast.error(
-          uploadErrorMessage(error, t("knowledge.importFailed" as Parameters<typeof t>[0])),
+          uploadErrorMessage(
+            error,
+            t("knowledge.importFailed" as Parameters<typeof t>[0]),
+          ),
         );
       } finally {
-        setDropping(false);
+        setUploading(false);
       }
     },
     [activeKb, enterKb, uploadKbFiles],
@@ -799,7 +825,7 @@ export const KnowledgePage = ({
               paddingRight: "12px",
             }}
             className={cn(
-              "mx-5 flex w-[calc(100%-40px)] items-center gap-2 rounded-[8px] border-b border-[#f7f8fa] py-2.5 text-left transition-colors",
+              "mx-5 flex w-[calc(100%-40px)] items-center gap-2 rounded-lg border-b border-[#f7f8fa] py-2.5 text-left transition-colors",
               node.status === "missing"
                 ? "opacity-60"
                 : "hover:bg-surface-soft",
@@ -836,7 +862,7 @@ export const KnowledgePage = ({
               paddingRight: "12px",
             }}
             className={cn(
-              "mx-5 flex w-[calc(100%-40px)] items-center gap-2 rounded-[8px] border-b border-[#f7f8fa] py-2.5 text-left transition-colors",
+              "mx-5 flex w-[calc(100%-40px)] items-center gap-2 rounded-lg border-b border-[#f7f8fa] py-2.5 text-left transition-colors",
               selectedDocId === node.id
                 ? "bg-brand-light/35"
                 : "hover:bg-surface-soft",
@@ -927,14 +953,14 @@ export const KnowledgePage = ({
                             onClick={() => enterKb(kb.id)}
                             className={cn(
                               "group",
-                              "flex min-h-[148px] w-full flex-col rounded-[12px] border border-surface-border",
+                              "flex min-h-[148px] w-full flex-col rounded-2xl border border-surface-border",
                               "bg-[#ffffff] p-4 text-left shadow-xs transition-all",
                               "hover:-translate-y-1 hover:bg-[#ffffff] hover:shadow-md",
                               isProcessing && "bg-brand-light/25",
                             )}
                           >
                             <div className="flex items-start justify-between gap-3">
-                              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-[#f3f2ff] text-brand">
+                              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand">
                                 <KbIcon className="h-4 w-4" />
                               </div>
                               {isProcessing ? (
@@ -1064,9 +1090,6 @@ export const KnowledgePage = ({
             <span className="text-base font-semibold leading-5 text-ink-heading">
               {t("knowledge.knowledgeBase" as Parameters<typeof t>[0])}
             </span>
-            <span className="truncate text-xs leading-4 text-ink-body">
-              {t("knowledge.linkLocalDir" as Parameters<typeof t>[0])}
-            </span>
           </div>
         )}
         {activeKb ? (
@@ -1075,6 +1098,7 @@ export const KnowledgePage = ({
               variant="outline"
               size="sm"
               onClick={() => uploadInputRef.current?.click()}
+              loading={uploading}
               aria-label={t("knowledge.uploadFiles" as Parameters<typeof t>[0])}
               className="h-8 w-8 p-0 text-ink-meta hover:text-ink-heading"
             >
@@ -1133,11 +1157,24 @@ export const KnowledgePage = ({
         )}
       </div>
     );
-  }, [activeKb, exitKb, handleRescan, health, loading, rescanning, t]);
+    // ``uploading`` is load-bearing here: the header is memoised into the
+    // layout slot, so leaving it out would freeze the upload button's spinner
+    // on its first value — the header would keep rendering "idle" for the
+    // whole upload, which is the exact symptom this change exists to fix.
+  }, [
+    activeKb,
+    exitKb,
+    handleRescan,
+    health,
+    loading,
+    rescanning,
+    uploading,
+    t,
+  ]);
 
   useEffect(() => {
     setHeader(pageHeader);
-    setHeaderClassName(activeKb ? "h-auto px-5 py-5" : "h-auto px-5 py-5");
+    setHeaderClassName(activeKb ? "h-15 px-5" : "h-15 px-5");
     setContentInnerClassName("p-0");
     return () => {
       setHeader(null);
@@ -1160,17 +1197,14 @@ export const KnowledgePage = ({
       onDragOver={activeKb ? handleDragOver : undefined}
       onDrop={activeKb ? handleDrop : undefined}
     >
-      {dragOver && (
+      {(dragOver || uploading) && (
         <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-brand/5 backdrop-blur-sm">
           <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-brand/40 bg-card/90 px-12 py-10 shadow-lg">
             <Upload className="h-8 w-8 text-brand" />
             <span className="text-sm font-medium text-ink-heading">
-              {dropping
+              {uploading
                 ? t("common.processing" as Parameters<typeof t>[0])
                 : t("knowledge.importFiles" as Parameters<typeof t>[0])}
-            </span>
-            <span className="text-xs text-ink-meta">
-              {t("knowledge.importFiles" as Parameters<typeof t>[0])}
             </span>
           </div>
         </div>
@@ -1195,6 +1229,7 @@ export const KnowledgePage = ({
 
       <CreateKbDialog
         directoryFieldMode={directoryFieldMode}
+        managedRootAutoDiscovers={managedRootAutoDiscovers}
         open={createOpen}
         onOpenChange={setCreateOpen}
         onSubmit={async (data) => {

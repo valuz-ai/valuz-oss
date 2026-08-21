@@ -271,7 +271,7 @@ export function DocumentResearchPanel({
   };
 
   const renderSummary = () => {
-    if (summaryLoading && !summary) {
+    if ((summaryLoading && !summary) || summary?.status === "pending") {
       return (
         <div className="flex flex-1 items-center justify-center" role="status">
           <Loader2 className="h-4 w-4 animate-spin text-ink-meta" />
@@ -283,7 +283,9 @@ export function DocumentResearchPanel({
       return (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-5 text-center">
           <AlertTriangle className="h-5 w-5 text-warning-text" />
-          <p className="text-xs leading-5 text-ink-meta">{summaryError}</p>
+          <p className="text-xs leading-5 text-ink-meta">
+            {t("common.error")}
+          </p>
           <Button
             size="sm"
             variant="outline"
@@ -299,6 +301,34 @@ export function DocumentResearchPanel({
       return (
         <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-ink-meta">
           {t("ui.reader.summaryEmpty" as Parameters<typeof t>[0])}
+        </div>
+      );
+    }
+    if (!summary.content.trim()) {
+      const providerUnavailable = summary.error_message
+        ?.split(";")
+        .some((message) => message.trim() === "provider_summary_unavailable");
+      if (providerUnavailable || summary.status !== "failed") {
+        return (
+          <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-ink-meta">
+            {t("ui.reader.summaryEmpty" as Parameters<typeof t>[0])}
+          </div>
+        );
+      }
+      return (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-5 text-center">
+          <AlertTriangle className="h-5 w-5 text-warning-text" />
+          <p className="text-xs leading-5 text-ink-meta">
+            {t("common.error")}
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setSummaryAttempt((value) => value + 1)}
+          >
+            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+            {t("common.retry")}
+          </Button>
         </div>
       );
     }
@@ -319,8 +349,7 @@ export function DocumentResearchPanel({
           <div className="mb-3 rounded-md border border-warning/30 bg-warning-light px-3 py-2 text-xs text-warning-text">
             {summary.status === "stale"
               ? t("ui.reader.summaryStale" as Parameters<typeof t>[0])
-              : summary.error_message ||
-                t("ui.reader.summaryDegraded" as Parameters<typeof t>[0])}
+              : t("ui.reader.summaryDegraded" as Parameters<typeof t>[0])}
           </div>
         ) : null}
         <MarkdownContent

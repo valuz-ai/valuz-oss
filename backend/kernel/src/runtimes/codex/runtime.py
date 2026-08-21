@@ -5,10 +5,11 @@ Per ``docs/design/CODEX-INTEGRATION-DESIGN.md`` +
 
 * one ``AsyncCodex`` per Session, lazy-spawned on the first turn
 * ``Session.instructions`` -> ``thread_start(developer_instructions=...)``
-* ``Session.mcp_servers`` -> ``CodexConfig.config_overrides``
+* ``Session.mcp_servers`` -> one-shot Codex config overrides
   (the per-thread ``ThreadStartParams.config`` dict silently drops
-  unknown keys; ``--config k=v`` process flags work — see spike
-  ``docs/archive/codex-spike/spike_mcp_via_config_overrides_v2.py``).
+  unknown keys; secret MCP headers / stdio environment values are converted to
+  Codex's ``env_http_headers`` / ``env_vars`` references so only environment
+  variable names, never their values, enter ``--config k=v`` process flags).
 * ``Session.skills`` -> materialized into ``cwd/.agents/skills/``
 * ``Session.permission_mode`` drives the codex preset selection in
   ``_build_thread_kwargs`` (``never``+``danger-full-access`` for
@@ -32,6 +33,7 @@ Per ``docs/design/CODEX-INTEGRATION-DESIGN.md`` +
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import shutil
@@ -40,6 +42,7 @@ import uuid
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import asdict
 from typing import Any, Literal, cast
+from urllib.parse import quote_plus
 
 from openai_codex import (
     AsyncCodex,
@@ -53,6 +56,7 @@ from openai_codex.generated.v2_all import (
     AskForApprovalValue,
     SandboxMode,
     TextUserInput,
+    ThreadForkParams,
     ThreadResumeParams,
     ThreadStartParams,
     TurnCompletedNotification,
@@ -68,8 +72,6 @@ from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
 from src.core.tools import ExecContext, ToolDef, ToolKit
 from src.core.types import (
-    AUTO_COMPACT_WINDOW_FRACTION,
-    BudgetExhausted,
     EndTurn,
     Error,
     McpStdioServerConfig,
@@ -98,7 +100,11 @@ from src.runtimes.codex.event_mapper import (
     extract_turn_completed,
     map_notification,
 )
-from src.runtimes.interruption import describe_exception, is_runtime_interruption
+from src.runtimes.interruption import (
+    absorb_interrupt_cancellations,
+    describe_exception,
+    is_runtime_interruption,
+)
 from src.runtimes.network_egress import (
     ModelIngressDescriptor,
     merge_loopback_no_proxy,
@@ -175,9 +181,20 @@ class CodexRuntime:
         self._thread: AsyncThread | None = None
         self._active_turn: AsyncTurnHandle | None = None
         self._active_task: asyncio.Task[Any] | None = None
+        # ``interrupt()`` cancels of ``_active_task`` this turn; balanced by
+        # ``run()`` after it swallows the injected ``CancelledError`` (see
+        # ``absorb_interrupt_cancellations``).
+        self._interrupt_cancels = 0
         self._prepare_lock = asyncio.Lock()
         self._background_prepare_tasks: set[asyncio.Task[Any]] = set()
         self._cancelled: bool = False
+        # Native fork anchor for the codex turn most recently started:
+        # ``{"provider": "codex", "thread_id": ..., "turn_id": ...}``. Set
+        # from the ``turn/start`` response, read-and-cleared by the
+        # orchestrator (``consume_turn_anchor``) into
+        # ``Message.metadata["runtime_native"]`` — the message-granularity
+        # fork seam (``thread/fork(lastTurnId)``, docs/design/session-fork.md).
+        self._turn_anchor: dict[str, Any] | None = None
         # Tracks whether this runtime registered a toolkit endpoint so
         # ``close()`` can revoke it without needing the session reference.
         self._registered_session_id: str | None = None
@@ -266,6 +283,16 @@ class CodexRuntime:
     def update_sink(self, sink: EventSink) -> None:
         self.event_sink = sink
 
+    def consume_turn_anchor(self) -> dict[str, Any] | None:
+        """Return and clear the native anchor captured by the last ``run()``.
+
+        Read-and-clear so a turn that never reaches ``turn/start`` (resume
+        failure, egress error) cannot inherit a stale anchor from the
+        previous message.
+        """
+        anchor, self._turn_anchor = self._turn_anchor, None
+        return anchor
+
     async def prepare(self, session: Session) -> None:
         """Warm the Codex app-server and thread without dispatching a turn."""
         task = asyncio.current_task()
@@ -302,6 +329,50 @@ class CodexRuntime:
             if not was_ready:
                 await self._emit_turn_phase("runtime_ready")
 
+    async def fork_session(
+        self,
+        session: Session,
+        *,
+        source_native_session_id: str,
+        anchor: str | None = None,
+    ) -> str:
+        """Branch a source codex thread into this session's native thread.
+
+        The third thread-birth verb beside start/resume (codex lifecycle:
+        ``thread/start | thread/resume | thread/fork``). Reuses the
+        ``_prepare`` front half (skills + app-server spawn), then calls
+        ``thread/fork`` directly — NOT ``_ensure_thread``, which would
+        start/resume. ``anchor`` is a turn id; ``lastTurnId`` is inclusive
+        and codex 0.144.4 rejects an in-progress or unknown turn with
+        ``-32600`` (NEVER send ``beforeTurnId`` — this binary silently
+        ignores it and forks the whole thread). The fork reads the source
+        rollout from disk, so the source thread need not be loaded
+        anywhere and is never mutated. Leaves ``self._thread`` on the new
+        thread — the runtime is warm and the first Send resumes it.
+        """
+        async with self._prepare_lock:
+            self._loop = asyncio.get_running_loop()
+            self._materialize_skills(session)
+            await self._ensure_codex(session)
+        assert self._codex is not None
+        common = self._build_thread_kwargs(session)
+        t0 = time.monotonic()
+        forked = await self._codex._client.thread_fork(
+            source_native_session_id,
+            ThreadForkParams(
+                thread_id=source_native_session_id,
+                last_turn_id=anchor,
+                **common,
+            ),
+        )
+        self._thread = AsyncThread(self._codex, forked.thread.id)
+        # Same internal backfill as thread_start — no API write channel.
+        session.runtime_session_id = self._thread.id
+        await self._emit_turn_phase(
+            "thread_init", mode="fork", duration_ms=int((time.monotonic() - t0) * 1000)
+        )
+        return self._thread.id
+
     async def run(self, session: Session, user_message: UserMessage) -> None:
         from datetime import datetime
 
@@ -309,6 +380,7 @@ class CodexRuntime:
 
         session.status = "running"
         self._cancelled = False
+        self._interrupt_cancels = 0
         self._active_task = asyncio.current_task()
         turn_attempt_id = uuid.uuid4().hex
 
@@ -410,6 +482,16 @@ class CodexRuntime:
                 TurnStartParams(thread_id=self._thread.id, input=[turn_input], **turn_kwargs),
             )
             self._active_turn = AsyncTurnHandle(self._codex, self._thread.id, turn_resp.turn.id)
+            # Overwrite (never reset at run() entry): if a later turn fails
+            # before ``turn/start`` the previous consume already cleared the
+            # anchor, and a coverage continuation legitimately replaces the
+            # primary turn's anchor with its own — the Message maps to the
+            # LAST codex turn it drove.
+            self._turn_anchor = {
+                "provider": "codex",
+                "thread_id": self._thread.id,
+                "turn_id": turn_resp.turn.id,
+            }
             # Observability: the gap from this row to the first thinking/text
             # delta = codex's pre-sampling pipeline + model TTFT.
             await self._emit_turn_phase(
@@ -418,7 +500,7 @@ class CodexRuntime:
 
             completed: TurnCompletedNotification | None = None
             error_message: str | None = None
-            usage_payload: dict[str, Any] | None = None
+            usage_tracker = _TurnUsageTracker()
             saw_compaction = False
             saw_model_event = False
 
@@ -487,11 +569,10 @@ class CodexRuntime:
 
                     usage = extract_token_usage(notification)
                     if usage is not None:
-                        latest_usage_payload = _usage_payload_from_token_usage(
-                            usage.token_usage, self.model
-                        )
-                        if latest_usage_payload is not None:
-                            usage_payload = latest_usage_payload
+                        # One notification per model request; a turn that
+                        # calls the model more than once produces several,
+                        # and all of them belong to this turn's increment.
+                        usage_tracker.observe(usage.token_usage)
 
                     if extract_goal_cleared(notification) and session.mode == "goal":
                         # Slice 6 of session-modes: codex-core fires
@@ -521,10 +602,6 @@ class CodexRuntime:
                     turn_done = extract_turn_completed(notification)
                     if turn_done is not None:
                         completed = turn_done
-                        # final usage from ``Turn`` itself when the running
-                        # token-usage stream didn't catch the last update.
-                        if usage_payload is None:
-                            usage_payload = _empty_usage_payload(self.model)
                         break
             finally:
                 await stream.aclose()
@@ -574,8 +651,22 @@ class CodexRuntime:
             if is_compact and completed is not None and not saw_compaction:
                 await self.event_sink.emit(Event(type="compaction", data={}))
 
-            if usage_payload is not None:
-                await self.event_sink.emit(Event(type="usage_update", data=usage_payload))
+            # A turn that reached ``turn/completed`` reports its spend even
+            # when no usage notification arrived (an all-local turn) — an
+            # explicit zero, so the message row records "this turn cost
+            # nothing" rather than leaving the field empty.
+            turn_totals = usage_tracker.totals()
+            if turn_totals is not None:
+                await self.event_sink.emit(
+                    Event(
+                        type="usage_update",
+                        data=_usage_payload_from_turn_totals(turn_totals, self.model),
+                    )
+                )
+            elif completed is not None:
+                await self.event_sink.emit(
+                    Event(type="usage_update", data=_empty_usage_payload(self.model))
+                )
 
         except asyncio.CancelledError:
             session.status = "idle"
@@ -584,6 +675,8 @@ class CodexRuntime:
                 retry_status="terminal",
                 message="cancelled",
             )
+            absorb_interrupt_cancellations(self._interrupt_cancels)
+            self._interrupt_cancels = 0
         except Exception as exc:
             session.status = "idle"
             if self._cancelled:
@@ -755,6 +848,7 @@ class CodexRuntime:
         task = self._active_task
         if task is not None and not task.done():
             task.cancel()
+            self._interrupt_cancels += 1
         for prepare_task in tuple(self._background_prepare_tasks):
             if not prepare_task.done():
                 prepare_task.cancel()
@@ -821,26 +915,40 @@ class CodexRuntime:
         t0 = time.monotonic()
         await self._emit_turn_phase("runtime_init_started")
         expose_toolkit = self._register_toolkit_if_eligible(session)
-        cfg = CodexConfig(
-            codex_bin=_resolve_codex_bin(),
-            config_overrides=_build_config_overrides(
-                session,
-                self.model_provider,
-                self.model,
-                expose_toolkit=expose_toolkit,
-                egress_base_url=(
-                    self.egress_descriptor.base_url if self.egress_descriptor is not None else None
-                ),
+        codex_bin = _resolve_codex_bin()
+        if codex_bin is None:
+            raise RuntimeError("Codex runtime binary is unavailable")
+        overrides = _build_config_overrides(
+            session,
+            self.model_provider,
+            self.model,
+            expose_toolkit=expose_toolkit,
+            egress_base_url=(
+                self.egress_descriptor.base_url if self.egress_descriptor is not None else None
             ),
+        )
+        safe_overrides, mcp_secret_env = _externalize_mcp_secrets(session, overrides)
+        cfg = CodexConfig(
+            codex_bin=codex_bin,
+            config_overrides=safe_overrides,
             env=_build_codex_env(
                 self.model_provider,
                 egress_base_url=(
                     self.egress_descriptor.base_url if self.egress_descriptor is not None else None
                 ),
+                mcp_secret_env=mcp_secret_env,
             ),
         )
         self._codex = AsyncCodex(config=cfg)
-        await self._codex.__aenter__()
+        try:
+            await self._codex.__aenter__()
+        except BaseException:
+            try:
+                await self._codex.close()
+            except Exception:
+                logger.debug("Error closing failed Codex startup", exc_info=True)
+            self._codex = None
+            raise
         self._install_approval_handler()
         await self._emit_turn_phase("runtime_init", duration_ms=int((time.monotonic() - t0) * 1000))
 
@@ -1414,6 +1522,185 @@ _HARNESS_PROVIDER_ENV_KEY = "HARNESS_CODEX_PROVIDER_API_KEY"
 # Responses API documentation recommends. Not user-configurable — this
 # is the harness's "show reasoning summaries by default" stance.
 _CODEX_REASONING_SUMMARY_DEFAULT = "auto"
+_CODEX_MCP_SECRET_ENV_PREFIX = "VALUZ_CODEX_MCP_SECRET_"
+_CODEX_OPENAI_API_KEY = "OPENAI_API_KEY"
+_CODEX_SHELL_APPLY_SECRET_FILTERS = "shell_environment_policy.ignore_default_excludes=false"
+_CODEX_SHELL_CORE_INHERIT = 'shell_environment_policy.inherit="core"'
+_CODEX_DISABLE_LOGIN_SHELL = "allow_login_shell=false"
+_CODEX_MCP_UNSAFE_PARENT_ENV_NAMES = frozenset(
+    {
+        "ALL_PROXY",
+        "AZURE_OPENAI_API_KEY",
+        "COMSPEC",
+        "HOME",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "HARNESS_CODEX_PROVIDER_API_KEY",
+        "NO_PROXY",
+        "NODE_OPTIONS",
+        "OPENAI_API_KEY",
+        "PATH",
+        "PATHEXT",
+        "PYTHONPATH",
+        "SHELL",
+        "SYSTEMROOT",
+        "USERPROFILE",
+    }
+)
+
+
+def _externalize_mcp_secrets(
+    session: Session,
+    overrides: tuple[str, ...],
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Replace MCP secret literals with Codex environment references.
+
+    Codex app-server does not accept ``--profile`` (verified against
+    codex-cli 0.144.x), while putting the original ``http_headers`` / ``env``
+    entries in repeated ``--config`` flags exposes their values in the OS
+    process table. Codex officially supports ``env_http_headers`` for remote
+    MCP headers and ``env_vars`` for stdio MCP variables, so use those paths
+    and carry the values only in the child environment.
+
+    Stdio ``env_vars`` preserves the variable's declared name. Two servers
+    cannot therefore request different values for the same name through one
+    Codex parent process; fail closed instead of silently giving one server the
+    other's credential.
+    """
+
+    remove: set[str] = set()
+    add: list[str] = []
+    secret_env: dict[str, str] = {}
+    # secret_env key -> redacted human origin ("http server 'x' header 'y'"),
+    # for the residue diagnostics below. Never carries values.
+    origin: dict[str, str] = {}
+    stdio_secret_values: dict[str, tuple[str, str]] = {}
+    nonce = uuid.uuid4().hex
+    inherited_stdio_names = {
+        name.upper()
+        for cfg in session.mcp_servers
+        if isinstance(cfg, McpStdioServerConfig)
+        for name in cfg.env_vars
+    }
+
+    for server_index, cfg in enumerate(session.mcp_servers):
+        if isinstance(cfg, McpStdioServerConfig):
+            env_vars = list(cfg.env_vars)
+            if cfg.env_vars:
+                remove.add(f"mcp_servers.{cfg.name}.env_vars={_toml_array(cfg.env_vars)}")
+            for key, value in cfg.env.items():
+                upper_key = key.upper()
+                if (
+                    upper_key in _CODEX_MCP_UNSAFE_PARENT_ENV_NAMES
+                    or upper_key.startswith("CODEX_")
+                    or upper_key in inherited_stdio_names
+                ):
+                    raise RuntimeError(
+                        "Codex cannot securely externalize MCP stdio environment "
+                        f"variable {key!r}; use a dedicated, non-runtime variable name"
+                    )
+                remove.add(f"mcp_servers.{cfg.name}.env.{_toml_key(key)}={_toml_quote(value)}")
+                previous = stdio_secret_values.get(upper_key)
+                if previous is not None and previous != (key, value):
+                    raise RuntimeError(
+                        "Codex MCP stdio servers declare conflicting values "
+                        f"for environment variable {key!r}; use distinct names"
+                    )
+                stdio_secret_values[upper_key] = (key, value)
+                secret_env[key] = value
+                origin[key] = f"stdio server {cfg.name!r} env {key!r}"
+                if key not in env_vars:
+                    env_vars.append(key)
+            if env_vars:
+                add.append(f"mcp_servers.{cfg.name}.env_vars={_toml_array(env_vars)}")
+            continue
+
+        for header_index, (key, value) in enumerate(cfg.headers.items()):
+            remove.add(f"mcp_servers.{cfg.name}.http_headers.{_toml_key(key)}={_toml_quote(value)}")
+            env_name = f"{_CODEX_MCP_SECRET_ENV_PREFIX}{nonce}_{server_index}_{header_index}"
+            secret_env[env_name] = value
+            origin[env_name] = f"http server {cfg.name!r} header {key!r}"
+            add.append(
+                f"mcp_servers.{cfg.name}.env_http_headers.{_toml_key(key)}={_toml_quote(env_name)}"
+            )
+
+    if secret_env:
+        # codex-cli 0.144.4 applies the automatic KEY/SECRET/TOKEN filter to
+        # app-server ``command/exec`` requests, but its model-facing ``shell``
+        # tool can still inherit the full app-server environment.  MCP header
+        # values have to live in that parent environment for
+        # ``env_http_headers`` to resolve them, so make shell inheritance
+        # fail-closed at the ``core`` baseline and disable login-shell startup.
+        # The latter is required because a login-shell snapshot can restore
+        # app-server variables after the environment policy has filtered them.
+        # This keeps HOME, PATH, and the other portable process essentials
+        # without loading profile state back into the model shell.
+        for policy in (
+            _CODEX_SHELL_APPLY_SECRET_FILTERS,
+            _CODEX_SHELL_CORE_INHERIT,
+            _CODEX_DISABLE_LOGIN_SHELL,
+        ):
+            if policy not in overrides:
+                add.append(policy)
+        # ``env_http_headers`` / ``env_vars`` are explicit references, and
+        # codex-cli can keep referenced values available under ``core`` when
+        # a login-shell snapshot is allowed to rehydrate its parent state.
+        # Exact filters plus disabled login-shell startup close both paths.
+        for env_name in secret_env:
+            policy = (
+                f"shell_environment_policy.filters.{_toml_key(env_name)}={_toml_quote('exclude')}"
+            )
+            if policy not in overrides:
+                add.append(policy)
+    safe_overrides = tuple(value for value in overrides if value not in remove) + tuple(add)
+    residues = _find_secret_residues(safe_overrides, secret_env, origin)
+    if residues:
+        detail = "; ".join(residues)
+        logger.error("codex MCP secret residue in argv overrides: %s", detail)
+        raise RuntimeError(
+            f"Refusing to launch Codex because an MCP secret remained in argv — {detail}"
+        )
+    return safe_overrides, secret_env
+
+
+def _find_secret_residues(
+    safe_overrides: tuple[str, ...],
+    secret_env: dict[str, str],
+    origin: dict[str, str],
+) -> list[str]:
+    """Diagnose externalized values that still appear in the override text.
+
+    Matches VALUE PARTS only (the text after each line's first ``=``): a value
+    that merely collides with a dotted key path — a server name,
+    ``http_headers.``, a policy key — no longer trips the guard. The previous
+    blind full-text substring check produced exactly that class of
+    undebuggable false positive, because every header value (secret or not)
+    is externalized. Each value is probed in the three shapes it could
+    survive in: raw (a removal miss), TOML-escaped (as ``_toml_quote`` writes
+    it into strings and arrays), and urlencoded (as ``merge_params_into_url``
+    embeds query params into ``url``).
+
+    Returns one redacted description per residue — origin, env name, length,
+    and a SHA-256 prefix for cross-checking against stored credentials; never
+    the value itself.
+    """
+    residues: list[str] = []
+    value_parts = [(line.partition("=")[0], line.partition("=")[2]) for line in safe_overrides]
+    for env_name, value in secret_env.items():
+        if not value:
+            continue
+        probes = {value, _toml_quote(value)[1:-1], quote_plus(value)}
+        matched = sorted(key for key, part in value_parts if any(p in part for p in probes))
+        if matched:
+            digest = hashlib.sha256(value.encode()).hexdigest()[:8]
+            residues.append(
+                f"{origin.get(env_name, 'unknown origin')} (env {env_name}, "
+                f"len={len(value)}, sha256={digest}) matched override value(s): "
+                + ", ".join(matched)
+            )
+    return residues
 
 
 def _build_config_overrides(
@@ -1424,7 +1711,7 @@ def _build_config_overrides(
     expose_toolkit: bool = False,
     egress_base_url: str | None = None,
 ) -> tuple[str, ...]:
-    """Serialize per-session config to ``--config k=v`` strings.
+    """Serialize per-session config to dotted TOML override entries.
 
     Three channels are emitted:
 
@@ -1435,11 +1722,11 @@ def _build_config_overrides(
        ``mcp_servers.X.env.<KEY>`` per var; remote entries emit ``url`` and a
        dotted ``mcp_servers.X.http_headers.<KEY>`` per header. Map fields
        (``env`` / ``http_headers``) are emitted ONE dotted key at a time, never
-       as an inline table ``{ … }`` — codex's ``-c`` parser reads an inline
+       as an inline table ``{ … }`` — codex's config overlay parser reads an inline
        table as a string and aborts at startup ("invalid type: string …
-       expected a map"); see ``_toml_key``. ``env_vars`` is passed through
-       verbatim so codex resolves it against its own process env at child-spawn
-       time (token values therefore never appear in the overrides string).
+       expected a map"); see ``_toml_key``. Before launch,
+       ``_externalize_mcp_secrets`` replaces header / explicit env values with
+       environment references so their values never enter process argv.
     2. Model transport -> a synthetic ``[model_providers.harness]`` block when
        a user provider or an egress subscription descriptor is present. API
        keys use a dedicated ``env_key``; ChatGPT subscriptions use Codex's
@@ -1476,7 +1763,7 @@ def _build_config_overrides(
                 if env_vars:
                     overrides.append(f"mcp_servers.{cfg.name}.env_vars={_toml_array(env_vars)}")
             # ``env`` is a TOML map: emit one dotted key per var, NOT an inline
-            # table — codex's ``-c`` parser rejects ``env={ … }`` as a string
+            # table — codex's config parser rejects ``env={ … }`` as a string
             # (see ``_toml_key``).
             for k, v in cfg.env.items():
                 overrides.append(f"mcp_servers.{cfg.name}.env.{_toml_key(k)}={_toml_quote(v)}")
@@ -1557,20 +1844,27 @@ def _build_config_overrides(
 
     # Channel-declared input window for models codex's own catalog can't
     # know (gateway aliases). ``model_context_window`` feeds codex's
-    # remaining-context bookkeeping; ``model_auto_compact_token_limit``
-    # triggers compaction at the shared fraction. Both are bare TOML
-    # integers (quoting turns them into strings codex rejects). Unlike
-    # ``model_reasoning_effort`` there is no thread-metadata pin trap:
-    # the model is locked per session, so the value never changes between
+    # remaining-context bookkeeping AND its compaction trigger: codex
+    # derives ``auto_compact_token_limit`` as 90% of the resolved window on
+    # its own (``ModelInfo::auto_compact_token_limit``) and clamps any
+    # explicit ``model_auto_compact_token_limit`` to that same 90%, so the
+    # runtime owns the threshold and we declare only the window. Bare TOML
+    # integer (quoting turns it into a string codex rejects). Unlike
+    # ``model_reasoning_effort`` there is no thread-metadata pin trap: the
+    # model is locked per session, so the value never changes between
     # thread_start and any later resume.
+    #
+    # Known upstream cap (codex-cli 0.144.x): an alias codex resolves to
+    # its fallback metadata carries ``max_context_window = 272k`` and the
+    # override is clamped to it, so a declaration above 272k is honoured
+    # only up to 272k unless the alias prefix-matches a catalog model with
+    # a larger cap. Nothing to do here — declaring the real value keeps the
+    # config correct for a codex that lifts the cap.
     max_input_tokens = (
         session.model_settings.max_input_tokens if session.model_settings is not None else None
     )
     if max_input_tokens:
         overrides.append(f"model_context_window={max_input_tokens}")
-        overrides.append(
-            f"model_auto_compact_token_limit={int(max_input_tokens * AUTO_COMPACT_WINDOW_FRACTION)}"
-        )
 
     if provider is not None:
         # Codex's ``web_search`` tool is wired against the OpenAI
@@ -1624,14 +1918,6 @@ def _build_config_overrides(
                 f"model_providers.{name}.env_key={_toml_quote(env_key)}",
             ]
         )
-        if egress_base_url is not None:
-            # Codex 0.144.4 does not yet support the newer keyed
-            # shell_environment_policy.filters map. Its supported automatic
-            # policy removes names containing KEY/SECRET/TOKEN without
-            # replacing the user's legacy exclude/include arrays. This keeps
-            # the per-session provider key in the model transport process but
-            # out of shell and other command subprocesses.
-            overrides.append("shell_environment_policy.ignore_default_excludes=false")
     elif provider is not None and model:
         # First-party OpenAI: no synthetic provider block, no
         # ``model_provider=harness`` override. Codex uses its built-in
@@ -1644,6 +1930,28 @@ def _build_config_overrides(
         # ``""`` and fail with "Missed model deployment".
         overrides.append(f"model={_toml_quote(model)}")
 
+    if provider is not None:
+        # Every custom provider path puts an API key in the app-server parent
+        # environment (HARNESS_CODEX_PROVIDER_API_KEY or OPENAI_API_KEY).
+        # codex-cli 0.144.4's model ``shell`` path does not reliably honor the
+        # automatic name filter, so use the same core boundary, login-shell
+        # block, and exact keyed exclusion as MCP secrets.  Avoid changing
+        # native ChatGPT subscription sessions, which carry no provider
+        # credential in the process env.
+        if _CODEX_SHELL_APPLY_SECRET_FILTERS not in overrides:
+            overrides.append(_CODEX_SHELL_APPLY_SECRET_FILTERS)
+        if _CODEX_SHELL_CORE_INHERIT not in overrides:
+            overrides.append(_CODEX_SHELL_CORE_INHERIT)
+        if _CODEX_DISABLE_LOGIN_SHELL not in overrides:
+            overrides.append(_CODEX_DISABLE_LOGIN_SHELL)
+        provider_env_key = (
+            _HARNESS_PROVIDER_ENV_KEY if effective_base_url is not None else _CODEX_OPENAI_API_KEY
+        )
+        overrides.append(
+            f"shell_environment_policy.filters.{_toml_key(provider_env_key)}="
+            f"{_toml_quote('exclude')}"
+        )
+
     return tuple(overrides)
 
 
@@ -1651,6 +1959,7 @@ def _build_codex_env(
     provider: ModelProvider | None,
     *,
     egress_base_url: str | None = None,
+    mcp_secret_env: dict[str, str] | None = None,
 ) -> dict[str, str] | None:
     """Subprocess env passed to ``codex app-server``.
 
@@ -1667,15 +1976,28 @@ def _build_codex_env(
       The harness-specific env var is *not* set in this branch (it'd
       be dead weight; codex's built-in openai provider doesn't read
       it).
+
+    ``mcp_secret_env`` carries values referenced by secret-free MCP
+    ``env_http_headers`` / ``env_vars`` config entries. Generated HTTP-header
+    names contain ``SECRET`` for defense in depth.  The generated config also
+    constrains model shell tools to Codex's ``core`` inheritance baseline,
+    disables login-shell profile restoration, and adds an exact keyed
+    exclusion for every credential.  codex-cli 0.144.4
+    does not reliably apply its automatic name filter on that execution path,
+    and MCP environment references are otherwise retained after the core
+    baseline.  Stdio variables remain explicitly available to their MCP
+    processes without being inherited by model shell commands.
     """
     if provider is None:
-        if egress_base_url is None:
+        if egress_base_url is None and not mcp_secret_env:
             return None
-        # The model transport keeps using Codex's native ChatGPT auth.json.
-        # We only provide an explicit environment so the loopback ingress is
-        # never captured by a user/system proxy inherited by the GUI process.
         subscription_env = dict(os.environ)
-        merge_loopback_no_proxy(subscription_env, egress_base_url)
+        if egress_base_url is not None:
+            # The model transport keeps using Codex's native ChatGPT auth.json.
+            # Keep loopback ingress out of any proxy inherited by the GUI.
+            merge_loopback_no_proxy(subscription_env, egress_base_url)
+        if mcp_secret_env:
+            subscription_env.update(mcp_secret_env)
         return subscription_env
     merged: dict[str, str] = dict(os.environ)
     if egress_base_url is not None or provider.base_url is not None:
@@ -1691,7 +2013,9 @@ def _build_codex_env(
         # spoofing the originator makes the SDK path match the working CLI path.
         merged["CODEX_INTERNAL_ORIGINATOR_OVERRIDE"] = "codex_exec"
     else:
-        merged["OPENAI_API_KEY"] = provider.api_key
+        merged[_CODEX_OPENAI_API_KEY] = provider.api_key
+    if mcp_secret_env:
+        merged.update(mcp_secret_env)
     return merged
 
 
@@ -1770,31 +2094,109 @@ def _stop_reason_from_turn(turn_done: TurnCompletedNotification) -> StopReason:
             retry_status="exhausted",
             message=err.message if err is not None else "turn failed",
         )
-    # ``in_progress`` should not appear on a turn/completed notification, but
-    # surface as a budget-exhausted-ish marker rather than silently.
-    return BudgetExhausted(reason="max_turns")
+    # ``in_progress`` should not appear on a turn/COMPLETED notification —
+    # codex is contradicting itself. Surface it rather than swallowing it,
+    # but NOT as ``BudgetExhausted``: a budget stop is a legible, expected
+    # outcome that the UI now explains in so many words ("this turn hit the
+    # runtime's maximum step count"), and telling the user that about a
+    # protocol inconsistency is a confident lie. It reads as an anomaly,
+    # which is what it is.
+    return Error(
+        category="execution_error",
+        retry_status="exhausted",
+        # ``status.value``, not ``status`` — this string lands in the user's
+        # error card, and ``repr`` of the enum would leak
+        # ``<TurnStatus.in_progress: 'inProgress'>`` into it.
+        message=f"codex reported a completed turn still in status {status.value!r}",
+    )
 
 
-def _usage_payload_from_token_usage(usage: Any, model: str) -> dict[str, Any] | None:
-    """Project Codex's latest-turn usage onto our four flat fields.
+_BREAKDOWN_FIELDS = (
+    "input_tokens",
+    "cached_input_tokens",
+    "output_tokens",
+    "reasoning_output_tokens",
+    "total_tokens",
+)
 
-    ``ThreadTokenUsage.total`` is a cumulative thread snapshot, whereas
-    ``last`` is the most recent turn's increment. Message rows are summed for
-    session/monthly reports, so persisting ``total`` on every message would
-    recount all earlier turns. Codex also reports cached input as a subset of
-    ``input_tokens`` and reasoning as a separate output bucket; normalize the
-    flat fields to the cross-runtime contract (uncached input, all output,
-    cache read, cache write) before they leave the runtime.
-    """
-    last = getattr(usage, "last", None)
-    if last is None:
+
+def _breakdown_fields(breakdown: Any) -> dict[str, int] | None:
+    """Read one ``TokenUsageBreakdown`` into a plain int map."""
+    if breakdown is None:
         return None
-    total_input = int(last.input_tokens or 0)
-    cache_read = int(last.cached_input_tokens or 0)
-    reasoning_output = int(last.reasoning_output_tokens or 0)
+    return {field: int(getattr(breakdown, field, 0) or 0) for field in _BREAKDOWN_FIELDS}
+
+
+class _TurnUsageTracker:
+    """Accumulate ONE turn's token spend from codex's usage notifications.
+
+    Codex emits ``thread/tokenUsage/updated`` once per model request, and its
+    ``ThreadTokenUsage`` carries two views: ``total`` is cumulative for the
+    thread, ``last`` covers only the request that just finished. Neither is
+    the turn: a turn that calls the model twice (the common tool-use shape)
+    produces two notifications, so keeping just the newest ``last`` — what
+    this runtime used to do by overwriting the payload each time — silently
+    dropped every request but the final one. On a real 3-turn session that
+    lost 69,193 of the first turn's 70,974 input tokens.
+
+    Differencing ``total`` across the turn is exact and, unlike summing
+    ``last``, survives a repeated or coalesced notification. The pre-turn
+    baseline is recovered from the first notification (``total - last``), so
+    nothing has to be carried across turns — a resumed thread that restores
+    its cumulative counter cannot leak into the next turn's numbers.
+    ``last``-summing stays as the fallback for a payload with no ``total``.
+    """
+
+    def __init__(self) -> None:
+        self._baseline: dict[str, int] | None = None
+        self._latest: dict[str, int] | None = None
+        self._summed: dict[str, int] = dict.fromkeys(_BREAKDOWN_FIELDS, 0)
+        self._saw_any = False
+
+    def observe(self, thread_usage: Any) -> None:
+        last = _breakdown_fields(getattr(thread_usage, "last", None))
+        total = _breakdown_fields(getattr(thread_usage, "total", None))
+        if last is None and total is None:
+            return
+        self._saw_any = True
+        if total is not None:
+            if self._baseline is None:
+                self._baseline = {
+                    field: max(0, total[field] - (last or {}).get(field, 0))
+                    for field in _BREAKDOWN_FIELDS
+                }
+            self._latest = total
+        if last is not None:
+            for field in _BREAKDOWN_FIELDS:
+                self._summed[field] += last[field]
+
+    def totals(self) -> dict[str, int] | None:
+        """This turn's spend, or None if no usage notification arrived."""
+        if not self._saw_any:
+            return None
+        if self._latest is None or self._baseline is None:
+            return dict(self._summed)
+        return {
+            field: max(0, self._latest[field] - self._baseline[field])
+            for field in _BREAKDOWN_FIELDS
+        }
+
+
+def _usage_payload_from_turn_totals(totals: dict[str, int], model: str) -> dict[str, Any]:
+    """Project one turn's codex totals onto our four flat fields.
+
+    Codex reports cached input as a subset of ``input_tokens`` (so the
+    uncached remainder is the cross-runtime ``input_tokens``) and reasoning
+    as a subset of ``output_tokens`` — its own ``total_tokens`` is
+    ``input_tokens + output_tokens`` with reasoning nowhere added, which is
+    how we know. Adding reasoning on top of output, as this used to, counted
+    the reasoning tokens twice.
+    """
+    cache_read = totals["cached_input_tokens"]
+    reasoning_output = totals["reasoning_output_tokens"]
     flat = {
-        "input_tokens": max(0, total_input - cache_read),
-        "output_tokens": int(last.output_tokens or 0) + reasoning_output,
+        "input_tokens": max(0, totals["input_tokens"] - cache_read),
+        "output_tokens": totals["output_tokens"],
         "cache_read_tokens": cache_read,
         "cache_write_tokens": 0,
     }
@@ -1803,7 +2205,7 @@ def _usage_payload_from_token_usage(usage: Any, model: str) -> dict[str, Any] | 
         model: {
             **flat,
             "reasoning_output_tokens": reasoning_output,
-            "total_tokens": int(last.total_tokens or 0),
+            "total_tokens": totals["total_tokens"],
         }
     }
     return payload

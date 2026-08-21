@@ -753,7 +753,7 @@ const CITATION_MARKDOWN_COMPONENTS = {
     <table
       {...props}
       className={cn(
-        "w-max min-w-full border-collapse text-[11px] leading-4",
+        "w-max min-w-full border-collapse text-2xs leading-4",
         className,
       )}
     />
@@ -781,7 +781,7 @@ const CITATION_MARKDOWN_COMPONENTS = {
     <th
       {...props}
       className={cn(
-        "whitespace-nowrap px-2 py-1.5 text-left text-[11px] font-semibold leading-4",
+        "whitespace-nowrap px-2 py-1.5 text-left text-2xs font-semibold leading-4",
         className,
       )}
     />
@@ -794,7 +794,7 @@ const CITATION_MARKDOWN_COMPONENTS = {
     <td
       {...props}
       className={cn(
-        "whitespace-nowrap px-2 py-1 align-top text-[11px] leading-4",
+        "whitespace-nowrap px-2 py-1 align-top text-2xs leading-4",
         className,
       )}
     />
@@ -1168,10 +1168,12 @@ function CitationHoverCard({
         >
           <button
             type="button"
-            className="inline-flex items-center gap-1 rounded-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            className="group inline-flex items-center gap-1 rounded-sm font-medium text-primary no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             onClick={openSource}
           >
-            {openActionLabel}
+            <span className="border-b border-dotted border-transparent leading-5 group-hover:border-current group-focus-visible:border-current">
+              {openActionLabel}
+            </span>
             <ExternalLink className="h-3 w-3" aria-hidden="true" />
           </button>
         </div>

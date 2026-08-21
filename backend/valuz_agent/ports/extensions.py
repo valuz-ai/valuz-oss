@@ -25,6 +25,7 @@ from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.integrations.sandbox_credential_hmac import (
     PerOwnerHmacSandboxCredentialVerifier,
 )
+from valuz_agent.ports.a2ui_components import A2UIComponentRegistry
 from valuz_agent.ports.agent_lifecycle import AgentLifecycleHook, NoopAgentLifecycleHook
 from valuz_agent.ports.automation_runtime import (
     AutomationRuntimePort,
@@ -45,9 +46,15 @@ from valuz_agent.ports.connector_oauth_refresh import (
     ConnectorOAuthRefreshPort,
     LocalConnectorOAuthRefreshProvider,
 )
+from valuz_agent.ports.docs_dispatch import (
+    DocsReindexDispatcher,
+    DocsScopeContributor,
+    NoopReindexDispatcher,
+    no_extra_documents,
+)
+from valuz_agent.ports.docs_runtime import DocsRuntimeFactory, default_docs_runtime
 from valuz_agent.ports.document_research import DocumentResearchProviderPort
 from valuz_agent.ports.file_address import FileAddressResolverPort, LocalFileAddressResolver
-from valuz_agent.ports.genui_blocks import GenUIBlockRegistry
 from valuz_agent.ports.instructions import (
     GlobalInstructionsPort,
     OSSGlobalInstructionsProvider,
@@ -66,6 +73,10 @@ from valuz_agent.ports.runtime_resource import (
     ManagedAgentMutationPort,
     ManagedConnectorMutationPort,
     RuntimeResourceApplyPort,
+)
+from valuz_agent.ports.runtime_turn_context import (
+    NoopRuntimeTurnContextContributor,
+    RuntimeTurnContextContributor,
 )
 from valuz_agent.ports.sandbox_allocator import BootSingletonAllocator, SandboxAllocatorPort
 from valuz_agent.ports.sandbox_credential import SandboxCredentialVerifierPort
@@ -119,6 +130,11 @@ class Extensions:
         self.sandbox_credential_verifier: SandboxCredentialVerifierPort = (
             PerOwnerHmacSandboxCredentialVerifier()
         )
+        # An overlay may attach opaque, non-persisted context to a runtime
+        # turn. OSS never interprets its keys or values.
+        self.runtime_turn_context: RuntimeTurnContextContributor = (
+            NoopRuntimeTurnContextContributor()
+        )
         self.resource_list_hook: ResourceListHook = NoopResourceListHook()
         self.skill_lifecycle: SkillLifecycleHook = NoopSkillLifecycleHook()
         self.agent_lifecycle: AgentLifecycleHook = NoopAgentLifecycleHook()
@@ -151,18 +167,32 @@ class Extensions:
         # provider. The effective declarative snapshot is re-stamped before
         # every turn so user-authored session metadata cannot weaken the gate.
         self.citation_quality_policies = CitationQualityPolicyRegistry()
-        # GenUI block catalog layers (same fixed commercial → distribution
+        # A2UI component catalog layers (same fixed commercial → distribution
         # order). Editions register the catalog text their frontend build
         # generated; the generate_ui prompt assembles from it per call, so a
         # registration is live without a process restart. See
-        # docs/design/genui-dynamic-blocks.md.
-        self.genui_blocks = GenUIBlockRegistry()
+        # docs/design/a2ui-dynamic-components.md.
+        self.a2ui_components = A2UIComponentRegistry()
         # Resolve a file's absolute path into a client-usable access address
         # (see docs/design/file-address-resolution.md). OSS default returns the
         # local absolute path (bundled desktop reads it directly); the commercial
         # overlay binds a storage-specific resolver (e.g. COS presigned URLs) for
         # the cloud deployment. The backend never proxies file bytes.
         self.file_address_resolver: FileAddressResolverPort = LocalFileAddressResolver()
+        # Builds the document-retrieval runtime for one owner. OSS default is
+        # ripgrep over that owner's preview markdown; a deployment whose
+        # documents are indexed in an external service binds its own factory.
+        # Per-owner rather than a singleton because the OSS default is scoped
+        # to the owner's preview directory.
+        self.docs_runtime_factory: DocsRuntimeFactory = default_docs_runtime
+        # Who parses queued documents. OSS default declines, leaving the
+        # in-process daemon thread; a scaled deployment binds a dispatcher that
+        # hands them to a worker so the work survives a web restart.
+        self.docs_reindex_dispatcher: DocsReindexDispatcher = NoopReindexDispatcher()
+        # Documents a caller may read beyond their own — shared libraries.
+        # Additive, and skipped for document-research sessions whose scope is
+        # exact by construction.
+        self.docs_scope_contributor: DocsScopeContributor = no_extra_documents
         # Generic ephemeral cache (e.g. the connector OAuth PKCE handoff). OSS
         # default is a local file cache (single desktop process); the commercial
         # overlay swaps in a Redis-backed cache for the shared multi-process

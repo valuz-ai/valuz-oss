@@ -29,6 +29,8 @@ CONTRACT_FILES=(
   "frontend/packages/core/src/edition/profile.ts"
   "frontend/packages/core/src/edition/virtual-overlay-plugin.ts"
   "frontend/packages/core/src/edition/hydrate-overlay.ts"
+  "frontend/packages/desktop-network-egress/src/contracts.ts"
+  "frontend/packages/desktop-network-egress/src/main/ipc-handlers.ts"
   "frontend/packages/shared/src/i18n/index.ts"
   "frontend/packages/shared/src/vite/preset.ts"
 )

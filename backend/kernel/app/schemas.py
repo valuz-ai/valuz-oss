@@ -61,6 +61,7 @@ class McpHttpServerConfigSchema(BaseModel):
     url: str
     transport: Literal["http", "sse"] = "http"
     headers: dict[str, str] = Field(default_factory=dict)
+    tool_timeout_sec: float | None = Field(default=None, gt=0)
 
 
 class McpStdioServerConfigSchema(BaseModel):
@@ -173,7 +174,7 @@ class ModelSettingsSchema(BaseModel):
     max_input_tokens: int | None = None
 
 
-RuntimeProvider = Literal["claude_agent", "codex", "deepagents"]
+RuntimeProvider = Literal["claude_agent", "codex", "deepagents", "deepseek_harness"]
 
 
 # -- Agent snapshot --
@@ -193,8 +194,8 @@ class AgentConfigSchema(BaseModel):
     runtime_provider: RuntimeProvider = "claude_agent"
     instructions: str = ""
     permission_mode: Literal["default", "auto_review", "full_access"] = "full_access"
-    max_turns: int = 50
-    max_cost_usd: float = 10.0
+    max_turns: int = 1000
+    max_cost_usd: float = 500.0
     tools: list[ToolDefSchema] = Field(default_factory=list)
     callable_agents: list[SubAgentDefSchema] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
@@ -455,6 +456,36 @@ class ImportMessageRequest(BaseModel):
 
     source_message_id: str
     user_text: str = Field(min_length=1, max_length=500)
+
+
+class ForkSessionRequest(BaseModel):
+    """Fork an owned session into a new one (docs/design/session-fork.md).
+
+    ``message_id`` anchors a message-granularity fork: the runtime-native
+    thread is forked through the message's stored anchor
+    (``messages.metadata["runtime_native"]``) and history up to and
+    including that message is copied. Omitted → whole-session fork at the
+    current tail. Everything else is copied server-side; the kernel stamps
+    ``forked_from`` provenance into the new session's metadata on top of
+    the caller-supplied ``metadata`` (host UX namespace).
+    """
+
+    message_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    #: Same opaque per-operation context ``run_turn`` carries. A fork builds a
+    #: runtime for the new session, so a deployment whose stored credential is
+    #: a runtime-context marker cannot materialize one without it.
+    runtime_context: dict[str, str] | None = None
+
+
+class PrepareRuntimeRequest(BaseModel):
+    """Warm a session's runtime — see ``ForkSessionRequest.runtime_context``.
+
+    The body is optional on the wire (older callers send none), so every field
+    has a default.
+    """
+
+    runtime_context: dict[str, str] | None = None
 
 
 # -- Events --
