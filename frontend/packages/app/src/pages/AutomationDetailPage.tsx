@@ -201,6 +201,8 @@ export const AutomationDetailPage = () => {
     trigger: Trigger;
     action_kind: ActionKind;
     worktree: boolean;
+    playbook_definition_id: string | null;
+    playbook_version: number | null;
   }) => {
     try {
       await automationsApi.update(automationId, data);
@@ -333,6 +335,12 @@ export const AutomationDetailPage = () => {
                   <span>{detail.agent_name}</span>
                 </>
               )}
+              {detail.playbook_definition_id && detail.playbook_version ? (
+                <>
+                  <span>·</span>
+                  <span>Playbook v{detail.playbook_version}</span>
+                </>
+              ) : null}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2 pt-1">
@@ -425,6 +433,7 @@ export const AutomationDetailPage = () => {
         agents={agentChoices}
         allowTaskMode={detail.project_kind === "project"}
         fixedTargetName={detail.project_name}
+        fixedProjectId={detail.project_id}
         initial={{
           name: detail.name,
           prompt_template: detail.prompt_template,
@@ -432,6 +441,8 @@ export const AutomationDetailPage = () => {
           trigger: detail.trigger,
           action_kind: (detail.action_kind as ActionKind) ?? "chat",
           worktree: detail.worktree ?? false,
+          playbook_definition_id: detail.playbook_definition_id,
+          playbook_version: detail.playbook_version,
         }}
         title={t(k("automation.dialogTitleEditNamed"), { name: detail.name })}
       />

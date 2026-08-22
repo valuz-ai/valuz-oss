@@ -21,6 +21,7 @@ Covered:
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -33,6 +34,9 @@ from valuz_agent.modules.automations.errors import (
     AutomationAgentRequired,
     AutomationNameEmpty,
     AutomationNotFound,
+    AutomationPlaybookNotFound,
+    AutomationPlaybookTaskUnsupported,
+    AutomationPlaybookVersionNotFound,
     AutomationProjectNotFound,
     AutomationPromptEmpty,
     AutomationTaskOnlyOnProject,
@@ -112,9 +116,7 @@ class FakeAutomationDatastore:
             return None
         return max(candidates, key=lambda r: r.triggered_at)
 
-    async def active_run(
-        self, user_id: str, automation_id: str
-    ) -> AutomationRunRow | None:
+    async def active_run(self, user_id: str, automation_id: str) -> AutomationRunRow | None:
         candidates = [
             r
             for r in self.runs.values()
@@ -158,6 +160,30 @@ class FakeAutomationDatastore:
             return []
         wanted = set(tool_call_ids)
         return [r for r in self.rows.values() if r.origin_tool_call_id in wanted]
+
+
+class FakePlaybookDatastore:
+    def __init__(self) -> None:
+        self.definitions = {
+            "pb-1": SimpleNamespace(id="pb-1", current_version=2),
+            "pb-2": SimpleNamespace(id="pb-2", current_version=1),
+        }
+        self.versions = {
+            ("pb-1", 1): SimpleNamespace(version=1),
+            ("pb-1", 2): SimpleNamespace(version=2),
+            ("pb-2", 1): SimpleNamespace(version=1),
+        }
+
+    async def get_definition(self, user_id: str, definition_id: str) -> Any | None:
+        return self.definitions.get(definition_id)
+
+    async def get_version(
+        self,
+        user_id: str,
+        definition_id: str,
+        version: int,
+    ) -> Any | None:
+        return self.versions.get((definition_id, version))
 
 
 class CapturingAutomationRuntime:
@@ -311,6 +337,7 @@ def service(
     svc._bus = bus
     svc._ws = project_svc  # type: ignore[assignment]
     svc._agent_svc = agent_svc  # type: ignore[assignment]
+    svc._playbooks = FakePlaybookDatastore()  # type: ignore[assignment]
     from valuz_agent.modules.automations.cron_utils import CronInterpreter
     from valuz_agent.modules.automations.triggers import TriggerEvaluator
 
@@ -568,6 +595,96 @@ class TestActionKind:
                 AutomationUpdatePayload(action_kind="task"),
                 user_id=TEST_USER_ID,
             )
+
+
+# ── Optional immutable Playbook pin ─────────────────────────────────
+
+
+class TestPlaybookPin:
+    async def test_create_without_version_pins_current_once(
+        self,
+        service: AutomationService,
+    ) -> None:
+        detail = await service.create(
+            _project_payload(playbook_definition_id="pb-1"),
+            user_id=TEST_USER_ID,
+        )
+
+        assert detail.playbook_definition_id == "pb-1"
+        assert detail.playbook_version == 2
+
+    async def test_create_can_pin_historical_version(
+        self,
+        service: AutomationService,
+    ) -> None:
+        detail = await service.create(
+            _project_payload(
+                playbook_definition_id="pb-1",
+                playbook_version=1,
+            ),
+            user_id=TEST_USER_ID,
+        )
+
+        assert detail.playbook_version == 1
+
+    async def test_rejects_missing_definition_or_version(
+        self,
+        service: AutomationService,
+    ) -> None:
+        with pytest.raises(AutomationPlaybookNotFound):
+            await service.create(
+                _project_payload(playbook_definition_id="missing"),
+                user_id=TEST_USER_ID,
+            )
+        with pytest.raises(AutomationPlaybookVersionNotFound):
+            await service.create(
+                _project_payload(
+                    playbook_definition_id="pb-1",
+                    playbook_version=99,
+                ),
+                user_id=TEST_USER_ID,
+            )
+
+    async def test_task_mode_rejects_playbook_until_task_terminal_is_observable(
+        self,
+        service: AutomationService,
+    ) -> None:
+        with pytest.raises(AutomationPlaybookTaskUnsupported):
+            await service.create(
+                _project_payload(
+                    action_kind="task",
+                    playbook_definition_id="pb-1",
+                ),
+                user_id=TEST_USER_ID,
+            )
+
+    async def test_update_definition_repins_current_and_can_unpin(
+        self,
+        service: AutomationService,
+    ) -> None:
+        detail = await service.create(
+            _project_payload(
+                playbook_definition_id="pb-1",
+                playbook_version=1,
+            ),
+            user_id=TEST_USER_ID,
+        )
+
+        updated = await service.update(
+            detail.automation_id,
+            AutomationUpdatePayload(playbook_definition_id="pb-2"),
+            user_id=TEST_USER_ID,
+        )
+        assert updated.playbook_definition_id == "pb-2"
+        assert updated.playbook_version == 1
+
+        unpinned = await service.update(
+            detail.automation_id,
+            AutomationUpdatePayload(playbook_definition_id=None),
+            user_id=TEST_USER_ID,
+        )
+        assert unpinned.playbook_definition_id is None
+        assert unpinned.playbook_version is None
 
 
 # ── CRUD lifecycle ──────────────────────────────────────────────────

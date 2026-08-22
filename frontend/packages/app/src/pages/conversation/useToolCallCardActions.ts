@@ -259,6 +259,8 @@ export function useToolCallCardActions({
         agent_slug?: string | null;
         action_kind?: "chat" | "task";
         worktree?: boolean;
+        playbook_definition_id?: string | null;
+        playbook_version?: number | null;
       },
     ) => {
       const sid = selectedSessionIdRef.current;
@@ -279,6 +281,8 @@ export function useToolCallCardActions({
           agent_slug: spec.agent_slug ?? null,
           action_kind: spec.action_kind,
           worktree: spec.worktree ?? false,
+          playbook_definition_id: spec.playbook_definition_id ?? null,
+          playbook_version: spec.playbook_version ?? null,
         });
         setAutomationProposalStates((prev) => ({
           ...prev,

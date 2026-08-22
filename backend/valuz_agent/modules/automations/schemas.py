@@ -108,6 +108,12 @@ class AutomationCreatePayload(BaseModel):
 
     prompt_template: str = Field(min_length=1)
 
+    # Optional immutable Playbook pin. ``playbook_version`` may be omitted on
+    # create; the service resolves and stores the Definition's current version
+    # exactly once. A version without a Definition is rejected.
+    playbook_definition_id: str | None = Field(default=None, max_length=36)
+    playbook_version: int | None = Field(default=None, ge=1)
+
     trigger: Trigger
 
     # Execution mode (see ``ActionKind`` docstring). Default ``chat`` keeps
@@ -144,6 +150,11 @@ class AutomationUpdatePayload(BaseModel):
     # the resulting (project_kind, action_kind) pair.
     action_kind: ActionKind | None = None
     worktree: bool | None = None
+    # Both fields are patchable. Explicit ``playbook_definition_id=null``
+    # unpins the Playbook; changing a Definition without naming a version pins
+    # that Definition's current version at update time.
+    playbook_definition_id: str | None = Field(default=None, max_length=36)
+    playbook_version: int | None = Field(default=None, ge=1)
 
 
 # ── Response models ──────────────────────────────────────────────────
@@ -167,6 +178,8 @@ class AutomationItemResponse(BaseModel):
     action_kind: str
     # Worktree isolation flag (both action kinds; git-repo projects only).
     worktree: bool = False
+    playbook_definition_id: str | None = None
+    playbook_version: int | None = None
 
     # Trigger payload re-projected as a discriminated union so the frontend
     # doesn't have to reconstitute it from flat columns.
@@ -212,6 +225,7 @@ class AutomationRunItemResponse(BaseModel):
     error_message_key: str | None
     session_id: str | None
     created_files: list[str]
+    playbook_run_id: str | None = None
     # The task this run kicked off (task automations only) — id + title let the
     # execution log deep-link to it ("→ 任务《title》"). ``None`` for non-task runs.
     task_id: str | None = None
@@ -318,6 +332,8 @@ class AutomationToolPayload(BaseModel):
     # ``task`` isolates the whole task (lead + every member). Requires the
     # project to be a git repository (silently dropped otherwise).
     worktree: bool | None = None
+    playbook_definition_id: str | None = Field(default=None, max_length=36)
+    playbook_version: int | None = Field(default=None, ge=1)
     scope: str | None = Field(
         default=None,
         description=(
@@ -350,6 +366,8 @@ class AutomationProposalSpec(BaseModel):
     # Worktree isolation (both action kinds; git-repo projects only) — echoed
     # so the confirm card can display and replay it.
     worktree: bool = False
+    playbook_definition_id: str | None = None
+    playbook_version: int | None = None
     # Localised "每天 9 点" / "every 5 minutes" — the card's primary schedule line.
     trigger_human_readable: str
     # First fire instant (epoch ms) the schedule would produce — preview only.
@@ -392,6 +410,8 @@ class AutomationProposalConfirmRequest(BaseModel):
     agent_slug: str | None = None
     action_kind: ActionKind = "chat"
     worktree: bool = False
+    playbook_definition_id: str | None = Field(default=None, max_length=36)
+    playbook_version: int | None = Field(default=None, ge=1)
 
 
 class AutomationProposalStatusRequest(BaseModel):

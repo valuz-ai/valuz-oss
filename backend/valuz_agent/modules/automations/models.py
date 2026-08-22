@@ -103,6 +103,13 @@ class AutomationRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     next_run_at: Mapped[int | None] = mapped_column(BigInteger)
     last_run_at: Mapped[int | None] = mapped_column(BigInteger)
 
+    # Optional exact Playbook contract. Simple automations may continue to use
+    # prompt_template only; when set, every run fixes this Definition version.
+    playbook_definition_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True
+    )
+    playbook_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
 
 class AutomationRunRow(Base, PrimaryKeyMixin, UserMixin):
     __tablename__ = "valuz_automation_run"
@@ -137,3 +144,7 @@ class AutomationRunRow(Base, PrimaryKeyMixin, UserMixin):
     # with an ``input`` argument — e.g. a triage agent passing a discovered task
     # id into a manual automation's instruction. NULL for plain runs.
     extra_input: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # When the Automation pins a Playbook, every fire creates one immutable
+    # PlaybookRun and stores the canonical back-link here.  NULL for simple
+    # prompt-only automations and for queued rows that have not started yet.
+    playbook_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)

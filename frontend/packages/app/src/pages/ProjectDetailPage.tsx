@@ -829,6 +829,8 @@ export const ProjectDetailPage = () => {
     trigger: Trigger;
     action_kind: ActionKind;
     worktree: boolean;
+    playbook_definition_id: string | null;
+    playbook_version: number | null;
   }) => {
     // Edit mode: PATCH the existing row. The dialog is stateless and calls the
     // same submit handler for create + edit; ``editTask`` decides which.
@@ -840,6 +842,8 @@ export const ProjectDetailPage = () => {
         trigger: data.trigger,
         action_kind: data.action_kind,
         worktree: data.worktree,
+        playbook_definition_id: data.playbook_definition_id,
+        playbook_version: data.playbook_version,
       });
       toast.success(t("common.saved" as Parameters<typeof t>[0]));
       await reloadScheduledTasks();
@@ -859,6 +863,8 @@ export const ProjectDetailPage = () => {
       trigger: data.trigger,
       action_kind: data.action_kind,
       worktree: data.worktree,
+      playbook_definition_id: data.playbook_definition_id,
+      playbook_version: data.playbook_version,
     });
     toast.success(t("project.taskCreated" as Parameters<typeof t>[0]));
     const schedRes = await automationsApi.listGroups(id);
@@ -1825,6 +1831,7 @@ export const ProjectDetailPage = () => {
         }))}
         allowTaskMode
         fixedTargetName={displayName}
+        fixedProjectId={id}
         initial={
           editTask
             ? {
@@ -1834,6 +1841,8 @@ export const ProjectDetailPage = () => {
                 trigger: editTask.trigger,
                 action_kind: (editTask.action_kind as ActionKind) ?? "chat",
                 worktree: editTask.worktree ?? false,
+                playbook_definition_id: editTask.playbook_definition_id,
+                playbook_version: editTask.playbook_version,
               }
             : undefined
         }

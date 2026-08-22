@@ -50,6 +50,7 @@ import valuz_agent.modules.docs.models  # noqa: F401,E402
 import valuz_agent.modules.marketplace.install_store  # noqa: F401,E402
 import valuz_agent.modules.notifications.models  # noqa: F401,E402
 import valuz_agent.modules.parser.models  # noqa: F401,E402
+import valuz_agent.modules.playbooks.models  # noqa: F401,E402
 import valuz_agent.modules.plugins.models  # noqa: F401,E402
 import valuz_agent.modules.projects.models  # noqa: F401,E402
 import valuz_agent.modules.providers.models  # noqa: F401,E402
