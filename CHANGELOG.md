@@ -7,6 +7,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-08-22
+
+### Added
+
+- **Valuz Data built-in connectors** — the built-in Reportify search/stock
+  endpoints are replaced by Valuz Data search and full-data MCPs, seeded as
+  non-deletable built-ins without starting OAuth in OSS. Existing connector and
+  agent bindings migrate from `valuz-stock` to `valuz-data`, Cloud-managed
+  credential families stay isolated from local OAuth group sharing, and
+  citation/tool metadata is aligned with Valuz Data while accessible source
+  labels are preserved (#996 @St0neWan9).
+- **A built-in connector says it is built-in** — Disconnect renders disabled
+  with an explanatory notice instead of looking enabled and silently doing
+  nothing, and a Built-in badge sits beside the connector's name
+  (#999 @St0neWan9).
+- **The composition root can hand the parser registry a plugin** — `register()`
+  is a second door beside the `valuz.parser_plugins` entry-point group. An
+  overlay that ships as source on `PYTHONPATH` installs no distribution
+  metadata, so entry-point discovery could never see it and every routing
+  decision naming it was quietly demoted to `light_local` — with no exception,
+  no log line, and no missing module (#992 @Ready22Race).
+- **The desktop window remembers its size and position** across restarts, and
+  an explicit centred origin is now computed on every platform. macOS was
+  previously let through on the assumption that it clamps — it does, but
+  clamping is not placement, and a 1440x900 window opened flush against the top
+  of the work area (#986 @St0neWan9).
+
+### Changed
+
+- **The Task Coverage protocol stays out of the transcript** — its tool calls
+  and results are kept private, its assistant text is held until terminal
+  classification, no-gap and meta responses are dropped, and only genuine
+  supplement text is published (#983 @St0neWan9).
+- **The create-KB dialog stops offering a scan nobody runs** — on a backend
+  whose managed root receives documents only through the API, the
+  "auto-discover new files" checkbox is hidden and `auto_discover: false` is
+  sent, rather than creating knowledge bases with a checked-by-default hidden
+  option and then rendering the scan as enabled. Every current caller keeps
+  today's behaviour (#989 @Ready22Race).
+
+### Fixed
+
+- **Claude MCP source metadata survives the content-only bridge** — configured
+  Claude MCP servers route through one transparent in-process proxy so
+  result-level `dev.valuz/source-metadata` and `structuredContent` reach
+  citations; the canonical compacted projection is retained beside the private
+  Citation sidecar so generic JSON pointers inflate against the projection they
+  were minted from; root-scoped Collection hashes stay independent of
+  `_valuz_evidence` transport fields; an omitted declared `itemsPointer` is
+  normalized; and a cited chunk's display title/URL is enriched from richer,
+  already-validated metadata for the same provider and document identity
+  (#983 @St0neWan9).
+- **A budget stop is no longer claimed when it never happened** — a Codex turn
+  still reporting `in_progress` was mapped onto
+  `BudgetExhausted(reason="max_turns")`, a ceiling that runtime does not have.
+  Borrowing the type was free while a budget stop rendered as nothing; since
+  0.4.3 states it in plain words, it is not. A real budget stop is also no
+  longer rendered silently (#988 @Ready22Race).
+- **An attachment appears the moment it is attached, not five seconds later** —
+  a placeholder row goes into local state first and the server row swaps in
+  when the upload lands, instead of waiting out sandbox allocation (~3.6s on
+  cloud) and the upload itself (~1.3s). The chip is removed if the upload
+  fails, and all of them are removed if session creation throws — a chip that
+  outlives its upload promises a turn that cannot carry it (#997 @Ready22Race).
+- **A knowledge-base upload shows that it is running, and the list keeps its
+  statuses live** — one `uploading` state now covers both the header button and
+  the drop overlay (whose "processing" copy was unreachable dead code), and the
+  tree polls while documents are still parsing instead of going stale for
+  minutes (#993 @Ready22Race).
+- **DeepAgents dead-end virtual paths fall through to host paths** — under
+  `virtual_mode`, an out-of-workspace absolute such as `/Users/x/test` resolved
+  to `<cwd>/Users/x/test` and listed empty while the shell tool read the same
+  directory freely. The resolution ladder gains one purely additive branch;
+  `virtual_mode` stays on, so virtual artifact namespaces and the Windows path
+  virtualizer keep working (#998 @jiaoqsh).
+- **The Codex MCP-secret guard is diagnosable and correctly scoped** — the
+  residue check now matches only the value part of each override line, so a
+  benign header value that happens to be a substring of a dotted key path no
+  longer trips it; it probes raw, TOML-escaped, and urlencoded shapes, so URL-
+  and args-borne residues are caught even when byte-shifted; and a refusal
+  carries redacted diagnostics (origin, `secret_env` key, value length,
+  SHA-256 prefix, matched key prefixes) instead of a blind message
+  (#990 @jiaoqsh).
+- **AskUserQuestion cards** — a lone header is hoisted into the card title
+  (#985 @St0neWan9), and a header pill that accompanies a question is stacked
+  above it rather than crowding the same line (#984 @St0neWan9).
+
+### Docs & Chore
+
+- **`make dev` vendors the DeepSeek Harness runtime closure** — `scripts/dev.sh`
+  fetches it on demand with an idempotent freshness check, respects
+  `VALUZ_DSH_RUNTIME_BIN` / `VALUZ_DSH_ROOT`, and fails open. Only
+  `build-desktop.sh` fetched the closure before, so every dev checkout showed
+  the runtime greyed out until the vendor script was found by hand
+  (#991 @jiaoqsh).
+- "A parsing attachment should hold the turn, not the person" (#994
+  @Ready22Race) was reverted before this release (#995 @Ready22Race) and is not
+  part of 0.4.4.
+
 ## [0.4.3] - 2026-08-21
 
 ### Added
