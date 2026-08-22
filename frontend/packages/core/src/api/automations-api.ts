@@ -85,6 +85,9 @@ export interface AutomationItem {
   action_kind: ActionKind;
   /** Worktree isolation flag (both action kinds; git-repo projects only). */
   worktree: boolean;
+  /** Optional immutable Playbook contract executed by each fire. */
+  playbook_definition_id: string | null;
+  playbook_version: number | null;
 
   trigger: Trigger;
   /** Localized "every day at 9" / "every 5 minutes". */
@@ -137,6 +140,8 @@ export interface AutomationRunItem {
   error_message: string | null;
   session_id: string | null;
   created_files: string[];
+  /** Canonical PlaybookRun created for this fire, when a Playbook is pinned. */
+  playbook_run_id: string | null;
   // The task this run kicked off (task automations only) — id + title deep-link
   // to it ("→ 任务《title》"). `null` for non-task runs.
   task_id: string | null;
@@ -204,6 +209,10 @@ export interface AutomationCreatePayload {
    * every member in one worktree. Silently dropped for chat-only projects.
    */
   worktree?: boolean;
+  /** Definition + exact immutable version. Omitting the version asks the
+   * backend to resolve and persist the Definition's current version once. */
+  playbook_definition_id?: string | null;
+  playbook_version?: number | null;
 }
 
 export interface AutomationUpdatePayload {
@@ -213,6 +222,18 @@ export interface AutomationUpdatePayload {
   agent_slug?: string | null;
   action_kind?: ActionKind | null;
   worktree?: boolean | null;
+  playbook_definition_id?: string | null;
+  playbook_version?: number | null;
+}
+
+/** Minimal Definition projection needed by the Automation contract picker. */
+export interface AutomationPlaybookChoice {
+  id: string;
+  project_id: string;
+  name: string;
+  status: "draft" | "active" | "retired";
+  current_version: number;
+  revision: number;
 }
 
 export interface AutomationRunAccepted {
@@ -256,6 +277,8 @@ export interface AutomationProposalSpec {
   action_kind: ActionKind;
   /** Worktree isolation (both action kinds; git-repo projects only). */
   worktree: boolean;
+  playbook_definition_id: string | null;
+  playbook_version: number | null;
   trigger_human_readable: string;
   next_run_at: number | null;
 }
@@ -270,6 +293,8 @@ export interface AutomationProposalConfirmPayload {
   agent_slug?: string | null;
   action_kind?: ActionKind;
   worktree?: boolean;
+  playbook_definition_id?: string | null;
+  playbook_version?: number | null;
 }
 
 export interface AutomationProposalStatusResult {
@@ -283,6 +308,15 @@ const sessionBase = (sessionId: string): string | undefined =>
   resolveApiBase({ sessionId }, "") || undefined;
 
 export const automationsApi = {
+  /** List Playbook Definitions on the same execution target as the future
+   * Automation. Definition ownership and execution Project may differ; this
+   * intentionally does not filter by project_id. */
+  listPlaybooks(opts?: {
+    baseUrl?: string;
+  }): Promise<AutomationPlaybookChoice[]> {
+    return fetchJson("/v1/playbooks", { baseUrl: opts?.baseUrl });
+  },
+
   async listGroups(projectId?: string): Promise<{ groups: AutomationGroup[] }> {
     const qs = new URLSearchParams();
     if (projectId) qs.set("project_id", projectId);

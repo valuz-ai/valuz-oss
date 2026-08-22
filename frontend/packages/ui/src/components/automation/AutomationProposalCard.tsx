@@ -13,7 +13,15 @@
  * renders the message and offers no Confirm button.
  */
 import { memo, useCallback, useState } from "react";
-import { AlarmClock, Check, Loader2, Sparkles, User, X } from "lucide-react";
+import {
+  AlarmClock,
+  BookOpen,
+  Check,
+  Loader2,
+  Sparkles,
+  User,
+  X,
+} from "lucide-react";
 import { cn } from "@valuz/ui/lib/utils";
 import { useI18n } from "../../hooks/use-i18n";
 
@@ -35,6 +43,8 @@ interface AutomationProposalCardProps {
   actionKind: "chat" | "task";
   /** Both action kinds: each fire runs in an isolated git worktree. */
   worktree?: boolean;
+  /** Immutable Playbook version the server resolved for this proposal. */
+  playbookVersion?: number | null;
   state: AutomationProposalState;
   /** When ``state === "error"``, the confirm failure to display. */
   errorMessage?: string;
@@ -51,6 +61,7 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
   agentName,
   actionKind,
   worktree = false,
+  playbookVersion,
   state,
   errorMessage,
   validationError,
@@ -137,8 +148,8 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
             ) : null}
           </div>
 
-          {triggerHuman || agentName ? (
-            <div className="mt-1 flex items-center gap-3 text-xs">
+          {triggerHuman || agentName || playbookVersion ? (
+            <div className="mt-1 flex flex-wrap items-center gap-3 text-xs">
               {triggerHuman ? (
                 <span className="flex shrink-0 items-center gap-1 text-ink-body">
                   <Sparkles className="h-3 w-3 shrink-0 text-ink-label" />
@@ -153,6 +164,12 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
                       ? `${t("automation.proposalLead")}: ${agentName}`
                       : `${t("automation.agentLabel")}: ${agentName}`}
                   </span>
+                </span>
+              ) : null}
+              {playbookVersion ? (
+                <span className="flex shrink-0 items-center gap-1 text-ink-meta">
+                  <BookOpen className="h-3 w-3 shrink-0 text-ink-label" />
+                  Playbook v{playbookVersion}
                 </span>
               ) : null}
             </div>

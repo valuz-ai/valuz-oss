@@ -24,6 +24,7 @@ single-flight ``_active_ids`` guard, stranded-run reconciliation on startup,
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from datetime import UTC, datetime, timedelta
@@ -44,6 +45,58 @@ logger = logging.getLogger(__name__)
 
 TICK_INTERVAL = 30
 TEMPLATE_VAR_RE = re.compile(r"\{\{(\w+(?:\.\w+)*)\}\}")
+
+
+def _json_contract(value: Any) -> str:
+    """Render one Playbook contract field deterministically for the prompt."""
+
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def _compose_playbook_prompt(
+    *,
+    definition: Any,
+    version: Any,
+    automation_prompt: str,
+) -> str:
+    """Compose the immutable Playbook contract and this fire's input.
+
+    The Playbook version is already pinned on ``AutomationRow``. Keeping the
+    full contract in the actual user turn makes execution reproducible even if
+    the Definition later advances, while ``PlaybookRun.input_snapshot`` keeps
+    the same inputs queryable without parsing the conversation.
+    """
+
+    fields = (
+        ("Goal", version.goal),
+        ("Applicability", version.applicability),
+        ("Inputs", version.inputs),
+        ("Context reads", version.context_reads),
+        ("Stages", version.stages),
+        ("Required skills", version.required_skills),
+        ("Allowed skills", version.allowed_skills),
+        ("Conditions", version.conditions),
+        ("Approvals", version.approvals),
+        ("Outputs", version.outputs),
+        ("Context writes", version.context_writes),
+        ("Failure policy", version.failure_policy),
+    )
+    rendered_fields = "\n\n".join(
+        f"### {label}\n{value if isinstance(value, str) else _json_contract(value)}"
+        for label, value in fields
+    )
+    return (
+        "# Playbook execution contract\n\n"
+        f"Definition: {definition.name} ({definition.id})\n"
+        f"Pinned version: {version.version}\n\n"
+        "Execute this immutable contract for this run. Treat declared stages, "
+        "conditions, approvals, outputs, context reads/writes, and failure policy "
+        "as the governing process. Do not silently substitute a newer Playbook "
+        "version.\n\n"
+        f"{rendered_fields}\n\n"
+        "# Automation run input\n\n"
+        f"{automation_prompt}"
+    )
 
 
 def _render_template(template: str, variables: dict[str, str]) -> str:
@@ -184,9 +237,11 @@ class InProcessAutomationRunner:
         """
         from valuz_agent.infra.db import async_unit_of_work
         from valuz_agent.modules.automations.datastore import AutomationDatastore
+        from valuz_agent.modules.playbooks.datastore import PlaybookDatastore
 
         async with async_unit_of_work() as db:
             ds = AutomationDatastore(db)
+            playbooks = PlaybookDatastore(db)
             stranded = await ds.list_stranded_runs()
             now = now_ms()
             for run in stranded:
@@ -196,6 +251,11 @@ class InProcessAutomationRunner:
                 if run.started_at is not None:
                     # Both instants are epoch ms — duration is a plain int subtract.
                     run.duration_ms = now - run.started_at
+                await self._stop_linked_playbook_run(
+                    playbooks,
+                    run,
+                    completed_at=now,
+                )
                 await ds.replace_run(run)
                 logger.info(
                     "Reconciled stranded run %s (automation=%s, prev=queued/running)",
@@ -206,9 +266,11 @@ class InProcessAutomationRunner:
     async def _mark_active_runs_interrupted(self) -> None:
         from valuz_agent.infra.db import async_unit_of_work
         from valuz_agent.modules.automations.datastore import AutomationDatastore
+        from valuz_agent.modules.playbooks.datastore import PlaybookDatastore
 
         async with async_unit_of_work() as db:
             ds = AutomationDatastore(db)
+            playbooks = PlaybookDatastore(db)
             # Active automations span owners (shutdown path has no request
             # context) — use each automation's own owner, never ambient.
             for automation_id, owner in list(self._active_ids.items()):
@@ -217,6 +279,11 @@ class InProcessAutomationRunner:
                     last_run.status = "interrupted_by_shutdown"
                     last_run.error_code = "AUTOMATION_INTERRUPTED_BY_SHUTDOWN"
                     last_run.completed_at = now_ms()
+                    await self._stop_linked_playbook_run(
+                        playbooks,
+                        last_run,
+                        completed_at=last_run.completed_at,
+                    )
                     await ds.replace_run(last_run)
             self._active_ids.clear()
 
@@ -341,6 +408,8 @@ class InProcessAutomationRunner:
     ) -> None:
         from valuz_agent.infra.db import async_unit_of_work
         from valuz_agent.modules.automations.datastore import AutomationDatastore
+        from valuz_agent.modules.playbooks.datastore import PlaybookDatastore
+        from valuz_agent.modules.playbooks.models import PlaybookRunRow
 
         assert self._triggers is not None
         execution_lease: AutomationExecutionLease = lease or NoopAutomationExecutionLease()
@@ -352,6 +421,7 @@ class InProcessAutomationRunner:
         handoff_args: tuple[str, str] | None = None
         async with async_unit_of_work() as db:
             ds = AutomationDatastore(db)
+            playbooks = PlaybookDatastore(db)
             row = await ds.get_automation(user_id, automation_id)
             run = await ds.last_run(user_id, automation_id)
             if not row or not run or run.id != run_id:
@@ -380,6 +450,97 @@ class InProcessAutomationRunner:
                 # to the instruction for THIS run only.
                 if run.extra_input:
                     rendered_prompt = f"{rendered_prompt}\n\n{run.extra_input}"
+
+                playbook_run: PlaybookRunRow | None = None
+                if row.playbook_definition_id is not None:
+                    definition = await playbooks.get_definition(
+                        user_id,
+                        row.playbook_definition_id,
+                    )
+                    version = (
+                        await playbooks.get_version(
+                            user_id,
+                            row.playbook_definition_id,
+                            row.playbook_version,
+                        )
+                        if row.playbook_version is not None
+                        else None
+                    )
+                    if definition is None or version is None:
+                        run.status = "failed"
+                        run.error_code = (
+                            "AutomationPlaybookNotFound"
+                            if definition is None
+                            else "AutomationPlaybookVersionNotFound"
+                        )
+                        run.error_message = (
+                            "Pinned Playbook Definition is no longer available."
+                            if definition is None
+                            else "Pinned Playbook version is no longer available."
+                        )
+                        run.completed_at = now_ms()
+                        if not await execution_lease.is_current():
+                            logger.warning(
+                                "Run %s lost execution lease before Playbook failure write",
+                                run_id,
+                            )
+                            return
+                        await ds.replace_run(run)
+                        return
+
+                    started_at = now_ms()
+                    playbook_run = PlaybookRunRow(
+                        user_id=user_id,
+                        definition_id=definition.id,
+                        definition_version=version.version,
+                        project_id=row.project_id,
+                        status="running",
+                        trigger_kind="automation",
+                        trigger_ref=run.id,
+                        subject_refs=[],
+                        input_snapshot={
+                            "automation_id": row.id,
+                            "automation_run_id": run.id,
+                            "prompt_template": row.prompt_template,
+                            "rendered_input": rendered_prompt,
+                            "extra_input": run.extra_input,
+                            "template_variables": variables,
+                        },
+                        context_snapshot={
+                            "project_id": row.project_id,
+                            "definition_project_id": definition.project_id,
+                            "agent_slug": row.agent_slug,
+                            "declared_contract": {
+                                "applicability": version.applicability,
+                                "inputs": version.inputs,
+                                "context_reads": version.context_reads,
+                                "required_skills": version.required_skills,
+                                "allowed_skills": version.allowed_skills,
+                                "conditions": version.conditions,
+                                "approvals": version.approvals,
+                                "outputs": version.outputs,
+                                "context_writes": version.context_writes,
+                                "failure_policy": version.failure_policy,
+                            },
+                        },
+                        plan=version.stages,
+                        tasks=[],
+                        tool_calls=[],
+                        approvals=[],
+                        artifact_refs=[],
+                        change_set_refs=[],
+                        output_refs=[],
+                        checkpoint={"automation_run_status": "running"},
+                        started_at=started_at,
+                    )
+                    playbooks.add(playbook_run)
+                    await playbooks.flush()
+                    run.playbook_run_id = playbook_run.id
+                    rendered_prompt = _compose_playbook_prompt(
+                        definition=definition,
+                        version=version,
+                        automation_prompt=rendered_prompt,
+                    )
 
                 # Two execution modes per ADR-021 follow-up:
                 #
@@ -417,9 +578,7 @@ class InProcessAutomationRunner:
                     # omitted → auto-generated) opts in; a non-git project 422s
                     # here and the except-block marks the run failed.
                     wt_spec = (
-                        SessionWorktreeSpec()
-                        if bool(getattr(row, "worktree", False))
-                        else None
+                        SessionWorktreeSpec() if bool(getattr(row, "worktree", False)) else None
                     )
                     # Execution identity follows the bound agent — no model /
                     # provider / runtime override surface remains. The agent's
@@ -438,6 +597,15 @@ class InProcessAutomationRunner:
                     run.error_message_key = getattr(exc, "message_key", None)
                     run.error_message = str(exc)[:500]
                     run.completed_at = now_ms()
+                    if playbook_run is not None:
+                        playbook_run.status = "failed"
+                        playbook_run.error_code = run.error_code
+                        playbook_run.error_message = run.error_message
+                        playbook_run.completed_at = run.completed_at
+                        playbook_run.checkpoint = {
+                            "automation_run_status": "failed",
+                            "phase": "session_creation",
+                        }
                     if not await execution_lease.is_current():
                         logger.warning("Run %s lost execution lease before failure write", run_id)
                         return
@@ -452,6 +620,15 @@ class InProcessAutomationRunner:
                 run.status = "running"
                 run.started_at = now_ms()
                 run.session_id = session.id
+                if playbook_run is not None:
+                    playbook_run.output_refs = [
+                        {"type": "automation_run", "id": run.id},
+                        {"type": "session", "id": session.id},
+                    ]
+                    playbook_run.checkpoint = {
+                        "automation_run_status": "running",
+                        "session_id": session.id,
+                    }
                 if not await execution_lease.is_current():
                     logger.warning("Run %s lost execution lease before running write", run_id)
                     return
@@ -508,12 +685,14 @@ class InProcessAutomationRunner:
         """
         from valuz_agent.infra.db import async_unit_of_work
         from valuz_agent.modules.automations.datastore import AutomationDatastore
+        from valuz_agent.modules.playbooks.datastore import PlaybookDatastore
 
         assert self._triggers is not None
         execution_lease: AutomationExecutionLease = lease or NoopAutomationExecutionLease()
         try:
             async with async_unit_of_work() as db:
                 ds = AutomationDatastore(db)
+                playbooks = PlaybookDatastore(db)
                 row = await ds.get_automation(user_id, automation_id)
                 run = await ds.last_run(user_id, automation_id)
                 if not row or not run or run.id != run_id:
@@ -581,6 +760,31 @@ class InProcessAutomationRunner:
                 if not await execution_lease.is_current():
                     logger.warning("Run %s lost execution lease before terminal write", run_id)
                     return
+                playbook_run_id = getattr(run, "playbook_run_id", None)
+                if playbook_run_id is not None:
+                    playbook_run = await playbooks.get_run(user_id, playbook_run_id)
+                    if playbook_run is not None and playbook_run.status in {
+                        "queued",
+                        "planning",
+                        "running",
+                        "waiting_approval",
+                    }:
+                        playbook_run.status = "completed" if run.status == "success" else "failed"
+                        playbook_run.error_code = run.error_code
+                        playbook_run.error_message = run.error_message
+                        playbook_run.completed_at = run.completed_at
+                        playbook_run.output_refs = [
+                            {"type": "automation_run", "id": run.id},
+                            {
+                                "type": "session",
+                                "id": session_id,
+                                "status": run.status,
+                            },
+                        ]
+                        playbook_run.checkpoint = {
+                            "automation_run_status": run.status,
+                            "session_id": session_id,
+                        }
                 await ds.replace_run(run)
 
                 row.last_run_at = run.triggered_at
@@ -671,9 +875,7 @@ class InProcessAutomationRunner:
             lead_session_id: str | None = None
             try:
                 async with async_unit_of_work(commit=False) as ts_db:
-                    runs = await TaskSessionDatastore(ts_db).list_runs(
-                        user_id, task.id
-                    )
+                    runs = await TaskSessionDatastore(ts_db).list_runs(user_id, task.id)
                     lead_run = pick_lead_run(runs)
                     lead_session_id = lead_run.session_id if lead_run else None
             except Exception:
@@ -741,6 +943,37 @@ class InProcessAutomationRunner:
         await ds.trim_runs(row.user_id, automation_id, keep=100)
 
     # ── Helpers ──────────────────────────────────────────────────────
+
+    @staticmethod
+    async def _stop_linked_playbook_run(
+        playbooks: Any,
+        automation_run: AutomationRunRow,
+        *,
+        completed_at: int,
+    ) -> None:
+        """Reconcile a nonterminal PlaybookRun when its AutomationRun dies."""
+
+        playbook_run_id = getattr(automation_run, "playbook_run_id", None)
+        if playbook_run_id is None:
+            return
+        playbook_run = await playbooks.get_run(
+            automation_run.user_id,
+            playbook_run_id,
+        )
+        if playbook_run is None or playbook_run.status not in {
+            "queued",
+            "planning",
+            "running",
+            "waiting_approval",
+        }:
+            return
+        playbook_run.status = "stopped"
+        playbook_run.error_code = "AUTOMATION_INTERRUPTED_BY_SHUTDOWN"
+        playbook_run.error_message = "The owning Automation run was interrupted by shutdown."
+        playbook_run.completed_at = completed_at
+        playbook_run.checkpoint = {
+            "automation_run_status": "interrupted_by_shutdown",
+        }
 
     def _effective_tz_for(self, row: AutomationRow) -> str:
         """Pick the timezone for prompt-variable rendering.

@@ -309,6 +309,19 @@ export function useToolCallCards({
         }
       }
 
+      // Generic edition-domain mutation seam. Industry editions expose an
+      // always-on MCP tool named ``domain_operation`` and register the actual
+      // persisted proposal card in this slot. The host owns only placement;
+      // it neither knows Finance entities nor duplicates their confirm API.
+      if (isToolNamed(name, "domain_operation")) {
+        return (
+          <SlotRenderer
+            name="domain.operation-card"
+            context={{ tool }}
+          />
+        );
+      }
+
       // ADR-021: automation tool result → AutomationToolCard. The MCP
       // server returns a structured JSON blob as ``tool.output``; we
       // parse it and hand off to the card. If the output is missing
@@ -357,6 +370,12 @@ export function useToolCallCards({
             proposal?.worktree ?? inputSpec?.worktree ?? false;
           const cardAgentName =
             proposal?.agent_name ?? inputSpec?.agent_slug ?? null;
+          const cardPlaybookDefinitionId =
+            proposal?.playbook_definition_id ??
+            inputSpec?.playbook_definition_id ??
+            null;
+          const cardPlaybookVersion =
+            proposal?.playbook_version ?? inputSpec?.playbook_version ?? null;
           const entry = automationProposalStates[tool.id] || {
             state: "pending" as const,
           };
@@ -368,6 +387,7 @@ export function useToolCallCards({
               agentName={cardAgentName}
               actionKind={cardActionKind}
               worktree={cardWorktree}
+              playbookVersion={cardPlaybookVersion}
               state={entry.state}
               errorMessage={entry.errorMessage}
               validationError={validationError}
@@ -380,6 +400,8 @@ export function useToolCallCards({
                   agent_slug: proposal?.agent_slug ?? inputSpec?.agent_slug,
                   action_kind: cardActionKind,
                   worktree: cardWorktree,
+                  playbook_definition_id: cardPlaybookDefinitionId,
+                  playbook_version: cardPlaybookVersion,
                 });
               }}
               onDismiss={() => handleDismissAutomation(tool.id)}

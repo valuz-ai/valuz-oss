@@ -52,6 +52,8 @@ export interface AutomationToolItem {
   agent_slug: string;
   agent_name: string | null;
   action_kind: "chat" | "task";
+  playbook_definition_id?: string | null;
+  playbook_version?: number | null;
   trigger: AutomationTrigger;
   trigger_human_readable: string;
   status: string;
@@ -72,6 +74,8 @@ export interface AutomationProposalSpecPayload {
   action_kind: "chat" | "task";
   /** Worktree isolation (both action kinds; git-repo projects only). */
   worktree?: boolean;
+  playbook_definition_id?: string | null;
+  playbook_version?: number | null;
   trigger_human_readable: string;
   next_run_at: number | null;
 }

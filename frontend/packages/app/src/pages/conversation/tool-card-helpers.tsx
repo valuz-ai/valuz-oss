@@ -238,6 +238,8 @@ export function parseAutomationCreateInput(input: unknown): {
   agent_slug?: string;
   action_kind?: "chat" | "task";
   worktree?: boolean;
+  playbook_definition_id?: string;
+  playbook_version?: number;
 } | null {
   if (!input) return null;
   let parsed: unknown;
@@ -288,6 +290,12 @@ export function parseAutomationCreateInput(input: unknown): {
     agent_slug: typeof p.agent_slug === "string" ? p.agent_slug : undefined,
     action_kind: actionKind,
     worktree,
+    playbook_definition_id:
+      typeof p.playbook_definition_id === "string"
+        ? p.playbook_definition_id
+        : undefined,
+    playbook_version:
+      typeof p.playbook_version === "number" ? p.playbook_version : undefined,
   };
 }
 

@@ -379,6 +379,8 @@ export const AutomationPage = () => {
     trigger: Trigger;
     action_kind: ActionKind;
     worktree: boolean;
+    playbook_definition_id: string | null;
+    playbook_version: number | null;
     /** Chat-standalone target only: chosen execution-location target id. */
     exec_location?: string;
   }) => {
@@ -411,6 +413,8 @@ export const AutomationPage = () => {
           trigger: data.trigger,
           action_kind: data.action_kind,
           worktree: data.worktree,
+          playbook_definition_id: data.playbook_definition_id,
+          playbook_version: data.playbook_version,
         },
         baseUrl ? { baseUrl } : undefined,
       );
