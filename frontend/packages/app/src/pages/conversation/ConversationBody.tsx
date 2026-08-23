@@ -183,6 +183,13 @@ export function ConversationBody({
             <SelectionActionsOverlay
               sessionId={selectedSessionId}
               containerRef={scrollContainerRef}
+              // Appends below any text already staged, so acting on a
+              // selection never clobbers a draft in progress.
+              insertDraft={(text) =>
+                setDraft((previous) =>
+                  previous.trim() ? `${previous.trimEnd()}\n\n${text}` : text,
+                )
+              }
             />
             <div
               ref={scrollContainerRef}

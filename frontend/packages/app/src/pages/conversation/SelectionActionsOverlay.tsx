@@ -38,9 +38,15 @@ function rectOf(range: Range): DOMRect | null {
 export function SelectionActionsOverlay({
   sessionId,
   containerRef,
+  insertDraft,
 }: {
   sessionId: string | null;
   containerRef: { readonly current: HTMLElement | null };
+  /** Append text to THIS conversation's composer draft (never auto-sends).
+   *  Handed to slot components so a selection action can stage an
+   *  agent-native request — e.g. "add this claim to my research" — for the
+   *  user to complete and send. */
+  insertDraft?: (text: string) => void;
 }) {
   const hasActions = useRegistryStore(
     (state) => (state.slots[SELECTION_ACTIONS_SLOT]?.length ?? 0) > 0,
@@ -126,6 +132,7 @@ export function SelectionActionsOverlay({
             messageId: active.messageId,
             selectedText: active.text,
             clear,
+            insertDraft,
           }}
         />
       </div>

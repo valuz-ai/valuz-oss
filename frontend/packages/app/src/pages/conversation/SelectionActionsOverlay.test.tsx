@@ -8,7 +8,13 @@ import {
   SelectionActionsOverlay,
 } from "./SelectionActionsOverlay";
 
-function Harness({ sessionId = "session-1" }: { sessionId?: string | null }) {
+function Harness({
+  sessionId = "session-1",
+  insertDraft,
+}: {
+  sessionId?: string | null;
+  insertDraft?: (text: string) => void;
+}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   return (
     <div ref={containerRef}>
@@ -22,6 +28,7 @@ function Harness({ sessionId = "session-1" }: { sessionId?: string | null }) {
       <SelectionActionsOverlay
         sessionId={sessionId}
         containerRef={containerRef}
+        insertDraft={insertDraft}
       />
     </div>
   );
@@ -134,6 +141,31 @@ describe("SelectionActionsOverlay", () => {
     // ``false`` means preventDefault ran — the browser will not collapse the
     // selection out from under the click.
     expect(mouseDown).toBe(false);
+  });
+
+  it("hands the host's insertDraft to slot components", () => {
+    const drafts: string[] = [];
+    useRegistryStore.getState().registerSlot(SELECTION_ACTIONS_SLOT, {
+      id: "test-action",
+      component: (props: Record<string, unknown>) => (
+        <button
+          type="button"
+          onClick={() =>
+            (props.insertDraft as (text: string) => void)(
+              `加入研究：${String(props.selectedText)}`,
+            )
+          }
+        >
+          加入研究
+        </button>
+      ),
+    });
+
+    render(<Harness insertDraft={(text) => drafts.push(text)} />);
+    selectTextIn(screen.getByText("Margins were stable."));
+    fireEvent.click(screen.getByRole("button", { name: "加入研究" }));
+
+    expect(drafts).toEqual(["加入研究：Margins were stable."]);
   });
 
   it("ignores registrations arriving without any selection", () => {
