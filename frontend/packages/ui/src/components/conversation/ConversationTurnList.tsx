@@ -1296,6 +1296,11 @@ const TurnRow = memo(
                 <div
                   key={`segment-${turn.id}-${blockIndex}`}
                   className="space-y-3"
+                  // Selection anchor for host text-selection actions
+                  // (``conversation.selection-actions`` slot): a selection
+                  // inside this segment resolves to the assistant message it
+                  // belongs to — the same identity the citation system uses.
+                  data-assistant-message-id={block.messageId ?? undefined}
                 >
                   {block.header !== null ? (
                     <MarkdownContent
