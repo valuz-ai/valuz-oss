@@ -12,6 +12,7 @@ end-to-end with all the moving parts.
 
 from __future__ import annotations
 
+import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -767,3 +768,171 @@ class TestAutomationFacade:
         assert update_called_with["automation_id"] == "existing-id"
         assert update_called_with["payload"].name == "Updated Name"
         assert update_called_with["payload"].trigger.kind == "manual"
+
+
+# ---------------------------------------------------------------------------
+# Playbook — definitions are the resource; versions and runs stay local
+# ---------------------------------------------------------------------------
+
+
+class _FakeDefinition:
+    def __init__(
+        self,
+        definition_id: str = "pb-1",
+        name: str = "Quarterly Review",
+        project_id: str | None = "proj-1",
+        current_version: int = 3,
+    ) -> None:
+        self.id = definition_id
+        self.name = name
+        self.project_id = project_id
+        self.current_version = current_version
+        self.status = "active"
+        self.origin = "user"
+
+
+class _FakeVersion:
+    def __init__(self, version: int = 3) -> None:
+        self.version = version
+        self.content = "1. pull filings\n2. summarise"
+        self.goal = "LEGACY MIRROR — must not travel"
+        self.reference_metadata = [{"kind": "doc", "id": "d1"}]
+        self.default_executor = {"agent_slug": "research"}
+        self.applicability = {"sector": "tech"}
+        self.inputs = [{"name": "ticker"}]
+        self.stages = [{"name": "collect"}]
+        self.context_reads = ["ctx.a"]
+        self.context_writes = [{"key": "ctx.b"}]
+        self.required_skills = ["search"]
+        self.allowed_skills = ["search", "browse"]
+        self.conditions = [{"when": "always"}]
+        self.approvals = [{"stage": "collect"}]
+        self.outputs = ["report"]
+        self.failure_policy = "stop"
+
+
+def _patch_playbook_service(monkeypatch, service_cls, project=None):
+    """Bind the facade's playbook branch to ``service_cls`` and a stub project lib."""
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _fake_uow(commit: bool = True):
+        yield object()
+
+    class _FakeProjectLibrary:
+        async def get(self, user_id: str, project_id: str):
+            return project
+
+    monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", _fake_uow)
+    monkeypatch.setattr(
+        "valuz_agent.modules.playbooks.service.PlaybookService", service_cls
+    )
+    monkeypatch.setattr("valuz_agent.facade.projects.ProjectLibrary", _FakeProjectLibrary)
+
+
+class TestPlaybookFacade:
+    async def test_list_playbook_returns_definition_refs(self, monkeypatch) -> None:
+        """list("playbook") maps every definition the user owns to a ResourceRef by id."""
+
+        class _FakeService:
+            def __init__(self, _db, _projects) -> None:
+                pass
+
+            async def list_definitions(self, user_id, project_id=None):
+                assert project_id is None, "every definition, not just one project's"
+                return [
+                    _FakeDefinition("pb-1", "Quarterly Review"),
+                    _FakeDefinition("pb-2", "Earnings Recap", project_id=None),
+                ]
+
+        _patch_playbook_service(monkeypatch, _FakeService)
+
+        lib = ResourceLibrary()
+        refs = await lib.list(USER_ID, "playbook")
+        assert refs == [
+            ResourceRef(kind="playbook", key="pb-1", name="Quarterly Review"),
+            ResourceRef(kind="playbook", key="pb-2", name="Earnings Recap"),
+        ]
+
+    async def test_get_playbook_exports_the_current_version_body(self, monkeypatch) -> None:
+        """get("playbook") flattens the definition's current version into ``data``."""
+
+        class _FakeService:
+            def __init__(self, _db, _projects) -> None:
+                pass
+
+            async def get_definition(self, user_id, definition_id):
+                return _FakeDefinition(definition_id)
+
+            async def get_version(self, user_id, definition_id, version):
+                assert version == 3, "must export the definition's current version"
+                return _FakeVersion(version)
+
+        class _Project:
+            name = "Research"
+
+        _patch_playbook_service(monkeypatch, _FakeService, project=_Project())
+
+        lib = ResourceLibrary()
+        snap = await lib.get(USER_ID, "playbook", "pb-1")
+        assert snap is not None
+        assert snap.kind == "playbook"
+        assert snap.key == "pb-1"
+        assert snap.name == "Quarterly Review"
+        assert snap.data["content"] == "1. pull filings\n2. summarise"
+        assert snap.data["stages"] == [{"name": "collect"}]
+        assert snap.data["status"] == "active"
+        # Project travels as a display-only reference, never as a binding.
+        assert snap.data["project_id_ref"] == "proj-1"
+        assert snap.data["project_name_ref"] == "Research"
+        # The deprecated migration mirror stays local.
+        assert "goal" not in snap.data
+        assert snap.files is None
+
+    async def test_get_playbook_without_project_leaves_the_refs_empty(self, monkeypatch) -> None:
+        """A definition outside any Project exports with null project refs."""
+
+        class _FakeService:
+            def __init__(self, _db, _projects) -> None:
+                pass
+
+            async def get_definition(self, user_id, definition_id):
+                return _FakeDefinition(definition_id, project_id=None)
+
+            async def get_version(self, user_id, definition_id, version):
+                return _FakeVersion(version)
+
+        _patch_playbook_service(monkeypatch, _FakeService)
+
+        lib = ResourceLibrary()
+        snap = await lib.get(USER_ID, "playbook", "pb-2")
+        assert snap is not None
+        assert snap.data["project_id_ref"] is None
+        assert snap.data["project_name_ref"] is None
+
+    async def test_get_playbook_returns_none_when_missing(self, monkeypatch) -> None:
+        """PlaybookService raises LookupError for an unknown/foreign definition."""
+
+        class _FakeService:
+            def __init__(self, _db, _projects) -> None:
+                pass
+
+            async def get_definition(self, user_id, definition_id):
+                raise LookupError("playbook_definition_not_found")
+
+            async def get_version(self, user_id, definition_id, version):  # pragma: no cover
+                raise AssertionError("must not be reached")
+
+        _patch_playbook_service(monkeypatch, _FakeService)
+
+        lib = ResourceLibrary()
+        assert await lib.get(USER_ID, "playbook", "nope") is None
+
+    async def test_save_playbook_is_not_implemented(self, monkeypatch) -> None:
+        """Playbook is export-only for now — importing needs its own conflict story."""
+        lib = ResourceLibrary()
+        snap = ResourceSnapshot(
+            kind="playbook", key="pb-1", name="Quarterly Review", data={"content": "x"}
+        )
+        with pytest.raises(NotImplementedError):
+            await lib.save(USER_ID, snap)
