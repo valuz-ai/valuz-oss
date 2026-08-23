@@ -1,12 +1,17 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { BookOpenText, Pencil, Play, Plus, Archive } from "lucide-react";
+import {
+  Archive,
+  BookOpenText,
+  CircleCheck,
+  ChevronDown,
+  ChevronRight,
+  MoreHorizontal,
+  Pencil,
+  Play,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   agentsApi,
@@ -22,21 +27,34 @@ import {
   type PlaybookDefinition,
   type PlaybookDetail,
   type PlaybookRun,
+  type PlaybookStatus,
 } from "@valuz/core";
 import {
   Button,
+  Card,
+  CardContent,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DeleteConfirmDialog,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   EmptyState,
   PageHeader,
   PageLoader,
   StatusPill,
 } from "@valuz/ui";
 import { useProjectOutlet } from "@valuz/app/layout";
-import { CreatePlaybookDialog } from "@valuz/app/components";
+import {
+  CreatePlaybookDialog,
+  type PlaybookAgentChoice,
+} from "@valuz/app/components";
+import { OriginIcon } from "../components/ExecutionLocationPicker";
 
 export const PlaybookPage = () => {
   const { t } = useTranslation();
@@ -48,10 +66,20 @@ export const PlaybookPage = () => {
   const [definitions, setDefinitions] = useState<PlaybookDefinition[]>([]);
   const [targets, setTargets] = useState<AutomationProjectTarget[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [projectAgents, setProjectAgents] = useState<
+    Record<string, PlaybookAgentChoice[]>
+  >({});
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<PlaybookDetail | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<PlaybookDefinition | null>(
+    null,
+  );
+  const [deleting, setDeleting] = useState(false);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<PlaybookRun | null>(null);
+  const [collapsedGroupIds, setCollapsedGroupIds] = useState<Set<string>>(
+    new Set(),
+  );
   const selectedDefinitionId = searchParams.get("definition");
 
   useEffect(() => {
@@ -88,6 +116,26 @@ export const PlaybookPage = () => {
       setDefinitions(playbookRows);
       setTargets(projectTargets.targets);
       setAgents(agentRows.agents);
+
+      const projectAgentPairs = await Promise.all(
+        projectTargets.targets
+          .filter((target) => target.kind === "project" && target.project_id)
+          .map(async (target) => {
+            try {
+              const members = await agentsApi.listMembers(target.project_id!);
+              return [
+                target.project_id!,
+                members.agents.map((entry) => ({
+                  slug: entry.member.agent_slug,
+                  name: entry.agent?.name ?? entry.member.agent_slug,
+                })),
+              ] as const;
+            } catch {
+              return [target.project_id!, [] as PlaybookAgentChoice[]] as const;
+            }
+          }),
+      );
+      setProjectAgents(Object.fromEntries(projectAgentPairs));
     } catch (error) {
       toast.error(t("playbook.loadFailed", { error: String(error) }));
     } finally {
@@ -99,30 +147,107 @@ export const PlaybookPage = () => {
     void load();
   }, [load]);
 
+  const groups = useMemo(() => {
+    const chatGroupId = "chat";
+    const projectTargets = targets.filter(
+      (target) => target.kind === "project" && target.project_id,
+    );
+    const projectNames = new Map(
+      projectTargets.map((target) => [target.project_id!, target.name]),
+    );
+    const projectOrder = new Map(
+      projectTargets.map((target, index) => [target.project_id!, index]),
+    );
+    const grouped = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        definitions: PlaybookDefinition[];
+      }
+    >();
+
+    for (const definition of definitions) {
+      const id = definition.project_id ?? chatGroupId;
+      const group = grouped.get(id) ?? {
+        id,
+        name: definition.project_id
+          ? (projectNames.get(definition.project_id) ?? definition.project_id)
+          : t("playbook.defaultChatGroup"),
+        definitions: [],
+      };
+      group.definitions.push(definition);
+      grouped.set(id, group);
+    }
+
+    return [...grouped.values()].sort((a, b) => {
+      if (a.id === chatGroupId) return -1;
+      if (b.id === chatGroupId) return 1;
+      const aOrder = projectOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+      const bOrder = projectOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+      return aOrder - bOrder || a.name.localeCompare(b.name);
+    });
+  }, [definitions, t, targets]);
+
+  const toggleGroupCollapsed = useCallback((groupId: string) => {
+    setCollapsedGroupIds((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  }, []);
+
+  const totalCount = definitions.length;
+  const activeCount = definitions.filter(
+    (definition) => definition.status === "active",
+  ).length;
+  const hasPlaybooks = totalCount > 0;
+
+  const openCreate = useCallback(() => {
+    setEditing(null);
+    setDialogOpen(true);
+  }, []);
+
   const header = useMemo(
     () => (
       <PageHeader
         title={t("playbook.title")}
         action={
-          <Button
-            size="sm"
-            onClick={() => {
-              setEditing(null);
-              setDialogOpen(true);
-            }}
-          >
-            <Plus className="h-4 w-4" />
-            {t("playbook.createAction")}
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            <div className="hidden h-8 items-center gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 text-xs md:flex">
+              <span className="font-medium text-ink-heading">
+                {t(
+                  totalCount === 1
+                    ? "playbook.headerCount"
+                    : "playbook.headerCountPlural",
+                  { count: totalCount },
+                )}
+              </span>
+              <span className="text-ink-meta">·</span>
+              <span className="text-ink-meta">
+                {t("playbook.headerActive", { count: activeCount })}
+              </span>
+            </div>
+            <Button
+              variant="default"
+              size="sm"
+              className="shrink-0"
+              onClick={openCreate}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {hasPlaybooks
+                ? t("playbook.actionNew")
+                : t("playbook.createAction")}
+            </Button>
+          </div>
         }
       />
     ),
-    [t],
+    [activeCount, hasPlaybooks, openCreate, t, totalCount],
   );
 
-  // The header lives in the parent layout slot. Install it before paint so a
-  // frame of the previous page's header cannot flash during navigation.
-  useLayoutEffect(() => {
+  useEffect(() => {
     setHeader(header);
     setHeaderClassName("h-15 px-5");
     setContentInnerClassName("p-0");
@@ -135,7 +260,11 @@ export const PlaybookPage = () => {
 
   const openEdit = async (definition: PlaybookDefinition) => {
     try {
-      setEditing(await playbooksApi.get(definition.id));
+      const [detail, versions] = await Promise.all([
+        playbooksApi.get(definition.id),
+        playbooksApi.listVersions(definition.id),
+      ]);
+      setEditing({ ...detail, versions });
       setDialogOpen(true);
     } catch (error) {
       toast.error(t("playbook.loadFailed", { error: String(error) }));
@@ -146,6 +275,8 @@ export const PlaybookPage = () => {
     name: string;
     content: string;
     project_id: string | null;
+    status: PlaybookStatus;
+    reference_metadata: Record<string, unknown>[];
     default_executor: Record<string, unknown>;
   }) => {
     try {
@@ -154,30 +285,31 @@ export const PlaybookPage = () => {
         toast.success(t("playbook.createSuccess", { name: data.name }));
       } else {
         const definition = editing.definition;
+        const contentChanged =
+          data.content !== editing.current_version.content ||
+          JSON.stringify(data.reference_metadata) !==
+            JSON.stringify(editing.current_version.reference_metadata) ||
+          JSON.stringify(data.default_executor) !==
+            JSON.stringify(editing.current_version.default_executor);
         if (
           data.name !== definition.name ||
-          data.project_id !== definition.project_id
+          data.project_id !== definition.project_id ||
+          (!contentChanged && data.status !== definition.status)
         ) {
           await playbooksApi.updateDefinition(definition.id, {
             expected_revision: definition.revision,
             name: data.name,
             project_id: data.project_id,
+            ...(!contentChanged ? { status: data.status } : {}),
           });
         }
-        const oldExecutor = JSON.stringify(
-          editing.current_version.default_executor,
-        );
-        if (
-          data.content !== editing.current_version.content ||
-          JSON.stringify(data.default_executor) !== oldExecutor
-        ) {
+        if (contentChanged) {
           await playbooksApi.createVersion(definition.id, {
             base_version: definition.current_version,
             content: data.content,
-            reference_metadata: editing.current_version.reference_metadata,
+            reference_metadata: data.reference_metadata,
             default_executor: data.default_executor,
-            status:
-              definition.status === "retired" ? "draft" : definition.status,
+            status: data.status,
           });
         }
         toast.success(t("playbook.updateSuccess", { name: data.name }));
@@ -189,16 +321,40 @@ export const PlaybookPage = () => {
     }
   };
 
-  const retire = async (definition: PlaybookDefinition) => {
+  const changeStatus = async (
+    definition: PlaybookDefinition,
+    status: PlaybookStatus,
+  ) => {
     try {
       await playbooksApi.updateDefinition(definition.id, {
         expected_revision: definition.revision,
-        status: "retired",
+        status,
       });
-      toast.success(t("playbook.retireSuccess", { name: definition.name }));
+      toast.success(
+        t("playbook.statusSuccess", {
+          name: definition.name,
+          status: t(`playbook.status.${status}`),
+        }),
+      );
       await load();
     } catch (error) {
       toast.error(t("playbook.saveFailed", { error: String(error) }));
+    }
+  };
+
+  const deleteDefinition = async (definition: PlaybookDefinition) => {
+    setDeleting(true);
+    try {
+      await playbooksApi.deleteDefinition(definition.id, definition.revision);
+      toast.success(t("playbook.deleteSuccess", { name: definition.name }));
+      setDeleteTarget(null);
+      if (editing?.definition.id === definition.id) setEditing(null);
+      await load();
+    } catch (error) {
+      toast.error(t("playbook.deleteFailed", { error: String(error) }));
+      throw error;
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -252,93 +408,249 @@ export const PlaybookPage = () => {
   if (loading) return <PageLoader />;
 
   return (
-    <div className="h-full overflow-y-auto p-5">
-      {definitions.length === 0 ? (
-        <EmptyState
-          icon={<BookOpenText className="h-5 w-5" />}
-          title={t("playbook.emptyTitle")}
-          description={t("playbook.emptyDescription")}
-          action={
-            <Button
-              onClick={() => {
-                setEditing(null);
-                setDialogOpen(true);
-              }}
-            >
-              <Plus className="h-4 w-4" />
-              {t("playbook.createAction")}
-            </Button>
-          }
-        />
-      ) : (
-        <div className="mx-auto flex max-w-5xl flex-col gap-3">
-          {definitions.map((definition) => (
-            <div
-              key={definition.id}
-              id={`playbook-${definition.id}`}
-              className={
-                selectedDefinitionId === definition.id
-                  ? "rounded-xl border border-brand/50 bg-brand/5 p-4"
-                  : "rounded-xl border border-surface-border bg-surface-base p-4"
+    <div className="relative h-full min-h-0 overflow-y-auto bg-card">
+      <div className="mx-auto flex min-h-full w-full max-w-[1000px] flex-col pb-5 pt-3">
+        {definitions.length === 0 ? (
+          <div className="flex flex-1 justify-center pt-[160px]">
+            <EmptyState
+              variant="plain"
+              icon={<BookOpenText className="h-5 w-5" />}
+              title={t("playbook.emptyTitle")}
+              description={t("playbook.emptyDescription")}
+              action={
+                <Button size="sm" onClick={openCreate}>
+                  <Plus className="h-3 w-3" />
+                  {t("playbook.createAction")}
+                </Button>
               }
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h2 className="truncate text-sm font-semibold text-ink-heading">
-                      {definition.name}
-                    </h2>
-                    <StatusPill
-                      status={definition.status}
-                      label={t(`playbook.status.${definition.status}`)}
-                    />
-                  </div>
-                  <p className="mt-1 text-xs text-ink-meta">
-                    {t("playbook.versionMeta", {
-                      version: definition.current_version,
-                    })}
-                    {" · "}
-                    {definition.project_id
-                      ? t("playbook.projectAssociated")
-                      : t("playbook.projectGlobal")}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={definition.status === "retired"}
-                    onClick={() => void run(definition)}
-                  >
-                    <Play className="h-4 w-4" />
-                    {runningId === definition.id
-                      ? t("playbook.running")
-                      : t("playbook.runAction")}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => void openEdit(definition)}
-                  >
-                    <Pencil className="h-4 w-4" />
-                    {t("common.edit")}
-                  </Button>
-                  {definition.status !== "retired" && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => void retire(definition)}
+            />
+          </div>
+        ) : (
+          <div className="space-y-5">
+          {groups.map((group) => {
+            const collapsed = collapsedGroupIds.has(group.id);
+            const Chevron = collapsed ? ChevronRight : ChevronDown;
+            const rows = [...group.definitions].sort(
+              (a, b) =>
+                Number(a.status === "retired") -
+                Number(b.status === "retired"),
+            );
+            return (
+              <section key={group.id}>
+                <Card className="gap-0 overflow-hidden border-0 py-0 shadow-[var(--shadow-1)]">
+                  <CardContent className="px-0 py-0">
+                    <button
+                      type="button"
+                      onClick={() => toggleGroupCollapsed(group.id)}
+                      className="flex h-10 w-full items-center justify-between gap-4 px-5 text-left"
+                      aria-expanded={!collapsed}
                     >
-                      <Archive className="h-4 w-4" />
-                      {t("playbook.retireAction")}
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+                      <div className="flex min-w-0 items-center gap-3">
+                        <Chevron className="h-4 w-4 shrink-0 text-ink-meta" />
+                        <span className="truncate text-sm font-semibold text-ink-heading">
+                          {group.name}
+                          <span className="font-medium text-[#6e7481]">
+                            {" · "}
+                            {t(
+                              rows.length === 1
+                                ? "playbook.groupCount"
+                                : "playbook.groupCountPlural",
+                              { count: rows.length },
+                            )}
+                          </span>
+                        </span>
+                      </div>
+                    </button>
+
+                    {collapsed ? null : (
+                      <>
+                        <div className="hidden border-b border-[#f7f8fa] px-5 py-2 text-xs font-medium text-[#6E7481] md:grid md:grid-cols-[2fr_0.7fr_0.8fr_72px] dark:border-surface-border dark:text-ink-body">
+                          <div>{t("playbook.nameColumn")}</div>
+                          <div className="text-center">
+                            {t("playbook.versionColumn")}
+                          </div>
+                          <div className="text-center">
+                            {t("playbook.statusColumn")}
+                          </div>
+                          <div className="text-center">
+                            {t("playbook.actionColumn")}
+                          </div>
+                        </div>
+
+                        {rows.map((definition) => {
+                          const selected =
+                            selectedDefinitionId === definition.id;
+                          const actionMenu = (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  className="h-8 w-8 hover:bg-[#f3f4f6] hover:text-inherit dark:hover:bg-surface-muted"
+                                  aria-label={t("playbook.actionColumn")}
+                                >
+                                  <MoreHorizontal className="h-3.5 w-3.5" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent
+                                align="end"
+                                className="min-w-[140px]"
+                              >
+                                <DropdownMenuItem
+                                  disabled={
+                                    definition.status === "retired" ||
+                                    runningId === definition.id
+                                  }
+                                  onSelect={() => void run(definition)}
+                                >
+                                  <Play />
+                                  {runningId === definition.id
+                                    ? t("playbook.running")
+                                    : t("playbook.runAction")}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onSelect={() => void openEdit(definition)}
+                                >
+                                  <Pencil />
+                                  {t("common.edit")}
+                                </DropdownMenuItem>
+                                {definition.status !== "active" ? (
+                                  <DropdownMenuItem
+                                    onSelect={() =>
+                                      void changeStatus(definition, "active")
+                                    }
+                                  >
+                                    <CircleCheck />
+                                    {t("playbook.activateAction")}
+                                  </DropdownMenuItem>
+                                ) : null}
+                                {definition.status !== "retired" ? (
+                                  <DropdownMenuItem
+                                    onSelect={() =>
+                                      void changeStatus(definition, "retired")
+                                    }
+                                  >
+                                    <Archive />
+                                    {t("playbook.retireAction")}
+                                  </DropdownMenuItem>
+                                ) : null}
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  className="text-error-text focus:text-error-text"
+                                  onSelect={() => setDeleteTarget(definition)}
+                                >
+                                  <Trash2 />
+                                  {t("common.delete")}
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          );
+
+                          return (
+                            <div
+                              key={definition.id}
+                              id={`playbook-${definition.id}`}
+                              className={
+                                selected
+                                  ? "bg-brand/5 ring-1 ring-inset ring-brand/30"
+                                  : undefined
+                              }
+                            >
+                              <div className="hidden items-center px-5 py-4 md:grid md:grid-cols-[2fr_0.7fr_0.8fr_72px]">
+                                <div className="flex min-w-0 items-start gap-2">
+                                  <BookOpenText
+                                    className={
+                                      definition.status === "retired"
+                                        ? "mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-meta opacity-50"
+                                        : "mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-meta"
+                                    }
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => void openEdit(definition)}
+                                    className={
+                                      definition.status === "retired"
+                                        ? "flex min-w-0 items-center gap-1 truncate text-left text-sm font-medium text-ink-heading opacity-50 transition-colors hover:text-brand"
+                                        : "flex min-w-0 items-center gap-1 truncate text-left text-sm font-medium text-ink-heading transition-colors hover:text-brand"
+                                    }
+                                  >
+                                    <span className="truncate">
+                                      {definition.name}
+                                    </span>
+                                    {definition.exec_origin ? (
+                                      <OriginIcon
+                                        origin={definition.exec_origin}
+                                      />
+                                    ) : null}
+                                  </button>
+                                </div>
+                                <div className="text-center font-mono text-xs text-ink-label">
+                                  v{definition.current_version}
+                                </div>
+                                <div className="flex justify-center">
+                                  <StatusPill
+                                    status={definition.status}
+                                    label={t(
+                                      `playbook.status.${definition.status}`,
+                                    )}
+                                  />
+                                </div>
+                                <div className="flex justify-center">
+                                  {actionMenu}
+                                </div>
+                              </div>
+
+                              <div className="px-5 py-4 md:hidden">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="flex min-w-0 items-start gap-2">
+                                    <BookOpenText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-meta" />
+                                    <div className="min-w-0">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          void openEdit(definition)
+                                        }
+                                        className="flex min-w-0 items-center gap-1 truncate text-left text-sm font-medium text-ink-heading"
+                                      >
+                                        <span className="truncate">
+                                          {definition.name}
+                                        </span>
+                                        {definition.exec_origin ? (
+                                          <OriginIcon
+                                            origin={definition.exec_origin}
+                                          />
+                                        ) : null}
+                                      </button>
+                                      <div className="mt-1 font-mono text-xs text-ink-meta">
+                                        v{definition.current_version}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <StatusPill
+                                    status={definition.status}
+                                    label={t(
+                                      `playbook.status.${definition.status}`,
+                                    )}
+                                  />
+                                </div>
+                                <div className="mt-2 flex justify-end">
+                                  {actionMenu}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
+              </section>
+            );
+          })}
+          </div>
+        )}
+      </div>
 
       <CreatePlaybookDialog
         open={dialogOpen}
@@ -346,7 +658,20 @@ export const PlaybookPage = () => {
         initial={editing}
         targets={targets}
         agents={agents.map((agent) => ({ slug: agent.slug, name: agent.name }))}
+        agentsByProject={projectAgents}
         onSubmit={submit}
+        onDelete={deleteDefinition}
+      />
+      <DeleteConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={t("playbook.deleteTitle", {
+          name: deleteTarget?.name ?? "",
+        })}
+        description={t("playbook.deleteDescription")}
+        confirmLabel={t("common.delete")}
+        loading={deleting}
+        onConfirm={() => deleteTarget && void deleteDefinition(deleteTarget)}
       />
       <Dialog
         open={selectedRun !== null}

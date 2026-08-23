@@ -4529,6 +4529,23 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/PlaybookDefinition"}
         "409": {description: Revision conflict}
+    delete:
+      summary: Delete a Playbook, its immutable versions, and run history
+      operationId: deletePlaybook
+      tags: [playbooks]
+      parameters:
+        - name: definition_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: expected_revision
+          in: query
+          required: true
+          schema: {type: integer, minimum: 1}
+      responses:
+        "204": {description: Playbook deleted}
+        "404": {description: Playbook not found}
+        "409": {description: Revision conflict, active run, or Automation binding}
 
   /v1/playbooks/{definition_id}/versions:
     get:
@@ -4794,6 +4811,7 @@ components:
           required: [name]
           properties:
             name: {type: string, minLength: 1, maxLength: 200}
+            status: {type: string, enum: [draft, active, retired], default: draft}
             project_id: {type: string, nullable: true}
             current_project_id: {type: string, nullable: true}
             origin: {type: string, enum: [user, system_example_copy, fork], default: user}

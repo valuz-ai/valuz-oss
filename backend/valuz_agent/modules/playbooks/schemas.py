@@ -25,6 +25,7 @@ class PlaybookContent(BaseModel):
 
 class PlaybookCreateRequest(PlaybookContent):
     name: str = Field(min_length=1, max_length=200)
+    status: Literal["draft", "active", "retired"] = "draft"
     project_id: str | None = Field(default=None, max_length=36)
     current_project_id: str | None = Field(default=None, max_length=36)
     origin: Literal["user", "system_example_copy", "fork"] = "user"

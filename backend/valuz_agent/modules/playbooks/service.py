@@ -72,7 +72,7 @@ class PlaybookService:
             user_id=user_id,
             project_id=project_id,
             name=body.name.strip(),
-            status="draft",
+            status=body.status,
             origin=body.origin,
             source_definition_id=body.source_definition_id,
             current_version=1,
@@ -189,6 +189,38 @@ class PlaybookService:
     async def list_versions(self, user_id: str, definition_id: str) -> list[PlaybookVersionRow]:
         await self.get_definition(user_id, definition_id)
         return await self._ds.list_versions(user_id, definition_id)
+
+    async def get_version(
+        self,
+        user_id: str,
+        definition_id: str,
+        version: int,
+    ) -> PlaybookVersionRow:
+        await self.get_definition(user_id, definition_id)
+        row = await self._ds.get_version(user_id, definition_id, version)
+        if row is None:
+            raise LookupError("playbook_version_not_found")
+        return row
+
+    async def delete_definition(
+        self,
+        user_id: str,
+        definition_id: str,
+        *,
+        expected_revision: int,
+    ) -> PlaybookDefinitionRow:
+        definition = await self.get_definition(user_id, definition_id)
+        if definition.revision != expected_revision:
+            raise ValueError(
+                f"stale Playbook revision {expected_revision}; current={definition.revision}"
+            )
+        binding_count = await self._ds.count_automation_bindings(user_id, definition_id)
+        if binding_count:
+            raise ValueError(f"playbook_definition_in_use_by_automation:{binding_count}")
+        if await self._ds.has_active_runs(user_id, definition_id):
+            raise ValueError("playbook_definition_has_active_runs")
+        await self._ds.delete_definition_graph(user_id, definition_id)
+        return definition
 
     async def create_run(self, user_id: str, body: PlaybookRunCreateRequest) -> PlaybookRunRow:
         definition = await self.get_definition(user_id, body.definition_id)

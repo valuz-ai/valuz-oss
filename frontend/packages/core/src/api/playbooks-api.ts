@@ -1,4 +1,4 @@
-import { createFetchJson } from "./fetch-json";
+import { ApiError, createFetchJson } from "./fetch-json";
 import { resolveApiBase } from "./base-resolver";
 import { fanOutTargets, getListFanOutTargets } from "../edition/list-fanout";
 import {
@@ -54,6 +54,8 @@ export interface PlaybookVersion {
 export interface PlaybookDetail {
   definition: PlaybookDefinition;
   current_version: PlaybookVersion;
+  /** Loaded on demand for editing; newest immutable version first. */
+  versions?: PlaybookVersion[];
 }
 
 export interface PlaybookRun {
@@ -82,6 +84,7 @@ export interface PlaybookRun {
 export interface PlaybookCreatePayload {
   name: string;
   content: string;
+  status?: PlaybookStatus;
   project_id?: string | null;
   reference_metadata?: Record<string, unknown>[];
   default_executor?: Record<string, unknown>;
@@ -104,12 +107,21 @@ export const playbooksApi = {
     if (getListFanOutTargets().length === 0) {
       return fetchJson(`/v1/playbooks`);
     }
-    const outcome = await fanOutTargets((target, signal) =>
-      fetchJson<PlaybookDefinition[]>(`/v1/playbooks`, {
-        baseUrl: target.baseUrl,
-        signal,
-      }),
-    );
+    const outcome = await fanOutTargets(async (target, signal) => {
+      try {
+        return await fetchJson<PlaybookDefinition[]>(`/v1/playbooks`, {
+          baseUrl: target.baseUrl,
+          signal,
+        });
+      } catch (error) {
+        // A reachable older runtime may predate the Playbook API. Treat that
+        // target as an empty Playbook library instead of marking the whole
+        // service unreachable; real transport and server failures still flow
+        // through fan-out's degraded-target handling.
+        if (error instanceof ApiError && error.status === 404) return [];
+        throw error;
+      }
+    });
     recordEntityOrigins(
       outcome.values.flatMap(({ target, value }) =>
         value.map(
@@ -145,7 +157,10 @@ export const playbooksApi = {
     payload: PlaybookCreatePayload,
     opts?: { baseUrl?: string },
   ): Promise<PlaybookDetail> {
-    const result = await fetchJson<PlaybookDetail>("/v1/playbooks", {
+    const result = await fetchJson<{
+      definition: PlaybookDefinition;
+      version: PlaybookVersion;
+    }>("/v1/playbooks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -159,7 +174,11 @@ export const playbooksApi = {
       const origin = getEntityOrigin(payload.project_id, "project");
       if (origin) recordEntityOrigin(result.definition.id, origin);
     }
-    return result;
+    return {
+      definition: result.definition,
+      current_version: result.version,
+      versions: [result.version],
+    };
   },
 
   createVersion(
@@ -198,6 +217,29 @@ export const playbooksApi = {
       body: JSON.stringify(payload),
       baseUrl: playbookBase(definitionId),
     });
+  },
+
+  listVersions(definitionId: string): Promise<PlaybookVersion[]> {
+    return fetchJson(
+      `/v1/playbooks/${encodeURIComponent(definitionId)}/versions`,
+      { baseUrl: playbookBase(definitionId) },
+    );
+  },
+
+  deleteDefinition(
+    definitionId: string,
+    expectedRevision: number,
+  ): Promise<void> {
+    const query = new URLSearchParams({
+      expected_revision: String(expectedRevision),
+    });
+    return fetchJson(
+      `/v1/playbooks/${encodeURIComponent(definitionId)}?${query}`,
+      {
+        method: "DELETE",
+        baseUrl: playbookBase(definitionId),
+      },
+    );
   },
 
   listRuns(params?: {

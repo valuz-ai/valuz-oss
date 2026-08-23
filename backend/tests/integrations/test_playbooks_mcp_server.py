@@ -73,6 +73,7 @@ async def test_agent_create_requires_operation_confirmation_then_can_run(
             action="create",
             name="Earnings review",
             content="Review the latest earnings and update the research context.",
+            agent_slug="assistant-1",
         )
     )
     assert proposed["ok"] is True
@@ -100,6 +101,94 @@ async def test_agent_create_requires_operation_confirmation_then_can_run(
         )
     )
     assert finished["status"] == "completed"
+
+    metadata_proposal = json.loads(
+        await mcp.playbook_invoke(
+            action="update_definition",
+            definition_id=definition_id,
+            expected_revision=1,
+            name="Earnings review v2",
+        )
+    )
+    assert metadata_proposal["operation"]["preview"]["change"] == "metadata"
+    metadata_operation = await OperationService(db, projects).confirm(  # type: ignore[arg-type]
+        USER,
+        metadata_proposal["operation"]["id"],
+        expected_proposal_hash=metadata_proposal["operation"]["proposal_hash"],
+    )
+    assert metadata_operation.result_payload["name"] == "Earnings review v2"
+
+    version_proposal = json.loads(
+        await mcp.playbook_invoke(
+            action="update",
+            definition_id=definition_id,
+            base_version=1,
+            content="Review earnings and compare the result with prior guidance.",
+        )
+    )
+    version_operation = await OperationService(db, projects).confirm(  # type: ignore[arg-type]
+        USER,
+        version_proposal["operation"]["id"],
+        expected_proposal_hash=version_proposal["operation"]["proposal_hash"],
+    )
+    assert version_operation.result_payload["definition_version"] == 2
+
+    history = json.loads(
+        await mcp.playbook_invoke(
+            action="list_versions",
+            definition_id=definition_id,
+        )
+    )
+    assert [item["version"] for item in history["versions"]] == [2, 1]
+    old_version = json.loads(
+        await mcp.playbook_invoke(
+            action="get",
+            definition_id=definition_id,
+            version=1,
+        )
+    )
+    assert "latest earnings" in old_version["version"]["content"]
+    current = json.loads(await mcp.playbook_invoke(action="get", definition_id=definition_id))
+    assert current["current_version"]["version"] == 2
+    assert current["current_version"]["default_executor"] == {"agent_slug": "assistant-1"}
+
+    status_proposal = json.loads(
+        await mcp.playbook_invoke(
+            action="set_status",
+            definition_id=definition_id,
+            expected_revision=3,
+            status="active",
+        )
+    )
+    assert status_proposal["operation"]["preview"]["status"] == "active"
+    status_operation = await OperationService(db, projects).confirm(  # type: ignore[arg-type]
+        USER,
+        status_proposal["operation"]["id"],
+        expected_proposal_hash=status_proposal["operation"]["proposal_hash"],
+    )
+    assert status_operation.result_payload["status"] == "active"
+
+    delete_proposal = json.loads(
+        await mcp.playbook_invoke(
+            action="delete",
+            definition_id=definition_id,
+            expected_revision=4,
+        )
+    )
+    assert delete_proposal["operation"]["risk_level"] == "destructive"
+    delete_operation = await OperationService(db, projects).confirm(  # type: ignore[arg-type]
+        USER,
+        delete_proposal["operation"]["id"],
+        expected_proposal_hash=delete_proposal["operation"]["proposal_hash"],
+    )
+    assert delete_operation.state == "succeeded"
+    assert delete_operation.result_payload["deleted_definition_id"] == definition_id
+    assert (
+        await db.scalar(
+            select(PlaybookDefinitionRow).where(PlaybookDefinitionRow.id == definition_id)
+        )
+        is None
+    )
 
 
 async def test_agent_cannot_finish_a_run_from_another_session(

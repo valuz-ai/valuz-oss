@@ -343,7 +343,13 @@ export function useToolCallCardActions({
           [operation.id]: next,
         }));
         if (next.state === "succeeded") {
-          toast.success(t("playbook.operation.succeeded"));
+          toast.success(
+            t(
+              next.preview.change === "delete"
+                ? "playbook.operation.deleted"
+                : "playbook.operation.succeeded",
+            ),
+          );
         } else if (next.error_message) {
           toast.error(next.error_message);
         }

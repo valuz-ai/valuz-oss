@@ -662,6 +662,7 @@ export const ProjectDetailPage = () => {
     openEdit: openEditPlaybook,
     setOpen: setPlaybookDialogOpen,
     submit: submitPlaybook,
+    remove: removePlaybook,
     run: runPlaybook,
   } = useProjectPlaybooks(id);
   const selectedFileParam = searchParams.get("file");
@@ -1916,6 +1917,7 @@ export const ProjectDetailPage = () => {
         open={playbookDialogOpen}
         onOpenChange={setPlaybookDialogOpen}
         onSubmit={submitPlaybook}
+        onDelete={removePlaybook}
         initial={editingPlaybook}
         targets={[]}
         agents={rawMembers.map((entry) => ({

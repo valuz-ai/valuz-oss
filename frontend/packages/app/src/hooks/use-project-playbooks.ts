@@ -9,6 +9,7 @@ import {
   sessionsApi,
   type PlaybookDefinition,
   type PlaybookDetail,
+  type PlaybookStatus,
 } from "@valuz/core";
 import { t } from "@valuz/shared/i18n";
 
@@ -16,6 +17,8 @@ export interface ProjectPlaybookSubmitData {
   name: string;
   content: string;
   project_id: string | null;
+  status: PlaybookStatus;
+  reference_metadata: Record<string, unknown>[];
   default_executor: Record<string, unknown>;
 }
 
@@ -74,7 +77,11 @@ export function useProjectPlaybooks(projectId: string) {
 
   const openEdit = useCallback(async (definitionId: string) => {
     try {
-      setEditing(await playbooksApi.get(definitionId));
+      const [detail, versions] = await Promise.all([
+        playbooksApi.get(definitionId),
+        playbooksApi.listVersions(definitionId),
+      ]);
+      setEditing({ ...detail, versions });
       setDialogOpen(true);
     } catch (error) {
       toast.error(t("playbook.loadFailed", { error: String(error) }));
@@ -94,32 +101,36 @@ export function useProjectPlaybooks(projectId: string) {
             name: data.name,
             content: data.content,
             project_id: projectId,
+            status: data.status,
+            reference_metadata: data.reference_metadata,
             default_executor: data.default_executor,
           });
           toast.success(t("playbook.createSuccess", { name: data.name }));
         } else {
           const definition = editing.definition;
-          if (data.name !== definition.name) {
+          const contentChanged =
+            data.content !== editing.current_version.content ||
+            JSON.stringify(data.reference_metadata) !==
+              JSON.stringify(editing.current_version.reference_metadata) ||
+            JSON.stringify(data.default_executor) !==
+              JSON.stringify(editing.current_version.default_executor);
+          if (
+            data.name !== definition.name ||
+            (!contentChanged && data.status !== definition.status)
+          ) {
             await playbooksApi.updateDefinition(definition.id, {
               expected_revision: definition.revision,
               name: data.name,
+              ...(!contentChanged ? { status: data.status } : {}),
             });
           }
-          if (
-            data.content !== editing.current_version.content ||
-            JSON.stringify(data.default_executor) !==
-              JSON.stringify(editing.current_version.default_executor)
-          ) {
+          if (contentChanged) {
             await playbooksApi.createVersion(definition.id, {
               base_version: definition.current_version,
               content: data.content,
-              reference_metadata:
-                editing.current_version.reference_metadata,
+              reference_metadata: data.reference_metadata,
               default_executor: data.default_executor,
-              status:
-                definition.status === "retired"
-                  ? "draft"
-                  : definition.status,
+              status: data.status,
             });
           }
           toast.success(t("playbook.updateSuccess", { name: data.name }));
@@ -131,6 +142,21 @@ export function useProjectPlaybooks(projectId: string) {
       }
     },
     [editing, projectId, reload],
+  );
+
+  const remove = useCallback(
+    async (definition: PlaybookDefinition) => {
+      try {
+        await playbooksApi.deleteDefinition(definition.id, definition.revision);
+        toast.success(t("playbook.deleteSuccess", { name: definition.name }));
+        setEditing(null);
+        await reload();
+      } catch (error) {
+        toast.error(t("playbook.deleteFailed", { error: String(error) }));
+        throw error;
+      }
+    },
+    [reload],
   );
 
   const run = useCallback(
@@ -184,6 +210,7 @@ export function useProjectPlaybooks(projectId: string) {
     openEdit,
     setOpen,
     submit,
+    remove,
     run,
     reload,
   };

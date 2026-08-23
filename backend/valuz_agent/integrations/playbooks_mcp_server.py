@@ -137,14 +137,27 @@ Its `content` is the only authoritative instruction body; references such as
 Actions:
 - list: list the current owner's Playbooks. Read-only.
 - get: return one Definition and its current immutable Version. Read-only.
+- list_versions: list immutable Version metadata for one Definition. Read-only.
+  Use get with `version` to read the complete content of one historical Version.
 - create: propose a Playbook from `name` + complete `content`. `project_id` is
   optional; in a project conversation it defaults to that project, while a
-  normal chat proposes an owner-global Playbook. The user must confirm the
-  returned Operation Card before anything is created.
+  normal chat proposes an owner-global Playbook. `status` optionally sets draft,
+  active, or retired and defaults to draft. The user must confirm the returned
+  Operation Card before anything is created.
 - update: propose immutable vNext. Requires definition_id, base_version and the
-  complete replacement content. The user must confirm the Operation.
+  complete replacement content. Existing references and default Agent are
+  preserved unless `agent_slug` is supplied. The user must confirm the Operation.
+- update_definition: propose changing mutable Definition metadata without making
+  a Version. Requires definition_id and expected_revision; accepts name, status,
+  project_id, or clear_project=true. The user must confirm the Operation.
+- set_status: propose changing a Definition to draft, active, or retired.
+  Requires definition_id, expected_revision, and status. The user must confirm.
 - retire: propose retiring a Definition. Requires definition_id and
-  expected_revision. The user must confirm the Operation.
+  expected_revision. Kept as a convenience alias for set_status=retired.
+- delete: propose permanently deleting a Definition, all immutable Versions,
+  and its Run history. Requires definition_id and expected_revision. Deletion
+  is blocked while an Automation references it or a Run is active. The user
+  must confirm the destructive Operation.
 - run: pin a Version and start a PlaybookRun in THIS agent turn. The result
   contains `content`; execute it as the next instruction, using the optional
   `input` as additional context. If called from another Playbook, pass
@@ -171,6 +184,8 @@ async def playbook_invoke(
     run_id: str | None = None,
     status: str | None = None,
     error_message: str | None = None,
+    agent_slug: str | None = None,
+    clear_project: bool = False,
 ) -> str:
     session_id = get_current_mcp_session_id()
     if not session_id:
@@ -185,6 +200,7 @@ async def playbook_invoke(
     from valuz_agent.modules.playbooks import operations as _playbook_operations  # noqa: F401
     from valuz_agent.modules.playbooks.schemas import (
         PlaybookCreateRequest,
+        PlaybookDefinitionUpdateRequest,
         PlaybookRunCreateRequest,
         PlaybookRunUpdateRequest,
         PlaybookVersionCreateRequest,
@@ -205,24 +221,61 @@ async def playbook_invoke(
                 if not definition_id:
                     raise ValueError("definition_id_required")
                 definition = await svc.get_definition(user_id, definition_id)
+                selected_version = (
+                    await svc.get_version(user_id, definition_id, version)
+                    if version is not None
+                    else await svc.get_version(
+                        user_id,
+                        definition_id,
+                        definition.current_version,
+                    )
+                )
+                version_payload = _version(selected_version)
+                response = {
+                    "ok": True,
+                    "action": action,
+                    "definition": _definition(definition),
+                    "version": version_payload,
+                }
+                if version is None:
+                    # Preserve the established current-version field while the
+                    # generic field also supports explicit historical reads.
+                    response["current_version"] = version_payload
+                return json.dumps(response, ensure_ascii=False)
+            if action == "list_versions":
+                if not definition_id:
+                    raise ValueError("definition_id_required")
+                definition = await svc.get_definition(user_id, definition_id)
                 versions = await svc.list_versions(user_id, definition_id)
                 return json.dumps(
                     {
                         "ok": True,
                         "action": action,
                         "definition": _definition(definition),
-                        "current_version": _version(versions[0]),
+                        "versions": [
+                            {
+                                "version": item.version,
+                                "base_version": item.base_version,
+                                "created_by": item.created_by,
+                                "produced_by_run": item.produced_by_run,
+                                "created_at": item.created_at,
+                            }
+                            for item in versions
+                        ],
                     },
                     ensure_ascii=False,
                 )
             if action == "create":
                 if not name or not content:
                     raise ValueError("name_and_content_required")
+                create_status = status if status in {"draft", "active", "retired"} else "draft"
                 target = project_id or (current_project_id if project_kind == "project" else None)
                 payload = PlaybookCreateRequest(
                     name=name,
                     content=content,
                     project_id=target,
+                    status=create_status,
+                    default_executor={"agent_slug": agent_slug} if agent_slug else {},
                 ).model_dump(exclude_none=True)
                 operation = await operations.propose(
                     user_id,
@@ -240,6 +293,7 @@ async def playbook_invoke(
                             "name": name,
                             "content": content,
                             "project_id": target,
+                            "status": create_status,
                             "next_version": 1,
                         },
                         expected_revisions={},
@@ -265,9 +319,20 @@ async def playbook_invoke(
                         f"stale Playbook version {base_version}; "
                         f"current={definition.current_version}"
                     )
+                current_version = await svc.get_version(
+                    user_id,
+                    definition_id,
+                    definition.current_version,
+                )
                 version_payload = PlaybookVersionCreateRequest(
                     base_version=base_version,
                     content=content,
+                    reference_metadata=current_version.reference_metadata,
+                    default_executor=(
+                        {"agent_slug": agent_slug}
+                        if agent_slug
+                        else current_version.default_executor
+                    ),
                 ).model_dump(exclude_none=True)
                 payload = {
                     "definition_id": definition_id,
@@ -300,6 +365,94 @@ async def playbook_invoke(
                         },
                         expected_revisions={
                             "definition_version": base_version,
+                        },
+                        risk_level="material",
+                        confirmation_policy="confirm",
+                        idempotency_key=_operation_key(session_id, action, payload),
+                    ),
+                )
+                return json.dumps(
+                    {
+                        "ok": True,
+                        "action": action,
+                        "operation": _operation(operation),
+                    },
+                    ensure_ascii=False,
+                )
+            if action == "update_definition":
+                if not definition_id or expected_revision is None:
+                    raise ValueError("definition_id_and_expected_revision_required")
+                if not any(
+                    (
+                        name is not None,
+                        status is not None,
+                        project_id is not None,
+                        clear_project,
+                    )
+                ):
+                    raise ValueError("definition_update_field_required")
+                if status is not None and status not in {"draft", "active", "retired"}:
+                    raise ValueError("valid_status_required")
+                if project_id is not None and clear_project:
+                    raise ValueError("project_id_and_clear_project_conflict")
+                definition = await svc.get_definition(user_id, definition_id)
+                if definition.revision != expected_revision:
+                    raise ValueError(
+                        f"stale Playbook revision {expected_revision}; "
+                        f"current={definition.revision}"
+                    )
+                update_payload: dict[str, Any] = {
+                    "expected_revision": expected_revision,
+                }
+                if name is not None:
+                    update_payload["name"] = name
+                if status is not None:
+                    update_payload["status"] = status
+                if project_id is not None or clear_project:
+                    update_payload["project_id"] = project_id
+                # Validate before proposing so bad project-independent fields
+                # fail in the tool call instead of after confirmation.
+                update_payload = PlaybookDefinitionUpdateRequest.model_validate(
+                    update_payload
+                ).model_dump(exclude_unset=True)
+                payload = {
+                    "definition_id": definition_id,
+                    "update": update_payload,
+                }
+                operation = await operations.propose(
+                    user_id,
+                    OperationProposal(
+                        operation_type="playbook.update_definition",
+                        project_id=definition.project_id,
+                        actor_kind="agent",
+                        actor_id=session_id,
+                        origin_session_id=session_id,
+                        target_refs=[
+                            {
+                                "type": "playbook_definition",
+                                "id": definition.id,
+                                "revision": definition.revision,
+                            }
+                        ],
+                        input_payload=payload,
+                        preview={
+                            "kind": "playbook",
+                            "change": "metadata",
+                            "name": name or definition.name,
+                            "previous_name": definition.name,
+                            "project_id": (
+                                project_id
+                                if project_id is not None
+                                else None
+                                if clear_project
+                                else definition.project_id
+                            ),
+                            "previous_project_id": definition.project_id,
+                            "status": status or definition.status,
+                            "current_version": definition.current_version,
+                        },
+                        expected_revisions={
+                            "definition_revision": expected_revision,
                         },
                         risk_level="material",
                         confirmation_policy="confirm",
@@ -354,6 +507,116 @@ async def playbook_invoke(
                             "definition_revision": expected_revision,
                         },
                         risk_level="material",
+                        confirmation_policy="confirm",
+                        idempotency_key=_operation_key(session_id, action, payload),
+                    ),
+                )
+                return json.dumps(
+                    {
+                        "ok": True,
+                        "action": action,
+                        "operation": _operation(operation),
+                    },
+                    ensure_ascii=False,
+                )
+            if action == "set_status":
+                if (
+                    not definition_id
+                    or expected_revision is None
+                    or status not in {"draft", "active", "retired"}
+                ):
+                    raise ValueError("definition_id_expected_revision_and_valid_status_required")
+                definition = await svc.get_definition(user_id, definition_id)
+                if definition.revision != expected_revision:
+                    raise ValueError(
+                        f"stale Playbook revision {expected_revision}; "
+                        f"current={definition.revision}"
+                    )
+                payload = {
+                    "definition_id": definition_id,
+                    "expected_revision": expected_revision,
+                    "status": status,
+                }
+                operation = await operations.propose(
+                    user_id,
+                    OperationProposal(
+                        operation_type="playbook.set_status",
+                        project_id=definition.project_id,
+                        actor_kind="agent",
+                        actor_id=session_id,
+                        origin_session_id=session_id,
+                        target_refs=[
+                            {
+                                "type": "playbook_definition",
+                                "id": definition.id,
+                                "revision": definition.revision,
+                            }
+                        ],
+                        input_payload=payload,
+                        preview={
+                            "kind": "playbook",
+                            "change": "status",
+                            "name": definition.name,
+                            "project_id": definition.project_id,
+                            "current_version": definition.current_version,
+                            "status": status,
+                        },
+                        expected_revisions={
+                            "definition_revision": expected_revision,
+                        },
+                        risk_level="material",
+                        confirmation_policy="confirm",
+                        idempotency_key=_operation_key(session_id, action, payload),
+                    ),
+                )
+                return json.dumps(
+                    {
+                        "ok": True,
+                        "action": action,
+                        "operation": _operation(operation),
+                    },
+                    ensure_ascii=False,
+                )
+            if action == "delete":
+                if not definition_id or expected_revision is None:
+                    raise ValueError("definition_id_and_expected_revision_required")
+                definition = await svc.get_definition(user_id, definition_id)
+                if definition.revision != expected_revision:
+                    raise ValueError(
+                        f"stale Playbook revision {expected_revision}; "
+                        f"current={definition.revision}"
+                    )
+                payload = {
+                    "definition_id": definition_id,
+                    "expected_revision": expected_revision,
+                }
+                operation = await operations.propose(
+                    user_id,
+                    OperationProposal(
+                        operation_type="playbook.delete",
+                        project_id=definition.project_id,
+                        actor_kind="agent",
+                        actor_id=session_id,
+                        origin_session_id=session_id,
+                        target_refs=[
+                            {
+                                "type": "playbook_definition",
+                                "id": definition.id,
+                                "revision": definition.revision,
+                            }
+                        ],
+                        input_payload=payload,
+                        preview={
+                            "kind": "playbook",
+                            "change": "delete",
+                            "name": definition.name,
+                            "project_id": definition.project_id,
+                            "current_version": definition.current_version,
+                        },
+                        expected_revisions={
+                            "definition_revision": expected_revision,
+                        },
+                        risk_level="destructive",
                         confirmation_policy="confirm",
                         idempotency_key=_operation_key(session_id, action, payload),
                     ),

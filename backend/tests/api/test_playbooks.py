@@ -120,3 +120,10 @@ def test_definition_version_and_run_roundtrip(client: TestClient) -> None:
     listed = client.get("/v1/playbooks/runs/list")
     assert listed.status_code == 200
     assert listed.json()[0]["id"] == run_body["id"]
+
+    deleted = client.delete(
+        f"/v1/playbooks/{definition['id']}",
+        params={"expected_revision": revised.json()["definition"]["revision"]},
+    )
+    assert deleted.status_code == 204
+    assert client.get(f"/v1/playbooks/{definition['id']}").status_code == 404

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from valuz_agent.api.deps import get_current_user_id
 from valuz_agent.facade.projects import ProjectLibrary, get_project_library
@@ -216,6 +216,25 @@ async def update_playbook(
 ) -> PlaybookDefinitionView:
     try:
         return _definition(await service.update_definition(user_id, definition_id, body))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.delete("/{definition_id}", status_code=204)
+async def delete_playbook(
+    definition_id: str,
+    expected_revision: int = Query(ge=1),
+    service: PlaybookService = Depends(get_playbook_service),
+    user_id: str = Depends(get_current_user_id),
+) -> None:
+    try:
+        await service.delete_definition(
+            user_id,
+            definition_id,
+            expected_revision=expected_revision,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

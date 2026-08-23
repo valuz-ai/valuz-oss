@@ -5,10 +5,12 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from valuz_agent.facade.projects import ProjectRef
 from valuz_agent.infra.database import Base
+from valuz_agent.modules.automations.models import AutomationRow
 from valuz_agent.modules.playbooks.models import (
     PlaybookDefinitionRow,
     PlaybookRunRow,
@@ -209,3 +211,107 @@ async def test_owner_cannot_read_definition_or_run(db: AsyncSession) -> None:
         await service.get_definition("another-owner", definition.id)
     with pytest.raises(LookupError):
         await service.get_run("another-owner", run.id)
+
+
+async def test_delete_removes_versions_and_completed_run_history(db: AsyncSession) -> None:
+    projects = FakeProjects()
+    service = PlaybookService(db, projects)
+    definition, _ = await service.create_definition(USER, create_request())
+    definition, _ = await service.create_version(
+        USER,
+        definition.id,
+        PlaybookVersionCreateRequest(
+            content="Review the revised evidence.",
+            base_version=1,
+        ),
+    )
+    run = await service.create_run(
+        USER,
+        PlaybookRunCreateRequest(definition_id=definition.id),
+    )
+    await service.update_run(USER, run.id, PlaybookRunUpdateRequest(status="running"))
+    await service.update_run(USER, run.id, PlaybookRunUpdateRequest(status="completed"))
+
+    deleted = await service.delete_definition(
+        USER,
+        definition.id,
+        expected_revision=definition.revision,
+    )
+
+    assert deleted.id == definition.id
+    assert (
+        await db.scalar(
+            select(PlaybookDefinitionRow).where(PlaybookDefinitionRow.id == definition.id)
+        )
+        is None
+    )
+    assert (
+        list(
+            (
+                await db.scalars(
+                    select(PlaybookVersionRow).where(
+                        PlaybookVersionRow.definition_id == definition.id
+                    )
+                )
+            ).all()
+        )
+        == []
+    )
+    assert (
+        list(
+            (
+                await db.scalars(
+                    select(PlaybookRunRow).where(PlaybookRunRow.definition_id == definition.id)
+                )
+            ).all()
+        )
+        == []
+    )
+
+
+async def test_delete_is_blocked_by_active_run_or_automation_binding(
+    db: AsyncSession,
+) -> None:
+    projects = FakeProjects()
+    projects.seed(USER, "p1")
+    service = PlaybookService(db, projects)
+    definition, _ = await service.create_definition(
+        USER,
+        create_request(project_id="p1"),
+    )
+    await service.create_run(
+        USER,
+        PlaybookRunCreateRequest(definition_id=definition.id, project_id="p1"),
+    )
+    with pytest.raises(ValueError, match="playbook_definition_has_active_runs"):
+        await service.delete_definition(
+            USER,
+            definition.id,
+            expected_revision=definition.revision,
+        )
+
+    for run in await service.list_runs(USER, definition_id=definition.id):
+        await service.update_run(USER, run.id, PlaybookRunUpdateRequest(status="stopped"))
+    db.add(
+        AutomationRow(
+            user_id=USER,
+            name="Weekly review",
+            agent_kind="library_agent",
+            agent_slug="valurion",
+            project_id="p1",
+            prompt_template="",
+            action_kind="chat",
+            worktree=False,
+            trigger_kind="manual",
+            status="enabled",
+            playbook_definition_id=definition.id,
+            playbook_version=definition.current_version,
+        )
+    )
+    await db.flush()
+    with pytest.raises(ValueError, match="playbook_definition_in_use_by_automation:1"):
+        await service.delete_definition(
+            USER,
+            definition.id,
+            expected_revision=definition.revision,
+        )
