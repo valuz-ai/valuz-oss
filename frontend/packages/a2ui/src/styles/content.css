@@ -108,3 +108,4 @@
 .va2-empty > span { align-items: center; background: var(--va2-brand-soft); border-radius: var(--va2-radius-2xl); color: var(--va2-brand-text); display: flex; height: 44px; justify-content: center; margin-bottom: 12px; width: 44px; }
 .va2-empty strong { color: var(--va2-text); font-size: 15px; }
 .va2-empty p { font-size: 13px; margin: 5px 0 0; max-width: 360px; }
+.va2-empty .va2-button { margin-top: 12px; }

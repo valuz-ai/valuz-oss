@@ -2,6 +2,7 @@ import type { ComponentApi } from "@a2ui/web_core/v0_9";
 import { z } from "zod";
 
 import {
+  ActionSchema,
   DynamicBooleanSchema,
   DynamicNumberSchema,
   DynamicStringSchema,
@@ -26,7 +27,9 @@ export const TextContentApi = {
       truncate: DynamicBooleanSchema.default(false).optional(),
     })
     .strict()
-    .describe("Render text with semantic hierarchy and restrained presentation controls."),
+    .describe(
+      "Render text with semantic hierarchy and restrained presentation controls.",
+    ),
 } satisfies ComponentApi;
 
 export const MarkdownApi = {
@@ -50,13 +53,19 @@ export const ImageApi = {
       alt: DynamicStringSchema,
       caption: DynamicStringSchema.optional(),
       fit: z.enum(["cover", "contain", "fill"]).default("cover").optional(),
-      aspectRatio: z.enum(["auto", "square", "video", "portrait", "wide"])
+      aspectRatio: z
+        .enum(["auto", "square", "video", "portrait", "wide"])
         .default("auto")
         .optional(),
-      radius: z.enum(["none", "sm", "md", "lg", "full"]).default("md").optional(),
+      radius: z
+        .enum(["none", "sm", "md", "lg", "full"])
+        .default("md")
+        .optional(),
     })
     .strict()
-    .describe("Display an accessible image with predictable sizing and an optional caption."),
+    .describe(
+      "Display an accessible image with predictable sizing and an optional caption.",
+    ),
 } satisfies ComponentApi;
 
 const galleryImageSchema = z
@@ -74,7 +83,10 @@ export const ImageGalleryApi = {
       ...commonProps,
       images: z.union([z.array(galleryImageSchema), DynamicValueSchema]),
       columns: z.number().int().min(1).max(6).default(3).optional(),
-      aspectRatio: z.enum(["square", "video", "portrait", "auto"]).default("square").optional(),
+      aspectRatio: z
+        .enum(["square", "video", "portrait", "auto"])
+        .default("square")
+        .optional(),
     })
     .strict()
     .describe("Show a responsive collection of related images."),
@@ -117,10 +129,15 @@ export const ListBlockApi = {
       items: z.union([z.array(listItemSchema), DynamicValueSchema]),
       ordered: DynamicBooleanSchema.default(false).optional(),
       divided: DynamicBooleanSchema.default(false).optional(),
-      density: z.enum(["compact", "comfortable"]).default("comfortable").optional(),
+      density: z
+        .enum(["compact", "comfortable"])
+        .default("comfortable")
+        .optional(),
     })
     .strict()
-    .describe("Present a readable list of facts, entities, tasks, or ranked results."),
+    .describe(
+      "Present a readable list of facts, entities, tasks, or ranked results.",
+    ),
 } satisfies ComponentApi;
 
 const tableColumnSchema = z
@@ -128,7 +145,8 @@ const tableColumnSchema = z
     key: z.string(),
     label: DynamicStringSchema,
     align: z.enum(["left", "center", "right"]).default("left").optional(),
-    format: z.enum(["text", "number", "percent", "currency", "date"])
+    format: z
+      .enum(["text", "number", "percent", "currency", "date"])
       .default("text")
       .optional(),
     width: z.number().int().min(60).max(640).optional(),
@@ -162,7 +180,9 @@ export const CodeBlockApi = {
       wrap: DynamicBooleanSchema.default(false).optional(),
     })
     .strict()
-    .describe("Display code or machine-readable text in a copyable, readable panel."),
+    .describe(
+      "Display code or machine-readable text in a copyable, readable panel.",
+    ),
 } satisfies ComponentApi;
 
 export const CalloutApi = {
@@ -176,7 +196,9 @@ export const CalloutApi = {
       icon: z.string().optional(),
     })
     .strict()
-    .describe("Emphasize a concise insight, warning, success, or contextual note."),
+    .describe(
+      "Emphasize a concise insight, warning, success, or contextual note.",
+    ),
 } satisfies ComponentApi;
 
 export const AvatarApi = {
@@ -220,7 +242,9 @@ export const SkeletonApi = {
       lines: z.number().int().min(1).max(12).default(1).optional(),
     })
     .strict()
-    .describe("Reserve layout while streamed or remote content is still loading."),
+    .describe(
+      "Reserve layout while streamed or remote content is still loading.",
+    ),
 } satisfies ComponentApi;
 
 export const EmptyStateApi = {
@@ -231,9 +255,13 @@ export const EmptyStateApi = {
       title: DynamicStringSchema,
       description: DynamicStringSchema.optional(),
       icon: z.string().optional(),
+      actionLabel: DynamicStringSchema.optional(),
+      action: ActionSchema.optional(),
     })
     .strict()
-    .describe("Explain an intentional empty result and suggest what the user can do next."),
+    .describe(
+      "Explain an intentional empty result and suggest what the user can do next; an optional action (with actionLabel) renders one follow-up button.",
+    ),
 } satisfies ComponentApi;
 
 export const contentApis = [

@@ -8,9 +8,17 @@ import {
   type ReactComponentImplementation,
   type SurfaceModel,
 } from "@valuz/a2ui";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import { Skeleton } from "../ui/skeleton";
+import { dispatchGenUIAction } from "./genui-channel/action-registry";
 import {
   getGenUIDataHost,
   type GenUIComponentDataRef,
@@ -38,9 +46,12 @@ function safeJsonParse(value: string): unknown {
 }
 
 function looksLikeA2UIMessage(value: Record<string, unknown>): boolean {
-  return ["createSurface", "updateComponents", "updateDataModel", "deleteSurface"].some(
-    (key) => key in value,
-  );
+  return [
+    "createSurface",
+    "updateComponents",
+    "updateDataModel",
+    "deleteSurface",
+  ].some((key) => key in value);
 }
 
 function salvagePartialMessage(line: string): A2UIMessage | null {
@@ -55,7 +66,8 @@ function parseA2UIMessages(body: string): A2UIMessage[] {
   if (!trimmed) return [];
   const parsed = safeJsonParse(trimmed);
   if (Array.isArray(parsed)) return parsed.filter(isRecord);
-  if (isRecord(parsed) && Array.isArray(parsed.messages)) return parsed.messages.filter(isRecord);
+  if (isRecord(parsed) && Array.isArray(parsed.messages))
+    return parsed.messages.filter(isRecord);
   if (isRecord(parsed) && looksLikeA2UIMessage(parsed)) return [parsed];
 
   const messages: A2UIMessage[] = [];
@@ -72,14 +84,28 @@ function parseA2UIMessages(body: string): A2UIMessage[] {
   return messages;
 }
 
-function collectComponentDataRefs(body: string): Map<string, GenUIComponentDataRef[]> {
+function collectComponentDataRefs(
+  body: string,
+): Map<string, GenUIComponentDataRef[]> {
   const bySurface = new Map<string, Map<string, GenUIComponentDataRef>>();
   for (const message of parseA2UIMessages(body)) {
     const update = message.updateComponents;
-    if (!isRecord(update) || typeof update.surfaceId !== "string" || !Array.isArray(update.components)) continue;
-    const existing = bySurface.get(update.surfaceId) ?? new Map<string, GenUIComponentDataRef>();
+    if (
+      !isRecord(update) ||
+      typeof update.surfaceId !== "string" ||
+      !Array.isArray(update.components)
+    )
+      continue;
+    const existing =
+      bySurface.get(update.surfaceId) ??
+      new Map<string, GenUIComponentDataRef>();
     for (const raw of update.components) {
-      if (!isRecord(raw) || typeof raw.id !== "string" || typeof raw.component !== "string") continue;
+      if (
+        !isRecord(raw) ||
+        typeof raw.id !== "string" ||
+        typeof raw.component !== "string"
+      )
+        continue;
       if (isRecord(raw.dataRefs)) {
         for (const [inputKey, ref] of Object.entries(raw.dataRefs)) {
           if (!inputKey) continue;
@@ -95,7 +121,10 @@ function collectComponentDataRefs(body: string): Map<string, GenUIComponentDataR
     if (existing.size) bySurface.set(update.surfaceId, existing);
   }
   return new Map(
-    Array.from(bySurface, ([surfaceId, refs]) => [surfaceId, Array.from(refs.values())]),
+    Array.from(bySurface, ([surfaceId, refs]) => [
+      surfaceId,
+      Array.from(refs.values()),
+    ]),
   );
 }
 
@@ -149,16 +178,27 @@ function hasPartialTrailingLine(body: string): boolean {
   return safeJsonParse(line) === undefined;
 }
 
-function withoutUnreadyComponents(messages: A2UIMessage[], trailingIsPartial: boolean): A2UIMessage[] {
+function withoutUnreadyComponents(
+  messages: A2UIMessage[],
+  trailingIsPartial: boolean,
+): A2UIMessage[] {
   const known = new Set(effectiveA2UIComponentNames());
   const trailingIndex = trailingIsPartial ? messages.length - 1 : -1;
   const declared = new Set<string>();
 
   messages.forEach((message, messageIndex) => {
-    if (!isRecord(message.updateComponents) || !Array.isArray(message.updateComponents.components)) return;
+    if (
+      !isRecord(message.updateComponents) ||
+      !Array.isArray(message.updateComponents.components)
+    )
+      return;
     for (const component of message.updateComponents.components) {
       if (!isRecord(component) || typeof component.id !== "string") continue;
-      if (messageIndex === trailingIndex && !known.has(String(component.component ?? ""))) continue;
+      if (
+        messageIndex === trailingIndex &&
+        !known.has(String(component.component ?? ""))
+      )
+        continue;
       declared.add(component.id);
     }
   });
@@ -168,14 +208,16 @@ function withoutUnreadyComponents(messages: A2UIMessage[], trailingIsPartial: bo
     const update = message.updateComponents;
     if (!isRecord(update) || !Array.isArray(update.components)) return message;
     const components = update.components
-      .filter((component) =>
-        isRecord(component) &&
-        typeof component.id === "string" &&
-        typeof component.component === "string" &&
-        (messageIndex !== trailingIndex || known.has(component.component)),
+      .filter(
+        (component) =>
+          isRecord(component) &&
+          typeof component.id === "string" &&
+          typeof component.component === "string" &&
+          (messageIndex !== trailingIndex || known.has(component.component)),
       )
       .flatMap((component) => {
-        if (!isRecord(component) || !Array.isArray(component.children)) return component;
+        if (!isRecord(component) || !Array.isArray(component.children))
+          return component;
         const children = component.children.filter(
           (child) => typeof child !== "string" || declared.has(child),
         );
@@ -184,13 +226,19 @@ function withoutUnreadyComponents(messages: A2UIMessage[], trailingIsPartial: bo
         // "[Loading root...]" placeholder. Hold it until at least one named
         // child has arrived; the product-level generation skeleton covers the
         // wait without leaking protocol text.
-        if (trailingIsPartial && component.children.length > 0 && children.length === 0) {
+        if (
+          trailingIsPartial &&
+          component.children.length > 0 &&
+          children.length === 0
+        ) {
           return [];
         }
-        return [{
-          ...component,
-          children,
-        }];
+        return [
+          {
+            ...component,
+            children,
+          },
+        ];
       });
     return { ...message, updateComponents: { ...update, components } };
   });
@@ -230,9 +278,12 @@ function withoutInvalidComponents(messages: A2UIMessage[]): {
       rejected.push({
         id,
         component,
-        reason: result?.error?.issues?.map((issue) =>
-          `${issue.path.join(".") || "props"}: ${issue.message}`,
-        ).join("; ") ?? "component is not registered",
+        reason:
+          result?.error?.issues
+            ?.map(
+              (issue) => `${issue.path.join(".") || "props"}: ${issue.message}`,
+            )
+            .join("; ") ?? "component is not registered",
       });
     }
   }
@@ -242,9 +293,12 @@ function withoutInvalidComponents(messages: A2UIMessage[]): {
     rejected,
     messages: messages.flatMap((message) => {
       const update = message.updateComponents;
-      if (!isRecord(update) || !Array.isArray(update.components)) return [message];
+      if (!isRecord(update) || !Array.isArray(update.components))
+        return [message];
       const components = update.components
-        .filter((raw) => !isRecord(raw) || !rejectedIds.has(String(raw.id ?? "")))
+        .filter(
+          (raw) => !isRecord(raw) || !rejectedIds.has(String(raw.id ?? "")),
+        )
         .map((raw) => {
           if (!isRecord(raw) || !Array.isArray(raw.children)) return raw;
           return {
@@ -273,24 +327,26 @@ function normalizeWeightedChildren(messages: A2UIMessage[]): A2UIMessage[] {
     const update = message.updateComponents;
     if (!isRecord(update) || !Array.isArray(update.components)) return message;
     const weights = new Map<string, number>();
-    const components = update.components.map((raw) => {
-      if (!isRecord(raw) || !Array.isArray(raw.children)) return raw;
-      const children = raw.children.flatMap((child) => {
-        if (typeof child === "string") return [child];
-        if (!isRecord(child) || typeof child.id !== "string") return [];
-        if (typeof child.weight === "number" && child.weight > 0) {
-          weights.set(child.id, child.weight);
-        }
-        return [child.id];
+    const components = update.components
+      .map((raw) => {
+        if (!isRecord(raw) || !Array.isArray(raw.children)) return raw;
+        const children = raw.children.flatMap((child) => {
+          if (typeof child === "string") return [child];
+          if (!isRecord(child) || typeof child.id !== "string") return [];
+          if (typeof child.weight === "number" && child.weight > 0) {
+            weights.set(child.id, child.weight);
+          }
+          return [child.id];
+        });
+        return { ...raw, children };
+      })
+      .map((raw) => {
+        if (!isRecord(raw) || typeof raw.id !== "string") return raw;
+        const weight = weights.get(raw.id);
+        return weight === undefined || raw.weight !== undefined
+          ? raw
+          : { ...raw, weight };
       });
-      return { ...raw, children };
-    }).map((raw) => {
-      if (!isRecord(raw) || typeof raw.id !== "string") return raw;
-      const weight = weights.get(raw.id);
-      return weight === undefined || raw.weight !== undefined
-        ? raw
-        : { ...raw, weight };
-    });
     return { ...message, updateComponents: { ...update, components } };
   });
 }
@@ -299,6 +355,7 @@ function buildSurfaces(
   body: string,
   liveMessages: A2UIMessage[] = [],
   suppressIncompleteWarnings = false,
+  onAction?: Parameters<typeof createValuzMessageProcessor>[0],
 ): SurfaceModel<ReactComponentImplementation>[] {
   const deduped = dropRepeatedDocument(body);
   const ready = withoutUnreadyComponents(
@@ -308,24 +365,26 @@ function buildSurfaces(
   const sanitized = withoutInvalidComponents(
     normalizeWeightedChildren(withoutComponentDataRefs(ready)),
   );
-  const messages = [
-    ...sanitized.messages,
-    ...liveMessages,
-  ];
+  const messages = [...sanitized.messages, ...liveMessages];
   if (!messages.length) return [];
-  const hasComponents = messages.some((message) =>
-    isRecord(message.updateComponents) &&
-    Array.isArray(message.updateComponents.components) &&
-    message.updateComponents.components.length > 0,
+  const hasComponents = messages.some(
+    (message) =>
+      isRecord(message.updateComponents) &&
+      Array.isArray(message.updateComponents.components) &&
+      message.updateComponents.components.length > 0,
   );
   if (!hasComponents) return [];
-  if (import.meta.env.DEV && sanitized.rejected.length && !suppressIncompleteWarnings) {
+  if (
+    import.meta.env.DEV &&
+    sanitized.rejected.length &&
+    !suppressIncompleteWarnings
+  ) {
     console.warn(
       "[a2ui] skipped invalid component(s)",
       JSON.stringify(sanitized.rejected),
     );
   }
-  const processor = createValuzMessageProcessor();
+  const processor = createValuzMessageProcessor(onAction);
   try {
     processor.processMessages(messages as never);
   } catch (error) {
@@ -342,10 +401,26 @@ function buildSurfaces(
 
 function GenerationSkeleton() {
   return (
-    <div data-slot="a2ui-generation-skeleton" aria-hidden className="min-w-0 space-y-4">
-      <div className="space-y-2"><Skeleton className="h-6 w-56 max-w-full" /><Skeleton className="h-3.5 w-36 max-w-full" /></div>
+    <div
+      data-slot="a2ui-generation-skeleton"
+      aria-hidden
+      className="min-w-0 space-y-4"
+    >
+      <div className="space-y-2">
+        <Skeleton className="h-6 w-56 max-w-full" />
+        <Skeleton className="h-3.5 w-36 max-w-full" />
+      </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {[0, 1, 2].map((index) => <div key={index} className="space-y-2.5 rounded-xl border border-surface-border p-4"><Skeleton className="h-4 w-24 max-w-full" /><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-4/5" /></div>)}
+        {[0, 1, 2].map((index) => (
+          <div
+            key={index}
+            className="space-y-2.5 rounded-xl border border-surface-border p-4"
+          >
+            <Skeleton className="h-4 w-24 max-w-full" />
+            <Skeleton className="h-3 w-full" />
+            <Skeleton className="h-3 w-4/5" />
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -359,15 +434,27 @@ function GenerationTail() {
     let parent = element.parentElement;
     while (parent) {
       const overflow = getComputedStyle(parent).overflowY;
-      if ((overflow === "auto" || overflow === "scroll") && parent.scrollHeight > parent.clientHeight) {
-        if (parent.scrollHeight - parent.scrollTop - parent.clientHeight > 240) return;
+      if (
+        (overflow === "auto" || overflow === "scroll") &&
+        parent.scrollHeight > parent.clientHeight
+      ) {
+        if (parent.scrollHeight - parent.scrollTop - parent.clientHeight > 240)
+          return;
         break;
       }
       parent = parent.parentElement;
     }
     element.scrollIntoView({ block: "end", behavior: "smooth" });
   });
-  return <div ref={ref} data-slot="a2ui-generation-tail" className="flex items-center gap-2 px-1 py-3"><Skeleton className="h-3 w-32" /></div>;
+  return (
+    <div
+      ref={ref}
+      data-slot="a2ui-generation-tail"
+      className="flex items-center gap-2 px-1 py-3"
+    >
+      <Skeleton className="h-3 w-32" />
+    </div>
+  );
 }
 
 export function A2UIRenderer({ body, status, hostParams }: A2UIRendererProps) {
@@ -380,27 +467,51 @@ export function A2UIRenderer({ body, status, hostParams }: A2UIRendererProps) {
   useEffect(() => setLiveMessages([]), [body]);
 
   const hostParamsKey = hostParams
-    ? JSON.stringify(Object.keys(hostParams).sort().map((key) => [key, hostParams[key]]))
+    ? JSON.stringify(
+        Object.keys(hostParams)
+          .sort()
+          .map((key) => [key, hostParams[key]]),
+      )
     : "";
   useEffect(() => {
     const factory = getGenUIDataHost();
     if (!factory) return;
-    const handles = Array.from(collectComponentDataRefs(body), ([surfaceId, dataRefs]) =>
-      factory({
-        surfaceId,
-        dataRefs,
-        push: (message) => setLiveMessages((previous) => [...previous, message]),
-        ...(hostParams ? { host: hostParams } : {}),
-      }),
+    const handles = Array.from(
+      collectComponentDataRefs(body),
+      ([surfaceId, dataRefs]) =>
+        factory({
+          surfaceId,
+          dataRefs,
+          push: (message) =>
+            setLiveMessages((previous) => [...previous, message]),
+          ...(hostParams ? { host: hostParams } : {}),
+        }),
     ).filter(Boolean);
     return () => handles.forEach((handle) => handle?.stop());
     // hostParamsKey is the stable representation of hostParams.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [body, version, hostParamsKey]);
 
+  // Forward user actions to the registered host sink (action-registry.ts)
+  // with this renderer's host identity attached. Reads hostParams through a
+  // ref so the callback stays stable and never forces a surface rebuild.
+  const hostParamsRef = useRef(hostParams);
+  hostParamsRef.current = hostParams;
+  const onAction = useCallback<
+    NonNullable<Parameters<typeof createValuzMessageProcessor>[0]>
+  >((action) => {
+    dispatchGenUIAction({
+      name: action.name,
+      surfaceId: action.surfaceId,
+      sourceComponentId: action.sourceComponentId,
+      context: action.context ?? {},
+      ...(hostParamsRef.current ? { host: hostParamsRef.current } : {}),
+    });
+  }, []);
+
   const built = useMemo(
-    () => buildSurfaces(body, liveMessages, status === "running"),
-    [body, version, liveMessages, status],
+    () => buildSurfaces(body, liveMessages, status === "running", onAction),
+    [body, version, liveMessages, status, onAction],
   );
   // 流式过程中某一帧解析不出 surface 时，沿用上一帧的成品，避免画面闪空。
   // 这是"渲染期派生状态"，不是 ref 的用途：写/读 ref 会在并发渲染下失准
@@ -411,14 +522,22 @@ export function A2UIRenderer({ body, status, hostParams }: A2UIRendererProps) {
     body: string;
     surfaces: SurfaceModel<ReactComponentImplementation>[];
   }>({ body: "", surfaces: [] });
-  if (built.length && lastGood.surfaces !== built) setLastGood({ body, surfaces: built });
-  const inherits = lastGood.surfaces.length > 0 && body.startsWith(lastGood.body);
-  const surfaces = built.length || status !== "running" || !inherits ? built : lastGood.surfaces;
+  if (built.length && lastGood.surfaces !== built)
+    setLastGood({ body, surfaces: built });
+  const inherits =
+    lastGood.surfaces.length > 0 && body.startsWith(lastGood.body);
+  const surfaces =
+    built.length || status !== "running" || !inherits
+      ? built
+      : lastGood.surfaces;
 
-  if (!surfaces.length) return status === "running" ? <GenerationSkeleton /> : null;
+  if (!surfaces.length)
+    return status === "running" ? <GenerationSkeleton /> : null;
   return (
     <div data-slot="a2ui-renderer">
-      {surfaces.map((surface) => <ValuzA2UISurface key={surface.id} surface={surface} />)}
+      {surfaces.map((surface) => (
+        <ValuzA2UISurface key={surface.id} surface={surface} />
+      ))}
       {status === "running" ? <GenerationTail /> : null}
     </div>
   );
