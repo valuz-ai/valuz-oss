@@ -16,8 +16,10 @@ const h = vi.hoisted(() => ({
   tasksByProject: new Map<string, unknown[]>(),
   sessions: [] as unknown[],
   members: [] as unknown[],
+  playbooks: [] as unknown[],
   chatBindings: [] as ChatProjectBinding[],
   rightPanel: null as unknown,
+  playbookDialog: null as unknown,
   setRightPanel: vi.fn(),
   setHeader: vi.fn(),
   setMainClassName: vi.fn(),
@@ -133,6 +135,10 @@ vi.mock("@valuz/app/components", () => ({
     />
   ),
   CreateAutomationDialog: () => null,
+  CreatePlaybookDialog: (props: unknown) => {
+    h.playbookDialog = props;
+    return null;
+  },
   DeployAgentsDialog: () => null,
   RenameInput: () => null,
   RowActionsMenu: () => null,
@@ -232,6 +238,20 @@ vi.mock("../../../core/src/api/automations-api", async (orig) => {
     automationsApi: {
       ...(actual as { automationsApi: object }).automationsApi,
       listGroups: vi.fn(async () => ({ groups: [] })),
+    },
+  };
+});
+vi.mock("../../../core/src/api/playbooks-api", async (orig) => {
+  const actual = await orig<typeof import("@valuz/core")>();
+  return {
+    ...actual,
+    playbooksApi: {
+      ...(actual as { playbooksApi: object }).playbooksApi,
+      list: vi.fn(async () => h.playbooks),
+      get: vi.fn(),
+      create: vi.fn(),
+      updateDefinition: vi.fn(),
+      createVersion: vi.fn(),
     },
   };
 });
@@ -377,7 +397,26 @@ const anchorKeys = (root: HTMLElement, prefix: string): string[] =>
 type RightPanelProps = {
   chatBindings: Array<{ id: string; name: string }>;
   onDeleteChat: (chatId: string) => void;
+  playbooks: Array<{
+    id: string;
+    name: string;
+    version: number;
+    status: string;
+    running?: boolean;
+  }>;
+  onAddPlaybook: () => void;
 };
+
+type PlaybookDialogProps = {
+  open: boolean;
+  fixedProjectId?: string;
+  fixedProjectName?: string;
+};
+
+const playbookDialogProps = (): PlaybookDialogProps | null =>
+  h.playbookDialog && typeof h.playbookDialog === "object"
+    ? (h.playbookDialog as PlaybookDialogProps)
+    : null;
 
 const rightPanelProps = (): RightPanelProps | null =>
   h.rightPanel &&
@@ -394,6 +433,7 @@ describe("ProjectDetailPage auto-refresh wiring", () => {
     h.tasksByProject = new Map([["A", [task({ id: "t1", title: "Alpha" })]]]);
     h.sessions = [session({ id: "s1", project_id: "A" })];
     h.members = [];
+    h.playbooks = [];
     h.chatBindings = [
       {
         channel_instance_id: "channel-1",
@@ -406,6 +446,7 @@ describe("ProjectDetailPage auto-refresh wiring", () => {
       },
     ];
     h.rightPanel = null;
+    h.playbookDialog = null;
     h.setRightPanel.mockReset();
     h.setRightPanel.mockImplementation((panel: unknown) => {
       h.rightPanel = panel;
@@ -478,6 +519,45 @@ describe("ProjectDetailPage auto-refresh wiring", () => {
         "chat-2",
       ]),
     );
+  });
+
+  it("projects associated Playbooks into the right panel", async () => {
+    h.playbooks = [
+      {
+        id: "pb-1",
+        project_id: "A",
+        name: "Quarterly review",
+        status: "active",
+        origin: "user",
+        source_definition_id: null,
+        current_version: 3,
+        revision: 2,
+        created_at: 1,
+        updated_at: 2,
+      },
+    ];
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(rightPanelProps()?.playbooks).toEqual([
+        {
+          id: "pb-1",
+          name: "Quarterly review",
+          version: 3,
+          status: "active",
+          running: false,
+        },
+      ]),
+    );
+    expect(rightPanelProps()?.onAddPlaybook).toBeTypeOf("function");
+
+    act(() => rightPanelProps()?.onAddPlaybook());
+    expect(playbookDialogProps()).toMatchObject({
+      open: true,
+      fixedProjectId: "A",
+      fixedProjectName: "Proj",
+    });
   });
 
   it("removes a deleted group from the right panel", async () => {

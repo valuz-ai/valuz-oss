@@ -295,6 +295,61 @@ describe("ProjectDetailContextPanel — Todos section", () => {
   });
 });
 
+describe("ProjectDetailContextPanel — Playbooks section", () => {
+  it("shows project Playbooks with version, edit, and run actions", async () => {
+    const onOpenPlaybook = vi.fn();
+    const onRunPlaybook = vi.fn();
+    render(
+      <ProjectDetailContextPanel
+        multiOpen
+        playbooks={[
+          {
+            id: "pb-1",
+            name: "Quarterly review",
+            version: 3,
+            status: "active",
+          },
+        ]}
+        onOpenPlaybook={onOpenPlaybook}
+        onRunPlaybook={onRunPlaybook}
+      />,
+    );
+
+    expect(screen.getByText("Quarterly review")).toBeTruthy();
+    expect(screen.getByText(/v3/)).toBeTruthy();
+    expect(screen.getByText(/已启用/)).toBeTruthy();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "编辑: Quarterly review" }),
+    );
+    expect(onOpenPlaybook).toHaveBeenCalledWith("pb-1");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "运行: Quarterly review" }),
+    );
+    expect(onRunPlaybook).toHaveBeenCalledWith("pb-1");
+  });
+
+  it("keeps Playbook creation available when the project list is empty", async () => {
+    const onAddPlaybook = vi.fn();
+    render(
+      <ProjectDetailContextPanel
+        multiOpen
+        playbooks={[]}
+        onAddPlaybook={onAddPlaybook}
+      />,
+    );
+
+    expect(screen.getByText("暂无 Playbook")).toBeTruthy();
+    const createActions = screen.getAllByRole("button", {
+      name: "新建 Playbook",
+    });
+    expect(createActions.length).toBeGreaterThan(0);
+    await userEvent.click(createActions.at(-1)!);
+    expect(onAddPlaybook).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("ProjectDetailContextPanel — Generated files section", () => {
   it("should render agent-delivered artifacts under the 生成文件 section", () => {
     render(

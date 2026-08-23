@@ -48,6 +48,14 @@ export interface CreatePlaybookDialogProps {
   initial?: PlaybookDetail | null;
   targets: AutomationProjectTarget[];
   agents: PlaybookAgentChoice[];
+  /**
+   * Lock the Playbook to the project page that opened the dialog. The product
+   * calls this a workspace in Finance, but persistence deliberately remains
+   * ``project_id``. This mirrors CreateAutomationDialog's fixed-project mode:
+   * the association stays visible and cannot be changed accidentally.
+   */
+  fixedProjectId?: string;
+  fixedProjectName?: string;
 }
 
 export const CreatePlaybookDialog = ({
@@ -57,6 +65,8 @@ export const CreatePlaybookDialog = ({
   initial,
   targets,
   agents,
+  fixedProjectId,
+  fixedProjectName,
 }: CreatePlaybookDialogProps) => {
   const { t } = useI18n();
   const [name, setName] = useState("");
@@ -73,7 +83,9 @@ export const CreatePlaybookDialog = ({
     if (!open) return;
     setName(initial?.definition.name ?? "");
     setContent(initial?.current_version.content ?? "");
-    setProjectId(initial?.definition.project_id ?? "__global__");
+    setProjectId(
+      fixedProjectId ?? initial?.definition.project_id ?? "__global__",
+    );
     const executor = initial?.current_version.default_executor;
     setAgentSlug(
       typeof executor?.agent_slug === "string"
@@ -84,7 +96,7 @@ export const CreatePlaybookDialog = ({
       initial?.definition.exec_origin ?? getDefaultExecutionTarget()?.id ?? null,
     );
     setExpanded(false);
-  }, [initial, open]);
+  }, [fixedProjectId, initial, open]);
 
   const submit = async () => {
     if (!name.trim() || !content.trim() || submitting) return;
@@ -93,7 +105,9 @@ export const CreatePlaybookDialog = ({
       await onSubmit({
         name: name.trim(),
         content: content.trim(),
-        project_id: projectId === "__global__" ? null : projectId,
+        project_id:
+          fixedProjectId ??
+          (projectId === "__global__" ? null : projectId),
         default_executor:
           agentSlug === "__default__" ? {} : { agent_slug: agentSlug },
         exec_location:
@@ -179,28 +193,42 @@ export const CreatePlaybookDialog = ({
               </FormField>
 
               <FormField label={t("playbook.projectLabel")}>
-                <Select value={projectId} onValueChange={setProjectId}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__global__">
-                      {t("playbook.projectGlobal")}
-                    </SelectItem>
-                    {targets
-                      .filter(
-                        (target) => target.kind === "project" && target.project_id,
-                      )
-                      .map((target) => (
-                        <SelectItem
-                          key={target.project_id!}
-                          value={target.project_id!}
-                        >
-                          {target.name}
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
+                {fixedProjectId ? (
+                  <Select value={fixedProjectId} disabled>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={fixedProjectId}>
+                        {fixedProjectName ?? fixedProjectId}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Select value={projectId} onValueChange={setProjectId}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__global__">
+                        {t("playbook.projectGlobal")}
+                      </SelectItem>
+                      {targets
+                        .filter(
+                          (target) =>
+                            target.kind === "project" && target.project_id,
+                        )
+                        .map((target) => (
+                          <SelectItem
+                            key={target.project_id!}
+                            value={target.project_id!}
+                          >
+                            {target.name}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </FormField>
 
               {executionTargets.length >= 2 ? (
@@ -209,7 +237,9 @@ export const CreatePlaybookDialog = ({
                     "project.execLocation" as Parameters<typeof t>[0],
                   )}
                 >
-                  {!initial && projectId === "__global__" ? (
+                  {!initial &&
+                  !fixedProjectId &&
+                  projectId === "__global__" ? (
                     <ExecutionLocationPicker
                       value={execLocation}
                       onChange={setExecLocation}
@@ -219,7 +249,8 @@ export const CreatePlaybookDialog = ({
                       origin={initial?.definition.exec_origin}
                       entityId={
                         initial?.definition.id ??
-                        (projectId === "__global__" ? null : projectId)
+                        (fixedProjectId ??
+                          (projectId === "__global__" ? null : projectId))
                       }
                       kind={initial ? "playbook" : "project"}
                     />

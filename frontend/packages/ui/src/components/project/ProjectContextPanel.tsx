@@ -35,6 +35,7 @@ import {
   MessageSquare,
   MessageSquarePlus,
   Sparkles,
+  BookOpenText,
 } from "lucide-react";
 import { modelLabel } from "@valuz/shared";
 import {
@@ -129,6 +130,17 @@ export interface ScheduledTaskSummary {
   humanReadable: string;
   status: "on" | "off";
   nextRun: string;
+}
+
+/** A Playbook Definition associated with this project. The panel is only a
+ *  project-scoped projection of the shared Playbook model; versioning and runs
+ *  remain owned by the Playbook APIs. */
+export interface ProjectPlaybookSummary {
+  id: string;
+  name: string;
+  version: number;
+  status: "draft" | "active" | "retired";
+  running?: boolean;
 }
 
 /** One project worktree row for the panel's "Worktrees" section. Mirrors the
@@ -410,6 +422,12 @@ export interface ProjectContextPanelProps {
   onDeleteScheduledTask?: (taskId: string) => void;
   onRunScheduledTask?: (taskId: string) => void;
   onManageScheduledTasks?: () => void;
+  /** Project-associated Playbook Definitions. ``undefined`` hides the
+   * section; an empty array keeps the creation entry visible. */
+  playbooks?: ProjectPlaybookSummary[];
+  onAddPlaybook?: () => void;
+  onOpenPlaybook?: (definitionId: string) => void;
+  onRunPlaybook?: (definitionId: string) => void;
   fileTree?: FileTreeNode[];
   /** Section title for the file-tree accordion. Project projects use
    * "{t("project.projectFiles")}"; chat projects use "generated files" — the underlying tree
@@ -1085,6 +1103,10 @@ export const ProjectDetailContextPanel = ({
   onToggleScheduledTask,
   onDeleteScheduledTask,
   onRunScheduledTask,
+  playbooks,
+  onAddPlaybook,
+  onOpenPlaybook,
+  onRunPlaybook,
   fileTree,
   fileTreeTitle,
   fileTreeInTab = false,
@@ -1143,15 +1165,17 @@ export const ProjectDetailContextPanel = ({
       ? initialOpenSection
       : showInstructions
         ? "instructions"
-        : todos && todos.length > 0
-          ? "todos"
-          : visibleUploadedFiles.length > 0
-            ? "uploads"
-            : (fileTree?.length ?? 0) > 0
-              ? "files"
-              : (scheduledTasks ?? []).length > 0
-                ? "scheduled"
-                : null;
+        : playbooks !== undefined
+          ? "playbooks"
+          : todos && todos.length > 0
+            ? "todos"
+            : visibleUploadedFiles.length > 0
+              ? "uploads"
+              : (fileTree?.length ?? 0) > 0
+                ? "files"
+                : (scheduledTasks ?? []).length > 0
+                  ? "scheduled"
+                  : null;
   const [internalCollapsed, setInternalCollapsed] = useState(false);
   const [connectorPickerOpen, setConnectorPickerOpen] = useState(false);
   // Version history, keyed by artifact id. Undefined = never asked, null =
@@ -1625,6 +1649,164 @@ export const ProjectDetailContextPanel = ({
             hideEditAction={hideProjectContextActions}
             showInlineEditAction={false}
           />
+        </AccordionSection>
+      )}
+
+      {/* Playbooks are durable, versioned work logic. This is deliberately a
+          compact project-scoped projection — the same Definitions can also be
+          reached from the global library, invoked by an Agent, or pinned by an
+          Automation. Heavy authoring stays in the shared dialog opened by the
+          host callbacks. */}
+      {playbooks !== undefined && (
+        <AccordionSection
+          {...sectionState("playbooks", playbooks.length > 0)}
+          title={t("playbook.title" as Parameters<typeof t>[0])}
+          icon={BookOpenText}
+          iconClassName="text-context-icon"
+          count={playbooks.length || undefined}
+          action={
+            onAddPlaybook ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.currentTarget.blur();
+                  onAddPlaybook();
+                }}
+                className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted"
+                title={t("playbook.createAction" as Parameters<typeof t>[0])}
+                aria-label={t(
+                  "playbook.createAction" as Parameters<typeof t>[0],
+                )}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            ) : undefined
+          }
+        >
+          {playbooks.length > 0 ? (
+            <div className="-mr-3 max-h-[25vh] overflow-y-auto overflow-x-hidden pr-3">
+              {playbooks.map((playbook, index) => {
+                const canRun =
+                  Boolean(onRunPlaybook) && playbook.status !== "retired";
+                const statusLabel = t(
+                  `playbook.status.${playbook.status}` as Parameters<
+                    typeof t
+                  >[0],
+                );
+                return (
+                  <div key={playbook.id}>
+                    {index > 0 ? (
+                      <div className="h-px w-full bg-surface-border" />
+                    ) : null}
+                    <div className="group relative rounded-lg bg-card">
+                      <div className="pointer-events-none absolute inset-0 rounded-lg transition-colors group-hover:bg-surface-muted/60" />
+                      <div className="relative z-10 flex items-center gap-2.5 px-2 py-2.5">
+                        <button
+                          type="button"
+                          disabled={!onOpenPlaybook}
+                          onClick={(event) => {
+                            event.currentTarget.blur();
+                            onOpenPlaybook?.(playbook.id);
+                          }}
+                          className="flex min-w-0 flex-1 items-center gap-2.5 text-left disabled:cursor-default"
+                        >
+                          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-brand/8 text-brand">
+                            <BookOpenText className="h-3 w-3" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-xs font-medium text-ink-heading">
+                              {playbook.name}
+                            </div>
+                            <div className="truncate text-2xs text-ink-meta">
+                              {t(
+                                "playbook.versionMeta" as Parameters<
+                                  typeof t
+                                >[0],
+                                { version: playbook.version },
+                              )}
+                              {" · "}
+                              {statusLabel}
+                            </div>
+                          </div>
+                        </button>
+                        {onOpenPlaybook ? (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.currentTarget.blur();
+                              onOpenPlaybook(playbook.id);
+                            }}
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-ink-muted opacity-0 transition-opacity hover:bg-surface-muted hover:text-ink-body group-hover:opacity-100"
+                            title={t("common.edit" as Parameters<typeof t>[0])}
+                            aria-label={`${t(
+                              "common.edit" as Parameters<typeof t>[0],
+                            )}: ${playbook.name}`}
+                          >
+                            <FilePenLine className="h-3.5 w-3.5" />
+                          </button>
+                        ) : null}
+                        {onRunPlaybook ? (
+                          <button
+                            type="button"
+                            disabled={!canRun || playbook.running}
+                            onClick={(event) => {
+                              event.currentTarget.blur();
+                              onRunPlaybook(playbook.id);
+                            }}
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-brand transition-colors hover:bg-brand/8 disabled:cursor-not-allowed disabled:text-ink-muted"
+                            title={
+                              playbook.running
+                                ? t(
+                                    "playbook.running" as Parameters<
+                                      typeof t
+                                    >[0],
+                                  )
+                                : t(
+                                    "playbook.runAction" as Parameters<
+                                      typeof t
+                                    >[0],
+                                  )
+                            }
+                            aria-label={`${t(
+                              (playbook.running
+                                ? "playbook.running"
+                                : "playbook.runAction") as Parameters<
+                                typeof t
+                              >[0],
+                            )}: ${playbook.name}`}
+                          >
+                            {playbook.running ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Play className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-ink-heading">
+                {t("playbook.emptyTitle" as Parameters<typeof t>[0])}
+              </p>
+              <p className="text-2xs leading-5 text-ink-meta">
+                {t("playbook.emptyDescription" as Parameters<typeof t>[0])}
+              </p>
+              {onAddPlaybook ? (
+                <button
+                  type="button"
+                  onClick={onAddPlaybook}
+                  className="text-xs font-medium text-brand hover:underline"
+                >
+                  {t("playbook.createAction" as Parameters<typeof t>[0])}
+                </button>
+              ) : null}
+            </div>
+          )}
         </AccordionSection>
       )}
 
