@@ -37,6 +37,9 @@ async def test_project_definitions_and_runs_are_owner_scoped() -> None:
                 user_id="owner-1",
                 definition_id=definition.id,
                 version=1,
+                content="Use /earnings-analysis to review earnings",
+                reference_metadata=[{"kind": "skill", "ref": "earnings-analysis"}],
+                default_executor={},
                 goal="Review earnings",
                 required_skills=["earnings-analysis"],
             )
@@ -48,6 +51,7 @@ async def test_project_definitions_and_runs_are_owner_scoped() -> None:
             project_id="p1",
             status="completed",
             trigger_kind="user",
+            content_snapshot="Use /earnings-analysis to review earnings",
             output_refs=[{"type": "artifact", "id": "a1"}],
         )
         db.add(run)
@@ -56,7 +60,7 @@ async def test_project_definitions_and_runs_are_owner_scoped() -> None:
         library = PlaybookLibrary(db)
         rows = await library.list_project("owner-1", "p1")
         assert rows[0][0].id == definition.id
-        assert rows[0][1].required_skills == ("earnings-analysis",)
+        assert rows[0][1].content.startswith("Use /earnings-analysis")
         runs = await library.list_runs("owner-1", "p1")
         assert runs[0].id == run.id
         assert await library.list_project("another-owner", "p1") == []
@@ -85,14 +89,13 @@ async def test_command_facade_validates_payload_and_returns_immutable_refs() -> 
 
     async with sessions() as db:
         library = PlaybookLibrary(db, Projects())
-        definition, version, created_project = await library.create_definition(
+        definition, version = await library.create_definition(
             "owner-1",
             {
                 "project_id": "p1",
                 "name": "Earnings review",
-                "goal": "Review earnings against the active Thesis",
-                "required_skills": ["earnings-analysis"],
-                "outputs": ["strategy_evaluation"],
+                "content": "Use /earnings-analysis to review the active Thesis.",
+                "reference_metadata": [{"kind": "skill", "ref": "earnings-analysis"}],
             },
         )
         run = await library.create_run(
@@ -104,8 +107,7 @@ async def test_command_facade_validates_payload_and_returns_immutable_refs() -> 
             },
         )
 
-        assert created_project is False
-        assert version.required_skills == ("earnings-analysis",)
+        assert version.content.startswith("Use /earnings-analysis")
         assert run.project_id == "p1"
         assert not hasattr(definition, "user_id")
     await engine.dispose()

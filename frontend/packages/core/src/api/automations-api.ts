@@ -229,7 +229,7 @@ export interface AutomationUpdatePayload {
 /** Minimal Definition projection needed by the Automation contract picker. */
 export interface AutomationPlaybookChoice {
   id: string;
-  project_id: string;
+  project_id: string | null;
   name: string;
   status: "draft" | "active" | "retired";
   current_version: number;

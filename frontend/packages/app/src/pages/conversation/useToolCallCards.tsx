@@ -4,6 +4,7 @@ import { Sparkles } from "lucide-react";
 import {
   SESSION_ACTION_RESOLVED_EVENT,
   SlotRenderer,
+  parseOperationToolOutput,
   parseActionResolved,
   useTranslation,
   type SessionEventDTO,
@@ -16,6 +17,7 @@ import {
   AskUserQuestionCard,
   AutomationProposalCard,
   AutomationToolCard,
+  PlaybookOperationCard,
   GenerativeUICard,
   SkillSubmissionCard,
   UserAnswerSummaryCard,
@@ -93,12 +95,16 @@ export function useToolCallCards({
     submissionStates,
     proposalStates,
     automationProposalStates,
+    operationStates,
+    operationBusy,
     handleConfirmSubmission,
     handleDismissSubmission,
     handleConfirmProposal,
     handleDismissProposal,
     handleConfirmAutomation,
     handleDismissAutomation,
+    handleConfirmOperation,
+    handleCancelOperation,
   } = useToolCallCardActions({
     turns,
     isBusy,
@@ -320,6 +326,31 @@ export function useToolCallCards({
             context={{ tool }}
           />
         );
+      }
+
+      const isPlaybook = isToolNamed(name, "playbook");
+      if (isPlaybook) {
+        const result = parseOperationToolOutput(tool.output);
+        const snapshot = result?.operation;
+        if (snapshot) {
+          const operation = operationStates[snapshot.id] ?? snapshot;
+          return (
+            <PlaybookOperationCard
+              operation={operation}
+              busy={operationBusy[operation.id] ?? null}
+              onConfirm={() => void handleConfirmOperation(operation)}
+              onCancel={() => void handleCancelOperation(operation)}
+              onOpenPlaybook={(definitionId) =>
+                navigate(
+                  `/playbooks?definition=${encodeURIComponent(definitionId)}`,
+                )
+              }
+            />
+          );
+        }
+        // Read-only queries and run lifecycle actions do not create an
+        // OperationRecord. Let them reach the generic tool renderer so the
+        // user can still inspect the Agent's Playbook call and result.
       }
 
       // ADR-021: automation tool result → AutomationToolCard. The MCP
@@ -649,6 +680,10 @@ export function useToolCallCards({
       automationProposalStates,
       handleConfirmAutomation,
       handleDismissAutomation,
+      operationStates,
+      operationBusy,
+      handleConfirmOperation,
+      handleCancelOperation,
       askUserQuestionAnswersByToolId,
       askUserQuestionLocalAnswers,
       askUserQuestionSubmitRef,
@@ -656,6 +691,7 @@ export function useToolCallCards({
       workflowStates,
       revealInFinder,
       selectedSessionId,
+      hostRef,
       navigate,
       t,
     ],

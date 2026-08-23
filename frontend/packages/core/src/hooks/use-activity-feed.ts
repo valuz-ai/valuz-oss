@@ -20,7 +20,7 @@ import {
   type ActivityTab,
 } from "../api/activity-api";
 import { resolveApiBase } from "../api/base-resolver";
-import { recordEntityOrigins } from "../edition/entity-origin";
+import { getEntityOrigin, recordEntityOrigins } from "../edition/entity-origin";
 import { fanOutTargets, getListFanOutTargets } from "../edition/list-fanout";
 
 export interface ActivityFeed {
@@ -88,8 +88,16 @@ export function useActivityFeed(opts: {
           ? { baseUrl: resolveApiBase({ projectId }, "") || undefined }
           : undefined,
       );
+      const projectOrigin = projectId
+        ? getEntityOrigin(projectId, "project")
+        : undefined;
       return {
-        items: page.items,
+        // A project-scoped feed routes to one backend instead of fanning out,
+        // but its PlaybookRun rows still need an origin before a click leaves
+        // the project page for the global Run detail route.
+        items: projectOrigin
+          ? tagAndRecord(page.items, projectOrigin)
+          : page.items,
         cursor: { kind: "single", cursor: page.next_cursor },
       };
     }
@@ -153,8 +161,13 @@ export function useActivityFeed(opts: {
             ? { baseUrl: resolveApiBase({ projectId }, "") || undefined }
             : undefined,
         );
+        const projectOrigin = projectId
+          ? getEntityOrigin(projectId, "project")
+          : undefined;
         return {
-          older: page.items,
+          older: projectOrigin
+            ? tagAndRecord(page.items, projectOrigin)
+            : page.items,
           next: { kind: "single", cursor: page.next_cursor },
         };
       }

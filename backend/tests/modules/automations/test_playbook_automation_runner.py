@@ -27,18 +27,9 @@ class _Playbooks:
         self.version = SimpleNamespace(
             definition_id="pb-1",
             version=1,
-            goal="Re-test the pinned v1 thesis",
-            applicability={"asset_types": ["equity"]},
-            inputs=[{"name": "ticker", "required": True}],
-            context_reads=["thesis", "signals"],
-            stages=[{"id": "review", "instruction": "Use v1 review logic"}],
-            required_skills=["earnings-analysis"],
-            allowed_skills=["stock-analysis"],
-            conditions=[{"if": "material_change", "then": "revalue"}],
-            approvals=[{"before": "strategy_write"}],
-            outputs=["thesis_revision"],
-            context_writes=[{"target": "thesis"}],
-            failure_policy="stop",
+            content="Use /earnings-analysis to re-test the pinned v1 thesis.",
+            reference_metadata=[{"kind": "skill", "ref": "earnings-analysis"}],
+            default_executor={},
         )
         self.runs: dict[str, object] = {}
         self.pending: object | None = None
@@ -162,7 +153,7 @@ async def test_pinned_playbook_creates_and_completes_linked_run() -> None:
     assert run.playbook_run_id == "playbook-run-1"
     playbook_run = playbooks.runs["playbook-run-1"]
     assert playbook_run.definition_version == 1  # type: ignore[attr-defined]
-    assert playbook_run.plan == playbooks.version.stages  # type: ignore[attr-defined]
+    assert playbook_run.plan == []  # type: ignore[attr-defined]
     assert playbook_run.status == "completed"  # type: ignore[attr-defined]
     assert playbook_run.trigger_kind == "automation"  # type: ignore[attr-defined]
     assert playbook_run.trigger_ref == "run-1"  # type: ignore[attr-defined]
@@ -173,11 +164,9 @@ async def test_pinned_playbook_creates_and_completes_linked_run() -> None:
     }
 
     sent_prompt = session_svc.send_message_sync.await_args.args[1]
-    assert "Pinned version: 1" in sent_prompt
-    assert "Re-test the pinned v1 thesis" in sent_prompt
-    assert "Use v1 review logic" in sent_prompt
+    assert "Use /earnings-analysis to re-test the pinned v1 thesis." in sent_prompt
     assert "Use the latest filed 10-Q as evidence." in sent_prompt
-    assert "Pinned version: 2" not in sent_prompt
+    assert "execution contract" not in sent_prompt
 
 
 @pytest.mark.asyncio

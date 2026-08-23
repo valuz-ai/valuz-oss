@@ -668,7 +668,7 @@ class AutomationService:
         name = (name or "").strip()
         if not name:
             raise AutomationNameEmpty()
-        if not (prompt_template or "").strip():
+        if not (prompt_template or "").strip() and not playbook_definition_id:
             raise AutomationPromptEmpty()
         effective_agent_slug = agent_slug
         if not effective_agent_slug and project_kind == "chat":
@@ -752,7 +752,7 @@ class AutomationService:
         name = payload.name.strip()
         if not name:
             raise AutomationNameEmpty()
-        if not payload.prompt_template.strip():
+        if not payload.prompt_template.strip() and not payload.playbook_definition_id:
             raise AutomationPromptEmpty()
         if not payload.agent_slug:
             raise AutomationAgentRequired()
@@ -767,6 +767,8 @@ class AutomationService:
             version=payload.playbook_version,
             action_kind=payload.action_kind,
         )
+        if not payload.prompt_template.strip() and not playbook_definition_id:
+            raise AutomationPromptEmpty()
         agent_name = await self._preview_agent_name(payload, calling_session_project_id, user_id)
 
         now = now_ms()
@@ -837,7 +839,7 @@ class AutomationService:
         name = payload.name.strip()
         if not name:
             raise AutomationNameEmpty()
-        if not payload.prompt_template.strip():
+        if not payload.prompt_template.strip() and not payload.playbook_definition_id:
             raise AutomationPromptEmpty()
         if not payload.agent_slug:
             raise AutomationAgentRequired()
@@ -856,6 +858,8 @@ class AutomationService:
             version=payload.playbook_version,
             action_kind=payload.action_kind,
         )
+        if not payload.prompt_template.strip() and not playbook_definition_id:
+            raise AutomationPromptEmpty()
 
         project_id, agent_slug = await self._resolve_project_and_agent(
             payload,
@@ -934,7 +938,7 @@ class AutomationService:
                 raise InvalidCronExpression(err_msg)
         if not row.name.strip():
             raise AutomationNameEmpty()
-        if not row.prompt_template.strip():
+        if not row.prompt_template.strip() and not row.playbook_definition_id:
             raise AutomationPromptEmpty()
         if not row.agent_slug:
             raise AutomationAgentRequired()
@@ -1027,8 +1031,6 @@ class AutomationService:
 
         if payload.prompt_template is not None:
             prompt = payload.prompt_template.strip()
-            if not prompt:
-                raise AutomationPromptEmpty()
             row.prompt_template = prompt
 
         if payload.agent_slug is not None:
@@ -1080,6 +1082,9 @@ class AutomationService:
                 version=requested_version,
                 action_kind=row.action_kind,
             )
+
+        if not row.prompt_template.strip() and not row.playbook_definition_id:
+            raise AutomationPromptEmpty()
 
         if payload.worktree is not None:
             row.worktree = bool(payload.worktree)

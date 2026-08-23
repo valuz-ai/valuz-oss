@@ -192,6 +192,15 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
     edition: "personal",
   },
   {
+    id: "playbooks",
+    path: "/playbooks",
+    label: "playbook.title",
+    description: "Reusable versioned executable prompts and their runs.",
+    layout: "project",
+    showInNav: false,
+    edition: "personal",
+  },
+  {
     id: "automation",
     path: "/automations",
     label: "automation.title",

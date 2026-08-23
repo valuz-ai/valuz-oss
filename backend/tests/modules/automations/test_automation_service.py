@@ -601,6 +601,22 @@ class TestActionKind:
 
 
 class TestPlaybookPin:
+    async def test_create_accepts_playbook_without_extra_instruction(
+        self,
+        service: AutomationService,
+    ) -> None:
+        detail = await service.create(
+            _project_payload(
+                prompt_template="   ",
+                playbook_definition_id="pb-1",
+            ),
+            user_id=TEST_USER_ID,
+        )
+
+        assert detail.prompt_template == ""
+        assert detail.playbook_definition_id == "pb-1"
+        assert detail.playbook_version == 2
+
     async def test_create_without_version_pins_current_once(
         self,
         service: AutomationService,
@@ -685,6 +701,25 @@ class TestPlaybookPin:
         )
         assert unpinned.playbook_definition_id is None
         assert unpinned.playbook_version is None
+
+    async def test_update_rejects_removing_the_only_execution_content(
+        self,
+        service: AutomationService,
+    ) -> None:
+        detail = await service.create(
+            _project_payload(
+                prompt_template="",
+                playbook_definition_id="pb-1",
+            ),
+            user_id=TEST_USER_ID,
+        )
+
+        with pytest.raises(AutomationPromptEmpty):
+            await service.update(
+                detail.automation_id,
+                AutomationUpdatePayload(playbook_definition_id=None),
+                user_id=TEST_USER_ID,
+            )
 
 
 # ── CRUD lifecycle ──────────────────────────────────────────────────

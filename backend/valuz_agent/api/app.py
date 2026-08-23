@@ -34,6 +34,7 @@ from valuz_agent.api.routes.marketplace import router as marketplace_router
 from valuz_agent.api.routes.memory import router as memory_router
 from valuz_agent.api.routes.notifications import router as notifications_router
 from valuz_agent.api.routes.onboarding import router as onboarding_router
+from valuz_agent.api.routes.operations import router as operations_router
 from valuz_agent.api.routes.parser import settings_router as parser_settings_router
 from valuz_agent.api.routes.parser import system_router as parser_system_router
 from valuz_agent.api.routes.playbooks import router as playbooks_router
@@ -176,6 +177,7 @@ def create_app(
     api.include_router(docs_router)
     api.include_router(automations_router)
     api.include_router(playbooks_router)
+    api.include_router(operations_router)
     api.include_router(backup_router)
     api.include_router(notifications_router)
     api.include_router(agents_router)
@@ -271,6 +273,11 @@ def create_app(
     )
 
     _mount_internal("/_internal/mcp/automations", build_automations_mcp_asgi())
+
+    # Owner-scoped Playbook library + in-session invocation tool.
+    from valuz_agent.integrations.playbooks_mcp_server import build_playbooks_mcp_asgi
+
+    _mount_internal("/_internal/mcp/playbooks", build_playbooks_mcp_asgi())
 
     # In-process connectors MCP server — exposes the ``create_mcp`` tool to
     # every session so the agent can create connectors on behalf of the user.

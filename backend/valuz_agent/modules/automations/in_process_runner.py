@@ -24,7 +24,6 @@ single-flight ``_active_ids`` guard, stranded-run reconciliation on startup,
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 from datetime import UTC, datetime, timedelta
@@ -47,56 +46,23 @@ TICK_INTERVAL = 30
 TEMPLATE_VAR_RE = re.compile(r"\{\{(\w+(?:\.\w+)*)\}\}")
 
 
-def _json_contract(value: Any) -> str:
-    """Render one Playbook contract field deterministically for the prompt."""
-
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
-
-
 def _compose_playbook_prompt(
     *,
     definition: Any,
     version: Any,
     automation_prompt: str,
 ) -> str:
-    """Compose the immutable Playbook contract and this fire's input.
+    """Compose the pinned Prompt and this Automation fire's instruction.
 
-    The Playbook version is already pinned on ``AutomationRow``. Keeping the
-    full contract in the actual user turn makes execution reproducible even if
-    the Definition later advances, while ``PlaybookRun.input_snapshot`` keeps
-    the same inputs queryable without parsing the conversation.
+    ``PlaybookVersion.content`` is the sole authoritative executable body.
+    Automation instruction and trigger context are additive; neither is a
+    hidden workflow contract and the two sources are not mutually exclusive.
     """
-
-    fields = (
-        ("Goal", version.goal),
-        ("Applicability", version.applicability),
-        ("Inputs", version.inputs),
-        ("Context reads", version.context_reads),
-        ("Stages", version.stages),
-        ("Required skills", version.required_skills),
-        ("Allowed skills", version.allowed_skills),
-        ("Conditions", version.conditions),
-        ("Approvals", version.approvals),
-        ("Outputs", version.outputs),
-        ("Context writes", version.context_writes),
-        ("Failure policy", version.failure_policy),
-    )
-    rendered_fields = "\n\n".join(
-        f"### {label}\n{value if isinstance(value, str) else _json_contract(value)}"
-        for label, value in fields
-    )
-    return (
-        "# Playbook execution contract\n\n"
-        f"Definition: {definition.name} ({definition.id})\n"
-        f"Pinned version: {version.version}\n\n"
-        "Execute this immutable contract for this run. Treat declared stages, "
-        "conditions, approvals, outputs, context reads/writes, and failure policy "
-        "as the governing process. Do not silently substitute a newer Playbook "
-        "version.\n\n"
-        f"{rendered_fields}\n\n"
-        "# Automation run input\n\n"
-        f"{automation_prompt}"
-    )
+    pinned = version.content.strip()
+    extra = automation_prompt.strip()
+    if not extra:
+        return pinned
+    return f"{pinned}\n\n# Automation instruction for this run\n\n{extra}"
 
 
 def _render_template(template: str, variables: dict[str, str]) -> str:
@@ -510,20 +476,16 @@ class InProcessAutomationRunner:
                             "project_id": row.project_id,
                             "definition_project_id": definition.project_id,
                             "agent_slug": row.agent_slug,
-                            "declared_contract": {
-                                "applicability": version.applicability,
-                                "inputs": version.inputs,
-                                "context_reads": version.context_reads,
-                                "required_skills": version.required_skills,
-                                "allowed_skills": version.allowed_skills,
-                                "conditions": version.conditions,
-                                "approvals": version.approvals,
-                                "outputs": version.outputs,
-                                "context_writes": version.context_writes,
-                                "failure_policy": version.failure_policy,
-                            },
                         },
-                        plan=version.stages,
+                        content_snapshot=version.content,
+                        resolved_references=version.reference_metadata,
+                        extra_instruction=rendered_prompt,
+                        executor_snapshot={
+                            **version.default_executor,
+                            "agent_slug": row.agent_slug,
+                            "action_kind": row.action_kind,
+                        },
+                        plan=[],
                         tasks=[],
                         tool_calls=[],
                         approvals=[],
@@ -621,6 +583,7 @@ class InProcessAutomationRunner:
                 run.started_at = now_ms()
                 run.session_id = session.id
                 if playbook_run is not None:
+                    playbook_run.session_id = session.id
                     playbook_run.output_refs = [
                         {"type": "automation_run", "id": run.id},
                         {"type": "session", "id": session.id},

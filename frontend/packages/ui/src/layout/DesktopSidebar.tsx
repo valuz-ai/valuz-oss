@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, type ReactNode } from "react";
 import {
   Activity,
   BookOpen,
+  BookOpenText,
   Bot,
   ChevronDown,
   Clock,
@@ -132,6 +133,7 @@ const BOTTOM_ICON_MAP: Record<string, LucideIcon> = {
   knowledge: BookOpen,
   skills: Zap,
   scheduled: Clock,
+  playbooks: BookOpenText,
   activity: Activity,
   system: Activity,
   settings: Settings,

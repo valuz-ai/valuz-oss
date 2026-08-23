@@ -4,26 +4,28 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class PlaybookContent(BaseModel):
-    goal: str = Field(min_length=1, max_length=20_000)
-    applicability: dict[str, Any] = Field(default_factory=dict)
-    inputs: list[dict[str, Any]] = Field(default_factory=list)
-    context_reads: list[str] = Field(default_factory=list)
-    stages: list[dict[str, Any]] = Field(default_factory=list)
-    required_skills: list[str] = Field(default_factory=list)
-    allowed_skills: list[str] = Field(default_factory=list)
-    conditions: list[dict[str, Any]] = Field(default_factory=list)
-    approvals: list[dict[str, Any]] = Field(default_factory=list)
-    outputs: list[str] = Field(default_factory=list)
-    context_writes: list[dict[str, Any]] = Field(default_factory=list)
-    failure_policy: Literal["retry", "continue_partial", "stop"] = "stop"
+    """One immutable executable Prompt plus non-authoritative reference hints."""
+
+    content: str = Field(min_length=1, max_length=100_000)
+    reference_metadata: list[dict[str, Any]] = Field(default_factory=list)
+    default_executor: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("content")
+    @classmethod
+    def require_executable_content(cls, value: str) -> str:
+        """Keep Prompt formatting intact while rejecting whitespace-only versions."""
+        if not value.strip():
+            raise ValueError("Playbook content must not be blank")
+        return value
 
 
 class PlaybookCreateRequest(PlaybookContent):
     name: str = Field(min_length=1, max_length=200)
+    status: Literal["draft", "active", "retired"] = "draft"
     project_id: str | None = Field(default=None, max_length=36)
     current_project_id: str | None = Field(default=None, max_length=36)
     origin: Literal["user", "system_example_copy", "fork"] = "user"
@@ -39,7 +41,7 @@ class PlaybookVersionCreateRequest(PlaybookContent):
 
 class PlaybookDefinitionView(BaseModel):
     id: str
-    project_id: str
+    project_id: str | None
     name: str
     status: str
     origin: str
@@ -48,6 +50,13 @@ class PlaybookDefinitionView(BaseModel):
     revision: int
     created_at: int
     updated_at: int
+
+
+class PlaybookDefinitionUpdateRequest(BaseModel):
+    expected_revision: int = Field(ge=1)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    status: Literal["draft", "active", "retired"] | None = None
+    project_id: str | None = Field(default=None, max_length=36)
 
 
 class PlaybookVersionView(PlaybookContent):
@@ -71,6 +80,11 @@ class PlaybookRunCreateRequest(BaseModel):
     subject_refs: list[dict[str, Any]] = Field(default_factory=list)
     input_snapshot: dict[str, Any] = Field(default_factory=dict)
     context_snapshot: dict[str, Any] = Field(default_factory=dict)
+    resolved_references: list[dict[str, Any]] = Field(default_factory=list)
+    extra_instruction: str | None = Field(default=None, max_length=100_000)
+    executor_snapshot: dict[str, Any] = Field(default_factory=dict)
+    session_id: str | None = Field(default=None, max_length=36)
+    task_id: str | None = Field(default=None, max_length=36)
 
 
 class PlaybookRunUpdateRequest(BaseModel):
@@ -104,7 +118,7 @@ class PlaybookRunView(BaseModel):
     id: str
     definition_id: str
     definition_version: int
-    project_id: str
+    project_id: str | None
     research_scope_id: str | None
     status: str
     trigger_kind: str
@@ -112,6 +126,12 @@ class PlaybookRunView(BaseModel):
     subject_refs: list[dict[str, Any]]
     input_snapshot: dict[str, Any]
     context_snapshot: dict[str, Any]
+    content_snapshot: str
+    resolved_references: list[dict[str, Any]]
+    extra_instruction: str | None
+    executor_snapshot: dict[str, Any]
+    session_id: str | None
+    task_id: str | None
     plan: list[dict[str, Any]]
     tasks: list[dict[str, Any]]
     tool_calls: list[dict[str, Any]]
@@ -132,6 +152,7 @@ __all__ = [
     "PlaybookContent",
     "PlaybookCreateRequest",
     "PlaybookDefinitionView",
+    "PlaybookDefinitionUpdateRequest",
     "PlaybookRunCreateRequest",
     "PlaybookRunUpdateRequest",
     "PlaybookRunView",

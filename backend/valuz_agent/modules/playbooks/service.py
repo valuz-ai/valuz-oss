@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +20,7 @@ from valuz_agent.modules.playbooks.models import (
 from valuz_agent.modules.playbooks.schemas import (
     PlaybookContent,
     PlaybookCreateRequest,
+    PlaybookDefinitionUpdateRequest,
     PlaybookRunCreateRequest,
     PlaybookRunUpdateRequest,
     PlaybookVersionCreateRequest,
@@ -26,8 +29,6 @@ from valuz_agent.modules.playbooks.schemas import (
 
 class ProjectGateway(Protocol):
     async def get(self, user_id: str, project_id: str) -> ProjectRef | None: ...
-    async def create_chat(self, user_id: str, *, name: str = "Chat") -> ProjectRef: ...
-    async def delete(self, user_id: str, project_id: str) -> bool: ...
 
 
 class PlaybookService:
@@ -36,21 +37,17 @@ class PlaybookService:
         self._projects = projects
         self._ds = PlaybookDatastore(db)
 
-    async def _resolve_project(
+    async def _validate_project(
         self,
         user_id: str,
         *,
         project_id: str | None,
-        current_project_id: str | None,
-        hidden_name: str,
-    ) -> tuple[ProjectRef, bool]:
-        selected_id = project_id or current_project_id
-        if selected_id is not None:
-            project = await self._projects.get(user_id, selected_id)
-            if project is None:
-                raise LookupError("playbook_project_not_found")
-            return project, False
-        return await self._projects.create_chat(user_id, name=hidden_name), True
+    ) -> str | None:
+        if project_id is None:
+            return None
+        if await self._projects.get(user_id, project_id) is None:
+            raise LookupError("playbook_project_not_found")
+        return project_id
 
     async def get_definition(self, user_id: str, definition_id: str) -> PlaybookDefinitionRow:
         row = await self._ds.get_definition(user_id, definition_id)
@@ -67,30 +64,22 @@ class PlaybookService:
 
     async def create_definition(
         self, user_id: str, body: PlaybookCreateRequest
-    ) -> tuple[PlaybookDefinitionRow, PlaybookVersionRow, bool]:
-        project, created_project = await self._resolve_project(
-            user_id,
-            project_id=body.project_id,
-            current_project_id=body.current_project_id,
-            hidden_name=f"{body.name.strip()} Playbook",
+    ) -> tuple[PlaybookDefinitionRow, PlaybookVersionRow]:
+        project_id = await self._validate_project(
+            user_id, project_id=body.project_id or body.current_project_id
         )
         definition = PlaybookDefinitionRow(
             user_id=user_id,
-            project_id=project.id,
+            project_id=project_id,
             name=body.name.strip(),
-            status="draft",
+            status=body.status,
             origin=body.origin,
             source_definition_id=body.source_definition_id,
             current_version=1,
             revision=1,
         )
         self._ds.add(definition)
-        try:
-            await self._ds.flush()
-        except Exception:
-            if created_project:
-                await self._projects.delete(user_id, project.id)
-            raise
+        await self._ds.flush()
         version = self._version(
             user_id,
             definition_id=definition.id,
@@ -100,13 +89,8 @@ class PlaybookService:
             produced_by_run=body.produced_by_run,
         )
         self._ds.add(version)
-        try:
-            await self._ds.flush()
-        except Exception:
-            if created_project:
-                await self._projects.delete(user_id, project.id)
-            raise
-        return definition, version, created_project
+        await self._ds.flush()
+        return definition, version
 
     @staticmethod
     def _version(
@@ -122,18 +106,22 @@ class PlaybookService:
             user_id=user_id,
             definition_id=definition_id,
             version=version,
-            goal=content.goal,
-            applicability=content.applicability,
-            inputs=content.inputs,
-            context_reads=content.context_reads,
-            stages=content.stages,
-            required_skills=content.required_skills,
-            allowed_skills=content.allowed_skills,
-            conditions=content.conditions,
-            approvals=content.approvals,
-            outputs=content.outputs,
-            context_writes=content.context_writes,
-            failure_policy=content.failure_policy,
+            content=content.content,
+            reference_metadata=content.reference_metadata,
+            default_executor=content.default_executor,
+            # Keep old physical columns readable while new code uses content.
+            goal=content.content,
+            applicability={},
+            inputs=[],
+            context_reads=[],
+            stages=[],
+            required_skills=[],
+            allowed_skills=[],
+            conditions=[],
+            approvals=[],
+            outputs=[],
+            context_writes=[],
+            failure_policy="stop",
             created_by=user_id,
             produced_by_run=produced_by_run,
             base_version=base_version,
@@ -170,33 +158,86 @@ class PlaybookService:
             raise ValueError("concurrent Playbook version conflict") from exc
         return definition, row
 
+    async def update_definition(
+        self,
+        user_id: str,
+        definition_id: str,
+        body: PlaybookDefinitionUpdateRequest,
+    ) -> PlaybookDefinitionRow:
+        definition = await self.get_definition(user_id, definition_id)
+        if definition.revision != body.expected_revision:
+            raise ValueError(
+                f"stale Playbook revision {body.expected_revision}; current={definition.revision}"
+            )
+        changed = False
+        if "name" in body.model_fields_set and body.name is not None:
+            definition.name = body.name.strip()
+            changed = True
+        if "status" in body.model_fields_set and body.status is not None:
+            definition.status = body.status
+            changed = True
+        if "project_id" in body.model_fields_set:
+            definition.project_id = await self._validate_project(
+                user_id, project_id=body.project_id
+            )
+            changed = True
+        if changed:
+            definition.revision += 1
+            await self._ds.flush()
+        return definition
+
     async def list_versions(self, user_id: str, definition_id: str) -> list[PlaybookVersionRow]:
         await self.get_definition(user_id, definition_id)
         return await self._ds.list_versions(user_id, definition_id)
 
+    async def get_version(
+        self,
+        user_id: str,
+        definition_id: str,
+        version: int,
+    ) -> PlaybookVersionRow:
+        await self.get_definition(user_id, definition_id)
+        row = await self._ds.get_version(user_id, definition_id, version)
+        if row is None:
+            raise LookupError("playbook_version_not_found")
+        return row
+
+    async def delete_definition(
+        self,
+        user_id: str,
+        definition_id: str,
+        *,
+        expected_revision: int,
+    ) -> PlaybookDefinitionRow:
+        definition = await self.get_definition(user_id, definition_id)
+        if definition.revision != expected_revision:
+            raise ValueError(
+                f"stale Playbook revision {expected_revision}; current={definition.revision}"
+            )
+        binding_count = await self._ds.count_automation_bindings(user_id, definition_id)
+        if binding_count:
+            raise ValueError(f"playbook_definition_in_use_by_automation:{binding_count}")
+        if await self._ds.has_active_runs(user_id, definition_id):
+            raise ValueError("playbook_definition_has_active_runs")
+        await self._ds.delete_definition_graph(user_id, definition_id)
+        return definition
+
     async def create_run(self, user_id: str, body: PlaybookRunCreateRequest) -> PlaybookRunRow:
         definition = await self.get_definition(user_id, body.definition_id)
+        if definition.status == "retired":
+            raise ValueError("playbook_definition_retired")
         version = body.definition_version or definition.current_version
-        if await self._ds.get_version(user_id, definition.id, version) is None:
+        definition_version = await self._ds.get_version(user_id, definition.id, version)
+        if definition_version is None:
             raise LookupError("playbook_version_not_found")
-        # Explicit target > current Project > Definition owner Project. The
-        # fallback is chosen before resolution so no unused hidden Project can
-        # be created as a side effect.
-        target_project_id = body.project_id
-        current_project_id = body.current_project_id
-        if target_project_id is None and current_project_id is None:
-            target_project_id = definition.project_id
-        project, created_project = await self._resolve_project(
-            user_id,
-            project_id=target_project_id,
-            current_project_id=current_project_id,
-            hidden_name="Playbook Run",
+        target_project_id = await self._validate_project(
+            user_id, project_id=body.project_id or body.current_project_id
         )
         row = PlaybookRunRow(
             user_id=user_id,
             definition_id=definition.id,
             definition_version=version,
-            project_id=project.id,
+            project_id=target_project_id,
             research_scope_id=body.research_scope_id,
             status="queued",
             trigger_kind=body.trigger_kind,
@@ -204,6 +245,12 @@ class PlaybookService:
             subject_refs=body.subject_refs,
             input_snapshot=body.input_snapshot,
             context_snapshot=body.context_snapshot,
+            content_snapshot=definition_version.content,
+            resolved_references=(body.resolved_references or definition_version.reference_metadata),
+            extra_instruction=body.extra_instruction,
+            executor_snapshot=body.executor_snapshot or definition_version.default_executor,
+            session_id=body.session_id,
+            task_id=body.task_id,
             plan=[],
             tasks=[],
             tool_calls=[],
@@ -214,12 +261,7 @@ class PlaybookService:
             checkpoint={},
         )
         self._ds.add(row)
-        try:
-            await self._ds.flush()
-        except Exception:
-            if created_project:
-                await self._projects.delete(user_id, project.id)
-            raise
+        await self._ds.flush()
         return row
 
     async def get_run(self, user_id: str, run_id: str) -> PlaybookRunRow:
@@ -274,4 +316,66 @@ class PlaybookService:
         return await self._ds.list_runs(user_id, project_id=project_id, definition_id=definition_id)
 
 
-__all__ = ["PlaybookService", "ProjectGateway"]
+@dataclass(frozen=True, slots=True)
+class ActivityPlaybookRun:
+    id: str
+    project_id: str
+    title: str
+    status: str
+    trigger_kind: str
+    session_id: str | None
+    updated_at: int
+
+
+async def list_activity_playbook_runs_page(
+    user_id: str,
+    *,
+    project_id: str | None,
+    before_ts: int | None,
+    limit: int,
+) -> list[ActivityPlaybookRun]:
+    """Activity-owned read adapter without exposing the Playbook datastore."""
+
+    from valuz_agent.infra.db import async_unit_of_work
+
+    async with async_unit_of_work(commit=False) as db:
+        statement = (
+            select(PlaybookRunRow, PlaybookDefinitionRow.name)
+            .join(
+                PlaybookDefinitionRow,
+                PlaybookDefinitionRow.id == PlaybookRunRow.definition_id,
+            )
+            .where(
+                PlaybookRunRow.user_id == user_id,
+                PlaybookDefinitionRow.user_id == user_id,
+                PlaybookRunRow.project_id.is_not(None),
+            )
+        )
+        if project_id is not None:
+            statement = statement.where(PlaybookRunRow.project_id == project_id)
+        if before_ts is not None:
+            statement = statement.where(PlaybookRunRow.updated_at < before_ts)
+        rows = (
+            await db.execute(statement.order_by(PlaybookRunRow.updated_at.desc()).limit(limit))
+        ).all()
+    return [
+        ActivityPlaybookRun(
+            id=run.id,
+            project_id=run.project_id,
+            title=f"{name} · v{run.definition_version}",
+            status=run.status,
+            trigger_kind=run.trigger_kind,
+            session_id=run.session_id,
+            updated_at=run.updated_at,
+        )
+        for run, name in rows
+        if run.project_id is not None
+    ]
+
+
+__all__ = [
+    "ActivityPlaybookRun",
+    "PlaybookService",
+    "ProjectGateway",
+    "list_activity_playbook_runs_page",
+]

@@ -18,6 +18,7 @@ import {
 import {
   BindChatDialog,
   CreateAutomationDialog,
+  CreatePlaybookDialog,
   DeployAgentsDialog,
   ActivityFeedList,
   type ActivityFeedListProps,
@@ -72,6 +73,7 @@ import { AttachmentParsingDialog } from "../components/AttachmentParsingDialog";
 import { ArtifactSplitPane } from "../components/ArtifactSplitPane";
 import { useArtifactFile } from "../hooks/use-artifact-file";
 import { useForkSession } from "../hooks/use-fork-session";
+import { useProjectPlaybooks } from "../hooks/use-project-playbooks";
 import { toAbsoluteProjectPath } from "../lib/project-paths";
 
 /** Bytes as the rail shows them. Local because the two other copies of this in
@@ -95,6 +97,7 @@ const ActivityTabPanel = ({
   tab,
   onOpenSession,
   onOpenTask,
+  onOpenPlaybookRun,
   onRenameConfirm,
   onDeleteSession,
   onForkSession,
@@ -111,6 +114,7 @@ const ActivityTabPanel = ({
       feed={feed}
       onOpenSession={onOpenSession}
       onOpenTask={onOpenTask}
+      onOpenPlaybookRun={onOpenPlaybookRun}
       onRenameConfirm={onRenameConfirm}
       onDeleteSession={onDeleteSession}
       onForkSession={onForkSession}
@@ -649,6 +653,18 @@ export const ProjectDetailPage = () => {
     expandFolder: pickerExpandFolder,
   } = useKbDocTree(kbPickerOpen);
   const [scheduledTasks, setScheduledTasks] = useState<AutomationItem[]>([]);
+  const {
+    definitions: projectPlaybookDefinitions,
+    editing: editingPlaybook,
+    dialogOpen: playbookDialogOpen,
+    runningId: runningPlaybookId,
+    openCreate: openCreatePlaybook,
+    openEdit: openEditPlaybook,
+    setOpen: setPlaybookDialogOpen,
+    submit: submitPlaybook,
+    remove: removePlaybook,
+    run: runPlaybook,
+  } = useProjectPlaybooks(id);
   const selectedFileParam = searchParams.get("file");
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   // When set, the automation dialog opens in edit mode (PATCH the row) instead
@@ -1411,6 +1427,16 @@ export const ProjectDetailPage = () => {
         initialOpenSection={null}
         instructions={instructions}
         onInstructionsChange={handleInstructionsChange}
+        playbooks={projectPlaybookDefinitions.map((definition) => ({
+          id: definition.id,
+          name: definition.name,
+          version: definition.current_version,
+          status: definition.status,
+          running: runningPlaybookId === definition.id,
+        }))}
+        onAddPlaybook={openCreatePlaybook}
+        onOpenPlaybook={(definitionId) => void openEditPlaybook(definitionId)}
+        onRunPlaybook={(definitionId) => void runPlaybook(definitionId)}
         members={members}
         defaultLeadSlug={project?.default_lead_agent_slug ?? null}
         projectArtifacts={projectArtifacts}
@@ -1545,6 +1571,11 @@ export const ProjectDetailPage = () => {
     panelCollapsed,
     panelSetCollapsed,
     instructions,
+    projectPlaybookDefinitions,
+    runningPlaybookId,
+    openCreatePlaybook,
+    openEditPlaybook,
+    runPlaybook,
     members,
     chatBindings,
     addedKbTree,
@@ -1741,6 +1772,9 @@ export const ProjectDetailPage = () => {
                       <TabsTrigger value="automation">
                         {t("activity.automationTag" as Parameters<typeof t>[0])}
                       </TabsTrigger>
+                      <TabsTrigger value="playbook">
+                        {t("playbook.title" as Parameters<typeof t>[0])}
+                      </TabsTrigger>
                     </TabsList>
                   </div>
                   <TabsContent value="all" className="mt-5">
@@ -1749,6 +1783,13 @@ export const ProjectDetailPage = () => {
                       tab="all"
                       onOpenSession={(sid) => navigate(`/conversation/${sid}`)}
                       onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
+                      onOpenPlaybookRun={(runId, sessionId) =>
+                        navigate(
+                          sessionId
+                            ? `/conversation/${sessionId}`
+                            : `/playbooks?run=${encodeURIComponent(runId)}`,
+                        )
+                      }
                       onRenameConfirm={handleRenameConfirm}
                       onDeleteSession={handleDeleteSession}
                       onForkSession={handleForkSession}
@@ -1804,6 +1845,27 @@ export const ProjectDetailPage = () => {
                       )}
                     />
                   </TabsContent>
+                  <TabsContent value="playbook" className="mt-5">
+                    <ActivityTabPanel
+                      projectId={id}
+                      tab="playbook"
+                      onOpenSession={(sid) => navigate(`/conversation/${sid}`)}
+                      onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
+                      onOpenPlaybookRun={(runId, sessionId) =>
+                        navigate(
+                          sessionId
+                            ? `/conversation/${sessionId}`
+                            : `/playbooks?run=${encodeURIComponent(runId)}`,
+                        )
+                      }
+                      onRenameConfirm={handleRenameConfirm}
+                      onDeleteSession={handleDeleteSession}
+                      onForkSession={handleForkSession}
+                      forkPendingSessionId={forkingSessionId}
+                      hideScopeTag
+                      emptyLabel={t("playbook.emptyTitle" as Parameters<typeof t>[0])}
+                    />
+                  </TabsContent>
                 </Tabs>
               </div>
             </div>
@@ -1846,6 +1908,24 @@ export const ProjectDetailPage = () => {
               }
             : undefined
         }
+      />
+
+      {/* The project rail is a scoped projection of the same Playbook
+          library. Creation/editing stays on the shared dialog and persists
+          ``project_id=id``; no project-only Playbook model is introduced. */}
+      <CreatePlaybookDialog
+        open={playbookDialogOpen}
+        onOpenChange={setPlaybookDialogOpen}
+        onSubmit={submitPlaybook}
+        onDelete={removePlaybook}
+        initial={editingPlaybook}
+        targets={[]}
+        agents={rawMembers.map((entry) => ({
+          slug: entry.member.agent_slug,
+          name: entry.agent?.name ?? entry.member.agent_slug,
+        }))}
+        fixedProjectId={id}
+        fixedProjectName={displayName}
       />
 
       <DeleteConfirmDialog

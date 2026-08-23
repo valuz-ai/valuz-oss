@@ -42,7 +42,7 @@ async def restamp_always_on_mcp(session_id: str, user_id: str | None) -> None:
 
     Two distinct staleness sources converge here:
 
-    - **The always-on trio** (docs / automations / connectors). Their headers
+    - **The always-on tools** (docs / automations / playbooks / connectors). Their headers
       carry ``X-Valuz-Internal`` plus ``backend_base_url`` and the session id,
       baked at create time. A session re-driven after a backend restart — task
       resume / recovery, the persistent actor loop, a sync kickoff — can carry
