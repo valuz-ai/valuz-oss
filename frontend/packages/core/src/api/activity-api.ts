@@ -8,8 +8,8 @@ export const setActivityApiBase = (url: string): void => {
   _apiBase = url;
 };
 
-export type ActivityKind = "chat" | "task";
-export type ActivityTab = "all" | "chat" | "task" | "automation";
+export type ActivityKind = "chat" | "task" | "playbook";
+export type ActivityTab = "all" | "chat" | "task" | "automation" | "playbook";
 
 /** One entry in the unified activity feed — a user chat session or a task
  *  entity (see backend ``modules/activity``). Serves the project-home tabs
@@ -25,6 +25,8 @@ export interface ActivityItem {
   project_id: string;
   /** null for non-project quick chats. */
   project_name: string | null;
+  /** Conversation executing a PlaybookRun, when one exists. */
+  linked_session_id: string | null;
   /** Unix epoch ms — interleave key + the value inside the keyset cursor. */
   sort_at: number;
   /** CLIENT-side tag on multi-target editions: which execution target

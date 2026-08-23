@@ -10,6 +10,7 @@ export { OverlaysPage } from "./OverlaysPage";
 export { ToolCallsPage } from "./ToolCallsPage";
 export { ContextPanelPage } from "./ContextPanelPage";
 export { AutomationPage } from "./AutomationPage";
+export { PlaybookPage } from "./PlaybookPage";
 export { AutomationDetailPage } from "./AutomationDetailPage";
 export { SkillDetailPage } from "./SkillDetailPage";
 export { ProjectsPage } from "./ProjectsPage";

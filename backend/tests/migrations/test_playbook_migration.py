@@ -31,6 +31,8 @@ def test_playbook_tables_and_automation_binding_upgrade_and_downgrade(
         "valuz_playbook_definition",
         "valuz_playbook_version",
         "valuz_playbook_run",
+        "valuz_operation_record",
+        "valuz_confirmation_decision",
     } <= tables
     automation = {item["name"] for item in inspector.get_columns("valuz_automation")}
     assert {"playbook_definition_id", "playbook_version"} <= automation
@@ -42,6 +44,7 @@ def test_playbook_tables_and_automation_binding_upgrade_and_downgrade(
     engine = sa.create_engine(f"sqlite:///{db_path}")
     inspector = sa.inspect(engine)
     assert "valuz_playbook_definition" not in set(inspector.get_table_names())
+    assert "valuz_operation_record" not in set(inspector.get_table_names())
     automation = {item["name"] for item in inspector.get_columns("valuz_automation")}
     assert "playbook_definition_id" not in automation
     automation_run = {item["name"] for item in inspector.get_columns("valuz_automation_run")}

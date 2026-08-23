@@ -18,7 +18,7 @@ from valuz_agent.modules.playbooks.models import (
 @dataclass(frozen=True, slots=True)
 class PlaybookDefinitionRef:
     id: str
-    project_id: str
+    project_id: str | None
     name: str
     status: str
     current_version: int
@@ -30,11 +30,9 @@ class PlaybookDefinitionRef:
 class PlaybookVersionRef:
     definition_id: str
     version: int
-    goal: str
-    context_reads: tuple[str, ...]
-    required_skills: tuple[str, ...]
-    outputs: tuple[str, ...]
-    context_writes: tuple[dict[str, Any], ...]
+    content: str
+    reference_metadata: tuple[dict[str, Any], ...]
+    default_executor: dict[str, Any]
     produced_by_run: str | None
     created_at: int
 
@@ -44,7 +42,7 @@ class PlaybookRunRef:
     id: str
     definition_id: str
     definition_version: int
-    project_id: str
+    project_id: str | None
     research_scope_id: str | None
     status: str
     trigger_kind: str
@@ -87,11 +85,9 @@ class PlaybookLibrary:
         return PlaybookVersionRef(
             definition_id=row.definition_id,
             version=row.version,
-            goal=row.goal,
-            context_reads=tuple(row.context_reads),
-            required_skills=tuple(row.required_skills),
-            outputs=tuple(row.outputs),
-            context_writes=tuple(row.context_writes),
+            content=row.content,
+            reference_metadata=tuple(row.reference_metadata),
+            default_executor=dict(row.default_executor),
             produced_by_run=row.produced_by_run,
             created_at=row.created_at,
         )
@@ -116,16 +112,15 @@ class PlaybookLibrary:
 
     async def create_definition(
         self, user_id: str, payload: dict[str, Any]
-    ) -> tuple[PlaybookDefinitionRef, PlaybookVersionRef, bool]:
+    ) -> tuple[PlaybookDefinitionRef, PlaybookVersionRef]:
         from valuz_agent.modules.playbooks.schemas import PlaybookCreateRequest
 
-        definition, version, created_project = await self._service().create_definition(
+        definition, version = await self._service().create_definition(
             user_id, PlaybookCreateRequest.model_validate(payload)
         )
         return (
             self._definition_ref(definition),
             self._version_ref(version),
-            created_project,
         )
 
     async def create_version(

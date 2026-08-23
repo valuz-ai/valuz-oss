@@ -34,7 +34,12 @@ def test_order_key_newest_first_stable_tiebreak() -> None:
 def test_drop_already_seen_advances_past_cursor() -> None:
     # A page returned down to (150, chat, x); the next page must exclude every
     # item at-or-before that key and keep only strictly-older ones.
-    cands = [_c("chat", "a", 200), _c("chat", "x", 150), _c("task", "y", 150), _c("task", "b", 100)]
+    cands = [
+        _c("chat", "a", 200),
+        _c("chat", "x", 150),
+        _c("task", "y", 150),
+        _c("task", "b", 100),
+    ]
     cands.sort(key=svc._order_key)
     cur = (150, "chat", "x")
     cur_key = (-cur[0], cur[1], cur[2])
@@ -48,6 +53,9 @@ def test_tab_source_and_automation_routing() -> None:
     assert svc._want_tasks("task") and not svc._want_sessions("task")
     assert svc._want_sessions("automation") and svc._want_tasks("automation")
     assert svc._want_sessions("all") and svc._want_tasks("all")
+    assert svc._want_playbooks("playbook")
+    assert svc._want_playbooks("all")
+    assert not svc._want_playbooks("automation")
 
     assert svc._automation_filter("automation") is True
     assert svc._automation_filter("chat") is False

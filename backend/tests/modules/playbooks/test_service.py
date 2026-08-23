@@ -68,29 +68,24 @@ async def db() -> AsyncIterator[AsyncSession]:
 def create_request(**updates) -> PlaybookCreateRequest:  # type: ignore[no-untyped-def]
     values = {
         "name": "Earnings review",
-        "goal": "Review earnings and propose research updates",
-        "inputs": [{"name": "subject", "required": True}],
-        "context_reads": ["current_thesis", "portfolio_exposure"],
-        "required_skills": ["earnings-analysis"],
-        "outputs": ["artifact", "context_change_set"],
-        "context_writes": [{"type": "thesis", "policy": "confirm"}],
+        "content": "Use /earnings-analysis to review earnings and propose research updates.",
+        "reference_metadata": [{"kind": "skill", "ref": "earnings-analysis"}],
     }
     values.update(updates)
     return PlaybookCreateRequest.model_validate(values)
 
 
-async def test_omitted_project_creates_hidden_chat_but_persists_project_id(
+async def test_omitted_project_stays_owner_global_without_hidden_project(
     db: AsyncSession,
 ) -> None:
     projects = FakeProjects()
     service = PlaybookService(db, projects)
-    definition, version, created = await service.create_definition(USER, create_request())
-    assert created is True
-    assert definition.project_id == "chat-1"
-    assert projects.rows[(USER, definition.project_id)].kind == "chat"
+    definition, version = await service.create_definition(USER, create_request())
+    assert definition.project_id is None
+    assert projects.created_chat == 0
     assert version.definition_id == definition.id
     assert version.version == 1
-    assert version.required_skills == ["earnings-analysis"]
+    assert version.content.startswith("Use /earnings-analysis")
 
 
 async def test_explicit_project_is_owner_scoped(db: AsyncSession) -> None:
@@ -98,8 +93,7 @@ async def test_explicit_project_is_owner_scoped(db: AsyncSession) -> None:
     projects.seed(USER, "p1")
     projects.seed("another-owner", "private")
     service = PlaybookService(db, projects)
-    definition, _, created = await service.create_definition(USER, create_request(project_id="p1"))
-    assert created is False
+    definition, _ = await service.create_definition(USER, create_request(project_id="p1"))
     assert definition.project_id == "p1"
     with pytest.raises(LookupError, match="playbook_project_not_found"):
         await service.create_definition(USER, create_request(project_id="private"))
@@ -111,15 +105,13 @@ async def test_updates_append_versions_and_stale_base_never_overwrites(
     projects = FakeProjects()
     projects.seed(USER, "p1")
     service = PlaybookService(db, projects)
-    definition, _, _ = await service.create_definition(USER, create_request(project_id="p1"))
+    definition, _ = await service.create_definition(USER, create_request(project_id="p1"))
     definition, version = await service.create_version(
         USER,
         definition.id,
         PlaybookVersionCreateRequest(
-            goal="Review earnings with an explicit disconfirmation stage",
+            content="Review earnings and explicitly search for disconfirming evidence.",
             base_version=1,
-            stages=[{"id": "bear-case", "goal": "Find disconfirming evidence"}],
-            outputs=["artifact", "context_change_set"],
             status="active",
         ),
     )
@@ -130,7 +122,7 @@ async def test_updates_append_versions_and_stale_base_never_overwrites(
         await service.create_version(
             USER,
             definition.id,
-            PlaybookVersionCreateRequest(goal="stale", base_version=1),
+            PlaybookVersionCreateRequest(content="stale", base_version=1),
         )
     assert [item.version for item in await service.list_versions(USER, definition.id)] == [
         2,
@@ -145,7 +137,7 @@ async def test_run_fixes_definition_version_and_uses_actual_target_project(
     projects.seed(USER, "definition-project")
     projects.seed(USER, "target-project")
     service = PlaybookService(db, projects)
-    definition, _, _ = await service.create_definition(
+    definition, _ = await service.create_definition(
         USER, create_request(project_id="definition-project")
     )
     run = await service.create_run(
@@ -163,6 +155,7 @@ async def test_run_fixes_definition_version_and_uses_actual_target_project(
     )
     assert run.project_id == "target-project"
     assert run.definition_version == 1
+    assert run.content_snapshot.startswith("Use /earnings-analysis")
     assert run.context_snapshot["thesis"]["version"] == 3
 
     current_target = await service.create_run(
@@ -174,10 +167,10 @@ async def test_run_fixes_definition_version_and_uses_actual_target_project(
     )
     assert current_target.project_id == "target-project"
 
-    owner_fallback = await service.create_run(
+    global_run = await service.create_run(
         USER, PlaybookRunCreateRequest(definition_id=definition.id)
     )
-    assert owner_fallback.project_id == "definition-project"
+    assert global_run.project_id is None
     assert projects.created_chat == 0
 
     running = await service.update_run(
@@ -210,7 +203,7 @@ async def test_owner_cannot_read_definition_or_run(db: AsyncSession) -> None:
     projects = FakeProjects()
     projects.seed(USER, "p1")
     service = PlaybookService(db, projects)
-    definition, _, _ = await service.create_definition(USER, create_request(project_id="p1"))
+    definition, _ = await service.create_definition(USER, create_request(project_id="p1"))
     run = await service.create_run(USER, PlaybookRunCreateRequest(definition_id=definition.id))
     with pytest.raises(LookupError):
         await service.get_definition("another-owner", definition.id)

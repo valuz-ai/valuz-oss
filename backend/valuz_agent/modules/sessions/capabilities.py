@@ -474,7 +474,7 @@ async def _refresh_external_connector_entries(user_id: str, entries: list) -> li
 
 
 async def refresh_always_on_mcp_for_session(session_id: str, user_id: str) -> bool:
-    """Re-stamp the always-on in-process MCP servers (docs / automations /
+    """Re-stamp the always-on in-process MCP servers (docs / automations / playbooks /
     connectors) on an existing session row with the CURRENT process values.
 
     Why this exists

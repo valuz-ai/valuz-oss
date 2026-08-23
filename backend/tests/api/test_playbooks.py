@@ -61,23 +61,21 @@ def test_definition_version_and_run_roundtrip(client: TestClient) -> None:
         "/v1/playbooks",
         json={
             "name": "Earnings review",
-            "goal": "Review earnings and update research context",
-            "required_skills": ["earnings-analysis"],
-            "outputs": ["artifact", "context_change_set"],
+            "content": "Use /earnings-analysis to review earnings and update research context.",
+            "reference_metadata": [{"kind": "skill", "ref": "earnings-analysis"}],
         },
     )
     assert created.status_code == 201
     body = created.json()
     definition = body["definition"]
-    assert body["created_project"] is True
-    assert definition["project_id"] == "chat-1"
+    assert "created_project" not in body
+    assert definition["project_id"] is None
 
     revised = client.post(
         f"/v1/playbooks/{definition['id']}/versions",
         json={
             "base_version": 1,
-            "goal": "Review earnings and explicitly test disconfirming evidence",
-            "stages": [{"id": "bear-case", "goal": "Find counter-evidence"}],
+            "content": "Review earnings and explicitly test disconfirming evidence.",
             "status": "active",
         },
     )
@@ -97,7 +95,8 @@ def test_definition_version_and_run_roundtrip(client: TestClient) -> None:
     assert run.status_code == 201
     run_body = run.json()
     assert run_body["definition_version"] == 1
-    assert run_body["project_id"] == "chat-1"
+    assert run_body["project_id"] is None
+    assert run_body["content_snapshot"].startswith("Use /earnings-analysis")
 
     completed = client.patch(
         f"/v1/playbooks/runs/{run_body['id']}",

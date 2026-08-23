@@ -16,6 +16,10 @@ export {
   CreateAutomationDialog,
   type AutomationAgentChoice,
 } from "./CreateAutomationDialog";
+export {
+  CreatePlaybookDialog,
+  type PlaybookAgentChoice,
+} from "./CreatePlaybookDialog";
 export { AddAgentDialog } from "./AddAgentDialog";
 export type { AddAgentDialogProps, AddAgentSubmitData } from "./AddAgentDialog";
 export { DeployAgentsDialog } from "./DeployAgentsDialog";

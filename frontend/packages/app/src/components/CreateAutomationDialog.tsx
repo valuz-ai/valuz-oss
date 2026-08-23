@@ -542,7 +542,7 @@ export const CreateAutomationDialog = ({
 
   const submitDisabled =
     !effectiveAgentSlug ||
-    !prompt.trim() ||
+    (!prompt.trim() && !playbookDefinitionId) ||
     taskNeedsProject ||
     (triggerKind === "interval" && intervalSeconds < MIN_INTERVAL_SECONDS);
 

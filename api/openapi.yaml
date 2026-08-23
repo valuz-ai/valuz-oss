@@ -4464,6 +4464,281 @@ paths:
         "409":
           description: Version schema newer than app / backup running
 
+  /v1/playbooks:
+    get:
+      summary: List owner-scoped Playbook definitions
+      operationId: listPlaybooks
+      tags: [playbooks]
+      parameters:
+        - name: project_id
+          in: query
+          required: false
+          schema: {type: string, nullable: true}
+      responses:
+        "200":
+          description: Playbook definitions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/PlaybookDefinition"}
+    post:
+      summary: Create a Playbook and immutable version 1
+      operationId: createPlaybook
+      tags: [playbooks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PlaybookCreate"}
+      responses:
+        "201":
+          description: Created Definition and Version
+
+  /v1/playbooks/{definition_id}:
+    get:
+      summary: Get a Playbook and its current version
+      operationId: getPlaybook
+      tags: [playbooks]
+      parameters:
+        - name: definition_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Playbook detail}
+        "404": {description: Playbook not found}
+    patch:
+      summary: Update Playbook identity, status, or optional Project association
+      operationId: updatePlaybook
+      tags: [playbooks]
+      parameters:
+        - name: definition_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PlaybookDefinitionUpdate"}
+      responses:
+        "200":
+          description: Updated Definition
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PlaybookDefinition"}
+        "409": {description: Revision conflict}
+
+  /v1/playbooks/{definition_id}/versions:
+    get:
+      summary: List immutable Playbook versions
+      operationId: listPlaybookVersions
+      tags: [playbooks]
+      parameters:
+        - name: definition_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Versions newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/PlaybookVersion"}
+    post:
+      summary: Append an immutable Playbook version
+      operationId: createPlaybookVersion
+      tags: [playbooks]
+      parameters:
+        - name: definition_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PlaybookVersionCreate"}
+      responses:
+        "201": {description: Appended Definition version}
+        "409": {description: Base version conflict}
+
+  /v1/playbooks/runs:
+    post:
+      summary: Create a PlaybookRun pinned to an immutable version
+      operationId: createPlaybookRun
+      tags: [playbooks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PlaybookRunCreate"}
+      responses:
+        "201":
+          description: Created Run
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PlaybookRun"}
+
+  /v1/playbooks/runs/list:
+    get:
+      summary: List owner-scoped PlaybookRuns
+      operationId: listPlaybookRuns
+      tags: [playbooks]
+      parameters:
+        - name: project_id
+          in: query
+          required: false
+          schema: {type: string, nullable: true}
+        - name: definition_id
+          in: query
+          required: false
+          schema: {type: string, nullable: true}
+      responses:
+        "200":
+          description: Runs newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/PlaybookRun"}
+
+  /v1/playbooks/runs/{run_id}:
+    get:
+      summary: Get one owner-scoped PlaybookRun
+      operationId: getPlaybookRun
+      tags: [playbooks]
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: PlaybookRun
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PlaybookRun"}
+        "404": {description: Run not found}
+    patch:
+      summary: Advance a PlaybookRun and append execution results
+      operationId: updatePlaybookRun
+      tags: [playbooks]
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PlaybookRunUpdate"}
+      responses:
+        "200":
+          description: Updated PlaybookRun
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PlaybookRun"}
+        "409": {description: Invalid state transition}
+
+  /v1/operations/{operation_id}:
+    get:
+      summary: Get a durable product operation
+      operationId: getOperation
+      tags: [operations]
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Operation state and canonical result
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "404": {description: Operation not found}
+
+  /v1/operations/{operation_id}/confirm:
+    post:
+      summary: Confirm and execute a proposed product operation
+      operationId: confirmOperation
+      tags: [operations]
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OperationDecision"}
+      responses:
+        "200":
+          description: Canonical terminal or retryable operation state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "409": {description: Hash, state, or revision conflict}
+
+  /v1/operations/{operation_id}/cancel:
+    post:
+      summary: Reject a proposed product operation
+      operationId: cancelOperation
+      tags: [operations]
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OperationDecision"}
+      responses:
+        "200":
+          description: Cancelled operation
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "409": {description: Hash or state conflict}
+
+  /v1/operations/status/batch:
+    post:
+      summary: Restore multiple operation cards after session re-entry
+      operationId: getOperationStatuses
+      tags: [operations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation_ids]
+              properties:
+                operation_ids:
+                  type: array
+                  maxItems: 100
+                  items: {type: string}
+      responses:
+        "200":
+          description: Owner-scoped operation map
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [operations]
+                properties:
+                  operations:
+                    type: object
+                    additionalProperties: {$ref: "#/components/schemas/Operation"}
+
 components:
   parameters:
     AcceptLanguage:
@@ -4480,6 +4755,182 @@ components:
         type: string
         examples: [zh-CN, en-US]
   schemas:
+    PlaybookDefinition:
+      type: object
+      required: [id, name, status, origin, current_version, revision, created_at, updated_at]
+      properties:
+        id: {type: string}
+        project_id: {type: string, nullable: true}
+        name: {type: string}
+        status: {type: string, enum: [draft, active, retired]}
+        origin: {type: string, enum: [user, system_example_copy, fork]}
+        source_definition_id: {type: string, nullable: true}
+        current_version: {type: integer, minimum: 1}
+        revision: {type: integer, minimum: 1}
+        created_at: {type: integer}
+        updated_at: {type: integer}
+
+    PlaybookContent:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          minLength: 1
+          description: Sole authoritative executable Prompt body
+        reference_metadata:
+          type: array
+          default: []
+          items: {type: object, additionalProperties: true}
+        default_executor:
+          type: object
+          default: {}
+          additionalProperties: true
+
+    PlaybookCreate:
+      allOf:
+        - {$ref: "#/components/schemas/PlaybookContent"}
+        - type: object
+          required: [name]
+          properties:
+            name: {type: string, minLength: 1, maxLength: 200}
+            project_id: {type: string, nullable: true}
+            current_project_id: {type: string, nullable: true}
+            origin: {type: string, enum: [user, system_example_copy, fork], default: user}
+            source_definition_id: {type: string, nullable: true}
+
+    PlaybookVersion:
+      allOf:
+        - {$ref: "#/components/schemas/PlaybookContent"}
+        - type: object
+          required: [id, definition_id, version, created_at]
+          properties:
+            id: {type: string}
+            definition_id: {type: string}
+            version: {type: integer, minimum: 1}
+            created_by: {type: string, nullable: true}
+            produced_by_run: {type: string, nullable: true}
+            base_version: {type: integer, nullable: true}
+            created_at: {type: integer}
+
+    PlaybookVersionCreate:
+      allOf:
+        - {$ref: "#/components/schemas/PlaybookContent"}
+        - type: object
+          required: [base_version]
+          properties:
+            base_version: {type: integer, minimum: 1}
+            status: {type: string, nullable: true, enum: [draft, active, retired]}
+
+    PlaybookDefinitionUpdate:
+      type: object
+      required: [expected_revision]
+      properties:
+        expected_revision: {type: integer, minimum: 1}
+        name: {type: string, nullable: true}
+        status: {type: string, nullable: true, enum: [draft, active, retired]}
+        project_id: {type: string, nullable: true}
+
+    PlaybookRunCreate:
+      type: object
+      required: [definition_id]
+      properties:
+        definition_id: {type: string}
+        definition_version: {type: integer, nullable: true, minimum: 1}
+        project_id: {type: string, nullable: true}
+        current_project_id: {type: string, nullable: true}
+        trigger_kind: {type: string, enum: [user, agent, automation, playbook, api], default: user}
+        trigger_ref: {type: string, nullable: true}
+        extra_instruction: {type: string, nullable: true}
+        session_id: {type: string, nullable: true}
+        task_id: {type: string, nullable: true}
+
+    PlaybookRun:
+      type: object
+      required: [id, definition_id, definition_version, status, trigger_kind, content_snapshot, created_at, updated_at]
+      properties:
+        id: {type: string}
+        definition_id: {type: string}
+        definition_version: {type: integer}
+        project_id: {type: string, nullable: true}
+        status: {type: string, enum: [queued, planning, running, waiting_approval, completed, failed, stopped]}
+        trigger_kind: {type: string, enum: [user, agent, automation, playbook, api]}
+        trigger_ref: {type: string, nullable: true}
+        content_snapshot: {type: string}
+        extra_instruction: {type: string, nullable: true}
+        session_id: {type: string, nullable: true}
+        task_id: {type: string, nullable: true}
+        created_at: {type: integer}
+        updated_at: {type: integer}
+
+    PlaybookRunUpdate:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [planning, running, waiting_approval, completed, failed, stopped]}
+        plan: {type: array, nullable: true, items: {type: object, additionalProperties: true}}
+        tasks: {type: array, nullable: true, items: {type: object, additionalProperties: true}}
+        tool_calls: {type: array, nullable: true, items: {type: object, additionalProperties: true}}
+        approvals: {type: array, nullable: true, items: {type: object, additionalProperties: true}}
+        artifact_refs: {type: array, nullable: true, items: {type: string}}
+        change_set_refs: {type: array, nullable: true, items: {type: string}}
+        output_refs: {type: array, nullable: true, items: {type: object, additionalProperties: true}}
+        checkpoint: {type: object, nullable: true, additionalProperties: true}
+        error_code: {type: string, nullable: true}
+        error_message: {type: string, nullable: true}
+
+    OperationDecision:
+      type: object
+      required: [proposal_hash]
+      properties:
+        proposal_hash: {type: string, minLength: 64, maxLength: 64}
+        comment: {type: string, nullable: true}
+
+    Operation:
+      type: object
+      required:
+        - id
+        - operation_type
+        - operation_version
+        - actor_kind
+        - target_refs
+        - input_payload
+        - preview
+        - expected_revisions
+        - risk_level
+        - confirmation_policy
+        - state
+        - proposal_hash
+        - canonical_result_refs
+        - result_payload
+        - created_at
+        - updated_at
+      properties:
+        id: {type: string}
+        project_id: {type: string, nullable: true}
+        operation_type: {type: string}
+        operation_version: {type: integer, minimum: 1}
+        actor_kind: {type: string, enum: [user, agent, playbook, automation, system]}
+        actor_id: {type: string, nullable: true}
+        origin_session_id: {type: string, nullable: true}
+        origin_tool_call_id: {type: string, nullable: true}
+        origin_playbook_run_id: {type: string, nullable: true}
+        origin_automation_run_id: {type: string, nullable: true}
+        target_refs: {type: array, items: {type: object, additionalProperties: true}}
+        input_payload: {type: object, additionalProperties: true}
+        preview: {type: object, additionalProperties: true}
+        expected_revisions: {type: object, additionalProperties: true}
+        risk_level: {type: string, enum: [low, material, destructive, external]}
+        confirmation_policy: {type: string, enum: [direct, explicit_submit, confirm, approval, preauthorized]}
+        state: {type: string, enum: [proposed, awaiting_confirmation, executing, succeeded, failed, cancelled, expired, stale, superseded]}
+        proposal_hash: {type: string}
+        canonical_result_refs: {type: array, items: {type: object, additionalProperties: true}}
+        result_payload: {type: object, additionalProperties: true}
+        error_code: {type: string, nullable: true}
+        error_message: {type: string, nullable: true}
+        created_at: {type: integer}
+        updated_at: {type: integer}
+
     WeComAIBotBinding:
       type: object
       required:

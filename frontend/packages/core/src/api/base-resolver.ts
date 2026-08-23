@@ -21,6 +21,7 @@ export interface ApiBaseRef {
   projectId?: string;
   taskId?: string;
   automationId?: string;
+  playbookId?: string;
   kbId?: string;
 }
 

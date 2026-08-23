@@ -3,9 +3,12 @@ import { toast } from "sonner";
 import {
   agentsApi,
   automationsApi,
+  operationsApi,
+  parseOperationToolOutput,
   skillsApi,
   useTranslation,
   type Trigger,
+  type OperationView,
   type useIncrementalTurns,
 } from "@valuz/core";
 import { type SkillSubmissionState } from "@valuz/ui";
@@ -93,6 +96,12 @@ export function useToolCallCardActions({
   };
   const [automationProposalStates, setAutomationProposalStates] = useState<
     Record<string, AutomationProposalEntry>
+  >({});
+  const [operationStates, setOperationStates] = useState<
+    Record<string, OperationView>
+  >({});
+  const [operationBusy, setOperationBusy] = useState<
+    Record<string, "confirm" | "cancel" | undefined>
   >({});
 
   const submissionProjectLabel = useMemo(() => {
@@ -315,6 +324,79 @@ export function useToolCallCardActions({
     }));
   }, []);
 
+  const handleConfirmOperation = useCallback(
+    async (operation: OperationView) => {
+      const sid = selectedSessionIdRef.current;
+      if (!sid) return;
+      setOperationBusy((current) => ({
+        ...current,
+        [operation.id]: "confirm",
+      }));
+      try {
+        const next = await operationsApi.confirm(
+          operation.id,
+          operation.proposal_hash,
+          sid,
+        );
+        setOperationStates((current) => ({
+          ...current,
+          [operation.id]: next,
+        }));
+        if (next.state === "succeeded") {
+          toast.success(t("playbook.operation.succeeded"));
+        } else if (next.error_message) {
+          toast.error(next.error_message);
+        }
+      } catch (cause) {
+        toast.error(
+          cause instanceof Error
+            ? cause.message
+            : t("playbook.operation.failed"),
+        );
+      } finally {
+        setOperationBusy((current) => ({
+          ...current,
+          [operation.id]: undefined,
+        }));
+      }
+    },
+    [selectedSessionIdRef, t],
+  );
+
+  const handleCancelOperation = useCallback(
+    async (operation: OperationView) => {
+      const sid = selectedSessionIdRef.current;
+      if (!sid) return;
+      setOperationBusy((current) => ({
+        ...current,
+        [operation.id]: "cancel",
+      }));
+      try {
+        const next = await operationsApi.cancel(
+          operation.id,
+          operation.proposal_hash,
+          sid,
+        );
+        setOperationStates((current) => ({
+          ...current,
+          [operation.id]: next,
+        }));
+      } catch (cause) {
+        toast.error(
+          cause instanceof Error
+            ? cause.message
+            : t("conversation.cancelFailed"),
+        );
+      } finally {
+        setOperationBusy((current) => ({
+          ...current,
+          [operation.id]: undefined,
+        }));
+      }
+    },
+    [selectedSessionIdRef, t],
+  );
+
   // Stable signature of the propose_agent tool_use ids in this session, so the
   // re-entry detection below fetches only when the set of proposal cards
   // changes (not on every streamed token).
@@ -454,6 +536,41 @@ export function useToolCallCardActions({
     };
   }, [selectedSessionId, automationCreateToolSig]);
 
+  const operationSig = useMemo(() => {
+    const ids: string[] = [];
+    for (const turn of turns) {
+      for (const block of turn.blocks) {
+        if (block.kind !== "tool") continue;
+        if (!isToolNamed(block.tool.title || "", "playbook")) continue;
+        const result = parseOperationToolOutput(block.tool.output);
+        if (result?.operation?.id) ids.push(result.operation.id);
+      }
+    }
+    return [...new Set(ids)].join(",");
+  }, [turns]);
+
+  useEffect(() => {
+    if (!selectedSessionId || !operationSig) return;
+    const ids = operationSig.split(",").filter(Boolean);
+    let cancelled = false;
+    void operationsApi
+      .status(ids, selectedSessionId)
+      .then((result) => {
+        if (!cancelled) {
+          setOperationStates((current) => ({
+            ...current,
+            ...result.operations,
+          }));
+        }
+      })
+      .catch(() => {
+        // Non-fatal: the tool result still renders its persisted snapshot.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [operationSig, selectedSessionId]);
+
   // Scan staging for every ``submit_skill`` tool_use we've seen, so the
   // card renders the actual file tree (not just the agent's
   // ``files_touched`` claim) and gates its save button on real file
@@ -570,11 +687,15 @@ export function useToolCallCardActions({
     submissionStates,
     proposalStates,
     automationProposalStates,
+    operationStates,
+    operationBusy,
     handleConfirmSubmission,
     handleDismissSubmission,
     handleConfirmProposal,
     handleDismissProposal,
     handleConfirmAutomation,
     handleDismissAutomation,
+    handleConfirmOperation,
+    handleCancelOperation,
   };
 }

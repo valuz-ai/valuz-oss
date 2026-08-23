@@ -1,7 +1,7 @@
 """Edition-registered always-on internal MCP servers.
 
-The four built-in always-on servers (docs / automations / connectors /
-harness) are hardcoded in ``adapters/capability_resolver``. Editions need the
+The five built-in always-on servers (docs / automations / playbooks /
+connectors / harness) are hardcoded in ``adapters/capability_resolver``. Editions need the
 same channel for their own domain tools (e.g. finance thesis/binding tools)
 without forking the resolver: they append a spec here, carrying both the path
 and the ASGI app to serve on it.
@@ -19,7 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 RESERVED_ALWAYS_ON_NAMES = frozenset(
-    {"valuz_docs", "valuz_automations", "valuz_connectors", "harness"}
+    {"valuz_docs", "valuz_automations", "valuz_playbooks", "valuz_connectors", "harness"}
 )
 
 __all__ = ["AlwaysOnMcpServerSpec", "RESERVED_ALWAYS_ON_NAMES"]

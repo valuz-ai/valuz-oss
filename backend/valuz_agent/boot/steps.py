@@ -779,6 +779,9 @@ async def start_mcp_session_managers(app: FastAPI) -> None:
     from valuz_agent.integrations.automations_mcp_server import (
         automations_mcp_session_manager_run,
     )
+    from valuz_agent.integrations.playbooks_mcp_server import (
+        playbooks_mcp_session_manager_run,
+    )
     from valuz_agent.integrations.connectors_mcp_server import (
         connectors_mcp_session_manager_run,
     )
@@ -791,6 +794,7 @@ async def start_mcp_session_managers(app: FastAPI) -> None:
     await stack.__aenter__()
     await stack.enter_async_context(docs_mcp_session_manager_run())
     await stack.enter_async_context(automations_mcp_session_manager_run())
+    await stack.enter_async_context(playbooks_mcp_session_manager_run())
     await stack.enter_async_context(connectors_mcp_session_manager_run())
     await stack.enter_async_context(toolkit_mcp_session_managers_run())
     app.state.docs_mcp_stack = stack

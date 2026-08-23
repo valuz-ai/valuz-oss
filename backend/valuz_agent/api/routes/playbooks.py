@@ -16,6 +16,7 @@ from valuz_agent.modules.playbooks.models import (
 )
 from valuz_agent.modules.playbooks.schemas import (
     PlaybookCreateRequest,
+    PlaybookDefinitionUpdateRequest,
     PlaybookDefinitionView,
     PlaybookRunCreateRequest,
     PlaybookRunUpdateRequest,
@@ -55,18 +56,9 @@ def _version(row: PlaybookVersionRow) -> PlaybookVersionView:
         id=row.id,
         definition_id=row.definition_id,
         version=row.version,
-        goal=row.goal,
-        applicability=row.applicability,
-        inputs=row.inputs,
-        context_reads=row.context_reads,
-        stages=row.stages,
-        required_skills=row.required_skills,
-        allowed_skills=row.allowed_skills,
-        conditions=row.conditions,
-        approvals=row.approvals,
-        outputs=row.outputs,
-        context_writes=row.context_writes,
-        failure_policy=row.failure_policy,  # type: ignore[arg-type]
+        content=row.content,
+        reference_metadata=row.reference_metadata,
+        default_executor=row.default_executor,
         created_by=row.created_by,
         produced_by_run=row.produced_by_run,
         base_version=row.base_version,
@@ -87,6 +79,12 @@ def _run(row: PlaybookRunRow) -> PlaybookRunView:
         subject_refs=row.subject_refs,
         input_snapshot=row.input_snapshot,
         context_snapshot=row.context_snapshot,
+        content_snapshot=row.content_snapshot,
+        resolved_references=row.resolved_references,
+        extra_instruction=row.extra_instruction,
+        executor_snapshot=row.executor_snapshot,
+        session_id=row.session_id,
+        task_id=row.task_id,
         plan=row.plan,
         tasks=row.tasks,
         tool_calls=row.tool_calls,
@@ -123,11 +121,10 @@ async def create_playbook(
     user_id: str = Depends(get_current_user_id),
 ) -> dict[str, object]:
     try:
-        definition, version, created_project = await service.create_definition(user_id, body)
+        definition, version = await service.create_definition(user_id, body)
         return {
             "definition": _definition(definition).model_dump(),
             "version": _version(version).model_dump(),
-            "created_project": created_project,
         }
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -160,6 +157,8 @@ async def create_playbook_run(
         return _run(await service.create_run(user_id, body))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/runs/{run_id}")
@@ -206,6 +205,21 @@ async def get_playbook(
         }
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.patch("/{definition_id}")
+async def update_playbook(
+    definition_id: str,
+    body: PlaybookDefinitionUpdateRequest,
+    service: PlaybookService = Depends(get_playbook_service),
+    user_id: str = Depends(get_current_user_id),
+) -> PlaybookDefinitionView:
+    try:
+        return _definition(await service.update_definition(user_id, definition_id, body))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/{definition_id}/versions", status_code=201)

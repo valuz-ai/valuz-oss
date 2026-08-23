@@ -229,7 +229,7 @@ class Extensions:
         self.host_capability_policies: list[HostCapabilityPolicyPort] = []
         # Edition-owned always-on internal MCP servers (list semantics —
         # editions append). The capability resolver appends them to every
-        # session after the four built-ins, with the same internal credential
+        # session after the five built-ins, with the same internal credential
         # headers and timeout; reserved built-in names are skipped.
         self.always_on_mcp_specs: list[AlwaysOnMcpServerSpec] = []
         # Generated-UI artifact sinks (list semantics — editions append).

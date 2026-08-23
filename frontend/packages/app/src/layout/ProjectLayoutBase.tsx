@@ -131,6 +131,7 @@ const NAV_ICON_MAP: Record<string, DesktopSidebarBottomItem["icon"]> = {
   assistant: "assistant",
   skills: "skills",
   scheduled: "scheduled",
+  playbooks: "playbooks",
   activity: "activity",
   knowledge: "knowledge",
   settings: "settings",

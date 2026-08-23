@@ -106,7 +106,10 @@ class AutomationCreatePayload(BaseModel):
     agent_kind: AgentKind
     agent_slug: str = Field(min_length=1)
 
-    prompt_template: str = Field(min_length=1)
+    # Optional when a Playbook is pinned. At least one of prompt_template or
+    # playbook_definition_id is enforced by AutomationService so API, Agent
+    # proposal, and update paths share the same composition rule.
+    prompt_template: str = ""
 
     # Optional immutable Playbook pin. ``playbook_version`` may be omitted on
     # create; the service resolves and stores the Definition's current version
@@ -405,7 +408,7 @@ class AutomationProposalConfirmRequest(BaseModel):
 
     tool_call_id: str = Field(min_length=1)
     name: str = Field(min_length=1, max_length=50)
-    prompt_template: str = Field(min_length=1)
+    prompt_template: str = ""
     trigger: Trigger
     agent_slug: str | None = None
     action_kind: ActionKind = "chat"

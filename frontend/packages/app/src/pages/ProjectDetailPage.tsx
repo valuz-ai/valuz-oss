@@ -95,6 +95,7 @@ const ActivityTabPanel = ({
   tab,
   onOpenSession,
   onOpenTask,
+  onOpenPlaybookRun,
   onRenameConfirm,
   onDeleteSession,
   onForkSession,
@@ -111,6 +112,7 @@ const ActivityTabPanel = ({
       feed={feed}
       onOpenSession={onOpenSession}
       onOpenTask={onOpenTask}
+      onOpenPlaybookRun={onOpenPlaybookRun}
       onRenameConfirm={onRenameConfirm}
       onDeleteSession={onDeleteSession}
       onForkSession={onForkSession}
@@ -1741,6 +1743,9 @@ export const ProjectDetailPage = () => {
                       <TabsTrigger value="automation">
                         {t("activity.automationTag" as Parameters<typeof t>[0])}
                       </TabsTrigger>
+                      <TabsTrigger value="playbook">
+                        {t("playbook.title" as Parameters<typeof t>[0])}
+                      </TabsTrigger>
                     </TabsList>
                   </div>
                   <TabsContent value="all" className="mt-5">
@@ -1749,6 +1754,13 @@ export const ProjectDetailPage = () => {
                       tab="all"
                       onOpenSession={(sid) => navigate(`/conversation/${sid}`)}
                       onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
+                      onOpenPlaybookRun={(runId, sessionId) =>
+                        navigate(
+                          sessionId
+                            ? `/conversation/${sessionId}`
+                            : `/playbooks?run=${encodeURIComponent(runId)}`,
+                        )
+                      }
                       onRenameConfirm={handleRenameConfirm}
                       onDeleteSession={handleDeleteSession}
                       onForkSession={handleForkSession}
@@ -1802,6 +1814,27 @@ export const ProjectDetailPage = () => {
                       emptyLabel={t(
                         "project.noSessions" as Parameters<typeof t>[0],
                       )}
+                    />
+                  </TabsContent>
+                  <TabsContent value="playbook" className="mt-5">
+                    <ActivityTabPanel
+                      projectId={id}
+                      tab="playbook"
+                      onOpenSession={(sid) => navigate(`/conversation/${sid}`)}
+                      onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
+                      onOpenPlaybookRun={(runId, sessionId) =>
+                        navigate(
+                          sessionId
+                            ? `/conversation/${sessionId}`
+                            : `/playbooks?run=${encodeURIComponent(runId)}`,
+                        )
+                      }
+                      onRenameConfirm={handleRenameConfirm}
+                      onDeleteSession={handleDeleteSession}
+                      onForkSession={handleForkSession}
+                      forkPendingSessionId={forkingSessionId}
+                      hideScopeTag
+                      emptyLabel={t("playbook.emptyTitle" as Parameters<typeof t>[0])}
                     />
                   </TabsContent>
                 </Tabs>
