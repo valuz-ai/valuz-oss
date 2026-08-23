@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Maximize2, Minimize2 } from "lucide-react";
 import {
-  getDefaultExecutionTarget,
-  useExecutionTargets,
   type AutomationProjectTarget,
   type PlaybookDetail,
 } from "@valuz/core";
@@ -24,10 +22,6 @@ import {
   Textarea,
 } from "@valuz/ui";
 import { useI18n } from "@valuz/ui";
-import {
-  ExecutionLocationPicker,
-  OriginBadge,
-} from "./ExecutionLocationPicker";
 
 export interface PlaybookAgentChoice {
   slug: string;
@@ -42,8 +36,6 @@ export interface CreatePlaybookDialogProps {
     content: string;
     project_id: string | null;
     default_executor: Record<string, unknown>;
-    /** Creation target for a global Playbook; never persisted as domain data. */
-    exec_location?: string;
   }) => Promise<void>;
   initial?: PlaybookDetail | null;
   targets: AutomationProjectTarget[];
@@ -73,11 +65,9 @@ export const CreatePlaybookDialog = ({
   const [content, setContent] = useState("");
   const [projectId, setProjectId] = useState("__global__");
   const [agentSlug, setAgentSlug] = useState("__default__");
-  const [execLocation, setExecLocation] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const contentBeforeExpanded = useRef("");
-  const executionTargets = useExecutionTargets();
 
   useEffect(() => {
     if (!open) return;
@@ -91,9 +81,6 @@ export const CreatePlaybookDialog = ({
       typeof executor?.agent_slug === "string"
         ? executor.agent_slug
         : "__default__",
-    );
-    setExecLocation(
-      initial?.definition.exec_origin ?? getDefaultExecutionTarget()?.id ?? null,
     );
     setExpanded(false);
   }, [fixedProjectId, initial, open]);
@@ -110,10 +97,6 @@ export const CreatePlaybookDialog = ({
           (projectId === "__global__" ? null : projectId),
         default_executor:
           agentSlug === "__default__" ? {} : { agent_slug: agentSlug },
-        exec_location:
-          !initial && projectId === "__global__"
-            ? execLocation ?? undefined
-            : undefined,
       });
       onOpenChange(false);
     } finally {
@@ -231,33 +214,9 @@ export const CreatePlaybookDialog = ({
                 )}
               </FormField>
 
-              {executionTargets.length >= 2 ? (
-                <FormField
-                  label={t(
-                    "project.execLocation" as Parameters<typeof t>[0],
-                  )}
-                >
-                  {!initial &&
-                  !fixedProjectId &&
-                  projectId === "__global__" ? (
-                    <ExecutionLocationPicker
-                      value={execLocation}
-                      onChange={setExecLocation}
-                    />
-                  ) : (
-                    <OriginBadge
-                      origin={initial?.definition.exec_origin}
-                      entityId={
-                        initial?.definition.id ??
-                        (fixedProjectId ??
-                          (projectId === "__global__" ? null : projectId))
-                      }
-                      kind={initial ? "playbook" : "project"}
-                    />
-                  )}
-                </FormField>
-              ) : null}
-
+              {/* Execution location belongs to each PlaybookRun, not to the
+                  reusable Definition. A run preflight may ask for it; this
+                  authoring form intentionally never does. */}
               <FormField label={t("playbook.executorLabel")}>
                 <Select value={agentSlug} onValueChange={setAgentSlug}>
                   <SelectTrigger>

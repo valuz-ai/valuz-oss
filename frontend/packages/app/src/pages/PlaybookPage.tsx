@@ -6,7 +6,6 @@ import {
   agentsApi,
   automationsApi,
   getEntityOrigin,
-  getExecutionTargets,
   playbooksApi,
   recordEntityOrigin,
   resolveApiBase,
@@ -141,23 +140,10 @@ export const PlaybookPage = () => {
     content: string;
     project_id: string | null;
     default_executor: Record<string, unknown>;
-    exec_location?: string;
   }) => {
     try {
       if (!editing) {
-        const { exec_location: execLocation, ...payload } = data;
-        const target = execLocation
-          ? getExecutionTargets().find(
-              (candidate) => candidate.id === execLocation,
-            )
-          : undefined;
-        const created = await playbooksApi.create(
-          payload,
-          target?.baseUrl ? { baseUrl: target.baseUrl } : undefined,
-        );
-        if (execLocation) {
-          recordEntityOrigin(created.definition.id, execLocation);
-        }
+        await playbooksApi.create(data);
         toast.success(t("playbook.createSuccess", { name: data.name }));
       } else {
         const definition = editing.definition;

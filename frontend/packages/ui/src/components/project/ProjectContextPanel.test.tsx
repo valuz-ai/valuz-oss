@@ -296,6 +296,18 @@ describe("ProjectDetailContextPanel — Todos section", () => {
 });
 
 describe("ProjectDetailContextPanel — Playbooks section", () => {
+  it("places the Playbook projection after the project team", () => {
+    const { container } = render(
+      <ProjectDetailContextPanel multiOpen members={[]} playbooks={[]} />,
+    );
+
+    const content = container.textContent ?? "";
+    expect(content.indexOf("团队成员")).toBeGreaterThanOrEqual(0);
+    expect(content.indexOf("执行手册")).toBeGreaterThan(
+      content.indexOf("团队成员"),
+    );
+  });
+
   it("shows project Playbooks with version, edit, and run actions", async () => {
     const onOpenPlaybook = vi.fn();
     const onRunPlaybook = vi.fn();
@@ -340,9 +352,9 @@ describe("ProjectDetailContextPanel — Playbooks section", () => {
       />,
     );
 
-    expect(screen.getByText("暂无 Playbook")).toBeTruthy();
+    expect(screen.getByText("暂无执行手册")).toBeTruthy();
     const createActions = screen.getAllByRole("button", {
-      name: "新建 Playbook",
+      name: "新建执行手册",
     });
     expect(createActions.length).toBeGreaterThan(0);
     await userEvent.click(createActions.at(-1)!);

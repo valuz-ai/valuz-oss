@@ -17,7 +17,6 @@ export interface ProjectPlaybookSubmitData {
   content: string;
   project_id: string | null;
   default_executor: Record<string, unknown>;
-  exec_location?: string;
 }
 
 /**
