@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+} from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { BookOpenText, Pencil, Play, Plus, Archive } from "lucide-react";
 import { toast } from "sonner";
@@ -97,7 +103,6 @@ export const PlaybookPage = () => {
     () => (
       <PageHeader
         title={t("playbook.title")}
-        description={t("playbook.subtitle")}
         action={
           <Button
             size="sm"
@@ -115,7 +120,9 @@ export const PlaybookPage = () => {
     [t],
   );
 
-  useEffect(() => {
+  // The header lives in the parent layout slot. Install it before paint so a
+  // frame of the previous page's header cannot flash during navigation.
+  useLayoutEffect(() => {
     setHeader(header);
     setHeaderClassName("h-15 px-5");
     setContentInnerClassName("p-0");
