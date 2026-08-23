@@ -87,3 +87,11 @@ export type {
   GenUIDataHostInput,
   GenUIComponentDataRef,
 } from "./host-registry";
+
+export {
+  dispatchGenUIAction,
+  getGenUIActionSink,
+  registerGenUIActionSink,
+  unregisterGenUIActionSink,
+} from "./action-registry";
+export type { GenUIActionEvent, GenUIActionSink } from "./action-registry";
