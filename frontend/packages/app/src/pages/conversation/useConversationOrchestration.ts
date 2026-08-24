@@ -21,6 +21,7 @@ import {
   useSessionArtifacts,
   useSessionAttachments,
   type MemberWithAgent,
+  resolveApiBase,
 } from "@valuz/core";
 import {
   type ApprovalCardSubject,
@@ -585,7 +586,15 @@ export function useConversationOrchestration({
     remove: removeSessionAttachmentRow,
     markPendingConsumed,
     pendingIds: pendingAttachmentIds,
-  } = useSessionAttachments(selectedSessionId);
+  } = useSessionAttachments(
+    selectedSessionId,
+    // A live session routes on its own id; a draft (``/conversation/new``) has
+    // none, so staged uploads follow the project this conversation belongs to.
+    // Without it they go to the module default and the send cannot find them.
+    selectedProjectId
+      ? resolveApiBase({ projectId: selectedProjectId }, "") || undefined
+      : undefined,
+  );
   // Agent-delivered artifacts (the "生成文件" list) — recorded by the
   // ``deliver_artifacts`` MCP tool. Loads on session change; refreshed on
   // turn-end (below) so newly delivered files appear without a manual reload.

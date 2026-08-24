@@ -123,7 +123,12 @@ export const ConversationsHomePage = () => {
     remove: removeAttachment,
     markPendingConsumed,
     pendingIds: pendingAttachmentIds,
-  } = useSessionAttachments(sessionId);
+  } = useSessionAttachments(
+    sessionId,
+    // See ProjectDetailPage: staged uploads must go to the backend this chat
+    // will actually run on, not to the module default.
+    resolveExecTarget()?.baseUrl,
+  );
   const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
   // Observed origin of the minted quick-chat session — drives the locked
   // bar's location chip (multi-target editions).

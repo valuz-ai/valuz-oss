@@ -406,4 +406,29 @@ describe("useSessionAttachments", () => {
     );
     expect(result.current.attachments).toHaveLength(0);
   });
+
+  it("uploads and reads staged files on the backend it was given", async () => {
+    // A staged upload has no session to route on, so the caller names the
+    // backend. Shipping the parameter without wiring it at the call sites sent
+    // every cloud-project upload to the module default — the desktop's LOCAL
+    // backend — so the rows landed in a database the turn that was supposed to
+    // claim them could never see. Everything looked fine: the chip appeared,
+    // the upload returned 201, and the file simply was not there.
+    const base = "https://cloud.example/agent";
+    uploadAttachment.mockResolvedValue(
+      row({ id: "srv1", session_id: null, parse_status: "ready" }),
+    );
+    const { result } = renderHook(() => useSessionAttachments(null, base));
+
+    await waitFor(() =>
+      expect(listStagedAttachments).toHaveBeenCalledWith({ baseUrl: base }),
+    );
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+
+    expect(uploadAttachment).toHaveBeenCalledWith(expect.any(File), {
+      baseUrl: base,
+    });
+  });
 });

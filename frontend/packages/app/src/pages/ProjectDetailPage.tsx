@@ -503,7 +503,15 @@ export const ProjectDetailPage = () => {
     remove: removeAttachment,
     markPendingConsumed,
     pendingIds: pendingAttachmentIds,
-  } = useSessionAttachments(chatSessionId);
+  } = useSessionAttachments(
+    chatSessionId,
+    // Staged uploads have no session to route on, so the composer names the
+    // backend — the SAME one the session will be created on. Leaving it out
+    // sent them to the module default: on a multi-target build that is a
+    // different backend entirely, so the files landed where the turn that was
+    // supposed to claim them could never see them.
+    resolveApiBase({ projectId: id }, "") || undefined,
+  );
   const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
   // PRD-PAAT §3.2 unified composer mode. ``chat`` creates a normal
   // session; ``task`` kicks off a background Task via tasksApi.kickoff
