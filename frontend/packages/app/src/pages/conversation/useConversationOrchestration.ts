@@ -1218,16 +1218,6 @@ export function useConversationOrchestration({
   // than raw ``sending`` so a stuck flag can't suppress the refresh.)
   const prevBusyRef = useRef(isBusy);
   useEffect(() => {
-    if (!prevBusyRef.current && isBusy) {
-      // A turn STARTING is the earliest moment this conversation's attachment
-      // list is guaranteed to be complete: the server binds the turn's files
-      // before it dispatches the turn. Without this read the page keeps
-      // whatever it loaded on mount — which, on the project-detail handoff, is
-      // a list fetched BEFORE the send that did the binding. The panel then
-      // shows the file, loses it the moment staging catches up, and the message
-      // has to wait for the server echo to show it at all.
-      void refreshBoundAttachments();
-    }
     if (prevBusyRef.current && !isBusy) {
       refreshFileTree();
       // The agent may have called ``deliver_artifacts`` during the turn —
@@ -1235,7 +1225,7 @@ export function useConversationOrchestration({
       void refreshArtifacts();
     }
     prevBusyRef.current = isBusy;
-  }, [isBusy, refreshFileTree, refreshArtifacts, refreshBoundAttachments]);
+  }, [isBusy, refreshFileTree, refreshArtifacts]);
 
   // Loading server-side attachments on session change + polling parse status
   // is owned by ``useSessionAttachments`` above.
@@ -1278,6 +1268,7 @@ export function useConversationOrchestration({
     removeSessionAttachmentRow,
     claimStagedAttachments,
     restageAttachments,
+    refreshBoundAttachments,
     refreshEvents,
     refreshActiveSession,
     fetchSidebarSessions,

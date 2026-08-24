@@ -9,8 +9,15 @@ export interface UseSessionAttachmentsResult {
   attachments: SessionAttachmentItem[];
   /** True while any of them is still parsing. */
   hasParsing: boolean;
-  /** Re-read now — for callers that just changed something. */
-  refresh: () => Promise<void>;
+  /**
+   * Re-read now.
+   *
+   * Takes the session explicitly because the caller often knows a newer one
+   * than this hook does: a send creates the session and then binds its files,
+   * and the closure that runs afterwards was built when the id was still null.
+   * Omitted → whatever the hook is currently pointed at.
+   */
+  refresh: (sessionId?: string) => Promise<void>;
   /** Detach a file from this conversation (and delete what it owns). */
   remove: (attachmentId: string) => Promise<void>;
 }
@@ -44,10 +51,19 @@ export function useSessionAttachments(
     }
   }, [sessionId]);
 
-  const load = useCallback(async () => {
-    const items = await read();
-    if (items) setAttachments(items);
-  }, [read]);
+  const load = useCallback(
+    async (override?: string) => {
+      const id = override ?? sessionId;
+      if (!id) return;
+      try {
+        const { items } = await sessionsApi.listAttachments(id);
+        setAttachments(items);
+      } catch {
+        /* keep what is on screen rather than flashing an empty panel */
+      }
+    },
+    [sessionId],
+  );
 
   useEffect(() => {
     let cancelled = false;

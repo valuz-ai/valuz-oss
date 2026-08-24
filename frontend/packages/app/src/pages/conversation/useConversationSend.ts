@@ -74,6 +74,7 @@ type ConversationSendParams = {
   removeSessionAttachmentRow: (attachmentId: string) => Promise<void>;
   claimStagedAttachments: () => SessionAttachmentItem[];
   restageAttachments: (rows: SessionAttachmentItem[]) => void;
+  refreshBoundAttachments: (sessionId?: string) => Promise<void>;
   refreshEvents: (sessionId: string | null) => Promise<void>;
   refreshActiveSession: (sessionId: string | null) => Promise<void>;
   fetchSidebarSessions: () => Promise<void>;
@@ -176,6 +177,7 @@ export function useConversationSend({
   removeSessionAttachmentRow,
   claimStagedAttachments,
   restageAttachments,
+  refreshBoundAttachments,
   refreshEvents,
   refreshActiveSession,
   fetchSidebarSessions,
@@ -538,11 +540,20 @@ export function useConversationSend({
     // even while ensureSession + uploads + POST /messages are still
     // round-tripping. Without this the page sits idle for ~500-3000ms
     // depending on session creation + Claude SDK warm-up.
-    // Attachments are already uploaded (on attach); the optimistic bubble
-    // lists this turn's pending rows so chips show instantly.
-    const queuedAttachmentMeta = sessionAttachments
-      .filter((a) => !a.consumed_at)
-      .map((a) => ({ name: a.filename, size: a.size_bytes }));
+    // Held across the awaits below so the failure path can hand them back.
+    let claimed: SessionAttachmentItem[] = [];
+    // Claim here, at the top, and let everything downstream use the result.
+    //
+    // Both the bubble's chips and the ids the turn binds come from this one
+    // answer, so they cannot disagree. Deriving the chips from a render value
+    // instead is what left the message with no attachment on the draft path:
+    // the page had only just mounted, its staging read had not resolved, and
+    // the list was empty at exactly the moment this ran.
+    claimed = claimStagedAttachments();
+    const queuedAttachmentMeta = claimed.map((a) => ({
+      name: a.filename,
+      size: a.size_bytes,
+    }));
     pinNextTurnToTopRef.current = true;
     keepCurrentTurnAtTopRef.current = true;
     const sentAt = Date.now();
@@ -575,8 +586,6 @@ export function useConversationSend({
         selectedComposerSkill.name,
       );
     }
-    // Hoisted so the failure path can hand them back.
-    let claimed: SessionAttachmentItem[] = [];
     try {
       const session = await ensureSession();
       // Protect the optimistic turn we just painted from the landing refresh.
@@ -621,10 +630,6 @@ export function useConversationSend({
       // click → turn-start window; the turn's ``message.user`` echo on the
       // stream releases it.
 
-      // Take the staged files and carry them to the turn. They leave the
-      // composer here; the panel picks them up from the session's own list
-      // once the bind lands.
-      claimed = claimStagedAttachments();
       const detail = await sessionsApi.sendMessage(
         session.id,
         outboundText,
@@ -634,6 +639,11 @@ export function useConversationSend({
         claimed.map((a) => a.id),
       );
       if (!detail?.id) throw new Error("Failed to send message.");
+      // The bind is durable now, so the conversation's own list can see it.
+      // Read here rather than off a busy transition: on the handoff path this
+      // page mounts with ``sending`` already true, so a false→true edge never
+      // happens and a refresh hung off one never runs.
+      void refreshBoundAttachments(session.id);
       // The desktop sidebar's per-project session lists are derived from
       // ``/v1/runs`` (ProjectLayoutBase), NOT from the session store the
       // optimistic updates below write to — so without a poke here a brand-new
