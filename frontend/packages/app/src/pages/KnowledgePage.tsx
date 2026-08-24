@@ -345,6 +345,7 @@ export const KnowledgePage = ({
     setHeader,
     setHeaderClassName,
     setContentInnerClassName,
+    setAsideClassName,
   } = useProjectOutlet();
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
 
@@ -496,8 +497,14 @@ export const KnowledgePage = ({
   useEffect(() => {
     if (!selectedDoc) {
       setRightPanel(null);
+      setAsideClassName(undefined);
       return;
     }
+    // The detail is the thing being read once a document is selected — parse
+    // history, error text, source path — while the list is just where the
+    // click came from. So the default 345px aside flips to the wider side
+    // here, and flips back the moment no document is open.
+    setAsideClassName("w-[55%] min-w-[420px] max-w-[960px]");
     setRightPanel(
       <DocumentDetailPanel
         doc={{
@@ -561,7 +568,15 @@ export const KnowledgePage = ({
         onDelete={() => setDeleteDocOpen(true)}
       />,
     );
-  }, [selectedDoc, preview, setRightPanel, activeKb, enterKb]);
+    // The panel and the widened aside live in the LAYOUT, not in this page —
+    // so without this they outlive the page. Settings is not an overlay
+    // route: navigating there unmounts this page, and the document detail
+    // stayed on screen next to the settings content.
+    return () => {
+      setRightPanel(null);
+      setAsideClassName(undefined);
+    };
+  }, [selectedDoc, preview, setRightPanel, setAsideClassName, activeKb, enterKb]);
 
   // Auto-poll the doc detail while the parse is in flight so the
   // panel reflects live state without a manual refresh. Polls every

@@ -12,6 +12,7 @@ let latestHeader: ReactNode | null = null;
 // no button in this tree to press. Captured instead, and its callbacks are
 // invoked directly — the wiring is what these tests are about.
 let latestRightPanel: ReactNode | null = null;
+let latestAsideClassName: string | undefined;
 
 vi.mock("react-router-dom", async () => {
   const actual =
@@ -29,7 +30,9 @@ vi.mock("react-router-dom", async () => {
       },
       setHeaderClassName: vi.fn(),
       setHideHeader: vi.fn(),
-      setAsideClassName: vi.fn(),
+      setAsideClassName: (cls: string | undefined) => {
+        latestAsideClassName = cls;
+      },
       setMainClassName: vi.fn(),
       setContentInnerClassName: vi.fn(),
     }),
@@ -50,6 +53,7 @@ const platform: PlatformCapabilities = {
 function renderKnowledgePage(props: Parameters<typeof KnowledgePage>[0] = {}) {
   latestHeader = null;
   latestRightPanel = null;
+  latestAsideClassName = undefined;
   return render(
     <PlatformProvider value={platform}>
       <KnowledgePage {...props} />
@@ -120,13 +124,13 @@ async function openDoc() {
     markdown: "",
   });
 
-  renderKnowledgePage();
+  const rendered = renderKnowledgePage();
   await waitFor(() => expect(screen.getByText(KB.name)).toBeTruthy());
   fireEvent.click(screen.getByText(KB.name));
   await waitFor(() => expect(screen.getByText(DOC.filename)).toBeTruthy());
   fireEvent.click(screen.getByText(DOC.filename));
   await waitFor(() => expect(get).toHaveBeenCalled());
-  return { get };
+  return { get, unmount: rendered.unmount };
 }
 
 describe("KnowledgePage", () => {
@@ -155,6 +159,33 @@ describe("KnowledgePage", () => {
     await vi.advanceTimersByTimeAsync(3500);
 
     expect(get).toHaveBeenLastCalledWith(DOC.id, KB.id);
+  });
+
+  it("gives the open document's detail the wider side", async () => {
+    // The detail is what is being read — parse history, error text, source
+    // path — while the list is just where the click came from. The default
+    // 345px aside made the panel the cramped side.
+    initI18n({ locale: "zh-CN", fallbackLocale: "zh-CN" });
+    await openDoc();
+
+    await waitFor(() =>
+      expect(latestAsideClassName ?? "").toContain("w-[55%]"),
+    );
+  });
+
+  it("hands the layout back when the document is closed and on unmount", async () => {
+    // The panel and the widened aside live in the LAYOUT. Settings is not an
+    // overlay route, so navigating there unmounts this page — and without the
+    // cleanup the document detail stayed on screen beside the settings
+    // content.
+    initI18n({ locale: "zh-CN", fallbackLocale: "zh-CN" });
+    const { unmount } = await openDoc();
+    await waitFor(() => expect(latestAsideClassName ?? "").toContain("w-[55%]"));
+
+    unmount();
+
+    expect(latestRightPanel).toBeNull();
+    expect(latestAsideClassName).toBeUndefined();
   });
 
   it("retries a document on its own library's backend", async () => {
