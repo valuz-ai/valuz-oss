@@ -128,7 +128,6 @@ function ConversationViewPage(props: ConversationViewProps) {
     searchParams: core.searchParams,
     selectedProjectId: core.selectedProjectId,
     draft: core.draft,
-    markPendingConsumed: core.markPendingConsumed,
     historyCursorRef: core.historyCursorRef,
     projectSendHandoffRef: core.projectSendHandoffRef,
     handoffSessionIdRef: core.handoffSessionIdRef,

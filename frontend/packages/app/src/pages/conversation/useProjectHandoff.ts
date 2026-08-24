@@ -14,11 +14,6 @@ type ProjectHandoffParams = {
   selectedProjectId: string | null;
   draft: string;
   /** True while any session attachment is still parsing. */
-  /** ``useSessionAttachments.markPendingConsumed`` — the handoff-consume
-   *  effect stamps the already-sent turn's pending rows (explicit id +
-   *  sentAt because the page's own ``selectedSessionId`` may not have
-   *  settled when the handoff is consumed). */
-  markPendingConsumed: (sessionId?: string, consumedAt?: number) => void;
   historyCursorRef: { current: number };
   /** Owned by ``useConversationOrchestration`` (shared with
    *  ``useConversationSend`` / ``useConversationHistory`` /
@@ -88,7 +83,6 @@ export function useProjectHandoff({
   searchParams,
   selectedProjectId,
   draft,
-  markPendingConsumed,
   historyCursorRef,
   projectSendHandoffRef,
   handoffSessionIdRef,
@@ -145,21 +139,10 @@ export function useProjectHandoff({
     if (Date.now() - sentAt > HANDOFF_MAX_AGE_MS) return;
     consumedHandoffSessionIdsRef.current.add(id);
     handoffSessionIdRef.current = id;
-    // The handing-over page already POSTed this turn (see ``performChatSend``
-    // in ProjectDetailPage) — every pending attachment of this session that
-    // existed at ``sentAt`` shipped with it. This page's own send path never
-    // runs for a handoff, so consume them here: the first attachments load
-    // was issued before the server stamped the rows, and without the
-    // watermark its still-pending result would pin the already-sent files
-    // back onto the composer.
-    markPendingConsumed(id, sentAt);
-    // The handoff carries the attachment meta because this page cannot derive
-    // it: ``markPendingConsumed`` above (and the same call on the sending
-    // page) stamps those rows, so by the time the attachments load lands they
-    // read as someone else's history. Seeding an empty list instead is what
-    // made an attached image appear only once the server echoed
-    // ``message.user`` back — the text was on screen for seconds first, and
-    // the person saw their own message arrive without the file they sent.
+    // Nothing to consume here. The page that handed this over already claimed
+    // its staged files and shipped their ids with the turn — the composer's
+    // set is the owner's, not this session's, so there is no per-session
+    // bookkeeping left for this page to do.
     setPendingUserMessage({
       text,
       attachments: handoff?.attachments ?? [],
@@ -180,8 +163,7 @@ export function useProjectHandoff({
     location.pathname,
     location.search,
     navigate,
-    markPendingConsumed,
-  ]);
+    ]);
 
   // Send entry point. While a turn is running, a follow-up is queued (drains
   // after the active turn). Otherwise it blocks on attachments still parsing —

@@ -20,6 +20,7 @@ import {
   useCapabilities,
   useSessionArtifacts,
   useSessionAttachments,
+  useStagedAttachments,
   type MemberWithAgent,
   resolveApiBase,
 } from "@valuz/core";
@@ -576,23 +577,49 @@ export function useConversationOrchestration({
   // hook's own setter (kept aliased so existing optimistic splices still
   // work). Local files now upload the moment they're attached, so there is no
   // separate not-yet-uploaded ``File[]`` queue for them anymore.
+  // TWO sets, because they answer two questions.
+  //
+  // ``staged`` is what the composer is holding: uploaded, not yet claimed by a
+  // turn, owner-scoped and blind to sessions. ``bound`` is what this
+  // conversation has been sent. Serving both from one hook is what broke the
+  // send — creating the session re-keyed the composer's state and dropped the
+  // staged rows, so the turn went out claiming nothing.
   const {
-    attachments: sessionAttachments,
-    setAttachments: setSessionAttachments,
-    hasParsing: attachmentsParsing,
+    attachments: stagedAttachments,
+    hasPending: attachmentsParsing,
     attachLocalFiles,
     attachKbDocs,
-    remove: removeSessionAttachmentRow,
-    markPendingConsumed,
-  } = useSessionAttachments(
-    selectedSessionId,
-    // A live session routes on its own id; a draft (``/conversation/new``) has
-    // none, so staged uploads follow the project this conversation belongs to.
-    // Without it they go to the module default and the send cannot find them.
+    remove: removeStagedAttachment,
+    claim: claimStagedAttachments,
+    restage: restageAttachments,
+  } = useStagedAttachments(
+    // The backend this conversation runs on. A draft has no session to route
+    // on, so it follows its project.
     selectedProjectId
       ? resolveApiBase({ projectId: selectedProjectId }, "") || undefined
       : undefined,
   );
+  const {
+    attachments: boundAttachments,
+    remove: removeBoundAttachment,
+  } = useSessionAttachments(selectedSessionId);
+  // What the panel shows: this conversation's files, plus whatever is staged
+  // for the next turn.
+  const sessionAttachments = useMemo(
+    () => [...boundAttachments, ...stagedAttachments],
+    [boundAttachments, stagedAttachments],
+  );
+  const removeSessionAttachmentRow = useCallback(
+    async (attachmentId: string) => {
+      if (stagedAttachments.some((a) => a.id === attachmentId)) {
+        await removeStagedAttachment(attachmentId);
+        return;
+      }
+      await removeBoundAttachment(attachmentId);
+    },
+    [stagedAttachments, removeStagedAttachment, removeBoundAttachment],
+  );
+
   // Agent-delivered artifacts (the "生成文件" list) — recorded by the
   // ``deliver_artifacts`` MCP tool. Loads on session change; refreshed on
   // turn-end (below) so newly delivered files appear without a manual reload.
@@ -1238,7 +1265,8 @@ export function useConversationOrchestration({
     attachKbDocs,
     attachLocalFiles,
     removeSessionAttachmentRow,
-    markPendingConsumed,
+    claimStagedAttachments,
+    restageAttachments,
     refreshEvents,
     refreshActiveSession,
     fetchSidebarSessions,
@@ -1418,10 +1446,12 @@ export function useConversationOrchestration({
       skipNextSessionStateResetRef.current = false;
       return;
     }
-    setSessionAttachments([]);
+    // ``boundAttachments`` resets itself on the session change; the STAGED set
+    // deliberately does not — a file the person is still holding is not part of
+    // the conversation they just left.
     setFileTree([]);
     closeArtifact();
-  }, [closeArtifact, selectedSessionId, setSessionAttachments]);
+  }, [closeArtifact, selectedSessionId]);
 
   // Drive the right-panel collapsed state from per-session data:
   //   * Project projects always have meaningful panel content
@@ -1521,7 +1551,8 @@ export function useConversationOrchestration({
     projectSendHandoffRef,
     handoffSessionIdRef,
     historyCursorRef,
-    markPendingConsumed,
+    claimStagedAttachments,
+    restageAttachments,
     attachmentsParsing,
     setPendingUserMessage,
     setTurnStartAnchor,

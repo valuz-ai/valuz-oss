@@ -1,0 +1,270 @@
+/** @vitest-environment jsdom */
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { SessionAttachmentItem } from "../api/sessions-api";
+
+const listStagedAttachments = vi.fn();
+const uploadAttachment = vi.fn();
+const addKbAttachments = vi.fn();
+const deleteAttachment = vi.fn();
+
+vi.mock("../api/sessions-api", () => ({
+  sessionsApi: {
+    listStagedAttachments: (...a: unknown[]) => listStagedAttachments(...a),
+    uploadAttachment: (...a: unknown[]) => uploadAttachment(...a),
+    addKbAttachments: (...a: unknown[]) => addKbAttachments(...a),
+    deleteAttachment: (...a: unknown[]) => deleteAttachment(...a),
+  },
+}));
+
+import { useStagedAttachments } from "./use-staged-attachments";
+
+const row = (
+  over: Partial<SessionAttachmentItem> = {},
+): SessionAttachmentItem => ({
+  id: "srv1",
+  session_id: null,
+  filename: "f.png",
+  stored_path: "attachments/srv1/f.png",
+  parsed_path: null,
+  parse_status: "ready",
+  size_bytes: 1,
+  mime_type: "image/png",
+  created_at: 0,
+  source_kind: "local",
+  consumed_at: null,
+  ...over,
+});
+
+const file = (name = "f.png") => new File(["x"], name, { type: "image/png" });
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  listStagedAttachments.mockResolvedValue({ items: [] });
+});
+afterEach(() => vi.useRealTimers());
+
+describe("useStagedAttachments", () => {
+  it("shows the file the moment it is attached, before the upload lands", async () => {
+    let release: (v: SessionAttachmentItem) => void = () => {};
+    uploadAttachment.mockReturnValue(
+      new Promise<SessionAttachmentItem>((r) => {
+        release = r;
+      }),
+    );
+    const { result } = renderHook(() => useStagedAttachments());
+
+    act(() => {
+      void result.current.attachLocalFiles([file()]);
+    });
+
+    await waitFor(() => expect(result.current.attachments).toHaveLength(1));
+    expect(result.current.hasPending).toBe(true);
+
+    await act(async () => release(row()));
+    expect(result.current.attachments).toHaveLength(1);
+    expect(result.current.attachments[0].id).toBe("srv1");
+  });
+
+  it("takes the chip back down when the upload fails", async () => {
+    uploadAttachment.mockRejectedValue(new Error("boom"));
+    const { result } = renderHook(() => useStagedAttachments());
+
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+
+    expect(result.current.attachments).toHaveLength(0);
+  });
+
+  it("restores staged files on mount so a reload does not lose them", async () => {
+    listStagedAttachments.mockResolvedValue({ items: [row()] });
+    const { result } = renderHook(() => useStagedAttachments());
+
+    await waitFor(() => expect(result.current.attachments).toHaveLength(1));
+  });
+
+  it("uploads and reads on the backend it was given", async () => {
+    // No session to route on, so the caller names the backend. Shipping the
+    // parameter without passing it at the call sites sent every cloud-project
+    // upload to the local default, where the turn could never find it.
+    const base = "https://cloud.example/agent";
+    uploadAttachment.mockResolvedValue(row());
+    const { result } = renderHook(() => useStagedAttachments(base));
+
+    await waitFor(() =>
+      expect(listStagedAttachments).toHaveBeenCalledWith({ baseUrl: base }),
+    );
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+
+    expect(uploadAttachment).toHaveBeenCalledWith(expect.any(File), {
+      baseUrl: base,
+    });
+  });
+
+  it("keeps polling until the parse settles", async () => {
+    uploadAttachment.mockResolvedValue(row({ parse_status: "parsing" }));
+    listStagedAttachments
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValue({ items: [row({ parse_status: "ready" })] });
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useStagedAttachments());
+
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+    expect(result.current.hasPending).toBe(true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(result.current.hasPending).toBe(false);
+  });
+
+  it("un-attaches server-side when the file is removed mid-upload", async () => {
+    let release: (v: SessionAttachmentItem) => void = () => {};
+    uploadAttachment.mockReturnValue(
+      new Promise<SessionAttachmentItem>((r) => {
+        release = r;
+      }),
+    );
+    deleteAttachment.mockResolvedValue(undefined);
+    const { result } = renderHook(() => useStagedAttachments());
+
+    await act(async () => {
+      void result.current.attachLocalFiles([file()]);
+    });
+    await waitFor(() => expect(result.current.attachments).toHaveLength(1));
+    const placeholderId = result.current.attachments[0].id;
+
+    await act(async () => {
+      await result.current.remove(placeholderId);
+    });
+    expect(deleteAttachment).not.toHaveBeenCalled(); // no server row yet
+
+    await act(async () => release(row()));
+
+    await waitFor(() =>
+      expect(deleteAttachment).toHaveBeenCalledWith("srv1", undefined),
+    );
+    expect(result.current.attachments).toHaveLength(0);
+  });
+
+  // ── claim ───────────────────────────────────────────────────────────────
+
+  it("hands the turn the files it is carrying", async () => {
+    uploadAttachment.mockResolvedValue(row());
+    const { result } = renderHook(() => useStagedAttachments());
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+
+    let claimed: SessionAttachmentItem[] = [];
+    act(() => {
+      claimed = result.current.claim();
+    });
+
+    expect(claimed.map((r) => r.id)).toEqual(["srv1"]);
+    expect(result.current.attachments).toHaveLength(0);
+  });
+
+  it("does not hand the same file to two turns", async () => {
+    uploadAttachment.mockResolvedValue(row());
+    const { result } = renderHook(() => useStagedAttachments());
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+
+    act(() => void result.current.claim());
+    let second: SessionAttachmentItem[] = [];
+    act(() => {
+      second = result.current.claim();
+    });
+
+    expect(second).toEqual([]);
+  });
+
+  it("leaves an in-flight upload staged for the next turn", async () => {
+    // Claiming a placeholder would hand the turn an id the server has never
+    // seen. Better staged than lost.
+    uploadAttachment.mockReturnValue(
+      new Promise<SessionAttachmentItem>(() => {}),
+    );
+    const { result } = renderHook(() => useStagedAttachments());
+    act(() => {
+      void result.current.attachLocalFiles([file()]);
+    });
+    await waitFor(() => expect(result.current.attachments).toHaveLength(1));
+
+    let claimed: SessionAttachmentItem[] = [];
+    act(() => {
+      claimed = result.current.claim();
+    });
+
+    expect(claimed).toEqual([]);
+    expect(result.current.attachments).toHaveLength(1);
+  });
+
+  it("gives the files back when the send they were claimed for fails", async () => {
+    uploadAttachment.mockResolvedValue(row());
+    const { result } = renderHook(() => useStagedAttachments());
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+
+    let claimed: SessionAttachmentItem[] = [];
+    act(() => {
+      claimed = result.current.claim();
+    });
+    act(() => result.current.restage(claimed));
+
+    expect(result.current.attachments.map((a) => a.id)).toEqual(["srv1"]);
+  });
+
+  it("claims from the current set, not from the last render", async () => {
+    // A send is several awaits long — create the session, navigate — and
+    // ``claim`` runs in the middle of it. Deriving the answer from a render
+    // value loses an upload that landed during those awaits.
+    uploadAttachment.mockResolvedValue(row());
+    const { result } = renderHook(() => useStagedAttachments());
+
+    let claimed: SessionAttachmentItem[] = [];
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+      // No re-render has been observed by this closure yet.
+      claimed = result.current.claim();
+    });
+
+    expect(claimed.map((r) => r.id)).toEqual(["srv1"]);
+  });
+
+  it("is unaffected by a session being created mid-send", async () => {
+    // THE bug this split exists for. The composer's send creates the session,
+    // and while one hook served both the staging set and a session's history,
+    // that promotion re-keyed this state and dropped every staged row — so the
+    // turn went out claiming nothing and the file sat unbound on the server
+    // with its parse finished.
+    //
+    // This hook takes no session id. There is no longer anything for a session
+    // to change here, which is the whole point of the split; the test stands as
+    // the statement of that invariant.
+    uploadAttachment.mockResolvedValue(row());
+    const { result, rerender } = renderHook(() => useStagedAttachments());
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+
+    rerender(); // whatever else the page re-rendered for
+
+    let claimed: SessionAttachmentItem[] = [];
+    act(() => {
+      claimed = result.current.claim();
+    });
+
+    expect(claimed.map((r) => r.id)).toEqual(["srv1"]);
+  });
+});
