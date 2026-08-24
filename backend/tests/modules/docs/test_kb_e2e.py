@@ -146,7 +146,7 @@ def _run_bg_work_inline(service: DocumentLibraryService) -> None:
 
         service._pending.append(_work)  # type: ignore[attr-defined]
 
-    def _inline_reindex(
+    async def _inline_reindex(
         doc_ids: list[str], task_id: str, user_id: str = "local-test-owner"
     ) -> None:
         async def _work() -> None:
