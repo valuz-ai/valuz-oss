@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowDown } from "lucide-react";
 import {
@@ -107,6 +107,12 @@ type ComposerPaneProps = {
   parsingConfirmOpen: boolean;
   setParsingConfirmOpen: Dispatch<SetStateAction<boolean>>;
   performSend: ConversationSend["performSend"];
+  /** Enables the composer's chat/task mode toggle (the same one the project
+   * home composer carries). In task mode Send hands the draft to this
+   * callback — typically a ``tasksApi.kickoff`` — instead of the
+   * conversation send; return ``true`` to clear the draft. Absent → no
+   * toggle, chat-only behavior unchanged. */
+  onSendTask?: (goal: string) => Promise<boolean> | boolean;
 };
 
 /**
@@ -195,9 +201,12 @@ export function ComposerPane({
   parsingConfirmOpen,
   setParsingConfirmOpen,
   performSend,
+  onSendTask,
 }: ComposerPaneProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  // Chat/task mode only exists when the host provides a task kickoff.
+  const [composerMode, setComposerMode] = useState<"chat" | "task">("chat");
 
   return (
     <>
@@ -305,7 +314,17 @@ export function ComposerPane({
             isProjectProject ? effectiveAgentSlug != null : undefined
           }
           autoFocus
+          mode={onSendTask ? composerMode : undefined}
+          onModeChange={onSendTask ? setComposerMode : undefined}
           onSend={() => {
+            if (onSendTask && composerMode === "task") {
+              const goal = draft.trim();
+              if (!goal) return;
+              void (async () => {
+                if (await onSendTask(goal)) setDraft("");
+              })();
+              return;
+            }
             void handleSend();
           }}
           sending={displayBusy}

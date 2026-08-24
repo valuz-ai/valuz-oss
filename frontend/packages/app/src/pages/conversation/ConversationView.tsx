@@ -54,6 +54,11 @@ export interface ConversationViewProps {
    *  chrome hooks (``useProjectOutlet`` / ``useContextPanel`` /
    *  ``useProjectHandoff`` / ``useTitleActions``) run in this variant. */
   variant?: ConversationViewVariant;
+  /** Enables the composer's chat/task mode toggle (the project-home
+   *  composer's). In task mode Send hands the draft to this callback —
+   *  typically a ``tasksApi.kickoff`` — instead of the conversation send;
+   *  return ``true`` to clear the draft. Absent → chat-only, unchanged. */
+  onSendTask?: (goal: string) => Promise<boolean> | boolean;
 }
 
 /**
@@ -287,6 +292,7 @@ function ConversationViewPage(props: ConversationViewProps) {
               where that makes no sense. */}
           {composerSuppressed ? null : (
             <ComposerPane
+              onSendTask={props.onSendTask}
               showScrollBottom={core.showScrollBottom}
               handleScrollToBottom={core.handleScrollToBottom}
               displayBusy={core.displayBusy}
@@ -442,6 +448,7 @@ function ConversationViewPanel(props: ConversationViewProps) {
       <BackgroundTaskStrip tasks={core.runningBgTasks} />
 
       <ComposerPane
+              onSendTask={props.onSendTask}
         showScrollBottom={core.showScrollBottom}
         handleScrollToBottom={core.handleScrollToBottom}
         displayBusy={core.displayBusy}
