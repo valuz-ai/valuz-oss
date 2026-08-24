@@ -107,6 +107,7 @@ _TASK_COVERAGE_META_RESPONSES = (
     "no supplement is needed",
     "response is complete",
     "answer is complete",
+    "request is complete",
     "already complete",
     "(empty)",
     "无需补充",
@@ -116,6 +117,60 @@ _TASK_COVERAGE_META_RESPONSES = (
     "回答已完整",
     "已完整",
 )
+
+
+_CONFIRMATION_CARD_ACTIONS: dict[str, frozenset[str]] = {
+    # Automation writes currently expose a dedicated confirmation card only
+    # for create. Read/run/status actions remain ordinary conversational tool
+    # work and must keep the normal post-run checks.
+    "automation": frozenset({"create"}),
+    # These Playbook actions all return a persisted Operation Card. ``run``
+    # and ``finish`` execute work and are deliberately excluded.
+    "playbook": frozenset(
+        {
+            "create",
+            "update",
+            "update_definition",
+            "set_status",
+            "retire",
+            "delete",
+        }
+    ),
+    # Finance exposes every entity mutation through one proposal action.
+    "domain_operation": frozenset({"propose"}),
+}
+
+
+def _matches_tool_name(tool_name: str, name: str) -> bool:
+    return tool_name == name or tool_name.endswith(f"__{name}") or tool_name.endswith(f"/{name}")
+
+
+def _structural_output_kind(data: dict[str, Any], tool_name: str) -> str | None:
+    """Classify turns whose product deliverable is structural, not prose.
+
+    ``generate_ui`` produces an A2UI artifact. The mutation actions below
+    produce a confirmation card whose pending state is the complete result of
+    the Agent turn. In both cases, a trailing acknowledgement has no factual
+    or task-coverage value, so Citation, Claim Audit, and Task Coverage should
+    not run for that turn.
+
+    Classification happens from the canonical tool-use input rather than
+    model-authored text or localized tool-result prose. Every supported Runtime
+    normalizes MCP arguments into ``data["input"]`` at this boundary.
+    """
+
+    if _matches_tool_name(tool_name, "generate_ui"):
+        return "generate_ui"
+    raw_input = data.get("input")
+    if not isinstance(raw_input, dict):
+        return None
+    action = raw_input.get("action")
+    if not isinstance(action, str):
+        return None
+    for canonical_name, actions in _CONFIRMATION_CARD_ACTIONS.items():
+        if _matches_tool_name(tool_name, canonical_name) and action in actions:
+            return f"{canonical_name}.{action}"
+    return None
 
 
 def _is_task_coverage_meta_response(text: str) -> bool:
@@ -506,6 +561,7 @@ class _MessageObserverSink:
         self._post_run_verification_completed = False
 
         self._tool_names: dict[str, str] = {}
+        self._structural_output_kinds: set[str] = set()
         self._external_tool_called = False
         self._evidence_registry = EvidenceRegistry(
             allowed_document_ids=allowed_document_ids,
@@ -546,11 +602,14 @@ class _MessageObserverSink:
                 # When task coverage is already disabled, that idle event
                 # finalizes Citation/Audit immediately, so waiting for the
                 # outer orchestrator to inspect ``called_tool`` is too late.
-                # Disable the prose sidecars at the attempted GenUI call — the
-                # user explicitly chose structural output, even if validation
-                # later rejects it.
-                if self._matches_tool_name(tool_name, "generate_ui"):
-                    self.skip_post_run_verification_for_generated_ui()
+                # Disable prose sidecars as soon as the Runtime requests a
+                # structural deliverable. This must happen before session_idle:
+                # hosted turns with Task Coverage disabled finalize Citation /
+                # Audit inside this observer, before run() returns.
+                structural_kind = _structural_output_kind(event.data, tool_name)
+                if structural_kind is not None:
+                    self._structural_output_kinds.add(structural_kind)
+                    self.skip_post_run_verification_for_structural_output()
 
         elif event.type == "tool_result":
             tool_use_id = event.data.get("id")
@@ -870,6 +929,14 @@ class _MessageObserverSink:
 
         return self._external_tool_called
 
+    def requested_structural_output(self) -> bool:
+        """Whether this turn requested A2UI or a product confirmation card."""
+
+        return bool(self._structural_output_kinds)
+
+    def structural_output_kinds(self) -> tuple[str, ...]:
+        return tuple(sorted(self._structural_output_kinds))
+
     def has_assistant_text(self) -> bool:
         """Whether the primary run produced any assistant prose.
 
@@ -916,17 +983,15 @@ class _MessageObserverSink:
 
     @staticmethod
     def _matches_tool_name(tool_name: str, name: str) -> bool:
-        return (
-            tool_name == name or tool_name.endswith(f"__{name}") or tool_name.endswith(f"/{name}")
-        )
+        return _matches_tool_name(tool_name, name)
 
-    def skip_post_run_verification_for_generated_ui(self) -> None:
-        """The A2UI artifact is not a prose research answer.
+    def skip_post_run_verification_for_structural_output(self) -> None:
+        """A product artifact or confirmation card is not a prose answer.
 
-        A generate_ui attempt returns structural output or a structural
-        validation error. Neither benefits from prose citation projection or
-        claim audit, and the calling Agent's acknowledgement has no evidence
-        value to verify.
+        The structural output (or its validation error) is the complete turn
+        result. Neither benefits from prose citation projection or Claim Audit,
+        and the calling Agent's acknowledgement has no evidence value to
+        verify.
         """
 
         self._citation_enabled = False
@@ -1765,19 +1830,19 @@ class SessionOrchestrator:
                 )
             )
             await runtime.run(session, user_message)
-            skip_genui_post_run = observer.called_tool("generate_ui")
-            if skip_genui_post_run:
-                observer.skip_post_run_verification_for_generated_ui()
+            skip_structural_post_run = observer.requested_structural_output()
+            if skip_structural_post_run:
+                observer.skip_post_run_verification_for_structural_output()
                 logger.info(
-                    "post-run coverage/citation/audit skipped after generate_ui "
-                    "attempt "
-                    "message=%s session=%s",
+                    "post-run coverage/citation/audit skipped after structural "
+                    "output request message=%s session=%s kinds=%s",
                     message.id,
                     session.id,
+                    observer.structural_output_kinds(),
                 )
             if should_run_task_coverage(
                 enabled=task_coverage_enabled,
-                skip_genui_post_run=skip_genui_post_run,
+                skip_structural_post_run=skip_structural_post_run,
                 called_external_tool=observer.called_external_tool(),
                 has_assistant_text=observer.has_assistant_text(),
                 stop_reason_type=getattr(session.stop_reason, "type", None),
