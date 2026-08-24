@@ -108,15 +108,29 @@ export function useSessionAttachments(
 ): UseSessionAttachmentsResult {
   const [attachments, setAttachments] = useState<SessionAttachmentItem[]>([]);
 
+  // The session the staged files were uploaded against, when the caller had no
+  // session yet and reserved an id instead.
+  //
+  // Everything below keys off ``sessionId``, which for a draft composer stays
+  // null until Send — so without this the load never runs and the poll never
+  // starts, and a chip put up on attach spins on "parsing" forever no matter
+  // what the server did with it. The id is learnt from ``ensureSession``: it
+  // returns the session the upload will use, reserved or created, which is
+  // exactly the one to read attachments from.
+  const [uploadedIntoSessionId, setUploadedIntoSessionId] = useState<
+    string | null
+  >(null);
+  const effectiveSessionId = sessionId ?? uploadedIntoSessionId;
+
   // Mirror of ``sessionId`` for callbacks that must read it at CALL time.
   // ``markPendingConsumed`` fires from a closure captured before the
   // project-send handoff promoted ``sessionId`` (null → real id), so reading
   // the prop directly would miss the session the send just consumed. (Synced
   // in an effect — the promote commits long before the send's POST resolves.)
-  const sessionIdRef = useRef(sessionId);
+  const sessionIdRef = useRef(effectiveSessionId);
   useEffect(() => {
-    sessionIdRef.current = sessionId;
-  }, [sessionId]);
+    sessionIdRef.current = effectiveSessionId;
+  }, [effectiveSessionId]);
 
   // Last optimistic-consume moment, per session. ``markPendingConsumed`` can
   // only stamp rows that are ALREADY in local state — but on the project-send
@@ -188,9 +202,9 @@ export function useSessionAttachments(
   useEffect(() => {
     let cancelled = false;
     const load = async (): Promise<SessionAttachmentItem[]> => {
-      if (!sessionId) return [];
+      if (!effectiveSessionId) return [];
       try {
-        const res = await sessionsApi.listAttachments(sessionId);
+        const res = await sessionsApi.listAttachments(effectiveSessionId);
         return res.items;
       } catch {
         return [];
@@ -204,7 +218,7 @@ export function useSessionAttachments(
         // while ``sessionId`` is still null, and the session is minted by the
         // upload that follows. Clearing here would erase the chip that was
         // just put up.
-        if (!sessionId) return prev.filter(isLocalPlaceholder);
+        if (!effectiveSessionId) return prev.filter(isLocalPlaceholder);
         const localById = new Map(prev.map((a) => [a.id, a]));
         const serverIds = new Set(items.map((r) => r.id));
         // Server rows win, but never backwards on ``consumed_at``: a send
@@ -226,7 +240,7 @@ export function useSessionAttachments(
         const optimistic = prev.filter(
           (a) =>
             !serverIds.has(a.id) &&
-            (a.session_id === sessionId || isLocalPlaceholder(a)),
+            (a.session_id === effectiveSessionId || isLocalPlaceholder(a)),
         );
         return [...merged, ...optimistic];
       });
@@ -234,7 +248,7 @@ export function useSessionAttachments(
     return () => {
       cancelled = true;
     };
-  }, [sessionId, applyConsumeWatermark]);
+  }, [effectiveSessionId, applyConsumeWatermark]);
 
   const hasParsing = attachments.some(
     (a) => !a.consumed_at && a.parse_status === "parsing",
@@ -248,11 +262,11 @@ export function useSessionAttachments(
   // dropped by a navigate→bootstrap reset.)
   const anyParsing = attachments.some((a) => a.parse_status === "parsing");
   useEffect(() => {
-    if (!sessionId || !anyParsing) return;
+    if (!effectiveSessionId || !anyParsing) return;
     let cancelled = false;
     const handle = setInterval(() => {
       sessionsApi
-        .listAttachments(sessionId)
+        .listAttachments(effectiveSessionId)
         .then((res) => {
           if (!cancelled) mergeServer(res.items);
         })
@@ -264,7 +278,7 @@ export function useSessionAttachments(
       cancelled = true;
       clearInterval(handle);
     };
-  }, [sessionId, anyParsing, mergeServer]);
+  }, [effectiveSessionId, anyParsing, mergeServer]);
 
   const attachLocalFiles = useCallback(
     async (files: File[], ensureSession: EnsureSession) => {
@@ -290,6 +304,10 @@ export function useSessionAttachments(
         for (const [, row] of staged) drop(row.id);
         throw cause;
       }
+
+      // Learnt here, not passed in: this is the one place that knows which
+      // session the bytes actually went to.
+      setUploadedIntoSessionId(session.id);
 
       for (const [file, row] of staged) {
         try {
@@ -321,6 +339,7 @@ export function useSessionAttachments(
     async (docIds: string[], ensureSession: EnsureSession) => {
       if (docIds.length === 0) return;
       const session = await ensureSession();
+      setUploadedIntoSessionId(session.id);
       await sessionsApi.addKbAttachments(session.id, docIds);
       // Re-read the full list (the KB endpoint returns pending-only); merge so
       // panel history + optimistic consume survive.
@@ -342,14 +361,14 @@ export function useSessionAttachments(
         removedPlaceholdersRef.current.add(attachmentId);
         return;
       }
-      if (!sessionId) return;
+      if (!effectiveSessionId) return;
       try {
-        await sessionsApi.deleteAttachment(sessionId, attachmentId);
+        await sessionsApi.deleteAttachment(effectiveSessionId, attachmentId);
       } catch {
         /* best-effort */
       }
     },
-    [sessionId],
+    [effectiveSessionId],
   );
 
   const markPendingConsumed = useCallback(

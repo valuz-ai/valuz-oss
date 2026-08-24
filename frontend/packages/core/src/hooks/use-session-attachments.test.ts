@@ -427,4 +427,42 @@ describe("useSessionAttachments", () => {
     );
     expect(result.current.attachments).toHaveLength(0);
   });
+
+  it("keeps polling the session the upload went to, with no session prop", async () => {
+    // The draft composer has no session id until Send — it reserves one and
+    // uploads against that. Everything here used to key off the PROP, so the
+    // load never ran and the poll never started: a chip put up on attach spun
+    // on "parsing" forever no matter what the server did with it. Reported
+    // from qa as "still parsing" on a file the server had finished.
+    uploadAttachment.mockResolvedValue(
+      row({ id: "srv1", session_id: "reserved-1", parse_status: "parsing" }),
+    );
+    listAttachments
+      .mockResolvedValueOnce({
+        items: [
+          row({ id: "srv1", session_id: "reserved-1", parse_status: "parsing" }),
+        ],
+      })
+      .mockResolvedValue({
+        items: [
+          row({ id: "srv1", session_id: "reserved-1", parse_status: "ready" }),
+        ],
+      });
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useSessionAttachments(null));
+
+    await act(async () => {
+      await result.current.attachLocalFiles([file()], async () => ({
+        id: "reserved-1",
+      }));
+    });
+    expect(result.current.hasParsing).toBe(true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(listAttachments).toHaveBeenCalledWith("reserved-1");
+    expect(result.current.hasParsing).toBe(false);
+  });
 });
