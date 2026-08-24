@@ -1228,6 +1228,15 @@ export const ProjectDetailPage = () => {
     const reserved = await sessionsApi.reserveSessionId(
       projectBaseUrl ? { baseUrl: projectBaseUrl } : undefined,
     );
+    // Record the origin the MOMENT the id exists — exactly what the create
+    // path did right after ``sessionsApi.create``. Everything session-scoped
+    // routes through ``resolveApiBase({sessionId})``, and an id with no
+    // recorded origin falls back to the module default. Without this the
+    // reservation is made on the project's backend and the upload that follows
+    // goes to whichever one is default: two backends, one id, and the row
+    // lands where nothing will ever look for it.
+    const projectOrigin = getEntityOrigin(id, "project");
+    if (projectOrigin) recordEntityOrigin(reserved, projectOrigin);
     reservedChatSessionIdRef.current = reserved;
     return { id: reserved };
   };

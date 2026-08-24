@@ -335,6 +335,10 @@ export const ConversationsHomePage = () => {
     const reserved = await sessionsApi.reserveSessionId(
       target ? { baseUrl: target.baseUrl } : undefined,
     );
+    // See ProjectDetailPage: an id with no recorded origin falls back to the
+    // module default, so the upload would leave the target the reservation was
+    // made on.
+    if (target) recordEntityOrigin(reserved, target.id);
     reservedSessionIdRef.current = reserved;
     return { id: reserved };
   };
