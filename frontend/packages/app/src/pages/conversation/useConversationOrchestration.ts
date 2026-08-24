@@ -586,12 +586,14 @@ export function useConversationOrchestration({
   // staged rows, so the turn went out claiming nothing.
   const {
     attachments: stagedAttachments,
+    inFlight: inFlightAttachments,
     hasPending: attachmentsParsing,
     attachLocalFiles,
     attachKbDocs,
     remove: removeStagedAttachment,
     claim: claimStagedAttachments,
     restage: restageAttachments,
+    settle: settleAttachments,
   } = useStagedAttachments(
     // The backend this conversation runs on. A draft has no session to route
     // on, so it follows its project.
@@ -604,21 +606,44 @@ export function useConversationOrchestration({
     remove: removeBoundAttachment,
     refresh: refreshBoundAttachments,
   } = useSessionAttachments(selectedSessionId);
-  // What the panel shows: this conversation's files, plus whatever is staged
-  // for the next turn.
-  const sessionAttachments = useMemo(
-    () => [...boundAttachments, ...stagedAttachments],
-    [boundAttachments, stagedAttachments],
-  );
+  // What the panel shows: this conversation's files — bound, on their way, and
+  // staged for the next turn.
+  //
+  // The middle group is why this is not just bound + staged. A claim takes the
+  // rows out of staging immediately but the bind is only durable once the POST
+  // returns, so leaving them out here emptied the panel for the length of the
+  // send — a session-create plus a message round trip on a cloud project,
+  // seconds during which the message bubble beside it already showed the file.
+  //
+  // De-duplicated because the two ends overlap by design: ``settle`` runs
+  // after the refresh that fetched the same row as bound, so for one render a
+  // file is legitimately in both.
+  const sessionAttachments = useMemo(() => {
+    const seen = new Set<string>();
+    return [
+      ...boundAttachments,
+      ...inFlightAttachments,
+      ...stagedAttachments,
+    ].filter((a) => !seen.has(a.id) && seen.add(a.id));
+  }, [boundAttachments, inFlightAttachments, stagedAttachments]);
   const removeSessionAttachmentRow = useCallback(
     async (attachmentId: string) => {
       if (stagedAttachments.some((a) => a.id === attachmentId)) {
         await removeStagedAttachment(attachmentId);
         return;
       }
+      // In flight or already bound, the row exists server-side either way; drop
+      // it from the in-flight set too so the panel does not re-show it when the
+      // turn's refresh lands.
+      settleAttachments([{ id: attachmentId }]);
       await removeBoundAttachment(attachmentId);
     },
-    [stagedAttachments, removeStagedAttachment, removeBoundAttachment],
+    [
+      stagedAttachments,
+      removeStagedAttachment,
+      removeBoundAttachment,
+      settleAttachments,
+    ],
   );
 
   // Agent-delivered artifacts (the "生成文件" list) — recorded by the
@@ -1268,6 +1293,7 @@ export function useConversationOrchestration({
     removeSessionAttachmentRow,
     claimStagedAttachments,
     restageAttachments,
+    settleAttachments,
     refreshBoundAttachments,
     refreshEvents,
     refreshActiveSession,

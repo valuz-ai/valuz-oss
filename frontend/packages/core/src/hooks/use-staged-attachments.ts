@@ -35,6 +35,20 @@ const placeholderFor = (file: File): SessionAttachmentItem => ({
 export interface UseStagedAttachmentsResult {
   /** Files staged for the next turn: uploaded-but-unclaimed, plus in-flight. */
   attachments: SessionAttachmentItem[];
+  /**
+   * Files a turn has claimed but the server has not confirmed bound yet.
+   *
+   * A file's life is ``staged → in-flight → bound``, and this is the middle
+   * one. It used to live only in a local variable inside the send, so the
+   * conversation's file panel — which shows staged plus bound — could see
+   * neither for the whole length of the send. On a cloud project that is a
+   * session-create plus a message POST, and the panel sat empty for seconds
+   * while the message bubble beside it already showed the file.
+   *
+   * Not part of ``attachments``: the composer must not offer to send a file
+   * that is already on its way.
+   */
+  inFlight: SessionAttachmentItem[];
   /** True while any staged file is still uploading or parsing. */
   hasPending: boolean;
   attachLocalFiles: (files: File[]) => Promise<void>;
@@ -55,6 +69,12 @@ export interface UseStagedAttachmentsResult {
   claim: () => SessionAttachmentItem[];
   /** Put claimed rows back — the send they were claimed for did not happen. */
   restage: (rows: SessionAttachmentItem[]) => void;
+  /**
+   * Let claimed rows go: the bind is durable, so the conversation's own list
+   * owns them now. Until this is called they stay in ``inFlight`` and the
+   * panel keeps showing them.
+   */
+  settle: (rows: Array<{ id: string }>) => void;
 }
 
 /**
@@ -81,6 +101,9 @@ export function useStagedAttachments(
 ): UseStagedAttachmentsResult {
   const opts = useMemo(() => (baseUrl ? { baseUrl } : undefined), [baseUrl]);
   const [attachments, setState] = useState<SessionAttachmentItem[]>([]);
+  // Claimed, sent, not yet confirmed bound. Plain state: unlike the staged set
+  // nothing reads this mid-await — it exists to be rendered.
+  const [inFlight, setInFlight] = useState<SessionAttachmentItem[]>([]);
 
   // The ref is the authority; the state is its render mirror. Every mutation
   // here happens in an async callback — an upload resolving, a poll tick, a
@@ -215,28 +238,41 @@ export function useStagedAttachments(
     if (claimed.length === 0) return [];
     for (const a of claimed) mineRef.current.delete(a.id);
     write((prev) => prev.filter(isPlaceholder));
+    // Out of the composer, but not yet the conversation's: hold them so the
+    // panel has something to show across the send. ``settle`` or ``restage``
+    // takes them from here.
+    setInFlight((prev) => [...prev, ...claimed]);
     return claimed;
   }, [write]);
+
+  const settle = useCallback((rows: Array<{ id: string }>) => {
+    if (rows.length === 0) return;
+    const done = new Set(rows.map((r) => r.id));
+    setInFlight((prev) => prev.filter((a) => !done.has(a.id)));
+  }, []);
 
   const restage = useCallback(
     (rows: SessionAttachmentItem[]) => {
       if (rows.length === 0) return;
+      settle(rows); // no longer in flight — it never left
       for (const r of rows) mineRef.current.add(r.id);
       write((prev) => {
         const have = new Set(prev.map((a) => a.id));
         return [...rows.filter((r) => !have.has(r.id)), ...prev];
       });
     },
-    [write],
+    [settle, write],
   );
 
   return {
     attachments,
+    inFlight,
     hasPending,
     attachLocalFiles,
     attachKbDocs,
     remove,
     claim,
     restage,
+    settle,
   };
 }
