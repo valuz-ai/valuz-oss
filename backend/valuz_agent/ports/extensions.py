@@ -63,6 +63,10 @@ from valuz_agent.ports.llm_provider import LLMProvider, NoopLLMProvider
 from valuz_agent.ports.mcp_always_on import AlwaysOnMcpServerSpec
 from valuz_agent.ports.message_context import MessageContextProviderPort
 from valuz_agent.ports.model_defaults import ModelDefaultsPort, SettingsModelDefaults
+from valuz_agent.ports.parser_routing_policy import (
+    ParserRoutingPolicyPort,
+    UserSettingsParserRoutingPolicy,
+)
 from valuz_agent.ports.provider_policy import AllowAllProviderPolicy, ProviderPolicyPort
 from valuz_agent.ports.resource_list_hook import NoopResourceListHook, ResourceListHook
 from valuz_agent.ports.runtime_availability import RuntimeAvailabilityPort
@@ -185,6 +189,11 @@ class Extensions:
         # Per-owner rather than a singleton because the OSS default is scoped
         # to the owner's preview directory.
         self.docs_runtime_factory: DocsRuntimeFactory = default_docs_runtime
+        # Whether the per-user routing snapshot is the last word on which
+        # parser runs. OSS default: it is. A managed deployment where parsing
+        # is an operator-provided capability rather than an account preference
+        # binds its own.
+        self.parser_routing_policy: ParserRoutingPolicyPort = UserSettingsParserRoutingPolicy()
         # Who parses queued documents. OSS default declines, leaving the
         # in-process daemon thread; a scaled deployment binds a dispatcher that
         # hands them to a worker so the work survives a web restart.
