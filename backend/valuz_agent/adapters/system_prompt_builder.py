@@ -124,6 +124,45 @@ def remove_citation_system_policy(instructions: str) -> str:
     return _CITATION_POLICY_BLOCK_RE.sub("\n\n", instructions or "").strip()
 
 
+# ── PTC (Programmatic Tool Calling) policy block ─────────────────────────
+
+PTC_POLICY_REVISION = "ptc-v1"
+
+PTC_SYSTEM_POLICY = """\
+For a single quick lookup, call a data tool directly. When a task needs \
+loops, comparisons, batch queries, or computation over data-tool results, \
+write Python and run it with the `execute_code` tool instead: import the \
+generated wrappers (usage and signatures in the `ptc-tools` skill), chain \
+the calls and the analysis in ONE program, save sizeable raw results to \
+files, and print only compact summaries — only stdout returns to you. \
+Orchestration, automation, scheduling, and connector-management tools are \
+always called directly, never from code."""
+
+_PTC_POLICY_BLOCK_RE = re.compile(
+    r"(?:\n{0,2})<ptc-policy(?:\s+revision=\"[^\"]*\")?>.*?</ptc-policy>(?:\n{0,2})",
+    re.DOTALL,
+)
+
+
+def ensure_ptc_system_policy(instructions: str) -> str:
+    """Install or upgrade the machine-managed PTC dispatch-rule block.
+
+    Same contract as the citation pair: idempotent, byte-stable for a given
+    revision, and applied before every turn so a revision bump reaches
+    existing sessions without touching user/agent/project sections.
+    """
+
+    without_old = _PTC_POLICY_BLOCK_RE.sub("\n\n", instructions or "").strip()
+    block = f'<ptc-policy revision="{PTC_POLICY_REVISION}">\n{PTC_SYSTEM_POLICY}\n</ptc-policy>'
+    return f"{without_old}\n\n{block}" if without_old else block
+
+
+def remove_ptc_system_policy(instructions: str) -> str:
+    """Remove the machine-managed PTC block without touching user text."""
+
+    return _PTC_POLICY_BLOCK_RE.sub("\n\n", instructions or "").strip()
+
+
 def build_project_system_prompt(
     *,
     project_name: str,
@@ -242,6 +281,9 @@ __all__ = [
     "assemble_session_instructions",
     "build_project_system_prompt",
     "build_worktree_notice",
+    "PTC_POLICY_REVISION",
+    "PTC_SYSTEM_POLICY",
     "ensure_citation_system_policy",
+    "ensure_ptc_system_policy",
     "remove_citation_system_policy",
 ]

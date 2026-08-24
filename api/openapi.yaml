@@ -5158,6 +5158,7 @@ components:
         - conversation_citations_enabled
         - conversation_verification_enabled
         - conversation_task_coverage_enabled
+        - ptc_enabled
       properties:
         default_timezone: {type: string}
         default_locale: {type: string}
@@ -5176,6 +5177,13 @@ components:
           type: boolean
           default: true
           description: Check explicit task completeness and repair bounded omissions before publishing a reply.
+        ptc_enabled:
+          type: boolean
+          default: false
+          description: >-
+            Programmatic Tool Calling — let agents batch data-tool calls by
+            writing Python via execute_code; only printed summaries enter the
+            model context.
     PreferencesPatch:
       type: object
       properties:
@@ -5186,6 +5194,7 @@ components:
         conversation_citations_enabled: {type: boolean}
         conversation_verification_enabled: {type: boolean}
         conversation_task_coverage_enabled: {type: boolean}
+        ptc_enabled: {type: boolean}
     MemoryView:
       type: object
       required: [enabled, auto_extract, custom_instructions, entries]

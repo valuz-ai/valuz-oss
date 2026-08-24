@@ -66,7 +66,8 @@ export const MemorySection = () => {
     key:
       | "conversation_citations_enabled"
       | "conversation_verification_enabled"
-      | "conversation_task_coverage_enabled",
+      | "conversation_task_coverage_enabled"
+      | "ptc_enabled",
     value: boolean,
   ) => {
     try {
@@ -121,6 +122,7 @@ export const MemorySection = () => {
     preferences?.conversation_verification_enabled ?? false;
   const taskCoverageOn =
     preferences?.conversation_task_coverage_enabled ?? false;
+  const ptcOn = preferences?.ptc_enabled ?? false;
 
   return (
     <SettingsSection
@@ -170,6 +172,19 @@ export const MemorySection = () => {
                   "conversation_task_coverage_enabled",
                   value,
                 )
+              }
+            />
+          </SettingsRow>
+          <div className="my-5 h-px bg-surface-border" />
+          <SettingsRow
+            className="px-0 py-0"
+            label={t("settings.personalization.ptcLabel")}
+            desc={t("settings.personalization.ptcDesc")}
+          >
+            <Switch
+              checked={ptcOn}
+              onCheckedChange={(value) =>
+                void toggleConversation("ptc_enabled", value)
               }
             />
           </SettingsRow>

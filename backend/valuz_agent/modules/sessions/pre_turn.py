@@ -200,5 +200,22 @@ def chat_capability_hook(
         await _refresh_bundled_skills(session_id, user_id)
         await _refresh_docs_capabilities(session_id, user_id)
         await restamp_always_on_mcp(session_id, user_id)
+        # Last: PTC reads the post-restamp MCP set (final server names) to
+        # decide the code face for this turn.
+        await _refresh_ptc(session_id, user_id)
 
     return _hook
+
+
+async def _refresh_ptc(session_id: str, user_id: str | None) -> None:
+    """Converge the PTC code face (generated skill + opt-in metadata +
+    prompt policy block) with the user's preference and the session's
+    data connectors. Additive/reversible; a no-op keeps rows unchanged."""
+    if user_id is None:
+        return
+    try:
+        from valuz_agent.modules.ptc.session_refresh import refresh_ptc_for_session
+
+        await refresh_ptc_for_session(session_id, user_id)
+    except Exception:  # noqa: BLE001 — never block a turn on a refresh failure
+        logger.warning("ptc refresh failed for session %s", session_id, exc_info=True)

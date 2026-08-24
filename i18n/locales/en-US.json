@@ -1389,6 +1389,8 @@
       "verificationDesc": "Review facts, numbers, and source consistency after each assistant message; this may add latency and model usage.",
       "taskCoverageLabel": "Check task completeness",
       "taskCoverageDesc": "After the main answer finishes, check whether it covers the request; important omissions may be added in one continuation.",
+      "ptcLabel": "Programmatic Tool Calling (PTC)",
+      "ptcDesc": "Let agents batch data-tool calls (Valuz Data/Search) by writing Python; raw payloads stay out of the conversation — only printed summaries return.",
       "memoryTitle": "Memory",
       "saveFailed": "Failed to save personalization settings"
     },

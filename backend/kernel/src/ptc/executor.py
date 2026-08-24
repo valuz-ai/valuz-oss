@@ -360,3 +360,24 @@ def register_execute_code_tool(store_getter: Callable[[], StorePort]) -> None:
     from src.core.tool_registry import register_tool
 
     register_tool(build_execute_code_tool(store_getter))
+
+
+def maybe_expose_execute_code(toolkit: Any, session: Any) -> bool:
+    """Expose ``execute_code`` on a session's toolkit when the session
+    opted into PTC (``metadata["ptc"].servers`` resolves to ≥1 server).
+
+    Called by the runtime factory for every session; a no-op unless the
+    implementation was registered at boot and the session qualifies.
+    Returns ``True`` when the tool was added.
+    """
+    from src.core.tool_registry import get_registered_tool
+
+    if toolkit.get(EXECUTE_CODE_TOOL_NAME) is not None:
+        return False
+    if not eligible_ptc_servers(session):
+        return False
+    registered = get_registered_tool(EXECUTE_CODE_TOOL_NAME)
+    if registered is None or registered.handler is None:
+        return False
+    toolkit.register(registered)
+    return True
