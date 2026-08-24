@@ -44,8 +44,12 @@ export function useProjectPlaybooks(projectId: string) {
     }
     try {
       setDefinitions(await playbooksApi.list(projectId));
-    } catch (error) {
-      toast.error(t("playbook.loadFailed", { error: String(error) }));
+    } catch {
+      // Quiet degrade, matching the automations load's ``.catch(() => null)``:
+      // a remote/shared host may legitimately refuse this route (offline
+      // relay, shared-agent verb table) and the project page must stay
+      // usable. User-initiated actions below keep their error toasts.
+      setDefinitions([]);
     }
   }, [projectId]);
 
@@ -60,10 +64,9 @@ export function useProjectPlaybooks(projectId: string) {
       .then((rows) => {
         if (!cancelled) setDefinitions(rows);
       })
-      .catch((error) => {
-        if (!cancelled) {
-          toast.error(t("playbook.loadFailed", { error: String(error) }));
-        }
+      .catch(() => {
+        // Same quiet degrade as ``reload`` above.
+        if (!cancelled) setDefinitions([]);
       });
     return () => {
       cancelled = true;
