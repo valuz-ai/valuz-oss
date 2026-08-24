@@ -12,7 +12,11 @@ import { cn } from "../../lib/cn";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { useI18n } from "../../hooks/use-i18n";
-import { MarkdownContent } from "../conversation/MarkdownContent";
+import { ArtifactRenderer } from "../artifacts/ArtifactViewerShell";
+import type {
+  ArtifactContent,
+  ArtifactDescriptor,
+} from "../artifacts/artifact-viewer.types";
 
 /** Mirror of the backend ``ParserAttempt`` row (one entry per plugin
  *  run for this doc — succeeded or failed). UI doesn't import the
@@ -80,6 +84,27 @@ function _formatAttemptTime(iso: string): string {
   }
 }
 
+/** The parsed markdown, dressed as an artifact for the shared viewer. */
+function _previewArtifact(name: string): ArtifactDescriptor {
+  return {
+    id: `kb-preview:${name}`,
+    kind: "file",
+    name,
+    previewKind: "markdown",
+    capabilities: {
+      canPreview: true,
+      canEdit: false,
+      canOpenExternal: false,
+      canCopyContent: true,
+      canDownload: false,
+    },
+  };
+}
+
+function _previewContent(markdown: string): ArtifactContent {
+  return { kind: "text", encoding: "utf-8", content: markdown, truncated: false };
+}
+
 export const DocumentDetailPanel = ({
   doc,
   meta,
@@ -110,12 +135,37 @@ export const DocumentDetailPanel = ({
       </div>
 
       <div className="flex-1 overflow-y-auto px-5 pb-5 pt-1">
-        <div className="mb-4">
+        <div className="mb-3">
           <div className="wrap-anywhere text-sm font-medium text-ink-heading">
             {doc.name}
           </div>
-          <div className="mt-2 flex items-center gap-2">
+          {/* One strip carries every scalar fact — type, size, import time,
+              index status — so the parsed content below gets the panel. The
+              old layout spent ~15 stacked rows on these and pushed the
+              preview off screen. */}
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-ink-body">
             <Badge variant="outline">{doc.format}</Badge>
+            {meta?.fileSize != null ? (
+              <span>
+                {meta.fileSize < 1024
+                  ? `${meta.fileSize} B`
+                  : meta.fileSize < 1024 * 1024
+                    ? `${(meta.fileSize / 1024).toFixed(1)} KB`
+                    : `${(meta.fileSize / (1024 * 1024)).toFixed(1)} MB`}
+              </span>
+            ) : null}
+            {meta?.importedAt ? (
+              <span className="text-ink-meta">
+                {new Date(meta.importedAt).toLocaleString(getLocale(), {
+                  year: "numeric",
+                  month: "2-digit",
+                  day: "2-digit",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  hour12: false,
+                })}
+              </span>
+            ) : null}
             <Badge
               variant={
                 doc.status === "ready"
@@ -140,89 +190,26 @@ export const DocumentDetailPanel = ({
                       : t("knowledge.statusWaiting")}
             </Badge>
           </div>
-        </div>
-
-        {doc.preview ? (
-          <section className="mb-5 border-b border-surface-border pb-5">
-            <div className="text-2xs font-medium text-ink-section">
-              {t("knowledge.preview")}
-            </div>
-            <MarkdownContent
-              content={doc.preview}
-              className="mt-2 text-xs leading-5 text-ink-body"
-            />
-          </section>
-        ) : null}
-
-        {meta ? (
-          <div className="mb-4 space-y-3">
-            {meta.kbName ? (
-              <div>
-                <div className="text-2xs font-medium text-ink-section">
-                  {t("knowledge.parentKb")}
-                </div>
-                <div className="mt-1 flex items-center gap-1.5 text-xs text-ink-heading">
-                  <FolderOpen className="h-3 w-3 text-ink-muted" />
+          {/* Where the file lives, compressed to one truncated line — kept at
+              all because the source path is what support asks for, but it must
+              not cost the preview its space. Hover for the full path. */}
+          {meta?.kbName || meta?.sourcePath ? (
+            <div
+              className="mt-1.5 flex min-w-0 items-center gap-1.5 text-2xs text-ink-meta"
+              title={meta?.sourcePath ?? meta?.relativePath ?? undefined}
+            >
+              {meta?.kbName ? (
+                <span className="flex shrink-0 items-center gap-1">
+                  <FolderOpen className="h-3 w-3" />
                   {meta.kbName}
-                </div>
-              </div>
-            ) : null}
-            {meta.relativePath ? (
-              <div>
-                <div className="text-2xs font-medium text-ink-section">
-                  {t("knowledge.kbPath")}
-                </div>
-                <div className="mt-1 wrap-anywhere font-mono text-xs text-ink-heading">
-                  {meta.relativePath}
-                </div>
-              </div>
-            ) : null}
-            {meta.sourcePath ? (
-              <div>
-                <div className="text-2xs font-medium text-ink-section">
-                  {t("knowledge.sourcePath")}
-                </div>
-                <div
-                  className="mt-1 wrap-anywhere font-mono text-xs leading-5 text-ink-body"
-                  title={meta.sourcePath}
-                >
-                  {meta.sourcePath}
-                </div>
-              </div>
-            ) : null}
-            {meta.fileSize != null ? (
-              <div>
-                <div className="text-2xs font-medium text-ink-section">
-                  {t("knowledge.fileSize")}
-                </div>
-                <div className="mt-1 text-xs text-ink-heading">
-                  {meta.fileSize < 1024
-                    ? `${meta.fileSize} B`
-                    : meta.fileSize < 1024 * 1024
-                      ? `${(meta.fileSize / 1024).toFixed(1)} KB`
-                      : `${(meta.fileSize / (1024 * 1024)).toFixed(1)} MB`}
-                </div>
-              </div>
-            ) : null}
-            {meta.importedAt ? (
-              <div>
-                <div className="text-2xs font-medium text-ink-section">
-                  {t("knowledge.importTime")}
-                </div>
-                <div className="mt-1 text-xs text-ink-heading">
-                  {new Date(meta.importedAt).toLocaleString(getLocale(), {
-                    year: "numeric",
-                    month: "2-digit",
-                    day: "2-digit",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    hour12: false,
-                  })}
-                </div>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
+                </span>
+              ) : null}
+              {meta?.sourcePath ? (
+                <span className="truncate font-mono">{meta.sourcePath}</span>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
 
         {hasParseInfo ? (
           <div className="mb-4 space-y-2">
@@ -304,6 +291,21 @@ export const DocumentDetailPanel = ({
               </div>
             ) : null}
           </div>
+        ) : null}
+
+        {doc.preview ? (
+          <section className="mt-1 flex min-h-0 flex-col border-t border-surface-border pt-4">
+            <div className="mb-2 text-2xs font-medium text-ink-section">
+              {t("knowledge.preview")}
+            </div>
+            {/* The system file viewer, not the chat bubble's markdown: the
+                parsed result is a document, and this is the renderer every
+                other document surface (artifacts, reader) already uses. */}
+            <ArtifactRenderer
+              artifact={_previewArtifact(doc.name)}
+              content={_previewContent(doc.preview)}
+            />
+          </section>
         ) : null}
       </div>
 

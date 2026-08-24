@@ -500,11 +500,11 @@ export const KnowledgePage = ({
       setAsideClassName(undefined);
       return;
     }
-    // The detail is the thing being read once a document is selected — parse
-    // history, error text, source path — while the list is just where the
-    // click came from. So the default 345px aside flips to the wider side
-    // here, and flips back the moment no document is open.
-    setAsideClassName("w-[55%] min-w-[420px] max-w-[960px]");
+    // The detail is the thing being read once a document is selected — the
+    // parsed markdown, error text — while the list is just where the click
+    // came from. 3:7 in the detail's favor; back to the 345px default the
+    // moment no document is open.
+    setAsideClassName("w-[70%] min-w-[480px]");
     setRightPanel(
       <DocumentDetailPanel
         doc={{
