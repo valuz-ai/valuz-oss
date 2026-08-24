@@ -584,6 +584,7 @@ export function useConversationOrchestration({
     attachKbDocs,
     remove: removeSessionAttachmentRow,
     markPendingConsumed,
+    pendingIds: pendingAttachmentIds,
   } = useSessionAttachments(selectedSessionId);
   // Agent-delivered artifacts (the "生成文件" list) — recorded by the
   // ``deliver_artifacts`` MCP tool. Loads on session change; refreshed on
@@ -1210,6 +1211,7 @@ export function useConversationOrchestration({
     attachLocalFiles,
     removeSessionAttachmentRow,
     markPendingConsumed,
+    pendingAttachmentIds,
     refreshEvents,
     refreshActiveSession,
     fetchSidebarSessions,

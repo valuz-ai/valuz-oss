@@ -291,13 +291,6 @@ import type { RuntimeId } from "@valuz/shared";
 export interface SessionCreateRequest {
   project_id: string;
   title?: string | null;
-  /**
-   * Create the session with an id already reserved from
-   * ``sessionsApi.reserveSessionId`` — the one attachments were uploaded
-   * against. Omitted for every caller with nothing staged, which is most of
-   * them; the host mints one then.
-   */
-  id?: string;
   // V5: ``model`` is locked at session creation. Either pass an explicit model
   // id, or pass a provider id and let the backend pick its default model.
   model_id?: string | null;
@@ -362,6 +355,8 @@ export interface SessionMessageHostRef {
 
 export interface SessionMessageRequest {
   prompt: string;
+  /** Staged attachments this turn claims. See ``sendMessage``. */
+  attachment_ids?: string[];
   provider_id?: string | null;
   model_id?: string | null;
   host_ref?: SessionMessageHostRef | null;
@@ -417,7 +412,8 @@ export interface SessionActionResponse {
 
 export interface SessionAttachmentItem {
   id: string;
-  session_id: string;
+  /** ``null`` while staged — bound by the turn that ships it. */
+  session_id: string | null;
   filename: string;
   stored_path: string;
   parsed_path?: string | null;
@@ -565,27 +561,6 @@ export const sessionsApi = {
     });
   },
 
-  /**
-   * Mint the id a session is *going* to have, without creating it.
-   *
-   * Attachments upload against a session id, and creating the session is what
-   * provisions a sandbox — so attaching a file used to wait on one (~3.6s in
-   * cloud mode) for something the upload path never touches. Reserve first,
-   * upload and parse against the id, and create at Send.
-   *
-   * The id comes from the host, not from here: its format is the host's to
-   * define and is already not uniform (``uuid4().hex`` from the host,
-   * ``str(uuid4())`` from the kernel on fork), so a client minting its own
-   * would be a third opinion on a settled-enough question.
-   */
-  async reserveSessionId(opts?: { baseUrl?: string }): Promise<string> {
-    const { session_id } = await fetchJson<{ session_id: string }>(
-      "/v1/sessions/reservations",
-      { method: "POST", baseUrl: opts?.baseUrl },
-    );
-    return session_id;
-  },
-
   async create(
     payload: SessionCreateRequest,
     opts?: { baseUrl?: string },
@@ -678,11 +653,16 @@ export const sessionsApi = {
     providerId?: string | null,
     modelId?: string | null,
     hostRef?: SessionMessageHostRef | null,
+    attachmentIds?: string[] | null,
   ): Promise<SessionDetail> {
     const body: SessionMessageRequest = { prompt };
     if (providerId) body.provider_id = providerId;
     if (modelId) body.model_id = modelId;
     if (hostRef) body.host_ref = hostRef;
+    // The staged files this turn claims. Server-minted ids handed back, not
+    // an identifier the client invented — and named explicitly so sending in
+    // one composer cannot swallow another's staged files.
+    if (attachmentIds?.length) body.attachment_ids = attachmentIds;
     return fetchJson(`/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -892,22 +872,39 @@ export const sessionsApi = {
     });
   },
 
+  /**
+   * Upload a file with no session attached to it.
+   *
+   * Uploading needed nothing from a session — the bytes land in the owner's
+   * store and the parse is a server-side job — but requiring one meant
+   * attaching a file had to CREATE one, and in cloud mode creating a session
+   * provisions a sandbox: about three and a half seconds of nothing happening.
+   * The turn that ships the file binds it (``sendMessage({attachmentIds})``).
+   *
+   * ``baseUrl`` is explicit because there is no session to route on; pass the
+   * project's / target's base, the same one the eventual create will use.
+   */
   uploadAttachment(
-    sessionId: string,
     file: File,
+    opts?: { baseUrl?: string },
   ): Promise<SessionAttachmentItem> {
     const form = new FormData();
     form.append("file", file);
-    return fetchJson(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/attachments`,
-      {
-        method: "POST",
-        body: form,
-        baseUrl: sessionBase(sessionId),
-      },
-    );
+    return fetchJson("/v1/attachments", {
+      method: "POST",
+      body: form,
+      baseUrl: opts?.baseUrl,
+    });
   },
 
+  /** This owner's staged (not yet sent) attachments. */
+  listStagedAttachments(opts?: {
+    baseUrl?: string;
+  }): Promise<{ items: SessionAttachmentItem[] }> {
+    return fetchJson("/v1/attachments", { baseUrl: opts?.baseUrl });
+  },
+
+  /** Everything ever attached to ``sessionId`` — the conversation's history. */
   listAttachments(
     sessionId: string,
   ): Promise<{ items: SessionAttachmentItem[] }> {
@@ -939,18 +936,15 @@ export const sessionsApi = {
    * silently dropped server-side; missing doc ids return 400.
    */
   addKbAttachments(
-    sessionId: string,
     docIds: string[],
+    opts?: { baseUrl?: string },
   ): Promise<{ items: SessionAttachmentItem[] }> {
-    return fetchJson(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/attachments/kb`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ doc_ids: docIds }),
-        baseUrl: sessionBase(sessionId),
-      },
-    );
+    return fetchJson("/v1/attachments/kb", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ doc_ids: docIds }),
+      baseUrl: opts?.baseUrl,
+    });
   },
 
   /**
@@ -959,11 +953,14 @@ export const sessionsApi = {
    * ``source_kind="kb_doc"`` only the row is deleted (the KB
    * document survives for other sessions).
    */
-  deleteAttachment(sessionId: string, attachmentId: string): Promise<void> {
-    return fetchJson(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}`,
-      { method: "DELETE", baseUrl: sessionBase(sessionId) },
-    );
+  deleteAttachment(
+    attachmentId: string,
+    opts?: { baseUrl?: string },
+  ): Promise<void> {
+    return fetchJson(`/v1/attachments/${encodeURIComponent(attachmentId)}`, {
+      method: "DELETE",
+      baseUrl: opts?.baseUrl,
+    });
   },
 
   /**

@@ -496,16 +496,13 @@ export const ProjectDetailPage = () => {
   // ``chatSessionId`` is set. Parsing runs async on the backend; the hook
   // polls status for the composer progress chips.
   const [chatSessionId, setChatSessionId] = useState<string | null>(null);
-  // The reserved-but-not-yet-created session id. A ref, not state: nothing
-  // renders from it, and it must survive a failed send so the retry reuses
-  // the id this composer's attachments are already staged against.
-  const reservedChatSessionIdRef = useRef<string | null>(null);
   const {
     attachments: stagedAttachments,
     hasParsing,
     attachLocalFiles,
     remove: removeAttachment,
     markPendingConsumed,
+    pendingIds: pendingAttachmentIds,
   } = useSessionAttachments(chatSessionId);
   const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
   // PRD-PAAT §3.2 unified composer mode. ``chat`` creates a normal
@@ -832,7 +829,8 @@ export const ProjectDetailPage = () => {
         );
         const projectOrigin = id ? getEntityOrigin(id, "project") : undefined;
         if (projectOrigin) recordEntityOrigin(session.id, projectOrigin);
-        await sessionsApi.addKbAttachments(session.id, ids);
+        // Staged, not bound: the conversation page's first send claims them.
+        await sessionsApi.addKbAttachments(ids);
         navigate(`/conversation/${session.id}`);
       } catch {
         toast.error(t("common.failed" as Parameters<typeof t>[0]));
@@ -1206,37 +1204,11 @@ export const ProjectDetailPage = () => {
     }
   };
 
-  // Reserve (once) the id this composer's session will have. Attachments
-  // upload against it immediately; the session itself is not created until
-  // Send.
-  //
-  // Creating it here is what made attaching a file wait on a sandbox — under
-  // scoped allocation ``create_session`` provisions one (~3.6s in cloud mode)
-  // while the upload path needs nothing from the kernel at all. Reserving is
-  // one cheap round-trip that writes no state.
-  //
-  // Held in a ref across failures on purpose: the files the person attached
-  // are staged against THIS id, so a failed send must retry with it rather
-  // than strand them under an id nothing will ever claim.
-  const reserveChatSessionId = async (): Promise<{ id: string }> => {
-    if (chatSessionId) return { id: chatSessionId };
-    if (reservedChatSessionIdRef.current) {
-      return { id: reservedChatSessionIdRef.current };
-    }
-    if (!selectedAgentSlug) throw new Error("no-agent-selected");
-    const projectBaseUrl = resolveApiBase({ projectId: id }, "");
-    const reserved = await sessionsApi.reserveSessionId(
-      projectBaseUrl ? { baseUrl: projectBaseUrl } : undefined,
-    );
-    reservedChatSessionIdRef.current = reserved;
-    return { id: reserved };
-  };
-
-  // Create the session the reservation named. Runs at Send, which is also
-  // where ADR-006 now freezes agent / model / runtime — later than before, and
-  // more truthfully: whatever is selected when the turn goes out is what the
-  // session gets, instead of whatever happened to be selected when a file was
-  // dropped on the composer.
+  // Create the session, at Send. Attachments no longer need one to exist, so
+  // this is also where ADR-006 freezes agent / model / runtime — later than
+  // before and more truthfully: whatever is selected when the turn goes out is
+  // what the session gets, instead of whatever happened to be selected when a
+  // file was dropped on the composer.
   const ensureChatSession = async (): Promise<{ id: string }> => {
     if (chatSessionId) return { id: chatSessionId };
     if (!selectedAgentSlug) throw new Error("no-agent-selected");
@@ -1246,12 +1218,6 @@ export const ProjectDetailPage = () => {
     const session = await sessionsApi.create(
       {
         project_id: id,
-        // The id attachments were uploaded against, when anything was
-        // attached. Absent for a plain text turn — nothing referenced it, so
-        // the host mints one.
-        ...(reservedChatSessionIdRef.current
-          ? { id: reservedChatSessionIdRef.current }
-          : {}),
         agent_slug: selectedAgentSlug,
         permission_mode: selectedPermissionMode,
         // Presence of the object opts into worktree isolation; a name set by
@@ -1278,7 +1244,7 @@ export const ProjectDetailPage = () => {
       );
       return;
     }
-    void attachLocalFiles(files, reserveChatSessionId);
+    void attachLocalFiles(files);
   };
 
   // The actual chat send. Attachments are already uploaded (on attach), so
@@ -1374,7 +1340,16 @@ export const ProjectDetailPage = () => {
       // serializes inline skill chips into its controlled value. This page is
       // unmounting behind the navigation; the failure toast below is global,
       // and the conversation page simply never gets its turn.
-      await sessionsApi.sendMessage(session.id, text);
+      // Bind the staged files to this turn — this is where a file stops
+      // being a draft and becomes part of the conversation.
+      await sessionsApi.sendMessage(
+        session.id,
+        text,
+        null,
+        null,
+        null,
+        pendingAttachmentIds,
+      );
     } catch (cause) {
       // A billing rejection (402) carries an i18n key the client renders;
       // otherwise fall back to the generic save-failed copy.

@@ -37,7 +37,12 @@ class ProjectSessionRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
 class SessionAttachmentRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     __tablename__ = "valuz_session_attachment"
 
-    session_id: Mapped[str] = mapped_column(String(36), index=True)
+    # NULL until a turn claims it. An attachment uploads on its own — the
+    # bytes go to the owner's data dir and the parse is a host task — and the
+    # send binds it to the session it ships with. Requiring a session here is
+    # what made attaching a file create one, which under scoped allocation
+    # provisions a sandbox for something the upload never touches.
+    session_id: Mapped[str | None] = mapped_column(String(36), index=True)
     filename: Mapped[str] = mapped_column(String(512))
     stored_path: Mapped[str] = mapped_column(Text)
     size_bytes: Mapped[int] = mapped_column(Integer, default=0)

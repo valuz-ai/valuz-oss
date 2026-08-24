@@ -1,17 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { sessionsApi, type SessionAttachmentItem } from "../api/sessions-api";
 
-/**
- * Mints (or returns) the session a freshly-attached file belongs to.
- *
- * Attachments upload **on attach**, not on send, so a session must already
- * exist before the first upload. For an ongoing conversation this just returns
- * the live session; for a brand-new / project conversation it eagerly creates
- * one (which, per ADR-006, freezes the model/agent/runtime — the composer
- * reflects that lock once a file is attached).
- */
-export type EnsureSession = () => Promise<{ id: string }>;
 
 export interface UseSessionAttachmentsResult {
   /** Every attachment row for the active session (pending + consumed). */
@@ -24,16 +14,19 @@ export interface UseSessionAttachmentsResult {
    * unparsed one.
    */
   hasParsing: boolean;
-  /** Upload local files immediately; eager-creates the session if needed. */
-  attachLocalFiles: (
-    files: File[],
-    ensureSession: EnsureSession,
-  ) => Promise<void>;
-  /** Attach KB documents immediately; eager-creates the session if needed. */
-  attachKbDocs: (
-    docIds: string[],
-    ensureSession: EnsureSession,
-  ) => Promise<void>;
+  /** Upload local files immediately. No session required, or created. */
+  attachLocalFiles: (files: File[]) => Promise<void>;
+  /** Attach KB documents immediately. No session required, or created. */
+  attachKbDocs: (docIds: string[]) => Promise<void>;
+  /**
+   * Ids of the staged attachments a send should claim, in upload order.
+   *
+   * Passed to ``sessionsApi.sendMessage`` — binding is what turns a staged
+   * file into part of a conversation. Named explicitly rather than "whatever
+   * this owner has staged" so a project chat and a quick chat open at once do
+   * not steal each other's files.
+   */
+  pendingIds: string[];
   /** Remove one attachment (optimistic drop + server delete). */
   remove: (attachmentId: string) => Promise<void>;
   /**
@@ -76,8 +69,8 @@ let localSeq = 0;
  */
 const placeholderFor = (file: File): SessionAttachmentItem => ({
   id: `${LOCAL_ID_PREFIX}${(localSeq += 1)}`,
-  // Unknown until ``ensureSession`` resolves; the merges below key off the id
-  // prefix rather than this, so an empty session never drops the row.
+  // NULL until a turn claims it. The merges below key off the id prefix, so
+  // an unbound row is never mistaken for a stale one.
   session_id: "",
   filename: file.name,
   stored_path: "",
@@ -105,7 +98,14 @@ const placeholderFor = (file: File): SessionAttachmentItem => ({
  */
 export function useSessionAttachments(
   sessionId: string | null,
+  /**
+   * Where staged reads and uploads go. There is no session to route on before
+   * the first send, so the caller names the backend — the same one the eventual
+   * session will be created on. Omitted → the module default.
+   */
+  baseUrl?: string,
 ): UseSessionAttachmentsResult {
+  const readOpts = useMemo(() => (baseUrl ? { baseUrl } : undefined), [baseUrl]);
   const [attachments, setAttachments] = useState<SessionAttachmentItem[]>([]);
 
   // Mirror of ``sessionId`` for callbacks that must read it at CALL time.
@@ -187,10 +187,16 @@ export function useSessionAttachments(
   // replace across a real session switch.
   useEffect(() => {
     let cancelled = false;
+    // No session → this owner's STAGING set (uploaded, not yet claimed by a
+    // turn), which is what a composer shows before its first send and what it
+    // restores from after a reload. With a session → that conversation's own
+    // attachments. Two questions, one hook, because a composer becomes the
+    // second the moment it sends.
     const load = async (): Promise<SessionAttachmentItem[]> => {
-      if (!sessionId) return [];
       try {
-        const res = await sessionsApi.listAttachments(sessionId);
+        const res = sessionId
+          ? await sessionsApi.listAttachments(sessionId)
+          : await sessionsApi.listStagedAttachments(readOpts);
         return res.items;
       } catch {
         return [];
@@ -204,7 +210,7 @@ export function useSessionAttachments(
         // while ``sessionId`` is still null, and the session is minted by the
         // upload that follows. Clearing here would erase the chip that was
         // just put up.
-        if (!sessionId) return prev.filter(isLocalPlaceholder);
+        // ``items`` is authoritative for whichever set was read.
         const localById = new Map(prev.map((a) => [a.id, a]));
         const serverIds = new Set(items.map((r) => r.id));
         // Server rows win, but never backwards on ``consumed_at``: a send
@@ -218,15 +224,21 @@ export function useSessionAttachments(
           }
           return applyConsumeWatermark(s);
         });
-        // Placeholders are kept regardless of ``session_id``: this effect runs
-        // the moment ``ensureSession`` promotes null → the new id, which is
-        // BEFORE the upload that will tell the placeholder which session it
-        // belongs to. Matching on session would drop it at exactly that
-        // moment, and the chip would blink out mid-upload.
+        // Placeholders are kept regardless of ``session_id``: a chip goes up
+        // before its upload lands, so a read that arrives in between must not
+        // take it back down.
+        // Optimistic rows the server has not returned yet: a placeholder put
+        // up before its upload landed, and a server row appended by an upload
+        // whose response beat a list read that was already in flight.
+        //
+        // Scoped to the set being READ, or a session switch would carry the
+        // previous conversation's files into the next one — the load is also
+        // what CLEARS on a switch, and a filter that keeps everything cannot
+        // clear anything.
+        const belongsHere = (a: SessionAttachmentItem) =>
+          sessionId ? a.session_id === sessionId : !a.session_id;
         const optimistic = prev.filter(
-          (a) =>
-            !serverIds.has(a.id) &&
-            (a.session_id === sessionId || isLocalPlaceholder(a)),
+          (a) => !serverIds.has(a.id) && (belongsHere(a) || isLocalPlaceholder(a)),
         );
         return [...merged, ...optimistic];
       });
@@ -248,11 +260,13 @@ export function useSessionAttachments(
   // dropped by a navigate→bootstrap reset.)
   const anyParsing = attachments.some((a) => a.parse_status === "parsing");
   useEffect(() => {
-    if (!sessionId || !anyParsing) return;
+    if (!anyParsing) return;
     let cancelled = false;
     const handle = setInterval(() => {
-      sessionsApi
-        .listAttachments(sessionId)
+      (sessionId
+        ? sessionsApi.listAttachments(sessionId)
+        : sessionsApi.listStagedAttachments(readOpts)
+      )
         .then((res) => {
           if (!cancelled) mergeServer(res.items);
         })
@@ -267,35 +281,23 @@ export function useSessionAttachments(
   }, [sessionId, anyParsing, mergeServer]);
 
   const attachLocalFiles = useCallback(
-    async (files: File[], ensureSession: EnsureSession) => {
+    async (files: File[]) => {
       if (files.length === 0) return;
 
-      // Show the files FIRST. ``ensureSession`` can take seconds — in cloud
-      // mode it allocates a sandbox — and the upload seconds more, and until
-      // this change every one of those seconds looked to the person like their
-      // drop had been ignored: no chip, no spinner, nothing. The row they see
-      // now is local; the upload below swaps in the server's.
+      // Show the files FIRST. The upload still takes a moment (it writes to
+      // the owner's store), and until the chip exists a drop looks ignored.
+      // The row they see is local; the upload below swaps in the server's.
       const staged = files.map((file) => [file, placeholderFor(file)] as const);
       setAttachments((prev) => [...prev, ...staged.map(([, row]) => row)]);
 
       const drop = (id: string) =>
         setAttachments((prev) => prev.filter((a) => a.id !== id));
 
-      let session: { id: string };
-      try {
-        session = await ensureSession();
-      } catch (cause) {
-        // No session means no upload for ANY of them — leaving the chips up
-        // would promise a turn that cannot carry them.
-        for (const [, row] of staged) drop(row.id);
-        throw cause;
-      }
-
       for (const [file, row] of staged) {
         try {
-          const item = await sessionsApi.uploadAttachment(session.id, file);
+          const item = await sessionsApi.uploadAttachment(file, readOpts);
           if (removedPlaceholdersRef.current.delete(row.id)) {
-            void sessionsApi.deleteAttachment(session.id, item.id).catch(() => {
+            void sessionsApi.deleteAttachment(item.id, readOpts).catch(() => {
               /* best-effort; the row is at worst an unreferenced file */
             });
             continue;
@@ -314,20 +316,18 @@ export function useSessionAttachments(
         }
       }
     },
-    [],
+    [readOpts],
   );
 
   const attachKbDocs = useCallback(
-    async (docIds: string[], ensureSession: EnsureSession) => {
+    async (docIds: string[]) => {
       if (docIds.length === 0) return;
-      const session = await ensureSession();
-      await sessionsApi.addKbAttachments(session.id, docIds);
-      // Re-read the full list (the KB endpoint returns pending-only); merge so
-      // panel history + optimistic consume survive.
-      const res = await sessionsApi.listAttachments(session.id);
-      mergeServer(res.items);
+      // The endpoint returns the owner's staging set, which is what a composer
+      // shows — no second read needed.
+      const { items } = await sessionsApi.addKbAttachments(docIds, readOpts);
+      mergeServer(items);
     },
-    [mergeServer],
+    [mergeServer, readOpts],
   );
 
   const remove = useCallback(
@@ -342,14 +342,13 @@ export function useSessionAttachments(
         removedPlaceholdersRef.current.add(attachmentId);
         return;
       }
-      if (!sessionId) return;
       try {
-        await sessionsApi.deleteAttachment(sessionId, attachmentId);
+        await sessionsApi.deleteAttachment(attachmentId, readOpts);
       } catch {
         /* best-effort */
       }
     },
-    [sessionId],
+    [readOpts],
   );
 
   const markPendingConsumed = useCallback(
@@ -364,9 +363,14 @@ export function useSessionAttachments(
     [],
   );
 
+  const pendingIds = attachments
+    .filter((a) => !a.consumed_at && !isLocalPlaceholder(a))
+    .map((a) => a.id);
+
   return {
     attachments,
     hasParsing,
+    pendingIds,
     attachLocalFiles,
     attachKbDocs,
     remove,

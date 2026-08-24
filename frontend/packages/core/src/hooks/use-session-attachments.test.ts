@@ -8,6 +8,7 @@ const listAttachments = vi.fn();
 const uploadAttachment = vi.fn();
 const addKbAttachments = vi.fn();
 const deleteAttachment = vi.fn();
+const listStagedAttachments = vi.fn();
 
 vi.mock("../api/sessions-api", () => ({
   sessionsApi: {
@@ -15,6 +16,7 @@ vi.mock("../api/sessions-api", () => ({
     uploadAttachment: (...a: unknown[]) => uploadAttachment(...a),
     addKbAttachments: (...a: unknown[]) => addKbAttachments(...a),
     deleteAttachment: (...a: unknown[]) => deleteAttachment(...a),
+    listStagedAttachments: (...a: unknown[]) => listStagedAttachments(...a),
   },
 }));
 
@@ -39,6 +41,7 @@ describe("useSessionAttachments", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listAttachments.mockResolvedValue({ items: [] });
+    listStagedAttachments.mockResolvedValue({ items: [] });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -72,15 +75,13 @@ describe("useSessionAttachments", () => {
     uploadAttachment.mockResolvedValue(
       row({ id: "u1", session_id: "s1", parse_status: "parsing" }),
     );
-    const ensureSession = vi.fn().mockResolvedValue({ id: "s1" });
 
     const { result } = renderHook(() => useSessionAttachments("s1"));
     // Upload appends u1 while the load is still pending.
     await act(async () => {
-      await result.current.attachLocalFiles(
-        [new File(["x"], "f.pdf", { type: "application/pdf" })],
-        ensureSession,
-      );
+      await result.current.attachLocalFiles([
+        new File(["x"], "f.pdf", { type: "application/pdf" }),
+      ]);
     });
     expect(result.current.attachments.some((a) => a.id === "u1")).toBe(true);
 
@@ -118,16 +119,14 @@ describe("useSessionAttachments", () => {
     uploadAttachment.mockResolvedValue(
       row({ id: "u1", parse_status: "parsing" }),
     );
-    const ensureSession = vi.fn().mockResolvedValue({ id: "s1" });
     const { result } = renderHook(() => useSessionAttachments("s1"));
     await waitFor(() => expect(listAttachments).toHaveBeenCalled());
 
     const file = new File(["hi"], "f.pdf", { type: "application/pdf" });
     await act(async () => {
-      await result.current.attachLocalFiles([file], ensureSession);
+      await result.current.attachLocalFiles([file]);
     });
-    expect(ensureSession).toHaveBeenCalledTimes(1);
-    expect(uploadAttachment).toHaveBeenCalledWith("s1", file);
+    expect(uploadAttachment).toHaveBeenCalledWith(file, undefined);
     expect(result.current.attachments.some((a) => a.id === "u1")).toBe(true);
     expect(result.current.hasParsing).toBe(true);
   });
@@ -289,42 +288,42 @@ describe("useSessionAttachments", () => {
   // ── attach-time feedback ────────────────────────────────────────────────
   //
   // Reported on qa: attach an image in a cloud conversation and nothing
-  // happens for ~5 seconds. ``ensureSession`` allocates a sandbox (~3.6s) and
-  // the upload writes to COS (~1.3s), and the chip only appeared after both.
+  // happens. The upload writes to the owner's store, and the chip only
+  // appeared after it landed.
 
   const file = (name = "f.png") => new File(["x"], name, { type: "image/png" });
 
   it("shows the file the moment it is attached, before any request", async () => {
     const { result } = renderHook(() => useSessionAttachments(null));
-    let releaseSession: (v: { id: string }) => void = () => {};
-    const ensure = () =>
-      new Promise<{ id: string }>((r) => {
-        releaseSession = r;
-      });
+    let releaseUpload: (v: SessionAttachmentItem) => void = () => {};
+    uploadAttachment.mockReturnValue(
+      new Promise<SessionAttachmentItem>((r) => {
+        releaseUpload = r;
+      }),
+    );
 
     act(() => {
-      void result.current.attachLocalFiles([file()], ensure);
+      void result.current.attachLocalFiles([file()]);
     });
 
-    // Still inside ``ensureSession`` — nothing has been asked of the server.
+    // The upload has not resolved — the chip is local.
     await waitFor(() => expect(result.current.attachments).toHaveLength(1));
     expect(result.current.attachments[0].filename).toBe("f.png");
     expect(result.current.hasParsing).toBe(true);
-    expect(uploadAttachment).not.toHaveBeenCalled();
 
     await act(async () => {
-      releaseSession({ id: "s1" });
+      releaseUpload(row({ id: "srv1", filename: "f.png", session_id: null }));
     });
   });
 
   it("replaces the placeholder with the server row rather than showing both", async () => {
-    uploadAttachment.mockResolvedValue(row({ id: "srv1", filename: "f.png" }));
+    uploadAttachment.mockResolvedValue(
+      row({ id: "srv1", filename: "f.png", session_id: null }),
+    );
     const { result } = renderHook(() => useSessionAttachments(null));
 
     await act(async () => {
-      await result.current.attachLocalFiles([file()], async () => ({
-        id: "s1",
-      }));
+      await result.current.attachLocalFiles([file()]);
     });
 
     expect(result.current.attachments).toHaveLength(1);
@@ -336,23 +335,7 @@ describe("useSessionAttachments", () => {
     const { result } = renderHook(() => useSessionAttachments(null));
 
     await act(async () => {
-      await result.current.attachLocalFiles([file()], async () => ({
-        id: "s1",
-      }));
-    });
-
-    expect(result.current.attachments).toHaveLength(0);
-  });
-
-  it("takes every chip down when the session cannot be created", async () => {
-    const { result } = renderHook(() => useSessionAttachments(null));
-
-    await act(async () => {
-      await result.current
-        .attachLocalFiles([file("a.png"), file("b.png")], async () => {
-          throw new Error("no session");
-        })
-        .catch(() => {});
+      await result.current.attachLocalFiles([file()]);
     });
 
     expect(result.current.attachments).toHaveLength(0);
@@ -376,9 +359,7 @@ describe("useSessionAttachments", () => {
       }),
     );
     await act(async () => {
-      void result.current.attachLocalFiles([file()], async () => ({
-        id: "s1",
-      }));
+      void result.current.attachLocalFiles([file()]);
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3000);
@@ -389,7 +370,7 @@ describe("useSessionAttachments", () => {
     );
 
     await act(async () => {
-      releaseUpload(row({ id: "srv1", filename: "f.png" }));
+      releaseUpload(row({ id: "srv1", filename: "f.png", session_id: null }));
     });
   });
 
@@ -406,9 +387,7 @@ describe("useSessionAttachments", () => {
     const { result } = renderHook(() => useSessionAttachments("s1"));
 
     await act(async () => {
-      void result.current.attachLocalFiles([file()], async () => ({
-        id: "s1",
-      }));
+      void result.current.attachLocalFiles([file()]);
     });
     await waitFor(() => expect(result.current.attachments).toHaveLength(1));
     const placeholderId = result.current.attachments[0].id;
@@ -419,11 +398,11 @@ describe("useSessionAttachments", () => {
     expect(deleteAttachment).not.toHaveBeenCalled(); // no server row yet
 
     await act(async () => {
-      releaseUpload(row({ id: "srv1", filename: "f.png" }));
+      releaseUpload(row({ id: "srv1", filename: "f.png", session_id: null }));
     });
 
     await waitFor(() =>
-      expect(deleteAttachment).toHaveBeenCalledWith("s1", "srv1"),
+      expect(deleteAttachment).toHaveBeenCalledWith("srv1", undefined),
     );
     expect(result.current.attachments).toHaveLength(0);
   });
