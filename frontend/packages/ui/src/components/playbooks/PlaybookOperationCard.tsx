@@ -145,7 +145,10 @@ export const PlaybookOperationCard = memo(function PlaybookOperationCard({
               ) : null}
             </div>
             {content ? (
-              <div className="relative mt-2 rounded-md bg-surface px-2.5 py-2 pr-9">
+              <div
+                data-slot="playbook-prompt-preview"
+                className="relative mt-2 pr-9"
+              >
                 <div className="line-clamp-4 whitespace-pre-wrap break-words text-xs leading-snug text-ink-body">
                   {content}
                 </div>
@@ -154,7 +157,7 @@ export const PlaybookOperationCard = memo(function PlaybookOperationCard({
                   variant="ghost"
                   size="icon-xs"
                   onClick={() => setDetailsOpen(true)}
-                  className="absolute right-1 top-1"
+                  className="absolute right-0 top-0"
                   title={t("playbook.promptLabel")}
                   aria-label={t("playbook.promptLabel")}
                 >

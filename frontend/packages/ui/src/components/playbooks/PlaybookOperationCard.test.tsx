@@ -76,4 +76,20 @@ describe("PlaybookOperationCard", () => {
     expect(card?.classList.contains("border-success/40")).toBe(true);
     expect(card?.classList.contains("bg-success/5")).toBe(true);
   });
+
+  it("keeps the prompt preview integrated with the card surface", () => {
+    const { container } = render(
+      <PlaybookOperationCard
+        operation={{ ...proposedOperation, state: "succeeded" }}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    const preview = container.querySelector(
+      '[data-slot="playbook-prompt-preview"]',
+    );
+    expect(preview).toBeTruthy();
+    expect(preview?.classList.contains("bg-surface")).toBe(false);
+  });
 });
