@@ -323,7 +323,7 @@ function ConversationViewPage(props: ConversationViewProps) {
               effectiveAgentSlug={core.effectiveAgentSlug}
               handleSend={handleSend}
               interruptRef={core.interruptRef}
-              sessionAttachments={core.sessionAttachments}
+              sessionAttachments={core.stagedAttachments}
               handleRemoveSessionAttachment={core.handleRemoveSessionAttachment}
               composerAgents={core.composerAgents}
               sessionAgentSlug={core.sessionAgentSlug}
@@ -477,7 +477,7 @@ function ConversationViewPanel(props: ConversationViewProps) {
         effectiveAgentSlug={core.effectiveAgentSlug}
         handleSend={core.handleSend}
         interruptRef={core.interruptRef}
-        sessionAttachments={core.sessionAttachments}
+        sessionAttachments={core.stagedAttachments}
         handleRemoveSessionAttachment={core.handleRemoveSessionAttachment}
         composerAgents={core.composerAgents}
         sessionAgentSlug={core.sessionAgentSlug}
