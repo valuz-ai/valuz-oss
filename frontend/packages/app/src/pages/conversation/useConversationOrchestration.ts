@@ -585,7 +585,6 @@ export function useConversationOrchestration({
     attachKbDocs,
     remove: removeSessionAttachmentRow,
     markPendingConsumed,
-    pendingIds: pendingAttachmentIds,
   } = useSessionAttachments(
     selectedSessionId,
     // A live session routes on its own id; a draft (``/conversation/new``) has
@@ -1241,7 +1240,6 @@ export function useConversationOrchestration({
     attachLocalFiles,
     removeSessionAttachmentRow,
     markPendingConsumed,
-    pendingAttachmentIds,
     refreshEvents,
     refreshActiveSession,
     fetchSidebarSessions,

@@ -502,7 +502,6 @@ export const ProjectDetailPage = () => {
     attachLocalFiles,
     remove: removeAttachment,
     markPendingConsumed,
-    pendingIds: pendingAttachmentIds,
   } = useSessionAttachments(
     chatSessionId,
     // Staged uploads have no session to route on, so the composer names the
@@ -1318,7 +1317,9 @@ export const ProjectDetailPage = () => {
       const handoffAttachments = stagedAttachments
         .filter((a) => !a.consumed_at)
         .map((a) => ({ name: a.filename, size: a.size_bytes }));
-      markPendingConsumed();
+      // The ids to bind, read at the moment they are consumed — not from a
+      // render value that the awaits below would leave behind.
+      const claimedAttachmentIds = markPendingConsumed();
       setComposerValue("");
       // Navigate the MOMENT there is an id to navigate to — before the send
       // round-trip, not after it.
@@ -1356,7 +1357,7 @@ export const ProjectDetailPage = () => {
         null,
         null,
         null,
-        pendingAttachmentIds,
+        claimedAttachmentIds,
       );
     } catch (cause) {
       // A billing rejection (402) carries an i18n key the client renders;

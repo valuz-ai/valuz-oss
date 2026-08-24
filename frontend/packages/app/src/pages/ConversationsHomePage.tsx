@@ -122,7 +122,6 @@ export const ConversationsHomePage = () => {
     attachLocalFiles,
     remove: removeAttachment,
     markPendingConsumed,
-    pendingIds: pendingAttachmentIds,
   } = useSessionAttachments(
     sessionId,
     // See ProjectDetailPage: staged uploads must go to the backend this chat
@@ -332,7 +331,8 @@ export const ConversationsHomePage = () => {
     setSending(true);
     try {
       const session = await ensureSession();
-      markPendingConsumed();
+      // See ProjectDetailPage: the ids come from the consume, not a render.
+      const claimedAttachmentIds = markPendingConsumed();
       // Bind the staged files to this turn — this is where a file stops
       // being a draft and becomes part of the conversation.
       await sessionsApi.sendMessage(
@@ -341,7 +341,7 @@ export const ConversationsHomePage = () => {
         null,
         null,
         null,
-        pendingAttachmentIds,
+        claimedAttachmentIds,
       );
       setInput("");
       panelSetCollapsed(false);

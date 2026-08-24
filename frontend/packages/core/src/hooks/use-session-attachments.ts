@@ -19,12 +19,12 @@ export interface UseSessionAttachmentsResult {
   /** Attach KB documents immediately. No session required, or created. */
   attachKbDocs: (docIds: string[]) => Promise<void>;
   /**
-   * Ids of the staged attachments a send should claim, in upload order.
+   * Ids of the staged attachments, for callers that only need to look.
    *
-   * Passed to ``sessionsApi.sendMessage`` — binding is what turns a staged
-   * file into part of a conversation. Named explicitly rather than "whatever
-   * this owner has staged" so a project chat and a quick chat open at once do
-   * not steal each other's files.
+   * NOT what a send should pass: this is a render value, and a send spans
+   * several awaits during which an upload can land. Use the ids
+   * ``markPendingConsumed`` returns — it reads the set at the moment it
+   * consumes it.
    */
   pendingIds: string[];
   /** Remove one attachment (optimistic drop + server delete). */
@@ -41,7 +41,7 @@ export interface UseSessionAttachmentsResult {
    * page's own ``sessionId`` may not have settled yet when it consumes the
    * handoff).
    */
-  markPendingConsumed: (sessionId?: string, consumedAt?: number) => void;
+  markPendingConsumed: (sessionId?: string, consumedAt?: number) => string[];
   /** Escape hatch for callers that need to splice optimistic state directly. */
   setAttachments: React.Dispatch<React.SetStateAction<SessionAttachmentItem[]>>;
 }
@@ -352,13 +352,31 @@ export function useSessionAttachments(
   );
 
   const markPendingConsumed = useCallback(
-    (sessionIdOverride?: string, consumedAt?: number) => {
+    (sessionIdOverride?: string, consumedAt?: number): string[] => {
       const ts = consumedAt ?? Date.now();
       const sid = sessionIdOverride ?? sessionIdRef.current;
       if (sid) consumeWatermarkRef.current = { sessionId: sid, ts };
-      setAttachments((prev) =>
-        prev.map((a) => (a.consumed_at ? a : { ...a, consumed_at: ts })),
-      );
+      // Returns what it stamped, and reads it from INSIDE the updater — the
+      // only place with the current set.
+      //
+      // The caller needs these ids to bind the files to the turn, and deriving
+      // them from a render value instead is a race it loses often: a send is
+      // several awaits long (session create, navigation), and an upload that
+      // lands in the middle is invisible to a list captured before it. Attach
+      // a file and hit send immediately and the closure still holds the local
+      // placeholder — filtered out, so the turn goes out claiming nothing.
+      //
+      // Consuming and knowing-what-you-consumed are the same act; splitting
+      // them is what allowed them to disagree.
+      const claimed: string[] = [];
+      setAttachments((prev) => {
+        claimed.length = 0;
+        for (const a of prev) {
+          if (!a.consumed_at && !isLocalPlaceholder(a)) claimed.push(a.id);
+        }
+        return prev.map((a) => (a.consumed_at ? a : { ...a, consumed_at: ts }));
+      });
+      return claimed;
     },
     [],
   );
