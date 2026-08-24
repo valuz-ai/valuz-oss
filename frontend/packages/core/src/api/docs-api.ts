@@ -309,11 +309,20 @@ export const docsApi = {
     );
   },
 
-  reindex(documentIds: string[]): Promise<ImportTask> {
-    return fetchJson(
-      "/v1/docs/reindex",
-      jsonPost({ document_ids: documentIds }),
-    );
+  /**
+   * Re-parse and re-index documents.
+   *
+   * ``kbId`` routes the call the same way every other per-document call is
+   * routed. Without it this always went to the module default, so retrying a
+   * failed document in a CLOUD library posted to the local backend, which has
+   * never heard of it — the button reported failure every single time, which
+   * reads as "this document cannot be retried".
+   */
+  reindex(documentIds: string[], kbId?: string): Promise<ImportTask> {
+    return fetchJson("/v1/docs/reindex", {
+      ...jsonPost({ document_ids: documentIds }),
+      baseUrl: kbId ? kbBase(kbId) : undefined,
+    });
   },
 
   async health(): Promise<DocsHealth> {
