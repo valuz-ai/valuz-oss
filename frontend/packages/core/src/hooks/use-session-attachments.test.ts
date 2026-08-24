@@ -431,4 +431,50 @@ describe("useSessionAttachments", () => {
       baseUrl: base,
     });
   });
+
+  it("reports the files it consumed, including one uploaded mid-send", async () => {
+    // A send is several awaits long — session create, navigation — and this is
+    // what the turn binds. Deriving it from a render value instead loses the
+    // common case outright: attach a file, hit send, and the value captured
+    // when the handler was built still holds the local placeholder, which is
+    // filtered out, so the turn goes out claiming nothing.
+    uploadAttachment.mockResolvedValue(
+      row({ id: "srv1", session_id: null, parse_status: "ready" }),
+    );
+    const { result } = renderHook(() => useSessionAttachments(null));
+
+    // Whatever a caller read before this point: nothing.
+    expect(result.current.pendingIds).toEqual([]);
+
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+
+    let claimed: string[] = [];
+    act(() => {
+      claimed = result.current.markPendingConsumed("s1");
+    });
+
+    expect(claimed).toEqual(["srv1"]);
+  });
+
+  it("consuming twice does not claim the same file for two turns", async () => {
+    uploadAttachment.mockResolvedValue(
+      row({ id: "srv1", session_id: null, parse_status: "ready" }),
+    );
+    const { result } = renderHook(() => useSessionAttachments(null));
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+
+    act(() => {
+      result.current.markPendingConsumed("s1");
+    });
+    let second: string[] = [];
+    act(() => {
+      second = result.current.markPendingConsumed("s2");
+    });
+
+    expect(second).toEqual([]);
+  });
 });

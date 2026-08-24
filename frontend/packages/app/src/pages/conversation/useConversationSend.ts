@@ -71,8 +71,6 @@ type ConversationSendParams = {
   attachLocalFiles: UseSessionAttachmentsResult["attachLocalFiles"];
   removeSessionAttachmentRow: UseSessionAttachmentsResult["remove"];
   markPendingConsumed: UseSessionAttachmentsResult["markPendingConsumed"];
-  /** Staged attachments this turn claims — see ``sessionsApi.sendMessage``. */
-  pendingAttachmentIds: string[];
   refreshEvents: (sessionId: string | null) => Promise<void>;
   refreshActiveSession: (sessionId: string | null) => Promise<void>;
   fetchSidebarSessions: () => Promise<void>;
@@ -174,7 +172,6 @@ export function useConversationSend({
   attachLocalFiles,
   removeSessionAttachmentRow,
   markPendingConsumed,
-  pendingAttachmentIds,
   refreshEvents,
   refreshActiveSession,
   fetchSidebarSessions,
@@ -618,16 +615,23 @@ export function useConversationSend({
       // click → turn-start window; the turn's ``message.user`` echo on the
       // stream releases it.
 
+      // Consume FIRST, and bind what the consume reports.
+      //
+      // Attachments are per-turn: the backend binds this turn's set and stamps
+      // them ``consumed_at`` once it runs; stamping optimistically here drops
+      // them out of the composer's staging chips immediately (they stay in the
+      // panel's "uploaded files" history). Doing it before the send is what
+      // makes the ids trustworthy — a send spans several awaits, and the
+      // render value this used to pass was captured before any upload that
+      // landed during them.
+      const claimedAttachmentIds = markPendingConsumed();
       const detail = await sessionsApi.sendMessage(
         session.id,
         outboundText,
         selectedProviderId,
         selectedModelId,
         hostRef,
-        // Bind the staged files to this turn. Read here rather than at the top
-        // of the send: an upload that finished while the person was still
-        // typing belongs to this turn too.
-        pendingAttachmentIds,
+        claimedAttachmentIds,
       );
       if (!detail?.id) throw new Error("Failed to send message.");
       // The desktop sidebar's per-project session lists are derived from
@@ -637,12 +641,6 @@ export function useConversationSend({
       // Force the shared poller now; the resulting ``liveRunIds`` transition
       // also triggers the layout's finished-runs refresh.
       refreshRunningRuns();
-      // Attachments are per-turn: the backend ships this turn's pending
-      // set with the message, then stamps those rows ``consumed_at`` once
-      // the turn runs. Optimistically mark them consumed so they drop out
-      // of the composer's staging chips immediately (they stay in the
-      // panel's "uploaded files" history).
-      markPendingConsumed();
       // ``send_message`` kicks the turn off in the BACKGROUND and returns
       // immediately — its status snapshot is stale-prone in BOTH directions:
       //  (a) taken before the kernel flips to "running" inside ``run_turn``
