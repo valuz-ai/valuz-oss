@@ -119,14 +119,18 @@
     "operation": {
       "cancelled": "已取消，未修改执行手册。",
       "create": "新建提案",
+      "createAction": "创建执行手册",
       "delete": "删除提案",
+      "deleteAction": "确认删除",
       "deleted": "执行手册已删除",
       "failed": "执行手册操作失败",
       "metadata": "信息修改提案",
       "retire": "停用提案",
+      "retireAction": "确认停用",
       "status": "状态变更提案",
       "succeeded": "操作已完成 · 查看执行手册",
-      "update": "新版本提案"
+      "update": "新版本提案",
+      "updateAction": "保存更新"
     },
     "projectAssociated": "已关联工作区",
     "projectGlobal": "全局（不关联工作区）",

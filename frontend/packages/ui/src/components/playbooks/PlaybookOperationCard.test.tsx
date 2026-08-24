@@ -59,9 +59,11 @@ describe("PlaybookOperationCard", () => {
       ),
     ).toBe("outline");
     expect(
-      screen.getByRole("button", { name: "common.confirm" }).getAttribute(
-        "data-variant",
-      ),
+      screen
+        .getByRole("button", {
+          name: "playbook.operation.createAction",
+        })
+        .getAttribute("data-variant"),
     ).toBe("default");
 
     rerender(
@@ -75,6 +77,40 @@ describe("PlaybookOperationCard", () => {
     const card = container.querySelector('[data-slot="playbook-operation-card"]');
     expect(card?.classList.contains("border-success/40")).toBe(true);
     expect(card?.classList.contains("bg-success/5")).toBe(true);
+  });
+
+  it.each([
+    ["create", "playbook.operation.createAction"],
+    ["update", "playbook.operation.updateAction"],
+    ["metadata", "playbook.operation.updateAction"],
+    ["status", "playbook.operation.updateAction"],
+    ["retire", "playbook.operation.retireAction"],
+    ["delete", "playbook.operation.deleteAction"],
+  ] as const)("labels the %s proposal with its concrete action", (change, label) => {
+    render(
+      <PlaybookOperationCard
+        operation={{
+          ...proposedOperation,
+          preview: { ...proposedOperation.preview, change },
+        }}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: label })).toBeTruthy();
+  });
+
+  it("uses retry only after a failed Playbook operation", () => {
+    render(
+      <PlaybookOperationCard
+        operation={{ ...proposedOperation, state: "failed" }}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "common.retry" })).toBeTruthy();
   });
 
   it("keeps the prompt preview integrated with the card surface", () => {

@@ -82,6 +82,14 @@ export const PlaybookOperationCard = memo(function PlaybookOperationCard({
     "superseded",
   ].includes(operation.state);
   const confirming = busy === "confirm" || operation.state === "executing";
+  const confirmActionKey =
+    change === "create"
+      ? "playbook.operation.createAction"
+      : change === "delete"
+        ? "playbook.operation.deleteAction"
+        : change === "retire"
+          ? "playbook.operation.retireAction"
+          : "playbook.operation.updateAction";
   const canConfirm =
     operation.state === "proposed" ||
     operation.state === "awaiting_confirmation" ||
@@ -216,7 +224,7 @@ export const PlaybookOperationCard = memo(function PlaybookOperationCard({
             >
               {operation.state === "failed"
                 ? t("common.retry")
-                : t("common.confirm")}
+                : t(confirmActionKey)}
             </Button>
           </div>
         ) : null}

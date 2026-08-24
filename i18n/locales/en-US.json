@@ -119,14 +119,18 @@
     "operation": {
       "cancelled": "Cancelled. The Playbook was not changed.",
       "create": "Create proposal",
+      "createAction": "Create Playbook",
       "delete": "Delete proposal",
+      "deleteAction": "Confirm delete",
       "deleted": "Playbook deleted",
       "failed": "The Playbook operation failed",
       "metadata": "Details-change proposal",
       "retire": "Retire proposal",
+      "retireAction": "Confirm retire",
       "status": "Status-change proposal",
       "succeeded": "Operation completed · View Playbook",
-      "update": "New-version proposal"
+      "update": "New-version proposal",
+      "updateAction": "Save update"
     },
     "projectAssociated": "Project associated",
     "projectGlobal": "Global (no project association)",
