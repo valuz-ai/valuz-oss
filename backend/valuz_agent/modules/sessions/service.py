@@ -1617,6 +1617,7 @@ class SessionService:
         *,
         citation_enabled_override: bool | None = None,
         citation_verification_enabled_override: bool | None = None,
+        task_coverage_enabled_override: bool | None = None,
         host_ref: HostRef | None = None,
     ) -> SessionRunResponse:
         """Block until the agent turn completes.  Used by the schedule runner."""
@@ -1628,6 +1629,7 @@ class SessionService:
             user_id,
             citation_enabled_override=citation_enabled_override,
             verification_enabled_override=citation_verification_enabled_override,
+            task_coverage_enabled_override=task_coverage_enabled_override,
             host_ref=host_ref,
         )
 

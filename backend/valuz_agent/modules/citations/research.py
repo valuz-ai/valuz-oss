@@ -340,6 +340,9 @@ class DocumentResearchService:
                 user_id=user_id,
                 citation_enabled_override=True,
                 citation_verification_enabled_override=False,
+                # Shared situational rule: an internal summary run pays for
+                # neither post-run feature — only the toggles are independent.
+                task_coverage_enabled_override=False,
             )
             messages = await kernel_client.list_messages(
                 user_id,
