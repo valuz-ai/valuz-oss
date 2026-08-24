@@ -65,6 +65,13 @@ describe("PlaybookOperationCard", () => {
         })
         .getAttribute("data-variant"),
     ).toBe("default");
+    expect(
+      screen
+        .getByRole("button", {
+          name: "playbook.operation.createAction",
+        })
+        .parentElement?.classList.contains("border-t"),
+    ).toBe(false);
 
     rerender(
       <PlaybookOperationCard

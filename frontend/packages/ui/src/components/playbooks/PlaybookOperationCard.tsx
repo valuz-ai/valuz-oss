@@ -201,7 +201,7 @@ export const PlaybookOperationCard = memo(function PlaybookOperationCard({
           </div>
         </div>
         {!terminal ? (
-          <div className="flex items-center justify-end gap-2 border-t border-surface-border px-4 py-2">
+          <div className="flex items-center justify-end gap-2 px-4 py-2">
             {canCancel ? (
               <Button
                 type="button"

@@ -214,7 +214,7 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
       </div>
 
       {!isTerminal ? (
-        <div className="flex items-center justify-end gap-2 border-t border-surface-border px-4 py-2">
+        <div className="flex items-center justify-end gap-2 px-4 py-2">
           <Button
             type="button"
             variant="outline"

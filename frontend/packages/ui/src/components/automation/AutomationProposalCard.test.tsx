@@ -83,6 +83,11 @@ describe("AutomationProposalCard", () => {
         name: "automation.actionCreate",
       }).getAttribute("data-variant"),
     ).toBe("default");
+    expect(
+      screen
+        .getByRole("button", { name: "automation.actionCreate" })
+        .parentElement?.classList.contains("border-t"),
+    ).toBe(false);
   });
 
   it("uses the shared semantic success surface", () => {
