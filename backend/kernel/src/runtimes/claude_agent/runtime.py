@@ -1827,7 +1827,12 @@ class ClaudeAgentRuntime:
         mcp: dict[str, Any] = {}
         sdk_tools = self._build_mcp_tools()
         if sdk_tools:
-            mcp["harness"] = create_sdk_mcp_server(name="harness", tools=sdk_tools)
+            # ``harness_toolkit`` — the kernel's own ToolDefs (e.g. PTC's
+            # execute_code), matching the codex bridge name. NOT ``harness``:
+            # that name belongs to the host's toolkit MCP server, which
+            # arrives through ``session.mcp_servers`` below and would
+            # otherwise overwrite this entry (shadowing every kernel tool).
+            mcp["harness_toolkit"] = create_sdk_mcp_server(name="harness_toolkit", tools=sdk_tools)
 
         proxies: list[ClaudeMcpSourceProxy] = []
         for cfg in session.mcp_servers:
@@ -1842,10 +1847,11 @@ class ClaudeAgentRuntime:
         # without invoking our ``_permission_handler``. We therefore
         # only include:
         #
-        # * ``mcp__harness__<tool>`` — harness-bridged tools the
-        #   operator defined via ``AgentConfig.tools``. These are
-        #   harness infrastructure (we are the authority on them) and
-        #   are not subject to user approval.
+        # * ``mcp__harness_toolkit__<tool>`` — kernel-bridged tools the
+        #   operator defined via ``AgentConfig.tools`` (or the kernel
+        #   exposed, e.g. PTC's execute_code). These are harness
+        #   infrastructure (we are the authority on them) and are not
+        #   subject to user approval.
         # * ``Agent`` — sub-agent dispatch (callable_agents), same
         #   rationale.
         #
@@ -1859,7 +1865,7 @@ class ClaudeAgentRuntime:
         # for every MCP tool on Claude (no ``requires_action`` event
         # was emitted; the SDK auto-approved upstream of our callback).
         allowed: list[str] = [
-            f"mcp__harness__{t.name}" for t in self.toolkit.list_tools() if t.handler
+            f"mcp__harness_toolkit__{t.name}" for t in self.toolkit.list_tools() if t.handler
         ]
         if self.config.callable_agents:
             allowed.append("Agent")
@@ -2665,8 +2671,13 @@ class ClaudeAgentRuntime:
             return await self._await_host_decision(tool_name, input_data, context)
 
         simple_name = tool_name
-        if tool_name.startswith("mcp__harness__"):
-            simple_name = tool_name[len("mcp__harness__") :]
+        # Kernel-bridged ToolDefs surface as ``mcp__harness_toolkit__*``;
+        # the legacy ``mcp__harness__`` strip stays for host-toolkit names
+        # (their bare names are not in ``self.toolkit``, so it is inert).
+        for prefix in ("mcp__harness_toolkit__", "mcp__harness__"):
+            if tool_name.startswith(prefix):
+                simple_name = tool_name[len(prefix) :]
+                break
 
         tdef = self.toolkit.get(simple_name)
         if tdef:
