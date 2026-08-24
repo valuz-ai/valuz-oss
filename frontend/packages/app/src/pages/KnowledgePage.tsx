@@ -533,8 +533,11 @@ export const KnowledgePage = ({
           // on submit, not on parse completion. The auto-poll below
           // then surfaces live ``processing`` → ``ready`` status.
           const docId = selectedDoc.id;
+          // Routed like every other per-document call. Unrouted, a cloud
+          // library's retry posted to the local backend and failed every time.
+          const docKbId = selectedDoc.kb_id ?? activeKb?.id;
           docsApi
-            .reindex([docId])
+            .reindex([docId], docKbId)
             .then(() => {
               toast.success(
                 t("knowledge.reindexStarted" as Parameters<typeof t>[0]),
@@ -574,9 +577,15 @@ export const KnowledgePage = ({
       selectedDoc.status === "queued" || selectedDoc.status === "processing";
     if (!inFlight) return;
     const docId = selectedDoc.id;
+    // The library this document lives in — the poll has to be routed exactly
+    // like the read that opened the panel. It was not, so on a CLOUD library
+    // every tick asked the LOCAL backend for a document it has never heard of,
+    // the 404 fell into the catch below, and the panel sat frozen while the
+    // list beside it — routed correctly — updated every three seconds.
+    const docKbId = selectedDoc.kb_id ?? undefined;
     const handle = window.setInterval(async () => {
       try {
-        const fresh = await docsApi.get(docId);
+        const fresh = await docsApi.get(docId, docKbId);
         // Race guard: the user may have switched docs between the
         // ``setInterval`` fire and the await resolving. Drop the
         // stale fetch so we don't briefly clobber the new doc's
@@ -592,7 +601,7 @@ export const KnowledgePage = ({
           fresh.status !== "queued" && fresh.status !== "processing";
         if (settled) {
           try {
-            const freshPreview = await docsApi.preview(docId);
+            const freshPreview = await docsApi.preview(docId, docKbId);
             if (selectedDocId === docId) {
               setPreview(freshPreview.markdown || null);
             }
