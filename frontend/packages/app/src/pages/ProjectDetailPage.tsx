@@ -390,8 +390,15 @@ export const ProjectDetailPage = () => {
   // view, as opposed to the per-session list a conversation shows. Reloaded
   // when the project changes; a delivery lands during a conversation, not here.
   const [projectArtifacts, setProjectArtifacts] = useState<
-    { id: string; name: string; size: string; path: string; versionNo: number;
-      isCurrent: boolean; artifactId: string }[]
+    {
+      id: string;
+      name: string;
+      size: string;
+      path: string;
+      versionNo: number;
+      isCurrent: boolean;
+      artifactId: string;
+    }[]
   >([]);
 
   useEffect(() => {
@@ -1063,7 +1070,12 @@ export const ProjectDetailPage = () => {
       void openArtifactFile(selectedFileParam, { syncUrl: false });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [project?.root_path, activeArtifactPath, openArtifactFile, selectedFileParam]);
+  }, [
+    project?.root_path,
+    activeArtifactPath,
+    openArtifactFile,
+    selectedFileParam,
+  ]);
 
   const handleArtifactReload = useCallback(() => {
     void reloadArtifact();
@@ -1288,6 +1300,13 @@ export const ProjectDetailPage = () => {
     setSending(true);
     try {
       const session = await ensureChatSession();
+      // Snapshot BEFORE ``markPendingConsumed`` stamps them: this is exactly
+      // the set that ships with this turn, and the conversation page cannot
+      // work it out for itself — by the time it mounts, these rows are
+      // consumed, so its own "pending" view of them is empty.
+      const handoffAttachments = stagedAttachments
+        .filter((a) => !a.consumed_at)
+        .map((a) => ({ name: a.filename, size: a.size_bytes }));
       markPendingConsumed();
       setComposerValue("");
       // Navigate the MOMENT there is an id to navigate to — before the send
@@ -1306,7 +1325,13 @@ export const ProjectDetailPage = () => {
       // its ``ensureSession``, which mints a SECOND session whenever the
       // freshly-navigated page has not fetched this one yet.
       navigate(`/conversation/${session.id}`, {
-        state: { handoff: { text, sentAt: Date.now() } },
+        state: {
+          handoff: {
+            text,
+            sentAt: Date.now(),
+            attachments: handoffAttachments,
+          },
+        },
       });
       // ``text`` already contains any ``/slug`` tokens because Composer
       // serializes inline skill chips into its controlled value. This page is
@@ -1863,7 +1888,9 @@ export const ProjectDetailPage = () => {
                       onForkSession={handleForkSession}
                       forkPendingSessionId={forkingSessionId}
                       hideScopeTag
-                      emptyLabel={t("playbook.emptyTitle" as Parameters<typeof t>[0])}
+                      emptyLabel={t(
+                        "playbook.emptyTitle" as Parameters<typeof t>[0],
+                      )}
                     />
                   </TabsContent>
                 </Tabs>
@@ -1872,206 +1899,207 @@ export const ProjectDetailPage = () => {
           </div>
         </>
 
-      {/* Project automation create — uses the same agent-driven dialog
+        {/* Project automation create — uses the same agent-driven dialog
           as the global Automation page, with task mode enabled (this is
           a project project) and candidates resolved from the project's
           members. ``description`` keeps the existing project-specific
           hint copy ("Tasks created here are linked to this project"). */}
-      <CreateAutomationDialog
-        open={newTaskOpen}
-        onOpenChange={(open) => {
-          // Reset edit context on close so the next "+ New" starts fresh in
-          // create mode.
-          if (!open) setEditTask(null);
-          setNewTaskOpen(open);
-        }}
-        description={t("project.instruction" as Parameters<typeof t>[0])}
-        onSubmit={handleSubmitTask}
-        agents={rawMembers.map((entry) => ({
-          slug: entry.member.agent_slug,
-          name: entry.agent?.name ?? entry.member.agent_slug,
-        }))}
-        allowTaskMode
-        fixedTargetName={displayName}
-        fixedProjectId={id}
-        initial={
-          editTask
-            ? {
-                name: editTask.name,
-                prompt_template: editTask.prompt_template,
-                agent_slug: editTask.agent_slug,
-                trigger: editTask.trigger,
-                action_kind: (editTask.action_kind as ActionKind) ?? "chat",
-                worktree: editTask.worktree ?? false,
-                playbook_definition_id: editTask.playbook_definition_id,
-                playbook_version: editTask.playbook_version,
-              }
-            : undefined
-        }
-      />
+        <CreateAutomationDialog
+          open={newTaskOpen}
+          onOpenChange={(open) => {
+            // Reset edit context on close so the next "+ New" starts fresh in
+            // create mode.
+            if (!open) setEditTask(null);
+            setNewTaskOpen(open);
+          }}
+          description={t("project.instruction" as Parameters<typeof t>[0])}
+          onSubmit={handleSubmitTask}
+          agents={rawMembers.map((entry) => ({
+            slug: entry.member.agent_slug,
+            name: entry.agent?.name ?? entry.member.agent_slug,
+          }))}
+          allowTaskMode
+          fixedTargetName={displayName}
+          fixedProjectId={id}
+          initial={
+            editTask
+              ? {
+                  name: editTask.name,
+                  prompt_template: editTask.prompt_template,
+                  agent_slug: editTask.agent_slug,
+                  trigger: editTask.trigger,
+                  action_kind: (editTask.action_kind as ActionKind) ?? "chat",
+                  worktree: editTask.worktree ?? false,
+                  playbook_definition_id: editTask.playbook_definition_id,
+                  playbook_version: editTask.playbook_version,
+                }
+              : undefined
+          }
+        />
 
-      {/* The project rail is a scoped projection of the same Playbook
+        {/* The project rail is a scoped projection of the same Playbook
           library. Creation/editing stays on the shared dialog and persists
           ``project_id=id``; no project-only Playbook model is introduced. */}
-      <CreatePlaybookDialog
-        open={playbookDialogOpen}
-        onOpenChange={setPlaybookDialogOpen}
-        onSubmit={submitPlaybook}
-        onDelete={removePlaybook}
-        initial={editingPlaybook}
-        targets={[]}
-        agents={rawMembers.map((entry) => ({
-          slug: entry.member.agent_slug,
-          name: entry.agent?.name ?? entry.member.agent_slug,
-        }))}
-        fixedProjectId={id}
-        fixedProjectName={displayName}
-      />
+        <CreatePlaybookDialog
+          open={playbookDialogOpen}
+          onOpenChange={setPlaybookDialogOpen}
+          onSubmit={submitPlaybook}
+          onDelete={removePlaybook}
+          initial={editingPlaybook}
+          targets={[]}
+          agents={rawMembers.map((entry) => ({
+            slug: entry.member.agent_slug,
+            name: entry.agent?.name ?? entry.member.agent_slug,
+          }))}
+          fixedProjectId={id}
+          fixedProjectName={displayName}
+        />
 
-      <DeleteConfirmDialog
-        open={chatDeleteTarget !== null}
-        onOpenChange={(next) => {
-          if (!next) setChatDeleteTarget(null);
-        }}
-        itemName={
-          chatBindings.find((c) => c.id === chatDeleteTarget)?.name ?? undefined
-        }
-        description={t("project.deleteChatDesc" as Parameters<typeof t>[0])}
-        onConfirm={() => {
-          const target = chatDeleteTarget;
-          setChatDeleteTarget(null);
-          if (target) void handleDeleteChat(target);
-        }}
-      />
+        <DeleteConfirmDialog
+          open={chatDeleteTarget !== null}
+          onOpenChange={(next) => {
+            if (!next) setChatDeleteTarget(null);
+          }}
+          itemName={
+            chatBindings.find((c) => c.id === chatDeleteTarget)?.name ??
+            undefined
+          }
+          description={t("project.deleteChatDesc" as Parameters<typeof t>[0])}
+          onConfirm={() => {
+            const target = chatDeleteTarget;
+            setChatDeleteTarget(null);
+            if (target) void handleDeleteChat(target);
+          }}
+        />
 
-      <BindChatDialog
-        open={bindChatOpen}
-        onOpenChange={setBindChatOpen}
-        projectId={id}
-        onBound={loadChatBindings}
-      />
+        <BindChatDialog
+          open={bindChatOpen}
+          onOpenChange={setBindChatOpen}
+          projectId={id}
+          onBound={loadChatBindings}
+        />
 
-      <DeployAgentsDialog
-        open={addAgentOpen}
-        onOpenChange={setAddAgentOpen}
-        projectId={id}
-        agents={libraryAgents}
-        members={rawMembers}
-        onChanged={loadMembers}
-        onCreateNew={() => navigate("/agents")}
-      />
+        <DeployAgentsDialog
+          open={addAgentOpen}
+          onOpenChange={setAddAgentOpen}
+          projectId={id}
+          agents={libraryAgents}
+          members={rawMembers}
+          onChanged={loadMembers}
+          onCreateNew={() => navigate("/agents")}
+        />
 
-      {/* Knowledge Base file picker overlay — tree view: documents
+        {/* Knowledge Base file picker overlay — tree view: documents
           organised under their KB and folders; folders expandable for
           navigation, only files selectable. */}
-      {kbPickerOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="flex h-[600px] max-h-[85vh] w-[720px] max-w-[92vw] flex-col rounded-xl border border-surface-border bg-card p-4 shadow-xl">
-            <KnowledgeFileTreePicker
-              kbTree={pickerKbTree}
-              loading={pickerKbLoading}
-              onExpandFolder={pickerExpandFolder}
-              selected={[]}
-              onCancel={() => setKbPickerOpen(false)}
-              onConfirm={(ids) => {
-                void handleKbPickerConfirm(ids);
-              }}
-            />
+        {kbPickerOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="flex h-[600px] max-h-[85vh] w-[720px] max-w-[92vw] flex-col rounded-xl border border-surface-border bg-card p-4 shadow-xl">
+              <KnowledgeFileTreePicker
+                kbTree={pickerKbTree}
+                loading={pickerKbLoading}
+                onExpandFolder={pickerExpandFolder}
+                selected={[]}
+                onCancel={() => setKbPickerOpen(false)}
+                onConfirm={(ids) => {
+                  void handleKbPickerConfirm(ids);
+                }}
+              />
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* KB add/remove dialog — lists all KBs with checkboxes; added KBs
+        {/* KB add/remove dialog — lists all KBs with checkboxes; added KBs
           pre-checked. Confirm atomically updates project bindings. */}
-      <KnowledgeBaseAddDialog
-        open={kbAddDialogOpen}
-        onOpenChange={setKbAddDialogOpen}
-        kbs={kbTree.map((kb) => ({
-          id: kb.id,
-          name: kb.name,
-          documentCount: kb.documentCount,
-        }))}
-        selectedIds={addedKbIds}
-        onConfirm={(ids) => {
-          void handleSetAddedKbs(ids);
-        }}
-      />
+        <KnowledgeBaseAddDialog
+          open={kbAddDialogOpen}
+          onOpenChange={setKbAddDialogOpen}
+          kbs={kbTree.map((kb) => ({
+            id: kb.id,
+            name: kb.name,
+            documentCount: kb.documentCount,
+          }))}
+          selectedIds={addedKbIds}
+          onConfirm={(ids) => {
+            void handleSetAddedKbs(ids);
+          }}
+        />
 
-      <DeleteConfirmDialog
-        open={worktreeDiscardTarget !== null}
-        onOpenChange={(v) => !v && setWorktreeDiscardTarget(null)}
-        itemName={worktreeDiscardTarget?.name}
-        title={t("project.worktreeDiscardTitle" as Parameters<typeof t>[0])}
-        description={
-          worktreeDiscardTarget
-            ? worktreeDiscardTarget.dirtyFiles !== null &&
-              worktreeDiscardTarget.aheadCommits !== null
-              ? t("project.worktreeDiscardDesc" as Parameters<typeof t>[0], {
-                  dirty: worktreeDiscardTarget.dirtyFiles,
-                  ahead: worktreeDiscardTarget.aheadCommits,
-                })
-              : t(
-                  "project.worktreeDiscardUnknownDesc" as Parameters<
-                    typeof t
-                  >[0],
-                )
-            : undefined
-        }
-        loading={worktreeDiscarding}
-        onConfirm={() => void handleDiscardWorktree()}
-      />
-      <DeleteConfirmDialog
-        open={memberDeleteTarget !== null}
-        onOpenChange={(v) => !v && setMemberDeleteTarget(null)}
-        title={t("agent.confirmDeleteMember")}
-        description={
-          memberDeleteTarget
-            ? t("agent.confirmDeleteMemberDesc", { slug: memberDeleteTarget })
-            : undefined
-        }
-        confirmLabel={t("common.remove")}
-        loading={memberDeleteBusy}
-        onConfirm={confirmMemberDelete}
-      />
-      <DeleteConfirmDialog
-        open={pendingDelete !== null}
-        onOpenChange={(v) => !v && setPendingDelete(null)}
-        itemName={pendingDelete?.name || undefined}
-        description={
-          pendingDelete?.kind === "task"
-            ? t("cron.confirmDeleteTaskDesc" as Parameters<typeof t>[0], {
-                name: pendingDelete.name,
-              })
-            : undefined
-        }
-        loading={pendingDeleteBusy}
-        onConfirm={async () => {
-          if (!pendingDelete) return;
-          const pd = pendingDelete;
-          setPendingDeleteBusy(true);
-          try {
-            if (pd.kind === "task") {
-              await automationsApi.delete(pd.id);
-              toast.success(t("common.deleted" as Parameters<typeof t>[0]));
-              await reloadScheduledTasks();
-            } else {
-              await deleteSession(pd.id);
-              toast.success(t("sidebar.deleted" as Parameters<typeof t>[0]));
-            }
-            setPendingDelete(null);
-          } catch {
-            toast.error(
-              t(
-                (pd.kind === "task"
-                  ? "common.deleteFailed"
-                  : "sidebar.deleteFailed") as Parameters<typeof t>[0],
-              ),
-            );
-          } finally {
-            setPendingDeleteBusy(false);
+        <DeleteConfirmDialog
+          open={worktreeDiscardTarget !== null}
+          onOpenChange={(v) => !v && setWorktreeDiscardTarget(null)}
+          itemName={worktreeDiscardTarget?.name}
+          title={t("project.worktreeDiscardTitle" as Parameters<typeof t>[0])}
+          description={
+            worktreeDiscardTarget
+              ? worktreeDiscardTarget.dirtyFiles !== null &&
+                worktreeDiscardTarget.aheadCommits !== null
+                ? t("project.worktreeDiscardDesc" as Parameters<typeof t>[0], {
+                    dirty: worktreeDiscardTarget.dirtyFiles,
+                    ahead: worktreeDiscardTarget.aheadCommits,
+                  })
+                : t(
+                    "project.worktreeDiscardUnknownDesc" as Parameters<
+                      typeof t
+                    >[0],
+                  )
+              : undefined
           }
-        }}
-      />
+          loading={worktreeDiscarding}
+          onConfirm={() => void handleDiscardWorktree()}
+        />
+        <DeleteConfirmDialog
+          open={memberDeleteTarget !== null}
+          onOpenChange={(v) => !v && setMemberDeleteTarget(null)}
+          title={t("agent.confirmDeleteMember")}
+          description={
+            memberDeleteTarget
+              ? t("agent.confirmDeleteMemberDesc", { slug: memberDeleteTarget })
+              : undefined
+          }
+          confirmLabel={t("common.remove")}
+          loading={memberDeleteBusy}
+          onConfirm={confirmMemberDelete}
+        />
+        <DeleteConfirmDialog
+          open={pendingDelete !== null}
+          onOpenChange={(v) => !v && setPendingDelete(null)}
+          itemName={pendingDelete?.name || undefined}
+          description={
+            pendingDelete?.kind === "task"
+              ? t("cron.confirmDeleteTaskDesc" as Parameters<typeof t>[0], {
+                  name: pendingDelete.name,
+                })
+              : undefined
+          }
+          loading={pendingDeleteBusy}
+          onConfirm={async () => {
+            if (!pendingDelete) return;
+            const pd = pendingDelete;
+            setPendingDeleteBusy(true);
+            try {
+              if (pd.kind === "task") {
+                await automationsApi.delete(pd.id);
+                toast.success(t("common.deleted" as Parameters<typeof t>[0]));
+                await reloadScheduledTasks();
+              } else {
+                await deleteSession(pd.id);
+                toast.success(t("sidebar.deleted" as Parameters<typeof t>[0]));
+              }
+              setPendingDelete(null);
+            } catch {
+              toast.error(
+                t(
+                  (pd.kind === "task"
+                    ? "common.deleteFailed"
+                    : "sidebar.deleteFailed") as Parameters<typeof t>[0],
+                ),
+              );
+            } finally {
+              setPendingDeleteBusy(false);
+            }
+          }}
+        />
       </div>
     </ArtifactSplitPane>
   );
