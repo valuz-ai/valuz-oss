@@ -1,11 +1,11 @@
-import { memo, useCallback, useState } from "react";
+import { memo, useState } from "react";
 import {
   AlertTriangle,
   Archive,
   BookOpenText,
   Check,
   CircleCheck,
-  Loader2,
+  Maximize2,
   Pencil,
   Plus,
   Trash2,
@@ -14,6 +14,15 @@ import {
 
 import { useI18n } from "../../hooks/use-i18n";
 import { cn } from "../../lib/cn";
+import { MarkdownContent } from "../conversation/MarkdownContent";
+import { Button } from "../ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../ui/dialog";
 
 export interface PlaybookOperationView {
   state: string;
@@ -47,8 +56,7 @@ export const PlaybookOperationCard = memo(function PlaybookOperationCard({
   onOpenPlaybook,
 }: PlaybookOperationCardProps) {
   const { t } = useI18n();
-  const [expanded, setExpanded] = useState(false);
-  const [overflowing, setOverflowing] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const change = String(operation.preview.change ?? "update") as
     | "create"
     | "update"
@@ -85,146 +93,149 @@ export const PlaybookOperationCard = memo(function PlaybookOperationCard({
     typeof operation.result_payload.definition_id === "string"
       ? operation.result_payload.definition_id
       : null;
-  const measure = useCallback(
-    (node: HTMLDivElement | null) => {
-      if (node && content) setOverflowing(node.scrollHeight > node.clientHeight + 1);
-    },
-    [content],
-  );
 
   return (
-    <div
-      className={cn(
-        "rounded-lg border bg-surface-soft",
-        operation.state === "succeeded" && "border-success/40 bg-success/5",
-        operation.state === "cancelled" && "border-surface-border opacity-80",
-        ["failed", "stale"].includes(operation.state) &&
-          "border-error/40 bg-error-light/40",
-        !terminal && operation.state !== "failed" && "border-surface-border",
-      )}
-    >
-      <div className="flex items-start gap-3 px-4 py-3">
-        <div
-          className={cn(
-            "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brand/10 text-brand",
-            change === "delete" && "bg-error-light text-error-text",
-          )}
-        >
-          {operation.state === "succeeded" ? (
-            <Check className="h-4 w-4" />
-          ) : operation.state === "cancelled" ? (
-            <X className="h-4 w-4 text-ink-muted" />
-          ) : ["failed", "stale"].includes(operation.state) ? (
-            <AlertTriangle className="h-4 w-4 text-error" />
-          ) : (
-            <Icon className="h-4 w-4" />
-          )}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-baseline gap-2">
-            <span className="truncate text-sm font-medium text-ink-heading">
-              {name}
-            </span>
-            <span className="text-2xs uppercase tracking-wider text-ink-label">
-              {t(`playbook.operation.${change}`)}
-            </span>
-            {typeof operation.preview.next_version === "number" ? (
-              <span className="rounded-full bg-surface-muted px-1.5 text-2xs text-ink-label">
-                v{operation.preview.next_version}
-              </span>
-            ) : null}
-            {nextStatus ? (
-              <span className="rounded-full bg-surface-muted px-1.5 text-2xs text-ink-label">
-                {t(`playbook.status.${nextStatus}`)}
-              </span>
-            ) : null}
-          </div>
-          {content ? (
-            <div className="relative mt-2">
-              <div
-                ref={measure}
-                className={cn(
-                  "whitespace-pre-wrap break-words font-mono text-xs leading-snug text-ink-body",
-                  expanded ? "max-h-48 overflow-y-auto" : "line-clamp-4",
-                )}
-              >
-                {content}
-              </div>
-              {overflowing || expanded ? (
-                <button
-                  type="button"
-                  onClick={() => setExpanded((value) => !value)}
-                  className="mt-1 text-2xs font-medium text-brand hover:underline"
-                >
-                  {expanded
-                    ? t("playbook.collapseEditor")
-                    : t("playbook.expandEditor")}
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-          {operation.state === "succeeded" && change !== "delete" ? (
-            <button
-              type="button"
-              disabled={!definitionId || !onOpenPlaybook}
-              onClick={() => definitionId && onOpenPlaybook?.(definitionId)}
-              className="mt-2 text-xs font-medium text-success hover:underline disabled:no-underline"
-            >
-              {t("playbook.operation.succeeded")}
-            </button>
-          ) : null}
-          {operation.state === "succeeded" && change === "delete" ? (
-            <p className="mt-2 text-xs font-medium text-success">
-              {t("playbook.operation.deleted")}
-            </p>
-          ) : null}
-          {operation.state === "cancelled" ? (
-            <p className="mt-2 text-xs text-ink-meta">
-              {t("playbook.operation.cancelled")}
-            </p>
-          ) : null}
-          {["failed", "stale"].includes(operation.state) ? (
-            <p className="mt-2 text-xs text-error">
-              {operation.error_message ?? t("playbook.operation.failed")}
-            </p>
-          ) : null}
-        </div>
-      </div>
-      {!terminal ? (
-        <div className="flex items-center justify-end gap-2 border-t border-surface-border px-4 py-2">
-          {canCancel ? (
-            <button
-              type="button"
-              disabled={Boolean(busy)}
-              onClick={onCancel}
-              className="inline-flex h-7 items-center rounded-md border border-surface-border px-3 text-xs font-medium text-ink-body hover:bg-surface-2 disabled:opacity-50"
-            >
-              {busy === "cancel" ? (
-                <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-              ) : null}
-              {t("common.cancel")}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            disabled={!canConfirm || Boolean(busy)}
-            onClick={onConfirm}
+    <>
+      <div
+        data-slot="playbook-operation-card"
+        className={cn(
+          "rounded-lg border bg-surface-soft transition-colors",
+          operation.state === "succeeded" && "border-success/40 bg-success/5",
+          operation.state === "cancelled" &&
+            "border-surface-border bg-surface-2 opacity-80",
+          ["failed", "stale"].includes(operation.state) &&
+            "border-error/40 bg-error-light/40",
+          !terminal && operation.state !== "failed" && "border-surface-border",
+        )}
+      >
+        <div className="flex items-start gap-3 px-4 py-3">
+          <div
             className={cn(
-              "inline-flex h-7 items-center rounded-md px-3 text-xs font-medium text-white disabled:opacity-50",
-              change === "delete"
-                ? "bg-error hover:bg-error/90"
-                : "bg-brand hover:bg-brand-hover",
+              "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brand/10 text-brand",
+              change === "delete" && "bg-error-light text-error-text",
             )}
           >
-            {confirming ? (
-              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+            {operation.state === "succeeded" ? (
+              <Check className="h-4 w-4" />
+            ) : operation.state === "cancelled" ? (
+              <X className="h-4 w-4 text-ink-muted" />
+            ) : ["failed", "stale"].includes(operation.state) ? (
+              <AlertTriangle className="h-4 w-4 text-error" />
+            ) : (
+              <Icon className="h-4 w-4" />
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <span className="truncate text-sm font-medium text-ink-heading">
+                {name}
+              </span>
+              <span className="text-2xs uppercase tracking-wider text-ink-label">
+                {t(`playbook.operation.${change}`)}
+              </span>
+              {typeof operation.preview.next_version === "number" ? (
+                <span className="rounded-full bg-surface-muted px-1.5 text-2xs text-ink-label">
+                  v{operation.preview.next_version}
+                </span>
+              ) : null}
+              {nextStatus ? (
+                <span className="rounded-full bg-surface-muted px-1.5 text-2xs text-ink-label">
+                  {t(`playbook.status.${nextStatus}`)}
+                </span>
+              ) : null}
+            </div>
+            {content ? (
+              <div className="relative mt-2 rounded-md bg-surface px-2.5 py-2 pr-9">
+                <div className="line-clamp-4 whitespace-pre-wrap break-words text-xs leading-snug text-ink-body">
+                  {content}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => setDetailsOpen(true)}
+                  className="absolute right-1 top-1"
+                  title={t("playbook.promptLabel")}
+                  aria-label={t("playbook.promptLabel")}
+                >
+                  <Maximize2 />
+                </Button>
+              </div>
             ) : null}
-            {operation.state === "failed"
-              ? t("common.retry")
-              : t("common.confirm")}
-          </button>
+            {operation.state === "succeeded" && change !== "delete" ? (
+              <button
+                type="button"
+                disabled={!definitionId || !onOpenPlaybook}
+                onClick={() => definitionId && onOpenPlaybook?.(definitionId)}
+                className="mt-2 text-xs font-medium text-success hover:underline disabled:no-underline"
+              >
+                {t("playbook.operation.succeeded")}
+              </button>
+            ) : null}
+            {operation.state === "succeeded" && change === "delete" ? (
+              <p className="mt-2 text-xs font-medium text-success">
+                {t("playbook.operation.deleted")}
+              </p>
+            ) : null}
+            {operation.state === "cancelled" ? (
+              <p className="mt-2 text-xs text-ink-meta">
+                {t("playbook.operation.cancelled")}
+              </p>
+            ) : null}
+            {["failed", "stale"].includes(operation.state) ? (
+              <p className="mt-2 text-xs text-error">
+                {operation.error_message ?? t("playbook.operation.failed")}
+              </p>
+            ) : null}
+          </div>
         </div>
+        {!terminal ? (
+          <div className="flex items-center justify-end gap-2 border-t border-surface-border px-4 py-2">
+            {canCancel ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={Boolean(busy)}
+                loading={busy === "cancel"}
+                onClick={onCancel}
+              >
+                {t("common.cancel")}
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant={change === "delete" ? "destructive" : "default"}
+              size="sm"
+              disabled={!canConfirm || Boolean(busy)}
+              loading={confirming}
+              onClick={onConfirm}
+            >
+              {operation.state === "failed"
+                ? t("common.retry")
+                : t("common.confirm")}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+
+      {content ? (
+        <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+          <DialogContent className="flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
+            <DialogHeader className="border-b border-surface-border px-5 pb-4 pt-5 pr-12">
+              <DialogTitle>{name}</DialogTitle>
+              <DialogDescription>{t("playbook.promptLabel")}</DialogDescription>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+              <MarkdownContent
+                content={content}
+                showCitationSources={false}
+                className="text-sm leading-6 text-ink-body [&_h1]:mb-3 [&_h1]:mt-0 [&_h1]:text-xl [&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-lg [&_h3]:mb-2 [&_h3]:mt-4 [&_h3]:text-base [&_li]:my-1 [&_ol]:my-3 [&_p]:my-2 [&_table]:text-xs [&_ul]:my-3"
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
       ) : null}
-    </div>
+    </>
   );
 });

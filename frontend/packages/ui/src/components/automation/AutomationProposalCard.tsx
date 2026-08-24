@@ -17,13 +17,13 @@ import {
   AlarmClock,
   BookOpen,
   Check,
-  Loader2,
   Sparkles,
   User,
   X,
 } from "lucide-react";
 import { cn } from "@valuz/ui/lib/utils";
 import { useI18n } from "../../hooks/use-i18n";
+import { Button } from "../ui/button";
 
 export type AutomationProposalState =
   | "pending"
@@ -109,10 +109,10 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
 
   return (
     <div
+      data-slot="automation-proposal-card"
       className={cn(
         "rounded-lg border bg-surface-soft transition-colors",
-        state === "confirmed" &&
-          "border-[rgba(83,188,118,0.5)] bg-[rgba(83,188,118,0.06)]",
+        state === "confirmed" && "border-success/40 bg-success/5",
         state === "dismissed" && "border-surface-border bg-surface-2 opacity-80",
         state === "error" && "border-error/40 bg-error-light/40",
         state !== "confirmed" && state !== "dismissed" && state !== "error"
@@ -227,36 +227,25 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
 
       {!isTerminal ? (
         <div className="flex items-center justify-end gap-2 border-t border-surface-border px-4 py-2">
-          <button
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             disabled={isBusy}
+            loading={state === "dismissing"}
             onClick={onDismiss}
-            className={cn(
-              "inline-flex h-7 items-center rounded-md px-3 text-xs font-medium",
-              "border border-surface-border text-ink-body hover:bg-surface-2",
-              "disabled:cursor-not-allowed disabled:opacity-50",
-            )}
           >
-            {state === "dismissing" ? (
-              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-            ) : null}
             {t("common.cancel")}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            size="sm"
             disabled={!canConfirm || isBusy}
+            loading={state === "confirming"}
             onClick={onConfirm}
-            className={cn(
-              "inline-flex h-7 items-center rounded-md px-3 text-xs font-medium",
-              "bg-brand text-white hover:bg-brand-hover",
-              "disabled:cursor-not-allowed disabled:opacity-50",
-            )}
           >
-            {state === "confirming" ? (
-              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-            ) : null}
             {t("automation.actionCreate")}
-          </button>
+          </Button>
         </div>
       ) : null}
     </div>
