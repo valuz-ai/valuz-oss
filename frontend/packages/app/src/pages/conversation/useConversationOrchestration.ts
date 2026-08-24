@@ -932,6 +932,26 @@ export function useConversationOrchestration({
     projectSkills,
   });
 
+  // Host-pinned project: an embedded panel that declared a REAL project as
+  // its ``createDefaults.projectId`` (a workspace panel) behaves like the
+  // project home composer — the 📁 chip pre-selects that project (bootstrap,
+  // via ``presetProjectId`` above) AND the location bar locks, so a panel
+  // draft can never detach from its project. The ``chat-default`` sentinel
+  // and stale ids resolve to no row and leave everything unchanged.
+  const pinnedProject = useMemo(
+    () =>
+      createDefaults?.projectId
+        ? (projects.find(
+            (w) => w.id === createDefaults.projectId && w.kind === "project",
+          ) ?? null)
+        : null,
+    [createDefaults?.projectId, projects],
+  );
+  const execBarLockedWithPin = execBarLocked || pinnedProject != null;
+  const sessionExecOriginWithPin =
+    sessionExecOrigin ??
+    (pinnedProject ? (pinnedProject.exec_origin ?? "local") : undefined);
+
   // Seed the override controls from the bound agent's brain for a NEW agent
   // conversation. Runs on first bind and whenever the agent changes (the
   // agent picker clears ``composerTouched``); a user override sets
@@ -1029,6 +1049,7 @@ export function useConversationOrchestration({
       setSelectedProjectId,
       setSessions,
       setSelectedSessionId,
+      presetProjectId: createDefaults?.projectId ?? null,
     });
 
   // Safety net for a turn that dies before the kernel ever accepts it (a
@@ -1621,8 +1642,8 @@ export function useConversationOrchestration({
     sessionAttachments,
     handleRemoveSessionAttachment,
     composerAgents,
-    execBarLocked,
-    sessionExecOrigin,
+    execBarLocked: execBarLockedWithPin,
+    sessionExecOrigin: sessionExecOriginWithPin,
     execTargetId,
     setExecTargetId,
     setSelectedProviderId,

@@ -103,7 +103,32 @@ type ConversationHistoryParams = {
   setSelectedProjectId: Dispatch<SetStateAction<string | null>>;
   setSessions: Dispatch<SetStateAction<SessionListItem[]>>;
   setSelectedSessionId: Dispatch<SetStateAction<string | null>>;
+  /** Host-declared project for a fresh draft (``createDefaults.projectId``
+   *  from an embedded panel). Same effect as ``?project=<id>`` on the route:
+   *  the 📁 chip pre-selects that project instead of 临时对话. The URL query
+   *  wins when both are present. */
+  presetProjectId?: string | null;
 };
+
+/** Resolve which project a fresh draft pre-selects: the route query first,
+ *  then the embedding host's declared default — either only when it names a
+ *  real project row (the ``chat-default`` sentinel and stale ids fall
+ *  through to 临时对话). Exported for tests. */
+export function resolvePresetProject(
+  queryParam: string | null,
+  presetProjectId: string | null | undefined,
+  projects: ProjectListItem[],
+): string | null {
+  for (const candidate of [queryParam, presetProjectId]) {
+    if (
+      candidate &&
+      projects.some((w) => w.id === candidate && w.kind === "project")
+    ) {
+      return candidate;
+    }
+  }
+  return null;
+}
 
 /**
  * ── Conversation history loading ─────────────────────────────────────
@@ -152,6 +177,7 @@ export function useConversationHistory({
   setSelectedProjectId,
   setSessions,
   setSelectedSessionId,
+  presetProjectId,
 }: ConversationHistoryParams) {
   // A same-session bootstrap may skip REST history only after that session's
   // window completed successfully. Keeping selection and hydration separate
@@ -518,14 +544,11 @@ export function useConversationHistory({
           // chip lands on it instead of 临时对话. The user can flip back to
           // 临时 with one click. Falls back to the ``"chat-default"`` sentinel
           // (临时) when the query is absent or doesn't match a project.
-          const projectParam = searchParams.get("project");
-          const presetProject =
-            projectParam &&
-            wsResponse.projects.some(
-              (w) => w.id === projectParam && w.kind === "project",
-            )
-              ? projectParam
-              : null;
+          const presetProject = resolvePresetProject(
+            searchParams.get("project"),
+            presetProjectId,
+            wsResponse.projects,
+          );
           setSelectedProjectId(presetProject ?? "chat-default");
           // Preset project (e.g. home-page footer bar hand-off): same reveal
           // rule as an in-page pick.
@@ -662,6 +685,7 @@ export function useConversationHistory({
       id,
       location.state,
       onSessionUnavailable,
+      presetProjectId,
       refreshEvents,
       searchParams,
     ],
