@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SessionAttachmentItem } from "../api/sessions-api";
@@ -476,5 +477,35 @@ describe("useSessionAttachments", () => {
     });
 
     expect(second).toEqual([]);
+  });
+
+  it("reports the ids even when another state update is already pending", async () => {
+    // The version that shipped derived the ids INSIDE a function updater and
+    // returned them. React only evaluates an updater eagerly when nothing else
+    // is pending, so it worked in every test — which all called it on a quiet
+    // hook — and returned an empty list in the real send path, which sets
+    // ``sending`` first. Every turn went out claiming no attachments.
+    //
+    // Queueing an unrelated update first is what makes this test able to see
+    // it at all.
+    uploadAttachment.mockResolvedValue(
+      row({ id: "srv1", session_id: null, parse_status: "ready" }),
+    );
+    const { result } = renderHook(() => {
+      const [, bump] = useState(0);
+      return { ...useSessionAttachments(null), bump };
+    });
+
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+
+    let claimed: string[] = [];
+    act(() => {
+      result.current.bump(1); // a pending update, exactly like ``setSending``
+      claimed = result.current.markPendingConsumed("s1");
+    });
+
+    expect(claimed).toEqual(["srv1"]);
   });
 });
