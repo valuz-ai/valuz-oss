@@ -127,7 +127,11 @@ export function useProjectHandoff({
   useEffect(() => {
     const handoff = (
       location.state as {
-        handoff?: { text?: string; sentAt?: number };
+        handoff?: {
+          text?: string;
+          sentAt?: number;
+          attachments?: Array<{ name: string; size: number }>;
+        };
       } | null
     )?.handoff;
     const text = handoff?.text?.trim();
@@ -153,9 +157,16 @@ export function useProjectHandoff({
     // watermark its still-pending result would pin the already-sent files
     // back onto the composer.
     markPendingConsumed(id, sentAt);
+    // The handoff carries the attachment meta because this page cannot derive
+    // it: ``markPendingConsumed`` above (and the same call on the sending
+    // page) stamps those rows, so by the time the attachments load lands they
+    // read as someone else's history. Seeding an empty list instead is what
+    // made an attached image appear only once the server echoed
+    // ``message.user`` back — the text was on screen for seconds first, and
+    // the person saw their own message arrive without the file they sent.
     setPendingUserMessage({
       text,
-      attachments: [],
+      attachments: handoff?.attachments ?? [],
       fromSeq: historyCursorRef.current,
       sentAt,
     });
