@@ -78,11 +78,41 @@ describe("useStagedAttachments", () => {
     expect(result.current.attachments).toHaveLength(0);
   });
 
-  it("restores staged files on mount so a reload does not lose them", async () => {
-    listStagedAttachments.mockResolvedValue({ items: [row()] });
+  it("does not show files another composer staged", async () => {
+    // Staging is owner-scoped on the server — an attachment has no session and
+    // no composer, which is what lets it exist before either does. But a quick
+    // chat and a project chat open at once would then each show the other's
+    // files, which is what happened. A composer holds what IT attached, like
+    // the text draft beside it.
+    listStagedAttachments.mockResolvedValue({
+      items: [row({ id: "someone-elses" })],
+    });
     const { result } = renderHook(() => useStagedAttachments());
 
-    await waitFor(() => expect(result.current.attachments).toHaveLength(1));
+    // Give the mount a chance to do the wrong thing.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.attachments).toHaveLength(0);
+  });
+
+  it("a poll cannot pull in another composer's files either", async () => {
+    uploadAttachment.mockResolvedValue(row({ parse_status: "parsing" }));
+    listStagedAttachments.mockResolvedValue({
+      items: [row({ parse_status: "ready" }), row({ id: "someone-elses" })],
+    });
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useStagedAttachments());
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(result.current.attachments.map((a) => a.id)).toEqual(["srv1"]);
   });
 
   it("uploads and reads on the backend it was given", async () => {
@@ -90,19 +120,22 @@ describe("useStagedAttachments", () => {
     // parameter without passing it at the call sites sent every cloud-project
     // upload to the local default, where the turn could never find it.
     const base = "https://cloud.example/agent";
-    uploadAttachment.mockResolvedValue(row());
+    uploadAttachment.mockResolvedValue(row({ parse_status: "parsing" }));
+    listStagedAttachments.mockResolvedValue({ items: [row()] });
+    vi.useFakeTimers();
     const { result } = renderHook(() => useStagedAttachments(base));
 
-    await waitFor(() =>
-      expect(listStagedAttachments).toHaveBeenCalledWith({ baseUrl: base }),
-    );
     await act(async () => {
       await result.current.attachLocalFiles([file()]);
     });
-
     expect(uploadAttachment).toHaveBeenCalledWith(expect.any(File), {
       baseUrl: base,
     });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(listStagedAttachments).toHaveBeenCalledWith({ baseUrl: base });
   });
 
   it("keeps polling until the parse settles", async () => {

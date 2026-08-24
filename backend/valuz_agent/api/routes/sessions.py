@@ -1179,8 +1179,7 @@ async def add_kb_attachments(
         # Empty list is a no-op (picker confirmed with nothing
         # selected) — return the current attachment list instead of
         # erroring so the frontend doesn't need to special-case.
-        rows = await SessionDatastore(db).list_unbound_attachments(user_id)
-        return AttachmentListResponse(items=[_row_to_item(r) for r in rows])
+        return AttachmentListResponse(items=[])
 
     ds = SessionDatastore(db)
     existing = await ds.list_unbound_attachments(user_id)
@@ -1205,6 +1204,7 @@ async def add_kb_attachments(
         )
 
     doc_ds = DocumentDatastore(db)
+    created: list[SessionAttachmentRow] = []
     for doc_id in body.doc_ids:
         if doc_id in already_attached:
             continue
@@ -1239,10 +1239,17 @@ async def add_kb_attachments(
         )
         await ds.create_attachment(user_id, row)
         await db.refresh(row)
+        created.append(row)
         _spawn_attachment_parse(row.id, doc.source_path, safe_name, user_id)
 
-    rows = await ds.list_unbound_attachments(user_id)
-    return AttachmentListResponse(items=[_row_to_item(r) for r in rows])
+    # Only what this call created.
+    #
+    # Returning the owner's whole staging set instead would hand a composer
+    # files staged in another one — the server has no notion of which composer
+    # a staged file belongs to (deliberately: an attachment exists before any
+    # composer commits to a session), so the answer to "what did I just
+    # attach" has to be exactly that and nothing more.
+    return AttachmentListResponse(items=[_row_to_item(r) for r in created])
 
 
 @attachments_router.delete("/{attachment_id}", status_code=204)

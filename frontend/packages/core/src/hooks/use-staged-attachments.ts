@@ -98,30 +98,31 @@ export function useStagedAttachments(
   /** Ids the person removed while their upload was still in flight. */
   const removedRef = useRef<Set<string>>(new Set());
 
-  /** Server rows win; placeholders survive until their own upload lands. */
+  // The ids THIS composer put up.
+  //
+  // Staging is owner-scoped on the server — an attachment has no session and
+  // no composer, which is what lets it be uploaded before either exists. But
+  // "everything this owner has staged" is not what a composer is holding: with
+  // a quick chat and a project chat open, each would show the other's files.
+  // So the server answers per owner and this narrows it to its own, exactly
+  // like the text draft beside it, which is component state and shared with
+  // nobody.
+  //
+  // The consequence is deliberate: a reload loses the chips, as it loses the
+  // typed text. The rows stay on the server as unclaimed staging and fall to
+  // the per-owner cap. Restoring them instead is what leaked them sideways.
+  const mineRef = useRef<Set<string>>(new Set());
+
+  /** Server rows for files THIS composer staged; placeholders ride along. */
   const merge = useCallback(
     (serverRows: SessionAttachmentItem[]) => {
-      write((prev) => [...serverRows, ...prev.filter(isPlaceholder)]);
+      write((prev) => [
+        ...serverRows.filter((r) => mineRef.current.has(r.id)),
+        ...prev.filter(isPlaceholder),
+      ]);
     },
     [write],
   );
-
-  // Restore on mount: a reload should not lose files the person already
-  // uploaded. One read, no session in sight.
-  useEffect(() => {
-    let cancelled = false;
-    void sessionsApi
-      .listStagedAttachments(opts)
-      .then(({ items }) => {
-        if (!cancelled) merge(items);
-      })
-      .catch(() => {
-        /* a composer with no restored chips is degraded, not broken */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [opts, merge]);
 
   const hasPending = attachments.some((a) => a.parse_status === "parsing");
 
@@ -165,6 +166,7 @@ export function useStagedAttachments(
             });
             continue;
           }
+          mineRef.current.add(item.id);
           // Swap in place so a multi-file attach does not reshuffle itself as
           // each upload lands.
           write((prev) => prev.map((a) => (a.id === row.id ? item : a)));
@@ -181,7 +183,10 @@ export function useStagedAttachments(
     async (docIds: string[]) => {
       if (docIds.length === 0) return;
       const { items } = await sessionsApi.addKbAttachments(docIds, opts);
-      merge(items);
+      // The endpoint answers with the rows it just created, so every one of
+      // them is this composer's.
+      for (const r of items) mineRef.current.add(r.id);
+      merge([...ref.current.filter((a) => !isPlaceholder(a)), ...items]);
     },
     [merge, opts],
   );
@@ -189,6 +194,7 @@ export function useStagedAttachments(
   const remove = useCallback(
     async (attachmentId: string) => {
       write((prev) => prev.filter((a) => a.id !== attachmentId));
+      mineRef.current.delete(attachmentId);
       if (isPlaceholder({ id: attachmentId } as SessionAttachmentItem)) {
         // No server row yet — DELETE would 404 on an id it has never seen.
         // Recorded so the in-flight upload undoes itself on arrival.
@@ -207,6 +213,7 @@ export function useStagedAttachments(
   const claim = useCallback((): SessionAttachmentItem[] => {
     const claimed = ref.current.filter((a) => !isPlaceholder(a));
     if (claimed.length === 0) return [];
+    for (const a of claimed) mineRef.current.delete(a.id);
     write((prev) => prev.filter(isPlaceholder));
     return claimed;
   }, [write]);
@@ -214,6 +221,7 @@ export function useStagedAttachments(
   const restage = useCallback(
     (rows: SessionAttachmentItem[]) => {
       if (rows.length === 0) return;
+      for (const r of rows) mineRef.current.add(r.id);
       write((prev) => {
         const have = new Set(prev.map((a) => a.id));
         return [...rows.filter((r) => !have.has(r.id)), ...prev];
