@@ -35,7 +35,6 @@ import {
 import { homeSuggestions } from "@valuz/app/lib/prototype-data";
 import { useTranslation } from "@valuz/core";
 import { assetUrl } from "@valuz/shared";
-import { AttachmentParsingDialog } from "../components/AttachmentParsingDialog";
 import { OriginBadge } from "../components/ExecutionLocationPicker";
 import { ExecutionLocationBar } from "../components/ExecutionLocationBar";
 
@@ -118,7 +117,6 @@ export const ConversationsHomePage = () => {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const {
     attachments: stagedAttachments,
-    hasParsing,
     attachLocalFiles,
     remove: removeAttachment,
     markPendingConsumed,
@@ -128,7 +126,6 @@ export const ConversationsHomePage = () => {
     // will actually run on, not to the module default.
     resolveExecTarget()?.baseUrl,
   );
-  const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
   // Observed origin of the minted quick-chat session — drives the locked
   // bar's location chip (multi-target editions).
   const mintedSessionOrigin = useEntityOrigin(sessionId, "session");
@@ -358,11 +355,9 @@ export const ConversationsHomePage = () => {
   const handleSend = () => {
     const text = input.trim();
     if (!text || sending) return;
-    // Block on unfinished parsing — let the user wait or submit raw.
-    if (hasParsing) {
-      setParsingConfirmOpen(true);
-      return;
-    }
+    // An unfinished parse no longer stops the person: the turn binds the
+    // attachment either way and ships ``source_path`` if the extract is not
+    // ready. See ProjectDetailPage for the full rationale.
     void performSend();
   };
 
@@ -614,14 +609,7 @@ export const ConversationsHomePage = () => {
                 />
               }
             />
-            <AttachmentParsingDialog
-              open={parsingConfirmOpen}
-              onConfirm={() => {
-                setParsingConfirmOpen(false);
-                void performSend();
-              }}
-              onCancel={() => setParsingConfirmOpen(false)}
-            />
+
           </div>
         </div>
       </div>

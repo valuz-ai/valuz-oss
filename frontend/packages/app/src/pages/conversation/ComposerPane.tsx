@@ -14,7 +14,6 @@ import {
 import { cn, Composer, type ComposerConnector } from "@valuz/ui";
 import type { I18nKey } from "@valuz/shared";
 import { QueuedInputsBar } from "../../components/QueuedInputsBar";
-import { AttachmentParsingDialog } from "../../components/AttachmentParsingDialog";
 import { CreateAgentDialog } from "../../components/CreateAgentDialog";
 import { ExecutionLocationBar } from "../../components/ExecutionLocationBar";
 import type { useComposerConfig } from "./useComposerConfig";
@@ -104,8 +103,6 @@ type ComposerPaneProps = {
   connectorOptions: ComposerConnector[];
   selectedMcpSlugs: string[];
   toggleConnector: (slug: string, enabled: boolean) => void;
-  parsingConfirmOpen: boolean;
-  setParsingConfirmOpen: Dispatch<SetStateAction<boolean>>;
   performSend: ConversationSend["performSend"];
   /** Enables the composer's chat/task mode toggle (the same one the project
    * home composer carries). In task mode Send hands the draft to this
@@ -198,9 +195,6 @@ export function ComposerPane({
   connectorOptions,
   selectedMcpSlugs,
   toggleConnector,
-  parsingConfirmOpen,
-  setParsingConfirmOpen,
-  performSend,
   onSendTask,
 }: ComposerPaneProps) {
   const { t } = useTranslation();
@@ -541,14 +535,7 @@ export function ComposerPane({
           onManageSkills={() => navigate("/skills")}
           onManageConnectors={() => navigate("/connectors")}
         />
-        <AttachmentParsingDialog
-          open={parsingConfirmOpen}
-          onConfirm={() => {
-            setParsingConfirmOpen(false);
-            void performSend();
-          }}
-          onCancel={() => setParsingConfirmOpen(false)}
-        />
+
       </div>
     </>
   );

@@ -563,7 +563,6 @@ export function useConversationOrchestration({
   const pinNextTurnToTopRef = useRef(false);
   const keepCurrentTurnAtTopRef = useRef(false);
   // Open while confirming a send that would ship still-parsing attachments.
-  const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
   const sidebarSessions = useSessionStore((state) => state.sessions);
   const setSidebarSessions = useSessionStore((state) => state.setSessions);
   const fetchSidebarSessions = useSessionStore((state) => state.fetchSessions);
@@ -1285,10 +1284,6 @@ export function useConversationOrchestration({
         void performEnqueue();
         return;
       }
-      if (attachmentsParsing) {
-        setParsingConfirmOpen(true);
-        return;
-      }
       void performSend();
     },
     onSessionPromoted,
@@ -1581,10 +1576,6 @@ export function useConversationOrchestration({
         void performEnqueue();
         return;
       }
-      if (attachmentsParsing) {
-        setParsingConfirmOpen(true);
-        return;
-      }
       void performSend();
     },
     // approvals
@@ -1668,8 +1659,6 @@ export function useConversationOrchestration({
     connectorOptions,
     selectedMcpSlugs,
     toggleConnector,
-    parsingConfirmOpen,
-    setParsingConfirmOpen,
     // KB picker overlay
     kbPickerOpen,
     setKbPickerOpen,
