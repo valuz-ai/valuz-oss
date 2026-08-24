@@ -44,6 +44,7 @@ from src.core.task_coverage_continuation import (
     TASK_COVERAGE_NOOP_TOOL_NAME,
     build_task_coverage_continuation_prompt,
     build_task_coverage_noop_tool,
+    should_run_task_coverage,
 )
 from src.core.time_utils import now_ms
 from src.core.tracing import TurnTracingSink, start_turn_trace, turn_trace_context
@@ -868,6 +869,17 @@ class _MessageObserverSink:
         """Whether the primary run attempted an external data/tool call."""
 
         return self._external_tool_called
+
+    def has_assistant_text(self) -> bool:
+        """Whether the primary run produced any assistant prose.
+
+        The shared situational gate for BOTH post-run features: Citation/Audit
+        iterates the published assistant segments (nothing published → nothing
+        to check), and Task Coverage must judge the same way — a pure tool
+        turn or an empty answer has no prose whose coverage could be reviewed.
+        """
+
+        return bool(self._assistant_sidecar_inputs) or bool(self.partial_assistant_text)
 
     @staticmethod
     def _tool_event_is_external(data: dict[str, Any], tool_name: str) -> bool:
@@ -1763,11 +1775,12 @@ class SessionOrchestrator:
                     message.id,
                     session.id,
                 )
-            if (
-                task_coverage_enabled
-                and not skip_genui_post_run
-                and observer.called_external_tool()
-                and getattr(session.stop_reason, "type", None) == "end_turn"
+            if should_run_task_coverage(
+                enabled=task_coverage_enabled,
+                skip_genui_post_run=skip_genui_post_run,
+                called_external_tool=observer.called_external_tool(),
+                has_assistant_text=observer.has_assistant_text(),
+                stop_reason_type=getattr(session.stop_reason, "type", None),
             ):
                 if not bool(getattr(runtime, "supports_native_continuation", False)):
                     observer.mark_task_coverage_unavailable(
