@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { AutomationProposalCard } from "./AutomationProposalCard";
@@ -20,6 +21,39 @@ function renderCard(state: "pending" | "confirmed") {
 }
 
 describe("AutomationProposalCard", () => {
+  it("opens the full Prompt from a compact icon and renders Markdown", async () => {
+    const { container } = render(
+      <AutomationProposalCard
+        name="每日市场跟踪"
+        actionKind="chat"
+        promptTemplate={"# 市场概览\n\n- 跟踪美债利率\n- 检查半导体景气"}
+        state="pending"
+        onConfirm={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    const preview = container.querySelector(
+      '[data-slot="automation-prompt-preview"]',
+    );
+    expect(preview).toBeTruthy();
+    expect(preview?.querySelector(".overflow-y-auto")).toBeNull();
+
+    const details = screen.getByRole("button", {
+      name: "automation.viewPrompt",
+    });
+    expect(details.getAttribute("data-size")).toBe("icon-xs");
+    expect(details.textContent).toBe("");
+
+    await userEvent.click(details);
+
+    expect(
+      screen.getByRole("heading", { name: "每日市场跟踪" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "市场概览" })).toBeTruthy();
+    expect(screen.getByRole("list")).toBeTruthy();
+  });
+
   it("uses the standard action hierarchy", () => {
     renderCard("pending");
 
