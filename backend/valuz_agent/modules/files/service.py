@@ -54,6 +54,15 @@ async def owner_allowed_roots(user_id: str) -> list[Path]:
                 roots.append(_root_path(user_id, root_path).resolve())
             except Exception:  # noqa: BLE001
                 continue
+
+    # The owner's knowledge-base tree. KB files are the owner's own uploads,
+    # but they live under ``<data_dir>/kb`` — outside the project root — so
+    # resolving one for "view the original file" answered ``forbidden`` for a
+    # document the caller had just uploaded themselves.
+    try:
+        roots.append(fs_registry.kb_root(user_id).resolve())
+    except Exception:  # noqa: BLE001 — same posture as the managed root above
+        pass
     return roots
 
 

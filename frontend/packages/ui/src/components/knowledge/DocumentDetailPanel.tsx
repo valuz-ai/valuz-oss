@@ -1,6 +1,8 @@
+import { useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  ExternalLink,
   FolderOpen,
   Loader2,
   RotateCw,
@@ -65,6 +67,9 @@ export interface DocumentDetailPanelProps {
   };
   onDelete?: () => void;
   onRegenerate?: () => void;
+  /** Open the ORIGINAL file — the uploaded pdf/xlsx/…, as opposed to the
+   *  parsed markdown the preview below shows. */
+  onViewSource?: () => void;
 }
 
 function _formatAttemptTime(iso: string): string {
@@ -111,8 +116,13 @@ export const DocumentDetailPanel = ({
   parse,
   onDelete,
   onRegenerate,
+  onViewSource,
 }: DocumentDetailPanelProps) => {
   const { t } = useI18n();
+  // The attempt history is a support artifact; the latest entry answers the
+  // common question ("what parsed this / why did it fail") and the rest is
+  // behind 查看全部.
+  const [showAllAttempts, setShowAllAttempts] = useState(false);
   // Show the parse section as long as there's anything meaningful to
   // surface — either a current engine, an attempt history, or a
   // last-error to explain a failure. Skip the section entirely for
@@ -123,7 +133,8 @@ export const DocumentDetailPanel = ({
       (parse.attempts && parse.attempts.length > 0) ||
       parse.lastErrorMessage)
   );
-  const attempts = parse?.attempts ?? [];
+  const attempts = [...(parse?.attempts ?? [])].reverse(); // latest first
+  const visibleAttempts = showAllAttempts ? attempts : attempts.slice(0, 1);
   const isProcessing = doc.status === "indexing" || doc.status === "queued";
   const isFailed = doc.status === "failed";
   return (
@@ -136,8 +147,46 @@ export const DocumentDetailPanel = ({
 
       <div className="flex-1 overflow-y-auto px-5 pb-5 pt-1">
         <div className="mb-3">
-          <div className="wrap-anywhere text-sm font-medium text-ink-heading">
-            {doc.name}
+          <div className="flex items-start gap-1">
+            <div className="min-w-0 flex-1 wrap-anywhere text-sm font-medium text-ink-heading">
+              {doc.name}
+            </div>
+            {onViewSource ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0"
+                title={t("knowledge.viewSourceFile")}
+                aria-label={t("knowledge.viewSourceFile")}
+                onClick={onViewSource}
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+              </Button>
+            ) : null}
+            {onRegenerate ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0"
+                title={t("knowledge.rebuildIndex")}
+                aria-label={t("knowledge.rebuildIndex")}
+                onClick={onRegenerate}
+              >
+                <RotateCw className="h-3.5 w-3.5" />
+              </Button>
+            ) : null}
+            {onDelete ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0 text-error-text hover:text-error-text"
+                title={t("knowledge.deleteDoc")}
+                aria-label={t("knowledge.deleteDoc")}
+                onClick={onDelete}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            ) : null}
           </div>
           {/* One strip carries every scalar fact — type, size, import time,
               index status — so the parsed content below gets the panel. The
@@ -211,10 +260,37 @@ export const DocumentDetailPanel = ({
           ) : null}
         </div>
 
+        {doc.preview ? (
+          <section className="mt-1 flex min-h-0 flex-col border-t border-surface-border pt-4">
+            <div className="mb-2 text-2xs font-medium text-ink-section">
+              {t("knowledge.preview")}
+            </div>
+            {/* The system file viewer, not the chat bubble's markdown: the
+                parsed result is a document, and this is the renderer every
+                other document surface (artifacts, reader) already uses. */}
+            <ArtifactRenderer
+              artifact={_previewArtifact(doc.name)}
+              content={_previewContent(doc.preview)}
+            />
+          </section>
+        ) : null}
         {hasParseInfo ? (
-          <div className="mb-4 space-y-2">
-            <div className="text-2xs font-medium text-ink-section">
-              {t("knowledge.parseHistory")}
+          <div className="mt-4 space-y-2 border-t border-surface-border pt-4">
+            <div className="flex items-baseline justify-between">
+              <div className="text-2xs font-medium text-ink-section">
+                {t("knowledge.parseHistory")}
+              </div>
+              {attempts.length > 1 ? (
+                <button
+                  type="button"
+                  className="text-2xs text-ink-meta transition-colors hover:text-ink-body"
+                  onClick={() => setShowAllAttempts((v) => !v)}
+                >
+                  {showAllAttempts
+                    ? t("common.collapse")
+                    : `${t("knowledge.parseHistoryAll")} (${attempts.length})`}
+                </button>
+              ) : null}
             </div>
             {parse?.parserMode || isProcessing ? (
               <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-heading">
@@ -227,25 +303,13 @@ export const DocumentDetailPanel = ({
                     {parse?.parserMode ?? t("knowledge.parserEnginePending")}
                   </span>
                 </span>
-                {attempts.length > 0 ? (
-                  <span className="text-ink-meta">
-                    ·{" "}
-                    {t("knowledge.parserAttempts", {
-                      count: String(attempts.length),
-                    })}
-                  </span>
-                ) : null}
               </div>
             ) : null}
 
-            {attempts.length > 0 ? (
+            {visibleAttempts.length > 0 ? (
               <ol className="space-y-1.5 rounded-md border border-surface-border bg-surface-soft px-3 py-2">
-                {attempts.map((a, idx) => {
-                  // Each ``ParserAttempt`` is one plugin run: ``ok``
-                  // entries succeeded (green check, no error line); the
-                  // rest failed / fell back (red X + upstream error).
-                  // The list reads as a timeline — e.g. "mineru ✗ →
-                  // light_local ✓".
+                {visibleAttempts.map((a, idx) => {
+                  // One plugin run per entry; latest first when collapsed.
                   return (
                     <li
                       key={`${a.pluginId}-${a.occurredAt}-${idx}`}
@@ -292,49 +356,8 @@ export const DocumentDetailPanel = ({
             ) : null}
           </div>
         ) : null}
-
-        {doc.preview ? (
-          <section className="mt-1 flex min-h-0 flex-col border-t border-surface-border pt-4">
-            <div className="mb-2 text-2xs font-medium text-ink-section">
-              {t("knowledge.preview")}
-            </div>
-            {/* The system file viewer, not the chat bubble's markdown: the
-                parsed result is a document, and this is the renderer every
-                other document surface (artifacts, reader) already uses. */}
-            <ArtifactRenderer
-              artifact={_previewArtifact(doc.name)}
-              content={_previewContent(doc.preview)}
-            />
-          </section>
-        ) : null}
       </div>
 
-      {onRegenerate || onDelete ? (
-        <div className="flex shrink-0 gap-2 border-t border-surface-border bg-surface px-5 py-4">
-          {onRegenerate ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="min-w-0 flex-1 justify-center"
-              onClick={onRegenerate}
-            >
-              <RotateCw className="h-3.5 w-3.5" />
-              {t("knowledge.rebuildIndex")}
-            </Button>
-          ) : null}
-          {onDelete ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="min-w-0 flex-1 justify-center text-error-text hover:text-error-text"
-              onClick={onDelete}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              {t("knowledge.deleteDoc")}
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   );
 };
