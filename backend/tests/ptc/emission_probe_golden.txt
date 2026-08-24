@@ -1,0 +1,153 @@
+== module ==
+"""
+Auto-generated tool functions for MCP server: probe-data
+
+Each function forwards one tool call on the probe-data server through
+the PTC loopback client in ``tools/mcp_client.py``. Generated from
+tools/list schemas — do not edit by hand.
+"""
+
+from typing import Any, Literal  # noqa: F401 - Literal used only by enum params
+
+from .mcp_client import ToolCallError, _call_mcp_tool  # noqa: F401
+
+
+def get_series(from_: str, symbols: list[str], kind: Literal['daily', 'weekly', 'monthly'] = 'daily', limit: int | None = None) -> dict:
+    """Fetch a data series. Contains a hostile \"\"\" quote and a
+Returns:
+    dict: the series envelope with data rows
+    
+    Args:
+        from_ (string) (required): start date
+        kind (string): sampling [allowed: 'daily', 'weekly', 'monthly'] [default: 'daily']
+        symbols (array) (required): comma symbols
+        limit (integer): row cap
+    
+    Returns:
+        dict: dict: the series envelope with data rows
+    
+    Example:
+        result = get_series(from_="example", symbols=[])"""
+    arguments = {
+        "from": from_,
+        "symbols": symbols,
+    }
+    optional = {
+        "kind": kind,
+        "limit": limit,
+    }
+    arguments.update({k: v for k, v in optional.items() if v is not None})
+    return _call_mcp_tool("probe-data", "get_series", arguments)
+
+def list_items() -> list[dict]:
+    """List items.
+    
+    Returns:
+        list[dict]: Tool execution result"""
+    arguments = {}
+    return _call_mcp_tool("probe-data", "list_items", arguments)
+
+
+== docs ==
+# get_series(from_: str, symbols: list[str], kind: Literal['daily', 'weekly', 'monthly'] = 'daily', limit: int | None = None)
+
+Fetch a data series. Contains a hostile """ quote and a
+Returns:
+    dict: the series envelope with data rows
+
+## Parameters
+
+- `from_` (string) - **Required**
+  start date
+
+- `kind` (string) - Optional [allowed: 'daily', 'weekly', 'monthly'] [default: 'daily']
+  sampling
+
+- `symbols` (array) - **Required**
+  comma symbols
+
+- `limit` (integer) - Optional
+  row cap
+
+## Returns
+
+**Type:** `dict`
+
+dict: the series envelope with data rows
+
+## Example
+
+```python
+from tools.probe_data import get_series
+
+result = get_series(from_="example", symbols=[])
+print(result)
+```
+
+# list_items()
+
+List items.
+
+## Parameters
+
+No parameters
+
+## Returns
+
+**Type:** `list[dict]`
+
+Tool execution result
+
+## Example
+
+```python
+from tools.probe_data import list_items
+
+result = list_items()
+print(result)
+```
+
+# broken_required (unavailable)
+
+Not callable: a required parameter of its schema has no valid Python name.
+
+== skill ==
+---
+name: ptc-tools
+description: Call data tools from Python via execute_code — batch queries,
+  loops, and computation in one run with only printed summaries returning.
+---
+
+# PTC data tools
+
+Write Python via the `execute_code` tool. Import the generated wrappers
+and chain multiple tool calls + computation in ONE program:
+
+```python
+from tools.probe_data import broken_required
+```
+
+Rules:
+
+1. **Dump first, then process** — save sizeable raw results to
+   `work/*.json` immediately, compute on the saved data, and print ONLY
+   compact summaries (counts, key stats, small tables). Never print raw
+   payloads: only stdout returns to you.
+2. A failed call raises `ToolCallError` (fields: `server`, `tool`) —
+   try/except it to handle and continue.
+3. Before first use of a tool, read its full doc:
+   `tools/docs/<server>/<tool>.md` (signature, allowed values, example).
+4. Chain related fetches + analysis in one program instead of one call
+   per program.
+
+## Available tools
+
+### probe-data  (import: `from tools.probe_data import ...`)
+
+- `get_series(from_: str, symbols: list[str], kind: Literal['daily', 'weekly', 'monthly'] = 'daily', limit: int | None = None)`
+  - Fetch a data series. Contains a hostile """ quote and a
+- `list_items()`
+  - List items.
+
+== client-config ==
+_apply_config_dict(json.loads("{\"servers\": [\"probe-data\"]}"))

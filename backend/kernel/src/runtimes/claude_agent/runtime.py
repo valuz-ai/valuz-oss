@@ -433,6 +433,7 @@ class ClaudeAgentRuntime:
         # Identity of the session currently being run — exposed to
         # custom-tool handlers through ExecContext.
         self._cur_session_id: str = ""
+        self._cur_user_id: str = ""
         self._egress_turn_attempt_id: str | None = None
         self._egress_enabled_for_spawn = False
         self._egress_first_model_event_recorded = False
@@ -720,6 +721,8 @@ class ClaudeAgentRuntime:
         self._citation_raw_documents = {}
         self._citation_document_metadata = {}
         self._cur_session_id = session.id
+        # getattr: run() is exercised with synthetic session stubs in tests.
+        self._cur_user_id = getattr(session, "user_id", "") or ""
         self._egress_turn_attempt_id = uuid.uuid4().hex
         self._egress_first_model_event_recorded = False
         self._cancelled = False
@@ -2282,6 +2285,7 @@ class ClaudeAgentRuntime:
                 ExecContext(
                     workspace=self.workspace_root,
                     session_id=self._cur_session_id,
+                    user_id=self._cur_user_id,
                 ),
             )
             return {

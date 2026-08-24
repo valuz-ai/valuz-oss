@@ -1015,6 +1015,7 @@ class CodexRuntime:
             ExecContext(
                 workspace=self.workspace_root,
                 session_id=session.id,
+                user_id=getattr(session, "user_id", "") or "",
             ),
         )
         self._registered_session_id = session.id
