@@ -148,16 +148,18 @@ function PreviewSourceToggle({
   mode: PreviewSourceMode;
   onModeChange: (mode: PreviewSourceMode) => void;
 }) {
+  // The DESIGN segmented pattern (muted track, surface active pill) — the
+  // hand-rolled bordered box read as a stray input next to real controls.
   return (
-    <div className="inline-flex h-7 items-center rounded-md border border-surface-border bg-surface p-0.5 text-xs shadow-sm">
+    <div className="inline-flex h-7 items-center gap-0.5 rounded-lg bg-surface-muted p-0.5 text-xs">
       {(["preview", "source"] as const).map((item) => (
         <button
           key={item}
           type="button"
           onClick={() => onModeChange(item)}
-          className={`h-6 rounded-[5px] px-2.5 transition ${
+          className={`flex h-full items-center rounded-md px-2.5 font-medium leading-none transition-colors ${
             mode === item
-              ? "bg-surface-soft text-ink-heading shadow-sm"
+              ? "bg-surface text-ink-heading shadow-sm"
               : "text-ink-body hover:text-ink-heading"
           }`}
         >
@@ -252,8 +254,8 @@ function TextRenderer({
     return (
       <div className="flex h-full min-h-0 flex-col">
         {!shellViewMode ? (
-          <div className="flex h-10 shrink-0 items-center justify-between border-b border-surface-border bg-surface-soft px-4">
-            <span className="text-xs text-ink-body">Markdown</span>
+          <div className="flex h-10 shrink-0 items-center justify-between border-b border-surface-border px-3">
+            <span className="text-2xs font-medium text-ink-meta">Markdown</span>
             <PreviewSourceToggle
               mode={markdownMode}
               onModeChange={setMarkdownMode}

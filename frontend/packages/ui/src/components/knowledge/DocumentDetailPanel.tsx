@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   ExternalLink,
-  FolderOpen,
   Loader2,
   RotateCw,
   Trash2,
@@ -139,13 +138,7 @@ export const DocumentDetailPanel = ({
   const isFailed = doc.status === "failed";
   return (
     <div className={cn("flex h-full flex-col")}>
-      <div className="flex h-12 shrink-0 items-center px-5">
-        <span className="truncate text-lg font-medium text-ink-heading">
-          {t("knowledge.docDetail")}
-        </span>
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-5 pb-5 pt-1">
+      <div className="flex-1 overflow-y-auto px-5 pb-5 pt-4">
         <div className="mb-3">
           <div className="flex items-start gap-1">
             <div className="min-w-0 flex-1 wrap-anywhere text-sm font-medium text-ink-heading">
@@ -239,39 +232,19 @@ export const DocumentDetailPanel = ({
                       : t("knowledge.statusWaiting")}
             </Badge>
           </div>
-          {/* Where the file lives, compressed to one truncated line — kept at
-              all because the source path is what support asks for, but it must
-              not cost the preview its space. Hover for the full path. */}
-          {meta?.kbName || meta?.sourcePath ? (
-            <div
-              className="mt-1.5 flex min-w-0 items-center gap-1.5 text-2xs text-ink-meta"
-              title={meta?.sourcePath ?? meta?.relativePath ?? undefined}
-            >
-              {meta?.kbName ? (
-                <span className="flex shrink-0 items-center gap-1">
-                  <FolderOpen className="h-3 w-3" />
-                  {meta.kbName}
-                </span>
-              ) : null}
-              {meta?.sourcePath ? (
-                <span className="truncate font-mono">{meta.sourcePath}</span>
-              ) : null}
-            </div>
-          ) : null}
         </div>
 
         {doc.preview ? (
-          <section className="mt-1 flex min-h-0 flex-col border-t border-surface-border pt-4">
-            <div className="mb-2 text-2xs font-medium text-ink-section">
-              {t("knowledge.preview")}
+          <section className="mt-3 flex min-h-0 flex-col">
+            {/* The system file viewer (artifacts / reader), framed like every
+                other embedded document surface. No section label — the frame
+                and the viewer's own kind row already say what this is. */}
+            <div className="overflow-hidden rounded-[14px] border border-surface-border bg-surface">
+              <ArtifactRenderer
+                artifact={_previewArtifact(doc.name)}
+                content={_previewContent(doc.preview)}
+              />
             </div>
-            {/* The system file viewer, not the chat bubble's markdown: the
-                parsed result is a document, and this is the renderer every
-                other document surface (artifacts, reader) already uses. */}
-            <ArtifactRenderer
-              artifact={_previewArtifact(doc.name)}
-              content={_previewContent(doc.preview)}
-            />
           </section>
         ) : null}
         {hasParseInfo ? (
