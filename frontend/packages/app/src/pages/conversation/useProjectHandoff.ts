@@ -14,7 +14,6 @@ type ProjectHandoffParams = {
   selectedProjectId: string | null;
   draft: string;
   /** True while any session attachment is still parsing. */
-  attachmentsParsing: boolean;
   /** ``useSessionAttachments.markPendingConsumed`` — the handoff-consume
    *  effect stamps the already-sent turn's pending rows (explicit id +
    *  sentAt because the page's own ``selectedSessionId`` may not have
@@ -56,7 +55,6 @@ type ProjectHandoffParams = {
     } | null,
   ) => void;
   setSending: (sending: boolean) => void;
-  setParsingConfirmOpen: (open: boolean) => void;
   /** ``displayBusy`` is derived below the hook call site in the page (it
    *  needs useInputQueue's returns), so it arrives as a deferring getter —
    *  read only inside ``handleSend``, at send time, exactly as the original
@@ -90,7 +88,6 @@ export function useProjectHandoff({
   searchParams,
   selectedProjectId,
   draft,
-  attachmentsParsing,
   markPendingConsumed,
   historyCursorRef,
   projectSendHandoffRef,
@@ -99,7 +96,6 @@ export function useProjectHandoff({
   setPendingUserMessage,
   setTurnStartAnchor,
   setSending,
-  setParsingConfirmOpen,
   getDisplayBusy,
   performEnqueue,
   performSend,
@@ -206,10 +202,6 @@ export function useProjectHandoff({
     // as the Composer's queue affordance (also ``displayBusy``) advertises.
     if (getDisplayBusy()) {
       void performEnqueue();
-      return;
-    }
-    if (attachmentsParsing) {
-      setParsingConfirmOpen(true);
       return;
     }
     void performSend();

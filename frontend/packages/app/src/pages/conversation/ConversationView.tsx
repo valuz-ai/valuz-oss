@@ -128,7 +128,6 @@ function ConversationViewPage(props: ConversationViewProps) {
     searchParams: core.searchParams,
     selectedProjectId: core.selectedProjectId,
     draft: core.draft,
-    attachmentsParsing: core.attachmentsParsing,
     markPendingConsumed: core.markPendingConsumed,
     historyCursorRef: core.historyCursorRef,
     projectSendHandoffRef: core.projectSendHandoffRef,
@@ -137,7 +136,6 @@ function ConversationViewPage(props: ConversationViewProps) {
     setPendingUserMessage: core.setPendingUserMessage,
     setTurnStartAnchor: core.setTurnStartAnchor,
     setSending: core.setSending,
-    setParsingConfirmOpen: core.setParsingConfirmOpen,
     getDisplayBusy: () => core.displayBusy,
     performEnqueue: core.performEnqueue,
     performSend: core.performSend,
@@ -364,8 +362,6 @@ function ConversationViewPage(props: ConversationViewProps) {
               connectorOptions={core.connectorOptions}
               selectedMcpSlugs={core.selectedMcpSlugs}
               toggleConnector={core.toggleConnector}
-              parsingConfirmOpen={core.parsingConfirmOpen}
-              setParsingConfirmOpen={core.setParsingConfirmOpen}
               performSend={core.performSend}
             />
           )}
@@ -520,8 +516,6 @@ function ConversationViewPanel(props: ConversationViewProps) {
         connectorOptions={core.connectorOptions}
         selectedMcpSlugs={core.selectedMcpSlugs}
         toggleConnector={core.toggleConnector}
-        parsingConfirmOpen={core.parsingConfirmOpen}
-        setParsingConfirmOpen={core.setParsingConfirmOpen}
         performSend={core.performSend}
       />
 

@@ -69,7 +69,6 @@ import {
   type AgentSkillItem,
 } from "../lib/agent-skill-items";
 import { toFileTree } from "../lib/file-tree";
-import { AttachmentParsingDialog } from "../components/AttachmentParsingDialog";
 import { ArtifactSplitPane } from "../components/ArtifactSplitPane";
 import { useArtifactFile } from "../hooks/use-artifact-file";
 import { useForkSession } from "../hooks/use-fork-session";
@@ -498,7 +497,6 @@ export const ProjectDetailPage = () => {
   const [chatSessionId, setChatSessionId] = useState<string | null>(null);
   const {
     attachments: stagedAttachments,
-    hasParsing,
     attachLocalFiles,
     remove: removeAttachment,
     markPendingConsumed,
@@ -511,7 +509,6 @@ export const ProjectDetailPage = () => {
     // supposed to claim them could never see them.
     resolveApiBase({ projectId: id }, "") || undefined,
   );
-  const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
   // PRD-PAAT §3.2 unified composer mode. ``chat`` creates a normal
   // session; ``task`` kicks off a background Task via tasksApi.kickoff
   // and routes to the task detail page.
@@ -1422,11 +1419,19 @@ export const ProjectDetailPage = () => {
       return;
     }
 
-    // Chat mode — block on unfinished parsing, then send.
-    if (hasParsing) {
-      setParsingConfirmOpen(true);
-      return;
-    }
+    // Chat mode. An unfinished parse no longer stops the person.
+    //
+    // The confirm this replaces bought one thing: the agent seeing the markdown
+    // extract rather than the raw file. It does not buy it any more — the turn
+    // binds the attachment either way, and a turn that goes out mid-parse
+    // ships ``source_path``, which the runtime can read. What the dialog
+    // reliably did was stop someone in front of a composer where nothing was
+    // happening, to ask a question whose only answer is "yes".
+    //
+    // The remaining cost is real and accepted: a scanned PDF sent within the
+    // parse window reaches the agent as a PDF instead of text. If that needs
+    // protecting, it belongs on the server — holding a turn there costs no
+    // rendering — not in front of the person.
     void performChatSend();
   };
 
@@ -1784,15 +1789,7 @@ export const ProjectDetailPage = () => {
                   }
                   onWorktreeToggle={setWorktreeEnabled}
                 />
-                <AttachmentParsingDialog
-                  open={parsingConfirmOpen}
-                  onConfirm={() => {
-                    setParsingConfirmOpen(false);
-                    void performChatSend();
-                  }}
-                  onCancel={() => setParsingConfirmOpen(false)}
-                />
-              </div>
+</div>
 
               {/* Centre history area (PRD-NEXT §3.4): Chat (sessions) and Task
               (lead-dispatch tasks) split into two tabs. The Task tab always
