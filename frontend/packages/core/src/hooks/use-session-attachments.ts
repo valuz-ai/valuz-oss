@@ -106,7 +106,36 @@ export function useSessionAttachments(
   baseUrl?: string,
 ): UseSessionAttachmentsResult {
   const readOpts = useMemo(() => (baseUrl ? { baseUrl } : undefined), [baseUrl]);
-  const [attachments, setAttachments] = useState<SessionAttachmentItem[]>([]);
+  const [attachments, setAttachmentsState] = useState<SessionAttachmentItem[]>(
+    [],
+  );
+
+  // The ref is the authority; the state is its render mirror.
+  //
+  // ``markPendingConsumed`` has to REPORT what it stamped — the send binds
+  // those ids — and it used to derive them inside a function updater. That
+  // reads the current set only if React evaluates the updater right away,
+  // which is an optimisation, not a guarantee. It held in every test and the
+  // turn still went out claiming nothing: the row stayed unbound on the server
+  // with its parse finished, which is the shape this hook cannot afford to be
+  // subtle about.
+  //
+  // So writes go through one function that updates the ref and hands
+  // ``setAttachmentsState`` a VALUE. Reads are then plain synchronous reads of
+  // the ref, and the question of when React runs an updater stops mattering.
+  const attachmentsRef = useRef<SessionAttachmentItem[]>([]);
+  const setAttachments = useCallback(
+    (
+      next:
+        | SessionAttachmentItem[]
+        | ((prev: SessionAttachmentItem[]) => SessionAttachmentItem[]),
+    ) => {
+      attachmentsRef.current =
+        typeof next === "function" ? next(attachmentsRef.current) : next;
+      setAttachmentsState(attachmentsRef.current);
+    },
+    [],
+  );
 
   // Mirror of ``sessionId`` for callbacks that must read it at CALL time.
   // ``markPendingConsumed`` fires from a closure captured before the
@@ -368,14 +397,12 @@ export function useSessionAttachments(
       //
       // Consuming and knowing-what-you-consumed are the same act; splitting
       // them is what allowed them to disagree.
-      const claimed: string[] = [];
-      setAttachments((prev) => {
-        claimed.length = 0;
-        for (const a of prev) {
-          if (!a.consumed_at && !isLocalPlaceholder(a)) claimed.push(a.id);
-        }
-        return prev.map((a) => (a.consumed_at ? a : { ...a, consumed_at: ts }));
-      });
+      const claimed = attachmentsRef.current
+        .filter((a) => !a.consumed_at && !isLocalPlaceholder(a))
+        .map((a) => a.id);
+      setAttachments((prev) =>
+        prev.map((a) => (a.consumed_at ? a : { ...a, consumed_at: ts })),
+      );
       return claimed;
     },
     [],

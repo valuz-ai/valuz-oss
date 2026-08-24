@@ -808,9 +808,29 @@ async def _bind_staged_attachments(
     see or fix. ``bind_attachments`` only touches unbound rows, so a replay
     cannot move a file out of the conversation that already has it.
     """
-    if not attachment_ids:
+    store = SessionDatastore(db)
+    if attachment_ids:
+        await store.bind_attachments(user_id, attachment_ids, session_id)
         return
-    await SessionDatastore(db).bind_attachments(user_id, attachment_ids, session_id)
+
+    # No list. Almost always right — most turns are plain text — but it is also
+    # exactly what a client bug looks like from here, and we have had two: a
+    # staged attachment sitting on the server with its parse finished while the
+    # turn meant to carry it named nothing.
+    #
+    # Logged, not repaired. Binding the owner's staged set instead would let a
+    # plain-text turn in one composer swallow a file staged in another, and
+    # trading a visible bug for a silent one is not a trade. This line is what
+    # tells us which of the two happened, without guessing.
+    staged = await store.list_unbound_attachments(user_id)
+    if staged:
+        logger.warning(
+            "turn on session %s named no attachments while %d staged file(s) "
+            "wait unbound — a plain-text turn, or a client that failed to "
+            "claim them",
+            session_id,
+            len(staged),
+        )
 
 
 async def _enforce_staging_quota(db: AsyncSession, user_id: str) -> None:
