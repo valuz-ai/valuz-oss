@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, type Location } from "react-router-dom";
-import {
-  recordEntityOrigin,
-  type SessionAttachmentItem,
-} from "@valuz/core";
+import { recordEntityOrigin, type SessionAttachmentItem } from "@valuz/core";
 import { canSendProjectHandoff } from "../conversation-project-handoff";
 import { dropHandoffFromHistory } from "../conversation-handoff-history";
 import { NEW_SESSION_ID } from "./session-events";
@@ -55,6 +52,8 @@ type ProjectHandoffParams = {
   setSending: (sending: boolean) => void;
   /** Adopt files a sending composer handed over — see the draft handoff. */
   restageAttachments: (rows: SessionAttachmentItem[]) => void;
+  /** Take on files another page already sent into this conversation. */
+  adoptAttachments: (rows: SessionAttachmentItem[]) => void;
   /** ``displayBusy`` is derived below the hook call site in the page (it
    *  needs useInputQueue's returns), so it arrives as a deferring getter —
    *  read only inside ``handleSend``, at send time, exactly as the original
@@ -96,6 +95,7 @@ export function useProjectHandoff({
   setTurnStartAnchor,
   setSending,
   restageAttachments,
+  adoptAttachments,
   getDisplayBusy,
   performEnqueue,
   performSend,
@@ -127,6 +127,17 @@ export function useProjectHandoff({
           text?: string;
           sentAt?: number;
           attachments?: Array<{ name: string; size: number }>;
+          /**
+           * The same files as rows, when the handing-over page has them.
+           *
+           * ``attachments`` is chip material — a name and a size, enough to
+           * draw the bubble, and all the draft path can offer while an upload
+           * is still a placeholder. The panel needs the rows themselves, and
+           * cannot read them back: the sending page posts and navigates
+           * without waiting, so this page's attachment read races a bind that
+           * has not happened. Carrying them closes that gap.
+           */
+          attachmentRows?: SessionAttachmentItem[];
         };
       } | null
     )?.handoff;
@@ -145,10 +156,15 @@ export function useProjectHandoff({
     if (Date.now() - sentAt > HANDOFF_MAX_AGE_MS) return;
     consumedHandoffSessionIdsRef.current.add(id);
     handoffSessionIdRef.current = id;
-    // Nothing to consume here. The page that handed this over already claimed
-    // its staged files and shipped their ids with the turn — the composer's
-    // set is the owner's, not this session's, so there is no per-session
-    // bookkeeping left for this page to do.
+    // The files are already spent — the handing-over page claimed them and
+    // shipped their ids with the turn — but they are not readable back yet:
+    // that page posts and navigates without waiting, so this page's attachment
+    // read raced the bind and came up empty, and nothing else re-read. Hold
+    // them as in flight and the panel is right immediately; the conversation's
+    // own list takes over the moment it can see them.
+    if (handoff?.attachmentRows?.length) {
+      adoptAttachments(handoff.attachmentRows);
+    }
     setPendingUserMessage({
       text,
       attachments: handoff?.attachments ?? [],
@@ -163,13 +179,7 @@ export function useProjectHandoff({
     // handing-over navigation sets ``handoff`` and it carries nothing else, so
     // clearing the whole entry is safe here.
     dropHandoffFromHistory();
-  }, [
-    id,
-    location.state,
-    location.pathname,
-    location.search,
-    navigate,
-    ]);
+  }, [id, location.state, location.pathname, location.search, navigate]);
 
   // Send entry point. While a turn is running, a follow-up is queued (drains
   // after the active turn). Otherwise it blocks on attachments still parsing —

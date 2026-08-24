@@ -70,6 +70,15 @@ export interface UseStagedAttachmentsResult {
   /** Put claimed rows back — the send they were claimed for did not happen. */
   restage: (rows: SessionAttachmentItem[]) => void;
   /**
+   * Take on files another page already sent, so this one can show them.
+   *
+   * The project composer posts and navigates without waiting, so the arriving
+   * conversation has files it did not stage and cannot yet read back. Not
+   * ``restage``: these are spent. They are in flight, and the conversation's
+   * own list takes over the moment it can see them.
+   */
+  adopt: (rows: SessionAttachmentItem[]) => void;
+  /**
    * Let claimed rows go: the bind is durable, so the conversation's own list
    * owns them now. Until this is called they stay in ``inFlight`` and the
    * panel keeps showing them.
@@ -245,6 +254,14 @@ export function useStagedAttachments(
     return claimed;
   }, [write]);
 
+  const adopt = useCallback((rows: SessionAttachmentItem[]) => {
+    if (rows.length === 0) return;
+    setInFlight((prev) => {
+      const have = new Set(prev.map((a) => a.id));
+      return [...prev, ...rows.filter((r) => !have.has(r.id))];
+    });
+  }, []);
+
   const settle = useCallback((rows: Array<{ id: string }>) => {
     if (rows.length === 0) return;
     const done = new Set(rows.map((r) => r.id));
@@ -273,6 +290,7 @@ export function useStagedAttachments(
     remove,
     claim,
     restage,
+    adopt,
     settle,
   };
 }

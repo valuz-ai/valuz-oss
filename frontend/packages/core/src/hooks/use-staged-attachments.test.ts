@@ -361,6 +361,33 @@ describe("useStagedAttachments", () => {
     expect(result.current.attachments.map((a) => a.id)).toEqual(["srv1"]);
   });
 
+  it("takes on files another page already sent", async () => {
+    // The project composer posts and navigates without waiting, so the
+    // arriving conversation holds files it did not stage and cannot yet read
+    // back. They are spent — not restaged, which would offer them to a second
+    // turn — so they land in flight and the panel can show them.
+    const sent = [row({ id: "sent-elsewhere" })];
+    const { result } = renderHook(() => useStagedAttachments());
+
+    act(() => result.current.adopt(sent));
+
+    expect(result.current.inFlight.map((a) => a.id)).toEqual([
+      "sent-elsewhere",
+    ]);
+    expect(result.current.attachments).toHaveLength(0);
+    expect(result.current.claim()).toEqual([]);
+  });
+
+  it("does not take the same file on twice", async () => {
+    const sent = [row({ id: "sent-elsewhere" })];
+    const { result } = renderHook(() => useStagedAttachments());
+
+    act(() => result.current.adopt(sent));
+    act(() => result.current.adopt(sent));
+
+    expect(result.current.inFlight).toHaveLength(1);
+  });
+
   it("adopts files handed over from another composer", async () => {
     // A composer holds only what it attached — which is what stops two of them
     // showing each other's files, and also what breaks the draft handoff

@@ -593,6 +593,7 @@ export function useConversationOrchestration({
     remove: removeStagedAttachment,
     claim: claimStagedAttachments,
     restage: restageAttachments,
+    adopt: adoptAttachments,
     settle: settleAttachments,
   } = useStagedAttachments(
     // The backend this conversation runs on. A draft has no session to route
@@ -605,7 +606,22 @@ export function useConversationOrchestration({
     attachments: boundAttachments,
     remove: removeBoundAttachment,
     refresh: refreshBoundAttachments,
-  } = useSessionAttachments(selectedSessionId);
+  } = useSessionAttachments(
+    selectedSessionId,
+    // Files this page knows are on their way but did not send itself: the
+    // project composer posts and navigates without waiting, so its turn's
+    // files bind after this page has already read. Naming them here is what
+    // makes the read wait for them.
+    useMemo(() => inFlightAttachments.map((a) => a.id), [inFlightAttachments]),
+  );
+  // Once the conversation's own list can see a file, this page stops holding
+  // it: bound is the durable answer and in-flight was only ever the stand-in.
+  useEffect(() => {
+    if (inFlightAttachments.length === 0) return;
+    const bound = new Set(boundAttachments.map((a) => a.id));
+    const landed = inFlightAttachments.filter((a) => bound.has(a.id));
+    if (landed.length > 0) settleAttachments(landed);
+  }, [boundAttachments, inFlightAttachments, settleAttachments]);
   // What the panel shows: this conversation's files — bound, on their way, and
   // staged for the next turn.
   //
@@ -1581,6 +1597,7 @@ export function useConversationOrchestration({
     historyCursorRef,
     claimStagedAttachments,
     restageAttachments,
+    adoptAttachments,
     attachmentsParsing,
     setPendingUserMessage,
     setTurnStartAnchor,
