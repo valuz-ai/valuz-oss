@@ -51,6 +51,30 @@ class SessionDatastore:
         stmt = stmt.order_by(SessionAttachmentRow.created_at)
         return list((await self._db.execute(stmt)).scalars().all())
 
+    async def list_unconsumed_attachments(
+        self, user_id: str, *, limit: int = 200
+    ) -> list[SessionAttachmentRow]:
+        """This owner's not-yet-sent attachments, NEWEST first.
+
+        Across every session, because the caller's question is about the owner
+        rather than one conversation: a client may upload against a reserved
+        session id, so a row can outlive the draft that created it and the only
+        way to find those is to look at all of them.
+
+        Newest first so the caller can walk until its quota is satisfied and
+        stop — the common case (nothing abandoned) reads one page and returns.
+        """
+        stmt = (
+            select(SessionAttachmentRow)
+            .where(
+                SessionAttachmentRow.user_id == user_id,
+                SessionAttachmentRow.consumed_at.is_(None),
+            )
+            .order_by(SessionAttachmentRow.created_at.desc())
+            .limit(limit)
+        )
+        return list((await self._db.execute(stmt)).scalars().all())
+
     async def create_attachment(
         self, user_id: str, row: SessionAttachmentRow
     ) -> SessionAttachmentRow:

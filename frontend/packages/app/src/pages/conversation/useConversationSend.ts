@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { toast } from "sonner";
 import {
@@ -208,6 +208,27 @@ export function useConversationSend({
 }: ConversationSendParams) {
   const { t } = useTranslation();
 
+  // The reserved-but-not-yet-created session id. A ref, not state: nothing
+  // renders from it, and it must survive a failed send so the retry reuses the
+  // id this composer's attachments are already staged against.
+  const reservedSessionIdRef = useRef<string | null>(null);
+
+  // Reserve the id this composer's session WILL have, without creating it.
+  //
+  // Attachments upload against a session id, and creating the session is what
+  // provisions a sandbox (~3.6s in cloud mode) — for something the upload path
+  // never touches. So attaching reserves, and Send creates. An existing
+  // session needs neither: it already has an id and a kernel.
+  const reserveSessionId = useCallback(async (): Promise<{ id: string }> => {
+    if (selectedSession) return { id: selectedSession.id };
+    if (reservedSessionIdRef.current) {
+      return { id: reservedSessionIdRef.current };
+    }
+    const reserved = await sessionsApi.reserveSessionId();
+    reservedSessionIdRef.current = reserved;
+    return { id: reserved };
+  }, [selectedSession]);
+
   const ensureSession = useCallback(
     async (navigateOnCreate = false) => {
       if (selectedSession) return selectedSession;
@@ -272,6 +293,12 @@ export function useConversationSend({
         created = await sessionsApi.create(
           {
             project_id: isChat ? "chat-default" : sessionProjectId,
+            // The id attachments were uploaded against, when anything was
+            // attached. Absent for a plain text turn — nothing referenced it,
+            // so the host mints one.
+            ...(reservedSessionIdRef.current
+              ? { id: reservedSessionIdRef.current }
+              : {}),
             agent_slug: selectedAgentSlug ?? undefined,
             ...brainOverride,
             mcp_provider_slugs:
@@ -461,7 +488,7 @@ export function useConversationSend({
   const handleLocalFilesAttach = useCallback(
     (files: File[]) => {
       // navigate:false — stay on /conversation/new while attaching.
-      void attachLocalFiles(files, () => ensureSession(false));
+      void attachLocalFiles(files, reserveSessionId);
     },
     [attachLocalFiles, ensureSession],
   );
