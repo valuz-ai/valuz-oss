@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Sparkles, MessageSquarePlus, FolderOpen } from "lucide-react";
 import {
@@ -15,6 +15,7 @@ import {
   mcpProvidersApi,
   recordEntityOrigin,
   sessionsApi,
+  type SessionCreateRequest,
   useEntityOrigin,
   skillsApi,
   useComposerProviderChannels,
@@ -258,7 +259,7 @@ export const ConversationsHomePage = () => {
   // directories with one another. ADR-006: model_provider is locked at
   // session creation, so the composer's pick rides on the create call —
   // sendMessage ignores it.
-  const sessionPayload = () => ({
+  const sessionPayload = (): SessionCreateRequest => ({
     project_id: "chat-default",
     mcp_provider_slugs: enabledSlugs.length > 0 ? enabledSlugs : undefined,
     provider_id: selectedProviderId ?? undefined,
@@ -273,9 +274,17 @@ export const ConversationsHomePage = () => {
   // Create the quick-chat session on the chosen execution target (multi-target
   // editions) and record the observation so every follow-up call for this
   // session (messages / SSE / attachments / queue) routes to the same backend.
+  // The reserved-but-not-yet-created session id — see ``reserveSessionId``.
+  const reservedSessionIdRef = useRef<string | null>(null);
+
   const createSession = async () => {
     const target = resolveExecTarget();
     let payload = sessionPayload();
+    if (reservedSessionIdRef.current) {
+      // The id attachments were uploaded against. Absent for a plain text
+      // turn — nothing referenced it, so the host mints one.
+      payload = { ...payload, id: reservedSessionIdRef.current };
+    }
     if (target?.remote) {
       // Connector picks still come from the local backend. Model/provider
       // picks are target-scoped above, so they are valid on the selected
@@ -310,8 +319,26 @@ export const ConversationsHomePage = () => {
     }
   };
 
-  // Mint (once) the quick-chat session attachments upload into. Cached in
-  // ``sessionId`` so subsequent attaches + the send reuse the same session.
+  // Reserve (once) the id this quick chat's session WILL have. Attachments
+  // upload against it immediately; the session is created at Send.
+  //
+  // Creating it on attach is what made dropping a file wait on a sandbox —
+  // ``create_session`` provisions one (~3.6s in cloud mode) for something the
+  // upload path never touches. Held in a ref so a failed send retries with the
+  // same id rather than stranding the files staged under it.
+  const reserveSessionId = async (): Promise<{ id: string }> => {
+    if (sessionId) return { id: sessionId };
+    if (reservedSessionIdRef.current) {
+      return { id: reservedSessionIdRef.current };
+    }
+    const target = resolveExecTarget();
+    const reserved = await sessionsApi.reserveSessionId(
+      target ? { baseUrl: target.baseUrl } : undefined,
+    );
+    reservedSessionIdRef.current = reserved;
+    return { id: reserved };
+  };
+
   const ensureSession = async (): Promise<{ id: string }> => {
     if (sessionId) return { id: sessionId };
     const session = await createSession();
@@ -559,10 +586,10 @@ export const ConversationsHomePage = () => {
                 }))}
               onRemovePinnedAttachment={(attId) => void removeAttachment(attId)}
               onLocalUpload={(files) =>
-                void attachLocalFiles(files, ensureSession)
+                void attachLocalFiles(files, reserveSessionId)
               }
               onFileDrop={(files) =>
-                void attachLocalFiles(files, ensureSession)
+                void attachLocalFiles(files, reserveSessionId)
               }
               sending={sending}
               autoFocus

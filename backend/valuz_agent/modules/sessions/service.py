@@ -197,6 +197,20 @@ async def _enforce_budget(session: object, user_id: str | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 
+
+def mint_session_id() -> str:
+    """The id a new session gets, and the only place that decides its shape.
+
+    Two spellings of a UUID are already live in the sessions table — this one
+    (``uuid4().hex``, 32 chars) and the kernel's ``str(uuid4())`` (36, dashed)
+    that fork and the kernel's own mint produce. That split is not worth
+    migrating, but it is worth not widening: every host-side caller that needs
+    an id ahead of the create (the attachment reservation) comes through here
+    rather than writing ``uuid4()`` again with whichever spelling it happened
+    to pick.
+    """
+    return uuid4().hex
+
 class SessionService:
     """Business façade over the V5 kernel session machinery.
 
@@ -678,6 +692,7 @@ class SessionService:
         override_effort: str | None = None,
         worktree: SessionWorktreeSpec | None = None,
         user_id: str | None = None,
+        reserved_session_id: str | None = None,
     ) -> SessionDetail:
         """Create a session bound to an agent (project member OR global library).
 
@@ -896,7 +911,11 @@ class SessionService:
             ),
         )
 
-        session_id = uuid4().hex
+        # Caller-supplied when a side table already references this session —
+        # attachments upload against the id before the session exists, so that
+        # the upload does not have to wait for a create (which, under scoped
+        # allocation, provisions a sandbox). See ``reserve_session_id``.
+        session_id = reserved_session_id or mint_session_id()
 
         # Guarantee the always-on baseline AT SESSION-CREATE (not "whatever the
         # agent happens to carry") — symmetric with the task path
@@ -1022,6 +1041,7 @@ class SessionService:
         agent_slug: str | None = None,
         worktree: SessionWorktreeSpec | None = None,
         user_id: str | None = None,
+        reserved_session_id: str | None = None,
     ) -> SessionDetail:
         """Create a new kernel session for *project_id*.
 
@@ -1037,6 +1057,7 @@ class SessionService:
         """
         if agent_slug:
             return await self._create_agent_bound_session(
+                reserved_session_id=reserved_session_id,
                 project_id=project_id,
                 agent_slug=agent_slug,
                 origin=origin,
@@ -1207,7 +1228,7 @@ class SessionService:
         # it into the in-process docs MCP URL (the URL embeds the session
         # id so the host can scope each request to a project). The id
         # then flows into the kernel session row unchanged below.
-        session_id = uuid4().hex
+        session_id = reserved_session_id or mint_session_id()
 
         # Resolve skills / mcp_servers.
         try:

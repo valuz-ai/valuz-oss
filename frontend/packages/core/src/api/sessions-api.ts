@@ -291,6 +291,13 @@ import type { RuntimeId } from "@valuz/shared";
 export interface SessionCreateRequest {
   project_id: string;
   title?: string | null;
+  /**
+   * Create the session with an id already reserved from
+   * ``sessionsApi.reserveSessionId`` — the one attachments were uploaded
+   * against. Omitted for every caller with nothing staged, which is most of
+   * them; the host mints one then.
+   */
+  id?: string;
   // V5: ``model`` is locked at session creation. Either pass an explicit model
   // id, or pass a provider id and let the backend pick its default model.
   model_id?: string | null;
@@ -556,6 +563,27 @@ export const sessionsApi = {
       baseUrl: sessionBase(sessionId),
       timeoutMs: 120_000,
     });
+  },
+
+  /**
+   * Mint the id a session is *going* to have, without creating it.
+   *
+   * Attachments upload against a session id, and creating the session is what
+   * provisions a sandbox — so attaching a file used to wait on one (~3.6s in
+   * cloud mode) for something the upload path never touches. Reserve first,
+   * upload and parse against the id, and create at Send.
+   *
+   * The id comes from the host, not from here: its format is the host's to
+   * define and is already not uniform (``uuid4().hex`` from the host,
+   * ``str(uuid4())`` from the kernel on fork), so a client minting its own
+   * would be a third opinion on a settled-enough question.
+   */
+  async reserveSessionId(opts?: { baseUrl?: string }): Promise<string> {
+    const { session_id } = await fetchJson<{ session_id: string }>(
+      "/v1/sessions/reservations",
+      { method: "POST", baseUrl: opts?.baseUrl },
+    );
+    return session_id;
   },
 
   async create(

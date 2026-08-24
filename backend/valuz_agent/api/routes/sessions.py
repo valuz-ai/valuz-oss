@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -31,7 +32,7 @@ from valuz_agent.modules.sessions.schemas import (
     SessionModelSelection,
     SessionWorktreeSpec,
 )
-from valuz_agent.modules.sessions.service import SessionService
+from valuz_agent.modules.sessions.service import SessionService, mint_session_id
 from valuz_agent.ports.message_context import HostRef
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,14 @@ class SessionCreateRequest(SessionModelSelection):
 
     project_id: str
     title: str | None = None
+    # The id this session should be created with, when the client already
+    # reserved one and used it — attachments upload against a reserved id so
+    # that attaching a file does not have to wait for a create (which, under
+    # scoped allocation, provisions a sandbox). Omitted → the host mints one,
+    # which is what every caller without staged attachments does.
+    #
+    # Rejected if it is already a session: this reserves, it does not adopt.
+    id: str | None = None
     # Slugs of MCP data sources to enable for this session (e.g. ["reportify"]).
     # The frontend's data-source picker provides them; ``adapters.mcp_resolver``
     # expands each slug into one or more kernel ``McpServerConfig`` rows.
@@ -241,12 +250,55 @@ async def get_session(
     return await svc.get_session(session_id, user_id=user_id)
 
 
+class SessionIdReservation(BaseModel):
+    session_id: str
+
+
+@router.post("/reservations", status_code=201)
+async def reserve_session_id(
+    user_id: str = Depends(get_current_user_id),  # noqa: ARG001 — auth only
+) -> SessionIdReservation:
+    """Mint the id a session is *going* to have, without creating it.
+
+    Attachments upload against a session id, and under scoped allocation
+    creating the session provisions a sandbox — so requiring the session first
+    made attaching a file wait on one (~3.6s measured on a cloud deployment)
+    for something the upload path never touches. Reserving separates the two:
+    the id exists immediately, the upload and its parse run against it, and the
+    session is created when the person actually sends.
+
+    **The host mints it, not the client.** The id format is the host's to
+    define and it is already not uniform — the host writes ``uuid4().hex``
+    while the kernel writes ``str(uuid4())`` on fork — so a client generating
+    its own would be a third opinion on a question that already has two. It
+    also keeps a caller from choosing an id, which reserving deliberately does
+    not allow.
+
+    No state is written. A reservation is a promise about a name, and the only
+    thing that could break it is a uuid4 collision. Nothing to clean up if the
+    draft is abandoned — that falls to the attachments, which the upload path
+    sweeps.
+    """
+    return SessionIdReservation(session_id=mint_session_id())
+
+
 @router.post("", status_code=201)
 async def create_session(
     body: SessionCreateRequest,
     user_id: str = Depends(get_current_user_id),
     svc: SessionService = Depends(get_session_service),
 ) -> SessionDetail:
+    if body.id is not None:
+        # Shape first: a reserved id must be one this system could have minted,
+        # or the attachments uploaded against it were never reachable anyway.
+        if not _is_session_id_shaped(body.id):
+            raise HTTPException(status_code=422, detail="Invalid session id")
+        # Reserve, do not adopt. Without this, a client that replayed a create
+        # would be handed someone's live session — or its own, silently
+        # re-created with different model/agent picks while the original kept
+        # running.
+        if await data_reader().get_session(user_id, body.id) is not None:
+            raise HTTPException(status_code=409, detail="Session already exists")
     return await svc.create_session(
         body.project_id,
         title=body.title,
@@ -259,6 +311,7 @@ async def create_session(
         agent_slug=body.agent_slug,
         worktree=body.worktree,
         user_id=user_id,
+        reserved_session_id=body.id,
     )
 
 
@@ -753,6 +806,81 @@ class AddKbAttachmentsRequest(BaseModel):
     doc_ids: list[str]
 
 
+#: How many attachments one owner may hold against ids that never became
+#: sessions — drafts they attached to and abandoned.
+#:
+#: A cap rather than an age, deliberately. An age would need a number nobody
+#: can derive (is a draft dead after an hour? a day?) and would only ever be
+#: enforced by whoever happens to upload next — so the person who abandons a
+#: draft and never returns, who is exactly the person creating the mess, never
+#: triggers their own cleanup. A cap needs no such guess and is bounded by
+#: construction: whatever runs or does not run, an owner holds at most this
+#: many. It is the same kind of rule as ``max_session_attachments``, one level
+#: up.
+_MAX_UNCLAIMED_ATTACHMENTS = 20
+
+
+def _is_session_id_shaped(session_id: str) -> bool:
+    """Whether ``session_id`` has the shape of an id this system mints.
+
+    Not authorization — that comes from owner scoping on every read and write,
+    and from ``data_dir(user_id)`` on the bytes. This only keeps a typo or a
+    probe from opening an attachment directory under a name that was never
+    going to become a session.
+
+    **Both spellings of a UUID are live**, which is why this is not a single
+    pattern. The host mints ``uuid4().hex`` (32, no dashes) and the kernel
+    mints ``str(uuid4())`` (36, dashed) — the latter on fork and whenever the
+    host lets it mint. Measured on a deployment: 767 of the former, 24 of the
+    latter, none of anything else. Accepting only the host's spelling would
+    reject a forked session's own id, which is the kind of thing that works
+    everywhere except the one path nobody tests.
+    """
+    return bool(_SESSION_ID_RE.fullmatch(session_id))
+
+
+_SESSION_ID_RE = re.compile(
+    r"[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+)
+
+
+async def _evict_unclaimed_attachments(db: AsyncSession, user_id: str) -> None:
+    """Hold this owner to ``_MAX_UNCLAIMED_ATTACHMENTS`` abandoned drafts.
+
+    "Unclaimed" is decided per row, not per age: an attachment belongs to a
+    session or it does not, and one that does is untouchable no matter how old.
+    Only the overflow is evicted, oldest first — the file the person attached a
+    minute ago is the last thing to go, and only because they are past the cap.
+
+    Runs on upload because that is where the quota it enforces belongs: this is
+    admission control for the thing being created, not a background chore that
+    happens to be triggered here. Best-effort — being over quota must not fail
+    the upload; the cap re-asserts on the next one.
+    """
+    try:
+        store = SessionDatastore(db)
+        reader = data_reader()
+        # Newest first, so the scan can stop as soon as the cap is satisfied —
+        # an owner with nothing abandoned pays one query and one lookup.
+        unclaimed: list[SessionAttachmentRow] = []
+        for row in await store.list_unconsumed_attachments(user_id):
+            if await reader.get_session(user_id, row.session_id) is not None:
+                continue
+            unclaimed.append(row)
+            if len(unclaimed) <= _MAX_UNCLAIMED_ATTACHMENTS:
+                continue
+            for key in (row.stored_path, row.parsed_path):
+                if not key:
+                    continue
+                try:
+                    _data_file_path(user_id, key).unlink(missing_ok=True)
+                except (OSError, ValueError):
+                    logger.debug("evict: could not remove %s", key, exc_info=True)
+            await store.delete_attachment(user_id, row.id)
+    except Exception:  # noqa: BLE001 — over quota must never fail an upload
+        logger.warning("eviction of unclaimed attachments failed", exc_info=True)
+
+
 def _row_to_item(row: SessionAttachmentRow) -> AttachmentItem:
     return AttachmentItem(
         id=row.id,
@@ -808,7 +936,25 @@ async def upload_attachment(
     references it.
     """
     if await data_reader().get_session(user_id, session_id) is None:
-        raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
+        # Not an error: a client may upload against a RESERVED id, before the
+        # session exists. Requiring the session first is what made attaching a
+        # file wait on a sandbox — under scoped allocation ``create_session``
+        # provisions one (~3.6s measured on a cloud deployment) — while the
+        # upload itself needs nothing from the kernel at all.
+        #
+        # The id is only a KEY here. Bytes land under ``data_dir(user_id)`` and
+        # the row is written owner-scoped, so no part of isolation was ever
+        # resting on the session existing; this check's real job was keeping
+        # rows from accumulating against ids that never become sessions. The
+        # kernel has always accepted a host-preminted id for precisely this —
+        # "so side-tables can reference the session before the create
+        # round-trip".
+        if not _is_session_id_shaped(session_id):
+            raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
+        # An abandoned draft now leaves a row and a file behind, which could
+        # not happen while a session was required first. Bounded by a per-owner
+        # cap rather than swept on an age — see ``_MAX_UNCLAIMED_ATTACHMENTS``.
+        await _evict_unclaimed_attachments(db, user_id)
 
     # Session-wide attachment cap (local + KB-sourced counted together).
     from valuz_agent.infra.config import settings as _settings
