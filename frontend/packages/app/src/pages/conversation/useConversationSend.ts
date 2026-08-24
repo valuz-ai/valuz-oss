@@ -74,6 +74,7 @@ type ConversationSendParams = {
   removeSessionAttachmentRow: (attachmentId: string) => Promise<void>;
   claimStagedAttachments: () => SessionAttachmentItem[];
   restageAttachments: (rows: SessionAttachmentItem[]) => void;
+  settleAttachments: (rows: Array<{ id: string }>) => void;
   refreshBoundAttachments: (sessionId?: string) => Promise<void>;
   refreshEvents: (sessionId: string | null) => Promise<void>;
   refreshActiveSession: (sessionId: string | null) => Promise<void>;
@@ -177,6 +178,7 @@ export function useConversationSend({
   removeSessionAttachmentRow,
   claimStagedAttachments,
   restageAttachments,
+  settleAttachments,
   refreshBoundAttachments,
   refreshEvents,
   refreshActiveSession,
@@ -643,7 +645,13 @@ export function useConversationSend({
       // Read here rather than off a busy transition: on the handoff path this
       // page mounts with ``sending`` already true, so a false→true edge never
       // happens and a refresh hung off one never runs.
-      void refreshBoundAttachments(session.id);
+      //
+      // Let the rows go only once that read has landed. Settling first would
+      // reopen the gap this closes — for the length of the GET the panel would
+      // again hold neither the in-flight copy nor the bound one.
+      void refreshBoundAttachments(session.id).finally(() =>
+        settleAttachments(claimed),
+      );
       // The desktop sidebar's per-project session lists are derived from
       // ``/v1/runs`` (ProjectLayoutBase), NOT from the session store the
       // optimistic updates below write to — so without a poke here a brand-new

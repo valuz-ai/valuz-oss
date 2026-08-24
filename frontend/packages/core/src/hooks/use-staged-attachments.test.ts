@@ -301,6 +301,66 @@ describe("useStagedAttachments", () => {
     expect(claimed.map((r) => r.id)).toEqual(["srv1"]);
   });
 
+  // ── in flight ───────────────────────────────────────────────────────────
+  //
+  // A file's life is staged → in-flight → bound. The middle state used to
+  // exist only as a local variable inside the send, so the panel — which
+  // renders staged plus bound — showed NEITHER for the whole length of the
+  // send. On a cloud project that is a session-create plus a message POST, and
+  // the file vanished from the panel for seconds while the message bubble
+  // beside it already showed it.
+
+  it("keeps a claimed file in flight until the bind is confirmed", async () => {
+    uploadAttachment.mockResolvedValue(row());
+    const { result } = renderHook(() => useStagedAttachments());
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+
+    act(() => void result.current.claim());
+
+    // Out of the composer — it is on its way and must not be sent twice.
+    expect(result.current.attachments).toHaveLength(0);
+    // Still the conversation's, so the panel has something to render.
+    expect(result.current.inFlight.map((a) => a.id)).toEqual(["srv1"]);
+  });
+
+  it("lets the row go once the conversation's own list has it", async () => {
+    uploadAttachment.mockResolvedValue(row());
+    const { result } = renderHook(() => useStagedAttachments());
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+
+    let claimed: SessionAttachmentItem[] = [];
+    act(() => {
+      claimed = result.current.claim();
+    });
+    act(() => result.current.settle(claimed));
+
+    expect(result.current.inFlight).toHaveLength(0);
+    expect(result.current.attachments).toHaveLength(0);
+  });
+
+  it("takes a row back out of flight when the send fails", async () => {
+    // It never left, so it is a draft again — not something the panel should
+    // still be describing as part of the conversation.
+    uploadAttachment.mockResolvedValue(row());
+    const { result } = renderHook(() => useStagedAttachments());
+    await act(async () => {
+      await result.current.attachLocalFiles([file()]);
+    });
+
+    let claimed: SessionAttachmentItem[] = [];
+    act(() => {
+      claimed = result.current.claim();
+    });
+    act(() => result.current.restage(claimed));
+
+    expect(result.current.inFlight).toHaveLength(0);
+    expect(result.current.attachments.map((a) => a.id)).toEqual(["srv1"]);
+  });
+
   it("adopts files handed over from another composer", async () => {
     // A composer holds only what it attached — which is what stops two of them
     // showing each other's files, and also what breaks the draft handoff
