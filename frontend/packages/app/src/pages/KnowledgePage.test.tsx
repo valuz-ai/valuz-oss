@@ -169,7 +169,7 @@ describe("KnowledgePage", () => {
     await openDoc();
 
     await waitFor(() =>
-      expect(latestAsideClassName ?? "").toContain("w-[55%]"),
+      expect(latestAsideClassName ?? "").toContain("w-[70%]"),
     );
   });
 
@@ -180,7 +180,7 @@ describe("KnowledgePage", () => {
     // content.
     initI18n({ locale: "zh-CN", fallbackLocale: "zh-CN" });
     const { unmount } = await openDoc();
-    await waitFor(() => expect(latestAsideClassName ?? "").toContain("w-[55%]"));
+    await waitFor(() => expect(latestAsideClassName ?? "").toContain("w-[70%]"));
 
     unmount();
 
