@@ -42,7 +42,8 @@ import {
   usePanelStore,
   useProjectLastUsed,
   useRuntimes,
-  useSessionAttachments,
+  useStagedAttachments,
+  type SessionAttachmentItem,
   useSessionStore,
   useActivityFeed,
   type ActivityTab,
@@ -499,16 +500,15 @@ export const ProjectDetailPage = () => {
     attachments: stagedAttachments,
     attachLocalFiles,
     remove: removeAttachment,
-    markPendingConsumed,
-  } = useSessionAttachments(
-    chatSessionId,
-    // Staged uploads have no session to route on, so the composer names the
-    // backend — the SAME one the session will be created on. Leaving it out
-    // sent them to the module default: on a multi-target build that is a
-    // different backend entirely, so the files landed where the turn that was
-    // supposed to claim them could never see them.
+    claim: claimStagedAttachments,
+    restage: restageAttachments,
+  } = useStagedAttachments(
+    // No session to route on — the composer names the backend its turn will
+    // run on. Omitting it sent cloud-project uploads to the local default,
+    // where the turn could never find them.
     resolveApiBase({ projectId: id }, "") || undefined,
   );
+
   // PRD-PAAT §3.2 unified composer mode. ``chat`` creates a normal
   // session; ``task`` kicks off a background Task via tasksApi.kickoff
   // and routes to the task detail page.
@@ -1267,7 +1267,9 @@ export const ProjectDetailPage = () => {
     // shape /conversation/new already accepts.
     if (!chatSessionId) {
       setComposerValue("");
-      markPendingConsumed();
+      // The staged files stay staged: staging is the OWNER's, so the page this
+      // navigates to reads the very same set and claims it with its own send.
+      // Clearing here used to be necessary when the set was session-scoped.
       const params = new URLSearchParams({ project: id });
       if (selectedAgentSlug) params.set("agent", selectedAgentSlug);
       navigate(`/conversation/new?${params.toString()}`, {
@@ -1305,18 +1307,14 @@ export const ProjectDetailPage = () => {
     // early. Send into it from here and hand the conversation page only the
     // optimistic turn.
     setSending(true);
+    // Hoisted so the failure path can hand them back.
+    let claimed: SessionAttachmentItem[] = [];
     try {
       const session = await ensureChatSession();
-      // Snapshot BEFORE ``markPendingConsumed`` stamps them: this is exactly
-      // the set that ships with this turn, and the conversation page cannot
-      // work it out for itself — by the time it mounts, these rows are
-      // consumed, so its own "pending" view of them is empty.
-      const handoffAttachments = stagedAttachments
-        .filter((a) => !a.consumed_at)
-        .map((a) => ({ name: a.filename, size: a.size_bytes }));
-      // The ids to bind, read at the moment they are consumed — not from a
-      // render value that the awaits below would leave behind.
-      const claimedAttachmentIds = markPendingConsumed();
+      // Take the staged files out and carry them to the turn. The conversation
+      // page cannot work this set out for itself — it is gone from staging the
+      // moment this claim returns — so the handoff carries the names too.
+      claimed = claimStagedAttachments();
       setComposerValue("");
       // Navigate the MOMENT there is an id to navigate to — before the send
       // round-trip, not after it.
@@ -1338,7 +1336,10 @@ export const ProjectDetailPage = () => {
           handoff: {
             text,
             sentAt: Date.now(),
-            attachments: handoffAttachments,
+            attachments: claimed.map((a) => ({
+              name: a.filename,
+              size: a.size_bytes,
+            })),
           },
         },
       });
@@ -1354,9 +1355,11 @@ export const ProjectDetailPage = () => {
         null,
         null,
         null,
-        claimedAttachmentIds,
+        claimed.map((a) => a.id),
       );
     } catch (cause) {
+      // The turn did not go out, so the files are still the composer's.
+      restageAttachments(claimed);
       // A billing rejection (402) carries an i18n key the client renders;
       // otherwise fall back to the generic save-failed copy.
       toast.error(
@@ -1738,10 +1741,9 @@ export const ProjectDetailPage = () => {
                   skills={selectedAgentSkillItems}
                   uploadOnAttach
                   existingAttachmentCount={
-                    stagedAttachments.filter((a) => !a.consumed_at).length
+                    stagedAttachments.length
                   }
                   pinnedAttachments={stagedAttachments
-                    .filter((a) => !a.consumed_at)
                     .map((a) => ({
                       id: a.id,
                       name: a.filename,

@@ -15,6 +15,7 @@ import {
   mcpProvidersApi,
   recordEntityOrigin,
   sessionsApi,
+  type SessionAttachmentItem,
   type SessionCreateRequest,
   useEntityOrigin,
   skillsApi,
@@ -25,7 +26,7 @@ import {
   useModelDefaults,
   useRuntimes,
   usePanelStore,
-  useSessionAttachments,
+  useStagedAttachments,
   projectsApi,
   type ProjectListItem,
   type RuntimeId,
@@ -119,13 +120,13 @@ export const ConversationsHomePage = () => {
     attachments: stagedAttachments,
     attachLocalFiles,
     remove: removeAttachment,
-    markPendingConsumed,
-  } = useSessionAttachments(
-    sessionId,
-    // See ProjectDetailPage: staged uploads must go to the backend this chat
-    // will actually run on, not to the module default.
+    claim: claimStagedAttachments,
+    restage: restageAttachments,
+  } = useStagedAttachments(
+    // The backend this chat will run on — see ProjectDetailPage.
     resolveExecTarget()?.baseUrl,
   );
+
   // Observed origin of the minted quick-chat session — drives the locked
   // bar's location chip (multi-target editions).
   const mintedSessionOrigin = useEntityOrigin(sessionId, "session");
@@ -326,10 +327,11 @@ export const ConversationsHomePage = () => {
     const text = input.trim();
     if (!text || sending) return;
     setSending(true);
+    // Hoisted so the failure path can hand them back.
+    let claimed: SessionAttachmentItem[] = [];
     try {
       const session = await ensureSession();
-      // See ProjectDetailPage: the ids come from the consume, not a render.
-      const claimedAttachmentIds = markPendingConsumed();
+      claimed = claimStagedAttachments();
       // Bind the staged files to this turn — this is where a file stops
       // being a draft and becomes part of the conversation.
       await sessionsApi.sendMessage(
@@ -338,7 +340,7 @@ export const ConversationsHomePage = () => {
         null,
         null,
         null,
-        claimedAttachmentIds,
+        claimed.map((a) => a.id),
       );
       setInput("");
       panelSetCollapsed(false);
@@ -346,6 +348,8 @@ export const ConversationsHomePage = () => {
         state: { revealSessionContext: true },
       });
     } catch {
+      // The turn did not go out; the files are still this composer's.
+      restageAttachments(claimed);
       navigate("/conversation/new");
     } finally {
       setSending(false);
@@ -555,10 +559,9 @@ export const ConversationsHomePage = () => {
               modelLocked={sessionId != null}
               uploadOnAttach
               existingAttachmentCount={
-                stagedAttachments.filter((a) => !a.consumed_at).length
+                stagedAttachments.length
               }
               pinnedAttachments={stagedAttachments
-                .filter((a) => !a.consumed_at)
                 .map((a) => ({
                   id: a.id,
                   name: a.filename,

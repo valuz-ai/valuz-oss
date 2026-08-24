@@ -20,6 +20,8 @@ import {
   type SessionMessageHostRef,
   type SkillView,
   type UseSessionAttachmentsResult,
+  type UseStagedAttachmentsResult,
+  type SessionAttachmentItem,
 } from "@valuz/core";
 import type { ConversationTurn } from "@valuz/shared";
 import { t as _t } from "@valuz/shared/i18n";
@@ -67,10 +69,11 @@ type ConversationSendParams = {
   sessionAttachments: UseSessionAttachmentsResult["attachments"];
   sidebarSessions: SessionListItem[];
   resolveExecTarget: () => ExecutionTarget | undefined;
-  attachKbDocs: UseSessionAttachmentsResult["attachKbDocs"];
-  attachLocalFiles: UseSessionAttachmentsResult["attachLocalFiles"];
-  removeSessionAttachmentRow: UseSessionAttachmentsResult["remove"];
-  markPendingConsumed: UseSessionAttachmentsResult["markPendingConsumed"];
+  attachKbDocs: UseStagedAttachmentsResult["attachKbDocs"];
+  attachLocalFiles: UseStagedAttachmentsResult["attachLocalFiles"];
+  removeSessionAttachmentRow: (attachmentId: string) => Promise<void>;
+  claimStagedAttachments: () => SessionAttachmentItem[];
+  restageAttachments: (rows: SessionAttachmentItem[]) => void;
   refreshEvents: (sessionId: string | null) => Promise<void>;
   refreshActiveSession: (sessionId: string | null) => Promise<void>;
   fetchSidebarSessions: () => Promise<void>;
@@ -171,7 +174,8 @@ export function useConversationSend({
   attachKbDocs,
   attachLocalFiles,
   removeSessionAttachmentRow,
-  markPendingConsumed,
+  claimStagedAttachments,
+  restageAttachments,
   refreshEvents,
   refreshActiveSession,
   fetchSidebarSessions,
@@ -571,6 +575,8 @@ export function useConversationSend({
         selectedComposerSkill.name,
       );
     }
+    // Hoisted so the failure path can hand them back.
+    let claimed: SessionAttachmentItem[] = [];
     try {
       const session = await ensureSession();
       // Protect the optimistic turn we just painted from the landing refresh.
@@ -615,23 +621,17 @@ export function useConversationSend({
       // click → turn-start window; the turn's ``message.user`` echo on the
       // stream releases it.
 
-      // Consume FIRST, and bind what the consume reports.
-      //
-      // Attachments are per-turn: the backend binds this turn's set and stamps
-      // them ``consumed_at`` once it runs; stamping optimistically here drops
-      // them out of the composer's staging chips immediately (they stay in the
-      // panel's "uploaded files" history). Doing it before the send is what
-      // makes the ids trustworthy — a send spans several awaits, and the
-      // render value this used to pass was captured before any upload that
-      // landed during them.
-      const claimedAttachmentIds = markPendingConsumed();
+      // Take the staged files and carry them to the turn. They leave the
+      // composer here; the panel picks them up from the session's own list
+      // once the bind lands.
+      claimed = claimStagedAttachments();
       const detail = await sessionsApi.sendMessage(
         session.id,
         outboundText,
         selectedProviderId,
         selectedModelId,
         hostRef,
-        claimedAttachmentIds,
+        claimed.map((a) => a.id),
       );
       if (!detail?.id) throw new Error("Failed to send message.");
       // The desktop sidebar's per-project session lists are derived from
@@ -689,6 +689,8 @@ export function useConversationSend({
       );
       setSelectedSessionId(detail.id);
     } catch (cause) {
+      // The turn did not go out; the files are still the composer's.
+      restageAttachments(claimed);
       // The backend may attach an i18n key to a business error (structured
       // ``detail.key``) and let the client render it — e.g. a commercial
       // billing rejection. Prefer that key; otherwise show the raw message.
