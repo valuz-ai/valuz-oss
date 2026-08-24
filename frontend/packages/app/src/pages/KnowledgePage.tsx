@@ -56,6 +56,7 @@ import {
   kbApi,
   recordEntityOrigin,
   usePanelStore,
+  filesApi,
 } from "@valuz/core";
 import { ResourceActionSlot } from "../components/ResourceActionSlot";
 import type {
@@ -295,7 +296,8 @@ export const KnowledgePage = ({
   managedRootAutoDiscovers?: boolean;
 } = {}) => {
   const { t } = useTranslation();
-  const { copyFiles } = usePlatform();
+  const platform = usePlatform();
+  const { copyFiles } = platform;
   const [kbs, setKbs] = useState<KbListItem[]>([]);
   const [health, setHealth] = useState<DocsHealth | null>(null);
   const [loading, setLoading] = useState(true);
@@ -559,13 +561,21 @@ export const KnowledgePage = ({
                   ? { ...prev, status: "processing" }
                   : prev,
               );
-              if (activeKb) enterKb(activeKb.id);
+              // Refresh the tree IN PLACE. ``enterKb`` here threw the whole
+              // page away — selection, expansion, the panel — to update one
+              // badge, which read as "重建索引 kicked me back to the list".
+              void refreshTree();
             })
             .catch(() => {
               toast.error(t("common.failed" as Parameters<typeof t>[0]));
             });
         }}
         onDelete={() => setDeleteDocOpen(true)}
+        onViewSource={
+          selectedDoc.source_path
+            ? () => void openSourceFile(selectedDoc.source_path as string)
+            : undefined
+        }
       />,
     );
     // The panel and the widened aside live in the LAYOUT, not in this page —
@@ -576,7 +586,8 @@ export const KnowledgePage = ({
       setRightPanel(null);
       setAsideClassName(undefined);
     };
-  }, [selectedDoc, preview, setRightPanel, setAsideClassName, activeKb, enterKb]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshTree/openSourceFile change identity per render; the panel only needs the ones current when it was handed over
+  }, [selectedDoc, preview, setRightPanel, setAsideClassName, activeKb]);
 
   // Auto-poll the doc detail while the parse is in flight so the
   // panel reflects live state without a manual refresh. Polls every
@@ -663,6 +674,36 @@ export const KnowledgePage = ({
       setRescanning(false);
     }
   }, [activeKb, enterKb]);
+
+  // Open the document's ORIGINAL file — the uploaded pdf/xlsx, not the parsed
+  // markdown the panel previews. Resolution reuses the file surface every
+  // artifact click already goes through: local + desktop reveals in the
+  // Finder, remote opens the presigned URL (the browser renders pdf/images
+  // natively), and a plain browser on a local file can only say so.
+  const openSourceFile = useCallback(
+    async (sourcePath: string) => {
+      try {
+        // Routed to the library's own backend — the same per-call routing the
+        // detail poll and the retry needed: a cloud-owned path sent to the
+        // local default fails its owner-root allowlist as ``forbidden``.
+        const d = await filesApi.resolveOne(`valuz-file://${sourcePath}`, {
+          baseRef: activeKb ? { kbId: activeKb.id } : {},
+        });
+        if (d?.kind === "local" && d.absPath && platform.isElectron) {
+          await platform.revealInFinder(d.absPath);
+          return;
+        }
+        if (d?.url) {
+          window.open(d.url, "_blank", "noopener,noreferrer");
+          return;
+        }
+        toast.error(t("common.failed" as Parameters<typeof t>[0]));
+      } catch {
+        toast.error(t("common.failed" as Parameters<typeof t>[0]));
+      }
+    },
+    [platform, activeKb],
+  );
 
   // Multipart upload into the KB root — used by both the explicit
   // header button and the drag-drop fallback (when Electron's

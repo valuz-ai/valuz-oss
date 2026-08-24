@@ -779,7 +779,9 @@
     "supportedFormats": "支持 PDF、Word、PPT、Excel、OpenDocument、RTF、EPUB、Markdown、CSV、扫描图片，复杂版面自动进入高级解析流程",
     "uploadFiles": "上传文件",
     "uploaded": "已上传",
-    "groupPersonal": "个人"
+    "groupPersonal": "个人",
+    "viewSourceFile": "查看原文件",
+    "parseHistoryAll": "查看全部"
   },
   "connector": {
     "title": "连接器",

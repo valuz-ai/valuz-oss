@@ -779,7 +779,9 @@
     "supportedFormats": "Supports PDF, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB, Markdown, CSV and scanned images, with complex layouts routed to advanced parsing",
     "uploadFiles": "Upload files",
     "uploaded": "Uploaded",
-    "groupPersonal": "Personal"
+    "groupPersonal": "Personal",
+    "viewSourceFile": "View original file",
+    "parseHistoryAll": "Show all"
   },
   "connector": {
     "title": "Connectors",
