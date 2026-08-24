@@ -56,10 +56,6 @@ import {
   ErrorBoundary,
   Input,
   OfflineBanner,
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
   TopBar,
   WindowControls,
   type DesktopSidebarBottomItem,
@@ -99,6 +95,7 @@ import { OriginIcon } from "../components/ExecutionLocationPicker";
 import { useForkSession } from "../hooks/use-fork-session";
 import { FORKABLE_RUNTIMES } from "../pages/conversation/useTitleActions";
 import { PreservedRouteOutlet } from "./PreservedRouteOutlet";
+import { RightPanelControls } from "./RightPanelControls";
 import { resolveRightPanelAutoFold } from "./right-panel-autofold";
 import type { ProjectOutletContext } from "./types";
 
@@ -218,6 +215,7 @@ export function ProjectLayoutBase({
   const togglePanel = usePanelStore((state) => state.toggle);
 
   const [rightPanel, setRightPanel] = useState<ReactNode | null>(null);
+  const [rightPanelMaximized, setRightPanelMaximized] = useState(false);
   const [pageHeader, setPageHeader] = useState<ReactNode | null>(null);
   const [headerClassName, setHeaderClassName] = useState<string | undefined>();
   const [hideHeader, setHideHeader] = useState(false);
@@ -366,6 +364,13 @@ export function ProjectLayoutBase({
       }),
     [],
   );
+
+  // A collapsed panel always reopens at the last manually resized normal
+  // width. Keeping a hidden panel in the maximized state would make the
+  // expand affordance unexpectedly reopen at half-window size.
+  useEffect(() => {
+    if (rightPanelCollapsed) setRightPanelMaximized(false);
+  }, [rightPanelCollapsed]);
 
   useEffect(() => {
     const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
@@ -790,59 +795,32 @@ export function ProjectLayoutBase({
     location.pathname.startsWith("/skills") ||
     location.pathname.startsWith("/connectors") ||
     location.pathname.startsWith("/agents");
-  const rightPanelToggle =
+  const rightPanelControls =
     resolvedRightPanel && !suppressRightPanelToggle ? (
-      <TooltipProvider delayDuration={150}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label={
-                rightPanelCollapsed
-                  ? t("sidebar.expandPanel")
-                  : t("sidebar.collapsePanel")
-              }
-              onClick={() => togglePanel()}
-              className="flex h-[22px] w-[22px] items-center justify-center rounded-[5px] text-ink-body transition-colors hover:bg-surface-muted"
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                <line
-                  x1={rightPanelCollapsed ? 17 : 15}
-                  y1={rightPanelCollapsed ? 7 : 3}
-                  x2={rightPanelCollapsed ? 17 : 15}
-                  y2={rightPanelCollapsed ? 17 : 21}
-                />
-              </svg>
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {rightPanelCollapsed
-              ? t("sidebar.expandPanel")
-              : t("sidebar.collapsePanel")}
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <RightPanelControls
+        collapsed={rightPanelCollapsed}
+        maximized={rightPanelMaximized}
+        labels={{
+          collapse: t("sidebar.collapsePanel"),
+          expand: t("sidebar.expandPanel"),
+          maximize: t("sidebar.maximizePanel"),
+          restore: t("sidebar.restorePanel"),
+        }}
+        onToggleCollapsed={() => togglePanel()}
+        onToggleMaximized={() =>
+          setRightPanelMaximized((maximized) => !maximized)
+        }
+      />
     ) : null;
   // ADR-022: the decision-inbox badge always sits in the topbar control
   // group (it self-hides when there are no pendings), so the control is
   // present whenever the badge has something to show even if the page
-  // contributes no topbarActions / rightPanelToggle.
+  // contributes no topbarActions / rightPanelControls.
   const topbarRightControl = (
     <div className="flex items-center gap-1">
       <NotificationBadge />
       {topbarActions}
-      {rightPanelToggle}
+      {rightPanelControls}
     </div>
   );
 
@@ -1112,6 +1090,11 @@ export function ProjectLayoutBase({
         asideClassName={
           resolvedRightPanel ? (asideClassName ?? "w-[345px]") : undefined
         }
+        rightPanelResizable={Boolean(
+          resolvedRightPanel && !suppressRightPanelToggle,
+        )}
+        rightPanelMaximized={rightPanelMaximized}
+        rightPanelResizeLabel={t("sidebar.resizePanel")}
         mainClassName={mainClassName}
         contentInnerClassName={contentInnerClassName}
         // Degraded multi-target hint rides the shell's notice slot — pinned

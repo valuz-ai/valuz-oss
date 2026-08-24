@@ -1,6 +1,21 @@
-import type { ComponentType, PropsWithChildren, ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ComponentType,
+  type PropsWithChildren,
+  type ReactNode,
+} from "react";
 import type { NavigationItem } from "@valuz/shared";
 import { cn } from "../lib/cn";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+  type GroupImperativeHandle,
+  type Layout,
+} from "../components/ui/resizable";
+import { resolveRightPanelLayoutTransition } from "./right-panel-layout";
 
 /**
  * Props passed to a nav link component. Matches react-router-dom's `Link`
@@ -63,6 +78,15 @@ interface AppShellProps extends PropsWithChildren {
   mainClassName?: string;
   shellClassName?: string;
   asideClassName?: string;
+  /** Allows the main and right cards to be resized with a keyboard-accessible
+   * separator. Disabled by default so master-detail layouts keep their
+   * existing fixed sizing unless the host explicitly opts in. */
+  rightPanelResizable?: boolean;
+  /** Controlled half-window preset for the resizable right card. Returning to
+   * false restores the last user-selected normal layout. */
+  rightPanelMaximized?: boolean;
+  /** Accessible label for the otherwise visual resize separator. */
+  rightPanelResizeLabel?: string;
   /** Optional brand slot rendered above the app title (e.g. logo or window controls). */
   brandSlot?: ReactNode;
   /** Link component used for sidebar navigation. Pass react-router's Link to avoid full reloads. */
@@ -77,6 +101,82 @@ const isActivePath = (activePath: string, itemPath: string) => {
   }
   return activePath === itemPath || activePath.startsWith(`${itemPath}/`);
 };
+
+const rememberedNormalPanelLayouts = new Map<string, Layout>();
+
+function ResizableShellPanels({
+  mainPanel,
+  maximized,
+  resizeLabel,
+  rightPanel,
+}: {
+  mainPanel: ReactNode;
+  maximized: boolean;
+  resizeLabel?: string;
+  rightPanel: ReactNode;
+}) {
+  const layoutId = "app-shell-panels";
+  const [initialNormalLayout] = useState<Layout | null>(
+    () => rememberedNormalPanelLayouts.get(layoutId) ?? null,
+  );
+  const panelGroupRef = useRef<GroupImperativeHandle | null>(null);
+  const normalPanelLayoutRef = useRef<Layout | null>(initialNormalLayout);
+  const wasMaximizedRef = useRef(false);
+
+  useEffect(() => {
+    const group = panelGroupRef.current;
+    if (!group) return;
+
+    const transition = resolveRightPanelLayoutTransition({
+      currentLayout: group.getLayout(),
+      maximized,
+      normalLayout: normalPanelLayoutRef.current,
+      wasMaximized: wasMaximizedRef.current,
+    });
+    normalPanelLayoutRef.current = transition.normalLayout;
+    if (transition.normalLayout) {
+      rememberedNormalPanelLayouts.set(layoutId, transition.normalLayout);
+    }
+    if (transition.targetLayout) group.setLayout(transition.targetLayout);
+    wasMaximizedRef.current = maximized;
+  }, [maximized]);
+
+  return (
+    <ResizablePanelGroup
+      id={layoutId}
+      className="min-w-0 flex-1"
+      groupRef={panelGroupRef}
+      defaultLayout={initialNormalLayout ?? undefined}
+      onLayoutChanged={(layout) => {
+        if (maximized) return;
+        normalPanelLayoutRef.current = layout;
+        rememberedNormalPanelLayouts.set(layoutId, layout);
+      }}
+    >
+      <ResizablePanel
+        id="shell-main"
+        minSize="520px"
+        style={{ overflow: "hidden" }}
+      >
+        {mainPanel}
+      </ResizablePanel>
+      <ResizableHandle
+        aria-label={resizeLabel}
+        disabled={maximized}
+        className="w-2 shrink-0 bg-transparent before:absolute before:inset-y-2 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-brand before:opacity-0 before:transition-opacity after:w-2 data-[separator=active]:before:opacity-100 data-[separator=focus]:before:opacity-100 data-[separator=hover]:before:opacity-100 focus-visible:ring-0 focus-visible:ring-offset-0"
+      />
+      <ResizablePanel
+        id="shell-right"
+        defaultSize="345px"
+        minSize="320px"
+        maxSize="70%"
+        style={{ overflow: "visible" }}
+      >
+        {rightPanel}
+      </ResizablePanel>
+    </ResizablePanelGroup>
+  );
+}
 
 export const AppShell = ({
   activePath = "/",
@@ -95,17 +195,101 @@ export const AppShell = ({
   navItems = [],
   notice,
   right,
+  rightPanelMaximized = false,
+  rightPanelResizable = false,
+  rightPanelResizeLabel,
   sidebar,
   shellClassName,
   title,
   topBar,
-}: AppShellProps) => (
-  <div
-    className={cn(
-      "flex h-screen flex-col text-ink-heading",
-      shellClassName ?? "soft-gradient",
-    )}
-  >
+}: AppShellProps) => {
+  const rightPanel = aside || right;
+  const useResizablePanels = Boolean(rightPanel && rightPanelResizable);
+
+  const mainPanel = (
+    <main
+      className={cn(
+        "flex min-w-0 flex-1 flex-col overflow-hidden rounded-[14px] border border-surface-border bg-card",
+        useResizablePanels && "h-full w-full",
+        mainClassName,
+      )}
+    >
+      {notice}
+      {!hideHeader && header ? (
+        <header
+          className={cn(
+            "flex h-12 shrink-0 items-center px-5",
+            headerClassName,
+          )}
+        >
+          {header}
+        </header>
+      ) : null}
+      {!hideHeader && !header && title ? (
+        <header
+          className={cn(
+            "flex h-12 shrink-0 items-center px-5",
+            headerClassName,
+          )}
+        >
+          <span className="text-base font-medium text-ink-heading">
+            {title}
+          </span>
+        </header>
+      ) : null}
+      {/* Scroll container hugs the card's inner border so the scrollbar
+        renders flush against the right edge. Padding lives on the inner
+        wrapper, which is h-full so children using `h-full` (the standard
+        page-shell pattern) get a real viewport-sized box and can manage
+        their own internal scroll without bleeding into the outer scroll. */}
+      <div
+        className={cn(
+          "min-h-0 flex-1 overflow-auto",
+          hideHeader && "overflow-hidden",
+          contentClassName,
+        )}
+      >
+        <div
+          className={cn(
+            "h-full",
+            // Default keeps full 4-side padding so legacy pages
+            // (KnowledgePage's negative-margin fullbleed hack
+            // depends on the outer 28 px to stay above the
+            // header; ProjectDetailPage's centered column
+            // expects 24 px top breathing room) continue to
+            // render correctly. Pages that want different
+            // inner padding override via
+            // ``setContentInnerClassName`` (ActivityPage uses
+            // ``"px-6 sm:px-7"`` to drop the vertical padding,
+            // for example).
+            !hideHeader && (contentInnerClassName ?? "p-6 sm:p-7"),
+          )}
+        >
+          {children}
+        </div>
+      </div>
+    </main>
+  );
+
+  const rightPanelCard = rightPanel ? (
+    <aside
+      className={cn(
+        "hidden shrink-0 flex-col overflow-hidden rounded-[14px] border border-surface-border bg-card lg:flex",
+        asideClassName,
+        useResizablePanels && "h-full w-full",
+      )}
+    >
+      {rightPanel}
+    </aside>
+  ) : null;
+
+  return (
+    <div
+      className={cn(
+        "flex h-screen flex-col text-ink-heading",
+        shellClassName ?? "soft-gradient",
+      )}
+    >
     {topBar}
     <div className="flex min-h-0 flex-1">
       {sidebar ?? (
@@ -163,7 +347,8 @@ export const AppShell = ({
       {/* Content + right panel as floating white cards */}
       <div
         className={cn(
-          "flex min-w-0 flex-1 gap-2 p-4 pt-0",
+          "flex min-w-0 flex-1 p-4 pt-0",
+          !useResizablePanels && "gap-2",
           // sidebar=false signals "explicitly hidden" — give main the same
           // left padding as the right edge so the bordered card doesn't
           // bleed into the window edge. null/undefined falls back to the
@@ -171,88 +356,21 @@ export const AppShell = ({
           sidebar === false ? "pl-4" : "pl-0",
         )}
       >
-        <main
-          className={cn(
-            "flex min-w-0 flex-1 flex-col overflow-hidden rounded-[14px] border border-surface-border bg-card",
-            mainClassName,
-          )}
-        >
-          {notice}
-          {!hideHeader && header ? (
-            <header
-              className={cn(
-                "flex h-12 shrink-0 items-center px-5",
-                headerClassName,
-              )}
-            >
-              {header}
-            </header>
-          ) : null}
-          {!hideHeader && !header && title ? (
-            <header
-              className={cn(
-                "flex h-12 shrink-0 items-center px-5",
-                headerClassName,
-              )}
-            >
-              <span className="text-base font-medium text-ink-heading">
-                {title}
-              </span>
-            </header>
-          ) : null}
-          {/* Scroll container hugs the card's inner border so the scrollbar
-            renders flush against the right edge. Padding lives on the inner
-            wrapper, which is h-full so children using `h-full` (the standard
-            page-shell pattern) get a real viewport-sized box and can manage
-            their own internal scroll without bleeding into the outer scroll. */}
-          <div
-            className={cn(
-              "min-h-0 flex-1 overflow-auto",
-              hideHeader && "overflow-hidden",
-              contentClassName,
-            )}
-          >
-            <div
-              className={cn(
-                "h-full",
-                // Default keeps full 4-side padding so legacy pages
-                // (KnowledgePage's negative-margin fullbleed hack
-                // depends on the outer 28 px to stay above the
-                // header; ProjectDetailPage's centered column
-                // expects 24 px top breathing room) continue to
-                // render correctly. Pages that want different
-                // inner padding override via
-                // ``setContentInnerClassName`` (ActivityPage uses
-                // ``"px-6 sm:px-7"`` to drop the vertical padding,
-                // for example).
-                !hideHeader && (contentInnerClassName ?? "p-6 sm:p-7"),
-              )}
-            >
-              {children}
-            </div>
-          </div>
-        </main>
-
-        {aside ? (
-          <aside
-            className={cn(
-              "hidden shrink-0 flex-col overflow-hidden rounded-[14px] border border-surface-border bg-card lg:flex",
-              asideClassName,
-            )}
-          >
-            {aside}
-          </aside>
-        ) : right ? (
-          <aside
-            className={cn(
-              "hidden shrink-0 flex-col overflow-hidden rounded-[14px] border border-surface-border bg-card lg:flex",
-              asideClassName,
-            )}
-          >
-            {right}
-          </aside>
-        ) : null}
+        {useResizablePanels ? (
+          <ResizableShellPanels
+            mainPanel={mainPanel}
+            maximized={rightPanelMaximized}
+            resizeLabel={rightPanelResizeLabel}
+            rightPanel={rightPanelCard}
+          />
+        ) : (
+          <>
+            {mainPanel}
+            {rightPanelCard}
+          </>
+        )}
       </div>
     </div>
-  </div>
-);
+    </div>
+  );
+};
