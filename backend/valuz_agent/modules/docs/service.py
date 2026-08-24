@@ -975,7 +975,7 @@ class DocumentLibraryService:
                 total_items=len(queued_ids),
             )
             await self._ds.create_import_task(user_id, reindex_task)
-            self._schedule_background_reindex(queued_ids, reindex_task.id, user_id)
+            await self._schedule_background_reindex(queued_ids, reindex_task.id, user_id)
 
         self._bus.publish("kb.rescanned", kb_id=kb_id)
         return _task_to_result(task)
@@ -1049,7 +1049,7 @@ class DocumentLibraryService:
 
         threading.Thread(target=_runner, name="docs-bg-rescan", daemon=True).start()
 
-    def _schedule_background_reindex(
+    async def _schedule_background_reindex(
         self, doc_ids: list[str], task_id: str, user_id: str
     ) -> None:
         """Spawn a daemon thread that reindexes ``doc_ids`` using a
@@ -1074,7 +1074,12 @@ class DocumentLibraryService:
         # decline (the OSS default always does), in which case we spawn the
         # thread below exactly as before.
         try:
-            if ext.docs_reindex_dispatcher.dispatch(user_id, doc_ids, task_id):
+            # Awaited, so the answer is the truth. A dispatcher that only
+            # SCHEDULED its publish and answered optimistically got believed —
+            # and this ``return`` is not revocable, so when the publish was
+            # then cancelled with the loop that carried it, the documents sat
+            # queued with nobody coming.
+            if await ext.docs_reindex_dispatcher.dispatch(user_id, doc_ids, task_id):
                 return
         except Exception:  # noqa: BLE001 — a broken dispatcher must not strand
             # the documents; fall through to the in-process path.
@@ -1186,7 +1191,7 @@ class DocumentLibraryService:
             total_items=len(document_ids),
         )
         await self._ds.create_import_task(user_id, task)
-        self._schedule_background_reindex(document_ids, task.id, user_id)
+        await self._schedule_background_reindex(document_ids, task.id, user_id)
         return _task_to_result(task)
 
     async def _run_reindex_loop(self, document_ids: list[str], task: DocumentImportTaskRow) -> None:
