@@ -300,4 +300,48 @@ describe("useStagedAttachments", () => {
 
     expect(claimed.map((r) => r.id)).toEqual(["srv1"]);
   });
+
+  it("adopts files handed over from another composer", async () => {
+    // A composer holds only what it attached — which is what stops two of them
+    // showing each other's files, and also what breaks the draft handoff
+    // unless the transfer is explicit. The sending page claims and passes the
+    // rows through the navigation; this page restages them and they become
+    // ordinary staged files, claimable by its own send.
+    //
+    // Scoping without this made the receiving page claim nothing, so the turn
+    // went out with no attachment at all.
+    const handedOver = [row({ id: "from-elsewhere" })];
+    const { result } = renderHook(() => useStagedAttachments());
+
+    act(() => result.current.restage(handedOver));
+    expect(result.current.attachments.map((a) => a.id)).toEqual([
+      "from-elsewhere",
+    ]);
+
+    let claimed: SessionAttachmentItem[] = [];
+    act(() => {
+      claimed = result.current.claim();
+    });
+    expect(claimed.map((a) => a.id)).toEqual(["from-elsewhere"]);
+  });
+
+  it("a poll does not drop files that were handed over", async () => {
+    // ``restage`` has to register them as this composer's, or the next poll
+    // filters them straight back out.
+    const handedOver = [row({ id: "from-elsewhere", parse_status: "parsing" })];
+    listStagedAttachments.mockResolvedValue({
+      items: [row({ id: "from-elsewhere", parse_status: "ready" })],
+    });
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useStagedAttachments());
+    act(() => result.current.restage(handedOver));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(result.current.attachments.map((a) => a.id)).toEqual([
+      "from-elsewhere",
+    ]);
+  });
 });

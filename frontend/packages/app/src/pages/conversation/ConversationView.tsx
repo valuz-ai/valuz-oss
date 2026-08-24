@@ -135,6 +135,7 @@ function ConversationViewPage(props: ConversationViewProps) {
     setPendingUserMessage: core.setPendingUserMessage,
     setTurnStartAnchor: core.setTurnStartAnchor,
     setSending: core.setSending,
+    restageAttachments: core.restageAttachments,
     getDisplayBusy: () => core.displayBusy,
     performEnqueue: core.performEnqueue,
     performSend: core.performSend,

@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, type Location } from "react-router-dom";
-import { recordEntityOrigin } from "@valuz/core";
+import {
+  recordEntityOrigin,
+  type SessionAttachmentItem,
+} from "@valuz/core";
 import { canSendProjectHandoff } from "../conversation-project-handoff";
 import { dropHandoffFromHistory } from "../conversation-handoff-history";
 import { NEW_SESSION_ID } from "./session-events";
@@ -50,6 +53,8 @@ type ProjectHandoffParams = {
     } | null,
   ) => void;
   setSending: (sending: boolean) => void;
+  /** Adopt files a sending composer handed over — see the draft handoff. */
+  restageAttachments: (rows: SessionAttachmentItem[]) => void;
   /** ``displayBusy`` is derived below the hook call site in the page (it
    *  needs useInputQueue's returns), so it arrives as a deferring getter —
    *  read only inside ``handleSend``, at send time, exactly as the original
@@ -90,6 +95,7 @@ export function useProjectHandoff({
   setPendingUserMessage,
   setTurnStartAnchor,
   setSending,
+  restageAttachments,
   getDisplayBusy,
   performEnqueue,
   performSend,
@@ -236,6 +242,7 @@ export function useProjectHandoff({
           permissionMode?: PermissionMode;
           projectId?: string;
           execOrigin?: string;
+          attachments?: SessionAttachmentItem[];
         };
       } | null
     )?.projectSend;
@@ -286,6 +293,9 @@ export function useProjectHandoff({
     // Held until the send settles, so the flag outlives the ``state: null``
     // navigation above; the ``finally`` also covers a failed send, which
     // would otherwise suppress the welcome on this page forever.
+    // Take ownership of the files the sending composer handed over, so this
+    // page's own send claims them like any other.
+    if (send?.attachments?.length) restageAttachments(send.attachments);
     setProjectSendInFlight(true);
     void performSend(text).finally(() => setProjectSendInFlight(false));
     // ``performSend`` is a plain function, so it changes identity every render;
