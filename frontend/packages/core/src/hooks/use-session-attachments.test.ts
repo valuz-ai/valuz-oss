@@ -112,4 +112,21 @@ describe("useSessionAttachments", () => {
     expect(result.current.attachments).toHaveLength(0);
     expect(deleteAttachment).toHaveBeenCalledWith("a1");
   });
+
+  it("refreshes the session the caller names, not the one it was built with", async () => {
+    // A send creates the session and then binds its files. The closure that
+    // runs afterwards was built while the id was still null, so a refresh that
+    // read the hook's own prop would read the wrong session — or none — and the
+    // panel would stay empty through the whole turn. That is what happened.
+    const { result } = renderHook(() => useSessionAttachments(null));
+    await waitFor(() => expect(result.current.attachments).toHaveLength(0));
+    listAttachments.mockResolvedValue({ items: [row({ session_id: "s-new" })] });
+
+    await act(async () => {
+      await result.current.refresh("s-new");
+    });
+
+    expect(listAttachments).toHaveBeenCalledWith("s-new");
+    expect(result.current.attachments).toHaveLength(1);
+  });
 });
