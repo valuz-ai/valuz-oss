@@ -504,10 +504,17 @@ export function ProjectLayoutBase({
   // the finished-runs window explicitly; without this the forked chat
   // waits for the next unrelated turn to appear in the sidebar.
   useEffect(() => {
-    const onRefresh = () => refreshFinishedRuns();
+    const onRefresh = () => {
+      refreshFinishedRuns();
+      // The same nudge also covers "the set of projects a fan-out can see
+      // changed" (an agent share landing after boot): the endpoints catalog
+      // fires this event, and the extra-projects provider only reaches the
+      // sidebar through a fresh fetch.
+      void fetchProjects();
+    };
     window.addEventListener("valuz-runs-refresh", onRefresh);
     return () => window.removeEventListener("valuz-runs-refresh", onRefresh);
-  }, [refreshFinishedRuns]);
+  }, [refreshFinishedRuns, fetchProjects]);
 
   // Per-project runs for the sidebar accordion. The global finished-runs
   // window above is ONE recency list shared with quick chats, so an install
