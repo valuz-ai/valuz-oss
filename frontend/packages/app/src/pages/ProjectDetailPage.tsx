@@ -1267,9 +1267,11 @@ export const ProjectDetailPage = () => {
     // shape /conversation/new already accepts.
     if (!chatSessionId) {
       setComposerValue("");
-      // The staged files stay staged: staging is the OWNER's, so the page this
-      // navigates to reads the very same set and claims it with its own send.
-      // Clearing here used to be necessary when the set was session-scoped.
+      // Hand the files over explicitly. A composer holds what IT attached, so
+      // the page this navigates to cannot see these by looking — and must not
+      // be able to, or every composer would see every other one's. Claiming
+      // here and restaging there is the transfer said out loud.
+      const handedOver = claimStagedAttachments();
       const params = new URLSearchParams({ project: id });
       if (selectedAgentSlug) params.set("agent", selectedAgentSlug);
       navigate(`/conversation/new?${params.toString()}`, {
@@ -1277,6 +1279,7 @@ export const ProjectDetailPage = () => {
           projectSend: {
             text,
             sentAt: Date.now(),
+            attachments: handedOver,
             // Every choice this composer holds. The conversation page has its
             // own state under most of these names, so anything omitted here is
             // not an error — it silently mints the session with that page's
