@@ -122,3 +122,41 @@ async def test_empty_section_is_omitted(restore_providers: None) -> None:
     )
 
     assert "workbench" not in context
+
+
+@pytest.mark.asyncio
+async def test_a_kb_binding_is_announced_not_fatal() -> None:
+    """The KB scope must reach the announcement when the project has bindings.
+
+    The datastore went owner-scoped and ``_format_kb_scope`` kept calling it
+    one-argument, so the first ``kb``-kind binding raised TypeError — which
+    took the WHOLE additional-context block down (the caller swallows). The
+    docs skill tells the model to consult the announcement before guessing, so
+    an empty one reads as "no knowledge base": binding a KB is exactly what
+    switched its retrieval off, and the agent web-searched a question whose
+    answer sat in a bound library.
+
+    Driven through ``_format_kb_scope`` with a fake owner-scoped datastore —
+    the fake's signatures ARE the assertion that every call carries the owner.
+    """
+    from types import SimpleNamespace
+
+    from valuz_agent.modules.sessions.context_builder import _format_kb_scope
+
+    class _OwnerScopedDs:
+        async def get_kb(self, user_id: str, kb_id: str):
+            assert user_id == "user-1"
+            return SimpleNamespace(id=kb_id, name="test_cloud")
+
+        async def get_folder(self, user_id: str, folder_id: str):  # pragma: no cover
+            raise AssertionError("no folder bindings in this test")
+
+        async def get_by_id(self, user_id: str, doc_id: str):  # pragma: no cover
+            raise AssertionError("no document bindings in this test")
+
+    binding = SimpleNamespace(binding_kind="kb", target_id="kb-1")
+
+    section = await _format_kb_scope(_OwnerScopedDs(), [binding], "user-1")
+
+    assert "test_cloud" in section
+    assert "doc_search" in section
