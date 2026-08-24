@@ -44,6 +44,7 @@ from valuz_agent.api.routes.providers import router as providers_router
 from valuz_agent.api.routes.resources import router as resources_router
 from valuz_agent.api.routes.runs import router as runs_router
 from valuz_agent.api.routes.runtimes import router as runtimes_router
+from valuz_agent.api.routes.sessions import attachments_router
 from valuz_agent.api.routes.sessions import router as sessions_router
 from valuz_agent.api.routes.settings import router as settings_router
 from valuz_agent.api.routes.skills import router as skills_router
@@ -172,6 +173,9 @@ def create_app(
     api.include_router(artifacts_router)
     api.include_router(worktrees_router)
     api.include_router(sessions_router)
+    # Attachments live outside ``/v1/sessions``: a file uploads before any
+    # session exists and is bound by the turn that ships it.
+    api.include_router(attachments_router)
     api.include_router(stream_router)
     api.include_router(skills_router)
     api.include_router(docs_router)

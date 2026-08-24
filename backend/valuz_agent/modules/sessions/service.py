@@ -692,7 +692,6 @@ class SessionService:
         override_effort: str | None = None,
         worktree: SessionWorktreeSpec | None = None,
         user_id: str | None = None,
-        reserved_session_id: str | None = None,
     ) -> SessionDetail:
         """Create a session bound to an agent (project member OR global library).
 
@@ -911,11 +910,7 @@ class SessionService:
             ),
         )
 
-        # Caller-supplied when a side table already references this session —
-        # attachments upload against the id before the session exists, so that
-        # the upload does not have to wait for a create (which, under scoped
-        # allocation, provisions a sandbox). See ``reserve_session_id``.
-        session_id = reserved_session_id or mint_session_id()
+        session_id = mint_session_id()
 
         # Guarantee the always-on baseline AT SESSION-CREATE (not "whatever the
         # agent happens to carry") — symmetric with the task path
@@ -1041,7 +1036,6 @@ class SessionService:
         agent_slug: str | None = None,
         worktree: SessionWorktreeSpec | None = None,
         user_id: str | None = None,
-        reserved_session_id: str | None = None,
     ) -> SessionDetail:
         """Create a new kernel session for *project_id*.
 
@@ -1057,7 +1051,6 @@ class SessionService:
         """
         if agent_slug:
             return await self._create_agent_bound_session(
-                reserved_session_id=reserved_session_id,
                 project_id=project_id,
                 agent_slug=agent_slug,
                 origin=origin,
@@ -1228,7 +1221,7 @@ class SessionService:
         # it into the in-process docs MCP URL (the URL embeds the session
         # id so the host can scope each request to a project). The id
         # then flows into the kernel session row unchanged below.
-        session_id = reserved_session_id or mint_session_id()
+        session_id = mint_session_id()
 
         # Resolve skills / mcp_servers.
         try:

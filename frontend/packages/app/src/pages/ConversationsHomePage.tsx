@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Sparkles, MessageSquarePlus, FolderOpen } from "lucide-react";
 import {
@@ -122,6 +122,7 @@ export const ConversationsHomePage = () => {
     attachLocalFiles,
     remove: removeAttachment,
     markPendingConsumed,
+    pendingIds: pendingAttachmentIds,
   } = useSessionAttachments(sessionId);
   const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
   // Observed origin of the minted quick-chat session — drives the locked
@@ -274,17 +275,9 @@ export const ConversationsHomePage = () => {
   // Create the quick-chat session on the chosen execution target (multi-target
   // editions) and record the observation so every follow-up call for this
   // session (messages / SSE / attachments / queue) routes to the same backend.
-  // The reserved-but-not-yet-created session id — see ``reserveSessionId``.
-  const reservedSessionIdRef = useRef<string | null>(null);
-
   const createSession = async () => {
     const target = resolveExecTarget();
     let payload = sessionPayload();
-    if (reservedSessionIdRef.current) {
-      // The id attachments were uploaded against. Absent for a plain text
-      // turn — nothing referenced it, so the host mints one.
-      payload = { ...payload, id: reservedSessionIdRef.current };
-    }
     if (target?.remote) {
       // Connector picks still come from the local backend. Model/provider
       // picks are target-scoped above, so they are valid on the selected
@@ -319,26 +312,6 @@ export const ConversationsHomePage = () => {
     }
   };
 
-  // Reserve (once) the id this quick chat's session WILL have. Attachments
-  // upload against it immediately; the session is created at Send.
-  //
-  // Creating it on attach is what made dropping a file wait on a sandbox —
-  // ``create_session`` provisions one (~3.6s in cloud mode) for something the
-  // upload path never touches. Held in a ref so a failed send retries with the
-  // same id rather than stranding the files staged under it.
-  const reserveSessionId = async (): Promise<{ id: string }> => {
-    if (sessionId) return { id: sessionId };
-    if (reservedSessionIdRef.current) {
-      return { id: reservedSessionIdRef.current };
-    }
-    const target = resolveExecTarget();
-    const reserved = await sessionsApi.reserveSessionId(
-      target ? { baseUrl: target.baseUrl } : undefined,
-    );
-    reservedSessionIdRef.current = reserved;
-    return { id: reserved };
-  };
-
   const ensureSession = async (): Promise<{ id: string }> => {
     if (sessionId) return { id: sessionId };
     const session = await createSession();
@@ -355,7 +328,16 @@ export const ConversationsHomePage = () => {
     try {
       const session = await ensureSession();
       markPendingConsumed();
-      await sessionsApi.sendMessage(session.id, text);
+      // Bind the staged files to this turn — this is where a file stops
+      // being a draft and becomes part of the conversation.
+      await sessionsApi.sendMessage(
+        session.id,
+        text,
+        null,
+        null,
+        null,
+        pendingAttachmentIds,
+      );
       setInput("");
       panelSetCollapsed(false);
       navigate(`/conversation/${session.id}`, {
@@ -586,10 +568,10 @@ export const ConversationsHomePage = () => {
                 }))}
               onRemovePinnedAttachment={(attId) => void removeAttachment(attId)}
               onLocalUpload={(files) =>
-                void attachLocalFiles(files, reserveSessionId)
+                void attachLocalFiles(files)
               }
               onFileDrop={(files) =>
-                void attachLocalFiles(files, reserveSessionId)
+                void attachLocalFiles(files)
               }
               sending={sending}
               autoFocus

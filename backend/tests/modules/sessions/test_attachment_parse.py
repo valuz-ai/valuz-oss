@@ -231,9 +231,10 @@ async def _run_spawn(rid: str, src, _dest, base_name: str) -> SessionAttachmentR
     from valuz_agent.api.routes.sessions import _spawn_attachment_parse
     from valuz_agent.infra.db import async_unit_of_work
 
-    # ``_make_parsing_row`` stamps session_id="s1"; the parsed file lands under
-    # ``attachments/s1/`` in the tmp data dir bound by the fixture.
-    _spawn_attachment_parse(rid, str(src), "s1", base_name, "local-test-owner")
+    # The extract is filed under the ATTACHMENT, not the session — that is what
+    # lets an attachment exist before any session does, and makes binding a
+    # column write rather than a file move.
+    _spawn_attachment_parse(rid, str(src), base_name, "local-test-owner")
     await _drain_parse_tasks()
     async with async_unit_of_work() as session:
         got = await SessionDatastore(session).get_attachment("local-test-owner", rid)
