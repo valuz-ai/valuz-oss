@@ -21,6 +21,22 @@ function renderCard(state: "pending" | "confirmed") {
 }
 
 describe("AutomationProposalCard", () => {
+  it("offers retry after confirmation fails", () => {
+    render(
+      <AutomationProposalCard
+        name="每日市场跟踪"
+        actionKind="chat"
+        state="error"
+        errorMessage="API 422"
+        onConfirm={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    const retry = screen.getByRole("button", { name: "common.retry" });
+    expect(retry.hasAttribute("disabled")).toBe(false);
+  });
+
   it("opens the full Prompt from a compact icon and renders Markdown", async () => {
     const { container } = render(
       <AutomationProposalCard

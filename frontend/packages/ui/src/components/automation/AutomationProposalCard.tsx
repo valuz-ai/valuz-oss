@@ -96,7 +96,8 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
 
   const isBusy = state === "confirming" || state === "dismissing";
   const isTerminal = state === "confirmed" || state === "dismissed";
-  const canConfirm = state === "pending" && name.trim().length > 0;
+  const canConfirm =
+    (state === "pending" || state === "error") && name.trim().length > 0;
   const modeLabel =
     actionKind === "task"
       ? t("automation.actionKindTask")
@@ -231,7 +232,7 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
             loading={state === "confirming"}
             onClick={onConfirm}
           >
-            {t("automation.actionCreate")}
+            {state === "error" ? t("common.retry") : t("automation.actionCreate")}
           </Button>
         </div>
       ) : null}
