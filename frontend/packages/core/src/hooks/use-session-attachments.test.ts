@@ -113,6 +113,60 @@ describe("useSessionAttachments", () => {
     expect(deleteAttachment).toHaveBeenCalledWith("a1");
   });
 
+  it("waits for a file another page said it sent", async () => {
+    // The project composer posts and navigates in that order, so this read
+    // races a bind that has not happened. One mount-time read and nothing
+    // else refreshing left the file missing from the panel until the person
+    // switched away and back.
+    listAttachments
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValue({ items: [row({ id: "sent-elsewhere" })] });
+    vi.useFakeTimers();
+    const { result } = renderHook(() =>
+      useSessionAttachments("s1", ["sent-elsewhere"]),
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(result.current.attachments.map((a) => a.id)).toEqual([
+      "sent-elsewhere",
+    ]);
+  });
+
+  it("stops waiting for a file that never arrives", async () => {
+    // The promise can be broken: the page that sent the turn owns the POST,
+    // and a failure there means the bind never happens. Polling a conversation
+    // forever over it is worse than giving up.
+    listAttachments.mockResolvedValue({ items: [] });
+    vi.useFakeTimers();
+    renderHook(() => useSessionAttachments("s1", ["never-lands"]));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    // The mount read plus a bounded run of polls — not one per second forever.
+    expect(listAttachments.mock.calls.length).toBeLessThanOrEqual(22);
+  });
+
+  it("does not poll when everything expected is already here", async () => {
+    listAttachments.mockResolvedValue({ items: [row({ id: "a1" })] });
+    vi.useFakeTimers();
+    renderHook(() => useSessionAttachments("s1", ["a1"]));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const settled = listAttachments.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    expect(listAttachments).toHaveBeenCalledTimes(settled);
+  });
+
   it("refreshes the session the caller names, not the one it was built with", async () => {
     // A send creates the session and then binds its files. The closure that
     // runs afterwards was built while the id was still null, so a refresh that
@@ -120,7 +174,9 @@ describe("useSessionAttachments", () => {
     // panel would stay empty through the whole turn. That is what happened.
     const { result } = renderHook(() => useSessionAttachments(null));
     await waitFor(() => expect(result.current.attachments).toHaveLength(0));
-    listAttachments.mockResolvedValue({ items: [row({ session_id: "s-new" })] });
+    listAttachments.mockResolvedValue({
+      items: [row({ session_id: "s-new" })],
+    });
 
     await act(async () => {
       await result.current.refresh("s-new");

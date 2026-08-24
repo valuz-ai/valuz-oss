@@ -1343,6 +1343,12 @@ export const ProjectDetailPage = () => {
               name: a.filename,
               size: a.size_bytes,
             })),
+            // The rows themselves, for the arriving page's file panel. It
+            // cannot read them back: the POST below is still in flight when
+            // that page does its one attachment read, and nothing re-reads
+            // afterwards — so without these the file was missing from the
+            // panel until the person switched away and back.
+            attachmentRows: claimed,
           },
         },
       });

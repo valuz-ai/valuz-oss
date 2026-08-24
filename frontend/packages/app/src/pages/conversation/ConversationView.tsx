@@ -136,6 +136,7 @@ function ConversationViewPage(props: ConversationViewProps) {
     setTurnStartAnchor: core.setTurnStartAnchor,
     setSending: core.setSending,
     restageAttachments: core.restageAttachments,
+    adoptAttachments: core.adoptAttachments,
     getDisplayBusy: () => core.displayBusy,
     performEnqueue: core.performEnqueue,
     performSend: core.performSend,
