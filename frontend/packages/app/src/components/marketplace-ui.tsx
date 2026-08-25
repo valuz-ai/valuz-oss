@@ -21,7 +21,12 @@ import {
   Table2,
   Users,
 } from "lucide-react";
-import type { MarketplaceBadge, MarketplaceKnownSource, MarketplaceSource } from "@valuz/core";
+import type {
+  MarketplaceBadge,
+  MarketplaceItemType,
+  MarketplaceKnownSource,
+  MarketplaceSource,
+} from "@valuz/core";
 import { useTranslation } from "@valuz/core";
 import { Badge } from "@valuz/ui";
 
@@ -116,14 +121,38 @@ const SOURCE_LABEL_KEYS: Record<MarketplaceKnownSource, string> = {
   plugin: "marketplace.sourcePlugin",
 };
 
+// What we publish ourselves has no upstream store to name, and "Valuz
+// Official" on every one of our own cards told the reader nothing they could
+// act on. Those say what the item *is* instead — an uploaded skill reads
+// "Skill", an added connector reads "Connector" — while anything ingested
+// keeps naming where it came from.
+const SELF_PUBLISHED_LABEL_KEYS: Record<MarketplaceItemType, string> = {
+  skill: "marketplace.modalTypeSkill",
+  connector: "marketplace.modalTypeConnector",
+  plugin: "marketplace.modalTypePlugin",
+  agent_template: "marketplace.modalTypeAgent",
+  agent_team_template: "marketplace.modalTypeTeam",
+};
+
 // One neutral look for every source — per-source colors made the cards read
 // inconsistently across tabs. Uses the Badge primitive (metaNeutral) so the
 // pill follows the design-system sizing/rounding/background tokens.
 // ``source`` is an open string: a source this build has no label for (the
 // index added one after this release) falls back to a humanized wire value.
-export function MarketplaceSourcePill({ source }: { source: MarketplaceSource }) {
+// ``itemType`` is optional so a caller that has no item in hand still renders;
+// without it a self-published item falls back to naming the source.
+export function MarketplaceSourcePill({
+  source,
+  itemType,
+}: {
+  source: MarketplaceSource;
+  itemType?: MarketplaceItemType;
+}) {
   const { t } = useTranslation();
-  const key = (SOURCE_LABEL_KEYS as Record<string, string | undefined>)[source];
+  const selfPublished =
+    source === "valuz_official" && itemType ? SELF_PUBLISHED_LABEL_KEYS[itemType] : undefined;
+  const key =
+    selfPublished ?? (SOURCE_LABEL_KEYS as Record<string, string | undefined>)[source];
   return (
     <Badge variant="metaNeutral">
       {key ? t(key as Parameters<typeof t>[0]) : humanizeWireValue(source)}

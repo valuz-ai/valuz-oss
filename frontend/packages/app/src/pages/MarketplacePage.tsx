@@ -372,7 +372,7 @@ function TemplateCard({
             {item.title}
           </div>
           <div className="mt-1 flex items-center gap-1.5">
-            <MarketplaceSourcePill source={item.source} />
+            <MarketplaceSourcePill source={item.source} itemType={item.type} />
             {item.category_label ? (
               <span className="truncate text-2xs text-ink-meta">
                 {item.category_label}
@@ -637,7 +637,7 @@ function TeamCard({
             {team.title}
           </div>
           <div className="mt-1 flex items-center gap-1.5">
-            <MarketplaceSourcePill source={team.source} />
+            <MarketplaceSourcePill source={team.source} itemType={team.type} />
             {team.category_label ? (
               <span className="truncate text-2xs text-ink-meta">
                 {team.category_label}
@@ -1047,7 +1047,7 @@ function PluginMarketCard({
             {plugin.title}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <MarketplaceSourcePill source={plugin.source} />
+            <MarketplaceSourcePill source={plugin.source} itemType={plugin.type} />
             <span className="truncate text-2xs text-ink-meta">
               {composition === "with_connectors"
                 ? tr("marketplace.compositionWithConnectors")
@@ -1241,7 +1241,7 @@ function ConnectorMarketCard({
             {connector.title}
           </div>
           <div className="mt-1 flex items-center gap-1.5">
-            <MarketplaceSourcePill source={connector.source} />
+            <MarketplaceSourcePill source={connector.source} itemType={connector.type} />
             {connector.category_label ? (
               <span className="truncate text-2xs text-ink-meta">
                 {connector.category_label}
@@ -1334,7 +1334,7 @@ function SkillMarketCard({
             {skill.title}
           </div>
           <div className="mt-1 flex items-center gap-1.5">
-            <MarketplaceSourcePill source={skill.source} />
+            <MarketplaceSourcePill source={skill.source} itemType={skill.type} />
             {skill.category_label ? (
               <span className="truncate text-2xs text-ink-meta">
                 {skill.category_label}
