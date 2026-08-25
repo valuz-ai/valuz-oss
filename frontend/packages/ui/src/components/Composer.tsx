@@ -1689,6 +1689,13 @@ export const Composer = ({
                       : "composer.modeChat") as Parameters<typeof t>[0],
                   );
                   const ModeIcon = m === "task" ? ListTodo : MessageSquare;
+                  // The icon already says "chat" or "task"; the tooltip is
+                  // where the difference between the two is spelled out.
+                  const tip = t(
+                    (m === "task"
+                      ? "composer.modeTaskTip"
+                      : "composer.modeChatTip") as Parameters<typeof t>[0],
+                  );
                   return (
                     // Icons at every width, not just a narrow card. The two
                     // modes are a permanent, frequently-read control, so the
@@ -1719,7 +1726,7 @@ export const Composer = ({
                             />
                           </button>
                         </TooltipTrigger>
-                        <TooltipContent side="bottom">{label}</TooltipContent>
+                        <TooltipContent side="bottom">{tip}</TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   );
