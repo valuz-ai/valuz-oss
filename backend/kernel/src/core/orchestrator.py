@@ -2066,6 +2066,17 @@ class SessionOrchestrator:
         async with lock:
             cached = self._runtimes.get(session_id)
             if cached is not None:
+                # A cached runtime keeps the credentials it was BUILT with.
+                # Per-turn context is materialized at construction only, so a
+                # reused runtime silently carries the previous turn's values —
+                # worth saying when the caller did supply fresh ones.
+                if runtime_context:
+                    logger.info(
+                        "runtime-context: session %s reusing a cached runtime; "
+                        "this turn's context keys %s are NOT applied",
+                        session_id,
+                        sorted(runtime_context),
+                    )
                 cached.update_sink(sink)
                 self._runtime_last_used[session_id] = time.monotonic()
                 if user_id is not None:
