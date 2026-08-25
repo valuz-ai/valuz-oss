@@ -28,9 +28,18 @@ The tool handlers:
   ``folder_ids`` / ``document_ids`` further narrow scope; both are
   intersected with the project's bindings, so a runaway agent cannot
   reach docs from a different project even if it guesses an id.
+- ``doc_read(document_id, offset?)`` — one document's parsed text and
+  where it lives, paged. The other half of search: a snippet answers
+  "which document", and this answers "what does it say". Without it an
+  agent that finds the right document has no way to open it, and
+  reaches for whatever unrelated document tool it can see.
 - ``list_doc_scope(folder_id?)`` — returns the document tree the
   project is bound to. With no argument: every bound KB / folder /
   doc. With ``folder_id``: only that subtree.
+
+``doc_search`` and ``doc_read`` resolve scope through one service call
+(``authorized_doc_scope``) so the two cannot disagree about what this
+session may reach — an id the search returns is an id the read opens.
 
 Security note
 -------------
@@ -334,6 +343,88 @@ def _locator_for_search_hit(hit: Any, *, mime_type: str | None) -> dict[str, Any
     if mime_type == "text/html":
         return {"kind": "html", "quote": quote}
     return None
+
+
+#: How much parsed text one ``doc_read`` call may return. A knowledge base
+#: holds 200-page reports; handing one back whole is both a wasted context
+#: window and, past the model's limit, a failed turn. The agent pages with
+#: ``offset`` instead — and is told so in the response, because a truncation it
+#: cannot see is a truncation it will answer from.
+_READ_CHAR_LIMIT = 40_000
+
+
+@_mcp.tool()
+async def doc_read(document_id: str, offset: int = 0) -> dict[str, Any]:
+    """Read one bound document: where it lives, and its parsed text.
+
+    ``document_id`` is the id ``doc_search`` returns. Use this when a search
+    snippet is not enough — the surrounding section, a number the snippet cut
+    off, or the document read end-to-end.
+
+    Returns ``{document_id, filename, title, relative_path, source_path,
+    parsed_path, mime_type, file_size_bytes, status, parser_mode, markdown,
+    offset, next_offset, total_chars, truncated}``.
+
+    ``markdown`` is the PARSED text — what the index was built from, so what a
+    citation was taken from — not the original bytes. ``source_path`` is the
+    original file and ``parsed_path`` that same markdown on disk; both are
+    readable with your ordinary file tools, so for a long document prefer
+    grepping ``parsed_path`` over paging the whole thing through here. They are
+    absent for a document another user shared with you.
+
+    Long documents come back in pieces: when ``truncated`` is true, call again
+    with ``offset=next_offset``.
+
+    Errors with "document not found" for any id outside this session's bound
+    scope, which is the same scope ``doc_search`` searches.
+    """
+    from valuz_agent.infra.db import async_unit_of_work
+
+    session_id = _current_session_id()
+    user_id = _current_user_id()
+    locked_document_ids = await _resolve_locked_document_scope(user_id, session_id)
+    project_id = await _resolve_project_id(user_id, session_id)
+    if project_id is None and locked_document_ids is None:
+        raise ValueError(f"document not found: {document_id}")
+    knowledge_base_ids = await _resolve_session_knowledge_bases(user_id, session_id)
+    async with async_unit_of_work(commit=False) as db:
+        svc = _build_doc_service(db, user_id)
+        doc = await svc.read_document_in_scope(
+            user_id,
+            project_id=project_id or "",
+            document_id=document_id,
+            knowledge_base_ids=knowledge_base_ids,
+            authorized_document_ids=locked_document_ids,
+        )
+    if doc is None:
+        # Deliberately one message for "no such document" and "not yours": a
+        # model that can tell them apart can enumerate a library it was never
+        # given.
+        raise ValueError(f"document not found: {document_id}")
+
+    total = len(doc.markdown)
+    start = max(0, min(offset, total))
+    window = doc.markdown[start : start + _READ_CHAR_LIMIT]
+    end = start + len(window)
+    return {
+        "document_id": doc.document_id,
+        "filename": doc.filename,
+        "title": doc.title,
+        "relative_path": doc.relative_path,
+        "source_path": doc.source_path,
+        "parsed_path": doc.parsed_path,
+        "mime_type": doc.mime_type,
+        "file_size_bytes": doc.file_size_bytes,
+        "status": doc.status,
+        "parser_mode": doc.parser_mode,
+        "markdown": window,
+        "offset": start,
+        "total_chars": total,
+        "truncated": end < total,
+        # Absent when there is no more to read, so "call again" is a decision
+        # the response makes rather than one the model has to infer.
+        "next_offset": end if end < total else None,
+    }
 
 
 @_mcp.tool()
