@@ -310,7 +310,7 @@ export function MarketplacePluginDialog({
                   <span className="rounded border border-surface-border bg-surface-soft px-1.5 py-px font-mono text-2xs text-ink-meta">
                     {tr("marketplace.modalTypePlugin")}
                   </span>
-                  <MarketplaceSourcePill source={item.source} />
+                  <MarketplaceSourcePill source={item.source} itemType={item.type} />
                   <Badge variant="metaOutline">
                     {composition === "with_connectors"
                       ? tr("marketplace.compositionWithConnectors")
