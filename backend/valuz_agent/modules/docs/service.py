@@ -1985,3 +1985,20 @@ class DocumentLibraryService:
                 metadata={"error": "async_not_supported"},
             )
         return asyncio.run(self._parser.parse(file_path, options))
+
+
+async def owner_kb_root_paths(user_id: str) -> list[str]:
+    """Every knowledge base's own ``root_path`` for ``user_id``.
+
+    The file-resolve owner boundary needs these as prefixes: on the desktop a
+    library can point at any folder the user picked, so its documents live
+    outside both the managed project root and the managed KB tree. Mirrors
+    ``projects.service.project_root_paths`` — the datastore stays private and
+    the caller gets paths, not rows.
+    """
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.docs.datastore import DocumentDatastore
+
+    async with async_unit_of_work(commit=False) as db:
+        rows = await DocumentDatastore(db).list_kbs(user_id)
+    return [row.root_path for row in rows if row.root_path]
