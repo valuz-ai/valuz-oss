@@ -36,7 +36,6 @@ import { executionTargetIcon } from "./execution-target-icon";
 
 type TK = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
 
-
 export interface ExecutionLocationBarProject {
   id: string;
   name: string;
@@ -66,8 +65,13 @@ export interface ExecutionLocationBarProps {
   className?: string;
 }
 
+// ``min-w-0`` (not ``shrink-0``): this row sits under a composer that can be
+// as narrow as a resized chat card, and a chip that refuses to shrink pushes
+// the row past the card edge instead of truncating inside it. It stays one
+// line — the labels truncate, and the location label steps aside entirely
+// below the container breakpoint.
 const CHIP_CLASS =
-  "flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs text-ink-body outline-none";
+  "flex h-7 min-w-0 items-center gap-1.5 rounded-lg px-2 text-xs text-ink-body outline-none";
 const CHIP_INTERACTIVE_CLASS =
   "cursor-default transition-colors hover:bg-surface-border data-[state=open]:bg-surface-border";
 
@@ -121,7 +125,7 @@ export function ExecutionLocationBar({
     effectiveTarget && LocationIcon ? (
       <>
         <LocationIcon className="h-3.5 w-3.5 shrink-0" />
-        <span className="max-w-[120px] truncate">
+        <span className="hidden max-w-[120px] truncate @[360px]/execbar:inline">
           {t(effectiveTarget.labelKey as TK)}
         </span>
       </>
@@ -152,7 +156,7 @@ export function ExecutionLocationBar({
       data-locked={locked || undefined}
       className={cn(
         // pt-3 covers the 8px tuck under the input card + breathing room.
-        "flex items-center gap-1 rounded-b-xl border border-t-0 border-surface-soft bg-surface-soft px-2 pb-1 pt-3",
+        "@container/execbar flex items-center gap-1 rounded-b-xl border border-t-0 border-surface-soft bg-surface-soft px-2 pb-1 pt-3",
         className,
       )}
     >
