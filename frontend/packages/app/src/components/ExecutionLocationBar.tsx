@@ -17,7 +17,6 @@
  * location chip displays it and switching location resets the project.
  */
 
-import type { ReactNode } from "react";
 import {
   getDefaultExecutionTarget,
   selectableExecutionTargets,
@@ -64,9 +63,6 @@ export interface ExecutionLocationBarProps {
    */
   lockedOriginId?: string;
   className?: string;
-  /** Rendered at the far right of the same row (task-mode hint, …). Keeps
-   *  the strip one line instead of stacking another block under it. */
-  trailing?: ReactNode;
 }
 
 // ``min-w-0`` (not ``shrink-0``): this row sits under a composer that can be
@@ -87,7 +83,6 @@ export function ExecutionLocationBar({
   locked = false,
   lockedOriginId,
   className,
-  trailing,
 }: ExecutionLocationBarProps) {
   const { t } = useTranslation();
   const targets = useExecutionTargets();
@@ -270,14 +265,6 @@ export function ExecutionLocationBar({
           </DropdownMenuContent>
         </DropdownMenu>
       )}
-
-      {/* Far-right slot on the same row (task-mode hint). ``ml-auto`` pins it
-          to the right edge; it shrinks before the chips do, because the chips
-          answer "where does this run" and the hint only explains a mode the
-          user already picked. */}
-      {trailing ? (
-        <div className="ml-auto flex min-w-0 items-center">{trailing}</div>
-      ) : null}
     </div>
   );
 }

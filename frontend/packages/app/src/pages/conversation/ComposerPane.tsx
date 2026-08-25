@@ -16,7 +16,6 @@ import type { I18nKey } from "@valuz/shared";
 import { QueuedInputsBar } from "../../components/QueuedInputsBar";
 import { CreateAgentDialog } from "../../components/CreateAgentDialog";
 import { ExecutionLocationBar } from "../../components/ExecutionLocationBar";
-import { TaskLeadHint } from "../../components/TaskLeadHint";
 import type { useComposerConfig } from "./useComposerConfig";
 import type { useConversationScroll } from "./useConversationScroll";
 import type { useConversationSend } from "./useConversationSend";
@@ -403,7 +402,6 @@ export function ComposerPane({
           // ``null`` maps back to the sentinel. Frozen once a session exists.
           footerBar={
             <ExecutionLocationBar
-              trailing={composerMode === "task" ? <TaskLeadHint /> : undefined}
               locked={execBarLocked}
               lockedOriginId={sessionExecOrigin}
               targetId={execTargetId}

@@ -500,7 +500,6 @@ I18nKey = Literal[
     "composer.modeChatTip",
     "composer.modeTask",
     "composer.sendTask",
-    "composer.taskHint",
     "composer.taskHintShort",
     "composer.taskPlaceholder",
     "connector.addHttp",

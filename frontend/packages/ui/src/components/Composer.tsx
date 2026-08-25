@@ -1475,13 +1475,7 @@ export const Composer = ({
     <div
       ref={containerRef}
       // Spec 5.6 外层 padding 10px 20px 16px
-      // ``@container/composerpane``: the task hint below the card is a sibling
-      // of the input box, so it cannot read the box's own container. Naming
-      // the wrapper lets it size against the same width the card gets.
-      className={cn(
-        "@container/composerpane relative shrink-0 px-5 pt-2.5 pb-4",
-        wrapperClassName,
-      )}
+      className={cn("relative shrink-0 px-5 pt-2.5 pb-4", wrapperClassName)}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}

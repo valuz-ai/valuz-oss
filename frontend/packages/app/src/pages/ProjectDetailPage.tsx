@@ -61,7 +61,6 @@ import {
 import { modelLabel, type WorktreeItem } from "@valuz/shared";
 import { t as _t } from "@valuz/shared/i18n";
 import { ExecutionLocationBar } from "../components/ExecutionLocationBar";
-import { TaskLeadHint } from "../components/TaskLeadHint";
 import { useProjectOutlet } from "@valuz/app/layout";
 import { usePlatform } from "@valuz/app/platform";
 import { useProjectKbBindings, useKbDocTree } from "@valuz/app/hooks";
@@ -1717,9 +1716,6 @@ export const ProjectDetailPage = () => {
                   // project" is answered while working inside one.
                   footerBar={
                     <ExecutionLocationBar
-                      trailing={
-                        composerMode === "task" ? <TaskLeadHint /> : undefined
-                      }
                       locked
                       lockedOriginId={project?.exec_origin ?? "local"}
                       targetId={null}

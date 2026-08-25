@@ -304,10 +304,9 @@
   "composer": {
     "modeChat": "Chat",
     "modeTask": "Task",
-    "modeChatTip": "The agent answers here",
+    "modeChatTip": "The agent answers here: ask, follow up, refine.",
     "sendTask": "Launch task",
     "taskPlaceholder": "Describe the task goal — the lead agent will take over and run it in the background.",
-    "taskHint": "The lead agent owns the goal end-to-end: decomposes it, dispatches to teammates when useful, validates and aggregates. Track or step in any time from the task detail page.",
     "taskHintShort": "The lead agent owns it: plans, dispatches, aggregates."
   },
   "conversation": {

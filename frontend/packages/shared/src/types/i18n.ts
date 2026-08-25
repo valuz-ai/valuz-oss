@@ -494,7 +494,6 @@ export type KnownI18nKey =
   | "composer.modeChatTip"
   | "composer.modeTask"
   | "composer.sendTask"
-  | "composer.taskHint"
   | "composer.taskHintShort"
   | "composer.taskPlaceholder"
   | "connector.addHttp"
