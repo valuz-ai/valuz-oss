@@ -1393,6 +1393,8 @@
       "verificationDesc": "在每条助手消息发布后核查事实、数字与来源是否一致；可能增加等待时间和模型用量。",
       "taskCoverageLabel": "检查任务完整性",
       "taskCoverageDesc": "主回答正常结束后检查是否完整覆盖请求；发现重要遗漏时最多追加一次补充。",
+      "ptcLabel": "程序化工具调用（PTC）",
+      "ptcDesc": "让 agent 通过编写代码批量调用数据工具（Valuz 数据/搜索），原始数据不进入对话上下文，只返回打印的摘要。",
       "memoryTitle": "记忆",
       "saveFailed": "保存个性化设置失败"
     },

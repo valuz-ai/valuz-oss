@@ -16,7 +16,7 @@ export function isCloudOnlyResource(resource: unknown): boolean {
     outer.kind === "installed" && outer.item && typeof outer.item === "object"
       ? (outer.item as Record<string, unknown>)
       : outer;
-  const sync = target._sync as AgentSyncInfo | undefined;
+  const sync = (target._org_sync ?? target._sync) as AgentSyncInfo | undefined;
   return sync?.status === "cloud_only";
 }
 

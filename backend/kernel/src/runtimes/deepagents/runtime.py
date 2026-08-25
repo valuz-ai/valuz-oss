@@ -602,6 +602,7 @@ class DeepAgentsRuntime:
         # Identity of the session currently being run — exposed to
         # custom-tool handlers through ExecContext.
         self._cur_session_id: str = ""
+        self._cur_user_id: str = ""
         self._egress_turn_attempt_id: str | None = None
 
         # Approval bridge state (Phase 3 of the cross-runtime approval
@@ -800,6 +801,8 @@ class DeepAgentsRuntime:
         self._cancelled = False
         self._interrupt_cancels = 0
         self._cur_session_id = session.id
+        # getattr: run() is exercised with synthetic session stubs in tests.
+        self._cur_user_id = getattr(session, "user_id", "") or ""
         self._egress_turn_attempt_id = uuid.uuid4().hex
         if not self._continuing_same_user_turn:
             self._turn_evidence_registry.reset()
@@ -2129,6 +2132,7 @@ class DeepAgentsRuntime:
                 ExecContext(
                     workspace=captured_workspace,
                     session_id=self._cur_session_id,
+                    user_id=self._cur_user_id,
                 ),
             )
             if captured_hooks and captured_hooks._handlers.get("after_tool"):

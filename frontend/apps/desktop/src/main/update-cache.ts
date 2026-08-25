@@ -3,11 +3,30 @@ import { join } from 'node:path'
 import { app } from 'electron'
 
 /**
+ * electron-updater's differential-download state, keyed by the fixed names it
+ * writes after a successful download:
+ * ``MacUpdater`` → ``update.zip``; ``NsisUpdater`` →
+ * ``installer.exe`` / ``package.7z`` (``CURRENT_APP_INSTALLER_FILE_NAME`` /
+ * ``CURRENT_APP_PACKAGE_FILE_NAME`` in builder-util-runtime).
+ *
+ * One of these is the whole input to the next release's diff, so keeping ~600 MB
+ * on disk buys back a ~600 MB download every single update.
+ */
+const DIFFERENTIAL_STATE_FILES = new Set(['update.zip', 'installer.exe', 'package.7z'])
+
+/**
  * Delete the downloaded update artifacts a prior version left in
- * electron-updater's cache (the ``.zip`` / ``.blockmap`` / ``pending`` stage +
- * the ``update-info.json`` state file). Each package is ~600 MB, so a stale one
- * — after an install, or a crashed/aborted download — just wastes disk and can
- * confuse a later update.
+ * electron-updater's cache (the versioned ``.zip`` / ``.blockmap`` / ``pending``
+ * stage + the ``update-info.json`` state file). Each package is ~600 MB, so a
+ * stale one — after an install, or a crashed/aborted download — just wastes
+ * disk and can confuse a later update.
+ *
+ * Everything except electron-updater's own differential-download state, which
+ * must survive: after a successful download it keeps the package under a fixed
+ * name (``update.zip`` on macOS, ``installer.exe`` / ``package.7z`` for NSIS)
+ * and diffs the *next* release against it. Deleting those turns every update
+ * into a full download — which is exactly what this function used to do, since
+ * ``update.zip`` matches ``\.zip$``.
  *
  * Call this ONLY after the app has confirmed a healthy start (backend up),
  * never during boot: it keeps the previous version's package around as a
@@ -52,6 +71,9 @@ export const cleanStaleUpdateCache = () => {
     }
     let removed = 0
     for (const name of readdirSync(cacheDir)) {
+      if (DIFFERENTIAL_STATE_FILES.has(name.toLowerCase())) {
+        continue
+      }
       if (
         name === 'pending' ||
         name === 'update-info.json' ||

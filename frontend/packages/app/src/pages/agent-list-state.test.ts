@@ -52,6 +52,15 @@ describe("isCloudOnlyResource", () => {
       }),
     ).toBe(true);
   });
+
+  it("recognizes organization sync metadata used by duplicated local rows", () => {
+    expect(
+      isCloudOnlyResource({
+        id: "organization-agent",
+        _org_sync: { status: "cloud_only" },
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("isSystemAgent", () => {

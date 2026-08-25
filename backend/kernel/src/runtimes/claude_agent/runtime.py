@@ -18,7 +18,7 @@ from collections import deque
 from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from claude_agent_sdk import (
     AgentDefinition,
@@ -433,6 +433,7 @@ class ClaudeAgentRuntime:
         # Identity of the session currently being run — exposed to
         # custom-tool handlers through ExecContext.
         self._cur_session_id: str = ""
+        self._cur_user_id: str = ""
         self._egress_turn_attempt_id: str | None = None
         self._egress_enabled_for_spawn = False
         self._egress_first_model_event_recorded = False
@@ -720,6 +721,8 @@ class ClaudeAgentRuntime:
         self._citation_raw_documents = {}
         self._citation_document_metadata = {}
         self._cur_session_id = session.id
+        # getattr: run() is exercised with synthetic session stubs in tests.
+        self._cur_user_id = getattr(session, "user_id", "") or ""
         self._egress_turn_attempt_id = uuid.uuid4().hex
         self._egress_first_model_event_recorded = False
         self._cancelled = False
@@ -1824,7 +1827,12 @@ class ClaudeAgentRuntime:
         mcp: dict[str, Any] = {}
         sdk_tools = self._build_mcp_tools()
         if sdk_tools:
-            mcp["harness"] = create_sdk_mcp_server(name="harness", tools=sdk_tools)
+            # ``harness_toolkit`` — the kernel's own ToolDefs (e.g. PTC's
+            # execute_code), matching the codex bridge name. NOT ``harness``:
+            # that name belongs to the host's toolkit MCP server, which
+            # arrives through ``session.mcp_servers`` below and would
+            # otherwise overwrite this entry (shadowing every kernel tool).
+            mcp["harness_toolkit"] = create_sdk_mcp_server(name="harness_toolkit", tools=sdk_tools)
 
         proxies: list[ClaudeMcpSourceProxy] = []
         for cfg in session.mcp_servers:
@@ -1839,10 +1847,11 @@ class ClaudeAgentRuntime:
         # without invoking our ``_permission_handler``. We therefore
         # only include:
         #
-        # * ``mcp__harness__<tool>`` — harness-bridged tools the
-        #   operator defined via ``AgentConfig.tools``. These are
-        #   harness infrastructure (we are the authority on them) and
-        #   are not subject to user approval.
+        # * ``mcp__harness_toolkit__<tool>`` — kernel-bridged tools the
+        #   operator defined via ``AgentConfig.tools`` (or the kernel
+        #   exposed, e.g. PTC's execute_code). These are harness
+        #   infrastructure (we are the authority on them) and are not
+        #   subject to user approval.
         # * ``Agent`` — sub-agent dispatch (callable_agents), same
         #   rationale.
         #
@@ -1856,7 +1865,7 @@ class ClaudeAgentRuntime:
         # for every MCP tool on Claude (no ``requires_action`` event
         # was emitted; the SDK auto-approved upstream of our callback).
         allowed: list[str] = [
-            f"mcp__harness__{t.name}" for t in self.toolkit.list_tools() if t.handler
+            f"mcp__harness_toolkit__{t.name}" for t in self.toolkit.list_tools() if t.handler
         ]
         if self.config.callable_agents:
             allowed.append("Agent")
@@ -2282,6 +2291,7 @@ class ClaudeAgentRuntime:
                 ExecContext(
                     workspace=self.workspace_root,
                     session_id=self._cur_session_id,
+                    user_id=self._cur_user_id,
                 ),
             )
             return {
@@ -2394,12 +2404,21 @@ class ClaudeAgentRuntime:
             hooks is not None and hooks._handlers.get("after_tool")
         ):
 
-            def post_tool_output(tool_name: str, value: Any) -> SyncHookJSONOutput:
+            def post_tool_output(
+                tool_name: str,
+                value: Any,
+                *,
+                mcp_response_uses_content_blocks: bool,
+            ) -> SyncHookJSONOutput:
                 if tool_name.startswith("mcp__"):
                     return SyncHookJSONOutput(
                         hookSpecificOutput={
                             "hookEventName": "PostToolUse",
-                            "updatedMCPToolOutput": value,
+                            "updatedMCPToolOutput": (
+                                _normalize_mcp_tool_output(value)
+                                if mcp_response_uses_content_blocks
+                                else value
+                            ),
                         }
                     )
                 return SyncHookJSONOutput(
@@ -2415,6 +2434,9 @@ class ClaudeAgentRuntime:
                 data: dict[str, Any] = dict(input_data)
                 tool_name = str(data.get("tool_name") or "")
                 tool_response = data.get("tool_response", "")
+                mcp_response_uses_content_blocks = tool_name.startswith("mcp__") and isinstance(
+                    tool_response, list
+                )
                 if hooks is not None and hooks._handlers.get("after_tool"):
                     _, _, hook_tool_response = unwrap_mcp_source_content_transport(tool_response)
                     await hooks.fire(
@@ -2516,7 +2538,11 @@ class ClaudeAgentRuntime:
                                 ensure_ascii=False,
                                 separators=(",", ":"),
                             )
-                        return post_tool_output(tool_name, visible)
+                        return post_tool_output(
+                            tool_name,
+                            visible,
+                            mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
+                        )
                 if not source_metadata_handled:
                     augmented_indexed_content = augment_indexed_document_evidence(
                         effective_tool_response,
@@ -2555,29 +2581,17 @@ class ClaudeAgentRuntime:
                     )
                 if compacted is None:
                     if source_content_transport_handled:
-                        return post_tool_output(tool_name, effective_tool_response)
+                        return post_tool_output(
+                            tool_name,
+                            effective_tool_response,
+                            mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
+                        )
                     return SyncHookJSONOutput()
-                visible_output: Any = compacted
-                if source_content_transport_handled and tool_name.startswith("mcp__"):
-                    # Claude's SDK-MCP control bridge gives PostToolUse a list
-                    # of MCP content blocks and requires replacements to keep
-                    # that outer shape.  Source adaptation works on the
-                    # restored structured payload, so serialize its model
-                    # projection back into one ordinary compatibility block.
-                    # Returning the mapping directly makes the CLI call
-                    # ``reduce`` on a non-list and converts a successful tool
-                    # call into a runtime failure.
-                    visible_output = [
-                        {
-                            "type": "text",
-                            "text": json.dumps(
-                                compacted,
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                            ),
-                        }
-                    ]
-                return post_tool_output(tool_name, visible_output)
+                return post_tool_output(
+                    tool_name,
+                    compacted,
+                    mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
+                )
 
             sdk_hooks["PostToolUse"] = [HookMatcher(hooks=[post_tool_use])]
 
@@ -2657,8 +2671,13 @@ class ClaudeAgentRuntime:
             return await self._await_host_decision(tool_name, input_data, context)
 
         simple_name = tool_name
-        if tool_name.startswith("mcp__harness__"):
-            simple_name = tool_name[len("mcp__harness__") :]
+        # Kernel-bridged ToolDefs surface as ``mcp__harness_toolkit__*``;
+        # the legacy ``mcp__harness__`` strip stays for host-toolkit names
+        # (their bare names are not in ``self.toolkit``, so it is inert).
+        for prefix in ("mcp__harness_toolkit__", "mcp__harness__"):
+            if tool_name.startswith(prefix):
+                simple_name = tool_name[len(prefix) :]
+                break
 
         tdef = self.toolkit.get(simple_name)
         if tdef:
@@ -3482,6 +3501,46 @@ def _stringify_tool_result_content(content: Any) -> str:
         return json.dumps(content, ensure_ascii=False, default=default)
     except (TypeError, ValueError):
         return str(content)
+
+
+def _is_mcp_content_block(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    block_type = value.get("type")
+    if block_type == "text":
+        return isinstance(value.get("text"), str)
+    if block_type in {"image", "audio"}:
+        return isinstance(value.get("data"), str) and isinstance(value.get("mimeType"), str)
+    if block_type == "resource":
+        resource = value.get("resource")
+        return (
+            isinstance(resource, Mapping)
+            and isinstance(resource.get("uri"), str)
+            and (isinstance(resource.get("text"), str) or isinstance(resource.get("blob"), str))
+        )
+    if block_type == "resource_link":
+        return isinstance(value.get("name"), str) and isinstance(value.get("uri"), str)
+    return False
+
+
+def _is_mcp_content_block_list(value: Any) -> bool:
+    return isinstance(value, list) and all(_is_mcp_content_block(block) for block in value)
+
+
+def _normalize_mcp_tool_output(value: Any) -> list[Any]:
+    """Keep PostToolUse replacements inside Claude's MCP content contract.
+
+    Claude Code accepts strings or content-block lists when it budgets a tool
+    result, but structured projections from hooks are often mappings, scalars,
+    or ordinary JSON lists.  Passing those values through makes the CLI call
+    ``reduce`` on a non-list or silently ignore JSON list items.  Preserve a
+    real MCP content list and serialize every other JSON value into one text
+    block.  An empty list is already a valid empty MCP result.
+    """
+
+    if _is_mcp_content_block_list(value):
+        return cast(list[Any], value)
+    return [{"type": "text", "text": _stringify_tool_result_content(value)}]
 
 
 def _iter_tool_response_mappings(value: Any) -> Iterator[Mapping[str, Any]]:

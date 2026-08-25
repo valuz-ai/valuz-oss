@@ -106,7 +106,12 @@ function _previewArtifact(name: string): ArtifactDescriptor {
 }
 
 function _previewContent(markdown: string): ArtifactContent {
-  return { kind: "text", encoding: "utf-8", content: markdown, truncated: false };
+  return {
+    kind: "text",
+    encoding: "utf-8",
+    content: markdown,
+    truncated: false,
+  };
 }
 
 export const DocumentDetailPanel = ({
@@ -137,8 +142,15 @@ export const DocumentDetailPanel = ({
   const isProcessing = doc.status === "indexing" || doc.status === "queued";
   const isFailed = doc.status === "failed";
   return (
-    <div className={cn("flex h-full flex-col")}>
-      <div className="flex-1 overflow-y-auto px-5 pb-5 pt-4">
+    <div className={cn("flex h-full min-h-0 flex-col")}>
+      {/* Defensive, and deliberately not the fix for anything: a ``flex-1``
+          item in a column flex defaults to ``min-height: auto`` and a scroll
+          container with no ``overscroll-behavior`` hands its overflow to
+          whatever ancestor can take it. Neither was what made the shell
+          scroll — that was an absolutely-positioned ``sr-only`` node escaping
+          its clip, fixed in ``MarkdownContent``. These stay so a future
+          scrollable ancestor cannot resurrect the symptom. */}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-5 pt-4">
         <div className="mb-3">
           <div className="flex items-start gap-1">
             <div className="min-w-0 flex-1 wrap-anywhere text-sm font-medium text-ink-heading">
@@ -330,7 +342,6 @@ export const DocumentDetailPanel = ({
           </div>
         ) : null}
       </div>
-
     </div>
   );
 };

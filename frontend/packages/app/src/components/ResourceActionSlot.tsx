@@ -65,6 +65,38 @@ export function ResourceDetailActionSlot({
 }
 
 /**
+ * Edition-owned read-only detail for a cloud catalog row. It renders inside
+ * the host page's existing detail column, never in the layout-global aside.
+ */
+export function ResourceCloudDetailSlot({
+  resourceType,
+  resource,
+}: ResourceActionSlotProps) {
+  return (
+    <SlotRenderer
+      name={`resource.${resourceType}.cloud-detail`}
+      context={{ resourceType, resource }}
+    />
+  );
+}
+
+/**
+ * Actions safe to render in a remote Agent's layout-global detail panel.
+ * Kept separate from ``resource.agent.actions`` because list activators may
+ * require the project outlet context, which the global panel does not own.
+ */
+export function RemoteAgentDetailActionSlot({
+  resource,
+}: Pick<ResourceActionSlotProps, "resource">) {
+  return (
+    <SlotRenderer
+      name="resource.agent.remote-detail.actions"
+      context={{ resourceType: "agent", resource }}
+    />
+  );
+}
+
+/**
  * Overlay contributions rendered inside the host-owned Copy dropdown.
  *
  * The native Copy handler always remains the first item. The host only

@@ -2201,6 +2201,8 @@ I18nKey = Literal[
     "settings.personalization.citationsLabel",
     "settings.personalization.conversationTitle",
     "settings.personalization.memoryTitle",
+    "settings.personalization.ptcDesc",
+    "settings.personalization.ptcLabel",
     "settings.personalization.saveFailed",
     "settings.personalization.taskCoverageDesc",
     "settings.personalization.taskCoverageLabel",

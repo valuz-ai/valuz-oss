@@ -183,6 +183,7 @@ def write_composition(
     workspace_root: str,
     skills_root: str | None,
     model_settings: ModelSettings | None,
+    kernel_toolkit: bool = False,
 ) -> str:
     """Write this session's composition file; returns the ``cordis.yml`` path.
 
@@ -197,6 +198,7 @@ def write_composition(
         workspace_root=workspace_root,
         skills_root=skills_root,
         model_settings=model_settings,
+        kernel_toolkit=kernel_toolkit,
     )
     path.write_text(json.dumps(rows, ensure_ascii=False, indent=1))
     path.chmod(0o600)
@@ -209,12 +211,29 @@ def cleanup_composition(config_path: str | None) -> None:
     shutil.rmtree(Path(config_path).parent, ignore_errors=True)
 
 
+# The kernel's ``/mcp/toolkit/{session_id}`` bridge — kernel-owned ToolDefs
+# (e.g. PTC's execute_code). The env name keeps the legacy codex spelling:
+# the sandbox provisioner already exports it (sandbox_seatbelt), so dsh
+# inherits the correct callback base in every deployment for free.
+KERNEL_TOOLKIT_BASE_URL_ENV = "CODEX_TOOLKIT_BASE_URL"
+KERNEL_TOOLKIT_BASE_URL_DEFAULT = "http://127.0.0.1:8000"
+KERNEL_TOOLKIT_SERVER_NAME = "harness_toolkit"
+
+
+def kernel_toolkit_url(session_id: str) -> str:
+    base = (
+        os.environ.get(KERNEL_TOOLKIT_BASE_URL_ENV, "").strip() or KERNEL_TOOLKIT_BASE_URL_DEFAULT
+    )
+    return f"{base.rstrip('/')}/mcp/toolkit/{session_id}"
+
+
 def build_composition_rows(
     session: Session,
     *,
     workspace_root: str,
     skills_root: str | None,
     model_settings: ModelSettings | None,
+    kernel_toolkit: bool = False,
 ) -> list[dict[str, Any]]:
     """The plugin tree for one kernel session (pure; unit-testable).
 
@@ -282,6 +301,20 @@ def build_composition_rows(
         {"id": "compaction-basic", "name": "@deepseek-ai/dsh-compaction-basic"},
     ]
     rows.extend(_mcp_rows(session))
+    if kernel_toolkit:
+        # Kernel ToolDefs (registered by the runtime in mcp_bridge) surface
+        # like any other MCP server: ``mcp__harness_toolkit__<tool>``.
+        rows.append(
+            {
+                "id": "kernel-toolkit",
+                "name": "@deepseek-ai/dsh-mcp-client",
+                "config": {
+                    "serverName": KERNEL_TOOLKIT_SERVER_NAME,
+                    "transport": "streamable-http",
+                    "url": kernel_toolkit_url(session.id),
+                },
+            }
+        )
     return rows
 
 

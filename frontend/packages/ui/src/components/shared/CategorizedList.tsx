@@ -8,7 +8,11 @@ export interface CategorizedListProps<T> {
   selectedId: string | null;
   getId: (item: T) => string;
   onSelect: (item: T) => void;
-  renderItem: (item: T, isSelected: boolean) => ReactNode;
+  renderItem: (
+    item: T,
+    isSelected: boolean,
+    category: ResourceCategory<T>,
+  ) => ReactNode;
   emptyState?: ReactNode;
   className?: string;
 }
@@ -29,20 +33,31 @@ export function bucketByCategory<T>(
 ): { category: ResourceCategory<T>; items: T[] }[] {
   const result: { category: ResourceCategory<T>; items: T[] }[] = [];
   const assigned = new Set<string>();
+  const claimed = new Set<string>();
   for (const cat of categories) {
-    const filtered = items.filter((item) => {
+    const matching = items.filter((item) => {
       if (assigned.has(getId(item))) return false;
       return cat.filter(item);
     });
-    if (cat.sort) filtered.sort(cat.sort);
+    for (const item of matching) claimed.add(getId(item));
+    if (cat.sort) matching.sort(cat.sort);
+    const seenGroupIds = new Set<string>();
+    const filtered = cat.groupBy
+      ? matching.filter((item) => {
+          const groupId = cat.groupBy!(item);
+          if (seenGroupIds.has(groupId)) return false;
+          seenGroupIds.add(groupId);
+          return true;
+        })
+      : matching;
     if (filtered.length > 0) {
       result.push({ category: cat, items: filtered });
       if (!cat.multiAssign) {
-        for (const item of filtered) assigned.add(getId(item));
+        for (const item of matching) assigned.add(getId(item));
       }
     }
   }
-  const unassigned = items.filter((item) => !assigned.has(getId(item)));
+  const unassigned = items.filter((item) => !claimed.has(getId(item)));
   if (unassigned.length > 0) {
     result.push({
       category: {
@@ -79,6 +94,10 @@ export function CategorizedList<T>({
     () => bucketByCategory(items, categories, getId),
     [items, categories, getId],
   );
+  const selectedItem = useMemo(
+    () => items.find((item) => getId(item) === selectedId),
+    [getId, items, selectedId],
+  );
 
   if (items.length === 0 && emptyState) return <>{emptyState}</>;
 
@@ -106,15 +125,26 @@ export function CategorizedList<T>({
           </button>
           {!collapsed[category.id] && (
             <div className="flex flex-col gap-3">
-              {bucketItems.map((item) => (
-                <div
-                  key={getId(item)}
-                  onClick={() => onSelect(item)}
-                  className="cursor-pointer"
-                >
-                  {renderItem(item, selectedId === getId(item))}
-                </div>
-              ))}
+              {bucketItems.map((item) => {
+                const sameLogicalGroup =
+                  !!selectedItem &&
+                  !!category.groupBy &&
+                  category.filter(selectedItem) &&
+                  category.groupBy(selectedItem) === category.groupBy(item);
+                return (
+                  <div
+                    key={getId(item)}
+                    onClick={() => onSelect(item)}
+                    className="cursor-pointer"
+                  >
+                    {renderItem(
+                      item,
+                      selectedId === getId(item) || sameLogicalGroup,
+                      category,
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

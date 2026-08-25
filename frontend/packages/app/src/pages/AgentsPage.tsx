@@ -55,7 +55,6 @@ import { ExportPackDialog } from "../components/ExportPackDialog";
 import {
   agentRowId,
   agentTargetKind,
-  isCloudOnlyAgent,
   compareAgentsWithValurionFirst,
   isRemoteAgentRow,
   runsOnAnotherTarget,
@@ -276,6 +275,21 @@ export const AgentsPage = () => {
     // contributes its library (same rule as the sidebar rails).
   }, [loadData, targetsRevision]);
 
+  useEffect(() => {
+    const refresh = (event: Event) => {
+      const resourceType = (event as CustomEvent<{ resourceType?: string }>)
+        .detail?.resourceType;
+      if (resourceType !== "agent") return;
+      if (activeRemote) {
+        setActiveSlug(activeRemote.slug);
+        setActiveRemote(null);
+      }
+      void loadData();
+    };
+    window.addEventListener("valuz:resource-refresh", refresh);
+    return () => window.removeEventListener("valuz:resource-refresh", refresh);
+  }, [activeRemote, loadData]);
+
   /* -- Layout: split panel -- */
 
   useEffect(() => {
@@ -387,7 +401,7 @@ export const AgentsPage = () => {
       <div className="h-full overflow-y-auto">
         {/* key by row: remount on agent change so per-agent dialog/draft
             state (delete confirm, edits, deploy) never leaks across agents. */}
-        {runsOnAnotherTarget(currentAgent) ? (
+        {isRemoteAgentRow(currentAgent) ? (
           <RemoteAgentDetail
             key={agentRowId(currentAgent)}
             agent={currentAgent}
@@ -773,14 +787,13 @@ export const AgentsPage = () => {
                       : null
                 }
                 onSelect={(a: Agent) => {
-                  if (runsOnAnotherTarget(a)) {
+                  if (isRemoteAgentRow(a)) {
                     // Selectable, but read-only: its instructions and
                     // resources live on that machine.
                     setActiveRemote(a);
                     setActiveProjectMemberKey(null);
                     return;
                   }
-                  if (isCloudOnlyAgent(a)) return;
                   if (selecting) {
                     if (!isSystemAgent(a)) toggleChecked(a.slug);
                     return;

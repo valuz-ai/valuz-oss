@@ -116,7 +116,6 @@ export interface ProjectLayoutBaseProps {
   topbarActions?: ReactNode;
   projectDialogExtraFields?: ReactNode;
   rightPanel?: ReactNode;
-  mascotSrc?: string | null;
 }
 
 // How many runs each project's own sidebar window asks for. The accordion
@@ -177,7 +176,6 @@ export function ProjectLayoutBase({
   topbarActions,
   projectDialogExtraFields,
   rightPanel: controlledRightPanel,
-  mascotSrc = null,
 }: ProjectLayoutBaseProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -1031,7 +1029,6 @@ export function ProjectLayoutBase({
             sidebarHeader={sidebarHeader}
             sidebarFooter={sidebarFooter}
             sidebarExtraItems={sidebarExtraItems}
-            mascotSrc={mascotSrc}
             LinkComponent={Link}
             primaryActionHref="/conversation/new"
             onPrimaryAction={refreshConnectorAlert}

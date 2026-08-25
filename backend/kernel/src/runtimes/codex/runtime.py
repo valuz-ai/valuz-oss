@@ -1015,6 +1015,7 @@ class CodexRuntime:
             ExecContext(
                 workspace=self.workspace_root,
                 session_id=session.id,
+                user_id=getattr(session, "user_id", "") or "",
             ),
         )
         self._registered_session_id = session.id
@@ -1523,6 +1524,14 @@ _HARNESS_PROVIDER_ENV_KEY = "HARNESS_CODEX_PROVIDER_API_KEY"
 # is the harness's "show reasoning summaries by default" stance.
 _CODEX_REASONING_SUMMARY_DEFAULT = "auto"
 _CODEX_MCP_SECRET_ENV_PREFIX = "VALUZ_CODEX_MCP_SECRET_"
+
+# Header names (lowercase) whose values are identifiers, not credentials.
+# They stay on the plain ``http_headers`` override: the session id
+# legitimately recurs elsewhere in the overrides (the kernel toolkit URL
+# embeds it), so externalizing it as a secret makes the residue guard
+# refuse to launch on that legal recurrence (field bug: PTC exposing
+# ``harness_toolkit`` made the kernel toolkit URL appear for the first time).
+_CODEX_NON_SECRET_HTTP_HEADERS = frozenset({"x-valuz-session-id"})
 _CODEX_OPENAI_API_KEY = "OPENAI_API_KEY"
 _CODEX_SHELL_APPLY_SECRET_FILTERS = "shell_environment_policy.ignore_default_excludes=false"
 _CODEX_SHELL_CORE_INHERIT = 'shell_environment_policy.inherit="core"'
@@ -1618,6 +1627,8 @@ def _externalize_mcp_secrets(
             continue
 
         for header_index, (key, value) in enumerate(cfg.headers.items()):
+            if key.lower() in _CODEX_NON_SECRET_HTTP_HEADERS:
+                continue  # identifier header — keep the plain http_headers line
             remove.add(f"mcp_servers.{cfg.name}.http_headers.{_toml_key(key)}={_toml_quote(value)}")
             env_name = f"{_CODEX_MCP_SECRET_ENV_PREFIX}{nonce}_{server_index}_{header_index}"
             secret_env[env_name] = value

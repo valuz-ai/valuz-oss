@@ -791,6 +791,19 @@ async def start_mcp_session_managers(app: FastAPI) -> None:
     )
 
     stack = AsyncExitStack()
+
+    from valuz_agent.infra.config import settings as _settings
+
+    if not _settings.is_http_kernel:
+        # The kernel's ``/mcp/toolkit/{session_id}`` bridge (codex's path to
+        # kernel-owned ToolDefs, e.g. PTC's execute_code) is mounted on the
+        # host app in in-process mode (api/app.py); its
+        # StreamableHTTPSessionManager must be running or every request dies
+        # with "Session terminated". The standalone kernel runs it inside its
+        # own lifespan instead.
+        from app.mcp_toolkit_router import mcp_router_lifespan
+
+        await stack.enter_async_context(mcp_router_lifespan())
     await stack.__aenter__()
     await stack.enter_async_context(docs_mcp_session_manager_run())
     await stack.enter_async_context(automations_mcp_session_manager_run())

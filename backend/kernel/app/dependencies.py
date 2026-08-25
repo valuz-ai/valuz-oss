@@ -23,6 +23,7 @@ from src.core.orchestrator import SessionOrchestrator
 from src.core.semantic_verifier import build_session_semantic_verifier
 from src.core.tracing import init_tracing, shutdown_tracing
 from src.core.types import Session
+from src.ptc.executor import register_execute_code_tool
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,10 @@ async def init_dependencies(config: AppConfig) -> None:
         _runtime_store = RuntimeStore(local, durable)
         store = _runtime_store
     _store = store
+    # PTC: install the ``execute_code`` implementation now that the store
+    # singleton exists. Sessions opt in by declaring the tool in their
+    # ``agent_config.tools``; everything else stays inert.
+    register_execute_code_tool(get_store)
     _orchestrator = SessionOrchestrator(
         store,
         max_warm_runtimes=_env_int("VALUZ_MAX_WARM_RUNTIMES"),

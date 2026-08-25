@@ -12,6 +12,9 @@ end-to-end with all the moving parts.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -249,6 +252,64 @@ class TestConnectorListSmoke:
         lib = ResourceLibrary()
         refs = await lib.list(USER_ID, "connector")
         assert isinstance(refs, list)
+
+    async def test_save_connector_preserves_cloud_snapshot_key(self, monkeypatch) -> None:
+        """A downloaded org connector must remain addressable by its cloud slug."""
+        from valuz_agent.modules.connectors.service import ConnectorService
+
+        created: dict[str, object] = {}
+
+        class _FakeConnectorService:
+            async def list_connectors(self, user_id: str):
+                assert user_id == USER_ID
+                return []
+
+            async def create_connector(self, user_id: str, **kwargs: object):
+                assert user_id == USER_ID
+                created.update(kwargs)
+                return SimpleNamespace(
+                    slug=kwargs.get("slug") or "generated-from-display-name",
+                    display_name=kwargs["display_name"],
+                )
+
+        @asynccontextmanager
+        async def _fake_unit_of_work():
+            yield object()
+
+        fake_service = _FakeConnectorService()
+        monkeypatch.setattr(
+            "valuz_agent.infra.db.async_unit_of_work",
+            _fake_unit_of_work,
+        )
+        monkeypatch.setattr(
+            ConnectorService,
+            "with_defaults",
+            lambda _db: fake_service,
+        )
+
+        snapshot = ResourceSnapshot(
+            kind="connector",
+            key="team-search",
+            name="Team Search",
+            data={
+                "display_name": "Team Search",
+                "transport": "http",
+                "url": "https://example.com/mcp",
+                # Organization resources may have originated from a builtin,
+                # but the downloaded user-owned copy must remain removable.
+                "connector_type": "builtin",
+            },
+        )
+
+        ref = await ResourceLibrary().save(USER_ID, snapshot)
+
+        assert created["slug"] == "team-search"
+        assert created["connector_type"] == "custom"
+        assert ref == ResourceRef(
+            kind="connector",
+            key="team-search",
+            name="Team Search",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -824,9 +885,7 @@ def _patch_playbook_service(monkeypatch, service_cls, project=None):
             return project
 
     monkeypatch.setattr("valuz_agent.infra.db.async_unit_of_work", _fake_uow)
-    monkeypatch.setattr(
-        "valuz_agent.modules.playbooks.service.PlaybookService", service_cls
-    )
+    monkeypatch.setattr("valuz_agent.modules.playbooks.service.PlaybookService", service_cls)
     monkeypatch.setattr("valuz_agent.facade.projects.ProjectLibrary", _FakeProjectLibrary)
 
 

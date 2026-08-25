@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 
 from src.core.types import McpHttpServerConfig, Session
+
+logger = logging.getLogger(__name__)
 
 _MARKER_PREFIX = "__runtime_context:"
 _MARKER_SUFFIX = "__"
@@ -56,7 +59,26 @@ def materialize_runtime_context(session: Session, context: dict[str, str] | None
         for value in server.headers.values()
     ]
     if provider_marker is None and not any(mcp_markers):
+        # Nothing to fill. Said out loud because the silent version of this is
+        # indistinguishable from a successful fill everywhere downstream: the
+        # session ships as-is, and if it DID hold a marker the placeholder
+        # travels verbatim into every MCP header — 403 at the host gate, the
+        # runtime parks those servers, and the model reports its tools
+        # missing, three layers from here.
+        logger.info(
+            "runtime-context: session %s has no markers to fill "
+            "(%d mcp server(s), %d over http) — session passes through",
+            getattr(session, "id", "?"),
+            len(tuple(servers)),
+            sum(1 for x in servers if isinstance(x, McpHttpServerConfig)),
+        )
         return session
+    logger.info(
+        "runtime-context: session %s filling marker(s) %s from context keys %s",
+        getattr(session, "id", "?"),
+        sorted({m for m in ([provider_marker] if provider_marker else []) + mcp_markers if m}),
+        sorted(context or {}) or "nothing",
+    )
     values = context or {}
     runtime_provider = (
         dataclasses.replace(provider, api_key=_materialize(provider.api_key, values))

@@ -495,6 +495,32 @@ export const ConnectorsPage = () => {
 
   // Reconnect an already-added connector that isn't currently connected.
   // Test first — the probe now self-heals an expired OAuth token server-side
+  // Disconnecting a built-in means switching it off: the backend refuses to
+  // delete one, and the credential is what the owner wants gone anyway. Giving
+  // them no disconnect at all was the trap — a built-in whose grant had died
+  // still displayed "connected", the one state that hides the Connect button.
+  const handleDisableBuiltin = useCallback(
+    (connector: ConnectorItem) => {
+      setBusyKey(`installed:${connector.id}`);
+      invalidateConnectorTools(connector.id);
+      void (async () => {
+        try {
+          await connectorsApi.disable(connector.id);
+          await loadAll();
+        } catch (err) {
+          toast.error(
+            err instanceof Error
+              ? err.message
+              : _t("settings.connectors.operationFailed"),
+          );
+        } finally {
+          setBusyKey(null);
+        }
+      })();
+    },
+    [loadAll],
+  );
+
   // (refresh + retry). Only a still-failing OAuth connector escalates to full
   // re-authorization (browser re-consent); see ``connector-reconnect``.
   const handleReconnectInstalled = useCallback(
@@ -568,7 +594,9 @@ export const ConnectorsPage = () => {
           busy={busyKey === `installed:${c.id}`}
           onConnect={() => handleReconnectInstalled(c)}
           systemManaged={!canDeleteConnector(c)}
-          onDisconnect={() => canDeleteConnector(c) && setDeleteTarget(c)}
+          onDisconnect={() =>
+            canDeleteConnector(c) ? setDeleteTarget(c) : handleDisableBuiltin(c)
+          }
           headerActions={
             <ResourceDetailActionSlot
               resourceType="connector"

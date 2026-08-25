@@ -19,6 +19,7 @@ from valuz_agent.modules.settings.model_options import (
 from valuz_agent.modules.settings.preferences import (
     detect_system_timezone,
     get_conversation_citations_enabled,
+    get_ptc_enabled,
     get_conversation_task_coverage_enabled,
     get_conversation_verification_enabled,
     get_default_effort,
@@ -30,6 +31,7 @@ from valuz_agent.modules.settings.preferences import (
     get_font_size,
     get_theme,
     set_conversation_citations_enabled,
+    set_ptc_enabled,
     set_conversation_task_coverage_enabled,
     set_conversation_verification_enabled,
     set_default_effort,
@@ -65,6 +67,7 @@ class PreferencesResponse(BaseModel):
     conversation_citations_enabled: bool
     conversation_verification_enabled: bool
     conversation_task_coverage_enabled: bool
+    ptc_enabled: bool
 
 
 class PreferencesPatchPayload(BaseModel):
@@ -75,6 +78,7 @@ class PreferencesPatchPayload(BaseModel):
     conversation_citations_enabled: bool | None = None
     conversation_verification_enabled: bool | None = None
     conversation_task_coverage_enabled: bool | None = None
+    ptc_enabled: bool | None = None
 
 
 async def _read_preferences(db: AsyncSession, user_id: str) -> PreferencesResponse:
@@ -93,6 +97,7 @@ async def _read_preferences(db: AsyncSession, user_id: str) -> PreferencesRespon
         conversation_task_coverage_enabled=await get_conversation_task_coverage_enabled(
             db, user_id=user_id
         ),
+        ptc_enabled=await get_ptc_enabled(db, user_id=user_id),
     )
 
 
@@ -144,6 +149,8 @@ async def patch_preferences(
                     payload.conversation_task_coverage_enabled,
                     user_id=user_id,
                 )
+            if payload.ptc_enabled is not None:
+                await set_ptc_enabled(db, payload.ptc_enabled, user_id=user_id)
             return await _read_preferences(db, user_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

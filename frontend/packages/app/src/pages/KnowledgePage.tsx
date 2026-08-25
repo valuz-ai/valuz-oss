@@ -689,8 +689,29 @@ export const KnowledgePage = ({
         const d = await filesApi.resolveOne(`valuz-file://${sourcePath}`, {
           baseRef: activeKb ? { kbId: activeKb.id } : {},
         });
+        // Say which failure it is BEFORE trying to act on the descriptor. A
+        // resolve can succeed as a call and still describe a file that is not
+        // there — ``kind`` and ``absPath`` are filled in either way, so acting
+        // on those alone hands a dead path to the OS and gets back silence.
+        // A knowledge base whose folder was cleaned out (a library under
+        // ``/tmp``, a moved directory) is exactly that shape, and "the button
+        // does nothing" is the worst way to learn it.
+        if (d?.error === "not_found" || d?.exists === false) {
+          toast.error(
+            t("knowledge.statusSourceMissing" as Parameters<typeof t>[0]),
+          );
+          return;
+        }
+        if (d?.error) {
+          toast.error(t("common.failed" as Parameters<typeof t>[0]));
+          return;
+        }
         if (d?.kind === "local" && d.absPath && platform.isElectron) {
-          await platform.revealInFinder(d.absPath);
+          // ``revealInFinder`` hands back whatever the OS complained about —
+          // no association for the extension, quarantine, a path that vanished
+          // between the stat above and this call. Empty means it opened.
+          const failure = await platform.revealInFinder(d.absPath);
+          if (failure) toast.error(failure);
           return;
         }
         if (d?.url) {

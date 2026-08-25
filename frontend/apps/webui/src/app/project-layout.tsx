@@ -5,7 +5,6 @@ export function WebProjectLayout() {
     <ProjectLayoutBase
       logoSrc="/logo.png"
       directoryFieldMode="picker"
-      mascotSrc={null}
     />
   );
 }
