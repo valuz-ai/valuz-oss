@@ -2259,6 +2259,17 @@ export const Composer = ({
                               typeof t
                             >[0],
                           );
+                  // When an agent is selected use its own host-computed model
+                  // label (correct for project members, whose model id may not
+                  // resolve against the composer's own provider list — that path
+                  // falls back to a placeholder). Default/agentless uses the
+                  // composer's resolved model.
+                  const triggerModelLabel =
+                    selectedAgent?.modelLabel ??
+                    // Hide the "Model" placeholder when no model channel is
+                    // configured — ``selectedModelLabel`` falls back to that
+                    // literal only when ``providers`` is empty.
+                    (providers.length > 0 ? selectedModelLabel : null);
                   return (
                     <>
                       <button
@@ -2287,15 +2298,19 @@ export const Composer = ({
                               {t("task.runLead" as Parameters<typeof t>[0])}
                             </span>
                           )}
-                          {/* Agent name only. The bound model used to ride
-                              along as a muted suffix, but it is the widest,
-                              least-acted-on part of this row — in a narrow
-                              card it pushed the send button out of the
-                              composer. The model stays visible (and
-                              changeable) on the dropdown rows. */}
                           <span className="max-w-[200px] truncate text-ink-heading leading-none">
                             {triggerLabel}
                           </span>
+                          {/* The bound model as a muted hint, so the button
+                              reads e.g. "行业分析师 · Sonnet 4.6". It is the
+                              widest, least-acted-on part of the row, so a
+                              narrow card drops it first — the model is still
+                              shown, and picked, on the dropdown rows. */}
+                          {triggerModelLabel && (
+                            <span className="hidden max-w-[120px] truncate leading-none text-ink-muted @[500px]/composer:inline">
+                              {triggerModelLabel}
+                            </span>
+                          )}
                           {canOpen && (
                             <ChevronDown className="h-3 w-3 shrink-0" />
                           )}
