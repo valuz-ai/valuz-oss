@@ -54,12 +54,34 @@ def test_tokens_are_unique_per_execution():
 # -- interpreter probe ------------------------------------------------------
 
 
-def test_probe_missing_python3(monkeypatch):
+def test_missing_python3_falls_back_to_own_interpreter(monkeypatch):
+    import sys
+
     interpreter.reset_probe_cache_for_tests()
     monkeypatch.setattr(interpreter.shutil, "which", lambda _name: None)
     monkeypatch.delenv(interpreter.PTC_PYTHON_ENV, raising=False)
-    assert interpreter.python3_path() is None
-    assert "not found" in (interpreter.python3_unavailable_reason() or "")
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    assert interpreter.interpreter_argv() == (sys.executable,)
+    assert interpreter.interpreter_unavailable_reason() is None
+    interpreter.reset_probe_cache_for_tests()
+
+
+def test_frozen_fallback_uses_ptc_exec(monkeypatch):
+    import sys
+
+    interpreter.reset_probe_cache_for_tests()
+    monkeypatch.setattr(interpreter.shutil, "which", lambda _name: None)
+    monkeypatch.delenv(interpreter.PTC_PYTHON_ENV, raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert interpreter.interpreter_argv() == (sys.executable, "--ptc-exec")
+    interpreter.reset_probe_cache_for_tests()
+
+
+def test_broken_override_fails_loudly_without_fallback(monkeypatch):
+    interpreter.reset_probe_cache_for_tests()
+    monkeypatch.setenv(interpreter.PTC_PYTHON_ENV, "/no/such/python")
+    assert interpreter.interpreter_argv() is None
+    assert "is not executable" in (interpreter.interpreter_unavailable_reason() or "")
     interpreter.reset_probe_cache_for_tests()
 
 
@@ -73,16 +95,16 @@ def test_probe_result_is_cached(monkeypatch):
         return real_probe()
 
     monkeypatch.setattr(interpreter, "_probe", _counting_probe)
-    interpreter.python3_path()
-    interpreter.python3_unavailable_reason()
-    interpreter.python3_path()
+    interpreter.interpreter_argv()
+    interpreter.interpreter_unavailable_reason()
+    interpreter.interpreter_argv()
     assert calls["n"] == 1
     interpreter.reset_probe_cache_for_tests()
 
 
 def test_probe_finds_a_real_interpreter():
     interpreter.reset_probe_cache_for_tests()
-    # The dev/CI host running this suite has a python3 (we are python).
-    assert interpreter.python3_unavailable_reason() is None
-    assert interpreter.python3_path()
+    # Some interpreter always resolves (host python3 or our own runtime).
+    assert interpreter.interpreter_unavailable_reason() is None
+    assert interpreter.interpreter_argv()
     interpreter.reset_probe_cache_for_tests()

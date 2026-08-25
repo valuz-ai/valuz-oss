@@ -9,6 +9,7 @@ value back into the program → only stdout returns on the ToolResult.
 # ruff: noqa: I001 — kernel bootstrap side-effect import must precede src.*/app.*
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from pathlib import Path
@@ -232,11 +233,22 @@ async def test_session_without_ptc_servers_is_refused(execute, workspace):
     assert "no PTC-enabled data servers" in result.content
 
 
-async def test_missing_python3_is_a_clean_error(execute, monkeypatch):
-    monkeypatch.setattr(executor_mod, "python3_unavailable_reason", lambda: "python3 not found")
+async def test_unavailable_interpreter_is_a_clean_error(execute, monkeypatch):
+    monkeypatch.setattr(
+        executor_mod, "interpreter_unavailable_reason", lambda: "override is broken"
+    )
     result = await execute("print('hi')\n")
     assert result.is_error is True
-    assert "python3 not found" in result.content
+    assert "override is broken" in result.content
+
+
+async def test_multi_element_interpreter_argv_spawns(execute, monkeypatch):
+    # The frozen fallback is an argv PREFIX (``valuz-server --ptc-exec``);
+    # prove the spawn path handles more than a bare interpreter path.
+    monkeypatch.setattr(executor_mod, "interpreter_argv", lambda: (sys.executable, "-B"))
+    result = await execute("print('prefix-ok')\n")
+    assert result.is_error is False, result.content
+    assert "prefix-ok" in result.content
 
 
 def test_eligible_servers_filters_stdio_and_unlisted(workspace):

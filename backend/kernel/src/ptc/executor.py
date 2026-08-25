@@ -31,7 +31,7 @@ from src.ptc.execution_registry import (
     register_execution,
     revoke_execution,
 )
-from src.ptc.interpreter import python3_path, python3_unavailable_reason
+from src.ptc.interpreter import interpreter_argv, interpreter_unavailable_reason
 from src.ptc.upstream import UpstreamPool
 
 if TYPE_CHECKING:
@@ -252,7 +252,7 @@ def build_execute_code_tool(store_getter: Callable[[], StorePort]) -> ToolDef:
         if not isinstance(code, str) or not code.strip():
             return ToolResult(content="ERROR\n`code` must be a non-empty string", is_error=True)
 
-        reason = python3_unavailable_reason()
+        reason = interpreter_unavailable_reason()
         if reason is not None:
             return ToolResult(content=f"ERROR\nPTC execution unavailable: {reason}", is_error=True)
 
@@ -297,10 +297,10 @@ def build_execute_code_tool(store_getter: Callable[[], StorePort]) -> ToolDef:
         if os.name == "posix":
             spawn_kwargs["start_new_session"] = True
 
-        interpreter = python3_path()
+        interpreter = interpreter_argv()
         assert interpreter is not None  # guarded by the probe above
         proc = await asyncio.create_subprocess_exec(
-            interpreter,
+            *interpreter,
             str(code_path),
             cwd=str(cwd),
             env=env,

@@ -62,7 +62,7 @@ have a natural seat.
 | Execution tokens + trace | `backend/kernel/src/ptc/execution_registry.py` | One-shot token per run; per-execution server allowlist, sub-call budget, kernel-observed trace entries |
 | Upstream pool | `backend/kernel/src/ptc/upstream.py` | One warmed MCP session per (execution, server); worker-task-owned (anyio transports are task-affine); HTTP/SSE only |
 | Result unwrap + fingerprint | `backend/kernel/src/ptc/results.py` | `structuredContent`/text-block → canonical JSON; sha256; captures the `dev.valuz/source-metadata` descriptor |
-| Interpreter probe | `backend/kernel/src/ptc/interpreter.py` | Finds a WORKING `python3` (executes it once — detects the macOS CLT stub); cached per process; `VALUZ_PTC_PYTHON` override |
+| Interpreter resolution | `backend/kernel/src/ptc/interpreter.py` | Ladder: `VALUZ_PTC_PYTHON` (probed, fails loudly) → host `python3` (probed — detects the macOS CLT stub and the Windows Store alias) → the backend's own runtime (`sys.executable`; frozen: `valuz-server --ptc-exec`, see `valuz_agent/ptc_exec.py`). PTC is always launchable on standard builds |
 | Loopback route | `backend/kernel/app/ptc_router.py` | `POST {KERNEL_API_PREFIX}/v1/ptc/exec/{token}/call`; 404/403/429/502 error envelopes; bearer-middleware exempt (the token IS the credential) |
 | Codegen | `backend/valuz_agent/modules/ptc/tool_generator.py` | MCP schemas → typed wrappers (wire/py dual-name binding, enum→`Literal`, fact suffixes, schema-true examples), per-tool docs, SKILL.md; emission pinned by a golden |
 | Workspace client | `backend/valuz_agent/modules/ptc/client_runtime.py` | Stdlib-only (urllib) POST client, composed verbatim + injection-safe JSON epilogue; typed `ToolCallError` |
@@ -118,7 +118,7 @@ Identifier headers are therefore allowlisted as plain `http_headers`
 |---|---|---|
 | `VALUZ_PTC_ENDPOINT` | executor | Base of the PTC route incl. prefix; default `http://127.0.0.1:8000/kernel/v1/ptc` (in-process desktop) |
 | `VALUZ_PTC_CALL_URL` | workspace client (subprocess) | The complete one-shot call URL; **absent outside `execute_code`**, which is what makes bare `python x.py` invocations fail with a clear message |
-| `VALUZ_PTC_PYTHON` | interpreter probe | Explicit interpreter override (e.g. a venv carrying pandas) |
+| `VALUZ_PTC_PYTHON` | interpreter resolution | Explicit interpreter override (e.g. a venv carrying pandas); a broken value fails loudly instead of falling back |
 | `VALUZ_PTC_TIMEOUT_SECONDS` | executor | Wall-clock budget per run (default 180) |
 | `CODEX_TOOLKIT_BASE_URL` | codex + dsh compositions | Kernel toolkit bridge base (legacy spelling; the sandbox provisioner exports it) |
 
@@ -195,7 +195,7 @@ salt so warm skill dirs resync.
 
 ## 6. Testing
 
-`backend/tests/ptc/` (63 tests at time of writing): codegen incl. the
+`backend/tests/ptc/` (70 tests at time of writing): codegen incl. the
 emission golden; the stdlib client against a real local HTTP server;
 registry/probe units; router envelopes + trace; an end-to-end executor
 test driving a **real subprocess → urllib → uvicorn-served router →
@@ -211,9 +211,13 @@ session-id residue, dsh composition row + bridge registration, host mount).
   restarted since enablement; a **new** conversation (warm CLI runtimes
   build their tool surface at spawn); the session actually carries a
   qualifying data connector; `metadata["ptc"]` present on the session row.
-- **`ERROR PTC execution unavailable: python3 …`** — the host interpreter
-  probe failed (macOS CLT stub, broken PATH); install python3 or set
-  `VALUZ_PTC_PYTHON`, then restart.
+- **`ERROR PTC execution unavailable: …`** — only reachable when
+  `VALUZ_PTC_PYTHON` is set to a broken interpreter (the resolution ladder
+  otherwise always lands on the backend's own runtime — frozen builds
+  self-exec via `valuz-server --ptc-exec`). Fix or unset the override,
+  then restart. Note the fallback runtime carries the stdlib plus the
+  backend's bundled deps only; programs that want pandas/numpy need a host
+  python3 or an explicit override pointing at a venv that has them.
 - **Skill silently absent** — discovery failed (expired connector auth) or
   the servers expose no `readOnlyHint: true` tools; both log under
   `valuz_agent.modules.ptc` and fail closed.
@@ -231,5 +235,5 @@ session-id residue, dsh composition row + bridge registration, host mount).
   `execute_code` result as a multi-result transport envelope so each
   runtime's existing unwrap → `EvidenceRegistry.register_tool_result`
   path registers them ("one run = N virtual MCP results").
-- Live per-sub-call UI events; a Settings interpreter picker; PTC
-  availability surfaced in Settings (python3 probe result).
+- Live per-sub-call UI events; a Settings interpreter picker (pandas-capable
+  venvs without env-var surgery).
