@@ -76,3 +76,36 @@ def test_an_unbound_contributor_is_named_too(caplog):
 
     assert "no contributor supplied a value" in caplog.text
     assert "valuz_docs" in caplog.text
+
+
+class _NoContributorSession:
+    mcp_servers = ()
+
+
+async def test_an_unbound_contributor_is_reported(caplog, monkeypatch):
+    """The one fact that identifies this failure, and it is not in the session.
+
+    Two earlier attempts hung the evidence off the session row and saw
+    nothing: the built-in MCP servers carrying the markers live only in the
+    kernel's copy, so the durable row this code can reach has neither.
+    """
+    from valuz_agent.adapters import kernel_client
+    from valuz_agent.ports.runtime_turn_context import NoopRuntimeTurnContextContributor
+
+    monkeypatch.setattr(
+        kernel_client,
+        "get_runtime_turn_context_contributor",
+        lambda: NoopRuntimeTurnContextContributor(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "valuz_agent.ports.runtime_turn_context.get_runtime_turn_context_contributor",
+        lambda: NoopRuntimeTurnContextContributor(),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = await kernel_client._build_runtime_turn_context("u1", "s1")
+
+    assert result is None
+    assert "no runtime-context contributor is bound" in caplog.text
+    assert "s1" in caplog.text
