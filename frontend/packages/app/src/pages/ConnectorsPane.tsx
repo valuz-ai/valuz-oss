@@ -352,6 +352,33 @@ export function ConnectorsPane({
     [runConnect],
   );
 
+  // Disconnecting a built-in means switching it off: the backend refuses to
+  // delete one, and the credential is what the owner actually wants gone.
+  // Leaving them no disconnect at all was the trap — a built-in whose grant
+  // had died still displayed "connected", which is the one state that hides
+  // the Connect button.
+  const handleDisableBuiltin = useCallback(
+    (connector: ConnectorItem) => {
+      setBusyKey(`installed:${connector.id}`);
+      invalidateConnectorTools(connector.id);
+      void (async () => {
+        try {
+          await connectorsApi.disable(connector.id);
+          await loadAll();
+        } catch (err) {
+          toast.error(
+            err instanceof Error
+              ? err.message
+              : _t("settings.connectors.operationFailed"),
+          );
+        } finally {
+          setBusyKey(null);
+        }
+      })();
+    },
+    [loadAll],
+  );
+
   // Reconnect an installed connector: test first (server self-heals an
   // expired OAuth token), escalate to re-authorization only for OAuth.
   const handleReconnect = useCallback(
@@ -538,8 +565,11 @@ export function ConnectorsPane({
             systemManaged={!canDeleteConnector(selectedInstalled)}
             onConnect={() => handleReconnect(selectedInstalled)}
             onDisconnect={() => {
-              if (canDeleteConnector(selectedInstalled))
+              if (canDeleteConnector(selectedInstalled)) {
                 setDeleteTarget(selectedInstalled);
+              } else {
+                handleDisableBuiltin(selectedInstalled);
+              }
             }}
           />
         ) : selectedCatalog ? (
