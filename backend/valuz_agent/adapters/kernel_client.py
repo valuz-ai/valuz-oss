@@ -1390,11 +1390,74 @@ async def _build_runtime_turn_context(user_id: str, session_id: str) -> dict[str
         return None
     session = await _data_plane().get_session(user_id, session_id)
     metadata = getattr(session, "metadata", {}) if session is not None else {}
-    return await contributor.build(
+    context = await contributor.build(
         user_id=user_id,
         session_id=session_id,
         metadata=metadata if isinstance(metadata, dict) else {},
     )
+    _warn_on_unfillable_markers(session_id, session, context)
+    return context
+
+
+def _marker_keys_in_session(session: object) -> dict[str, list[str]]:
+    """Marker key -> the MCP server names whose headers still carry it.
+
+    Reads the marker syntax off the kernel so the two can never disagree about
+    what a marker looks like. A pin that predates it simply reports nothing.
+    """
+    try:
+        from src.core.runtime_context import _marker_key  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 — older pin, or kernel not importable here
+        return {}
+    found: dict[str, list[str]] = {}
+    for server in getattr(session, "mcp_servers", ()) or ():
+        headers = getattr(server, "headers", None)
+        if not isinstance(headers, dict):
+            continue
+        for value in headers.values():
+            key = _marker_key(value)
+            if key:
+                found.setdefault(key, []).append(getattr(server, "name", "?"))
+    return found
+
+
+def _warn_on_unfillable_markers(
+    session_id: str, session: object, context: dict[str, str] | None
+) -> None:
+    """Say out loud when a turn is about to ship an unfilled placeholder.
+
+    The runtime credential is deliberately NOT persisted: the session row
+    stores a ``__runtime_context:…__`` marker and the kernel swaps it for a
+    freshly issued capability each turn. When that swap does not happen the
+    marker travels verbatim, every built-in MCP answers 403, the runtime parks
+    those servers, and the model reports "No such tool available" — three
+    layers away from the cause, with nothing anywhere naming the marker.
+
+    This is the sentence that was missing. It costs one dict walk per turn and
+    it names the marker, the servers carrying it, and whether the context that
+    should fill it arrived.
+    """
+    markers = _marker_keys_in_session(session)
+    if not markers:
+        return
+    supplied = set(context or {})
+    missing = {key: names for key, names in markers.items() if key not in supplied}
+    if missing:
+        logger.error(
+            "session %s: runtime-context marker(s) %s have no value this turn "
+            "(context supplied: %s) — the built-in MCP servers %s will present "
+            "an unfilled placeholder and be refused",
+            session_id,
+            sorted(missing),
+            sorted(supplied) or "nothing",
+            sorted({name for names in missing.values() for name in names}),
+        )
+    else:
+        logger.debug(
+            "session %s: runtime-context marker(s) %s will be filled",
+            session_id,
+            sorted(markers),
+        )
 
 
 async def run_ephemeral_review_in_scope(
