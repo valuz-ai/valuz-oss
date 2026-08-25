@@ -59,3 +59,20 @@ def test_a_real_credential_is_not_mistaken_for_a_marker(caplog):
         _warn_on_unfillable_markers("s1", session, None)
 
     assert caplog.text == ""
+
+
+def test_an_unbound_contributor_is_named_too(caplog):
+    """The most informative case used to be the one the check could not see.
+
+    An unbound contributor returns ``None`` before the check ran, so a
+    deployment whose sessions carry markers sent every one of them out
+    unfilled in silence — which is exactly what happened.
+    """
+    marker = runtime_context_marker("commercial.execution")
+    session = _Session([_docs_server(marker)])
+
+    with caplog.at_level(logging.ERROR):
+        _warn_on_unfillable_markers("s1", session, None)
+
+    assert "no contributor supplied a value" in caplog.text
+    assert "valuz_docs" in caplog.text
