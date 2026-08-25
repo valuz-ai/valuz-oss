@@ -28,6 +28,8 @@ import {
   ConnectorConnectDialog,
   type ConnectorAddMode,
 } from "@valuz/app/components";
+import { ResourceActionSlot } from "../components/ResourceActionSlot";
+import { isCloudOnlyResource } from "./agent-list-state";
 import { reauthorizePayload, shouldReauthorize } from "./connector-reconnect";
 
 /** Add mode driven from the shared header dropdown (null = closed). */
@@ -111,7 +113,10 @@ function buildConnectorCategories(
       id: "installed",
       label: t("connector.groupInstalled" as Parameters<typeof t>[0]),
       order: 0,
-      filter: (e) => e.kind === "installed",
+      // Organization catalog placeholders use the installed entry shape so
+      // they can share the same row/detail renderer, but they are not local.
+      // Keep them out of "Added" until the user actually downloads a copy.
+      filter: (e) => e.kind === "installed" && !isCloudOnlyResource(e),
     },
     {
       id: "available",
@@ -181,6 +186,16 @@ export function ConnectorsPane({
     void loadAll();
   }, [loadAll]);
 
+  useEffect(() => {
+    const refresh = (event: Event) => {
+      const resourceType = (event as CustomEvent<{ resourceType?: string }>)
+        .detail?.resourceType;
+      if (resourceType === "connector") void loadAll();
+    };
+    window.addEventListener("valuz:resource-refresh", refresh);
+    return () => window.removeEventListener("valuz:resource-refresh", refresh);
+  }, [loadAll]);
+
   const iconBySlug = useMemo(() => {
     const m = new Map<string, string | null>();
     for (const c of catalog) m.set(c.connector.slug, c.iconUrl);
@@ -223,12 +238,15 @@ export function ConnectorsPane({
     const assigned = new Set<string>();
     for (const cat of categories) {
       const matching = unifiedList.filter(
-        (e) => !assigned.has(entryKey(e)) && cat.filter(e),
+        (e) =>
+          !isCloudOnlyResource(e) &&
+          !assigned.has(entryKey(e)) &&
+          cat.filter(e),
       );
       if (matching.length > 0) return matching[0];
       for (const e of unifiedList) if (cat.filter(e)) assigned.add(entryKey(e));
     }
-    return unifiedList[0] ?? null;
+    return unifiedList.find((entry) => !isCloudOnlyResource(entry)) ?? null;
   }, [unifiedList, categories]);
 
   const effectiveKey =
@@ -244,6 +262,7 @@ export function ConnectorsPane({
   );
   const selectedInstalled =
     selectedEntry?.kind === "installed" ? selectedEntry.item : null;
+  const selectedInstalledCloudOnly = isCloudOnlyResource(selectedEntry);
   const selectedCatalog =
     selectedEntry?.kind === "available" ? selectedEntry.item : null;
 
@@ -469,6 +488,7 @@ export function ConnectorsPane({
               renderItem={(entry: ConnectorListEntry, isSelected: boolean) => {
                 if (entry.kind === "installed") {
                   const c = entry.item;
+                  const cloudOnly = isCloudOnlyResource(entry);
                   return (
                     <ConnectorListItem
                       name={c.display_name}
@@ -482,19 +502,27 @@ export function ConnectorsPane({
                       active={isSelected}
                       onClick={() => setActiveKey(`installed:${c.id}`)}
                       actions={
-                        canDeleteConnector(c) && c.status !== "connected" ? (
-                          <button
-                            type="button"
-                            aria-label={t("common.delete")}
-                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-ink-meta transition-colors hover:bg-error-light hover:text-error-text"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setDeleteTarget(c);
-                            }}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        ) : undefined
+                        <>
+                          {!cloudOnly &&
+                            canDeleteConnector(c) &&
+                            c.status !== "connected" && (
+                              <button
+                                type="button"
+                                aria-label={t("common.delete")}
+                                className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-ink-meta transition-colors hover:bg-error-light hover:text-error-text"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDeleteTarget(c);
+                                }}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          <ResourceActionSlot
+                            resourceType="connector"
+                            resource={c as unknown as Record<string, unknown>}
+                          />
+                        </>
                       }
                     />
                   );
@@ -508,19 +536,27 @@ export function ConnectorsPane({
                     active={isSelected}
                     onClick={() => setActiveKey(catalogKey)}
                     actions={
-                      <UiButton
-                        type="button"
-                        variant="ghost"
-                        size="xs"
-                        loading={busyKey === catalogKey}
-                        className="text-brand hover:bg-brand-light/60 hover:text-brand"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleConnectCatalog(cf.connector);
-                        }}
-                      >
-                        {t("connector.connect")}
-                      </UiButton>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <UiButton
+                          type="button"
+                          variant="ghost"
+                          size="xs"
+                          loading={busyKey === catalogKey}
+                          className="text-brand hover:bg-brand-light/60 hover:text-brand"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleConnectCatalog(cf.connector);
+                          }}
+                        >
+                          {t("connector.connect")}
+                        </UiButton>
+                        <ResourceActionSlot
+                          resourceType="connector"
+                          resource={
+                            cf.connector as unknown as Record<string, unknown>
+                          }
+                        />
+                      </div>
                     }
                   />
                 );
@@ -547,7 +583,23 @@ export function ConnectorsPane({
       </div>
 
       <div className="min-w-0 flex-1">
-        {selectedInstalled ? (
+        {selectedInstalled && selectedInstalledCloudOnly ? (
+          <ConnectorDetailPanel
+            key={`organization:${selectedInstalled.id}`}
+            name={selectedInstalled.display_name}
+            iconUrl={iconBySlug.get(selectedInstalled.slug) ?? null}
+            description={selectedInstalled.description}
+            connected={false}
+            headerActions={
+              <ResourceActionSlot
+                resourceType="connector"
+                resource={
+                  selectedInstalled as unknown as Record<string, unknown>
+                }
+              />
+            }
+          />
+        ) : selectedInstalled ? (
           <ConnectorDetailPanel
             key={`installed:${selectedInstalled.id}`}
             name={selectedInstalled.display_name}
