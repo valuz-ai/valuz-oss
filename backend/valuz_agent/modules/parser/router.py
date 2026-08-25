@@ -49,19 +49,31 @@ def _drive_async_parse_sync(
 ) -> ParseResult:
     """Run an async-only backend's ``parse`` from a sync caller.
 
-    Two cases:
+    Three cases:
 
     - **No running loop** (true sync context / tests): ``asyncio.run`` it.
-    - **Already inside a running loop** (the docs reindex / rescan worker hosts
-      its own loop in a daemon thread): we CANNOT nest ``asyncio.run`` — it
-      raises "asyncio.run() cannot be called from a running event loop". And
-      for ASYNC_POLL backends (PaddleOCR / MinerU) the parse depends on the
-      ``PollingScheduler`` whose tick + awaiter futures live on the **main**
-      app loop, so the coroutine must run *there*. Dispatch it onto the
-      scheduler's loop via ``run_coroutine_threadsafe`` and block this worker
-      thread on the result.
+    - **Inside a running loop, backend needs a specific one.** The docs reindex
+      / rescan worker hosts its own loop in a daemon thread, and we CANNOT nest
+      ``asyncio.run`` there — it raises "asyncio.run() cannot be called from a
+      running event loop". For ASYNC_POLL backends (PaddleOCR / MinerU) the
+      parse depends on the ``PollingScheduler`` whose tick + awaiter futures
+      live on the **main** app loop, so the coroutine must run *there*:
+      dispatch it via ``run_coroutine_threadsafe`` and block on the result.
+    - **Inside a running loop, backend needs any loop.** A backend can be
+      async-implemented without being ASYNC_POLL — a cloud plugin that awaits
+      its own HTTP calls has no scheduler and needs no particular loop. This
+      case used to raise, on the reasoning that a missing scheduler meant a
+      missing prerequisite. It doesn't: nothing about that coroutine is bound
+      to a loop, it just cannot start on this one. Hand it to a thread that
+      owns a fresh loop and block on that.
+
+      The raise was invisible for as long as every file this could apply to
+      was routed elsewhere. Then one deployment stopped routing them away and
+      every PDF failed ``PARSE_ERROR`` — from a guard protecting against a
+      condition that was never the problem.
     """
     import asyncio
+    import concurrent.futures
 
     try:
         asyncio.get_running_loop()
@@ -80,10 +92,11 @@ def _drive_async_parse_sync(
         fut = asyncio.run_coroutine_threadsafe(backend.parse(file_path, options), main_loop)
         return fut.result()
 
-    raise RuntimeError(
-        "async parser backend requires a running PollingScheduler loop "
-        "to run from a sync worker thread"
-    )
+    # No scheduler to defer to. One thread, one fresh loop, blocked on until
+    # it finishes — the parse is already the slowest thing in this call, so
+    # the thread costs nothing measurable next to it.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(lambda: asyncio.run(backend.parse(file_path, options))).result()
 
 
 _PDF: Final = frozenset({".pdf"})
