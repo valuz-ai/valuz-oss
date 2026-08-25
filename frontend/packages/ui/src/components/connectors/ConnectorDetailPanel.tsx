@@ -72,14 +72,21 @@ export const ConnectorDetailPanel = ({
               {errorMessage}
             </p>
           ) : null}
-          <Button className="mt-3" size="sm" disabled={busy} onClick={onConnect}>
-            {busy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Plug className="h-3.5 w-3.5" />
-            )}
-            {t("connector.connect")}
-          </Button>
+          {onConnect ? (
+            <Button
+              className="mt-3"
+              size="sm"
+              disabled={busy}
+              onClick={onConnect}
+            >
+              {busy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Plug className="h-3.5 w-3.5" />
+              )}
+              {t("connector.connect")}
+            </Button>
+          ) : null}
         </div>
       </aside>
     );

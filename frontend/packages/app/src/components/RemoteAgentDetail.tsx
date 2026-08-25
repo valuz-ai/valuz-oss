@@ -17,7 +17,10 @@ import { modelLabel } from "@valuz/shared";
 
 import { SlotRenderer } from "@valuz/core";
 
-import { ResourceTitleBadgeSlot } from "./ResourceActionSlot";
+import {
+  RemoteAgentDetailActionSlot,
+  ResourceTitleBadgeSlot,
+} from "./ResourceActionSlot";
 
 type TK = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
 
@@ -55,6 +58,7 @@ export function RemoteAgentDetail({ agent }: { agent: Agent }) {
             ].join(" · ")}
           </div>
         </div>
+        <RemoteAgentDetailActionSlot resource={resource} />
       </div>
 
       {agent.description ? (

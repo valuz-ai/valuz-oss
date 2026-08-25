@@ -53,4 +53,17 @@ describe("ConnectorDetailPanel", () => {
     const button = screen.getByRole("button", { name: /disconnect|断开/i });
     expect((button as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it("does not offer a local connect action for a read-only catalog detail", () => {
+    render(
+      <ConnectorDetailPanel
+        name="Organization Connector"
+        connected={false}
+        headerActions={<button type="button">Download</button>}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Download" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
+  });
 });
