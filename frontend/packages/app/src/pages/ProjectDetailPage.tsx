@@ -61,6 +61,7 @@ import {
 import { modelLabel, type WorktreeItem } from "@valuz/shared";
 import { t as _t } from "@valuz/shared/i18n";
 import { ExecutionLocationBar } from "../components/ExecutionLocationBar";
+import { TaskLeadHint } from "../components/TaskLeadHint";
 import { useProjectOutlet } from "@valuz/app/layout";
 import { usePlatform } from "@valuz/app/platform";
 import { useProjectKbBindings, useKbDocTree } from "@valuz/app/hooks";
@@ -1716,6 +1717,9 @@ export const ProjectDetailPage = () => {
                   // project" is answered while working inside one.
                   footerBar={
                     <ExecutionLocationBar
+                      trailing={
+                        composerMode === "task" ? <TaskLeadHint /> : undefined
+                      }
                       locked
                       lockedOriginId={project?.exec_origin ?? "local"}
                       targetId={null}
@@ -1749,17 +1753,14 @@ export const ProjectDetailPage = () => {
                   showSkillSlash={selectedAgentSlug != null}
                   skills={selectedAgentSkillItems}
                   uploadOnAttach
-                  existingAttachmentCount={
-                    stagedAttachments.length
-                  }
-                  pinnedAttachments={stagedAttachments
-                    .map((a) => ({
-                      id: a.id,
-                      name: a.filename,
-                      parseStatus: a.parse_status as
-                        "parsing" | "ready" | "failed" | "native" | undefined,
-                      sourceKind: a.source_kind,
-                    }))}
+                  existingAttachmentCount={stagedAttachments.length}
+                  pinnedAttachments={stagedAttachments.map((a) => ({
+                    id: a.id,
+                    name: a.filename,
+                    parseStatus: a.parse_status as
+                      "parsing" | "ready" | "failed" | "native" | undefined,
+                    sourceKind: a.source_kind,
+                  }))}
                   onRemovePinnedAttachment={(attId) =>
                     void removeAttachment(attId)
                   }
@@ -1800,7 +1801,7 @@ export const ProjectDetailPage = () => {
                   }
                   onWorktreeToggle={setWorktreeEnabled}
                 />
-</div>
+              </div>
 
               {/* Centre history area (PRD-NEXT §3.4): Chat (sessions) and Task
               (lead-dispatch tasks) split into two tabs. The Task tab always

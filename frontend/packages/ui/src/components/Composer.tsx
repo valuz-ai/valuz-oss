@@ -3283,23 +3283,6 @@ export const Composer = ({
       {footerBar ? (
         <div className="mx-auto -mt-2 max-w-[760px]">{footerBar}</div>
       ) : null}
-
-      {/* PRD-PAAT §3.2 task-mode hint card — sits below the composer
-          and explains the lead-Agent ownership model in one line so
-          the user knows why ``send`` here behaves differently. */}
-      {mode === "task" && (
-        <div className="mx-auto mt-2 flex max-w-[760px] items-center justify-center gap-2 px-3 py-1.5 text-center text-2xs text-ink-meta">
-          <Zap className="h-3 w-3 shrink-0 text-ink-muted" strokeWidth={2} />
-          {/* One line at every width: a narrow card gets the short form
-              instead of wrapping the full sentence into a paragraph. */}
-          <span className="hidden @[560px]/composerpane:inline">
-            {t("composer.taskHint" as Parameters<typeof t>[0])}
-          </span>
-          <span className="truncate @[560px]/composerpane:hidden">
-            {t("composer.taskHintShort" as Parameters<typeof t>[0])}
-          </span>
-        </div>
-      )}
     </div>
   );
 };
