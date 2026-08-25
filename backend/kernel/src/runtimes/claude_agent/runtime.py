@@ -18,7 +18,7 @@ from collections import deque
 from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from claude_agent_sdk import (
     AgentDefinition,
@@ -2394,12 +2394,21 @@ class ClaudeAgentRuntime:
             hooks is not None and hooks._handlers.get("after_tool")
         ):
 
-            def post_tool_output(tool_name: str, value: Any) -> SyncHookJSONOutput:
+            def post_tool_output(
+                tool_name: str,
+                value: Any,
+                *,
+                mcp_response_uses_content_blocks: bool,
+            ) -> SyncHookJSONOutput:
                 if tool_name.startswith("mcp__"):
                     return SyncHookJSONOutput(
                         hookSpecificOutput={
                             "hookEventName": "PostToolUse",
-                            "updatedMCPToolOutput": value,
+                            "updatedMCPToolOutput": (
+                                _normalize_mcp_tool_output(value)
+                                if mcp_response_uses_content_blocks
+                                else value
+                            ),
                         }
                     )
                 return SyncHookJSONOutput(
@@ -2415,6 +2424,9 @@ class ClaudeAgentRuntime:
                 data: dict[str, Any] = dict(input_data)
                 tool_name = str(data.get("tool_name") or "")
                 tool_response = data.get("tool_response", "")
+                mcp_response_uses_content_blocks = tool_name.startswith("mcp__") and isinstance(
+                    tool_response, list
+                )
                 if hooks is not None and hooks._handlers.get("after_tool"):
                     _, _, hook_tool_response = unwrap_mcp_source_content_transport(tool_response)
                     await hooks.fire(
@@ -2516,7 +2528,11 @@ class ClaudeAgentRuntime:
                                 ensure_ascii=False,
                                 separators=(",", ":"),
                             )
-                        return post_tool_output(tool_name, visible)
+                        return post_tool_output(
+                            tool_name,
+                            visible,
+                            mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
+                        )
                 if not source_metadata_handled:
                     augmented_indexed_content = augment_indexed_document_evidence(
                         effective_tool_response,
@@ -2555,29 +2571,17 @@ class ClaudeAgentRuntime:
                     )
                 if compacted is None:
                     if source_content_transport_handled:
-                        return post_tool_output(tool_name, effective_tool_response)
+                        return post_tool_output(
+                            tool_name,
+                            effective_tool_response,
+                            mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
+                        )
                     return SyncHookJSONOutput()
-                visible_output: Any = compacted
-                if source_content_transport_handled and tool_name.startswith("mcp__"):
-                    # Claude's SDK-MCP control bridge gives PostToolUse a list
-                    # of MCP content blocks and requires replacements to keep
-                    # that outer shape.  Source adaptation works on the
-                    # restored structured payload, so serialize its model
-                    # projection back into one ordinary compatibility block.
-                    # Returning the mapping directly makes the CLI call
-                    # ``reduce`` on a non-list and converts a successful tool
-                    # call into a runtime failure.
-                    visible_output = [
-                        {
-                            "type": "text",
-                            "text": json.dumps(
-                                compacted,
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                            ),
-                        }
-                    ]
-                return post_tool_output(tool_name, visible_output)
+                return post_tool_output(
+                    tool_name,
+                    compacted,
+                    mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
+                )
 
             sdk_hooks["PostToolUse"] = [HookMatcher(hooks=[post_tool_use])]
 
@@ -3482,6 +3486,46 @@ def _stringify_tool_result_content(content: Any) -> str:
         return json.dumps(content, ensure_ascii=False, default=default)
     except (TypeError, ValueError):
         return str(content)
+
+
+def _is_mcp_content_block(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    block_type = value.get("type")
+    if block_type == "text":
+        return isinstance(value.get("text"), str)
+    if block_type in {"image", "audio"}:
+        return isinstance(value.get("data"), str) and isinstance(value.get("mimeType"), str)
+    if block_type == "resource":
+        resource = value.get("resource")
+        return (
+            isinstance(resource, Mapping)
+            and isinstance(resource.get("uri"), str)
+            and (isinstance(resource.get("text"), str) or isinstance(resource.get("blob"), str))
+        )
+    if block_type == "resource_link":
+        return isinstance(value.get("name"), str) and isinstance(value.get("uri"), str)
+    return False
+
+
+def _is_mcp_content_block_list(value: Any) -> bool:
+    return isinstance(value, list) and all(_is_mcp_content_block(block) for block in value)
+
+
+def _normalize_mcp_tool_output(value: Any) -> list[Any]:
+    """Keep PostToolUse replacements inside Claude's MCP content contract.
+
+    Claude Code accepts strings or content-block lists when it budgets a tool
+    result, but structured projections from hooks are often mappings, scalars,
+    or ordinary JSON lists.  Passing those values through makes the CLI call
+    ``reduce`` on a non-list or silently ignore JSON list items.  Preserve a
+    real MCP content list and serialize every other JSON value into one text
+    block.  An empty list is already a valid empty MCP result.
+    """
+
+    if _is_mcp_content_block_list(value):
+        return cast(list[Any], value)
+    return [{"type": "text", "text": _stringify_tool_result_content(value)}]
 
 
 def _iter_tool_response_mappings(value: Any) -> Iterator[Mapping[str, Any]]:
