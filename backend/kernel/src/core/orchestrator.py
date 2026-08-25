@@ -19,7 +19,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -1325,7 +1325,8 @@ class SessionOrchestrator:
             runtime_context=runtime_context,
         )
         try:
-            await runtime.prepare(session)
+            with self._lend_runtime_context(session, runtime_context):
+                await runtime.prepare(session)
         except Exception:
             await self._evict_runtime(session_id)
             raise
@@ -1365,11 +1366,12 @@ class SessionOrchestrator:
             runtime_context=runtime_context,
         )
         try:
-            return await runtime.fork_session(
-                session,
-                source_native_session_id=source_native_session_id,
-                anchor=anchor,
-            )
+            with self._lend_runtime_context(session, runtime_context):
+                return await runtime.fork_session(
+                    session,
+                    source_native_session_id=source_native_session_id,
+                    anchor=anchor,
+                )
         except Exception:
             await self._evict_runtime(session.id)
             raise
@@ -1764,7 +1766,8 @@ class SessionOrchestrator:
                     data={"status": "running", "message_id": message.id},
                 )
             )
-            await runtime.run(session, user_message)
+            with self._lend_runtime_context(session, runtime_context):
+                await runtime.run(session, user_message)
             skip_genui_post_run = observer.called_tool("generate_ui")
             if skip_genui_post_run:
                 observer.skip_post_run_verification_for_generated_ui()
@@ -1800,13 +1803,16 @@ class SessionOrchestrator:
                     coverage_sink = _TaskCoverageProtocolSink(observer)
                     runtime.update_sink(coverage_sink)
                     try:
-                        await runtime.run_task_coverage(
-                            session,
-                            UserMessage(
-                                text=build_task_coverage_continuation_prompt(task_coverage_policy)
-                            ),
-                            no_op_tool=build_task_coverage_noop_tool(),
-                        )
+                        with self._lend_runtime_context(session, runtime_context):
+                            await runtime.run_task_coverage(
+                                session,
+                                UserMessage(
+                                    text=build_task_coverage_continuation_prompt(
+                                        task_coverage_policy
+                                    )
+                                ),
+                                no_op_tool=build_task_coverage_noop_tool(),
+                            )
                     except asyncio.CancelledError:
                         # The primary answer is already complete; the
                         # continuation is an optional enhancement. A
@@ -2038,6 +2044,48 @@ class SessionOrchestrator:
         # The embedded snapshot IS the agent for this session — the kernel
         # holds no agents table to consult.
         return session, session.agent_config
+
+    @contextmanager
+    def _lend_runtime_context(
+        self,
+        session: Any,
+        runtime_context: dict[str, str] | None,
+    ) -> Any:
+        """Lend *session* its materialized runtime-context values for the
+        duration of one ``RuntimePort`` call, then take them back.
+
+        Materializing for ``create_runtime`` alone is not enough. Every
+        ``RuntimePort`` method — ``run`` / ``prepare`` / ``fork_session`` /
+        ``run_task_coverage`` — takes the session as an ARGUMENT and reads its
+        live fields: Claude assembles ``--mcp-config`` from
+        ``session.mcp_servers`` inside ``run()``, and codex emits its per-turn
+        ``mcp_servers.*`` overrides the same way. Only the provider api_key is
+        read at construction. So a session whose MCP headers hold a marker got
+        its model credential filled and shipped the literal placeholder to
+        every MCP server — 403 at the host gate, the runtime parks those
+        servers, and the model reports its tools missing.
+
+        The values are lent to the SAME object rather than handed over as a
+        copy, so the runtime's lifecycle writes (``status`` / ``stop_reason``
+        / ``runtime_session_id`` / ``todos`` / ``mode``) still land on the
+        object that gets persisted. The restore is what keeps the contract
+        from ``materialize_runtime_context``: a later ``save_session`` writes
+        the marker back, never the credential.
+        """
+        from src.core.runtime_context import materialize_runtime_context
+
+        runtime_session = materialize_runtime_context(session, runtime_context)
+        if runtime_session is session:
+            # No markers — nothing lent, nothing to take back.
+            yield
+            return
+        persisted = (session.mcp_servers, session.model_provider)
+        session.mcp_servers = runtime_session.mcp_servers
+        session.model_provider = runtime_session.model_provider
+        try:
+            yield
+        finally:
+            session.mcp_servers, session.model_provider = persisted
 
     async def _ensure_runtime(
         self,
