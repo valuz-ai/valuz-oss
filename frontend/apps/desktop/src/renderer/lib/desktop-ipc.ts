@@ -122,10 +122,10 @@ export const openNewWindow = async (): Promise<void> => {
  * the user can jump from an Edit/Write summary row to the actual file.
  * No-op outside Electron — webui callers degrade silently.
  */
-export const revealInFinder = async (path: string): Promise<void> => {
+export const revealInFinder = async (path: string): Promise<string> => {
   const bridge = getBridge();
-  if (!bridge || !path) return;
-  await bridge.invoke("open_in_finder", { path });
+  if (!bridge || !path) return "";
+  return (await bridge.invoke("open_in_finder", { path })) ?? "";
 };
 
 /**
