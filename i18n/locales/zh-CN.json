@@ -306,7 +306,8 @@
     "modeTask": "Task",
     "sendTask": "发起 Task",
     "taskPlaceholder": "描述任务目标，发送后主 Agent 接管，后台执行",
-    "taskHint": "主 Agent 全程对目标负责：自主拆解、按需派子任务给队友、校验汇总。可随时在任务详情页跟踪 / 介入。"
+    "taskHint": "主 Agent 全程对目标负责：自主拆解、按需派子任务给队友、校验汇总。可随时在任务详情页跟踪 / 介入。",
+    "taskHintShort": "主 Agent 全程负责：拆解、派活、汇总"
   },
   "conversation": {
     "addAttachment": "添加附件",

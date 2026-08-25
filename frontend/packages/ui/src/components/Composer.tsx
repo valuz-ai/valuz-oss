@@ -1475,7 +1475,13 @@ export const Composer = ({
     <div
       ref={containerRef}
       // Spec 5.6 外层 padding 10px 20px 16px
-      className={cn("relative shrink-0 px-5 pt-2.5 pb-4", wrapperClassName)}
+      // ``@container/composerpane``: the task hint below the card is a sibling
+      // of the input box, so it cannot read the box's own container. Naming
+      // the wrapper lets it size against the same width the card gets.
+      className={cn(
+        "@container/composerpane relative shrink-0 px-5 pt-2.5 pb-4",
+        wrapperClassName,
+      )}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -3284,7 +3290,14 @@ export const Composer = ({
       {mode === "task" && (
         <div className="mx-auto mt-2 flex max-w-[760px] items-center justify-center gap-2 px-3 py-1.5 text-center text-2xs text-ink-meta">
           <Zap className="h-3 w-3 shrink-0 text-ink-muted" strokeWidth={2} />
-          <span>{t("composer.taskHint" as Parameters<typeof t>[0])}</span>
+          {/* One line at every width: a narrow card gets the short form
+              instead of wrapping the full sentence into a paragraph. */}
+          <span className="hidden @[560px]/composerpane:inline">
+            {t("composer.taskHint" as Parameters<typeof t>[0])}
+          </span>
+          <span className="truncate @[560px]/composerpane:hidden">
+            {t("composer.taskHintShort" as Parameters<typeof t>[0])}
+          </span>
         </div>
       )}
     </div>

@@ -306,7 +306,8 @@
     "modeTask": "Task",
     "sendTask": "Launch task",
     "taskPlaceholder": "Describe the task goal — the lead agent will take over and run it in the background.",
-    "taskHint": "The lead agent owns the goal end-to-end: decomposes it, dispatches to teammates when useful, validates and aggregates. Track or step in any time from the task detail page."
+    "taskHint": "The lead agent owns the goal end-to-end: decomposes it, dispatches to teammates when useful, validates and aggregates. Track or step in any time from the task detail page.",
+    "taskHintShort": "The lead agent owns the goal end-to-end."
   },
   "conversation": {
     "addAttachment": "Add attachment",
