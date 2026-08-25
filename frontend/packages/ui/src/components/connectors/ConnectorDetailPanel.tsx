@@ -23,8 +23,11 @@ export interface ConnectorDetailPanelProps {
   toolsError?: string | null;
   /** A connect/disconnect request is in flight — disables the buttons. */
   busy?: boolean;
-  /** Built-in connector whose credentials the system manages: the
-   *  disconnect button renders disabled with an explanatory notice. */
+  /** Built-in connector: labelled as such, and it cannot be removed. It can
+   *  still be disconnected — the caller decides what that means (disabling a
+   *  built-in, deleting anything else), so this no longer disables the button.
+   *  Disabling it stranded owners whose credential had expired: a built-in
+   *  showing "connected" offers no Connect button and had no way out. */
   systemManaged?: boolean;
   onConnect?: () => void;
   onDisconnect?: () => void;
@@ -109,11 +112,11 @@ export const ConnectorDetailPanel = ({
             variant="outline"
             size="sm"
             className="shrink-0"
-            disabled={busy || systemManaged}
+            disabled={busy || !onDisconnect}
             title={
               systemManaged ? t("connector.systemManaged") : undefined
             }
-            onClick={systemManaged ? undefined : onDisconnect}
+            onClick={onDisconnect}
           >
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
             {t("connector.disconnect")}
