@@ -143,15 +143,13 @@ export const DocumentDetailPanel = ({
   const isFailed = doc.status === "failed";
   return (
     <div className={cn("flex h-full min-h-0 flex-col")}>
-      {/* ``min-h-0``: a ``flex-1`` item in a column flex defaults to
-          ``min-height: auto``, so it refuses to shrink below its content — the
-          scroll container then grows past the panel instead of scrolling
-          inside it.
-
-          ``overscroll-contain``: without it, a wheel gesture that reaches the
-          end of this list keeps going into whatever ancestor can scroll, and
-          the whole shell slides up under the cursor. Same treatment
-          ``ArtifactSplitPane`` already gives its pane. */}
+      {/* Defensive, and deliberately not the fix for anything: a ``flex-1``
+          item in a column flex defaults to ``min-height: auto`` and a scroll
+          container with no ``overscroll-behavior`` hands its overflow to
+          whatever ancestor can take it. Neither was what made the shell
+          scroll — that was an absolutely-positioned ``sr-only`` node escaping
+          its clip, fixed in ``MarkdownContent``. These stay so a future
+          scrollable ancestor cannot resurrect the symptom. */}
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-5 pt-4">
         <div className="mb-3">
           <div className="flex items-start gap-1">
