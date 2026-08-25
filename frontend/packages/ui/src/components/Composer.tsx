@@ -1719,7 +1719,7 @@ export const Composer = ({
                             />
                           </button>
                         </TooltipTrigger>
-                        <TooltipContent side="top">{label}</TooltipContent>
+                        <TooltipContent side="bottom">{label}</TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   );
