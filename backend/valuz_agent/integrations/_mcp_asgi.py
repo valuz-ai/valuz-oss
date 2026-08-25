@@ -127,11 +127,16 @@ def build_internal_mcp_asgi(inner: Any) -> Any:
             # "no header" vs "bad token" is exactly the fork the next person
             # needs first.
             reason = "missing X-Valuz-Internal header" if not raw_token else "credential rejected"
+            # The first 8 chars distinguish every credential shape in play —
+            # a per-owner JWT ("eyJhbGci"), a managed capability ("vxe_…"),
+            # and an unresolved runtime-context marker ("__runtim") — and none
+            # of them is secret at that length.
             logger.warning(
-                "Internal MCP 403 (%s): path=%s token_len=%d",
+                "Internal MCP 403 (%s): path=%s token_len=%d token_head=%s",
                 reason,
                 scope.get("path", ""),
                 len(raw_token or ""),
+                (raw_token or "")[:8],
             )
             response = PlainTextResponse(f"Forbidden: {reason}", status_code=403)
             await response(scope, receive, send)
