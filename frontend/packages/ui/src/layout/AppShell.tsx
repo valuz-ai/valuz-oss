@@ -15,7 +15,10 @@ import {
   type GroupImperativeHandle,
   type Layout,
 } from "../components/ui/resizable";
-import { resolveRightPanelLayoutTransition } from "./right-panel-layout";
+import {
+  NORMAL_PANEL_LAYOUT,
+  resolveRightPanelLayoutTransition,
+} from "./right-panel-layout";
 
 /**
  * Props passed to a nav link component. Matches react-router-dom's `Link`
@@ -146,7 +149,11 @@ function ResizableShellPanels({
       id={layoutId}
       className="min-w-0 flex-1"
       groupRef={panelGroupRef}
-      defaultLayout={initialNormalLayout ?? undefined}
+      // The group remembers a panel's size by id across mount/unmount, so
+      // ``defaultSize`` only lands the first time ``shell-right`` registers.
+      // Handing it an explicit layout keeps the standard split authoritative
+      // for a session that never dragged the divider.
+      defaultLayout={initialNormalLayout ?? NORMAL_PANEL_LAYOUT}
       onLayoutChanged={(layout) => {
         if (maximized) return;
         normalPanelLayoutRef.current = layout;
@@ -169,7 +176,7 @@ function ResizableShellPanels({
           />
           <ResizablePanel
             id="shell-right"
-            defaultSize="480px"
+            defaultSize="35%"
             minSize="320px"
             maxSize="70%"
             style={{ overflow: "visible" }}
