@@ -116,7 +116,6 @@ def workspace(tmp_path: Path) -> Path:
     (tools_dir / f"{SERVER}.py").write_text(
         generator.generate_tool_module(SERVER, [tool]), encoding="utf-8"
     )
-    (tmp_path / "work").mkdir()
     return tmp_path
 
 
@@ -183,7 +182,7 @@ async def test_program_calls_tool_and_only_stdout_returns(execute, workspace):
     # The upstream saw the call; the subprocess never saw the credential.
     assert FakePool.last is not None
     assert FakePool.last.calls == [(SERVER, "get_data", {"symbol": "AAPL"})]
-    archived = list((workspace / ".agents" / "ptc" / "runs").glob("exec_*.py"))
+    archived = list((workspace / ".ptc" / "runs").glob("exec_*.py"))
     assert len(archived) == 1
     assert "SECRET-TOKEN" not in archived[0].read_text(encoding="utf-8")
     # Token revoked on settle.
@@ -201,11 +200,14 @@ async def test_credentials_never_reach_subprocess_env(execute, workspace):
 
 
 async def test_files_created_are_reported(execute, workspace):
-    code = "open('work/out.json', 'w').write('{}')\nprint('done')\n"
+    # ``.ptc/work`` is pre-created by the executor — no makedirs in agent code.
+    code = "open('.ptc/work/out.json', 'w').write('{}')\nprint('done')\n"
     result = await execute(code)
     assert result.is_error is False
     assert "Files created:" in result.content
-    assert "work/out.json" in result.content
+    assert ".ptc/work/out.json" in result.content
+    # The archived program (written pre-snapshot) is never reported.
+    assert "runs/exec_" not in result.content
 
 
 async def test_failing_program_returns_error_with_traceback(execute):

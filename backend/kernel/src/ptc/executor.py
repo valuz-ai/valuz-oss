@@ -76,7 +76,16 @@ _SKILL_ROOT_CANDIDATES = (
     os.path.join(".claude", "skills", PTC_SKILL_DIRNAME),
 )
 
-_RUNS_SUBDIR = os.path.join(".agents", "ptc", "runs")
+# PTC's private cwd namespace. A DOT name so it stays out of the user-facing
+# file tree and cannot collide with a user's own directory; deliberately NOT
+# under ``.agents`` (that tree belongs to the Open Agent Skills standard, and
+# the files_created snapshot skips it while dumped files must stay reported).
+# Layout: ``.ptc/runs/`` archives each executed program (written BEFORE the
+# before-snapshot, so archives are never reported as created files);
+# ``.ptc/work/`` is the dump-first scratch space, pre-created per run.
+PTC_DIRNAME = ".ptc"
+_RUNS_SUBDIR = os.path.join(PTC_DIRNAME, "runs")
+PTC_WORK_DIRNAME = os.path.join(PTC_DIRNAME, "work")
 
 # ``files_created`` snapshot guardrails: never let a huge project tree turn
 # the bookkeeping into the expensive part of a run.
@@ -90,7 +99,8 @@ _EXECUTE_CODE_DESCRIPTION = (
     "generated data-tool wrappers (`from tools.<server> import <tool>`) and "
     "chains multiple tool calls, computation (loops, pandas if installed), "
     "and file output in one run. Only what the program prints returns to "
-    "you — save sizeable raw results to files and print compact summaries."
+    "you — save sizeable raw results under `.ptc/work/` and print compact "
+    "summaries."
 )
 
 _EXECUTE_CODE_PARAMETERS: dict[str, Any] = {
@@ -277,6 +287,7 @@ def build_execute_code_tool(store_getter: Callable[[], StorePort]) -> ToolDef:
             _settle(record)
 
     async def _run(record: ExecutionRecord, cwd: Path, code: str) -> ToolResult:
+        (cwd / PTC_WORK_DIRNAME).mkdir(parents=True, exist_ok=True)
         code_path = _archive_code(cwd, code, record.token)
         env = _build_subprocess_env(cwd, record.token)
         before = _snapshot_files(cwd)

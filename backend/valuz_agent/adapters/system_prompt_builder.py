@@ -133,8 +133,8 @@ For a single quick lookup, call a data tool directly. When a task needs \
 loops, comparisons, batch queries, or computation over data-tool results, \
 write Python and run it with the `execute_code` tool instead: import the \
 generated wrappers (usage and signatures in the `ptc-tools` skill), chain \
-the calls and the analysis in ONE program, save sizeable raw results to \
-files, and print only compact summaries — only stdout returns to you. \
+the calls and the analysis in ONE program, save sizeable raw results under \
+`.ptc/work/`, and print only compact summaries — only stdout returns to you. \
 Orchestration, automation, scheduling, and connector-management tools are \
 always called directly, never from code."""
 

@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from valuz_agent.adapters.system_prompt_builder import (
+    PTC_POLICY_REVISION,
     ensure_ptc_system_policy,
 )
 from valuz_agent.modules.ptc import session_refresh
@@ -91,7 +92,7 @@ async def test_enable_installs_skill_metadata_and_policy(env):
     assert "/skills/citation" in body.skills  # user skills preserved
     assert body.metadata["ptc"] == {"servers": ["valuz-data-67b487"]}
     assert body.metadata["valuz"] == {"project_id": "p1"}  # untouched
-    assert '<ptc-policy revision="ptc-v1">' in body.instructions
+    assert f'<ptc-policy revision="{PTC_POLICY_REVISION}">' in body.instructions
 
 
 async def test_converged_session_is_a_no_op(env):
