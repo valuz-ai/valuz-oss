@@ -493,7 +493,6 @@ export type KnownI18nKey =
   | "composer.modeChat"
   | "composer.modeChatTip"
   | "composer.modeTask"
-  | "composer.modeTaskTip"
   | "composer.sendTask"
   | "composer.taskHint"
   | "composer.taskHintShort"

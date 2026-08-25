@@ -1693,7 +1693,9 @@ export const Composer = ({
                   // where the difference between the two is spelled out.
                   const tip = t(
                     (m === "task"
-                      ? "composer.modeTaskTip"
+                      ? // Same sentence the location strip shows in task
+                        // mode, so the two never drift apart.
+                        "composer.taskHintShort"
                       : "composer.modeChatTip") as Parameters<typeof t>[0],
                   );
                   return (

@@ -499,7 +499,6 @@ I18nKey = Literal[
     "composer.modeChat",
     "composer.modeChatTip",
     "composer.modeTask",
-    "composer.modeTaskTip",
     "composer.sendTask",
     "composer.taskHint",
     "composer.taskHintShort",
