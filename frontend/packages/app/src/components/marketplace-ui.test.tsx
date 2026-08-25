@@ -35,7 +35,7 @@ describe("marketplace-ui open wire values", () => {
     // Labels are the zh-CN ones: that is the locale these tests render under.
     expect(screen.getByText("技能")).not.toBeNull();
     expect(screen.getByText("连接器")).not.toBeNull();
-    expect(screen.getByText("Agent 团队")).not.toBeNull();
+    expect(screen.getByText("团队")).not.toBeNull();
     expect(screen.queryByText("Valuz 官方")).toBeNull();
   });
 

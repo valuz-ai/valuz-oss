@@ -2953,7 +2953,7 @@
     "badgeLocked": "Not directly installable",
     "modalTypeSkill": "Skill",
     "modalTypeAgent": "Agent",
-    "modalTypeTeam": "Agent team",
+    "modalTypeTeam": "Team",
     "modalTypeConnector": "Connector",
     "connectorNoDescription": "No description available",
     "connected": "Added",
