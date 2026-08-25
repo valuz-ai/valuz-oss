@@ -1387,14 +1387,21 @@ async def _build_runtime_turn_context(user_id: str, session_id: str) -> dict[str
     # mode, and no dependency on an initialized store when the extension is
     # not bound.
     #
-    # The unbound case is NOT necessarily benign, though — a deployment whose
-    # sessions carry markers has something that must fill them, and answering
-    # ``None`` here sends every one of them out unfilled. The check below used
-    # to sit after this return, so the single most informative case was the
-    # one it could not see. It now runs on both paths.
+    # Report which contributor answered, unconditionally and without touching
+    # the session. Two earlier attempts to diagnose this hung their evidence
+    # off the session row and saw nothing — the built-in MCP servers whose
+    # headers carry the markers live only in the kernel's copy, so the durable
+    # row this function can reach has neither the servers nor the markers.
+    # What identifies the failure is not the session at all: it is which
+    # contributor ran and what it returned.
     if isinstance(contributor, NoopRuntimeTurnContextContributor):
-        _warn_on_unfillable_markers(
-            session_id, await _session_for_marker_check(user_id, session_id), None
+        # On a deployment that persists markers this is the whole bug: nothing
+        # is issued, the placeholder ships verbatim, every built-in MCP answers
+        # 403, and the model reports its tools missing.
+        logger.warning(
+            "session %s: no runtime-context contributor is bound — this turn "
+            "will supply no values, and any persisted marker ships unfilled",
+            session_id,
         )
         return None
     session = await _data_plane().get_session(user_id, session_id)
@@ -1404,22 +1411,14 @@ async def _build_runtime_turn_context(user_id: str, session_id: str) -> dict[str
         session_id=session_id,
         metadata=metadata if isinstance(metadata, dict) else {},
     )
+    logger.info(
+        "session %s: runtime-context contributor %s supplied %s",
+        session_id,
+        type(contributor).__name__,
+        sorted(context) if context else "nothing",
+    )
     _warn_on_unfillable_markers(session_id, session, context)
     return context
-
-
-async def _session_for_marker_check(user_id: str, session_id: str) -> object | None:
-    """The session, or ``None`` if it cannot be read.
-
-    Only ever feeds the diagnostic below, so a read failure must stay a
-    non-event: the OSS hot path's whole point is that an unbound contributor
-    costs nothing, and turning that into a new failure mode would be a worse
-    bug than the one being diagnosed.
-    """
-    try:
-        return await _data_plane().get_session(user_id, session_id)
-    except Exception:  # noqa: BLE001 — diagnostics must not add a failure mode
-        return None
 
 
 def _marker_keys_in_session(session: object) -> dict[str, list[str]]:
