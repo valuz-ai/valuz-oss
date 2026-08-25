@@ -1690,32 +1690,38 @@ export const Composer = ({
                   );
                   const ModeIcon = m === "task" ? ListTodo : MessageSquare;
                   return (
-                    <button
-                      key={m}
-                      type="button"
-                      onClick={() => {
-                        if (!active) onModeChange(m);
-                      }}
-                      // The label is the first thing to give way in a narrow
-                      // card: below the container breakpoint the toggle keeps
-                      // both modes visible as icons instead of pushing the
-                      // trailing chips out of the composer.
-                      title={label}
-                      aria-label={label}
-                      className={cn(
-                        "flex h-6 items-center justify-center rounded-md px-1.5 font-medium transition-colors duration-[120ms] @[420px]/composer:px-2",
-                        active
-                          ? m === "task"
-                            ? "bg-brand text-white shadow-button"
-                            : "bg-card text-ink-heading shadow-sm"
-                          : "text-ink-body hover:text-ink-heading",
-                      )}
-                    >
-                      <ModeIcon className="block h-3.5 w-3.5 shrink-0 @[420px]/composer:hidden" />
-                      <span className="hidden @[420px]/composer:inline">
-                        {label}
-                      </span>
-                    </button>
+                    // Icons at every width, not just a narrow card. The two
+                    // modes are a permanent, frequently-read control, so the
+                    // space they used to spend on labels goes to the chips
+                    // that actually change (agent, model). The tooltip is
+                    // what names them — same one the panel controls use.
+                    <TooltipProvider key={m} delayDuration={150}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!active) onModeChange(m);
+                            }}
+                            aria-label={label}
+                            className={cn(
+                              "flex h-6 items-center justify-center rounded-md px-2 font-medium transition-colors duration-[120ms]",
+                              active
+                                ? m === "task"
+                                  ? "bg-brand text-white shadow-button"
+                                  : "bg-card text-ink-heading shadow-sm"
+                                : "text-ink-body hover:text-ink-heading",
+                            )}
+                          >
+                            <ModeIcon
+                              className="block h-3.5 w-3.5 shrink-0"
+                              aria-hidden="true"
+                            />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top">{label}</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   );
                 })}
               </div>
@@ -2313,7 +2319,7 @@ export const Composer = ({
                               narrow card drops it first — the model is still
                               shown, and picked, on the dropdown rows. */}
                           {triggerModelLabel && (
-                            <span className="hidden max-w-[120px] truncate leading-none text-ink-muted @[500px]/composer:inline">
+                            <span className="hidden max-w-[120px] truncate leading-none text-ink-muted @[360px]/composer:inline">
                               {triggerModelLabel}
                             </span>
                           )}
