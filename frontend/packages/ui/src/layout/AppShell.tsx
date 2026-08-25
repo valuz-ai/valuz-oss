@@ -160,20 +160,24 @@ function ResizableShellPanels({
       >
         {mainPanel}
       </ResizablePanel>
-      <ResizableHandle
-        aria-label={resizeLabel}
-        disabled={maximized}
-        className="w-2 shrink-0 bg-transparent before:absolute before:inset-y-2 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-brand before:opacity-0 before:transition-opacity after:w-2 data-[separator=active]:before:opacity-100 data-[separator=focus]:before:opacity-100 data-[separator=hover]:before:opacity-100 focus-visible:ring-0 focus-visible:ring-offset-0"
-      />
-      <ResizablePanel
-        id="shell-right"
-        defaultSize="345px"
-        minSize="320px"
-        maxSize="70%"
-        style={{ overflow: "visible" }}
-      >
-        {rightPanel}
-      </ResizablePanel>
+      {rightPanel ? (
+        <>
+          <ResizableHandle
+            aria-label={resizeLabel}
+            disabled={maximized}
+            className="w-2 shrink-0 bg-transparent before:absolute before:inset-y-2 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-brand before:opacity-0 before:transition-opacity after:w-2 data-[separator=active]:before:opacity-100 data-[separator=focus]:before:opacity-100 data-[separator=hover]:before:opacity-100 focus-visible:ring-0 focus-visible:ring-offset-0"
+          />
+          <ResizablePanel
+            id="shell-right"
+            defaultSize="345px"
+            minSize="320px"
+            maxSize="70%"
+            style={{ overflow: "visible" }}
+          >
+            {rightPanel}
+          </ResizablePanel>
+        </>
+      ) : null}
     </ResizablePanelGroup>
   );
 }
@@ -204,7 +208,12 @@ export const AppShell = ({
   topBar,
 }: AppShellProps) => {
   const rightPanel = aside || right;
-  const useResizablePanels = Boolean(rightPanel && rightPanelResizable);
+  // Treat this flag as a layout capability, not as a reflection of whether
+  // async right-panel content has arrived yet. Switching between the plain
+  // fragment and ResizableShellPanels would otherwise remount the complete
+  // main route whenever the context panel changes null -> node (and the route
+  // bootstrap would start over in a request loop).
+  const useResizablePanels = rightPanelResizable;
 
   const mainPanel = (
     <main

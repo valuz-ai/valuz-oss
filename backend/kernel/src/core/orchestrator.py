@@ -2449,8 +2449,23 @@ class SessionOrchestrator:
         active_message = self._active_message.get(session_id)
         if runtime is None or active_message is None:
             # Pending exists in events but the runtime is gone — typical
-            # cause: host restart, but startup scan should have sealed
-            # the row first. Surface as 400 so the client refetches.
+            # cause: host restart. Seal lazily as well as at startup: older
+            # rows and host/durable reconciliation races can still reach this
+            # endpoint after the process that owned the parked future died.
+            sealed = await recovery.seal_pending(
+                self._store, user_id, session_id, pending_id
+            )
+            if sealed is not None:
+                resolved, message_id = sealed
+                bus = self._get_or_create_bus(session_id)
+                await bus.emit(
+                    Event(
+                        type=resolved.type,
+                        data={**resolved.data, "message_id": message_id},
+                        timestamp=resolved.timestamp,
+                    )
+                )
+                raise PendingActionExpiredError(pending_id, "expired")
             raise RuntimeUnavailableError(session_id)
 
         # ``approve_for_session`` commits the rule kernel-side BEFORE
@@ -2580,9 +2595,22 @@ class SessionOrchestrator:
         # sqlite (RuntimeStore authority) — sessions live on other processes
         # are structurally out of reach, so this is safe in every deployment.
         # ``user_id=None`` spans every owner within this kernel's own store.
-        sessions = await self._store.list_sessions(None, status="running", limit=500)
-        for session in sessions:
-            sealed += await self._seal_session_pendings(session.user_id, session.id)
+        # Do not filter by session status: another recovery layer may already
+        # have changed a crashed turn from running to idle, but its parked
+        # runtime future is still gone and the pending must still expire.
+        offset = 0
+        page_size = 500
+        while True:
+            sessions = await self._store.list_sessions(
+                None, limit=page_size, offset=offset
+            )
+            for session in sessions:
+                sealed += await self._seal_session_pendings(
+                    session.user_id, session.id
+                )
+            if len(sessions) < page_size:
+                break
+            offset += page_size
         return sealed
 
     async def _seal_session_pendings(self, user_id: str, session_id: str) -> int:

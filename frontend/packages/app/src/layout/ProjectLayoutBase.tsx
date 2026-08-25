@@ -1090,9 +1090,11 @@ export function ProjectLayoutBase({
         asideClassName={
           resolvedRightPanel ? (asideClassName ?? "w-[345px]") : undefined
         }
-        rightPanelResizable={Boolean(
-          resolvedRightPanel && !suppressRightPanelToggle,
-        )}
+        // Keep the main route under one stable panel owner while an async
+        // context panel loads, opens, or closes. The panel node itself is not
+        // the capability signal; changing this flag with the node remounts the
+        // conversation and repeats its bootstrap requests indefinitely.
+        rightPanelResizable={!suppressRightPanelToggle}
         rightPanelMaximized={rightPanelMaximized}
         rightPanelResizeLabel={t("sidebar.resizePanel")}
         mainClassName={mainClassName}
