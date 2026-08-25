@@ -1085,7 +1085,7 @@ export function ProjectLayoutBase({
         hideHeader={hideHeader}
         contentClassName="overflow-y-auto p-0"
         asideClassName={
-          resolvedRightPanel ? (asideClassName ?? "w-[345px]") : undefined
+          resolvedRightPanel ? (asideClassName ?? "w-[480px]") : undefined
         }
         // Keep the main route under one stable panel owner while an async
         // context panel loads, opens, or closes. The panel node itself is not

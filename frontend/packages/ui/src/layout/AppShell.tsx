@@ -169,7 +169,7 @@ function ResizableShellPanels({
           />
           <ResizablePanel
             id="shell-right"
-            defaultSize="345px"
+            defaultSize="480px"
             minSize="320px"
             maxSize="70%"
             style={{ overflow: "visible" }}
@@ -299,87 +299,87 @@ export const AppShell = ({
         shellClassName ?? "soft-gradient",
       )}
     >
-    {topBar}
-    <div className="flex min-h-0 flex-1">
-      {sidebar ?? (
-        <aside className="flex w-[240px] shrink-0 flex-col">
-          <div className="space-y-4 px-4 pb-2 pt-5">
-            {brandSlot ? <div>{brandSlot}</div> : null}
-            <div className="space-y-1">
-              <div className="gradient-brand inline-flex h-9 w-9 items-center justify-center rounded-xl text-sm font-semibold text-white">
-                {(appTitle ?? title ?? "V").slice(0, 1).toUpperCase()}
-              </div>
-              <div className="font-heading text-base font-medium text-ink-heading">
-                {appTitle ?? title ?? "Valuz Agent"}
+      {topBar}
+      <div className="flex min-h-0 flex-1">
+        {sidebar ?? (
+          <aside className="flex w-[240px] shrink-0 flex-col">
+            <div className="space-y-4 px-4 pb-2 pt-5">
+              {brandSlot ? <div>{brandSlot}</div> : null}
+              <div className="space-y-1">
+                <div className="gradient-brand inline-flex h-9 w-9 items-center justify-center rounded-xl text-sm font-semibold text-white">
+                  {(appTitle ?? title ?? "V").slice(0, 1).toUpperCase()}
+                </div>
+                <div className="font-heading text-base font-medium text-ink-heading">
+                  {appTitle ?? title ?? "Valuz Agent"}
+                </div>
               </div>
             </div>
-          </div>
 
-          <nav
-            aria-label="Project sections"
-            className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 pt-3"
-          >
-            <div className="label-mono px-3 pb-1 pt-2">Project</div>
-            {navItems.map((item) => {
-              const active = isActivePath(activePath, item.path);
-              return (
-                <LinkComponent
-                  key={item.path}
-                  to={item.path}
-                  className={cn(
-                    "flex h-auto items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm transition-all",
-                    active
-                      ? "bg-card text-ink-heading shadow-md"
-                      : "text-ink-label hover:bg-surface-muted",
-                  )}
-                >
-                  <span className="flex flex-col gap-0.5 text-left">
-                    <span
-                      className={cn(
-                        "truncate text-sm",
-                        active ? "font-medium" : "font-normal",
-                      )}
-                    >
-                      {item.label}
+            <nav
+              aria-label="Project sections"
+              className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 pt-3"
+            >
+              <div className="label-mono px-3 pb-1 pt-2">Project</div>
+              {navItems.map((item) => {
+                const active = isActivePath(activePath, item.path);
+                return (
+                  <LinkComponent
+                    key={item.path}
+                    to={item.path}
+                    className={cn(
+                      "flex h-auto items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm transition-all",
+                      active
+                        ? "bg-card text-ink-heading shadow-md"
+                        : "text-ink-label hover:bg-surface-muted",
+                    )}
+                  >
+                    <span className="flex flex-col gap-0.5 text-left">
+                      <span
+                        className={cn(
+                          "truncate text-sm",
+                          active ? "font-medium" : "font-normal",
+                        )}
+                      >
+                        {item.label}
+                      </span>
+                      <span className="text-2xs leading-4 text-ink-meta">
+                        {item.description}
+                      </span>
                     </span>
-                    <span className="text-2xs leading-4 text-ink-meta">
-                      {item.description}
-                    </span>
-                  </span>
-                </LinkComponent>
-              );
-            })}
-          </nav>
-        </aside>
-      )}
+                  </LinkComponent>
+                );
+              })}
+            </nav>
+          </aside>
+        )}
 
-      {/* Content + right panel as floating white cards */}
-      <div
-        className={cn(
-          "flex min-w-0 flex-1 p-4 pt-0",
-          !useResizablePanels && "gap-2",
-          // sidebar=false signals "explicitly hidden" — give main the same
-          // left padding as the right edge so the bordered card doesn't
-          // bleed into the window edge. null/undefined falls back to the
-          // default sidebar which already occupies the left strip.
-          sidebar === false ? "pl-4" : "pl-0",
-        )}
-      >
-        {useResizablePanels ? (
-          <ResizableShellPanels
-            mainPanel={mainPanel}
-            maximized={rightPanelMaximized}
-            resizeLabel={rightPanelResizeLabel}
-            rightPanel={rightPanelCard}
-          />
-        ) : (
-          <>
-            {mainPanel}
-            {rightPanelCard}
-          </>
-        )}
+        {/* Content + right panel as floating white cards */}
+        <div
+          className={cn(
+            "flex min-w-0 flex-1 p-4 pt-0",
+            !useResizablePanels && "gap-2",
+            // sidebar=false signals "explicitly hidden" — give main the same
+            // left padding as the right edge so the bordered card doesn't
+            // bleed into the window edge. null/undefined falls back to the
+            // default sidebar which already occupies the left strip.
+            sidebar === false ? "pl-4" : "pl-0",
+          )}
+        >
+          {useResizablePanels ? (
+            <ResizableShellPanels
+              mainPanel={mainPanel}
+              maximized={rightPanelMaximized}
+              resizeLabel={rightPanelResizeLabel}
+              rightPanel={rightPanelCard}
+            />
+          ) : (
+            <>
+              {mainPanel}
+              {rightPanelCard}
+            </>
+          )}
+        </div>
       </div>
-    </div>
     </div>
   );
 };
