@@ -465,3 +465,33 @@ describe("DocumentReaderView", () => {
     expect(onReload).toHaveBeenCalled();
   });
 });
+
+describe("truncated html", () => {
+  const html = (truncated?: boolean): DocumentSource => ({
+    id: "doc-html",
+    title: "Long filing",
+    render: { kind: "html", html: "<p>partial</p>", ...(truncated === undefined ? {} : { truncated }) },
+  });
+
+  it("tells the reader when the host cut the document short", () => {
+    // The desktop file reader caps at 5 MiB. Showing part of a document while
+    // looking complete is worse than refusing: a citation can point into the
+    // part that is gone and nothing on screen says so.
+    render(<DocumentReaderView doc={html(true)} />);
+
+    expect(screen.getByText(/5 MiB/)).toBeTruthy();
+  });
+
+  it("says nothing when the document is whole", () => {
+    render(<DocumentReaderView doc={html(false)} />);
+
+    expect(screen.queryByText(/5 MiB/)).toBeNull();
+  });
+
+  it("treats an absent flag as whole, not as truncated", () => {
+    // Hosts that never truncate should not have to say so.
+    render(<DocumentReaderView doc={html(undefined)} />);
+
+    expect(screen.queryByText(/5 MiB/)).toBeNull();
+  });
+});

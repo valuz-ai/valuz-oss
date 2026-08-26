@@ -38,8 +38,16 @@ export interface DocumentSource {
     | { kind: "file"; url: string; mimeType: string }
     | { kind: "chunks"; chunks: DocumentChunk[] }
     | { kind: "media"; url: string; mimeType: string }
-    /** Already-sanitized HTML. */
-    | { kind: "html"; html: string }
+    /**
+     * Already-sanitized HTML.
+     *
+     * ``truncated`` says the host cut the document short — the desktop file
+     * reader caps at 5 MiB. It must be carried, not assumed false: a reader
+     * that shows part of a document while looking complete is worse than one
+     * that refuses, because a citation can point into the part that is gone
+     * and nothing on screen says so.
+     */
+    | { kind: "html"; html: string; truncated?: boolean }
     | { kind: "external"; url: string };
   /** Optional text index used as a quote fallback for any primary renderer. */
   chunks?: DocumentChunk[];
