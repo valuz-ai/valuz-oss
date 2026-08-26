@@ -65,21 +65,25 @@ interface UseArtifactFileOptions {
    */
   multiTab?: boolean;
   /**
-   * How often to check whether the open documents changed on disk, in ms.
-   * ``0`` turns the watcher off — for a surface showing a file nothing is
-   * expected to write to, or a test that does not want a timer.
+   * Override the idle poll interval, in ms. ``0`` turns the watcher off
+   * entirely — for a surface showing a file nothing is expected to write to,
+   * or a test that does not want a timer.
    */
   watchIntervalMs?: number;
 }
 
 /**
- * Default poll cadence. Slow enough that a preview costs one small resolve
- * every few seconds (no content is transferred), fast enough that a file an
- * agent just rewrote catches up before the user goes looking for a refresh
- * button. The conversation page also pushes writes in as they are reported,
- * so this is the floor on staleness, not the typical latency.
+ * Poll cadence, in two gears — the same shape the other pollers in this app
+ * use (remote grants 5s/30s, devices 15s with a focused fast window).
+ *
+ * A file only really changes while an agent is working, so the fast gear is
+ * spent where it buys something and idle previews cost one small resolve every
+ * half minute. Nothing is transferred on a check either way: it compares a
+ * change token, and the conversation page separately pushes writes in as they
+ * are reported. So this is the ceiling on staleness, not the typical latency.
  */
-export const ARTIFACT_WATCH_INTERVAL_MS = 4000;
+export const ARTIFACT_WATCH_ACTIVE_MS = 4000;
+export const ARTIFACT_WATCH_IDLE_MS = 30_000;
 
 export interface UseArtifactFileResult {
   /** Open documents, in the order they were opened (= tab strip order). */
@@ -105,6 +109,12 @@ export interface UseArtifactFileResult {
    * call this with whatever it just wrote.
    */
   refreshOpen: (absolutePaths: readonly string[]) => Promise<void>;
+  /**
+   * Tell the watcher whether the files are expected to be changing right now.
+   * A surface with a running agent turns this on; everything else polls at the
+   * idle cadence. Has no effect when the watcher is disabled.
+   */
+  setWatchActive: (active: boolean) => void;
   /** Close every tab — the "dismiss the whole preview" action. */
   close: () => void;
 }
@@ -128,7 +138,7 @@ export function useArtifactFile({
   missingErrorMessage,
   baseRef,
   multiTab = false,
-  watchIntervalMs = ARTIFACT_WATCH_INTERVAL_MS,
+  watchIntervalMs = ARTIFACT_WATCH_IDLE_MS,
 }: UseArtifactFileOptions): UseArtifactFileResult {
   const [tabs, setTabs] = useState<ArtifactTab[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
@@ -443,8 +453,17 @@ export function useArtifactFile({
    */
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
+  // Fast gear while a caller reports its agent is working; idle otherwise.
+  // ``watchIntervalMs: 0`` disables the watcher outright and stays disabled.
+  const [watchActive, setWatchActive] = useState(false);
+  const effectiveIntervalMs =
+    watchIntervalMs === 0
+      ? 0
+      : watchActive
+        ? Math.min(ARTIFACT_WATCH_ACTIVE_MS, watchIntervalMs)
+        : watchIntervalMs;
   useEffect(() => {
-    if (!projectId || !watchIntervalMs) return;
+    if (!projectId || !effectiveIntervalMs) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -484,10 +503,10 @@ export function useArtifactFile({
         }
       }
       if (cancelled) return;
-      timer = setTimeout(() => void tick(), watchIntervalMs);
+      timer = setTimeout(() => void tick(), effectiveIntervalMs);
     };
 
-    timer = setTimeout(() => void tick(), watchIntervalMs);
+    timer = setTimeout(() => void tick(), effectiveIntervalMs);
     const onVisible = () => {
       // Coming back to the window is the moment staleness is most visible.
       if (!document.hidden) void tick();
@@ -499,11 +518,11 @@ export function useArtifactFile({
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [
+    effectiveIntervalMs,
     loadDocument,
     locate,
     projectId,
     resolveBaseRef,
-    watchIntervalMs,
   ]);
 
   useEffect(
@@ -530,6 +549,7 @@ export function useArtifactFile({
     open,
     reload,
     refreshOpen,
+    setWatchActive,
     close,
   };
 }

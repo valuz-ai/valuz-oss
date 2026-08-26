@@ -777,6 +777,12 @@ export function useConversationOrchestration({
   // carries busy for the turn itself — including turns started by the queue
   // drain, a schedule, or another client. The stream being open says nothing.
   const isBusy = deriveTurnActive(sending, selectedSession?.status);
+  // Files only really change while the agent is working, so the preview
+  // watcher spends its fast gear there and idles the rest of the time.
+  const setArtifactWatchActive = artifactFile.setWatchActive;
+  useEffect(() => {
+    setArtifactWatchActive(isBusy);
+  }, [isBusy, setArtifactWatchActive]);
 
   // The agent actually bound to this composer: an existing session is frozen to
   // its ``sessionAgentSlug`` (ADR-006), a fresh draft uses the picker's

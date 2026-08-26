@@ -474,6 +474,47 @@ describe("useArtifactFile", () => {
       }
     });
 
+    it("idles slowly, and speeds up only while an agent is working", async () => {
+      vi.useFakeTimers();
+      try {
+        resolveOne.mockImplementation(async () => resolvedAs("report.md", "r1"));
+        // Idle cadence for this test: 10s, so the fast gear (4s) is distinct.
+        const { result } = renderArtifactHook(undefined, true, 10_000);
+        await act(async () => {
+          await result.current.open("report.md");
+        });
+        resolveBatch.mockResolvedValue({
+          results: [resolvedAs("report.md", "r1")],
+        });
+
+        // 5s in: the idle timer has not fired.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5000);
+        });
+        expect(resolveBatch).not.toHaveBeenCalled();
+
+        // The agent starts working — now it checks on the fast cadence.
+        act(() => {
+          result.current.setWatchActive(true);
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(4000);
+        });
+        expect(resolveBatch).toHaveBeenCalledTimes(1);
+
+        // Back to idle: no more fast ticks.
+        act(() => {
+          result.current.setWatchActive(false);
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5000);
+        });
+        expect(resolveBatch).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("does not poll with nothing open", async () => {
       vi.useFakeTimers();
       try {
