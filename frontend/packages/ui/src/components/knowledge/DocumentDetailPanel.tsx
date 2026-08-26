@@ -13,7 +13,11 @@ import { cn } from "../../lib/cn";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { useI18n } from "../../hooks/use-i18n";
-import { VirtualizedMarkdown } from "./VirtualizedMarkdown";
+import { ArtifactRenderer } from "../artifacts/ArtifactViewerShell";
+import type {
+  ArtifactContent,
+  ArtifactDescriptor,
+} from "../artifacts/artifact-viewer.types";
 
 /** Mirror of the backend ``ParserAttempt`` row (one entry per plugin
  *  run for this doc — succeeded or failed). UI doesn't import the
@@ -31,6 +35,33 @@ export interface DocumentParserAttempt {
 export interface DocumentPreviewSlice {
   markdown: string;
   truncated: boolean;
+}
+
+/** The parsed markdown, dressed as an artifact for the shared viewer. */
+function _previewArtifact(name: string): ArtifactDescriptor {
+  return {
+    id: `kb-preview:${name}`,
+    kind: "file",
+    name,
+    previewKind: "markdown",
+    capabilities: {
+      canPreview: true,
+      canEdit: false,
+      canOpenExternal: false,
+      canCopyContent: true,
+      canDownload: false,
+    },
+  };
+}
+
+function _previewContent(preview: DocumentPreviewSlice): ArtifactContent {
+  return {
+    kind: "text",
+    encoding: "utf-8",
+    content: preview.markdown,
+    // Measured by the server, not asserted here.
+    truncated: preview.truncated,
+  };
 }
 
 export interface DocumentDetailPanelProps {
@@ -227,20 +258,15 @@ export const DocumentDetailPanel = ({
           <section className="mt-3 flex min-h-0 flex-col">
             {/* The system file viewer (artifacts / reader), framed like every
                 other embedded document surface. No section label — the frame
-                and the viewer's own kind row already say what this is. */}
-            <div className="overflow-hidden rounded-[14px] border border-surface-border bg-surface">
-              {doc.preview.truncated ? (
-                <div className="border-b border-surface-border bg-warning-light px-4 py-2 text-xs text-warning-text">
-                  {t("knowledge.previewTruncated")}
-                </div>
-              ) : null}
-              {/* Virtualized rather than handed to the viewer whole. The
-                  viewer's cost tracks the nodes it builds, and a spreadsheet
-                  flattened to GFM builds one per cell: 142 KiB is 261 ms as
-                  prose and 3,274 ms as a 16,000-cell table, and 355 KiB of
-                  table is 19 s. Rendering a screenful at a time holds it near
-                  1.5 s at that size. */}
-              <VirtualizedMarkdown content={doc.preview.markdown} />
+                and the viewer's own kind row already say what this is. It
+                brings the source/preview toggle and the reading column with
+                it; the windowing that keeps a large spreadsheet openable
+                lives inside it, not here. */}
+            <div className="h-[70vh] overflow-hidden rounded-[14px] border border-surface-border bg-surface">
+              <ArtifactRenderer
+                artifact={_previewArtifact(doc.name)}
+                content={_previewContent(doc.preview)}
+              />
             </div>
           </section>
         ) : null}

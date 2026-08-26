@@ -101,3 +101,44 @@ export function splitIntoUnits(
   flush();
   return units.filter((unit) => unit.trim() !== "");
 }
+
+/**
+ * How many table rows the document contains, counted the same way
+ * ``splitIntoUnits`` finds them — a row line following a delimiter, outside
+ * any code fence. Used to decide whether windowing is worth its cost, since
+ * cost tracks table cells and nothing else in a document produces them in
+ * bulk.
+ */
+export function countTableRows(markdown: string): number {
+  if (!markdown) return 0;
+  const lines = markdown.split("\n");
+  let rows = 0;
+  let inFence = false;
+  let inTable = false;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (isFence(line)) {
+      inFence = !inFence;
+      inTable = false;
+      continue;
+    }
+    if (inFence) continue;
+
+    if (!isTableRow(line)) {
+      inTable = false;
+      continue;
+    }
+    if (inTable) {
+      rows += 1;
+      continue;
+    }
+    // A lone leading pipe is prose far more often than it is a table; the
+    // delimiter on the next line is what makes it one.
+    if (i + 1 < lines.length && isTableDelimiter(lines[i + 1])) {
+      inTable = true;
+      i += 1;
+    }
+  }
+  return rows;
+}

@@ -9,15 +9,13 @@ vi.mock("../conversation/MarkdownContent", () => ({
 }));
 
 import { DocumentDetailPanel } from "./DocumentDetailPanel";
-import { splitIntoUnits } from "./markdown-units";
 
 describe("DocumentDetailPanel", () => {
-  it("mounts only a window of a long preview", () => {
-    // The point of the change this asserts. Rendering cost tracks the nodes
-    // built, so a 40,000-cell spreadsheet took 19 s to open; mounting a
-    // screenful holds it near 1.5 s. Not viewport-dependent: whatever the
-    // container height, fewer units are mounted than the document has.
-    const preview = `# README\n\n${"a paragraph\n\n".repeat(250)}`;
+  it("shows the preview through the shared file viewer", async () => {
+    // Not a bare renderer. The viewer is what brings the preview/source
+    // toggle, the reading column and the padding — a hand-rolled markdown
+    // block next to a document looked unstyled and could not show the source.
+    const preview = "# README\n\nprose";
 
     render(
       <DocumentDetailPanel
@@ -30,32 +28,11 @@ describe("DocumentDetailPanel", () => {
       />,
     );
 
-    const mounted = screen.getAllByTestId("markdown-content");
-    expect(mounted.length).toBeGreaterThan(0);
-    expect(mounted.length).toBeLessThan(splitIntoUnits(preview).length);
-  });
-
-  it("renders the mounted units verbatim and in order", () => {
-    // Each unit is handed to the renderer alone, so a unit that lost a table
-    // header or half a fence would render as garbage rather than fail.
-    const preview = `# README\n\n\`\`\`text\n${"tree entry\n".repeat(250)}\`\`\``;
-    const units = splitIntoUnits(preview);
-
-    render(
-      <DocumentDetailPanel
-        doc={{
-          name: "README.md",
-          format: "MARKDOWN",
-          status: "ready",
-          preview: { markdown: preview, truncated: false },
-        }}
-      />,
+    expect(screen.getByRole("button", { name: /source|源/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /preview|预览/i })).toBeTruthy();
+    expect(screen.getByTestId("markdown-content").textContent).toContain(
+      "README",
     );
-
-    const mounted = screen
-      .getAllByTestId("markdown-content")
-      .map((n) => n.textContent);
-    expect(mounted).toEqual(units.slice(0, mounted.length));
   });
 
   it("says so when the server returned only a window of a large document", () => {
@@ -73,7 +50,7 @@ describe("DocumentDetailPanel", () => {
       />,
     );
 
-    expect(screen.getByText(/开头|beginning/i)).toBeTruthy();
+    expect(screen.getByText(/MiB|较大|large/i)).toBeTruthy();
   });
 
   it("says nothing when the whole document fits", () => {
@@ -88,7 +65,7 @@ describe("DocumentDetailPanel", () => {
       />,
     );
 
-    expect(screen.queryByText(/开头|beginning/i)).toBeNull();
+    expect(screen.queryByText(/MiB|较大|large/i)).toBeNull();
   });
 
   it("keeps document actions in a dedicated footer", () => {
