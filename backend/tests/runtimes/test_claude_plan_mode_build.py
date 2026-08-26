@@ -1,6 +1,6 @@
 """Claude plan mode is a BUILD-TIME lowering, not just a permissionMode flip.
 
-Field bug: a plan-mode research session ("茅台股价分析") sailed straight to
+Field bug: a plan-mode research session (a stock-analysis ask) sailed straight to
 the full deliverable — the CLI's native plan mode only gates MUTATING
 tools, read-only research is legitimately allowed, so a no-mutation task
 never trips the gate; and ``execute_code`` (PTC) ran 5× because
@@ -112,6 +112,7 @@ def _make_transition_runtime(applied_mode: str):  # noqa: ANN202
     rt._applied_permission_mode = "full_access"
     rt._cached_permission_mode = "full_access"
     rt._applied_mode = applied_mode
+    rt._built_with_plan_prompt = applied_mode == "plan"
     rt._fork_next_spawn = False
     destroyed: list[bool] = []
 
@@ -143,3 +144,87 @@ async def test_no_transition_is_a_no_op() -> None:
     session.permission_mode = "full_access"
     await rt._reconcile_session_levers(session)
     assert destroyed == []
+
+
+async def test_post_approve_prompt_drift_cold_reloads() -> None:
+    # After a mid-turn ExitPlanMode approve the hook flips _applied_mode
+    # to default but cannot rebuild the live client — the next turn's
+    # reconcile must detect the stale plan-built prompt and cold-reload,
+    # or the model keeps being told it's planning.
+    rt, destroyed = _make_transition_runtime("default")
+    rt._built_with_plan_prompt = True
+    session = _session(mode="default")
+    session.permission_mode = "full_access"
+    await rt._reconcile_session_levers(session)
+    assert destroyed == [True]
+    assert rt._fork_next_spawn is True
+
+
+# --- plan gate in the permission handler ------------------------------------
+
+
+def _make_handler_runtime(
+    *, applied_mode: str, cached_permission: str = "full_access", read_only: bool = False
+):  # noqa: ANN202
+    rt = object.__new__(ClaudeAgentRuntime)
+    tdef = SimpleNamespace(read_only=read_only, permission=None)
+    rt.toolkit = SimpleNamespace(get=lambda name: tdef if name == "execute_code" else None)
+    rt._applied_mode = applied_mode
+    rt._cached_permission_mode = cached_permission
+    return rt
+
+
+async def test_plan_mode_denies_mutating_toolkit_tools_even_under_full_access() -> None:
+    rt = _make_handler_runtime(applied_mode="plan")
+    result = await rt._permission_handler("mcp__harness_toolkit__execute_code", {}, None)
+    assert type(result).__name__ == "PermissionResultDeny"
+    assert "Plan mode is active" in result.message
+
+
+async def test_plan_mode_still_allows_read_only_toolkit_tools() -> None:
+    rt = _make_handler_runtime(applied_mode="plan", read_only=True)
+    result = await rt._permission_handler("mcp__harness_toolkit__execute_code", {}, None)
+    assert type(result).__name__ == "PermissionResultAllow"
+
+
+async def test_approved_plan_releases_the_toolkit_gate() -> None:
+    # _on_exit_plan_mode_approved flips _applied_mode to "default" —
+    # same-turn execution passes the gate again.
+    rt = _make_handler_runtime(applied_mode="default")
+    result = await rt._permission_handler("mcp__harness_toolkit__execute_code", {}, None)
+    assert type(result).__name__ == "PermissionResultAllow"
+
+
+# --- rejection envelope ------------------------------------------------------
+
+
+async def test_exit_plan_mode_reject_wraps_feedback_unambiguously() -> None:
+    # Field case: the deny message IS the tool result the model reads.
+    # The raw CJK feedback below ("write the results to a file"), passed
+    # through alone, made the model announce the plan was approved and
+    # start executing — the envelope must both flag the rejection and
+    # round-trip the feedback verbatim.
+    import asyncio
+
+    class _Sink:
+        async def emit(self, event: object) -> None:
+            pass
+
+    rt = object.__new__(ClaudeAgentRuntime)
+    rt.workspace_root = "/tmp"
+    rt.event_sink = _Sink()
+    rt._pending_futures = {}
+
+    async def _resolve_soon() -> None:
+        while not rt._pending_futures:
+            await asyncio.sleep(0)
+        pid, future = next(iter(rt._pending_futures.items()))
+        future.set_result(("reject", "结果写到文件中", None, None))
+
+    resolver = asyncio.ensure_future(_resolve_soon())
+    result = await rt._await_host_decision("ExitPlanMode", {"plan": "# P"}, None)
+    await resolver
+    assert type(result).__name__ == "PermissionResultDeny"
+    assert "did NOT approve" in result.message
+    assert "结果写到文件中" in result.message
+    assert "ExitPlanMode again" in result.message

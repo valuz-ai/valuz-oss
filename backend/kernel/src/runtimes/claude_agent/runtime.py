@@ -572,6 +572,15 @@ class ClaudeAgentRuntime:
         # state at turn start (cross-runtime "PATCH applies on next turn
         # after Send" contract); see docs/design/session-modes.md §Per-runtime.
         self._applied_mode: Literal["default", "plan", "goal"] | None = None
+        # Whether the live client was BUILT with the plan-mode inputs
+        # (discipline prompt section + restricted allowlist). Diverges
+        # from ``_applied_mode`` after a mid-turn ExitPlanMode approve:
+        # the hook flips ``_applied_mode`` to default but cannot rebuild
+        # the client from inside a ``can_use_tool`` callback — the next
+        # turn's reconcile detects the drift and cold-reloads, or the
+        # stale prompt section would keep telling the model it's
+        # planning. Seeded at spawn alongside ``_applied_mode``.
+        self._built_with_plan_prompt: bool = False
         # Current-turn session reference, set at ``run()`` entry and
         # cleared on exit. The SDK ``can_use_tool`` callback runs
         # without session context, so ``_on_exit_plan_mode_approved``
@@ -784,6 +793,7 @@ class ClaudeAgentRuntime:
                     session.model_settings.effort if session.model_settings else None
                 )
                 self._applied_mode = session.mode
+                self._built_with_plan_prompt = session.mode == "plan"
                 await self._emit_turn_phase(
                     "runtime_init", duration_ms=int((time.monotonic() - t0) * 1000)
                 )
@@ -1710,6 +1720,18 @@ class ClaudeAgentRuntime:
                 await self._destroy_client()
                 return
             self._applied_mode = new_session_mode
+
+        # Plan-prompt drift: the client's build-time inputs (discipline
+        # section, restricted allowlist) must match the CURRENT mode even
+        # when ``_applied_mode`` is already in sync — the ExitPlanMode
+        # approve hook flips the trackers mid-turn but cannot rebuild the
+        # live client from inside a ``can_use_tool`` callback. Without
+        # this, every turn after an approved plan still carries the
+        # "you are in plan mode" prompt section.
+        if (new_session_mode == "plan") != self._built_with_plan_prompt:
+            self._fork_next_spawn = True
+            await self._destroy_client()
+            return
 
         # ``permission_mode`` change → live mutator when possible.
         # Skipped while in plan mode: the SDK's permissionMode is
@@ -2710,10 +2732,27 @@ class ClaudeAgentRuntime:
 
         tdef = self.toolkit.get(simple_name)
         if tdef:
-            if tdef.read_only or tdef.permission == "auto":
-                return PermissionResultAllow(updated_input=input_data)
             if tdef.permission == "deny":
                 return PermissionResultDeny(message=f"{tool_name} denied by policy")
+            # Plan mode's read-only guarantee for kernel toolkit tools.
+            # The CLI's plan gate only blocks its own built-in mutating
+            # tools; MCP tools route here, where ``full_access`` /
+            # ``permission == "auto"`` would happily wave through
+            # ``execute_code`` (arbitrary code — field-verified running
+            # mid-plan). Deny every non-read-only toolkit tool while the
+            # client is plan-built; the ExitPlanMode approve hook flips
+            # ``_applied_mode`` to default, so post-approval execution in
+            # the same turn passes normally.
+            if self._applied_mode == "plan" and not tdef.read_only:
+                return PermissionResultDeny(
+                    message=(
+                        f"Plan mode is active — {simple_name} is disabled until "
+                        "the plan is approved. Present your plan via ExitPlanMode "
+                        "first; execution tools unlock after approval."
+                    )
+                )
+            if tdef.read_only or tdef.permission == "auto":
+                return PermissionResultAllow(updated_input=input_data)
 
         if self._cached_permission_mode != "default":
             return PermissionResultAllow(updated_input=input_data)
@@ -2918,6 +2957,24 @@ class ClaudeAgentRuntime:
                 # docs/design/session-modes.md §Per-runtime / Claude.
                 await self._on_exit_plan_mode_approved()
             return PermissionResultAllow(updated_input=input_data)
+        if tool_name == "ExitPlanMode":
+            # The deny message is what the model reads as the tool
+            # result. Passing the user's feedback verbatim is fatally
+            # ambiguous — field case: a bare "write the results to a
+            # file" feedback made the model announce the plan was
+            # approved and start executing. Wrap it in an unambiguous
+            # NOT-approved envelope.
+            feedback = (message or "").strip()
+            detail = f' Their feedback: "{feedback}"' if feedback else ""
+            return PermissionResultDeny(
+                message=(
+                    "The user did NOT approve this plan. Plan mode is still "
+                    "active — do not execute anything and do not claim "
+                    "approval. Revise the plan to address the user's "
+                    "feedback, then present the updated plan via "
+                    f"ExitPlanMode again.{detail}"
+                )
+            )
         return PermissionResultDeny(message=message or "User rejected.")
 
     async def _on_exit_plan_mode_approved(self) -> None:
