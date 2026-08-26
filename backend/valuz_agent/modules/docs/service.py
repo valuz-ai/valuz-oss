@@ -166,6 +166,18 @@ MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
 # phase 3 only sniffs files it has never seen before.
 _TEXT_SNIFF_BYTES = 64 * 1024
 
+# How much parsed text one preview request returns unless it asks for less.
+#
+# 256 KiB is roughly where a markdown renderer stops being interactive on a
+# table-heavy document — the measured freeze was a 1.05 MiB spreadsheet
+# preview, and the next largest document in the same library was 232 KB and
+# fine. Chosen to keep the common document in a single request while making
+# the pathological one pageable rather than fatal.
+PREVIEW_WINDOW_BYTES = 256 * 1024
+# A caller may ask for less, never for more: an unbounded ``limit`` would put
+# the old behaviour back one query parameter away.
+PREVIEW_MAX_WINDOW_BYTES = 1024 * 1024
+
 
 def is_text_payload(data: bytes, *, complete: bool = True) -> bool:
     """Whether ``LightLocalParser``'s unknown-extension fallback will keep this
@@ -208,6 +220,26 @@ def is_ingestible(filename: str, data: bytes) -> bool:
 
 
 # ── Value Objects ─────────────────────────────────────────────────────
+
+
+@dataclass
+class DocumentPreview:
+    """One window of a document's parsed text.
+
+    ``total_bytes`` is the whole file, not the window, so a caller can tell
+    "this is everything" from "this is the first page of six" without a second
+    request — and so a UI that shows a truncation notice is stating a measured
+    fact rather than a guess.
+    """
+
+    markdown: str
+    offset: int
+    returned_bytes: int
+    total_bytes: int
+
+    @property
+    def truncated(self) -> bool:
+        return self.offset + self.returned_bytes < self.total_bytes
 
 
 @dataclass
@@ -1197,15 +1229,58 @@ class DocumentLibraryService:
             await self._update_folder_counts(user_id, row.kb_id)
         self._bus.publish("doc.deleted", document_id=doc_id)
 
-    async def get_document_preview(self, user_id: str, doc_id: str) -> str:
+    async def get_document_preview(
+        self,
+        user_id: str,
+        doc_id: str,
+        *,
+        offset: int = 0,
+        limit: int = PREVIEW_WINDOW_BYTES,
+    ) -> DocumentPreview:
+        """A window onto the parsed text, and how much of it there is.
+
+        **Bounded by default, not on request.** This used to return the file
+        whole, and one 1.05 MB spreadsheet preview was enough to hang the
+        browser tab that rendered it — a megabyte of markdown tables is a DOM
+        node per cell. An optional cap would not have helped: the caller that
+        froze was the one that did not know to ask for one.
+
+        The blob on disk stays whole, deliberately. It is not only a preview:
+        ``doc_read`` serves it to the agent as the document's text and reports
+        ``total_chars`` from its length, and where no remote index is
+        configured it *is* what gets searched. Cutting it at rest would tell
+        the agent it had read a document it had only seen half of — a bug this
+        code has already had once. So the cut belongs here, at the edge, where
+        it can be described.
+
+        Byte offsets rather than characters: the caller pages through a file
+        whose size it is told in bytes, and a character window would make
+        ``offset + returned`` disagree with ``total`` on any non-ASCII
+        document. The window is decoded leniently so a boundary landing inside
+        a multi-byte sequence yields a replacement character rather than an
+        error.
+        """
         row = await self._ds.get_by_id(user_id, doc_id)
         if not row:
             raise DocumentNotFound()
-        if row.preview_text_path:
-            local = _resolve_data_file_path(user_id, row.preview_text_path)
-            if local and local.exists():
-                return local.read_text(encoding="utf-8")
-        return ""
+        if not row.preview_text_path:
+            return DocumentPreview(markdown="", offset=0, returned_bytes=0, total_bytes=0)
+        local = _resolve_data_file_path(user_id, row.preview_text_path)
+        if not local or not local.exists():
+            return DocumentPreview(markdown="", offset=0, returned_bytes=0, total_bytes=0)
+
+        total = local.stat().st_size
+        start = max(0, min(offset, total))
+        size = max(0, min(limit, PREVIEW_MAX_WINDOW_BYTES))
+        with local.open("rb") as handle:
+            handle.seek(start)
+            chunk = handle.read(size)
+        return DocumentPreview(
+            markdown=chunk.decode("utf-8", errors="replace"),
+            offset=start,
+            returned_bytes=len(chunk),
+            total_bytes=total,
+        )
 
     async def reindex_documents(self, user_id: str, document_ids: list[str]) -> ImportTaskResult:
         """Create a reindex task and dispatch the per-doc parse loop to a

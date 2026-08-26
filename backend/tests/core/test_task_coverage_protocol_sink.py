@@ -60,6 +60,20 @@ async def test_meta_refusal_text_is_dropped_and_counts_as_no_gap() -> None:
 
 
 @pytest.mark.asyncio
+async def test_request_complete_confirmation_card_meta_text_is_dropped() -> None:
+    inner = _Recorder()
+    sink = _TaskCoverageProtocolSink(inner)
+    meta = "The automation was submitted as a confirmation card. The request is complete."
+
+    await sink.emit(Event(type="text_delta", data={"text": meta}))
+    await sink.emit(Event(type="assistant_message", data={"text": meta}))
+    await sink.finalize()
+
+    assert inner.events == []
+    assert sink.no_gap_declared is True
+
+
+@pytest.mark.asyncio
 async def test_long_supplement_waits_for_terminal_classification() -> None:
     inner = _Recorder()
     sink = _TaskCoverageProtocolSink(inner)

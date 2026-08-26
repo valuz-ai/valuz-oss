@@ -31,13 +31,19 @@ export interface DocumentParserAttempt {
   ok: boolean;
 }
 
+/** One window of a document's parsed text, as the docs API returns it. */
+export interface DocumentPreviewSlice {
+  markdown: string;
+  truncated: boolean;
+}
+
 export interface DocumentDetailPanelProps {
   doc: {
     name: string;
     format: string;
     status: string;
     chunks?: number;
-    preview?: string;
+    preview?: DocumentPreviewSlice;
   };
   meta?: {
     kbName?: string;
@@ -105,12 +111,16 @@ function _previewArtifact(name: string): ArtifactDescriptor {
   };
 }
 
-function _previewContent(markdown: string): ArtifactContent {
+function _previewContent(preview: DocumentPreviewSlice): ArtifactContent {
   return {
     kind: "text",
     encoding: "utf-8",
-    content: markdown,
-    truncated: false,
+    content: preview.markdown,
+    // Measured by the server, not asserted here. This was a hardcoded
+    // ``false`` on text read whole off disk, and one 1.05 MB spreadsheet
+    // preview was enough to hang the tab — the flag claimed completeness for
+    // something nothing had bounded.
+    truncated: preview.truncated,
   };
 }
 

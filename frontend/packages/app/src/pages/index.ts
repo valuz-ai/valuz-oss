@@ -12,6 +12,7 @@ export { ContextPanelPage } from "./ContextPanelPage";
 export { AutomationPage } from "./AutomationPage";
 export { PlaybookPage } from "./PlaybookPage";
 export { AutomationDetailPage } from "./AutomationDetailPage";
+export { PlaybookDetailPage } from "./PlaybookDetailPage";
 export { SkillDetailPage } from "./SkillDetailPage";
 export { ProjectsPage } from "./ProjectsPage";
 export { ConversationPage } from "./ConversationPage";

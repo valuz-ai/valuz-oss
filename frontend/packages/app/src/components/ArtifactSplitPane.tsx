@@ -23,11 +23,19 @@ const ARTIFACT_SPLIT_DEFAULT = 50;
 /**
  * Floors for the two columns, in px rather than percentages: what makes a
  * column unusable is an absolute width, not a share of whatever the window
- * happens to be. Below their sum there is no split worth showing, so the
- * preview folds away entirely and the content takes the pane back.
+ * happens to be.
+ *
+ * ``CONTENT_MIN_PX`` matches the reading column the surfaces lay out
+ * (``max-w-[760px]``): narrower than that and the conversation is being
+ * squeezed, not merely shortened. ``ARTIFACT_MIN_PX`` is what a document
+ * needs before its code blocks and tables start wrapping badly.
+ *
+ * Below their sum there is no split worth showing, and the preview covers
+ * the content instead — a document the reader opened must appear either
+ * way, and covering keeps both panes usable where splitting keeps neither.
  */
-const CONTENT_MIN_PX = 480;
-const ARTIFACT_MIN_PX = 360;
+const CONTENT_MIN_PX = 760;
+const ARTIFACT_MIN_PX = 480;
 const SPLIT_MIN_PX = CONTENT_MIN_PX + ARTIFACT_MIN_PX;
 
 /** Frames to wait for the artifact panel to register with the Group before
@@ -91,7 +99,10 @@ export function ArtifactSplitPane({
     return () => observer.disconnect();
   }, []);
 
-  const open = tabs.length > 0 && splitFits;
+  // A document is open whenever there are tabs; ``splitFits`` only decides
+  // *how* it is shown — beside the content, or over it.
+  const open = tabs.length > 0;
+  const overlay = open && !splitFits;
   usePreviewCloseShortcut({
     active: open && activePath !== null,
     onClose: () => {
@@ -112,7 +123,7 @@ export function ArtifactSplitPane({
   // than spin forever if the panel never shows up.
   const groupRef = useGroupRef();
   useEffect(() => {
-    if (!open) return;
+    if (!open || overlay) return;
     let frame = 0;
     let attemptsLeft = SPLIT_RESET_MAX_FRAMES;
     const applyEvenSplit = () => {
@@ -129,11 +140,50 @@ export function ArtifactSplitPane({
     };
     applyEvenSplit();
     return () => cancelAnimationFrame(frame);
-  }, [open, groupRef]);
+  }, [open, overlay, groupRef]);
+
+  const viewer = (
+    <div
+      className="flex h-full min-h-0 flex-col overflow-hidden overscroll-contain bg-surface"
+      onWheel={(event) => event.stopPropagation()}
+      onTouchMove={(event) => event.stopPropagation()}
+    >
+      {/* The strip names the open documents, so the shell below runs its
+          compact header — otherwise the file name would appear twice and
+          cost a row of content in a half-width pane. */}
+      <ArtifactTabBar
+        tabs={tabs.map((tab) => ({
+          path: tab.path,
+          name: tab.name,
+          previewKind: tab.artifact?.previewKind ?? null,
+          loading: tab.loading,
+          error: Boolean(tab.error),
+        }))}
+        activePath={activePath}
+        onActivate={activate}
+        onClose={closeTab}
+      />
+      <div className="min-h-0 flex-1">
+        <ArtifactViewerShell
+          artifact={artifact}
+          content={content}
+          target={target}
+          loading={loading}
+          error={error}
+          framed={false}
+          compactHeader
+          onReload={onReload}
+          onClose={onClose}
+          onCopyContent={onCopyContent}
+          onOpenExternal={onOpenExternal}
+        />
+      </div>
+    </div>
+  );
 
   return (
     <ResizablePanelGroup
-      className="min-h-0 bg-surface"
+      className="relative min-h-0 bg-surface"
       groupRef={groupRef}
       elementRef={groupElementRef}
     >
@@ -144,7 +194,7 @@ export function ArtifactSplitPane({
       >
         {children}
       </ResizablePanel>
-      {open ? (
+      {open && !overlay ? (
         <>
           <ResizableHandle className="transition-colors data-[separator=active]:bg-brand data-[separator=focus]:bg-brand data-[separator=hover]:bg-brand/60" />
           <ResizablePanel
@@ -153,44 +203,15 @@ export function ArtifactSplitPane({
             minSize={`${ARTIFACT_MIN_PX}px`}
             style={{ overflow: "hidden" }}
           >
-            <div
-              className="flex h-full min-h-0 flex-col overflow-hidden overscroll-contain bg-surface"
-              onWheel={(event) => event.stopPropagation()}
-              onTouchMove={(event) => event.stopPropagation()}
-            >
-              {/* The strip names the open documents, so the shell below runs
-                  its compact header — otherwise the file name would appear
-                  twice and cost a row of content in a half-width pane. */}
-              <ArtifactTabBar
-                tabs={tabs.map((tab) => ({
-                  path: tab.path,
-                  name: tab.name,
-                  previewKind: tab.artifact?.previewKind ?? null,
-                  loading: tab.loading,
-                  error: Boolean(tab.error),
-                }))}
-                activePath={activePath}
-                onActivate={activate}
-                onClose={closeTab}
-              />
-              <div className="min-h-0 flex-1">
-                <ArtifactViewerShell
-                  artifact={artifact}
-                  content={content}
-                  target={target}
-                  loading={loading}
-                  error={error}
-                  framed={false}
-                  compactHeader
-                  onReload={onReload}
-                  onClose={onClose}
-                  onCopyContent={onCopyContent}
-                  onOpenExternal={onOpenExternal}
-                />
-              </div>
-            </div>
+            {viewer}
           </ResizablePanel>
         </>
+      ) : null}
+      {overlay ? (
+        // Too narrow to seat both columns: the document covers the content
+        // rather than disappearing. Same viewer, so its close button and the
+        // tab strip behave exactly as they do in the split.
+        <div className="absolute inset-0 z-20 bg-surface">{viewer}</div>
       ) : null}
     </ResizablePanelGroup>
   );

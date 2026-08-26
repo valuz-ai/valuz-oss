@@ -17,6 +17,14 @@ export interface ProjectOutletContext {
   setHeaderClassName: (cls: string | undefined) => void;
   setHideHeader: (hide: boolean) => void;
   setAsideClassName: (cls: string | undefined) => void;
+  /** Opening width of the resizable right card for this page ("345px" default,
+   *  or a share like "35%" when the panel is a working surface). */
+  setRightPanelDefaultSize: (size: string | undefined) => void;
+  /** Declare that this page uses the right slot for a master-detail layout
+   *  (list + detail) rather than a collapsible side panel. Such a page owns
+   *  its own two-column sizing, so the shell neither offers the collapse /
+   *  maximize controls nor takes the columns over with a resizable split. */
+  setMasterDetailLayout: (on: boolean) => void;
   setMainClassName: (cls: string | undefined) => void;
   setContentInnerClassName: (cls: string | undefined) => void;
 }

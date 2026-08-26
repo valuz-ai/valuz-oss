@@ -228,16 +228,16 @@ export const AutomationDetailPage = () => {
   if (loading) return <PageLoader />;
   if (!detail) return null;
 
-  // Back nav respects where the user arrived from: opened from a project's
-  // automation panel (``?from=project``) it returns to that project; opened from
-  // the standalone Automation list it returns to the list.
-  const fromProject = searchParams.get("from") === "project";
-  const backTarget = fromProject
-    ? `/projects/${detail.project_id}`
-    : "/automations";
-  const backLabel = fromProject
-    ? t(k("automation.backToProject"))
-    : t(k("automation.title"));
+  // Back nav returns to the exact view the user came from — ``from`` carries
+  // a full path (query included, so a workspace reopens on its own tab).
+  // ``from=project`` is the older shorthand and still resolves; with nothing
+  // to go on, the standalone list is the only sensible destination.
+  const from = searchParams.get("from");
+  const backTarget =
+    from === "project"
+      ? `/projects/${detail.project_id}`
+      : (from ?? "/automations");
+  const backLabel = t(k("common.back"));
 
   // Drop runs that never produced a session — interrupted-on-shutdown
   // or recovered-skip ticks that fired but never kicked off a task/chat.
@@ -384,7 +384,7 @@ export const AutomationDetailPage = () => {
         </div>
 
         {/* Two-column layout — each column scrolls independently */}
-        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_360px] overflow-hidden border-t border-surface-border/70">
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(380px,32%)] overflow-hidden border-t border-surface-border/70">
           {/* Left: execution history */}
           <div className="flex min-w-0 flex-col overflow-hidden pt-5">
             <h2 className="mb-3 shrink-0 pr-8 text-sm font-medium text-ink-meta">
@@ -417,7 +417,7 @@ export const AutomationDetailPage = () => {
             <h2 className="mb-3 shrink-0 text-sm font-medium text-ink-meta">
               {t(k("cron.instruction"))}
             </h2>
-            <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-[#f7f8fa] bg-surface-soft/40 p-4">
+            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
               <p className="whitespace-pre-wrap text-sm leading-6 text-ink-body">
                 {detail.prompt_template}
               </p>
