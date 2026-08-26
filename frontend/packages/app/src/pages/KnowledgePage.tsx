@@ -348,7 +348,7 @@ export const KnowledgePage = ({
     setHeader,
     setHeaderClassName,
     setContentInnerClassName,
-    setAsideClassName,
+    setRightPanelDefaultSize,
   } = useProjectOutlet();
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
 
@@ -510,14 +510,20 @@ export const KnowledgePage = ({
   useEffect(() => {
     if (!selectedDoc) {
       setRightPanel(null);
-      setAsideClassName(undefined);
+      setRightPanelDefaultSize(undefined);
       return;
     }
     // The detail is the thing being read once a document is selected — the
     // parsed markdown, error text — while the list is just where the click
-    // came from. 3:7 in the detail's favor; back to the 345px default the
-    // moment no document is open.
-    setAsideClassName("w-[70%] min-w-[480px]");
+    // came from. 3:7 in the detail's favor; back to the shell default the
+    // moment no document is open, so no other page inherits this width.
+    //
+    // Asked for as a panel size, not a width class. The shell moved to
+    // resizable panels, where the aside is laid out by the panel group and
+    // carries ``w-full`` — a ``w-[70%]`` class still reaches the element and
+    // is still overridden there, so the page silently got the 345px default
+    // while looking like it had asked for 70%.
+    setRightPanelDefaultSize("70%");
     setRightPanel(
       <DocumentDetailPanel
         doc={{
@@ -595,10 +601,10 @@ export const KnowledgePage = ({
     // stayed on screen next to the settings content.
     return () => {
       setRightPanel(null);
-      setAsideClassName(undefined);
+      setRightPanelDefaultSize(undefined);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshTree/openSourceFile change identity per render; the panel only needs the ones current when it was handed over
-  }, [selectedDoc, preview, setRightPanel, setAsideClassName, activeKb]);
+  }, [selectedDoc, preview, setRightPanel, setRightPanelDefaultSize, activeKb]);
 
   // Auto-poll the doc detail while the parse is in flight so the
   // panel reflects live state without a manual refresh. Polls every
