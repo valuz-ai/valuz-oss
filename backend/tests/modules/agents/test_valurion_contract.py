@@ -23,7 +23,9 @@ from valuz_agent.modules.agents.service import (
     AgentManagedFieldError,
     AgentNotDeletableError,
     AgentService,
+    InvalidAgentSlugError,
 )
+from valuz_agent.ports.runtime_resource import ManagedMutationResult
 
 OWNER = "owner-valurion"
 
@@ -270,3 +272,56 @@ def test_deployed_valurion_summary_uses_the_request_language() -> None:
 
     assert _agent_to_summary(agent, "zh-CN").name == "小万"
     assert _agent_to_summary(agent, "en-US").name == "Valurion"
+
+
+async def test_copy_does_not_leak_internal_keys_into_the_managed_mutation(
+    db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mutation crosses to the Control Plane, whose model rejects unknowns.
+
+    ``copy_agent`` marks provenance with the private ``_source`` key and
+    ``create_agent`` used to forward the whole payload, so every copy reached
+    the Control Plane carrying it and came back
+    ``422 extra_forbidden: body._source`` — with the copy dialog simply
+    refusing to complete. Provenance travels as the declared ``source``.
+    """
+    seen: list[dict] = []
+
+    async def _capture(user_id, command, *, expected_etag=None, idempotency_key=None):
+        seen.append(dict(command))
+        return ManagedMutationResult(cloud_committed=False)
+
+    monkeypatch.setattr(
+        "valuz_agent.modules.agents.service._before_managed_agent_mutation", _capture
+    )
+    svc = AgentService(db)  # type: ignore[arg-type]
+    source = await svc.create_agent(OWNER, {"name": "Origin"})
+    seen.clear()
+
+    await svc.copy_agent(OWNER, source.slug)
+
+    assert seen, "the copy must still go through the managed mutation"
+    command = seen[-1]
+    assert not [k for k in command if k.startswith("_")], command
+    # The provenance the copy asked for is preserved — via the wire field.
+    assert command["source"] == "user"
+
+
+async def test_copy_accepts_a_caller_chosen_slug(db) -> None:
+    """A derived slug is not always usable (it has to be ASCII), so the caller
+    — and now the dialog — may name the handle outright."""
+    svc = AgentService(db)  # type: ignore[arg-type]
+    source = await svc.create_agent(OWNER, {"name": "Origin"})
+
+    copied = await svc.copy_agent(OWNER, source.slug, name="Market", new_slug="market-analyst")
+
+    assert copied.slug == "market-analyst"
+    assert copied.name == "Market"
+
+
+async def test_copy_rejects_an_invalid_caller_slug(db) -> None:
+    svc = AgentService(db)  # type: ignore[arg-type]
+    source = await svc.create_agent(OWNER, {"name": "Origin"})
+
+    with pytest.raises(InvalidAgentSlugError):
+        await svc.copy_agent(OWNER, source.slug, new_slug="行情分析师")

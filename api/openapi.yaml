@@ -6200,6 +6200,10 @@ components:
       type: object
       properties:
         name: {type: string, nullable: true}
+        # Optional — same rules and same validation as CreateAgentRequest.slug.
+        # A copy derives its slug from the new name when omitted, which is the
+        # only behaviour the UI had before it grew a slug field.
+        slug: {type: string, nullable: true}
     EffectiveResource:
       type: object
       required: [id, slug, name, source, status]

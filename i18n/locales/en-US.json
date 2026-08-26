@@ -2748,7 +2748,11 @@
     "clearDefaultLead": "Clear default lead",
     "remoteGroup": "Remote",
     "sharedGroup": "Shared",
-    "remoteDetailNote": "This agent lives on another machine, so it is read-only here. To use it, pick it in the composer — the conversation starts over there."
+    "remoteDetailNote": "This agent lives on another machine, so it is read-only here. To use it, pick it in the composer — the conversation starts over there.",
+    "slugLabel": "Identifier",
+    "slugHint": "Derived from the name when left blank. Used in links and dispatch calls; ASCII letters, digits and hyphens only, and fixed once created.",
+    "slugPlaceholder": "e.g. market-analyst",
+    "copySubtitle": "Create a copy of “{name}”. Adjust anything before creating — and after."
   },
   "task": {
     "triggeredByChat": "Triggered by a conversation",

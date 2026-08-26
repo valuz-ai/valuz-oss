@@ -2748,7 +2748,11 @@
     "clearDefaultLead": "取消默认 lead",
     "remoteGroup": "远程",
     "sharedGroup": "分享",
-    "remoteDetailNote": "这个 Agent 运行在另一台机器上，这里只能查看。要用它，在输入框里选中它——对话会直接在那台机器上开始。"
+    "remoteDetailNote": "这个 Agent 运行在另一台机器上，这里只能查看。要用它，在输入框里选中它——对话会直接在那台机器上开始。",
+    "slugLabel": "标识符",
+    "slugHint": "留空则按名称自动生成。用于链接与调用，只能是英文字母、数字和连字符，创建后不可修改。",
+    "slugPlaceholder": "例：market-analyst",
+    "copySubtitle": "基于「{name}」创建一个副本，可先改好再创建；创建后也能调整。"
   },
   "task": {
     "triggeredByChat": "由对话触发",
