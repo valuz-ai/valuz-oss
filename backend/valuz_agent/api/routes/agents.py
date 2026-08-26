@@ -390,6 +390,9 @@ async def update_agent(
 
 class CopyAgentRequest(BaseModel):
     name: str | None = None
+    # Optional, same rules as CreateAgentRequest.slug: a copy derives one from
+    # the new name when omitted.
+    slug: str | None = None
 
 
 @router.post("/v1/agents/{slug}/copy", status_code=201, response_model=AgentResponse)
@@ -406,6 +409,7 @@ async def copy_agent(
             user_id,
             slug,
             name=payload.name if payload is not None else None,
+            new_slug=payload.slug if payload is not None else None,
         )
     except AgentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"Agent not found: {slug}") from exc

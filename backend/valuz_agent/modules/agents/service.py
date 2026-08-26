@@ -412,9 +412,21 @@ class AgentService:
         )
         # Live-reference: sessions snapshot the row at creation time, so a
         # fresh agent needs no extra materialization step.
+        #
+        # Underscore-prefixed keys are private to this call and must not ride
+        # along: the mutation crosses a process boundary into a target whose
+        # schema rejects fields it does not declare. ``_source`` is exactly
+        # that case — it travels as the declared ``source``, read back off the
+        # row so the two can never disagree. (The Valurion path above already
+        # passes ``source`` explicitly for the same reason.)
         authority = await _before_managed_agent_mutation(
             user_id,
-            {"operation": "upsert", "slug": slug, **payload},
+            {
+                "operation": "upsert",
+                "slug": slug,
+                **{key: value for key, value in payload.items() if not key.startswith("_")},
+                "source": row.source,
+            },
             idempotency_key=payload.get("idempotency_key"),
         )
         if authority.resource_id:
@@ -553,8 +565,14 @@ class AgentService:
         slug: str,
         *,
         name: str | None = None,
+        new_slug: str | None = None,
     ) -> AgentRow:
-        """Copy one Agent without copying identity, ownership, or secrets."""
+        """Copy one Agent without copying identity, ownership, or secrets.
+
+        new_slug is the caller's chosen handle for the copy; omitted, the
+        slug is derived from the new name as before. It goes through the same
+        validation as any caller-supplied slug on create.
+        """
         source = await self.get_agent(user_id, slug)
         is_valurion = source.kind == "system" and source.slug == VALURION_SLUG
         if is_valurion:
@@ -591,6 +609,8 @@ class AgentService:
                 "avatar": source.avatar,
                 "_source": "user",
             }
+        if new_slug:
+            payload["slug"] = new_slug
         return await self.create_agent(user_id, payload)
 
     async def resolve_effective_resources(

@@ -300,7 +300,9 @@ export const agentsApi = {
     for (const { target, value } of outcome.values) {
       const elsewhere = target.id !== defaultTargetId;
       for (const agent of value.agents) {
-        merged.push(elsewhere ? { ...agent, exec_target_id: target.id } : agent);
+        merged.push(
+          elsewhere ? { ...agent, exec_target_id: target.id } : agent,
+        );
       }
     }
     return { agents: merged };
@@ -341,13 +343,20 @@ export const agentsApi = {
     return result;
   },
 
-  async copyAgent(slug: string, name?: string): Promise<Agent> {
+  async copyAgent(
+    slug: string,
+    name?: string,
+    newSlug?: string,
+  ): Promise<Agent> {
     const result = await fetchJson<Agent>(
       `/v1/agents/${encodeURIComponent(slug)}/copy`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(name ? { name } : {}),
+        body: JSON.stringify({
+          ...(name ? { name } : {}),
+          ...(newSlug ? { slug: newSlug } : {}),
+        }),
       },
     );
     invalidateAgents();
@@ -372,10 +381,10 @@ export const agentsApi = {
   },
 
   listMembers(projectId: string): Promise<{ agents: MemberWithAgent[] }> {
-    return fetchJson(
-      `/v1/projects/${encodeURIComponent(projectId)}/agents`,
-      { cache: projectAgentsCache(projectId), baseUrl: projectBase(projectId) },
-    );
+    return fetchJson(`/v1/projects/${encodeURIComponent(projectId)}/agents`, {
+      cache: projectAgentsCache(projectId),
+      baseUrl: projectBase(projectId),
+    });
   },
 
   /** v2 派驻: deploy (live-reference) a library agent into a project. */

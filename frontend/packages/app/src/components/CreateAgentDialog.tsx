@@ -94,6 +94,7 @@ export const CreateAgentDialog = ({
   const [avatar, setAvatar] = useState<string | null>(null);
   const [model, setModel] = useState<AgentModelSelection>(DEFAULT_MODEL);
   const [effort, setEffort] = useState<EffortLevel>(DEFAULT_EFFORT);
+  const [slug, setSlug] = useState("");
   const [instructions, setInstructions] = useState("");
   const [skills, setSkills] = useState<string[]>([]);
   const [connectors, setConnectors] = useState<string[]>([]);
@@ -121,6 +122,7 @@ export const CreateAgentDialog = ({
   const reset = useCallback(() => {
     setStep("form");
     setName("");
+    setSlug("");
     setTagline("");
     setAvatar(null);
     setModel(DEFAULT_MODEL);
@@ -144,6 +146,10 @@ export const CreateAgentDialog = ({
     if (seed) {
       const copy = getAgentCopyDefaults(seed);
       setName(copy.name);
+      // Deliberately NOT seeded from the source: a slug is unique per owner, so
+      // carrying the original over would always collide. Blank means "derive
+      // from the new name", which is what a copy did before this field existed.
+      setSlug("");
       setTagline(copy.tagline);
       setAvatar(copy.avatar);
       setModel(copy.model);
@@ -213,6 +219,7 @@ export const CreateAgentDialog = ({
     setBusy(true);
     let rollbackSlug: string | null = null;
     try {
+      const trimmedSlug = slug.trim();
       const payload = {
         name: trimmed,
         description: tagline.trim(),
@@ -229,12 +236,18 @@ export const CreateAgentDialog = ({
       };
       let created: Agent;
       if (seed) {
-        const copied = await agentsApi.copyAgent(seed.slug, trimmed);
+        const copied = await agentsApi.copyAgent(
+          seed.slug,
+          trimmed,
+          trimmedSlug || undefined,
+        );
         rollbackSlug = copied.slug;
         created = await agentsApi.updateAgent(copied.slug, payload);
         rollbackSlug = null;
       } else {
-        created = await agentsApi.createAgent(payload);
+        created = await agentsApi.createAgent(
+          trimmedSlug ? { ...payload, slug: trimmedSlug } : payload,
+        );
       }
       setCreatedSlug(created.slug);
       setCreatedName(created.name);
@@ -298,10 +311,16 @@ export const CreateAgentDialog = ({
           <>
             <DialogHeader>
               <DialogTitle>
-                {t("agent.createAgent" as Parameters<typeof t>[0])}
+                {seed
+                  ? t("agent.copyAgent" as Parameters<typeof t>[0])
+                  : t("agent.createAgent" as Parameters<typeof t>[0])}
               </DialogTitle>
               <DialogDescription>
-                {t("agent.createSubtitle" as Parameters<typeof t>[0])}
+                {seed
+                  ? t("agent.copySubtitle" as Parameters<typeof t>[0], {
+                      name: seed.name,
+                    })
+                  : t("agent.createSubtitle" as Parameters<typeof t>[0])}
               </DialogDescription>
             </DialogHeader>
 
@@ -345,6 +364,27 @@ export const CreateAgentDialog = ({
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   autoFocus
+                />
+              </DialogField>
+
+              {/* The handle. Optional — blank derives one from the name, which
+                  is what every agent got before this field existed. It is
+                  offered because a derived handle is not always usable: the
+                  slug travels in URLs, dispatch parameters and an HTTP header,
+                  so it has to be ASCII, and a wholly non-Latin name derives
+                  something opaque. Creation-time only: members, tasks and
+                  shares reference an agent by this value, so it is fixed once
+                  the agent exists. */}
+              <DialogField
+                label={t("agent.slugLabel" as Parameters<typeof t>[0])}
+                help={t("agent.slugHint" as Parameters<typeof t>[0])}
+              >
+                <DialogInput
+                  value={slug}
+                  onChange={(e) => setSlug(e.target.value)}
+                  placeholder={t(
+                    "agent.slugPlaceholder" as Parameters<typeof t>[0],
+                  )}
                 />
               </DialogField>
 
@@ -497,7 +537,9 @@ export const CreateAgentDialog = ({
                 {t("common.cancel")}
               </Button>
               <Button onClick={submitCreate} disabled={busy || !name.trim()}>
-                {t("agent.createAgent" as Parameters<typeof t>[0])}
+                {seed
+                  ? t("agent.copyAgent" as Parameters<typeof t>[0])
+                  : t("agent.createAgent" as Parameters<typeof t>[0])}
               </Button>
             </DialogFooter>
           </>
