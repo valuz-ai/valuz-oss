@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { AlertTriangle, CheckCircle2, MessageCircleQuestion } from "lucide-react";
 
 import {
+  ApiError,
   dismissNotification,
   sessionsApi,
   tasksApi,
@@ -192,6 +193,10 @@ function QuestionCard({ entry, onNavigateAway }: NotificationCardProps): ReactEl
         // No optimistic removal — the ``action_resolved`` event resolves the
         // notification and the SSE ``resolved`` frame clears it.
       } catch (err) {
+        // The backend emits action_resolved(expired) when this notification
+        // outlived the runtime that was waiting for it. The stream will remove
+        // the stale card; no retryable user error exists in that case.
+        if (err instanceof ApiError && err.status === 410) return;
         setSubmitting(false);
         toast.error(
           err instanceof Error ? err.message : _t("common.saveFailed" as I18nKey),

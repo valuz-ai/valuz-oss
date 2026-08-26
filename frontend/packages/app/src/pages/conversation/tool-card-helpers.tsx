@@ -220,6 +220,59 @@ export function renderChatplanStatusPill(
 }
 
 /**
+ * Normalize current and recorded legacy Automation trigger shapes at the
+ * conversation boundary. Older proposals used ``{ cron: "..." }``; replaying
+ * one directly into the current confirm endpoint produces a discriminator 422
+ * because today's contract requires ``kind``.
+ */
+export function normalizeAutomationTrigger(value: unknown): Trigger | null {
+  if (typeof value === "string") {
+    try {
+      return normalizeAutomationTrigger(JSON.parse(value));
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== "object") return null;
+
+  const trigger = value as Record<string, unknown>;
+  const cronExpr =
+    typeof trigger.cron_expr === "string"
+      ? trigger.cron_expr.trim()
+      : typeof trigger.cron === "string"
+        ? trigger.cron.trim()
+        : "";
+  if ((trigger.kind === "cron" || !trigger.kind) && cronExpr) {
+    return {
+      kind: "cron",
+      cron_expr: cronExpr,
+      timezone:
+        typeof trigger.timezone === "string" && trigger.timezone.trim()
+          ? trigger.timezone
+          : null,
+    };
+  }
+
+  const seconds =
+    typeof trigger.seconds === "number"
+      ? trigger.seconds
+      : typeof trigger.interval_seconds === "number"
+        ? trigger.interval_seconds
+        : typeof trigger.interval === "number"
+          ? trigger.interval
+          : null;
+  if (
+    (trigger.kind === "interval" || !trigger.kind) &&
+    seconds !== null &&
+    Number.isFinite(seconds)
+  ) {
+    return { kind: "interval", seconds };
+  }
+
+  return trigger.kind === "manual" ? { kind: "manual" } : null;
+}
+
+/**
  * Parse an ``automation`` tool call's INPUT into a create spec, or null if it
  * isn't a ``create`` action. ``create`` is the only action that renders a
  * propose→confirm card (others render ``AutomationToolCard``).
@@ -256,14 +309,7 @@ export function parseAutomationCreateInput(input: unknown): {
     return null;
   }
   const p = parsed as Record<string, unknown>;
-  let trigger: unknown = p.trigger ?? null;
-  if (typeof trigger === "string") {
-    try {
-      trigger = JSON.parse(trigger);
-    } catch {
-      trigger = null;
-    }
-  }
+  const trigger = normalizeAutomationTrigger(p.trigger ?? null);
   const actionKind =
     p.action_kind === "task"
       ? "task"
@@ -285,8 +331,7 @@ export function parseAutomationCreateInput(input: unknown): {
     name: typeof p.name === "string" ? p.name : "",
     prompt_template:
       typeof p.prompt_template === "string" ? p.prompt_template : "",
-    trigger:
-      trigger && typeof trigger === "object" ? (trigger as Trigger) : null,
+    trigger,
     agent_slug: typeof p.agent_slug === "string" ? p.agent_slug : undefined,
     action_kind: actionKind,
     worktree,

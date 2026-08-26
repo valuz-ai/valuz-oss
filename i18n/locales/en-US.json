@@ -67,14 +67,13 @@
     "playbookLabel": "Playbook",
     "playbookNone": "No Playbook — run the automation instruction only",
     "playbookRetired": "Retired",
-    "proposalCollapse": "Collapse",
     "proposalCreated": "Automation created.",
     "proposalDismissed": "Dismissed",
-    "proposalExpand": "Expand",
     "proposalFailed": "Couldn't prepare this automation",
     "proposalLead": "Lead",
     "proposalNew": "New automation",
     "proposalUnnamed": "Unnamed automation",
+    "promptLabel": "Prompt",
     "recentExecutions": "Recent executions",
     "resumeSuccess": "Resumed \"{name}\"",
     "runFailed": "Run failed: {error}",
@@ -83,6 +82,7 @@
     "targetChat": "Quick chat",
     "targetLabelTask": "Project",
     "timezoneLabel": "Timezone",
+    "viewPrompt": "View full prompt",
     "title": "Automation",
     "toggleFailed": "Toggle failed: {error}",
     "triggerCron": "Cron",
@@ -119,14 +119,18 @@
     "operation": {
       "cancelled": "Cancelled. The Playbook was not changed.",
       "create": "Create proposal",
+      "createAction": "Create Playbook",
       "delete": "Delete proposal",
+      "deleteAction": "Confirm delete",
       "deleted": "Playbook deleted",
       "failed": "The Playbook operation failed",
       "metadata": "Details-change proposal",
       "retire": "Retire proposal",
+      "retireAction": "Confirm retire",
       "status": "Status-change proposal",
       "succeeded": "Operation completed · View Playbook",
-      "update": "New-version proposal"
+      "update": "New-version proposal",
+      "updateAction": "Save update"
     },
     "projectAssociated": "Project associated",
     "projectGlobal": "Global (no project association)",
@@ -165,7 +169,23 @@
     "versionReuseHint": "Reusing v{source}; saving creates v{version} without overwriting history.",
     "versionSaveHint": "Editing the Prompt creates v{version}; changing only the name, status, or project does not add a version.",
     "versionColumn": "Version",
-    "actionColumn": "Actions"
+    "actionColumn": "Actions",
+    "detailTitle": "Playbook detail",
+    "versionLabel": "v{version}",
+    "run": "Run",
+    "executionHistory": "Execution history",
+    "noExecutions": "No executions yet",
+    "content": "Playbook content",
+    "notFound": "This playbook no longer exists",
+    "runStatus": {
+      "queued": "Queued",
+      "planning": "Planning",
+      "running": "Running",
+      "waiting_approval": "Awaiting approval",
+      "completed": "Completed",
+      "failed": "Failed",
+      "stopped": "Stopped"
+    }
   },
   "backend": {
     "schedule": {
@@ -300,9 +320,10 @@
   "composer": {
     "modeChat": "Chat",
     "modeTask": "Task",
+    "modeChatTip": "Chat — the agent answers here: ask, follow up, refine",
     "sendTask": "Launch task",
     "taskPlaceholder": "Describe the task goal — the lead agent will take over and run it in the background.",
-    "taskHint": "The lead agent owns the goal end-to-end: decomposes it, dispatches to teammates when useful, validates and aggregates. Track or step in any time from the task detail page."
+    "modeTaskTip": "Task — a lead agent owns the goal: plans, dispatches, aggregates"
   },
   "conversation": {
     "addAttachment": "Add attachment",
@@ -1191,7 +1212,7 @@
     "importFailed": "Import failed — make sure the file is a valid .valuzpack",
     "importDone": "Imported · {members} member(s)",
     "nameConflict": "A project with this name already exists",
-    "nameConflictHint": "Import will be skipped to avoid overwriting the existing project. Rename it first if you want to import this one.",
+    "nameConflictHint": "A project with this name already exists — rename it to import.",
     "confirm": "Confirm import",
     "done": "Done",
     "cancel": "Cancel",
@@ -1250,7 +1271,8 @@
     "bindChatShort": "Link",
     "deleteChat": "Delete group",
     "deleteChatDone": "Group deleted",
-    "deleteChatDesc": "Valuz created this group. Deleting it removes the group and its history for good."
+    "deleteChatDesc": "Valuz created this group. Deleting it removes the group and its history for good.",
+    "nameSection": "Project name"
   },
   "schedule": {
     "create": "Create Schedule",
@@ -1921,6 +1943,9 @@
     "deleted": "Deleted",
     "desktopOnly": "Only supported in desktop",
     "expandPanel": "Expand right panel",
+    "maximizePanel": "Maximize right panel",
+    "resizePanel": "Resize right panel",
+    "restorePanel": "Restore right panel",
     "expandShow": "Expand ({count})",
     "help": "Help",
     "home": "Home",
@@ -3228,6 +3253,7 @@
     "apiKeyConfig": "API key configuration",
     "toolCalls": "Tool calls",
     "contextPanel": "Context panel",
-    "overlays": "Overlays"
+    "overlays": "Overlays",
+    "playbookDetail": "Playbook detail"
   }
 }

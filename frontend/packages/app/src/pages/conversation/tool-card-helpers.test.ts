@@ -1,8 +1,53 @@
 import { describe, expect, it } from "vitest";
 
-import { hostDocumentFileName, resolveGenUiHost } from "./tool-card-helpers";
+import {
+  hostDocumentFileName,
+  normalizeAutomationTrigger,
+  parseAutomationCreateInput,
+  resolveGenUiHost,
+} from "./tool-card-helpers";
 
 const PANEL = { host_type: "finance.research-desk", host_id: "desk" };
+
+describe("automation trigger compatibility", () => {
+  it("normalizes the legacy cron proposal before confirmation", () => {
+    expect(normalizeAutomationTrigger({ cron: "0 9 * * *" })).toEqual({
+      kind: "cron",
+      cron_expr: "0 9 * * *",
+      timezone: null,
+    });
+  });
+
+  it("normalizes a legacy trigger read from automation tool input", () => {
+    expect(
+      parseAutomationCreateInput(
+        JSON.stringify({
+          action: "create",
+          name: "每日简报",
+          trigger: { cron: "0 9 * * *" },
+        }),
+      )?.trigger,
+    ).toEqual({
+      kind: "cron",
+      cron_expr: "0 9 * * *",
+      timezone: null,
+    });
+  });
+
+  it("keeps the current discriminated trigger contract", () => {
+    expect(
+      normalizeAutomationTrigger({
+        kind: "cron",
+        cron_expr: "30 8 * * 1",
+        timezone: "Asia/Shanghai",
+      }),
+    ).toEqual({
+      kind: "cron",
+      cron_expr: "30 8 * * 1",
+      timezone: "Asia/Shanghai",
+    });
+  });
+});
 
 describe("resolveGenUiHost", () => {
   it("should return null when neither the tool nor the panel names a host", () => {

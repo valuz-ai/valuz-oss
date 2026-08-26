@@ -535,7 +535,6 @@ export function ComposerPane({
           onManageSkills={() => navigate("/skills")}
           onManageConnectors={() => navigate("/connectors")}
         />
-
       </div>
     </>
   );

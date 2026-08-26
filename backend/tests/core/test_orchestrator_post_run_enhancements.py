@@ -70,6 +70,7 @@ class _RecordingRuntime:
         evidence_payload: dict[str, object] | None = None,
         coverage_noop: bool = False,
         called_tool_name: str | None = None,
+        called_tool_input: dict[str, object] | None = None,
         called_tool_external: bool | None = None,
         tool_result_is_error: bool = False,
     ) -> None:
@@ -88,6 +89,7 @@ class _RecordingRuntime:
         self.evidence_payload = evidence_payload
         self.coverage_noop = coverage_noop
         self.called_tool_name = called_tool_name
+        self.called_tool_input = called_tool_input
         self.called_tool_external = called_tool_external
         self.tool_result_is_error = tool_result_is_error
         self.prompts: list[UserMessage] = []
@@ -132,7 +134,7 @@ class _RecordingRuntime:
                         data={
                             "id": tool_use_id,
                             "name": self.called_tool_name,
-                            "input": {},
+                            "input": self.called_tool_input or {},
                             **(
                                 {"external": self.called_tool_external}
                                 if self.called_tool_external is not None
@@ -428,8 +430,7 @@ async def test_post_run_checks_skip_when_primary_uses_only_internal_tools(
     assert "task_coverage" not in message.metadata
     assert "claim_audits" not in message.metadata
     assert not any(
-        event.type == "turn_phase"
-        and event.data.get("phase") == "post_run_verification"
+        event.type == "turn_phase" and event.data.get("phase") == "post_run_verification"
         for event in store.appended
     )
 
@@ -498,8 +499,7 @@ async def test_successful_generate_ui_skips_task_coverage_for_that_turn(
     assert "citation_bundle" not in message.metadata
     assert "claim_audits" not in message.metadata
     assert not any(
-        event.type == "turn_phase"
-        and event.data.get("phase") == "post_run_verification"
+        event.type == "turn_phase" and event.data.get("phase") == "post_run_verification"
         for event in store.appended
     )
 
@@ -541,10 +541,96 @@ async def test_namespaced_generate_ui_skips_post_run_checks_for_that_turn(
     assert "citation_bundle" not in message.metadata
     assert "claim_audits" not in message.metadata
     assert not any(
-        event.type == "turn_phase"
-        and event.data.get("phase") == "post_run_verification"
+        event.type == "turn_phase" and event.data.get("phase") == "post_run_verification"
         for event in store.appended
     )
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "tool_input"),
+    [
+        ("mcp__valuz_automations__automation", {"action": "create"}),
+        ("valuz-playbooks/playbook", {"action": "create"}),
+        ("mcp__valuz_playbooks__playbook", {"action": "update"}),
+        ("valuz-playbooks/playbook", {"action": "delete"}),
+        ("mcp__valuz_finance__domain_operation", {"action": "propose"}),
+    ],
+)
+async def test_confirmation_card_operation_skips_post_run_checks_for_that_turn(
+    tmp_path,
+    monkeypatch,
+    tool_name: str,
+    tool_input: dict[str, object],
+) -> None:
+    session = _session(
+        tmp_path,
+        task_coverage_enabled=True,
+        citation_enabled=True,
+        verification_enabled=True,
+    )
+    store = _FakeStore(session)
+    runtimes: list[_RecordingRuntime] = []
+
+    def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
+        runtime = _RecordingRuntime(
+            args[2],
+            primary_text="The confirmation card is ready.",
+            called_tool_name=tool_name,
+            called_tool_input=tool_input,
+        )
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
+
+    message = await SessionOrchestrator(store).run_turn(
+        "owner-1",
+        session.id,
+        UserMessage(text="Create the resource and let me confirm it."),
+    )
+
+    assert len(runtimes[0].prompts) == 1
+    assert message.assistant_message == "The confirmation card is ready."
+    assert "task_coverage" not in message.metadata
+    assert "citation_bundle" not in message.metadata
+    assert "claim_audits" not in message.metadata
+    assert not any(
+        event.type == "turn_phase" and event.data.get("phase") == "post_run_verification"
+        for event in store.appended
+    )
+
+
+async def test_read_only_resource_tool_still_runs_post_run_checks(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    session = _session(
+        tmp_path,
+        task_coverage_enabled=True,
+        citation_enabled=True,
+        verification_enabled=True,
+    )
+    store = _FakeStore(session)
+    runtimes: list[_RecordingRuntime] = []
+
+    def create_runtime(*args, **kwargs) -> _RecordingRuntime:  # noqa: ANN002, ANN003
+        runtime = _RecordingRuntime(
+            args[2],
+            called_tool_name="mcp__valuz_automations__automation",
+            called_tool_input={"action": "list"},
+        )
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr("src.runtimes.factory.create_runtime", create_runtime)
+
+    await SessionOrchestrator(store).run_turn(
+        "owner-1",
+        session.id,
+        UserMessage(text="Summarize my automations."),
+    )
+
+    assert len(runtimes[0].prompts) == 2
 
 
 async def test_failed_generate_ui_also_skips_post_run_checks_for_that_turn(
@@ -584,8 +670,7 @@ async def test_failed_generate_ui_also_skips_post_run_checks_for_that_turn(
     assert "citation_bundle" not in message.metadata
     assert "claim_audits" not in message.metadata
     assert not any(
-        event.type == "turn_phase"
-        and event.data.get("phase") == "post_run_verification"
+        event.type == "turn_phase" and event.data.get("phase") == "post_run_verification"
         for event in store.appended
     )
 

@@ -755,9 +755,10 @@ async def submit_session_action(
 
     See OpenAPI / `docs/design/cross-runtime-approval-contract.md` §4.2.
     Idempotent on (pending_id, decision); conflicts (different decision)
-    return 409; expired / interrupted pendings return 410; missing
-    runtime returns 400; runtime that hasn't yet wired the bridge
-    returns 501.
+    return 409; expired / interrupted pendings return 410. A durable pending
+    that outlived its runtime is sealed lazily and also returns 410; a missing
+    runtime whose event cannot be repaired returns 400. A runtime that hasn't
+    yet wired the bridge returns 501.
     """
     try:
         result = await orchestrator.submit_action(

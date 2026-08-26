@@ -337,10 +337,12 @@ class ProjectPackService:
         model: str,
         effort: str | None,
         root_path: str | None = None,
+        name: str | None = None,
     ) -> dict[str, Any]:
-        """Commit a staged import. If a project of the same name already
-        exists for the recipient, SKIP (don't create, don't overwrite) and
-        return ``{status: "skipped_name_conflict"}``.
+        """Commit a staged import. ``name`` overrides the name carried by the
+        pack, which is how the importer resolves a clash with a project they
+        already own. If the resulting name is still taken, SKIP (don't create,
+        don't overwrite) and return ``{status: "skipped_name_conflict"}``.
         """
         staged = _project_import_stage.pop(preview_id, None)
         if staged is None:
@@ -355,20 +357,25 @@ class ProjectPackService:
                     "this is an agent pack — import it from the agents page, not here"
                 )
 
+            # The importer may rename on the way in; everything downstream
+            # (the synthesized collection, the created project) uses the
+            # effective name.
+            effective_name = (name or "").strip() or project.name
+
             # Re-check name conflict at confirm time (a project created
             # between preview and confirm must not be overwritten).
-            if await self._projects.get_by_name(user_id, project.name) is not None:
+            if await self._projects.get_by_name(user_id, effective_name) is not None:
                 return {
                     "status": "skipped_name_conflict",
                     "project": None,
-                    "project_name": project.name,
+                    "project_name": effective_name,
                 }
 
             # 1) Install skills + connectors + library agents de-duped by slug.
             #    Reuse the agent-pack install path by presenting the payload as
             #    a collection manifest (the agents already live in ``agents[]``).
             synth = PackManifest(
-                collection=PackCollection(name=project.name),
+                collection=PackCollection(name=effective_name),
                 agents=list(manifest.agents),
                 skills=manifest.skills,
                 connectors=manifest.connectors,
@@ -388,7 +395,7 @@ class ProjectPackService:
             #    otherwise create_project_from_pack falls back to a managed cwd.
             project_row = await self._projects.create_project_from_pack(
                 user_id,
-                name=project.name,
+                name=effective_name,
                 kind=project.kind,
                 icon=project.icon,
                 instructions_md=resolve_text(project.instructions_md),
