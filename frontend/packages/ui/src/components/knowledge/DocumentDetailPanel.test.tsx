@@ -20,12 +20,45 @@ describe("DocumentDetailPanel", () => {
           name: "README.md",
           format: "MARKDOWN",
           status: "ready",
-          preview,
+          preview: { markdown: preview, truncated: false },
         }}
       />,
     );
 
     expect(screen.getByTestId("markdown-content").textContent).toBe(preview);
+  });
+
+  it("says so when the server returned only a window of a large document", () => {
+    // The flag is measured server-side now. It used to be a hardcoded
+    // ``false`` on text read whole off disk, and one 1.05 MB spreadsheet
+    // preview was enough to hang the tab.
+    render(
+      <DocumentDetailPanel
+        doc={{
+          name: "big.xlsx",
+          format: "XLSX",
+          status: "ready",
+          preview: { markdown: "# part one", truncated: true },
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/5 MiB|较大|large/i)).toBeTruthy();
+  });
+
+  it("says nothing when the whole document fits", () => {
+    render(
+      <DocumentDetailPanel
+        doc={{
+          name: "small.md",
+          format: "MARKDOWN",
+          status: "ready",
+          preview: { markdown: "# all of it", truncated: false },
+        }}
+      />,
+    );
+
+    expect(screen.queryByText(/5 MiB|较大|large/i)).toBeNull();
   });
 
   it("keeps document actions in a dedicated footer", () => {

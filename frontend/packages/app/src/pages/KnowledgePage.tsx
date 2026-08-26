@@ -49,6 +49,7 @@ import {
   PageLoader,
   SearchInput,
   cn,
+  type DocumentPreviewSlice,
 } from "@valuz/ui";
 import {
   docsApi,
@@ -325,7 +326,7 @@ export const KnowledgePage = ({
 
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<DocDetail | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
+  const [preview, setPreview] = useState<DocumentPreviewSlice | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -483,10 +484,20 @@ export const KnowledgePage = ({
           docsApi.get(docId, activeKb?.id),
           docsApi
             .preview(docId, activeKb?.id)
-            .catch(() => ({ document_id: docId, markdown: "" })),
+            .catch(() => ({
+              document_id: docId,
+              markdown: "",
+              offset: 0,
+              returned_bytes: 0,
+              total_bytes: 0,
+              truncated: false,
+            })),
         ]);
         setSelectedDoc(doc);
-        setPreview(prev.markdown || null);
+        // The whole response, not just the text: ``truncated`` is what lets the
+        // panel say a large document is only partly shown instead of silently
+        // presenting a window as the document.
+        setPreview(prev.markdown ? prev : null);
       } catch {
         toast.error(t("knowledge.cannotLoadDetail" as Parameters<typeof t>[0]));
       }
@@ -629,7 +640,7 @@ export const KnowledgePage = ({
           try {
             const freshPreview = await docsApi.preview(docId, docKbId);
             if (selectedDocId === docId) {
-              setPreview(freshPreview.markdown || null);
+              setPreview(freshPreview.markdown ? freshPreview : null);
             }
           } catch {
             // Preview re-fetch failed — keep the old content; non-fatal.

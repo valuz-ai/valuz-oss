@@ -128,6 +128,10 @@ async function openDoc(opts: { platformOverrides?: Partial<PlatformCapabilities>
   vi.spyOn(docsApi, "preview").mockResolvedValue({
     document_id: DOC.id,
     markdown: "",
+    offset: 0,
+    returned_bytes: 0,
+    total_bytes: 0,
+    truncated: false,
   });
 
   const rendered = renderKnowledgePage();
