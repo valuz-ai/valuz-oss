@@ -79,6 +79,12 @@ export interface UseArtifactFileResult {
   error: string | null;
   open: (path: string, target?: ArtifactOpenTarget | null) => Promise<void>;
   reload: () => Promise<void>;
+  /**
+   * Re-read the open tabs matching those absolute paths, in place — no focus
+   * change, no tab reordering, no blank frame. Surfaces watching an agent
+   * call this with whatever it just wrote.
+   */
+  refreshOpen: (absolutePaths: readonly string[]) => Promise<void>;
   /** Close every tab — the "dismiss the whole preview" action. */
   close: () => void;
 }
@@ -193,33 +199,25 @@ export function useArtifactFile({
     [forgetTab, touchViewOrder],
   );
 
-  const open = useCallback(
-    async (path: string, openTarget?: ArtifactOpenTarget | null) => {
+  /**
+   * Read one document into its tab. Split out of ``open`` so a background
+   * refresh can reuse the exact same read without ``open``'s side effects —
+   * it must not steal focus or reorder the LRU just because a file changed
+   * under a tab the user isn't looking at.
+   *
+   * ``silent`` keeps the current content on screen while the re-read is in
+   * flight. A refresh that flipped the tab to ``loading`` would blank the
+   * preview on every agent edit, which is the opposite of following along.
+   */
+  const loadDocument = useCallback(
+    async (
+      key: string,
+      location: ArtifactFileLocation,
+      openTarget: ArtifactOpenTarget | null,
+      options?: { silent?: boolean },
+    ) => {
       if (!projectId) return;
-
-      const location = locate(path);
-      const key = location.relativePath;
-      const alreadyOpen = tabs.some((tab) => tab.path === key);
-
-      touchViewOrder(key);
-      setActivePath(key);
-
-      // Re-opening a document that's already loaded is a focus change, not a
-      // refetch — unless a target (e.g. a PDF page) has to be applied.
-      if (alreadyOpen && multiTab && !openTarget) return;
-
-      if (!multiTab) {
-        // Single-document mode replaces the selection outright, so anything
-        // still in flight for another path is now dead weight — drop it before
-        // it can burn a content read nobody will see.
-        for (const [path, inflight] of controllersRef.current) {
-          if (path === key) continue;
-          inflight.abort();
-          controllersRef.current.delete(path);
-          requestIdsRef.current.delete(path);
-        }
-        viewOrderRef.current = [key];
-      }
+      const silent = options?.silent ?? false;
 
       const requestId = (requestIdsRef.current.get(key) ?? 0) + 1;
       requestIdsRef.current.set(key, requestId);
@@ -243,7 +241,11 @@ export function useArtifactFile({
         const index = prev.findIndex((tab) => tab.path === key);
         if (index !== -1) {
           const next = [...prev];
-          next[index] = { ...next[index], ...pending };
+          // A silent refresh keeps whatever is rendered; only the target and
+          // the in-flight marker move.
+          next[index] = silent
+            ? { ...next[index], target: openTarget ?? next[index].target }
+            : { ...next[index], ...pending };
           return next;
         }
         const next = [...prev, pending];
@@ -289,6 +291,7 @@ export function useArtifactFile({
           artifact: result.artifact,
           content: result.content,
           name: result.artifact?.name ?? fileNameOf(key),
+          error: null,
         });
       } catch (cause) {
         if (
@@ -312,15 +315,45 @@ export function useArtifactFile({
     },
     [
       forgetTab,
-      locate,
       missingErrorMessage,
       multiTab,
       platform,
       projectId,
       resolveBaseRef,
-      tabs,
-      touchViewOrder,
     ],
+  );
+
+  const open = useCallback(
+    async (path: string, openTarget?: ArtifactOpenTarget | null) => {
+      if (!projectId) return;
+
+      const location = locate(path);
+      const key = location.relativePath;
+      const alreadyOpen = tabs.some((tab) => tab.path === key);
+
+      touchViewOrder(key);
+      setActivePath(key);
+
+      // Re-opening a document that's already loaded is a focus change, not a
+      // refetch — unless a target (e.g. a PDF page) has to be applied.
+      if (alreadyOpen && multiTab && !openTarget) return;
+
+      if (!multiTab) {
+        // Single-document mode replaces the selection outright, so anything
+        // still in flight for another path is now dead weight — drop it before
+        // it can burn a content read nobody will see.
+        for (const [path, inflight] of controllersRef.current) {
+          if (path === key) continue;
+          inflight.abort();
+          controllersRef.current.delete(path);
+          requestIdsRef.current.delete(path);
+        }
+        viewOrderRef.current = [key];
+      }
+
+      await loadDocument(key, location, openTarget ?? null);
+    },
+    [loadDocument, locate, multiTab, projectId, tabs, touchViewOrder],
   );
 
   const activeTab = useMemo(
@@ -329,8 +362,42 @@ export function useArtifactFile({
   );
 
   const reload = useCallback(async () => {
-    if (activeTab) await open(activeTab.path, activeTab.target);
-  }, [activeTab, open]);
+    if (!activeTab) return;
+    // Straight to the read: going through ``open`` would return early on an
+    // already-open tab in multi-tab mode and quietly do nothing.
+    await loadDocument(
+      activeTab.path,
+      locate(activeTab.path),
+      activeTab.target,
+    );
+  }, [activeTab, loadDocument, locate]);
+
+  /**
+   * Re-read whichever open tabs those absolute paths point at.
+   *
+   * The caller passes what an agent just wrote — absolute paths, the way the
+   * tool reported them. Tabs are keyed by a surface-relative path, so both
+   * sides are normalized through ``locate`` before comparing; a write to a
+   * file nobody has open is simply ignored.
+   *
+   * Refreshes are silent: focus, tab order, and the rendered content all stay
+   * put until the new bytes arrive.
+   */
+  const refreshOpen = useCallback(
+    async (absolutePaths: readonly string[]) => {
+      if (absolutePaths.length === 0 || tabs.length === 0) return;
+      const wanted = new Set(absolutePaths);
+      const hits = tabs
+        .map((tab) => ({ tab, location: locate(tab.path) }))
+        .filter(({ location }) => wanted.has(location.absolutePath));
+      await Promise.all(
+        hits.map(({ tab, location }) =>
+          loadDocument(tab.path, location, tab.target, { silent: true }),
+        ),
+      );
+    },
+    [loadDocument, locate, tabs],
+  );
 
   useEffect(
     () => () => {
@@ -355,6 +422,7 @@ export function useArtifactFile({
     error: activeTab?.error ?? null,
     open,
     reload,
+    refreshOpen,
     close,
   };
 }

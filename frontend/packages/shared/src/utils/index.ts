@@ -6,4 +6,5 @@ export * from "./id";
 export * from "./safe-storage";
 export * from "./segment-summary";
 export * from "./timezone";
+export * from "./turn-file-writes";
 export * from "./turn-preview";

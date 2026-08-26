@@ -296,4 +296,77 @@ describe("useArtifactFile", () => {
     expect(tabNames(result.current.tabs)).not.toContain("f1.txt");
     expect(result.current.activePath).toBe("overflow.txt");
   });
+
+  describe("refreshOpen", () => {
+    it("re-reads an open tab the agent wrote, without moving focus", async () => {
+      resolveOne.mockImplementation(async (ref: string) =>
+        descriptor(ref.split("/").pop() ?? ""),
+      );
+      const { result } = renderTabbedHook();
+
+      await act(async () => {
+        await result.current.open("report.md");
+      });
+      await act(async () => {
+        await result.current.open("notes.md");
+      });
+      await waitFor(() => expect(result.current.tabs).toHaveLength(2));
+      expect(result.current.activePath).toBe("notes.md");
+      const reads = resolvedToArtifactFile.mock.calls.length;
+
+      // The agent wrote the tab that is NOT focused.
+      await act(async () => {
+        await result.current.refreshOpen(["/root/report.md"]);
+      });
+
+      expect(resolvedToArtifactFile.mock.calls.length).toBe(reads + 1);
+      // Focus and tab order are the user's, not the agent's.
+      expect(result.current.activePath).toBe("notes.md");
+      expect(tabNames(result.current.tabs)).toEqual(["report.md", "notes.md"]);
+    });
+
+    it("keeps the current content on screen while re-reading", async () => {
+      resolveOne.mockImplementation(async (ref: string) =>
+        descriptor(ref.split("/").pop() ?? ""),
+      );
+      const { result } = renderTabbedHook();
+      await act(async () => {
+        await result.current.open("report.md");
+      });
+      await waitFor(() => expect(result.current.content).not.toBeNull());
+
+      // A refresh that blanked the tab would flash on every agent edit.
+      const slow = deferred<ResolvedFileDescriptor | null>();
+      resolveOne.mockReturnValueOnce(slow.promise);
+      act(() => {
+        void result.current.refreshOpen(["/root/report.md"]);
+      });
+      expect(result.current.content).not.toBeNull();
+      expect(result.current.tabs[0].loading).toBe(false);
+
+      await act(async () => {
+        slow.resolve(descriptor("report.md"));
+      });
+      await waitFor(() => expect(result.current.tabs[0].loading).toBe(false));
+      expect(result.current.content).not.toBeNull();
+    });
+
+    it("ignores a write to a file nobody has open", async () => {
+      resolveOne.mockImplementation(async (ref: string) =>
+        descriptor(ref.split("/").pop() ?? ""),
+      );
+      const { result } = renderTabbedHook();
+      await act(async () => {
+        await result.current.open("report.md");
+      });
+      const reads = resolvedToArtifactFile.mock.calls.length;
+
+      await act(async () => {
+        await result.current.refreshOpen(["/root/elsewhere.md"]);
+      });
+
+      expect(resolvedToArtifactFile.mock.calls.length).toBe(reads);
+      expect(tabNames(result.current.tabs)).toEqual(["report.md"]);
+    });
+  });
 });
