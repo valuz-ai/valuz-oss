@@ -323,6 +323,23 @@ export const ApprovalCard = memo(function ApprovalCard({
         {mode === "rejecting" ? (
           <ApprovalRejectInline
             submitting={submitting}
+            // Plan review: the inline form is a revision request, not a
+            // refusal — its copy must read coherently with the
+            // "keep planning" verb that opened it.
+            placeholder={
+              subject === "exit_plan_mode"
+                ? t(
+                    "conversation.planKeepPlanningPlaceholder" as Parameters<
+                      typeof t
+                    >[0],
+                  )
+                : undefined
+            }
+            submitLabel={
+              subject === "exit_plan_mode"
+                ? t("conversation.planKeepPlanning" as Parameters<typeof t>[0])
+                : undefined
+            }
             onSubmit={(reason) => {
               onReject(reason);
               // Keep the inline open while submitting — the parent

@@ -22,12 +22,23 @@ interface ApprovalRejectInlineProps {
   submitting?: boolean;
   onSubmit: (reason: string) => void;
   onCancel: () => void;
+  /**
+   * Subject-aware copy overrides (already-translated strings). The
+   * default copy speaks generic "reject" language; the plan-review
+   * card overrides both so the flow reads coherently with its
+   * "keep planning" verb (the feedback is a revision request, not a
+   * refusal). Omitted → generic reject copy.
+   */
+  placeholder?: string;
+  submitLabel?: string;
 }
 
 export const ApprovalRejectInline = memo(function ApprovalRejectInline({
   submitting,
   onSubmit,
   onCancel,
+  placeholder,
+  submitLabel,
 }: ApprovalRejectInlineProps) {
   const { t } = useI18n();
   const [reason, setReason] = useState("");
@@ -38,7 +49,9 @@ export const ApprovalRejectInline = memo(function ApprovalRejectInline({
         value={reason}
         onChange={(e) => setReason(e.target.value)}
         disabled={submitting}
-        placeholder={t("conversation.approvalRejectReasonPlaceholder")}
+        placeholder={
+          placeholder ?? t("conversation.approvalRejectReasonPlaceholder")
+        }
         className="min-h-[64px] resize-y text-xs leading-snug"
         spellCheck={false}
         autoFocus
@@ -63,7 +76,7 @@ export const ApprovalRejectInline = memo(function ApprovalRejectInline({
           ) : (
             <XCircle className="mr-1.5 h-3 w-3" />
           )}
-          {t("conversation.approvalRejectSubmit")}
+          {submitLabel ?? t("conversation.approvalRejectSubmit")}
         </Button>
       </div>
     </div>

@@ -536,6 +536,7 @@
     "approvalReject": "Reject",
     "planApproveAndRun": "Approve & start executing",
     "planKeepPlanning": "Keep planning",
+    "planKeepPlanningPlaceholder": "Revision notes (optional, sent to the agent)",
     "approvalApproveWithChanges": "Edit & Approve",
     "approvalApproveForSession": "Always for this session",
     "approvalApproveForSessionDisabled": "Session-scoped rule not supported here",

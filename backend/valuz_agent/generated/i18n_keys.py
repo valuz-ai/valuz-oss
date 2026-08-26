@@ -707,6 +707,7 @@ I18nKey = Literal[
     "conversation.pillPlanned",
     "conversation.planApproveAndRun",
     "conversation.planKeepPlanning",
+    "conversation.planKeepPlanningPlaceholder",
     "conversation.planLabel",
     "conversation.pleaseSelect",
     "conversation.processedMinutes",

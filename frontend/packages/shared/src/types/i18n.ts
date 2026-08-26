@@ -701,6 +701,7 @@ export type KnownI18nKey =
   | "conversation.pillPlanned"
   | "conversation.planApproveAndRun"
   | "conversation.planKeepPlanning"
+  | "conversation.planKeepPlanningPlaceholder"
   | "conversation.planLabel"
   | "conversation.pleaseSelect"
   | "conversation.processedMinutes"
