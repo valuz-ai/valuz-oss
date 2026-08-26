@@ -824,6 +824,24 @@ function rewriteMarkdownLinkDestination(
 interface MarkdownContentProps {
   content: string;
   className?: string;
+  /**
+   * Whether the content is still arriving.
+   *
+   * Streaming is the default because the conversation is the common caller and
+   * its markdown grows a token at a time. It is not free: the renderer splits
+   * the text into blocks so it can re-render incrementally, and repairs
+   * half-written constructs (unclosed fences, a table whose last row stops
+   * mid-cell) on every pass. Both are the right thing to do to a prefix of a
+   * document and pure overhead on a whole one.
+   *
+   * A viewer showing a document that is already on disk should say
+   * ``"static"``. Correctness first, not speed: repairing a complete document
+   * can only alter it — an intentionally unmatched ``*`` gets closed for the
+   * author. The measured saving is small and does not scale (1.3x on a
+   * 500-row table, none at 2,000); what makes a large table slow is the
+   * number of DOM nodes, which is a different fix.
+   */
+  mode?: "static" | "streaming";
   isAnimating?: boolean;
   isLocalFileHref?: (href: string) => boolean;
   onLocalFileLinkClick?: (href: string) => void;
@@ -1307,6 +1325,7 @@ export const MarkdownContent = memo(function MarkdownContent({
   content,
   className,
   isAnimating,
+  mode = "streaming",
   isLocalFileHref,
   onLocalFileLinkClick,
   citationBundle,
@@ -1924,6 +1943,10 @@ export const MarkdownContent = memo(function MarkdownContent({
         <Streamdown
           plugins={{ code, mermaid, math, cjk }}
           icons={STREAMDOWN_ICONS}
+          mode={mode}
+          // Only a prefix can be malformed by being a prefix, so repairing a
+          // whole document can only misread deliberate markup as damage.
+          parseIncompleteMarkdown={mode === "streaming"}
           isAnimating={isAnimating}
           components={components}
           urlTransform={urlTransform}

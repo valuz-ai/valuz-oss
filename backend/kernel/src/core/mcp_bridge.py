@@ -32,11 +32,22 @@ underlying handlers; the URL adds no privilege beyond that.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from mcp.server import Server
 from mcp.types import TextContent, Tool
-from src.core.tools import ExecContext, ToolKit
+from src.core.tools import ExecContext, ToolDef, ToolKit
+
+# Optional per-call gate a runtime attaches to its registry record. Called
+# with the resolved ToolDef right before execution; a non-None return is a
+# deny message surfaced to the model as an ``[error]`` tool result (content
+# -side, not a wire failure). The dsh runtime uses this for plan mode:
+# non-read-only toolkit tools (``execute_code``) stay disabled while the
+# session's plan state is active — same guarantee Claude's permission
+# handler enforces — and unlock the moment an approved ``exit_plan_mode``
+# flips the state, so same-turn post-approval execution passes.
+ToolGate = Callable[[ToolDef], str | None]
 
 
 @dataclass(frozen=True)
@@ -45,6 +56,7 @@ class SessionToolkitRecord:
 
     toolkit: ToolKit
     exec_context: ExecContext
+    tool_gate: ToolGate | None = None
 
 
 _REGISTRY: dict[str, SessionToolkitRecord] = {}
@@ -55,10 +67,13 @@ def register_session_toolkit(
     session_id: str,
     toolkit: ToolKit,
     exec_context: ExecContext,
+    tool_gate: ToolGate | None = None,
 ) -> None:
     """Add (or replace) a session's toolkit + ExecContext entry."""
     with _REGISTRY_LOCK:
-        _REGISTRY[session_id] = SessionToolkitRecord(toolkit=toolkit, exec_context=exec_context)
+        _REGISTRY[session_id] = SessionToolkitRecord(
+            toolkit=toolkit, exec_context=exec_context, tool_gate=tool_gate
+        )
 
 
 def unregister_session_toolkit(session_id: str) -> None:

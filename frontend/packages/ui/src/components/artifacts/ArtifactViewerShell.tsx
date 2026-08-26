@@ -30,7 +30,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import { MarkdownContent } from "../conversation/MarkdownContent";
+import { VirtualizedMarkdown } from "../knowledge/VirtualizedMarkdown";
 import { Badge } from "../ui/badge";
 import { PdfRenderer } from "./PdfRenderer";
 import type {
@@ -262,16 +262,23 @@ function TextRenderer({
             />
           </div>
         ) : null}
-        <div className="min-h-0 flex-1 overflow-y-auto px-8 py-7">
-          <div className="mx-auto max-w-[820px]">
-            {content.truncated ? (
-              <div className="mb-4 rounded-md border border-warning-light bg-warning-light px-3 py-2 text-xs text-warning-text">
-                {t("ui.artifact.truncated")}
-              </div>
-            ) : null}
-            <MarkdownContent content={content.content} />
+        {content.truncated ? (
+          <div className="shrink-0 px-8 pt-7">
+            <div className="mx-auto max-w-[820px] rounded-md border border-warning-light bg-warning-light px-3 py-2 text-xs text-warning-text">
+              {t("ui.artifact.truncated")}
+            </div>
           </div>
-        </div>
+        ) : null}
+        {/* Windowed past a few hundred table rows, rendered whole below that.
+            A spreadsheet flattened to GFM builds one DOM node per cell, and
+            40,000 cells took 19 s to open here; the reading column, the
+            source toggle and the padding are the viewer's, not the
+            renderer's. */}
+        <VirtualizedMarkdown
+          content={content.content}
+          viewportClassName="min-h-0 flex-1 px-8 py-7"
+          sizerClassName="mx-auto max-w-[820px]"
+        />
       </div>
     );
   }

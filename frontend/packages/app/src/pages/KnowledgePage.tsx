@@ -507,23 +507,39 @@ export const KnowledgePage = ({
 
   // ── Right panel ───────────────────────────────────────────────────
 
+  // Asked for once per page, NOT per selection — and that distinction is the
+  // whole point of this being its own effect.
+  //
+  // The shell remounts its panel group when this value changes (``key=
+  // {rightPanelDefaultSize}`` in AppShell), and the main route is rendered
+  // inside that group. So a page that flips the size while mounted remounts
+  // itself: every piece of state here resets, ``activeKb`` goes back to null,
+  // and the user lands on the library list. That is precisely what happened —
+  // clicking a document threw you back to the list of knowledge bases.
+  //
+  // Declaring it for the page instead makes the value change only when this
+  // page mounts and unmounts, where a remount is what happens anyway. Nothing
+  // is lost visually: the list view has no right panel, so a 70% right panel
+  // has nothing to size until a document opens.
+  useEffect(() => {
+    // The detail is the thing being read once a document is selected — the
+    // parsed markdown, error text — while the list is just where the click
+    // came from. 3:7 in the detail's favor; back to the shell default when
+    // the page goes away, so no other page inherits this width.
+    //
+    // A panel size, not a width class. The shell's aside is laid out by the
+    // panel group and carries ``w-full`` — a ``w-[70%]`` class still reaches
+    // the element and is still overridden there, so the page silently got the
+    // 345px default while looking like it had asked for 70%.
+    setRightPanelDefaultSize("70%");
+    return () => setRightPanelDefaultSize(undefined);
+  }, [setRightPanelDefaultSize]);
+
   useEffect(() => {
     if (!selectedDoc) {
       setRightPanel(null);
-      setRightPanelDefaultSize(undefined);
       return;
     }
-    // The detail is the thing being read once a document is selected — the
-    // parsed markdown, error text — while the list is just where the click
-    // came from. 3:7 in the detail's favor; back to the shell default the
-    // moment no document is open, so no other page inherits this width.
-    //
-    // Asked for as a panel size, not a width class. The shell moved to
-    // resizable panels, where the aside is laid out by the panel group and
-    // carries ``w-full`` — a ``w-[70%]`` class still reaches the element and
-    // is still overridden there, so the page silently got the 345px default
-    // while looking like it had asked for 70%.
-    setRightPanelDefaultSize("70%");
     setRightPanel(
       <DocumentDetailPanel
         doc={{
@@ -601,10 +617,9 @@ export const KnowledgePage = ({
     // stayed on screen next to the settings content.
     return () => {
       setRightPanel(null);
-      setRightPanelDefaultSize(undefined);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshTree/openSourceFile change identity per render; the panel only needs the ones current when it was handed over
-  }, [selectedDoc, preview, setRightPanel, setRightPanelDefaultSize, activeKb]);
+  }, [selectedDoc, preview, setRightPanel, activeKb]);
 
   // Auto-poll the doc detail while the parse is in flight so the
   // panel reflects live state without a manual refresh. Polls every

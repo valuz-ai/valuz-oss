@@ -37,6 +37,33 @@ export interface DocumentPreviewSlice {
   truncated: boolean;
 }
 
+/** The parsed markdown, dressed as an artifact for the shared viewer. */
+function _previewArtifact(name: string): ArtifactDescriptor {
+  return {
+    id: `kb-preview:${name}`,
+    kind: "file",
+    name,
+    previewKind: "markdown",
+    capabilities: {
+      canPreview: true,
+      canEdit: false,
+      canOpenExternal: false,
+      canCopyContent: true,
+      canDownload: false,
+    },
+  };
+}
+
+function _previewContent(preview: DocumentPreviewSlice): ArtifactContent {
+  return {
+    kind: "text",
+    encoding: "utf-8",
+    content: preview.markdown,
+    // Measured by the server, not asserted here.
+    truncated: preview.truncated,
+  };
+}
+
 export interface DocumentDetailPanelProps {
   doc: {
     name: string;
@@ -77,12 +104,18 @@ export interface DocumentDetailPanelProps {
   onViewSource?: () => void;
 }
 
-function _formatAttemptTime(iso: string): string {
+function _formatAttemptTime(stamp: string): string {
   // Compact ``HH:mm:ss`` — the doc has its own importedAt above so
   // the day part would just be visual noise on most attempts.
   try {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
+    // Two shapes reach this. OSS's own parser writes ISO 8601; the cloud
+    // pipeline wrote epoch milliseconds, and ``new Date("1787303620297")`` is
+    // an Invalid Date, not that instant — so those rows printed their raw
+    // number. The writer is fixed, but the rows it already wrote are not, and
+    // they are the ones a user is looking at when something went wrong.
+    const epoch = /^\d+$/.test(stamp.trim()) ? Number(stamp) : NaN;
+    const d = Number.isNaN(epoch) ? new Date(stamp) : new Date(epoch);
+    if (Number.isNaN(d.getTime())) return stamp;
     return d.toLocaleTimeString(getLocale(), {
       hour: "2-digit",
       minute: "2-digit",
@@ -90,39 +123,10 @@ function _formatAttemptTime(iso: string): string {
       hour12: false,
     });
   } catch {
-    return iso;
+    return stamp;
   }
 }
 
-/** The parsed markdown, dressed as an artifact for the shared viewer. */
-function _previewArtifact(name: string): ArtifactDescriptor {
-  return {
-    id: `kb-preview:${name}`,
-    kind: "file",
-    name,
-    previewKind: "markdown",
-    capabilities: {
-      canPreview: true,
-      canEdit: false,
-      canOpenExternal: false,
-      canCopyContent: true,
-      canDownload: false,
-    },
-  };
-}
-
-function _previewContent(preview: DocumentPreviewSlice): ArtifactContent {
-  return {
-    kind: "text",
-    encoding: "utf-8",
-    content: preview.markdown,
-    // Measured by the server, not asserted here. This was a hardcoded
-    // ``false`` on text read whole off disk, and one 1.05 MB spreadsheet
-    // preview was enough to hang the tab — the flag claimed completeness for
-    // something nothing had bounded.
-    truncated: preview.truncated,
-  };
-}
 
 export const DocumentDetailPanel = ({
   doc,
@@ -260,8 +264,11 @@ export const DocumentDetailPanel = ({
           <section className="mt-3 flex min-h-0 flex-col">
             {/* The system file viewer (artifacts / reader), framed like every
                 other embedded document surface. No section label — the frame
-                and the viewer's own kind row already say what this is. */}
-            <div className="overflow-hidden rounded-[14px] border border-surface-border bg-surface">
+                and the viewer's own kind row already say what this is. It
+                brings the source/preview toggle and the reading column with
+                it; the windowing that keeps a large spreadsheet openable
+                lives inside it, not here. */}
+            <div className="h-[70vh] overflow-hidden rounded-[14px] border border-surface-border bg-surface">
               <ArtifactRenderer
                 artifact={_previewArtifact(doc.name)}
                 content={_previewContent(doc.preview)}

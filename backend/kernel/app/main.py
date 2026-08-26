@@ -10,6 +10,7 @@ from typing import Any
 from app import config_gate
 from app.config import AppConfig
 from app.dependencies import init_dependencies, shutdown_dependencies
+from app.dsh_user_questions_router import router as dsh_uq_router
 from app.mcp_toolkit_router import mcp_router_lifespan, mount_mcp_router
 from app.ptc_router import router as ptc_router
 from app.routes.events import router as events_router
@@ -108,6 +109,10 @@ async def _require_bearer_token(request: Request, call_next: Any) -> Any:
     # bearer. See app/ptc_router.py.
     if token and "/v1/ptc/exec/" in request.url.path:
         return await call_next(request)
+    # Same model for the dsh user-questions bridge: per-spawn token in the
+    # path IS the credential. See app/dsh_user_questions_router.py.
+    if token and "/v1/dsh/user-questions/" in request.url.path:
+        return await call_next(request)
     if token and request.url.path != "/health":
         supplied = request.headers.get("authorization", "")
         if supplied != f"Bearer {token}":
@@ -125,6 +130,7 @@ app.include_router(messages_router)
 app.include_router(run_router)
 app.include_router(events_router)
 app.include_router(ptc_router)
+app.include_router(dsh_uq_router)
 app.include_router(usage_router)
 app.include_router(runtimes_router)
 mount_mcp_router(app)
