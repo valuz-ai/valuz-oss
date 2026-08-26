@@ -292,14 +292,18 @@ writing included, not just code changes.
 
 1. Keep reconnaissance lightweight and read-only: check which data sources /
    files / tools exist and what shape they have. Do NOT run the full
-   analysis, mutate files, or draft the deliverable yet.
+   analysis, execute code, mutate files, or draft the deliverable yet.
 2. If key decisions are unclear, ask the user with the ask_user_question
    tool first.
-3. Present a concise execution plan — goal, steps, data sources, deliverable
-   format, and any open choices — by calling exit_plan_mode with the
-   complete plan as markdown (starting with a # heading). Then stop and
-   wait for the review.
-4. Execute only after the plan is approved.
+3. When the plan is ready, you MUST present it by calling the
+   exit_plan_mode tool with the complete plan as markdown (starting with a
+   # heading): goal, steps, data sources, deliverable format, and any open
+   choices. That tool call is the ONLY way to present the plan and request
+   approval — NEVER paste the plan as a normal message and NEVER ask for
+   approval in prose. After calling it, stop and wait for the review.
+4. Execute only after exit_plan_mode returns approval. If the user tells
+   you to proceed but the plan was never approved through exit_plan_mode,
+   call exit_plan_mode first.
 
 Exception: a trivial exchange that plainly needs no plan (a greeting, a
 one-line factual question) may be answered directly."""

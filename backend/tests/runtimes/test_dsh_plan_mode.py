@@ -488,3 +488,73 @@ class TestPlanStateTracking:
         # respawn required.
         session_plan = _session(mode="plan")
         assert runtime._plan_capable and runtime._dsh_plan_active != (session_plan.mode == "plan")
+
+
+# ---------------------------------------------------------------------------
+# Plan-mode toolkit gate (execute_code read-only guarantee)
+# ---------------------------------------------------------------------------
+
+
+class TestPlanToolkitGate:
+    """dsh plan is soft guidance upstream and the toolkit bridge has no
+    permission callback — field-verified: ``execute_code`` ran mid-plan.
+    The runtime's ``tool_gate`` on the mcp_bridge record is the enforcement
+    (same guarantee Claude's permission handler provides)."""
+
+    def _tools(self):
+        from src.core.tools import ToolDef
+
+        async def _handler(args, ctx):  # pragma: no cover — never executed
+            raise AssertionError("gated tool must not execute")
+
+        mutating = ToolDef(name="execute_code", description="stub", handler=_handler)
+        readonly = ToolDef(name="stock_quote", description="stub", handler=_handler, read_only=True)
+        return mutating, readonly
+
+    def test_gate_denies_mutating_tools_while_plan_active(self) -> None:
+        runtime = _runtime()
+        runtime._plan_capable = True
+        runtime._dsh_plan_active = True
+        mutating, readonly = self._tools()
+        denial = runtime._plan_toolkit_gate(mutating)
+        assert denial is not None and "exit_plan_mode" in denial
+        # Read-only tools stay available for reconnaissance.
+        assert runtime._plan_toolkit_gate(readonly) is None
+
+    def test_gate_opens_after_the_approved_exit_flips_state(self) -> None:
+        runtime = _runtime()
+        runtime._plan_capable = True
+        runtime._dsh_plan_active = True
+        mutating, _ = self._tools()
+        assert runtime._plan_toolkit_gate(mutating) is not None
+        # exit_plan_mode approved → ``plan/mode {active: false}`` flows past
+        # ``_consume_turn`` and flips the tracked state — the SAME turn's
+        # subsequent execute_code must pass.
+        runtime._dsh_plan_active = False
+        assert runtime._plan_toolkit_gate(mutating) is None
+
+    def test_gate_is_inert_off_plan_capable_closures(self) -> None:
+        runtime = _runtime()
+        mutating, _ = self._tools()
+        assert runtime._plan_toolkit_gate(mutating) is None
+
+    def test_registration_carries_the_gate_to_the_bridge_record(self) -> None:
+        from src.core.mcp_bridge import get_session_record, reset_registry_for_tests
+        from src.core.tools import ToolKit
+
+        reset_registry_for_tests()
+        try:
+            runtime = _runtime()
+            runtime._plan_capable = True
+            runtime._dsh_plan_active = True
+            mutating, _ = self._tools()
+            toolkit = ToolKit()
+            toolkit.register(mutating)
+            runtime.toolkit = toolkit
+            assert runtime._register_kernel_toolkit(_session()) is True
+            record = get_session_record("s-plan")
+            assert record is not None and record.tool_gate is not None
+            denial = record.tool_gate(mutating)
+            assert denial is not None and "Plan mode is active" in denial
+        finally:
+            reset_registry_for_tests()

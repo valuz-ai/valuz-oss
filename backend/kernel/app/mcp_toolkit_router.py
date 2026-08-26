@@ -85,6 +85,14 @@ def _build_router_server() -> Server:
         tdef = rec.toolkit.get(name)
         if tdef is None or tdef.handler is None:
             raise ValueError(f"unknown tool: {name}")
+        if rec.tool_gate is not None:
+            denial = rec.tool_gate(tdef)
+            if denial is not None:
+                # Content-side deny (same ``[error]`` convention as
+                # is_error results): the model reads the message and can
+                # correct course — a wire-level failure would render as an
+                # opaque transport error instead.
+                return [TextContent(type="text", text=f"[error] {denial}")]
         result = await tdef.handler(dict(arguments), rec.exec_context)
         # is_error is content-side metadata, not a wire-level failure;
         # surface it as a prefix the way mcp_bridge does.

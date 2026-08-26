@@ -547,9 +547,31 @@ class DeepSeekHarnessRuntime:
                 session_id=session.id,
                 user_id=getattr(session, "user_id", "") or "",
             ),
+            tool_gate=self._plan_toolkit_gate,
         )
         self._registered_session_id = session.id
         return True
+
+    def _plan_toolkit_gate(self, tdef: ToolDef) -> str | None:
+        """Plan mode's read-only guarantee for kernel toolkit tools.
+
+        dsh's plan mode is soft guidance by upstream design (sandbox and
+        approval enforce independently), and the toolkit bridge executes
+        with no permission callback — so without this gate ``execute_code``
+        runs happily mid-plan (field-verified, same failure Claude had).
+        Deny every non-read-only toolkit tool while the dsh-side plan
+        state is active; the deny message steers the model to
+        ``exit_plan_mode``, and an approved exit flips
+        ``_dsh_plan_active`` via the ``plan/mode`` event BEFORE the model's
+        next tool call, so same-turn post-approval execution passes.
+        """
+        if self._plan_capable and self._dsh_plan_active and not tdef.read_only:
+            return (
+                f"Plan mode is active — {tdef.name} is disabled until the plan "
+                "is approved. Present your plan via the exit_plan_mode tool "
+                "first; execution tools unlock after approval."
+            )
+        return None
 
     # -- user-questions bridge (plan review + clarifying parks) --
 
