@@ -1683,21 +1683,18 @@ export const Composer = ({
                       : "composer.modeChat") as Parameters<typeof t>[0],
                   );
                   const ModeIcon = m === "task" ? ListTodo : MessageSquare;
-                  // The icon already says "chat" or "task"; the tooltip is
-                  // where the difference between the two is spelled out.
+                  // Spells out what the mode does — the label alone ("对话" /
+                  // "任务") does not, and below the breakpoint the label is
+                  // gone entirely.
                   const tip = t(
                     (m === "task"
-                      ? // Same sentence the location strip shows in task
-                        // mode, so the two never drift apart.
-                        "composer.taskHintShort"
+                      ? "composer.modeTaskTip"
                       : "composer.modeChatTip") as Parameters<typeof t>[0],
                   );
                   return (
-                    // Icons at every width, not just a narrow card. The two
-                    // modes are a permanent, frequently-read control, so the
-                    // space they used to spend on labels goes to the chips
-                    // that actually change (agent, model). The tooltip is
-                    // what names them — same one the panel controls use.
+                    // Labels while the card is wide enough; icons once it is
+                    // not, so the trailing chips keep their room. The tooltip
+                    // carries the explanation either way.
                     <TooltipProvider key={m} delayDuration={150}>
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -1708,7 +1705,7 @@ export const Composer = ({
                             }}
                             aria-label={label}
                             className={cn(
-                              "flex h-6 items-center justify-center rounded-md px-2 font-medium transition-colors duration-[120ms]",
+                              "flex h-6 items-center justify-center rounded-md px-1.5 font-medium transition-colors duration-[120ms] @[420px]/composer:px-2",
                               active
                                 ? m === "task"
                                   ? "bg-brand text-white shadow-button"
@@ -1717,9 +1714,12 @@ export const Composer = ({
                             )}
                           >
                             <ModeIcon
-                              className="block h-3.5 w-3.5 shrink-0"
+                              className="block h-3.5 w-3.5 shrink-0 @[420px]/composer:hidden"
                               aria-hidden="true"
                             />
+                            <span className="hidden @[420px]/composer:inline">
+                              {label}
+                            </span>
                           </button>
                         </TooltipTrigger>
                         <TooltipContent side="bottom">{tip}</TooltipContent>
