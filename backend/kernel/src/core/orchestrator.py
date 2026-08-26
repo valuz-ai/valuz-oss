@@ -454,6 +454,27 @@ def _session_document_scope(session: Session) -> set[str] | None:
     return {str(item) for item in document_ids if str(item)}
 
 
+def _make_mode_persist(
+    store: Any, user_id: str, session_id: str
+) -> Callable[[str], Awaitable[None]]:
+    """Targeted write-through for a runtime-initiated mode transition.
+
+    Loads a FRESH row and writes only ``mode`` — deliberately not the
+    turn's in-memory ``session`` reference, whose other runtime-owned
+    fields (status, todos, stop_reason) must keep their end-of-turn save
+    semantics. The turn's final ``save_session`` persists the same mode
+    again (the reconcile rule keeps the runtime's value when
+    ``runtime_mode_change`` is set), so this write is idempotent."""
+
+    async def _persist(mode: str) -> None:
+        fresh = await store.load_session(user_id, session_id)
+        if fresh is not None and fresh.mode != mode:
+            fresh.mode = mode
+            await store.save_session(fresh)
+
+    return _persist
+
+
 class _MessageObserverSink:
     """Pass Runtime events through first, then attach optional sidecars.
 
@@ -478,6 +499,7 @@ class _MessageObserverSink:
         semantic_verifier: SemanticVerifierPort | None = None,
         claim_normalizer: ClaimNormalizerPort | None = None,
         task_coverage_enabled: bool = False,
+        mode_persist: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._inner = inner
         self._message_id = message_id
@@ -520,6 +542,7 @@ class _MessageObserverSink:
         self.task_coverage: dict[str, Any] | None = None
         self.last_todos: list[dict[str, Any]] | None = None
         self.runtime_mode_change: Literal["default", "plan", "goal"] | None = None
+        self._mode_persist = mode_persist
 
     async def emit(self, event: Event) -> None:
         if event.type == "citation_evidence":
@@ -649,6 +672,25 @@ class _MessageObserverSink:
                 mode = event.data.get("mode")
                 if mode in ("default", "plan", "goal"):
                     self.runtime_mode_change = mode
+                    # Write the transition through to the store NOW, not at
+                    # the end-of-turn save. A runtime-initiated exit
+                    # (approved ExitPlanMode) can happen minutes before the
+                    # turn finishes; until then any client that (re)opens
+                    # the session hydrates ``mode`` from the row and would
+                    # show a stale plan chip — the live ``mode_changed``
+                    # frame only reaches clients attached at that moment,
+                    # and replays are deliberately inert. Best-effort: a
+                    # failed persist must never corrupt the turn (the
+                    # end-of-turn save persists the same value anyway).
+                    if self._mode_persist is not None:
+                        try:
+                            await self._mode_persist(mode)
+                        except Exception:
+                            logger.warning(
+                                "mode_changed write-through failed; the "
+                                "end-of-turn save will persist it",
+                                exc_info=True,
+                            )
 
         await self._inner.emit(event)
 
@@ -1672,6 +1714,7 @@ class SessionOrchestrator:
             semantic_verifier=semantic_verifier,
             claim_normalizer=claim_normalizer,
             task_coverage_enabled=task_coverage_enabled,
+            mode_persist=_make_mode_persist(self._store, user_id, session_id),
         )
 
         # Sessions are self-sufficient: ``session.cwd`` is required at
