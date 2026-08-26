@@ -13,7 +13,7 @@ let latestHeader: ReactNode | null = null;
 // no button in this tree to press. Captured instead, and its callbacks are
 // invoked directly — the wiring is what these tests are about.
 let latestRightPanel: ReactNode | null = null;
-let latestAsideClassName: string | undefined;
+let latestPanelSize: string | undefined;
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn(), loading: vi.fn(), dismiss: vi.fn() },
@@ -35,8 +35,9 @@ vi.mock("react-router-dom", async () => {
       },
       setHeaderClassName: vi.fn(),
       setHideHeader: vi.fn(),
-      setAsideClassName: (cls: string | undefined) => {
-        latestAsideClassName = cls;
+      setAsideClassName: vi.fn(),
+      setRightPanelDefaultSize: (size: string | undefined) => {
+        latestPanelSize = size;
       },
       setMainClassName: vi.fn(),
       setContentInnerClassName: vi.fn(),
@@ -58,7 +59,7 @@ const platform: PlatformCapabilities = {
 function renderKnowledgePage(props: Parameters<typeof KnowledgePage>[0] = {}) {
   latestHeader = null;
   latestRightPanel = null;
-  latestAsideClassName = undefined;
+  latestPanelSize = undefined;
   return render(
     <PlatformProvider value={platform}>
       <KnowledgePage {...props} />
@@ -177,13 +178,17 @@ describe("KnowledgePage", () => {
   it("gives the open document's detail the wider side", async () => {
     // The detail is what is being read — parse history, error text, source
     // path — while the list is just where the click came from. The default
-    // 345px aside made the panel the cramped side.
+    // 345px panel made the detail the cramped side.
+    //
+    // Asserted as a panel size rather than a width class. The class was what
+    // this page used to set, and it kept passing after the shell moved to
+    // resizable panels — the class still reached the element, was overridden
+    // there by the panel group's ``w-full``, and the page silently rendered at
+    // the default width while the test agreed it had asked for 70%.
     initI18n({ locale: "zh-CN", fallbackLocale: "zh-CN" });
     await openDoc();
 
-    await waitFor(() =>
-      expect(latestAsideClassName ?? "").toContain("w-[70%]"),
-    );
+    await waitFor(() => expect(latestPanelSize).toBe("70%"));
   });
 
   it("hands the layout back when the document is closed and on unmount", async () => {
@@ -193,12 +198,14 @@ describe("KnowledgePage", () => {
     // content.
     initI18n({ locale: "zh-CN", fallbackLocale: "zh-CN" });
     const { unmount } = await openDoc();
-    await waitFor(() => expect(latestAsideClassName ?? "").toContain("w-[70%]"));
+    await waitFor(() => expect(latestPanelSize).toBe("70%"));
 
     unmount();
 
     expect(latestRightPanel).toBeNull();
-    expect(latestAsideClassName).toBeUndefined();
+    // Cleared, not left behind: the size lives in the shell, so a stale value
+    // would widen whatever page the user navigated to next.
+    expect(latestPanelSize).toBeUndefined();
   });
 
   it("retries a document on its own library's backend", async () => {
