@@ -196,6 +196,9 @@ describe("citation document preview helpers", () => {
     expect(document.render).toEqual({
       kind: "html",
       html: "<h1>Report</h1>",
+      // Carried through from the read, not defaulted at the reader: a whole
+      // document has to be distinguishable from one cut at the size cap.
+      truncated: false,
     });
   });
 

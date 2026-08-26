@@ -269,7 +269,11 @@ function TextRenderer({
                 {t("ui.artifact.truncated")}
               </div>
             ) : null}
-            <MarkdownContent content={content.content} />
+            {/* A file the viewer already has in hand, not a stream — so it
+                should not be patched up as if it were half-written. Not a
+                speed fix: a large table is slow because of how many DOM nodes
+                it becomes, and this changes none of them. */}
+            <MarkdownContent content={content.content} mode="static" />
           </div>
         </div>
       </div>

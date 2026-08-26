@@ -980,6 +980,7 @@ export type KnownI18nKey =
   | "knowledge.parserFallbackOk"
   | "knowledge.parserLastError"
   | "knowledge.preview"
+  | "knowledge.previewTruncated"
   | "knowledge.rebuildIndex"
   | "knowledge.refFromKb"
   | "knowledge.referenced"
