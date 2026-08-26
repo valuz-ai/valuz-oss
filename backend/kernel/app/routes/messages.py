@@ -4,15 +4,18 @@
 
 from __future__ import annotations
 
+import copy
 import dataclasses
+import uuid
 from typing import Annotated, Any
 
-from app.dependencies import get_owner_id, get_store
+from app.dependencies import get_orchestrator, get_owner_id, get_store
 from app.routes import KERNEL_API_PREFIX
 from app.schemas import (
     AttachmentSchema,
     EventData,
     EventListResponse,
+    ImportMessageRequest,
     MessageData,
     MessageListResponse,
     MessageResponse,
@@ -21,7 +24,8 @@ from app.schemas import (
     UserMessageSchema,
 )
 from fastapi import APIRouter, Depends, HTTPException, Query
-from src.core import Event, Message, StorePort
+from src.core import Event, Message, StorePort, UserMessage
+from src.core.types import now_ms
 
 router = APIRouter(tags=["messages"])
 
@@ -88,6 +92,106 @@ async def get_message(message_id: str, store: StoreDep, owner: OwnerDep) -> dict
     if message is None:
         raise HTTPException(status_code=404, detail="Message not found")
     return {"data": _message_to_data(message)}
+
+
+@router.post(
+    f"{KERNEL_API_PREFIX}/v1/sessions/{{session_id}}/messages/import",
+    response_model=MessageResponse,
+    status_code=201,
+)
+async def import_canonical_message(
+    session_id: str,
+    body: ImportMessageRequest,
+    store: StoreDep,
+    orchestrator: Annotated[Any, Depends(get_orchestrator)],
+    owner: OwnerDep,
+) -> dict[str, Any]:
+    """Import a completed canonical assistant message without trusting the UI.
+
+    This is deliberately a server-side copy operation: callers cannot submit
+    assistant prose or citation metadata.  Both source and target are loaded
+    through the same owner-scoped store, so a guessed id cannot cross users.
+    """
+
+    target = await store.load_session(owner, session_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Target session not found")
+    if target.status == "running":
+        raise HTTPException(status_code=409, detail="Target session is running")
+
+    source = await store.load_message(owner, body.source_message_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source message not found")
+    if source.session_id == session_id:
+        raise HTTPException(status_code=409, detail="Source and target sessions must differ")
+    if source.status != "completed" or not source.assistant_message:
+        raise HTTPException(status_code=409, detail="Source message is not completed")
+
+    citation_bundle = source.metadata.get("citation_bundle")
+    if not (
+        isinstance(citation_bundle, dict)
+        and citation_bundle.get("version") == 1
+        and isinstance(citation_bundle.get("citations"), list)
+    ):
+        raise HTTPException(status_code=409, detail="Source message has no canonical citations")
+
+    timestamp = now_ms()
+    imported = Message(
+        id=str(uuid.uuid4()),
+        session_id=session_id,
+        user_message=UserMessage(text=body.user_text),
+        assistant_message=source.assistant_message,
+        started_at=timestamp,
+        ended_at=timestamp,
+        status="completed",
+        total_turns=1,
+        metadata={
+            "citation_bundle": copy.deepcopy(citation_bundle),
+            "imported_from": {
+                "session_id": source.session_id,
+                "message_id": source.id,
+            },
+        },
+    )
+    await store.save_message(owner, imported)
+    events = [
+        Event(
+            type="user_message",
+            data={
+                "message": body.user_text,
+                "attachments": [],
+                "message_id": imported.id,
+            },
+            timestamp=timestamp,
+        ),
+        Event(
+            type="assistant_message",
+            data={
+                "text": imported.assistant_message,
+                "citation_bundle": copy.deepcopy(citation_bundle),
+                "message_id": imported.id,
+            },
+            timestamp=timestamp,
+        ),
+    ]
+    for event in events:
+        event_uid = str(uuid.uuid4())
+        seq = await store.append_event(
+            owner,
+            session_id,
+            imported.id,
+            event,
+            request_id=event_uid,
+        )
+        live_data = {**event.data, "event_uid": event_uid}
+        if seq is not None:
+            live_data["seq"] = seq
+        await orchestrator.emit_session_event(
+            session_id,
+            Event(type=event.type, data=live_data, timestamp=event.timestamp),
+            create_bus=True,
+        )
+    return {"data": _message_to_data(imported)}
 
 
 @router.get(

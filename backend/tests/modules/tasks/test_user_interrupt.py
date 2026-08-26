@@ -28,14 +28,17 @@ from typing import Any
 
 import pytest
 
-from valuz_agent.modules.tasks import planning
+from valuz_agent.modules.tasks import mailbox_store, planning
 from valuz_agent.modules.tasks.actor_runner import (
     ActorRunner,
     _resolve_turn_status,
 )
-from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
+from valuz_agent.modules.tasks.mailbox import InboxMsg
+from valuz_agent.modules.tasks.member_state import classify_member
+from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
-from valuz_agent.modules.tasks.recovery import classify_member
+
+from .conftest import deliver_async
 
 LOCAL_USER_ID = "local-test-owner"
 
@@ -77,7 +80,7 @@ def test_resolve_turn_status_real_errors_still_terminate() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_interrupted_member_breaks_without_per_turn_notify() -> None:
+async def test_interrupted_member_breaks_without_per_turn_notify(db_factory) -> None:
     orch = TaskOrchestrator()
     notified: list[str] = []
     finalized: list[str] = []
@@ -91,12 +94,12 @@ async def test_interrupted_member_breaks_without_per_turn_notify() -> None:
     async def fake_finalize(**kwargs: object) -> None:
         finalized.append(str(kwargs["final_status"]))
 
-    orch._run_turn_with_sink = fake_turn  # type: ignore[method-assign]
-    orch._notify_lead_member_idle = fake_notify  # type: ignore[method-assign]
-    orch._finalize_actor = fake_finalize  # type: ignore[method-assign]
+    orch.actor.run_turn = fake_turn  # type: ignore[method-assign]
+    orch.coordination.notify_lead_member_idle = fake_notify  # type: ignore[method-assign]
+    orch.finalization.finalize_actor = fake_finalize  # type: ignore[method-assign]
 
     await asyncio.wait_for(
-        orch.run_actor_loop(
+        orch.actor.run_actor_loop(
             session_id="mem-int-1",
             initial_prompt="do it",
             role="subtask",
@@ -115,8 +118,33 @@ async def test_interrupted_member_breaks_without_per_turn_notify() -> None:
 
 async def test_lead_loop_member_done_cancelled_skips_mark_in_review(
     monkeypatch: pytest.MonkeyPatch,
+    db_factory,
 ) -> None:
     """A cancelled/terminated member_done must not flip the node to in_review."""
+    # The loop now asks durable state whether a member_done is still worth a
+    # turn, so the task has to exist for this test to exercise the path it is
+    # about. Without a row the answer is "nothing left to drive" — correct in
+    # production (a purged task should not wake anyone), just not this test.
+    db = db_factory()
+    try:
+        db.add(
+            TaskRow(
+                id="t1",
+                user_id=LOCAL_USER_ID,
+                project_id="w1",
+                file_path="tasks/t1.md",
+                title="T",
+                goal="g",
+                status="active",
+                lead_agent_slug="lead",
+                current_holder="lead",
+                plan={"subtasks": []},
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
     orch = TaskOrchestrator()
     marked: list[str] = []
     turns = 0
@@ -132,12 +160,11 @@ async def test_lead_loop_member_done_cancelled_skips_mark_in_review(
     async def fake_mark(**kwargs: object) -> None:
         marked.append(str(kwargs["member_session_id"]))
 
-    orch._run_turn_with_sink = fake_turn  # type: ignore[method-assign]
-    orch._finalize_actor = fake_finalize  # type: ignore[method-assign]
+    orch.actor.run_turn = fake_turn  # type: ignore[method-assign]
+    orch.finalization.finalize_actor = fake_finalize  # type: ignore[method-assign]
     monkeypatch.setattr(planning, "mark_in_review", fake_mark)
 
-    mailbox_registry.register("lead-int-1")
-    mailbox_registry.put(
+    await deliver_async(
         "lead-int-1",
         InboxMsg(
             kind="member_done",
@@ -145,14 +172,13 @@ async def test_lead_loop_member_done_cancelled_skips_mark_in_review(
             payload={"status": "cancelled", "summary": "用户中断了该子任务"},
         ),
     )
-    mailbox_registry.put(
+    await deliver_async(
         "lead-int-1",
         InboxMsg(kind="member_done", from_session="mem-ok", payload={"status": "idle"}),
     )
-    mailbox_registry.put("lead-int-1", InboxMsg(kind="shutdown"))
 
     await asyncio.wait_for(
-        orch.run_actor_loop(
+        orch.actor.run_actor_loop(
             session_id="lead-int-1",
             initial_prompt="brief",
             role="lead",
@@ -184,134 +210,138 @@ def test_format_member_done_failure_guidance() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _patch_finalize_deps(
-    monkeypatch: pytest.MonkeyPatch,
+def _seed_interrupted_member(
+    db_factory,
     *,
     run_status: str,
-    plan_nodes: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Stub lifecycle's DB seams for _finalize_interrupted_member and record
-    every write. Returns the recorder dict."""
-    from valuz_agent.modules.tasks import lifecycle as lc_mod
+    node_status: str,
+) -> None:
+    """Seed a real task + member run for the finalize-callback tests.
 
-    rec: dict[str, Any] = {"run_updates": [], "events": [], "task_plan": None}
+    Was ``_patch_finalize_deps``: four hand-rolled fake datastores plus a fake
+    unit of work, recording writes into a dict. That fake broke twice during
+    the 2026-07 refactor on edits that had nothing to do with what it was
+    testing, because it modelled the datastore API rather than the data. A real
+    tmp sqlite row costs microseconds, cannot drift, and lets the assertions
+    read the ACTUAL persisted state instead of a recorder.
+    """
+    db = db_factory()
+    try:
+        db.add(
+            TaskRow(
+                user_id=LOCAL_USER_ID,
+                id="t1",
+                project_id="w1",
+                file_path="/tmp/t1.md",
+                title="T",
+                goal="g",
+                status="active",
+                created_by="user",
+                lead_agent_slug="lead",
+                current_holder="lead",
+                plan={
+                    "subtasks": [
+                        {"key": "dev", "title": "dev", "agent": "coder", "status": node_status}
+                    ]
+                },
+            )
+        )
+        db.add(
+            TaskSessionRow(
+                user_id=LOCAL_USER_ID,
+                id="run-mem",
+                project_id="w1",
+                task_id="t1",
+                session_id="mem-1",
+                agent_slug="coder",
+                sequence=1,
+                kind="subtask",
+                status=run_status,
+                subtask_key="dev",
+                dispatched_by="lead-1",
+                run_dir="/tmp",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
 
-    run = SimpleNamespace(
-        session_id="mem-1",
-        kind="subtask",
-        subtask_key="dev",
-        agent_slug="coder",
-        dispatched_by="lead-1",
-        status=run_status,
-        run_dir="/tmp",
-        task_id="t1",
-        project_id="w1",
-    )
-    task_row = SimpleNamespace(
-        plan={"subtasks": plan_nodes},
-        status="active",
-    )
 
-    class _FakeRunDs:
-        def __init__(self, _db):
-            pass
-
-        async def get_run(self, _sid):
-            return run
-
-        async def update_run_by_session(self, **kw):
-            rec["run_updates"].append(kw)
-
-    class _FakeTaskDs:
-        def __init__(self, _db):
-            pass
-
-        async def get_task_by_project(self, _uid, _ws, _tid):
-            return task_row
-
-        async def update_task(self, row):
-            rec["task_plan"] = row.plan
-
-    class _FakeEventDs:
-        def __init__(self, _db):
-            pass
-
-        async def append_event(self, *a, **kw):
-            rec["events"].append(kw.get("type") or (a[3] if len(a) > 3 else None))
-
-    @asynccontextmanager
-    async def _fake_uow(*_a, **_k):
-        yield SimpleNamespace()
-
-    async def _fake_emit(*_a, **_k):
-        return None
-
-    async def _fake_name(*_a, **_k):
-        return "Coder"
-
-    monkeypatch.setattr(lc_mod, "async_unit_of_work", _fake_uow)
-    monkeypatch.setattr(lc_mod, "TaskSessionDatastore", _FakeRunDs)
-    monkeypatch.setattr(lc_mod, "TaskDatastore", _FakeTaskDs)
-    monkeypatch.setattr(lc_mod, "TaskEventDatastore", _FakeEventDs)
-    monkeypatch.setattr(lc_mod, "resolve_agent_display_name", _fake_name)
-    monkeypatch.setattr(planning, "emit_plan_update", _fake_emit)
-    return rec
+def _read_state(db_factory) -> tuple[str, dict[str, Any], list[str]]:
+    """(run status, plan node, event types) straight from the DB."""
+    db = db_factory()
+    try:
+        run = db.query(TaskSessionRow).filter_by(session_id="mem-1").one()
+        task = db.query(TaskRow).filter_by(id="t1").one()
+        events = [
+            e.type
+            for e in db.query(TaskEventRow).order_by(TaskEventRow.sequence).all()
+        ]
+        return run.status, task.plan["subtasks"][0], events
+    finally:
+        db.close()
 
 
 async def test_finalize_interrupted_member_records_user_stop(
-    monkeypatch: pytest.MonkeyPatch,
+    db_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    rec = _patch_finalize_deps(
-        monkeypatch,
-        run_status="active",
-        plan_nodes=[{"key": "dev", "title": "dev", "status": "in_progress"}],
-    )
+    from valuz_agent.modules.tasks import finalization as lc_mod
+
+    async def _fake_name(*_a: Any, **_k: Any) -> str:
+        return "Coder"
+
+    monkeypatch.setattr(lc_mod, "resolve_agent_display_name", _fake_name)
+    _seed_interrupted_member(db_factory, run_status="active", node_status="in_progress")
+
     orch = TaskOrchestrator()
-    mailbox_registry.register("lead-1")
     try:
-        await orch._lifecycle._finalize_interrupted_member(
+        await orch.finalization._finalize_interrupted_member(
             session_id="mem-1", task_id="t1", project_id="w1", user_id=LOCAL_USER_ID
         )
+        run_status, node, events = _read_state(db_factory)
         # run → rejected (the stop_member convention, not archived/failed)
-        assert rec["run_updates"] and rec["run_updates"][0]["status"] == "rejected"
+        assert run_status == "rejected"
         # node → rework with a user-stop note
-        node = rec["task_plan"]["subtasks"][0]
         assert node["status"] == "rework"
-        assert "用户中断" in (node.get("review_feedback") or "")
-        # timeline shows a stop, NOT a failure
-        assert rec["events"] == ["subtask_stopped"]
-        # exactly one member_done(cancelled) reached the lead
-        msg = await mailbox_registry.get("lead-1", timeout=0.5)
+        from valuz_agent.i18n import t
+
+        assert node.get("review_feedback") == t("task.reworkUserInterrupted")
+        # timeline shows a stop, NOT a failure (plus the plan snapshot)
+        assert "subtask_stopped" in events
+        assert "subtask_failed" not in events
+        # exactly one member_done(cancelled) reached the lead — through the
+        # durable inbox, since the lead's loop need not share this process
+        drained = await mailbox_store.drain("lead-1", limit=32)
+        assert len(drained) == 1
+        msg = drained[0]
         assert msg.kind == "member_done"
         assert msg.payload is not None and msg.payload["status"] == "cancelled"
     finally:
-        mailbox_registry.unregister("lead-1")
+        pass
 
 
+@pytest.mark.parametrize("parked", ["rejected", "paused"])
 async def test_finalize_interrupted_member_skips_already_recorded_runs(
-    monkeypatch: pytest.MonkeyPatch,
+    db_factory, parked: str
 ) -> None:
     """stop_member (rejected) / stop_task (paused) already recorded the outcome
     — the loop-exit callback must not overwrite it or double-notify."""
-    for parked in ("rejected", "paused"):
-        rec = _patch_finalize_deps(
-            monkeypatch,
-            run_status=parked,
-            plan_nodes=[{"key": "dev", "title": "dev", "status": "paused"}],
+    _seed_interrupted_member(db_factory, run_status=parked, node_status="paused")
+
+    orch = TaskOrchestrator()
+    try:
+        await orch.finalization._finalize_interrupted_member(
+            session_id="mem-1", task_id="t1", project_id="w1", user_id=LOCAL_USER_ID
         )
-        orch = TaskOrchestrator()
-        mailbox_registry.register("lead-1")
-        try:
-            await orch._lifecycle._finalize_interrupted_member(
-                session_id="mem-1", task_id="t1", project_id="w1", user_id=LOCAL_USER_ID
-            )
-            assert rec["run_updates"] == []
-            assert rec["events"] == []
-            assert rec["task_plan"] is None
-            with pytest.raises(asyncio.TimeoutError):
-                await mailbox_registry.get("lead-1", timeout=0.05)
-        finally:
-            mailbox_registry.unregister("lead-1")
+        run_status, node, events = _read_state(db_factory)
+        assert run_status == parked, "the parked outcome must survive untouched"
+        assert node["status"] == "paused"
+        assert events == []
+        assert await mailbox_store.drain("lead-1", limit=32) == [], (
+            "an already-parked run must not tell the lead a second time"
+        )
+    finally:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +352,7 @@ async def test_finalize_interrupted_member_skips_already_recorded_runs(
 def _patch_await_deps(monkeypatch: pytest.MonkeyPatch, key_by_session: dict[str, str]) -> None:
     """Same seams as test_actor_v2._patch_await_deps (coordination module)."""
     from valuz_agent.modules.tasks import coordination as coord_mod
+    from valuz_agent.modules.tasks import member_probe as probe_mod
 
     class _FakeRunDs:
         def __init__(self, _db):
@@ -354,13 +385,17 @@ def _patch_await_deps(monkeypatch: pytest.MonkeyPatch, key_by_session: dict[str,
     async def _fake_uow(*_a, **_k):
         yield SimpleNamespace()
 
-    monkeypatch.setattr(coord_mod, "async_unit_of_work", _fake_uow)
-    monkeypatch.setattr(coord_mod, "TaskSessionDatastore", _FakeRunDs)
-    monkeypatch.setattr(coord_mod, "TaskDatastore", _FakeTaskDs)
+    # Both modules: ``await_member_results`` reads through coordination, and
+    # the crash backstop it calls reads through member_probe. Each imported
+    # these names itself, so patching one leaves the other on the real DB.
+    for mod in (coord_mod, probe_mod):
+        monkeypatch.setattr(mod, "async_unit_of_work", _fake_uow)
+        monkeypatch.setattr(mod, "TaskSessionDatastore", _FakeRunDs)
+        monkeypatch.setattr(mod, "TaskDatastore", _FakeTaskDs)
 
 
 def _patch_kernel_running(monkeypatch: pytest.MonkeyPatch) -> None:
-    from valuz_agent.modules.tasks import coordination as coord_mod
+    from valuz_agent.modules.tasks import member_probe as probe_mod
 
     def _reader():
         async def _get_session(_uid, _sid):
@@ -368,7 +403,7 @@ def _patch_kernel_running(monkeypatch: pytest.MonkeyPatch) -> None:
 
         return SimpleNamespace(get_session=_get_session)
 
-    monkeypatch.setattr(coord_mod, "data_reader", _reader)
+    monkeypatch.setattr(probe_mod, "data_reader", _reader)
 
 
 async def test_await_timeout_reports_running_member_liveness(
@@ -379,6 +414,7 @@ async def test_await_timeout_reports_running_member_liveness(
     _patch_await_deps(monkeypatch, {"sB": "B"})
     _patch_kernel_running(monkeypatch)
     from valuz_agent.modules.tasks import coordination as coord_mod
+    from valuz_agent.modules.tasks import member_probe as probe_mod
 
     monkeypatch.setattr(coord_mod, "_HEARTBEAT_S", 0.05)
 
@@ -386,14 +422,13 @@ async def test_await_timeout_reports_running_member_liveness(
         return {}
 
     monkeypatch.setattr(
-        coord_mod.CoordinationService, "_pending_asks_by_session", staticmethod(_no_asks)
+        probe_mod, "_pending_asks_by_session", (_no_asks)
     )
 
     orch = TaskOrchestrator()
     lead = "lead-live-1"
-    mailbox_registry.register(lead)
     try:
-        res = await orch.await_member_results(
+        res = await orch.coordination.await_member_results(
             lead_session_id=lead,
             project_id="w1",
             task_id="t1",
@@ -408,7 +443,7 @@ async def test_await_timeout_reports_running_member_liveness(
         assert status["B"]["state"] == "running"
         assert "ALIVE" in res["hint"]
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
 
 async def test_await_breaks_early_when_all_pending_awaiting_user(
@@ -419,6 +454,7 @@ async def test_await_breaks_early_when_all_pending_awaiting_user(
     _patch_await_deps(monkeypatch, {"sB": "B"})
     _patch_kernel_running(monkeypatch)
     from valuz_agent.modules.tasks import coordination as coord_mod
+    from valuz_agent.modules.tasks import member_probe as probe_mod
 
     monkeypatch.setattr(coord_mod, "_HEARTBEAT_S", 0.05)
 
@@ -426,16 +462,15 @@ async def test_await_breaks_early_when_all_pending_awaiting_user(
         return {"sB": "which environment should I deploy to?"}
 
     monkeypatch.setattr(
-        coord_mod.CoordinationService, "_pending_asks_by_session", staticmethod(_asks)
+        probe_mod, "_pending_asks_by_session", (_asks)
     )
 
     orch = TaskOrchestrator()
     lead = "lead-ask-1"
-    mailbox_registry.register(lead)
     try:
         loop = asyncio.get_running_loop()
         start = loop.time()
-        res = await orch.await_member_results(
+        res = await orch.coordination.await_member_results(
             lead_session_id=lead,
             project_id="w1",
             task_id="t1",
@@ -444,6 +479,10 @@ async def test_await_breaks_early_when_all_pending_awaiting_user(
             timeout_s=30,  # would block ~30s without the early break
             user_id=LOCAL_USER_ID,
         )
+        # The probe runs every ``_PROBE_EVERY_N_SLICES`` heartbeat slices (it
+        # answers a question only a human can change), so the break costs that
+        # many slices — trivial here because ``_HEARTBEAT_S`` is patched to
+        # 0.05s above. The budget below just has to clear it.
         assert loop.time() - start < 2.0
         assert res["awaiting_user"] is True
         assert res["timed_out"] is False
@@ -452,7 +491,7 @@ async def test_await_breaks_early_when_all_pending_awaiting_user(
         assert "deploy" in entry["question"]
         assert "decision inbox" in res["hint"]
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +502,7 @@ async def test_await_breaks_early_when_all_pending_awaiting_user(
 async def test_finish_task_stopped_rejected_while_members_live(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from valuz_agent.modules.tasks import orchestrator as orch_mod
+    from valuz_agent.modules.tasks import finalization as lc_mod
 
     class _FakeRunDs:
         def __init__(self, _db):
@@ -478,25 +517,21 @@ async def test_finish_task_stopped_rejected_while_members_live(
     async def _fake_uow(*_a, **_k):
         yield SimpleNamespace()
 
-    monkeypatch.setattr(orch_mod, "async_unit_of_work", _fake_uow)
-    monkeypatch.setattr(orch_mod, "TaskSessionDatastore", _FakeRunDs)
+    monkeypatch.setattr(lc_mod, "async_unit_of_work", _fake_uow)
+    monkeypatch.setattr(lc_mod, "TaskSessionDatastore", _FakeRunDs)
 
     orch = TaskOrchestrator()
-    orch._members.add_member("t-guard", "mem-live-1")
-    try:
-        res = await orch.finish_task(
-            task_id="t-guard",
-            project_id="w1",
-            lead_session_id="lead-g",
-            summary="giving up",
-            status="stopped",
-            user_id=LOCAL_USER_ID,
-        )
-        assert res["status"] == "rejected"
-        assert res["live_subtasks"] == ["build"]
-        assert "force=true" in res["error"]
-    finally:
-        orch._members.discard_member("t-guard", "mem-live-1")
+    res = await orch.finalization.finish_task(
+        task_id="t-guard",
+        project_id="w1",
+        lead_session_id="lead-g",
+        summary="giving up",
+        status="stopped",
+        user_id=LOCAL_USER_ID,
+    )
+    assert res["status"] == "rejected"
+    assert res["live_subtasks"] == ["build"]
+    assert "force=true" in res["error"]
 
 
 async def test_finish_task_stopped_force_bypasses_guard(
@@ -504,7 +539,7 @@ async def test_finish_task_stopped_force_bypasses_guard(
 ) -> None:
     """force=True must get PAST the live-member guard (proven by reaching the
     terminal-write path, stubbed here)."""
-    from valuz_agent.modules.tasks import orchestrator as orch_mod
+    from valuz_agent.modules.tasks import finalization as lc_mod
 
     writes: list[str] = []
 
@@ -513,7 +548,12 @@ async def test_finish_task_stopped_force_bypasses_guard(
             pass
 
         async def get_task_by_project(self, *_a):
-            return None  # no plan guard / no worktree cleanup
+            # A REAL row. This used to return None, which happened to skip the
+            # guards — but ``finish_task`` now rejects a missing task outright
+            # (it used to write a terminal event for a task that doesn't
+            # exist). An empty plan + no worktree keeps this test on its actual
+            # subject: that ``force`` gets past the LIVE-MEMBER guard.
+            return SimpleNamespace(plan={}, metadata_={})
 
         async def update_task_status(self, _uid, _tid, status):
             writes.append(status)
@@ -542,25 +582,27 @@ async def test_finish_task_stopped_force_bypasses_guard(
     async def _no_session(*_a, **_k):
         return None
 
-    monkeypatch.setattr(orch_mod, "async_unit_of_work", _fake_uow)
-    monkeypatch.setattr(orch_mod, "TaskDatastore", _FakeTaskDs)
-    monkeypatch.setattr(orch_mod, "TaskSessionDatastore", _FakeRunDs)
-    monkeypatch.setattr(orch_mod, "TaskEventDatastore", _FakeEventDs)
-    monkeypatch.setattr(orch_mod.kernel_client, "get_session", _no_session)
+    from valuz_agent.modules.tasks import events as events_mod
+
+    monkeypatch.setattr(lc_mod, "async_unit_of_work", _fake_uow)
+    monkeypatch.setattr(lc_mod, "TaskDatastore", _FakeTaskDs)
+    monkeypatch.setattr(lc_mod, "TaskSessionDatastore", _FakeRunDs)
+    monkeypatch.setattr(lc_mod, "TaskEventDatastore", _FakeEventDs)
+    # finish_task's terminal write now runs through events.finalize_task —
+    # stub the same fakes on its namespace.
+    monkeypatch.setattr(events_mod, "TaskDatastore", _FakeTaskDs)
+    monkeypatch.setattr(events_mod, "TaskEventDatastore", _FakeEventDs)
+    monkeypatch.setattr(lc_mod.kernel_client, "get_session", _no_session)
 
     orch = TaskOrchestrator()
-    orch._members.add_member("t-force", "mem-live-2")
-    try:
-        res = await orch.finish_task(
-            task_id="t-force",
-            project_id="w1",
-            lead_session_id="lead-f",
-            summary="deliberate stop",
-            status="stopped",
-            force=True,
-            user_id=LOCAL_USER_ID,
-        )
-        assert res == {"ok": True, "status": "stopped"}
-        assert writes == ["stopped"]
-    finally:
-        orch._members.discard_member("t-force", "mem-live-2")
+    res = await orch.finalization.finish_task(
+        task_id="t-force",
+        project_id="w1",
+        lead_session_id="lead-f",
+        summary="deliberate stop",
+        status="stopped",
+        force=True,
+        user_id=LOCAL_USER_ID,
+    )
+    assert res == {"ok": True, "status": "stopped"}
+    assert writes == ["stopped"]

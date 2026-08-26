@@ -1,11 +1,10 @@
 import { createRef } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { ConversationTurn } from "@valuz/shared";
+import type { CitationBundleV1, ConversationTurn } from "@valuz/shared";
 import { ConversationTurnList } from "./ConversationTurnList";
 
-const processedElapsedName =
-  /已处理 (?:\d+ 秒|\d+ 分(?: \d+ 秒)?)/;
+const processedElapsedName = /已处理 (?:\d+ 秒|\d+ 分(?: \d+ 秒)?)/;
 
 const virtualState = {
   start: 0,
@@ -44,12 +43,55 @@ function buildTurn(i: number): ConversationTurn {
   };
 }
 
+function citationBundle(
+  citationId: string,
+  sourceId: string,
+  title: string,
+): CitationBundleV1 {
+  return {
+    version: 1,
+    citations: [
+      {
+        citationId,
+        source: {
+          sourceId,
+          providerId: "test",
+          sourceType: "document",
+          title,
+          retrievedAt: "2026-08-04T00:00:00Z",
+        },
+        evidence: {
+          kind: "text",
+          quote: `${title} evidence`,
+          snippet: `${title} evidence`,
+          capturedAt: "2026-08-04T00:00:00Z",
+        },
+      },
+    ],
+  };
+}
+
+function projectedCitationBundle(
+  citationId: string,
+  evidenceHandle: string,
+  sourceId: string,
+  title: string,
+): CitationBundleV1 {
+  return {
+    ...citationBundle(citationId, sourceId, title),
+    projection: {
+      evidenceHandleToCitationId: { [evidenceHandle]: citationId },
+    },
+  };
+}
+
 function renderList(
   turns: ConversationTurn[],
   opts: {
     onRetry?: (turnId: string) => void;
     loading?: boolean;
     sending?: boolean;
+    postRunVerificationActive?: boolean;
   } = {},
 ) {
   const scrollContainerRef = createRef<HTMLDivElement>();
@@ -61,6 +103,7 @@ function renderList(
         turns={turns}
         scrollContainerRef={scrollContainerRef}
         sending={opts.sending ?? false}
+        postRunVerificationActive={opts.postRunVerificationActive ?? false}
         loading={opts.loading ?? false}
         error={null}
         onRetry={opts.onRetry}
@@ -97,7 +140,9 @@ describe("ConversationTurnList virtualization", () => {
 
     const { getApi, rerender } = renderList(turns);
     getApi()?.scrollToTurnTop(120);
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => resolve()),
+    );
 
     const scrollContainerRef = createRef<HTMLDivElement>();
     rerender(
@@ -155,9 +200,7 @@ describe("ConversationTurnList virtualization", () => {
       screen.getAllByRole("button", { name: "已处理 1 分 25 秒" }),
     ).toHaveLength(1);
     fireEvent.click(processingToggle);
-    fireEvent.click(
-      screen.getByRole("button", { name: /调用了 1 次工具/ }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /调用了 1 次工具/ }));
     expect(screen.getByText(/first thinking text/)).toBeTruthy();
     expect(screen.getByText(/second thinking text/)).toBeTruthy();
     expect(screen.getByText("tool-title")).toBeTruthy();
@@ -228,9 +271,7 @@ describe("ConversationTurnList virtualization", () => {
 
     expect(screen.queryByText("tool-title")).toBeNull();
     fireEvent.click(indicators[0]);
-    fireEvent.click(
-      screen.getByRole("button", { name: /调用了 1 次工具/ }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /调用了 1 次工具/ }));
     expect(screen.getByText("tool-title")).toBeTruthy();
     expect(screen.getByText(/before tool/)).toBeTruthy();
     expect(screen.getByText(/after tool/)).toBeTruthy();
@@ -269,11 +310,173 @@ describe("ConversationTurnList virtualization", () => {
     expect(indicators).toHaveLength(1);
     expect(indicators[0].textContent).toContain("已处理 2 分");
   });
+
+  it("merges sources and citation numbering across adjacent answer messages", () => {
+    virtualState.start = 0;
+    const turns: ConversationTurn[] = [
+      {
+        id: "turn-repaired-answer",
+        userMessageSeq: 4,
+        userText: "research",
+        failedMessage: null,
+        blocks: [
+          {
+            kind: "assistant",
+            text: "Main answer [source](citation://cit_main).",
+            messageId: "message-main",
+            citationBundle: citationBundle("cit_main", "doc-main", "Main source"),
+          },
+          {
+            kind: "assistant",
+            text: "Repair detail [source](citation://cit_repair).",
+            messageId: "message-repair",
+            citationBundle: citationBundle(
+              "cit_repair",
+              "doc-repair",
+              "Repair source",
+            ),
+          },
+        ],
+      },
+    ];
+
+    const { container } = renderList(turns);
+
+    expect(
+      container.querySelectorAll("[data-citation-source-list]"),
+    ).toHaveLength(1);
+    expect(
+      screen.getByRole("button", { name: /(?:citation|引用) 1/i })
+        .textContent,
+    ).toBe("1");
+    expect(
+      screen.getByRole("button", { name: /(?:citation|引用) 2/i })
+        .textContent,
+    ).toBe("2");
+    expect(screen.getByRole("button", { name: /^1 Main source$/i })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /^2 Repair source$/i }),
+    ).toBeTruthy();
+  });
+
+  it("resolves an inline citation from the merged turn bundle on hover", () => {
+    virtualState.start = 0;
+    const turns: ConversationTurn[] = [
+      {
+        id: "turn-cross-message-citation",
+        userMessageSeq: 5,
+        userText: "research",
+        failedMessage: null,
+        blocks: [
+          {
+            kind: "assistant",
+            text: "Main answer [source](citation://cit_late).",
+            messageId: "message-main",
+          },
+          {
+            kind: "assistant",
+            text: "Repair completed.",
+            messageId: "message-repair",
+            citationBundle: citationBundle(
+              "cit_late",
+              "doc-late",
+              "Late sidecar source",
+            ),
+          },
+        ],
+      },
+    ];
+
+    renderList(turns);
+
+    const pill = screen.getByRole("button", {
+      name: /(?:citation|引用) 1/i,
+    });
+    fireEvent.mouseEnter(pill);
+    const hoverCard = document.querySelector<HTMLElement>(
+      "[data-citation-hover-card]",
+    );
+    expect(hoverCard).not.toBeNull();
+    expect(hoverCard?.textContent).toContain(
+      "Late sidecar source",
+    );
+    expect(hoverCard?.textContent).toContain(
+      "Late sidecar source evidence",
+    );
+  });
+
+  it("numbers post-publish evidence links through the turn projection", () => {
+    virtualState.start = 0;
+    const turns: ConversationTurn[] = [
+      {
+        id: "turn-projected-evidence",
+        userMessageSeq: 6,
+        userText: "research",
+        failedMessage: null,
+        blocks: [
+          {
+            kind: "assistant",
+            text: "Revenue [source](evidence://ev_revenue_q2).",
+            messageId: "message-projected",
+            citationBundle: projectedCitationBundle(
+              "cit_revenue_q2",
+              "ev_revenue_q2",
+              "doc-revenue",
+              "Revenue source",
+            ),
+          },
+        ],
+      },
+    ];
+
+    const { container } = renderList(turns);
+
+    expect(
+      screen.getByRole("button", { name: /(?:citation|引用) 1/i }).textContent,
+    ).toBe("1");
+    expect(container.querySelectorAll("[data-citation-source-list]")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: /^1 Revenue source$/i })).toBeTruthy();
+  });
+});
+
+describe("ConversationTurnList token usage", () => {
+  it("shows a compact per-turn total and opens the detailed token breakdown", async () => {
+    virtualState.start = 0;
+    const turn: ConversationTurn = {
+      ...buildTurn(1),
+      tokenUsage: {
+        inputTokens: 754,
+        outputTokens: 116,
+        cacheReadTokens: 59_900,
+        cacheWriteTokens: 2,
+        totalTokens: 60_772,
+        cacheHitRate: 59_900 / (754 + 59_900 + 2),
+        models: ["gpt-5.6-codex"],
+      },
+    };
+
+    renderList([turn]);
+
+    const trigger = screen.getByRole("button", {
+      name: /60[,.]?772 Tokens/,
+    });
+    expect(trigger.textContent).toMatch(/60[,.]?8K/i);
+
+    fireEvent.click(trigger);
+
+    expect(await screen.findByText("本轮 Tokens")).not.toBeNull();
+    expect(screen.getByText("输入（命中缓存）")).not.toBeNull();
+    expect(screen.getByText("59,900")).not.toBeNull();
+    expect(screen.getByText("98.8%")).not.toBeNull();
+    // The breakdown shows the public name (``modelLabel``), not the raw
+    // runtime id: gpt-5.6-codex → "GPT 5.6 Codex".
+    expect(screen.getByText("GPT 5.6 Codex")).not.toBeNull();
+  });
 });
 
 describe("ConversationTurnList loading placeholder", () => {
   const shimmer = (container: HTMLElement) =>
-    container.querySelector('img[src="./logo.png"]');
+    container.querySelector('img[src="/logo.png"]');
 
   it("shows the shimmer while an existing session's transcript loads", () => {
     // Regression: this state used to render literally nothing — a slow
@@ -284,7 +487,7 @@ describe("ConversationTurnList loading placeholder", () => {
 
   it("does not double-render with the sending shimmer", () => {
     const { container } = renderList([], { loading: true, sending: true });
-    expect(container.querySelectorAll('img[src="./logo.png"]').length).toBe(1);
+    expect(container.querySelectorAll('img[src="/logo.png"]').length).toBe(1);
   });
 
   it("hides the shimmer once turns are rendered", () => {
@@ -296,6 +499,28 @@ describe("ConversationTurnList loading placeholder", () => {
   it("renders nothing for a loaded empty session without error", () => {
     const { container } = renderList([], { loading: false });
     expect(shimmer(container)).toBeNull();
+  });
+
+  it("shows the verification tag above the loading logo on the latest turn", () => {
+    virtualState.start = 0;
+    const { container } = renderList([buildTurn(0)], {
+      sending: true,
+      postRunVerificationActive: true,
+    });
+
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("正在校验内容并生成引用…");
+    const logo = shimmer(container);
+    expect(logo).not.toBeNull();
+    expect(
+      status.compareDocumentPosition(logo as Node) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+  });
+
+  it("does not show the verification tag outside the post-run phase", () => {
+    virtualState.start = 0;
+    renderList([buildTurn(0)], { sending: true });
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });
 

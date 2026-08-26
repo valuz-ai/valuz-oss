@@ -17,6 +17,7 @@ Outputs:
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from openai_codex.generated.v2_all import (
@@ -24,9 +25,11 @@ from openai_codex.generated.v2_all import (
     AgentMessageThreadItem,
     CommandExecutionOutputDeltaNotification,
     CommandExecutionThreadItem,
+    ContextCompactionThreadItem,
     ErrorNotification,
     FileChangeOutputDeltaNotification,
     FileChangeThreadItem,
+    ImageViewThreadItem,
     ItemCompletedNotification,
     ItemStartedNotification,
     McpServerStatusUpdatedNotification,
@@ -41,6 +44,7 @@ from openai_codex.generated.v2_all import (
     TurnCompletedNotification,
     TurnPlanStepStatus,
     TurnPlanUpdatedNotification,
+    WebSearchThreadItem,
 )
 from openai_codex.models import Notification
 from src.core.events import Event
@@ -190,6 +194,14 @@ def _map_item_started(item: Any) -> list[Event]:
                 },
             )
         ]
+    # WebSearchThreadItem / ImageViewThreadItem are deliberately NOT mapped
+    # here: webSearch's started snapshot is an empty placeholder (query "",
+    # action {type: "other"}) and imageView's started+completed are emitted
+    # back-to-back with identical data, so both surface the tool_use at
+    # ItemCompleted from the authoritative final item, paired immediately
+    # with the tool_result. ContextCompactionThreadItem started is skipped
+    # too — compaction can still fail or be aborted after it fires; only
+    # completed proves the history was actually replaced.
     return []
 
 
@@ -245,6 +257,79 @@ def _map_item_completed(item: Any) -> list[Event]:
                 data={"id": item.id, "content": content, "is_error": is_error},
             )
         ]
+
+    if isinstance(item, WebSearchThreadItem):
+        # tool_use + tool_result are emitted together here because the
+        # ItemStarted snapshot carries no real data (see _map_item_started).
+        # The tool name `web_search` matches codex's rollout item type
+        # (`web_search_call`) and the frontend's search category alias.
+        # Codex never exposes the fetched results (they go straight into
+        # the model's context, like the upstream Responses API
+        # `web_search_call`) — the action is all there is, so it's split
+        # across the pair instead of duplicated: input carries just the
+        # action *type* (search / openPage / findInPage), the result
+        # carries the full action (query/queries/url/pattern). The item
+        # has no error field, so is_error is always False.
+        if item.action is not None:
+            input_data: dict[str, Any] = {"action": {"type": item.action.root.type}}
+            content_obj: Any = item.action.model_dump(mode="json", exclude_none=True)
+        else:
+            # No action on the wire — fall back to the item's display
+            # query so neither side of the card is empty.
+            input_data = {"query": item.query} if item.query else {}
+            content_obj = item.model_dump(mode="json", exclude_none=True)
+        return [
+            Event(
+                type="tool_use",
+                data={"id": item.id, "name": "web_search", "input": input_data},
+            ),
+            Event(
+                type="tool_result",
+                data={
+                    "id": item.id,
+                    "content": json.dumps(content_obj, ensure_ascii=False),
+                    "is_error": False,
+                },
+            ),
+        ]
+
+    if isinstance(item, ImageViewThreadItem):
+        # Same pair-at-completed shape as webSearch above. The tool name
+        # `view_image` matches the codex tool the model actually invoked.
+        # The image bytes go straight into the model's context (never onto
+        # the item), so the full item is the non-empty output side; a failed
+        # view never emits the item at all, so is_error is always False.
+        return [
+            Event(
+                type="tool_use",
+                data={
+                    "id": item.id,
+                    "name": "view_image",
+                    "input": {"path": item.path.root},
+                },
+            ),
+            Event(
+                type="tool_result",
+                data={
+                    "id": item.id,
+                    "content": json.dumps(
+                        item.model_dump(mode="json", exclude_none=True),
+                        ensure_ascii=False,
+                    ),
+                    "is_error": False,
+                },
+            ),
+        ]
+
+    if isinstance(item, ContextCompactionThreadItem):
+        # Codex compacted the conversation history (auto-compaction on token
+        # pressure, or an explicit compact). Mapped to the shared
+        # ``compaction`` marker with the same empty payload as the runtime's
+        # synthetic ``/compact`` marker: the item is bare ``{id}`` — codex
+        # exposes no compaction metadata (unlike Claude's
+        # ``compact_metadata``), and the real token counts ride the
+        # following ``usage_update``.
+        return [Event(type="compaction", data={})]
 
     return []
 

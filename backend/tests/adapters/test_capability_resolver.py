@@ -115,7 +115,9 @@ class _FakeSkillSource:
         self._manifests = manifests
         self.calls: list[RuntimeContext] = []
 
-    def list_skills(self, ctx: RuntimeContext) -> list[SkillManifest]:
+    def list_skills(
+        self, ctx: RuntimeContext, *, compute_content_hash: bool = True
+    ) -> list[SkillManifest]:
         self.calls.append(ctx)
         return list(self._manifests)
 
@@ -451,3 +453,34 @@ def test_unknown_project_raises_key_error() -> None:
                 user_id=USER,
             )
         )
+
+
+def test_the_resolver_never_asks_for_a_content_hash(tmp_path: Path) -> None:
+    """It reads path / scope / origin_label and nothing else.
+
+    Computing the hash reads every file of every package — 21-28 s on a managed
+    deployment's network mount, paid at session creation.
+    """
+    asked: list[bool] = []
+
+    class _Recording:
+        def list_skills(
+            self, ctx: RuntimeContext, *, compute_content_hash: bool = True
+        ) -> list[SkillManifest]:
+            asked.append(compute_content_hash)
+            return []
+
+    project = _FakeProject(id="ws-chat", kind="chat", root_path=None)
+
+    asyncio.run(
+        resolve_session_capabilities(
+            projects=_FakeProjectDatastore(project),
+            skills=_FakeSkillDatastore([]),
+            project_id="ws-chat",
+            user_id="u1",
+            skill_source=_Recording(),
+            extra_skill_sources=[_Recording()],
+        )
+    )
+
+    assert asked == [False, False]

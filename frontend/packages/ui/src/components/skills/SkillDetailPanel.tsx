@@ -7,10 +7,22 @@ import {
   Loader2,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { cn } from "../../lib/cn";
 import { useI18n } from "../../hooks/use-i18n";
 import { Badge } from "../ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
 import { MarkdownContent } from "../conversation/MarkdownContent";
 import { ProjectFileTree, type FileTreeNode } from "../project/ProjectFileTree";
 import { getSkillIconStyle } from "./skill-icon-style";
@@ -76,6 +88,10 @@ export interface SkillDetailPanelProps {
   onLoadFile?: (path: string) => Promise<string>;
   onDelete?: () => void;
   onCopy?: () => void;
+  /** Edition-provided items appended after the native Copy action. */
+  copyMenuItems?: ReactNode;
+  /** Edition/overlay-provided actions rendered before the native controls. */
+  headerActions?: ReactNode;
   /** Reveal the skill directory in the OS file manager (Finder on macOS,
    * Explorer on Windows). When provided, a folder icon button is
    * rendered to the left of the delete icon. */
@@ -297,6 +313,8 @@ export const SkillDetailPanel = ({
   onLoadFile,
   onDelete,
   onCopy,
+  copyMenuItems,
+  headerActions,
   onOpenInFinder,
 }: SkillDetailPanelProps) => {
   const { t } = useI18n();
@@ -519,7 +537,27 @@ export const SkillDetailPanel = ({
               it on every panel was noise. */}
           <TooltipProvider delayDuration={150}>
             <div className="flex shrink-0 items-center gap-0.5">
-              {onCopy ? (
+              {headerActions}
+              {onCopy && copyMenuItems ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label={t("skill.copyAsCustom")}
+                      className="flex h-7 w-7 cursor-default items-center justify-center rounded-md text-ink-meta transition-colors hover:bg-surface-soft hover:text-ink-body"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" forceMount>
+                    <DropdownMenuItem onSelect={onCopy}>
+                      <Copy className="h-3.5 w-3.5" />
+                      {t("skill.copyAsCustom")}
+                    </DropdownMenuItem>
+                    {copyMenuItems}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : onCopy ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button

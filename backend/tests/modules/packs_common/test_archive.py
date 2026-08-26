@@ -109,6 +109,21 @@ def test_sanitize_extracts_trailing_segment(raw: str, expected: str) -> None:
     assert sanitize_skill_slug(raw) == expected
 
 
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        # A namespaced slug keeps its colon through PureWindowsPath (``react``
+        # is not a drive letter), and the importer creates
+        # ``~/.agents/skills/<slug>/`` from it — uncreatable on Windows.
+        ("react:components", "react-components"),
+        ("weird<name>", "weird-name"),
+        ("con", "con-skill"),  # Windows device name
+    ],
+)
+def test_sanitize_scrubs_characters_windows_forbids(raw: str, expected: str) -> None:
+    assert sanitize_skill_slug(raw) == expected
+
+
 @pytest.mark.parametrize("degenerate", ["", "..", ".", "C:", "/", "\\", "//"])
 def test_sanitize_degenerate_is_one_safe_segment(degenerate: str) -> None:
     out = sanitize_skill_slug(degenerate)

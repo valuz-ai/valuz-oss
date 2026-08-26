@@ -159,3 +159,29 @@ async def test_should_skip_default_provider_fallback_when_no_default_model() -> 
     res = await resolve_model(providers=_FakeProviderDatastore([default_provider]))
     assert res.model == DEFAULT_MODEL
     assert res.source == "fallback"
+
+
+async def test_fallback_should_come_from_model_defaults_port() -> None:
+    """The last-resort model is the ``ext.model_defaults`` factory value, so a
+    distribution build (env override) or the commercial overlay (cloud
+    delivery) can move it without touching this module's constant."""
+    from valuz_agent.ports.extensions import ext
+    from valuz_agent.ports.model_defaults import ModelDefaults
+
+    class _Stub:
+        async def get(self, user_id=None):
+            return ModelDefaults(
+                default_runtime="deepagents",
+                default_model="dist-default-model",
+                default_provider_id=None,
+                default_effort="medium",
+            )
+
+    previous = ext.model_defaults
+    ext.model_defaults = _Stub()
+    try:
+        res = await resolve_model(providers=_FakeProviderDatastore())
+        assert res.model == "dist-default-model"
+        assert res.source == "fallback"
+    finally:
+        ext.model_defaults = previous

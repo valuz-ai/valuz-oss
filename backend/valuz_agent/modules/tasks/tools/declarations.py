@@ -1,12 +1,23 @@
-"""Dispatch MCP tool DECLARATIONS — the static, import-safe surface.
+"""Task MCP tool DECLARATIONS — the static, import-safe surface.
 
-Holds the tool-name constants, JSON-schema parameter dicts,
-``ToolDef(handler=None)`` declarations, the declaration tuples, and the pure
-agent-config transforms (``strip_dispatch_tools`` /
-``ensure_orchestration_tools_on_agent``).
+Holds the tool-name constants, JSON-schema parameter dicts, and the
+``ToolDef(handler=None)`` declarations, grouped into the TWO audience tuples
+that are this module's real output:
 
-This module is handler-free and orchestrator-free on purpose: it is imported by
-``projects/service.py``, ``agents/service.py``, and ``lifecycle._materialize_lead_agent``
+  * :data:`DISPATCH_TOOL_DECLARATIONS`      — the **lead** toolset (a running
+    task lead: plan, dispatch, await, review, finish).
+  * :data:`ORCHESTRATION_TOOL_DECLARATIONS` — the **chat** toolset (a plain
+    project conversation acting as a control surface: create/draft/commit a
+    task, inspect it, inject into it, resume it).
+
+``boot/steps.py`` partitions the host toolkit MCP server by exactly these two
+name lists (``/_internal/mcp/toolkit/{lead,base}``), so an audience change here
+IS the wire change — nothing else needs updating. Both tuples deliberately
+share ``list_members`` and the plan tools; the per-call authorization that the
+overlap needs lives in ``tools/gate.py`` (e.g. "an active task's plan is
+lead-only, chat must inject").
+
+This module is handler-free and orchestrator-free on purpose: it is imported
 during AgentConfig construction, so it must never reach the orchestrator (which
 would re-introduce the startup circular-import the handler closures avoid).
 
@@ -63,75 +74,6 @@ STOP_SUBTASK_TOOL_NAME = "stop_subtask"
 # ``deliverable_updated`` event; does not change task status.
 UPDATE_DELIVERABLE_TOOL_NAME = "update_deliverable"
 
-DISPATCH_TOOL_NAMES = (
-    DISPATCH_TOOL_NAME,
-    AWAIT_MEMBERS_TOOL_NAME,
-    LIST_MEMBERS_TOOL_NAME,
-    FINISH_TASK_TOOL_NAME,
-    SEND_TOOL_NAME,
-    CREATE_TASK_TOOL_NAME,
-    LIST_TASKS_TOOL_NAME,
-    GET_TASK_TOOL_NAME,
-    PLAN_TASK_TOOL_NAME,
-    GET_PLAN_TOOL_NAME,
-    MODIFY_PLAN_TOOL_NAME,
-    REVIEW_SUBTASK_TOOL_NAME,
-    DRAFT_TASK_TOOL_NAME,
-    COMMIT_TASK_TOOL_NAME,
-    ABANDON_TASK_TOOL_NAME,
-    INJECT_INTO_TASK_TOOL_NAME,
-    RESUME_TASK_TOOL_NAME,
-    STOP_SUBTASK_TOOL_NAME,
-    UPDATE_DELIVERABLE_TOOL_NAME,
-)
-
-# Strict-lead-only dispatch tools — must NOT be on a plain conversation agent
-# (stripped via ``strip_dispatch_tools``).
-#
-# VALUZ-CHATPLAN S2 (D4): plan_task / modify_plan / get_plan are NO LONGER
-# strict-lead-only — they are also advertised on chat agents (via
-# ORCHESTRATION_TOOL_DECLARATIONS) so the chat-as-control-surface flow can
-# write plans on draft tasks. Handler-level ``_check_plan_writer_gate``
-# enforces "active-task plan is lead-only" semantics.
-#
-# VALUZ-CHATPLAN bug fix: ``list_members`` was previously in this set with
-# a comment claiming ``ensure_orchestration_tools_on_agent`` would re-add it
-# via ORCHESTRATION_TOOL_DECLARATIONS. But ``_prepare_conversation_tools``
-# runs ``strip_dispatch_tools(ensure_orchestration_tools_on_agent(agent))``
-# (add THEN strip), so list_members was added and immediately stripped —
-# leaving chat agents without it. The chat-as-control-surface flow needs
-# list_members on chat agents (and the description explicitly tells the
-# LLM to call it before draft_task), so it's removed from the strip set.
-# Lead clones still get list_members via DISPATCH_TOOL_DECLARATIONS in
-# ``_materialize_lead_agent``, so removing it from the strip set is safe.
-LEAD_ONLY_TOOL_NAMES = frozenset(
-    {
-        DISPATCH_TOOL_NAME,
-        AWAIT_MEMBERS_TOOL_NAME,
-        SEND_TOOL_NAME,
-        FINISH_TASK_TOOL_NAME,
-        REVIEW_SUBTASK_TOOL_NAME,
-        STOP_SUBTASK_TOOL_NAME,
-        UPDATE_DELIVERABLE_TOOL_NAME,
-    }
-)
-
-
-def strip_dispatch_tools(agent_cfg: Any) -> Any:
-    """Return *agent_cfg* with all lead-only dispatch tools removed (idempotent).
-
-    A conversation/member agent must not advertise dispatch/finish_task — those
-    belong on the per-task lead clone. Pure — caller persists if changed.
-    """
-    from dataclasses import replace
-
-    tools = agent_cfg.tools or ()
-    kept = tuple(t for t in tools if getattr(t, "name", None) not in LEAD_ONLY_TOOL_NAMES)
-    if len(kept) == len(tools):
-        return agent_cfg
-    return replace(agent_cfg, tools=kept)
-
-
 # ---------------------------------------------------------------------------
 # JSON Schema parameters
 # ---------------------------------------------------------------------------
@@ -144,7 +86,9 @@ _DISPATCH_PARAMETERS: dict[str, Any] = {
             "type": "string",
             "description": (
                 "The key of a planned subtask (from plan_task/get_plan) to "
-                "dispatch. It must be ready: deps done, status planned/rework."
+                "dispatch. Dispatchable when its deps are done and its status "
+                "is 'planned', 'rework' or 'paused'. NOTE get_plan's `ready` "
+                "list omits 'rework' nodes — dispatch those by key directly."
             ),
         },
         "agent": {
@@ -193,11 +137,15 @@ _AWAIT_MEMBERS_PARAMETERS: dict[str, Any] = {
         },
         "timeout_s": {
             "type": "number",
+            "maximum": 600,
             "description": (
-                "Optional max seconds to wait. On timeout, returns whatever "
-                "finished plus a 'pending' list AND 'pending_status' — each "
-                "pending member's live state: 'running' means it is ALIVE and "
-                "still working (long builds/tests routinely exceed this wait; "
+                "Optional max seconds to wait, capped at 600 (larger values are "
+                "clamped — a bigger number does NOT let you wait longer). await "
+                "is meant to be LOOPED: one call need not wait long; to keep "
+                "waiting, just call await_members again. On timeout, returns "
+                "whatever finished plus a 'pending' list AND 'pending_status' — "
+                "each pending member's live state: 'running' means it is ALIVE "
+                "and still working (long builds/tests routinely exceed this wait; "
                 "await again rather than treating it as dead), "
                 "'awaiting_user' means it is paused on a question only the "
                 "USER can answer (do not busy-wait; do other work or end your "
@@ -214,7 +162,7 @@ _SEND_PARAMETERS: dict[str, Any] = {
         "session_id": {
             "type": "string",
             "description": (
-                "The member session id returned by dispatch_async (or seen in a "
+                "The member session id returned by dispatch (or seen in a "
                 "<member-result> block) to send this follow-up to."
             ),
         },
@@ -240,20 +188,12 @@ _CREATE_TASK_PARAMETERS: dict[str, Any] = {
             "type": "string",
             "description": "The task goal/brief handed to the spawned lead agent.",
         },
-        "lead_agent": {
+        "lead_agent_slug": {
             "type": "string",
             "description": (
-                "Project-local agent slug to lead the task. Defaults to the "
-                "agent of the current conversation."
-            ),
-        },
-        "dispatch_mode": {
-            "type": "string",
-            "enum": ["sync", "async"],
-            "description": (
-                "Dispatch architecture for the spawned lead. 'async' (default) "
-                "= persistent actor that dispatches members in parallel; 'sync' "
-                "= lead blocks on each dispatch in a single turn."
+                "Project-local agent slug to lead the task. Omit to use the "
+                "project's default lead, falling back to the agent of the "
+                "current conversation."
             ),
         },
         "refs": {
@@ -276,7 +216,15 @@ _LIST_TASKS_PARAMETERS: dict[str, Any] = {
     "properties": {
         "status": {
             "type": "string",
-            "enum": ["active", "completed", "failed"],
+            "enum": [
+                "draft",
+                "active",
+                "paused",
+                "stopped",
+                "completed",
+                "blocked",
+                "abandoned",
+            ],
             "description": "Optional filter by task status.",
         },
         "mine_only": {
@@ -444,11 +392,14 @@ _MODIFY_PLAN_PARAMETERS: dict[str, Any] = {
         "expected_version": {
             "type": "integer",
             "description": (
-                "CAS optimistic-lock token (from get_plan response). When passed, "
-                "the call is rejected with PLAN_VERSION_CONFLICT if it does not "
-                "equal the current plan_version. Chat callers (multi-session "
-                "concurrency possible) should always pass it; lead callers "
-                "(single-actor serial) may omit it."
+                "Version token from get_plan's current_version. "
+                "When passed, the call is rejected with PLAN_VERSION_CONFLICT if "
+                "it no longer matches. A lead editing its OWN task is the single "
+                "writer and may omit it; a human/REST editor of a RUNNING task "
+                "must pass it (the request is refused otherwise — the lead is "
+                "writing the same document concurrently). Note every plan write "
+                "bumps the version, including a subtask moving to in_review or "
+                "done, so re-read before retrying."
             ),
         },
     },
@@ -458,7 +409,7 @@ _MODIFY_PLAN_PARAMETERS: dict[str, Any] = {
 
 _DRAFT_TASK_PARAMETERS: dict[str, Any] = {
     "type": "object",
-    "required": ["goal", "lead_agent_slug"],
+    "required": ["goal"],
     "properties": {
         "goal": {
             "type": "string",
@@ -466,7 +417,11 @@ _DRAFT_TASK_PARAMETERS: dict[str, Any] = {
         },
         "lead_agent_slug": {
             "type": "string",
-            "description": "Which project agent will become the lead at commit time.",
+            "description": (
+                "Which project agent becomes the lead at commit time. Omit to "
+                "use the project's default lead, falling back to the agent of "
+                "the current conversation."
+            ),
         },
         "title": {
             "type": "string",
@@ -534,11 +489,12 @@ _RESUME_TASK_PARAMETERS: dict[str, Any] = {
         "task_id": {
             "type": "string",
             "description": (
-                "The paused, blocked, or stopped task to revive. The lead "
-                "session is respawned (Layer-2 recovery path) and the task "
-                "flips back to 'active'. Rejected for hard-terminal tasks "
-                "('completed' = goal already met → run a follow-up task; "
-                "'abandoned' = draft was discarded, nothing to revive)."
+                "The task to revive: 'paused', 'blocked', 'stopped', or "
+                "'completed' (reopening a completed task lets you supplement "
+                "or adjust its subtasks). The lead session is respawned and "
+                "the task flips back to 'active'. Rejected for 'abandoned' "
+                "(a discarded draft — nothing to revive) and 'draft' (launch "
+                "it with commit_task)."
             ),
         },
     },
@@ -556,7 +512,10 @@ _REVIEW_SUBTASK_PARAMETERS: dict[str, Any] = {
         "decision": {
             "type": "string",
             "enum": ["approve", "rework"],
-            "description": "approve → mark done (unlocks dependents); rework → send back.",
+            "description": (
+                "approve → mark done (unlocks dependents; only for a subtask "
+                "that ran); rework → send back for another attempt."
+            ),
         },
         "feedback": {
             "type": "string",
@@ -583,7 +542,7 @@ _STOP_SUBTASK_PARAMETERS: dict[str, Any] = {
             "type": "string",
             "description": (
                 "Member run session id (alternative to subtask_key). Use this "
-                "when you got the id from a SubtaskResult / await_members reply."
+                "when you got the id from an await_members result entry."
             ),
         },
         "reason": {
@@ -644,7 +603,8 @@ AWAIT_MEMBERS_TOOL_DECLARATION = ToolDef(
     name=AWAIT_MEMBERS_TOOL_NAME,
     description=(
         "Wait for dispatched members to finish and collect their results "
-        "(SubtaskResult[]) — call this ONLY after dispatch(). Use mode='any' in "
+        "(one entry per member: subtask_key, session_id, agent, status, summary, "
+        "artifacts) — call this ONLY after dispatch(). Use mode='any' in "
         "a loop to review members the moment each one completes; mode='all' to "
         "wait for the whole batch. Each returned member then awaits your "
         "review_subtask. Omit 'keys' to wait for all outstanding subtasks. "
@@ -678,14 +638,17 @@ GET_PLAN_TOOL_DECLARATION = ToolDef(
     ),
     parameters=_GET_PLAN_PARAMETERS,
     handler=None,
+    read_only=True,
 )
 
 MODIFY_PLAN_TOOL_DECLARATION = ToolDef(
     name=MODIFY_PLAN_TOOL_NAME,
     description=(
-        "The subtask-level add/update/remove primitive. Revise the plan after "
-        "it exists: add new subtasks, update existing ones (by key), or remove "
-        "them. Validates the DAG (no cycles / dangling deps). In CHAT on a "
+        "The subtask-level add/update primitive. Revise the plan after it "
+        "exists: add new subtasks, or update existing ones by key (goal, "
+        "agent, deps, title). Subtasks are a durable record — there is no "
+        "removal; to retire one, re-scope its goal. Validates the DAG (no "
+        "cycles / dangling deps). In CHAT on a "
         "DRAFT task, call this directly to amend subtasks; on a RUNNING task "
         "the lead owns the plan, so from chat send the change via "
         "inject_into_task and let the lead call modify_plan."
@@ -699,7 +662,10 @@ REVIEW_SUBTASK_TOOL_DECLARATION = ToolDef(
     description=(
         "Review a finished subtask: approve (mark done, unlocking dependents) or "
         "rework (send it back with feedback). Identify it by subtask_key or the "
-        "member's session_id. Call this after a member reports a result."
+        "member's session_id. Call this after a member reports a result — a "
+        "subtask that was never dispatched cannot be approved (dispatch it "
+        "first), and the task itself must still be active. Re-approving an "
+        "already-approved subtask is a no-op that returns already_done=true."
     ),
     parameters=_REVIEW_SUBTASK_PARAMETERS,
     handler=None,
@@ -711,8 +677,9 @@ STOP_SUBTASK_TOOL_DECLARATION = ToolDef(
         "HARD-stop a specific in-flight subtask. Use when a member is misdirected, "
         "stuck, or no longer needed (e.g. plan was revised). Interrupts the "
         "kernel session immediately, flips the plan node to ``rework`` (so you "
-        "can re-dispatch with a corrected goal via dispatch()) or you can "
-        "modify_plan to retire the work, and injects a synthetic "
+        "can re-dispatch it with a corrected goal via "
+        "dispatch(subtask_key=...), or re-scope it first with "
+        "modify_plan(update=[...])), and injects a synthetic "
         "``member_done(status=cancelled)`` into your mailbox so await_members "
         "doesn't hang. Identify the target by ``subtask_key`` OR ``session_id``. "
         "This is different from ``send`` (which just nudges a member that keeps "
@@ -911,7 +878,8 @@ RESUME_TASK_TOOL_DECLARATION = ToolDef(
     description=(
         "Revive a task that is paused, blocked, stopped, OR completed. The "
         "lead session is respawned and the task flips back to 'active'; "
-        "in-flight members are reconciled the same way as Layer-1 startup "
+        "in-flight members are reconciled the same way as they are after an "
+        "app restart "
         "recovery. Use when the user asks to 'continue the task we "
         "stopped/paused', 'restart the blocked task', or — the key new case "
         "— wants to SUPPLEMENT OR ADJUST the subtasks of an already-COMPLETED "
@@ -953,43 +921,3 @@ ORCHESTRATION_TOOL_DECLARATIONS: tuple[ToolDef, ...] = (
     INJECT_INTO_TASK_TOOL_DECLARATION,
     RESUME_TASK_TOOL_DECLARATION,
 )
-
-# Names of conversation-launcher tools — dropped from the per-task lead clone
-# (the lead dispatches; it doesn't launch new tasks). ``list_members`` is NOT
-# in this set: it stays on the lead too (it's part of the dispatch toolset),
-# so it must not be stripped from the lead clone.
-#
-# VALUZ-CHATPLAN S2: draft/commit/abandon are chat-only — a running lead has
-# no need (and no business) creating new drafts inside its own execution.
-# plan_task / modify_plan / get_plan are deliberately NOT here: the lead
-# clone re-adds them via DISPATCH_TOOL_DECLARATIONS. Dedup of duplicate
-# advertisements happens in ``_materialize_lead_agent``.
-ORCHESTRATION_TOOL_NAMES = frozenset(
-    {
-        CREATE_TASK_TOOL_NAME,
-        LIST_TASKS_TOOL_NAME,
-        GET_TASK_TOOL_NAME,
-        DRAFT_TASK_TOOL_NAME,
-        COMMIT_TASK_TOOL_NAME,
-        ABANDON_TASK_TOOL_NAME,
-        INJECT_INTO_TASK_TOOL_NAME,
-        RESUME_TASK_TOOL_NAME,
-    }
-)
-
-
-def ensure_orchestration_tools_on_agent(agent_cfg: Any) -> Any:
-    """Return *agent_cfg* with the ``create_task`` ToolDef declared (idempotent).
-
-    Project-conversation agents need ``create_task`` advertised to the model;
-    tools live on ``AgentConfig.tools`` (kernel Session has no tools field).
-    The launcher counterpart to ``TaskOrchestrator._materialize_lead_agent``
-    (which builds the per-task lead clone). Pure — caller persists.
-    """
-    from dataclasses import replace
-
-    existing = {getattr(t, "name", None) for t in (agent_cfg.tools or ())}
-    missing = [td for td in ORCHESTRATION_TOOL_DECLARATIONS if td.name not in existing]
-    if not missing:
-        return agent_cfg
-    return replace(agent_cfg, tools=tuple(agent_cfg.tools or ()) + tuple(missing))

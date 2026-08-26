@@ -3,8 +3,10 @@
  *
  * The unified attention ledger — questions + task failures. Wraps:
  * - ``GET  /v1/notifications``          — REST snapshot (entries + unread)
+ * - ``GET  /v1/notifications/history``  — resolved entries, cursor-paginated
  * - ``GET  /v1/notifications/stream``   — SSE (snapshot/added/updated/resolved)
- * - ``POST /v1/notifications/{id}:read`` / ``:read-all`` / ``:dismiss``
+ * - ``POST /v1/notifications/{id}:read`` / ``:read-all`` / ``:dismiss`` /
+ *   ``:dismiss-all``
  *
  * Consumed by ``useNotifications`` (singleton) → ``notification-store``.
  * Supersedes decisions-api + the interim tasksApi.listAttention.
@@ -52,11 +54,29 @@ export interface NotificationListResponse {
   unread: number;
 }
 
+export interface NotificationHistoryResponse {
+  entries: NotificationEntry[];
+  /** True when another page exists below the returned entries. */
+  has_more?: boolean;
+}
+
 const fetchJson = createFetchJson(() => _apiBase);
 
 export const notificationsApi = {
   fetchOpen(): Promise<NotificationListResponse> {
     return fetchJson(`/v1/notifications`);
+  },
+
+  /** Resolved entries, newest first. Page by passing the last entry's
+   *  ``created_at`` as ``before``. */
+  fetchHistory(
+    params: { limit?: number; before?: number } = {},
+  ): Promise<NotificationHistoryResponse> {
+    const q = new URLSearchParams();
+    if (params.limit != null) q.set("limit", String(params.limit));
+    if (params.before != null) q.set("before", String(params.before));
+    const qs = q.toString();
+    return fetchJson(`/v1/notifications/history${qs ? `?${qs}` : ""}`);
   },
 
   streamUrl(): string {
@@ -77,5 +97,9 @@ export const notificationsApi = {
     return fetchJson(`/v1/notifications/${encodeURIComponent(id)}:dismiss`, {
       method: "POST",
     });
+  },
+
+  dismissAll(): Promise<{ ok: boolean }> {
+    return fetchJson(`/v1/notifications:dismiss-all`, { method: "POST" });
   },
 };

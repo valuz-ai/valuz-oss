@@ -12,10 +12,13 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from collections import deque
-from collections.abc import Callable
-from typing import Any, Literal
+from collections.abc import Callable, Iterator, Mapping
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Literal, cast
 
 from claude_agent_sdk import (
     AgentDefinition,
@@ -54,21 +57,22 @@ from claude_agent_sdk.types import (
     SystemPromptPreset,
     ToolPermissionContext,
 )
-from claude_agent_sdk.types import (
-    McpHttpServerConfig as SdkMcpHttpServerConfig,
-)
-from claude_agent_sdk.types import (
-    McpSSEServerConfig as SdkMcpSSEServerConfig,
-)
-from claude_agent_sdk.types import (
-    McpStdioServerConfig as SdkMcpStdioServerConfig,
-)
 from src.core.agent_config import AgentConfig
 from src.core.approval_rule_matcher import (
     ClaudePermissionUpdateRuleMatcher,
     ExactArgsRuleMatcher,
     RuntimeApprovalRuleMatcher,
     _permission_update_to_dict,
+)
+from src.core.citation import (
+    compact_citation_tool_content,
+    private_citation_tool_content,
+    rebase_collection_projections,
+)
+from src.core.citation_document_search import (
+    augment_indexed_document_evidence,
+    extract_raw_document,
+    grep_document_evidence,
 )
 from src.core.events import (
     AVAILABLE_DECISIONS_CLARIFYING,
@@ -78,6 +82,10 @@ from src.core.events import (
     EventSink,
 )
 from src.core.hooks import Hooks
+from src.core.mcp_source_metadata import (
+    adapt_mcp_source_result,
+    unwrap_mcp_source_content_transport,
+)
 from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
 from src.core.tools import ExecContext, ToolDef, ToolKit, ToolResult
@@ -85,13 +93,13 @@ from src.core.types import (
     BudgetExhausted,
     EndTurn,
     Error,
-    McpServerConfig,
-    McpStdioServerConfig,
     ModelProvider,
     ModelSettings,
     Session,
     UserMessage,
+    is_bare_completion,
 )
+from src.core.usage import diff_model_usage
 
 # Approval bridge — pure helpers live in ``approval_bridge.py``; we
 # re-export them here so existing call sites importing from
@@ -103,8 +111,18 @@ from src.runtimes.claude_agent.approval_bridge import (
     _build_pending_payload,
     _classify_subject,
 )
-from src.runtimes.interruption import describe_exception, is_runtime_interruption
-from src.runtimes.mcp_env import resolve_stdio_env
+from src.runtimes.claude_agent.mcp_proxy import ClaudeMcpSourceProxy
+from src.runtimes.interruption import (
+    absorb_interrupt_cancellations,
+    describe_exception,
+    is_runtime_interruption,
+)
+from src.runtimes.network_egress import (
+    ModelIngressDescriptor,
+    claude_api_key_credential_gate,
+    merge_loopback_no_proxy,
+    record_runtime_egress_phase,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +136,22 @@ logger = logging.getLogger(__name__)
 # stderr stream. 40 lines is enough for a typical Rust / node panic
 # trace without flooding event payloads.
 _STDERR_TAIL_LINES: int = 40
+
+# Claude CLI replaces large tool results with a small ``<persisted-output>``
+# notice and stores the original payload under its private project journal.
+# The model can still read that file, so citation handles inside it must also
+# reach the host-side EvidenceRegistry.  This ceiling is aligned with the
+# Registry's private-sidecar limit; oversized files stay unavailable to
+# citation binding rather than being read unboundedly from a path supplied in
+# text.
+# Persisted results stay outside the model transcript.  The larger bound lets
+# citation registration recover evidence envelopes from transcript/search
+# payloads without feeding those bytes back into the LLM context.
+_MAX_PERSISTED_CITATION_CONTENT_BYTES: int = 16_000_000
+_PERSISTED_OUTPUT_PATH_RE = re.compile(
+    r"\A<persisted-output>\s*\n"
+    r"Output too large \([^)]+\)\. Full output saved to: ([^\r\n]+)"
+)
 
 
 # The Claude Agent SDK buffers the CLI's stdout into a single JSON message whose
@@ -145,6 +179,43 @@ _MAX_BUFFER_SIZE: int = 32 * 1024 * 1024  # 32 MB
 # without writing a settings file into the user's project tree.
 # See ``docs/references/claude-workflows-spike/README.md``.
 _WORKFLOW_SETTINGS: dict[str, Any] = {"enableWorkflows": True}
+
+# WebFetch-preflight contributor to ``_build_settings``. Before every fetch
+# the Claude Code CLI sends the target hostname to
+# ``api.anthropic.com/api/web/domain_info`` and FAILS CLOSED when that check
+# is unreachable ("Unable to verify if domain … is safe to fetch") — which
+# kills every WebFetch in deployments that cannot reach Anthropic
+# (restrictive egress, and sessions on third-party Anthropic-compatible
+# channels whose base_url never touches Anthropic). The official escape
+# hatch is the ``skipWebFetchPreflight`` setting
+# (https://code.claude.com/docs/en/settings, "Set to true in environments
+# that block traffic to Anthropic"); the env var below opts a deployment
+# into injecting it. Opt-in by env — not a blanket default — because
+# skipping also drops Anthropic's malicious-domain blocklist, so the check
+# should stay on wherever Anthropic is reachable.
+SKIP_WEBFETCH_PREFLIGHT_ENV = "VALUZ_SKIP_WEBFETCH_PREFLIGHT"
+
+
+def _skip_webfetch_preflight_enabled() -> bool:
+    return os.getenv(SKIP_WEBFETCH_PREFLIGHT_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
+def _merge_forced_settings_env(
+    raw_settings: str | None,
+    forced_env: Mapping[str, str] | None,
+) -> str | None:
+    """Add non-secret egress routing fields to the highest settings layer.
+
+    Keep ``_build_settings()`` as the established no-argument test/runtime
+    seam. When no egress fields are present this is a byte-for-byte no-op.
+    """
+    if not forced_env:
+        return raw_settings
+    parsed = json.loads(raw_settings) if raw_settings else {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+    parsed["env"] = dict(forced_env)
+    return json.dumps(parsed)
 
 
 # B2a: ``claude_agent + auto_review`` sessions fail at the first turn
@@ -235,6 +306,35 @@ PERMISSION_MAP: dict[
     "full_access": "bypassPermissions",
 }
 
+# Appended to the system prompt while ``session.mode == "plan"``
+# (``_build_system_prompt``). The CLI's native plan mode only gates
+# MUTATING tools; read-only research is legitimately allowed, so a pure
+# analysis task never trips the gate and the model produces the final
+# deliverable without ever proposing a plan. The product semantics
+# ("align on the plan before doing the work" — for research and writing
+# tasks as much as code) therefore have to ride the prompt, the same way
+# dsh's plan plugin ships a ``plan:policy`` prompt section.
+PLAN_MODE_DISCIPLINE = """
+
+<plan-mode-discipline>
+This session is in plan mode. The user wants to align on a plan BEFORE
+you produce anything. This applies to EVERY kind of task — research,
+analysis, and writing included, not just code changes:
+
+1. Keep reconnaissance lightweight and read-only: check which data
+   sources / files exist and what shape they have. Do NOT run the full
+   analysis, pull complete datasets, or draft the deliverable yet.
+2. Present a concise execution plan — goal, steps, data sources,
+   deliverable format, and any open choices for the user — by calling
+   the ExitPlanMode tool with the plan as markdown. Then stop and wait
+   for approval.
+3. Execute only after the plan is approved.
+
+Exception: a trivial exchange that plainly needs no plan (a greeting, a
+one-line factual question) may be answered directly.
+</plan-mode-discipline>
+"""
+
 MODEL_MAP: dict[str, str] = {
     "claude-opus-4-6": "opus",
     "claude-sonnet-4-6": "sonnet",
@@ -280,6 +380,14 @@ _WORKFLOW_POLL_INTERVAL_S = 2.0
 # to a late turn end, never a hang.
 _WAKEUP_BRACKET_GRACE_S = 5.0
 
+# Terminal ``patch.status`` values a ``task_updated`` push can carry — the
+# same set as ``TaskNotificationStatus``. A task whose output the model
+# retrieves synchronously (blocking on the run via the task-output tool) gets
+# NO ``task_notification`` from the CLI: the result lands in the pending
+# tool_result instead, and the terminal ``task_updated`` is the only end-of-
+# task signal on the stream.
+_TERMINAL_BG_TASK_STATUSES = frozenset({"completed", "failed", "stopped"})
+
 # ``_to_thinking_config`` was removed on 2026-05-12 along with the
 # explicit ``thinking=`` kwarg to ``ClaudeAgentOptions`` — runtimes now
 # let the SDK use its own thinking default. ``AgentConfig.thinking``
@@ -291,6 +399,8 @@ _WAKEUP_BRACKET_GRACE_S = 5.0
 class ClaudeAgentRuntime:
     """Wraps Claude Agent SDK (ClaudeSDKClient) as a RuntimePort implementation."""
 
+    supports_native_continuation = True
+
     def __init__(
         self,
         config: AgentConfig,
@@ -300,6 +410,7 @@ class ClaudeAgentRuntime:
         workspace_root: str = "",
         model_provider: ModelProvider | None = None,
         model_settings: ModelSettings | None = None,
+        egress_descriptor: ModelIngressDescriptor | None = None,
     ) -> None:
         self.config = config
         self.model = model
@@ -308,8 +419,15 @@ class ClaudeAgentRuntime:
         self.workspace_root = workspace_root
         self.model_provider = model_provider
         self.model_settings = model_settings
+        self.egress_descriptor = egress_descriptor
         self._client: ClaudeSDKClient | None = None
         self._active_client: ClaudeSDKClient | None = None
+        self._mcp_source_proxies: list[ClaudeMcpSourceProxy] = []
+        # Last cumulative usage snapshot echoed by the CLI, kept so every
+        # ``usage_update`` we emit carries a disjoint increment. Cleared
+        # with the client: a fresh CLI process restarts its accumulator at
+        # zero, so the next snapshot IS the delta.
+        self._usage_snapshot: dict[str, Any] | None = None
         # tool_use ids for TodoWrite calls in the current turn — used to
         # drop the matching ToolResultBlock from the outbound stream.
         self._todo_tool_use_ids: set[str] = set()
@@ -317,7 +435,7 @@ class ClaudeAgentRuntime:
         # current turn so ``input_json_delta`` chunks (which only carry an
         # index, not the id) can be routed to the right tool_use_id when
         # we emit ``tool_input_delta``.
-        self._tool_block_by_index: dict[int, tuple[str, str]] = {}
+        self._tool_block_by_index: dict[tuple[str | None, int], tuple[str, str]] = {}
         # tool_use ids for ``Workflow`` calls in the current turn, and the
         # background poll tasks streaming their ``workflow_progress``. Both are
         # per-turn scoped and torn down in ``run()``'s finally.
@@ -344,10 +462,20 @@ class ClaudeAgentRuntime:
         # Identity of the session currently being run — exposed to
         # custom-tool handlers through ExecContext.
         self._cur_session_id: str = ""
+        self._cur_user_id: str = ""
+        self._egress_turn_attempt_id: str | None = None
+        self._egress_enabled_for_spawn = False
+        self._egress_first_model_event_recorded = False
         # The task running ``run()``. Cancelled by ``interrupt()`` so the
         # iterator unblocks even when ``receive_response().__anext__`` is
         # waiting on the SDK subprocess for the next chunk.
         self._active_task: asyncio.Task[Any] | None = None
+        # How many times ``interrupt()`` cancelled ``_active_task`` during the
+        # current turn. ``run()`` swallows the injected ``CancelledError`` and
+        # then ``uncancel()``s exactly this many times so the turn task does
+        # not carry a stale cancellation count into later turns it drives
+        # (see ``absorb_interrupt_cancellations``).
+        self._interrupt_cancels = 0
         # Idle-stream drainer: consumes SDK messages BETWEEN turns so
         # background-task lifecycle pushes (task_updated / task_notification)
         # and the CLI's spontaneous wake-up turns are processed live instead
@@ -370,6 +498,23 @@ class ClaudeAgentRuntime:
         # ``stopped`` terminal event is flushed then, or the event stream
         # would say "running" forever and the UI would spin on a corpse.
         self._live_bg_tasks: dict[str, str] = {}
+        # Raw source-bearing MCP outputs captured before Claude Code replaces
+        # them with a compact model-visible view. The host still needs the
+        # immutable envelopes for CitationGuard registration. Model Content
+        # keeps every Evidence handle aligned with the complete chunk window
+        # selected by the retrieval tool; entries are consumed by the matching
+        # ToolResultBlock and reset at each user turn.
+        self._citation_tool_result_sidecars: dict[str, str] = {}
+        # ``private_citation_tool_content`` may replace repeated source data
+        # with JSON pointers into the canonical compacted projection. Claude's
+        # MCP bridge wraps that projection in a text content block before the
+        # matching ToolResultBlock reaches us, so retain the exact pointer
+        # root alongside the private sidecar. This is internal registration
+        # state only and is removed before the event is persisted/broadcast.
+        self._citation_tool_result_model_contents: dict[str, Any] = {}
+        self._citation_compaction_enabled: bool = True
+        self._citation_raw_documents: dict[str, dict[str, Any]] = {}
+        self._citation_document_metadata: dict[str, dict[str, Any]] = {}
 
         # Slice 3 — approval contract.
         # ``_pending_futures`` maps pending_id → asyncio.Future that
@@ -427,6 +572,15 @@ class ClaudeAgentRuntime:
         # state at turn start (cross-runtime "PATCH applies on next turn
         # after Send" contract); see docs/design/session-modes.md §Per-runtime.
         self._applied_mode: Literal["default", "plan", "goal"] | None = None
+        # Whether the live client was BUILT with the plan-mode inputs
+        # (discipline prompt section + restricted allowlist). Diverges
+        # from ``_applied_mode`` after a mid-turn ExitPlanMode approve:
+        # the hook flips ``_applied_mode`` to default but cannot rebuild
+        # the client from inside a ``can_use_tool`` callback — the next
+        # turn's reconcile detects the drift and cold-reloads, or the
+        # stale prompt section would keep telling the model it's
+        # planning. Seeded at spawn alongside ``_applied_mode``.
+        self._built_with_plan_prompt: bool = False
         # Current-turn session reference, set at ``run()`` entry and
         # cleared on exit. The SDK ``can_use_tool`` callback runs
         # without session context, so ``_on_exit_plan_mode_approved``
@@ -447,6 +601,16 @@ class ClaudeAgentRuntime:
         # binds to that fresh id. Consumed (and cleared) by the next
         # ``_build_options`` call.
         self._fork_next_spawn: bool = False
+        # Native fork anchor for the turn in flight: ``{"provider":
+        # "claude_agent", "native_session_id": ..., "message_uuid": ...}``.
+        # ``message_uuid`` is the transcript-entry uuid of the LAST
+        # main-chain stream message seen this turn (last write wins) —
+        # the anchor ``claude_agent_sdk.fork_session(up_to_message_id=...)``
+        # slices on. Read-and-cleared by the orchestrator
+        # (``consume_turn_anchor``) into
+        # ``Message.metadata["runtime_native"]`` — the message-granularity
+        # fork seam (docs/design/session-fork.md).
+        self._turn_anchor: dict[str, Any] | None = None
         # Phase 3 — approve_for_session matcher. Uses the SDK's
         # ``ToolPermissionContext.suggestions`` to derive pattern-grammar
         # rules (``Bash(npm test:*)``, ``Edit(src/**/*.ts)``,
@@ -492,6 +656,90 @@ class ClaudeAgentRuntime:
     def update_sink(self, sink: EventSink) -> None:
         self.event_sink = sink
 
+    def consume_turn_anchor(self) -> dict[str, Any] | None:
+        """Return and clear the native anchor captured by the last ``run()``.
+
+        Read-and-clear so a turn that streams no main-chain message
+        (spawn failure, immediate error) cannot inherit a stale anchor
+        from the previous message.
+        """
+        anchor, self._turn_anchor = self._turn_anchor, None
+        return anchor
+
+    async def fork_session(
+        self,
+        session: Session,
+        *,
+        source_native_session_id: str,
+        anchor: str | None = None,
+    ) -> str:
+        """Branch a source SDK session into this session's native session.
+
+        Uses the SDK's OFFLINE transcript transform
+        (``claude_agent_sdk.fork_session`` — a public export since 0.2.x,
+        absent from the sessions docs): it slices the source transcript at
+        ``anchor`` (a transcript ``message_uuid``, inclusive; ``None`` =
+        full copy), re-mints UUIDs preserving the ``parentUuid`` chain,
+        and writes a NEW session file — no CLI process, the new native id
+        returns synchronously, and the source is never mutated. The first
+        Send resumes the new id through the normal spawn path.
+
+        Deliberately NOT the spawn-time ``--resume-session-at`` /
+        ``resume_session_at`` route (SDK PR #1198): the CLI only reports
+        the forked session id in the ``init`` message of the FIRST QUERY
+        (probe-verified: no init arrives on a bare connect), so spawn-time
+        slicing cannot satisfy the eager fork contract — reserve those
+        options for a future same-session rewind feature. Also distinct
+        from ``_fork_next_spawn``, the permission-mode workaround that
+        forks only at the tail and rewrites this session's own id.
+        """
+        try:
+            from claude_agent_sdk import fork_session as sdk_fork_session
+        except ImportError as exc:  # pragma: no cover — pinned SDK ships it
+            raise NotImplementedError(
+                "claude_agent native fork needs claude_agent_sdk.fork_session "
+                f"(not exported by the installed SDK): {exc}"
+            ) from exc
+
+        directory = self.workspace_root or session.cwd or None
+        # Sync, filesystem-only transform — keep it off the event loop.
+        result = await asyncio.to_thread(
+            sdk_fork_session,
+            source_native_session_id,
+            directory=directory,
+            up_to_message_id=anchor,
+        )
+        new_id = str(result.session_id)
+        # Same internal backfill as the init-message capture — no API
+        # write channel involved.
+        session.runtime_session_id = new_id
+        return new_id
+
+    async def prepare(self, session: Session) -> None:
+        """Claude prewarming is deferred until its client lifecycle is isolated."""
+        del session
+
+    async def _emit_turn_phase(self, phase: str, **fields: Any) -> None:
+        """Persisted latency marker — see ``turn_phase`` in ``events.py``."""
+        await self.event_sink.emit(Event(type="turn_phase", data={"phase": phase, **fields}))
+        await record_runtime_egress_phase(
+            getattr(self, "_cur_session_id", "") or None,
+            getattr(self, "_egress_turn_attempt_id", None),
+            phase,
+            enabled=getattr(self, "_egress_enabled_for_spawn", False),
+        )
+
+    async def _record_egress_model_first_event(self) -> None:
+        if getattr(self, "_egress_first_model_event_recorded", False):
+            return
+        self._egress_first_model_event_recorded = True
+        await record_runtime_egress_phase(
+            getattr(self, "_cur_session_id", "") or None,
+            getattr(self, "_egress_turn_attempt_id", None),
+            "model_first_event",
+            enabled=getattr(self, "_egress_enabled_for_spawn", False),
+        )
+
     async def run(self, session: Session, user_message: UserMessage) -> None:
         from datetime import datetime
 
@@ -506,8 +754,17 @@ class ClaudeAgentRuntime:
         self._workflow_tool_use_ids = set()
         self._workflow_pollers = []
         self._active_workflows = []
+        self._citation_tool_result_sidecars = {}
+        self._citation_tool_result_model_contents = {}
+        self._citation_raw_documents = {}
+        self._citation_document_metadata = {}
         self._cur_session_id = session.id
+        # getattr: run() is exercised with synthetic session stubs in tests.
+        self._cur_user_id = getattr(session, "user_id", "") or ""
+        self._egress_turn_attempt_id = uuid.uuid4().hex
+        self._egress_first_model_event_recorded = False
         self._cancelled = False
+        self._interrupt_cancels = 0
         # Reset stderr buffer so any ``session_error`` from this turn
         # carries only this turn's CLI output, not noise from prior
         # successful turns rolling in the deque.
@@ -524,6 +781,7 @@ class ClaudeAgentRuntime:
             await self._reconcile_session_levers(session)
 
             if self._client is None:
+                t0 = time.monotonic()
                 self._materialize_skills(session)
                 opts = self._build_options(session)
                 self._client = ClaudeSDKClient(options=opts)
@@ -535,6 +793,10 @@ class ClaudeAgentRuntime:
                     session.model_settings.effort if session.model_settings else None
                 )
                 self._applied_mode = session.mode
+                self._built_with_plan_prompt = session.mode == "plan"
+                await self._emit_turn_phase(
+                    "runtime_init", duration_ms=int((time.monotonic() - t0) * 1000)
+                )
 
             prompt = build_user_prompt(
                 user_message,
@@ -543,7 +805,13 @@ class ClaudeAgentRuntime:
             )
             self._active_client = self._client
             self._active_task = asyncio.current_task()
+            t_dispatch = time.monotonic()
             await self._client.query(prompt)
+            # Observability: the gap from this row to the first thinking/text
+            # delta = CLI turn preparation + model TTFT.
+            await self._emit_turn_phase(
+                "dispatch", duration_ms=int((time.monotonic() - t_dispatch) * 1000)
+            )
             await self._consume_turn_stream(session)
             # Slice 5 of session-modes: after the goal-mode turn's
             # ResultMessage lands, Claude doesn't surface a "goal
@@ -568,13 +836,21 @@ class ClaudeAgentRuntime:
         except asyncio.CancelledError:
             # interrupt() called task.cancel() to unblock the SDK iterator
             # when it was waiting on the subprocess for the next chunk.
+            # Swallowing it ends the turn as a user cancel; balancing the
+            # cancel count keeps this task honest for the turns it drives
+            # next (queue drain / actor loop) — a stale ``cancelling() > 0``
+            # made ``_stop_idle_drainer`` mistake a later drainer teardown
+            # for its own cancellation and fail a completed turn.
             session.status = "idle"
             session.stop_reason = Error(
                 category="user_interrupt",
                 retry_status="terminal",
                 message="cancelled",
             )
+            absorb_interrupt_cancellations(self._interrupt_cancels)
+            self._interrupt_cancels = 0
             await self._destroy_client()
+
         except Exception as exc:
             session.status = "idle"
             if self._cancelled:
@@ -688,6 +964,41 @@ class ClaudeAgentRuntime:
             # clean turn.
             if not self._cancelled and self._client is not None:
                 self._start_idle_drainer(session)
+            await record_runtime_egress_phase(
+                self._cur_session_id or None,
+                self._egress_turn_attempt_id,
+                (
+                    "interrupted"
+                    if getattr(session.stop_reason, "category", None)
+                    in {"user_interrupt", "interrupted"}
+                    else "turn_complete"
+                ),
+                enabled=self._egress_enabled_for_spawn,
+            )
+
+    async def run_task_coverage(
+        self,
+        session: Session,
+        user_message: UserMessage,
+        *,
+        no_op_tool: ToolDef,
+    ) -> None:
+        """Resume the same Claude session with a turn-scoped private tool."""
+
+        previous = self.toolkit.get(no_op_tool.name)
+        self.toolkit.register(no_op_tool)
+        # Claude SDK fixes in-process MCP tools at client construction.  A
+        # rebuild resumes ``session.runtime_session_id`` rather than creating
+        # a fresh conversation.
+        await self._destroy_client()
+        try:
+            await self.run(session, user_message)
+        finally:
+            if previous is None:
+                self.toolkit.unregister(no_op_tool.name)
+            else:
+                self.toolkit.register(previous)
+            await self._destroy_client()
 
     # -- Background tasks: turn brackets, wake-up turns, idle drainer --
     #
@@ -776,7 +1087,7 @@ class ClaudeAgentRuntime:
                     await self.event_sink.emit(
                         Event(
                             type="usage_update",
-                            data=_build_usage_payload(self.model, msg),
+                            data=self._usage_delta_payload(msg),
                         )
                     )
                     continue
@@ -805,15 +1116,16 @@ class ClaudeAgentRuntime:
         if task is None or task.done():
             return
         task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            # Re-raise ONLY if it is *this* coroutine being cancelled;
-            # the drainer's own cancellation lands here as a plain result.
-            if (cur := asyncio.current_task()) is not None and cur.cancelling():
-                raise
-        except Exception:
-            logger.debug("claude_agent: idle drainer teardown failed", exc_info=True)
+        # ``asyncio.wait`` never re-raises the DRAINER's cancellation into this
+        # coroutine — only a genuine cancellation of the current task
+        # propagates out of it. (The previous ``await task`` +
+        # ``current_task().cancelling()`` discriminator misfired whenever the
+        # turn task carried a stale cancel count from an earlier swallowed
+        # interrupt, surfacing the drainer's own CancelledError as a turn
+        # failure right after a completed answer.)
+        await asyncio.wait({task})
+        if not task.cancelled() and (exc := task.exception()) is not None:
+            logger.debug("claude_agent: idle drainer teardown failed: %r", exc)
 
     async def _drain_idle_stream(self, session: Session) -> None:
         """Between-turns consumer: background-task pushes + wake-up turns.
@@ -834,7 +1146,7 @@ class ClaudeAgentRuntime:
                     await self.event_sink.emit(
                         Event(
                             type="usage_update",
-                            data=_build_usage_payload(self.model, msg),
+                            data=self._usage_delta_payload(msg),
                         )
                     )
                     await self.event_sink.emit(
@@ -1207,6 +1519,7 @@ class ClaudeAgentRuntime:
         task = self._active_task
         if task is not None and not task.done():
             task.cancel()
+            self._interrupt_cancels += 1
 
     async def close(self) -> None:
         await self._destroy_client()
@@ -1218,6 +1531,10 @@ class ClaudeAgentRuntime:
         self._bracket_open = False
         self._open_bracket_is_wakeup = False
         self._pending_wakeups = 0
+        # The CLI process owns the cumulative usage counter this runtime
+        # differences against; a rebuilt CLI starts it at zero again, so a
+        # baseline that outlived its process would swallow the next turn.
+        self._usage_snapshot = None
         # Background processes die with the CLI subprocess — flush a terminal
         # event for each so the persisted stream never claims a task is
         # running on a dead runtime. Best-effort: destroy may run during
@@ -1249,6 +1566,59 @@ class ClaudeAgentRuntime:
             finally:
                 self._client = None
                 self._active_client = None
+        proxies = getattr(self, "_mcp_source_proxies", [])
+        self._mcp_source_proxies = []
+        if proxies:
+            await asyncio.gather(*(proxy.close() for proxy in proxies), return_exceptions=True)
+
+    def _usage_delta_payload(self, result_msg: Any) -> dict[str, Any]:
+        """Turn the CLI's cumulative usage counter into THIS turn's increment.
+
+        The Claude CLI keeps one per-model usage accumulator for the whole
+        process (``Ot.modelUsage``, reset only by a conversation reset) and
+        echoes it on every ``result`` message. Persisting that snapshot as
+        the turn's usage made every message row carry "everything spent so
+        far", so summing rows — which is exactly what the session panel, the
+        monthly rollup and the billing meter do — recounted earlier turns:
+        a 3-turn session reported ~3x its real input tokens, and a turn that
+        issued no request at all (a local slash command) reported a full
+        copy of the previous turn's total.
+
+        Differencing against the last snapshot makes every emitted
+        ``usage_update`` a disjoint increment, which also makes the two
+        snapshots a single turn can produce (an interleaved wake-up turn
+        plus our own result) additive instead of double-counted. A counter
+        that moved backwards means the CLI restarted or reset its
+        conversation mid-flight; drop the stale baseline and take the fresh
+        snapshot whole rather than clamping the turn to zero.
+        """
+        snapshot = _build_cumulative_usage_snapshot(self.model, result_msg)
+        previous = self._usage_snapshot
+        self._usage_snapshot = snapshot
+        if previous is not None and any(
+            int(snapshot.get(field) or 0) < int(previous.get(field) or 0)
+            for field in _FLAT_USAGE_FIELDS
+        ):
+            previous = None
+
+        delta: dict[str, Any] = {
+            field: max(0, int(snapshot.get(field) or 0) - int((previous or {}).get(field) or 0))
+            for field in _FLAT_USAGE_FIELDS
+        }
+        per_model = snapshot.get("model_usage")
+        if isinstance(per_model, dict):
+            base = (previous or {}).get("model_usage")
+            delta["model_usage"] = diff_model_usage(
+                base if isinstance(base, dict) else None, per_model
+            )
+        else:
+            delta["model_usage"] = per_model
+        if "cost_usd" in snapshot:
+            cost = float(snapshot.get("cost_usd") or 0.0) - float(
+                (previous or {}).get("cost_usd") or 0.0
+            )
+            delta["cost_usd"] = max(0.0, cost)
+        return delta
 
     def _on_stderr_line(self, line: str) -> None:
         """Callback wired into ``ClaudeAgentOptions.stderr``. Pushes the
@@ -1313,13 +1683,11 @@ class ClaudeAgentRuntime:
 
         # Slice 5 — session-mode transition. Run BEFORE the
         # permission_mode arm because ``mode == "plan"`` supersedes
-        # ``session.permission_mode`` on the SDK side: the slash sets
-        # the SDK's permissionMode to ``"plan"`` regardless of the
-        # underlying value, and exiting plan must restore explicitly.
-        # Entering goal is a deliberate no-op here — the orchestrator
-        # wraps the user's NEXT message to ``/goal <text>`` and the
-        # SDK enters goal mode on that turn (the bare ``/goal`` is
-        # status-only on Claude, spike-confirmed).
+        # ``session.permission_mode`` on the SDK side. Entering goal is
+        # a deliberate no-op here — the orchestrator wraps the user's
+        # NEXT message to ``/goal <text>`` and the SDK enters goal mode
+        # on that turn (the bare ``/goal`` is status-only on Claude,
+        # spike-confirmed).
         if new_session_mode != self._applied_mode:
             prior_mode = self._applied_mode
             if prior_mode == "goal" and new_session_mode != "goal":
@@ -1331,49 +1699,39 @@ class ClaudeAgentRuntime:
                     await self._client.query("/goal clear")
                 except Exception:
                     logger.exception("claude_agent: /goal clear failed")
-            if prior_mode == "plan" and new_session_mode != "plan":
-                # Restore SDK permissionMode to the underlying
-                # ``session.permission_mode`` (which may have been
-                # PATCHed silently while we were in plan).  Typed
-                # mutator: deterministic, doesn't depend on the CLI's
-                # current toggle state.
-                sdk_perm = PERMISSION_MAP.get(session.permission_mode, "default")
-                try:
-                    await self._client.set_permission_mode(sdk_perm)
-                except Exception:
-                    logger.exception(
-                        "claude_agent: set_permission_mode(%s) failed on "
-                        "plan exit; falling back to destroy+rebuild",
-                        sdk_perm,
-                    )
-                    await self._destroy_client()
-                    return
-                # SDK is now back in sync with session.permission_mode.
-                self._applied_permission_mode = session.permission_mode
-                self._cached_permission_mode = session.permission_mode
-            # Mode-ENTRY dispatch is wrap-driven for goal (orchestrator
-            # prepends ``/goal <text>`` and Claude's CLI processes the
-            # slash). Plan is the exception: Claude's ``/plan`` slash
-            # is interactive-CLI-only and returns "isn't available in
-            # this environment" through the SDK. The typed mutator IS
-            # exposed, so plan entry goes through there. ``wrap_for_mode``
-            # skips Claude+plan in lockstep — subsequent user messages
-            # flow through unwrapped, Claude's plan permissionMode is
-            # sticky on the client.
-            if new_session_mode == "plan":
-                try:
-                    await self._client.set_permission_mode("plan")
-                except Exception:
-                    logger.exception(
-                        "claude_agent: set_permission_mode('plan') failed; "
-                        "falling back to destroy+rebuild"
-                    )
-                    await self._destroy_client()
-                    return
-                # SDK is now in plan mode; reflect in caches so the perm
-                # arm below sees us as already-in-plan and short-circuits.
-                self._applied_permission_mode = session.permission_mode
+            if new_session_mode == "plan" or prior_mode == "plan":
+                # Plan entry AND exit → cold reload, NOT the live
+                # ``set_permission_mode`` mutator. The plan-mode
+                # discipline section of the system prompt is a
+                # BUILD-TIME input (``_build_system_prompt``), as is the
+                # plan-restricted toolkit allowlist (``_build_options``
+                # drops ``execute_code``): flipping only the SDK's
+                # permissionMode would gate file edits while leaving
+                # the model without the plan-first instructions —
+                # field-verified failure: a research task in plan mode
+                # sailed straight to the full deliverable (read-only
+                # tools are legitimately allowed in plan mode, so a
+                # no-mutation task never hits the gate). Fork the next
+                # spawn: plain ``--resume`` makes the CLI honor the
+                # resumed session's ORIGINAL permissionMode and ignore
+                # the new ``--permission-mode`` arg (same CLI behavior
+                # the bypass arm below documents).
+                self._fork_next_spawn = True
+                await self._destroy_client()
+                return
             self._applied_mode = new_session_mode
+
+        # Plan-prompt drift: the client's build-time inputs (discipline
+        # section, restricted allowlist) must match the CURRENT mode even
+        # when ``_applied_mode`` is already in sync — the ExitPlanMode
+        # approve hook flips the trackers mid-turn but cannot rebuild the
+        # live client from inside a ``can_use_tool`` callback. Without
+        # this, every turn after an approved plan still carries the
+        # "you are in plan mode" prompt section.
+        if (new_session_mode == "plan") != self._built_with_plan_prompt:
+            self._fork_next_spawn = True
+            await self._destroy_client()
+            return
 
         # ``permission_mode`` change → live mutator when possible.
         # Skipped while in plan mode: the SDK's permissionMode is
@@ -1496,10 +1854,19 @@ class ClaudeAgentRuntime:
         mcp: dict[str, Any] = {}
         sdk_tools = self._build_mcp_tools()
         if sdk_tools:
-            mcp["harness"] = create_sdk_mcp_server(name="harness", tools=sdk_tools)
+            # ``harness_toolkit`` — the kernel's own ToolDefs (e.g. PTC's
+            # execute_code), matching the codex bridge name. NOT ``harness``:
+            # that name belongs to the host's toolkit MCP server, which
+            # arrives through ``session.mcp_servers`` below and would
+            # otherwise overwrite this entry (shadowing every kernel tool).
+            mcp["harness_toolkit"] = create_sdk_mcp_server(name="harness_toolkit", tools=sdk_tools)
 
+        proxies: list[ClaudeMcpSourceProxy] = []
         for cfg in session.mcp_servers:
-            mcp[cfg.name] = _to_sdk_mcp_server(cfg)
+            proxy = ClaudeMcpSourceProxy(cfg)
+            proxies.append(proxy)
+            mcp[cfg.name] = proxy.sdk_config()
+        self._mcp_source_proxies = proxies
 
         # ``allowed_tools`` is the Claude SDK's *approval-bypass* list
         # (it lowers to ``--allowedTools`` on the CLI). Tools matched
@@ -1507,10 +1874,11 @@ class ClaudeAgentRuntime:
         # without invoking our ``_permission_handler``. We therefore
         # only include:
         #
-        # * ``mcp__harness__<tool>`` — harness-bridged tools the
-        #   operator defined via ``AgentConfig.tools``. These are
-        #   harness infrastructure (we are the authority on them) and
-        #   are not subject to user approval.
+        # * ``mcp__harness_toolkit__<tool>`` — kernel-bridged tools the
+        #   operator defined via ``AgentConfig.tools`` (or the kernel
+        #   exposed, e.g. PTC's execute_code). These are harness
+        #   infrastructure (we are the authority on them) and are not
+        #   subject to user approval.
         # * ``Agent`` — sub-agent dispatch (callable_agents), same
         #   rationale.
         #
@@ -1524,7 +1892,18 @@ class ClaudeAgentRuntime:
         # for every MCP tool on Claude (no ``requires_action`` event
         # was emitted; the SDK auto-approved upstream of our callback).
         allowed: list[str] = [
-            f"mcp__harness__{t.name}" for t in self.toolkit.list_tools() if t.handler
+            f"mcp__harness_toolkit__{t.name}"
+            for t in self.toolkit.list_tools()
+            if t.handler
+            # Plan mode: ``allowed_tools`` entries outrank the CLI's
+            # plan-mode read-only gate, and ``execute_code`` (PTC) runs
+            # arbitrary code — the one toolkit tool that can mutate the
+            # workspace. Field-verified: a plan-mode session ran
+            # execute_code 5× straight through. Keep it off the
+            # allowlist while planning so the SDK's plan gate treats it
+            # like any other mutating tool; the post-approval rebuild
+            # (mode transition → cold reload) restores it.
+            and not (session.mode == "plan" and t.name == "execute_code")
         ]
         if self.config.callable_agents:
             allowed.append("Agent")
@@ -1544,6 +1923,12 @@ class ClaudeAgentRuntime:
             perm = "plan"
         else:
             perm = PERMISSION_MAP.get(session.permission_mode, "default")
+        # Source metadata capture is shared Evidence infrastructure, not a
+        # user-visible Citation feature.  Keep the tool hook active even when
+        # Citation and Audit are both disabled; the switches only decide
+        # whether the Host later projects or verifies the registered data.
+        # Bare completions have no tool surface, so the hook remains omitted.
+        self._citation_compaction_enabled = not is_bare_completion(session)
         sdk_hooks = self._map_hooks()
 
         system_prompt = self._build_system_prompt(session)
@@ -1556,6 +1941,28 @@ class ClaudeAgentRuntime:
         # ``thinking`` is intentionally NOT threaded through —
         # Claude SDK uses its own thinking default for the active model.
         effort_value = session.model_settings.effort if session.model_settings is not None else None
+
+        descriptor = getattr(self, "egress_descriptor", None)
+        self._egress_enabled_for_spawn = descriptor is not None and (
+            self.model_provider is None
+            or claude_api_key_credential_gate(
+                permission_mode=session.permission_mode,
+                session_mode=session.mode,
+            ).eligible
+        )
+        # Build the env before the additional settings layer. Claude settings
+        # may themselves contain an ``env`` map and that map outranks the
+        # process environment; repeat only the non-secret loopback routing
+        # fields in ``--settings`` so a project cannot bypass the registered
+        # capability by replacing ANTHROPIC_BASE_URL.
+        model_env = self._build_model_provider_env(session=session)
+        forced_egress_env: dict[str, str] | None = None
+        if self._egress_enabled_for_spawn and model_env is not None:
+            forced_egress_env = {
+                key: model_env[key]
+                for key in ("ANTHROPIC_BASE_URL", "NO_PROXY", "no_proxy")
+                if key in model_env
+            }
 
         # ``setting_sources`` is a *positive* filter on the Claude CLI:
         # only the listed surfaces get loaded (``["project"]`` -> just
@@ -1574,13 +1981,17 @@ class ClaudeAgentRuntime:
         # under ``~/.claude.json``. That is by design — the harness is
         # not a Claude Code shell. If you want a specific model,
         # configure it on the session/agent.
+        runtime_settings = _merge_forced_settings_env(
+            self._build_settings(),
+            forced_egress_env,
+        )
         opts_kwargs: dict[str, Any] = dict(
             cwd=self.workspace_root,
             setting_sources=["project"] if self.workspace_root else None,
             # Harness-injected CLI settings, layered on top of what
             # ``setting_sources`` loads as an *additional* MERGE layer (CLI
             # ``--settings``), not a file rewrite — see ``_build_settings``.
-            settings=self._build_settings(),
+            settings=runtime_settings,
             system_prompt=system_prompt,
             allowed_tools=allowed,
             permission_mode=perm,
@@ -1618,6 +2029,24 @@ class ClaudeAgentRuntime:
         # ``""``, same bug codex would hit on a deployment named ``""``.
         if self.model:
             opts_kwargs["model"] = self.model
+        # Bare one-shot completion (``is_bare_completion``): strip every
+        # source of agentic scaffolding the SDK lets us drop. Combined with
+        # the plain-string system prompt from ``_build_system_prompt`` this
+        # reduces the request to instructions + user prompt:
+        #
+        # * ``tools=[]`` — disable ALL built-in tools (their schemas alone
+        #   are thousands of prefill tokens; a bare session calls none).
+        # * ``setting_sources=[]`` — skip the CLAUDE.md / settings / skills
+        #   discovery of the shared scratch cwd entirely.
+        # * ``settings=None`` — no harness settings layer (workflows etc.
+        #   are meaningless for a one-shot no-tool turn).
+        # * ``strict_mcp_config=True`` — don't let the CLI pick up ambient
+        #   ``.mcp.json`` from the cwd; the session declares no MCP servers.
+        if is_bare_completion(session):
+            opts_kwargs["tools"] = []
+            opts_kwargs["setting_sources"] = []
+            opts_kwargs["settings"] = None
+            opts_kwargs["strict_mcp_config"] = True
         # ``WebSearch`` is a Claude *subscription* tool — it works on
         # Claude Code CLI sessions backed by an Anthropic subscription
         # entitlement, but errors at use time on direct-API calls
@@ -1632,9 +2061,8 @@ class ClaudeAgentRuntime:
         if self.model_provider is not None:
             opts_kwargs["disallowed_tools"] = ["WebSearch"]
         opts = ClaudeAgentOptions(**opts_kwargs)
-        env = self._build_model_provider_env()
-        if env is not None:
-            opts.env = env
+        if model_env is not None:
+            opts.env = model_env
 
         if session.runtime_session_id:
             opts.resume = str(session.runtime_session_id)
@@ -1663,14 +2091,32 @@ class ClaudeAgentRuntime:
         omitted.
 
         The workspace's own settings are read once up front so each harness
-        default can defer to an explicit project value. Today there is a
-        single default — dynamic workflows / ``/deep-research``
-        (``enableWorkflows``), which the ``setting_sources=["project"]``
-        scoping otherwise drops (it lives in the user surface; see
-        ``_WORKFLOW_SETTINGS``). Keep it a true *default*: inject it only when
-        the project hasn't set the key, so a project's explicit value (loaded
-        via ``setting_sources``) wins. When more harness defaults appear,
-        split this back into per-default helpers sharing ``project``.
+        default can defer to an explicit project value. Two defaults today:
+
+        - dynamic workflows / ``/deep-research`` (``enableWorkflows``), which
+          the ``setting_sources=["project"]`` scoping otherwise drops (it
+          lives in the user surface; see ``_WORKFLOW_SETTINGS``);
+        - ``skipWebFetchPreflight`` when the deployment opts in via
+          ``VALUZ_SKIP_WEBFETCH_PREFLIGHT`` (see
+          ``SKIP_WEBFETCH_PREFLIGHT_ENV``).
+
+        Deliberately NOT ``autoCompactWindow``. The harness used to inject
+        ``0.85 x max_input_tokens`` here; the CLI treats that key as "how
+        full the context may get before compaction" and reports it as the
+        window in ``/context`` (``Tokens: x / 850k`` for a declared 1M),
+        which reads as a wrong window even though the model window was
+        right. The channel-declared window travels as
+        ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` instead
+        (``_build_model_provider_env``) and the CLI applies its own tuned
+        compaction threshold inside it — the same policy it uses for every
+        model it knows — so a project's / user's ``autoCompactWindow`` is
+        the only thing that ever narrows it.
+
+        Keep each a true *default*: inject it only when the project hasn't set
+        the key, so a project's explicit value loaded through
+        ``setting_sources`` wins. Egress routing fields are merged later by
+        ``_merge_forced_settings_env`` because those are capability boundaries,
+        not product preferences.
         """
         # Read the workspace's own settings once. Tolerant of a missing /
         # unreadable / non-dict file (treated as empty).
@@ -1688,14 +2134,18 @@ class ClaudeAgentRuntime:
         settings: dict[str, Any] = {}
         if "enableWorkflows" not in project:
             settings.update(_WORKFLOW_SETTINGS)
+        if _skip_webfetch_preflight_enabled() and "skipWebFetchPreflight" not in project:
+            settings["skipWebFetchPreflight"] = True
         return json.dumps(settings) if settings else None
 
-    def _build_model_provider_env(self) -> dict[str, str] | None:
-        """Build the spawned SDK subprocess's env when (and only when)
-        ``session.model_provider`` carries a per-session credential
-        override. Returns ``None`` for the no-override path so the
-        caller leaves ``ClaudeAgentOptions.env`` unset and the SDK
-        inherits the parent process env verbatim.
+    def _build_model_provider_env(self, session: Session | None = None) -> dict[str, str] | None:
+        """Build the spawned SDK subprocess's model-transport env.
+
+        A per-session provider supplies its API key as before. A subscription
+        egress descriptor supplies only ``ANTHROPIC_BASE_URL``; Claude Code
+        continues reading its native OAuth login and Valuz never copies that
+        credential into process env. With neither input, return ``None`` so
+        the SDK inherits the legacy ambient environment verbatim.
 
         Layout in the override case:
 
@@ -1708,17 +2158,59 @@ class ClaudeAgentRuntime:
           may be unavailable behind a gateway); cleared on the first-party
           path so it keeps the default.
         * ``ANTHROPIC_AUTH_TOKEN`` — the per-session api_key.
+        * ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` — the session's channel-declared
+          ``max_input_tokens``. For a gateway / custom model id the CLI
+          cannot resolve to a Claude model it otherwise *assumes* a window
+          for the id (its generic 200k default), so its auto-compaction
+          would be measured against the wrong size. Declaring the real
+          window is the Claude analog of codex's ``model_context_window``;
+          the compaction threshold itself is left to the CLI (its own tuned
+          headroom below the window, the same policy it applies to every
+          model it knows). Documented semantics (model-config "Correct the
+          window for a gateway or custom model ID"): applies directly to an
+          id that neither starts with ``claude-`` nor contains ``[1m]``; a
+          ``claude-`` / resolvable Claude id keeps the CLI's own tuning (the
+          variable is a no-op there unless ``DISABLE_COMPACT`` is set), and
+          an unresolvable ``[1m]`` id keeps the CLI's assumed 1M window.
+          Only set when declared — never guessed from the model name.
         * Non-Claude model aliases additionally rewrite the SDK's
           ``ANTHROPIC_DEFAULT_*_MODEL`` family so the CLI doesn't
           short-circuit to its built-in Claude defaults when running
           against a Claude-compatible gateway model (e.g.
           DeepSeek-via-anthropic-protocol).
         """
-        if self.model_provider is None:
+        egress_descriptor = getattr(self, "egress_descriptor", None)
+        if self.model_provider is None and egress_descriptor is None:
             return None
         merged: dict[str, str] = dict(os.environ)
-        if self.model_provider.base_url is not None:
-            merged["ANTHROPIC_BASE_URL"] = self.model_provider.base_url
+        if session is not None:
+            use_egress = egress_descriptor is not None and (
+                self.model_provider is None
+                or claude_api_key_credential_gate(
+                    permission_mode=session.permission_mode,
+                    session_mode=session.mode,
+                ).eligible
+            )
+        else:
+            use_egress = bool(
+                getattr(self, "_egress_enabled_for_spawn", egress_descriptor is not None)
+            )
+        provider_base_url = (
+            self.model_provider.base_url if self.model_provider is not None else None
+        )
+        effective_base_url = (
+            egress_descriptor.base_url
+            if use_egress and egress_descriptor is not None
+            else provider_base_url
+        )
+        if effective_base_url is not None:
+            merged["ANTHROPIC_BASE_URL"] = effective_base_url
+            # A loopback model ingress must never be sent back through the
+            # user's upstream proxy. Preserve every existing bypass entry and
+            # merge the local hosts into both casing variants; some bundled
+            # HTTP stacks prefer lowercase while GUI launches often expose
+            # uppercase only.
+            merge_loopback_no_proxy(merged, effective_base_url)
             # The advisor is a server-executed, Anthropic-API-only tool. It
             # is not available on Bedrock/Vertex/Foundry, and through an LLM
             # gateway its availability depends on whether the gateway
@@ -1729,7 +2221,15 @@ class ClaudeAgentRuntime:
             # enhancement beats a recurring user-facing failure. Direct
             # first-party Anthropic (``base_url is None``) keeps it on.
             # https://code.claude.com/docs/en/advisor.md
-            merged["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] = "1"
+            if self.model_provider is not None and self.model_provider.base_url is not None:
+                merged["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] = "1"
+            else:
+                merged.pop("CLAUDE_CODE_DISABLE_ADVISOR_TOOL", None)
+            if session is not None:
+                # Tag gateway LLM requests with the session id so the gateway
+                # can stamp session_id on gateway_debit ledger rows.
+                # ANTHROPIC_CUSTOM_HEADERS format: "Name: Value" lines joined by "\n".
+                merged["ANTHROPIC_CUSTOM_HEADERS"] = f"X-Valuz-Session-Id: {session.id}"
         else:
             # If a previous env carried a stale base_url (e.g. parent
             # shell exported one for an unrelated workflow), wipe it so
@@ -1740,7 +2240,22 @@ class ClaudeAgentRuntime:
             # advisor-off flag so the first-party path gets the default
             # (advisor on) rather than silently honoring a parent export.
             merged.pop("CLAUDE_CODE_DISABLE_ADVISOR_TOOL", None)
+        model_settings = getattr(self, "model_settings", None)
+        max_input_tokens = getattr(model_settings, "max_input_tokens", None)
+        if isinstance(max_input_tokens, int) and max_input_tokens > 0:
+            merged["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(max_input_tokens)
+        if self.model_provider is None:
+            # Native subscription credentials remain in Claude Code's own
+            # credential store. In particular, do not materialize
+            # CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_AUTH_TOKEN here.
+            return merged
         merged["ANTHROPIC_AUTH_TOKEN"] = self.model_provider.api_key
+        if use_egress:
+            # The locked Claude CLI keeps this credential for its own model
+            # transport while removing Anthropic credentials from Bash and
+            # other tool subprocesses. The egress capability itself is never
+            # placed in the CLI environment.
+            merged["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] = "1"
         if "claude" not in self.model:
             merged["ANTHROPIC_MODEL"] = self.model
             merged["ANTHROPIC_DEFAULT_OPUS_MODEL"] = self.model
@@ -1760,12 +2275,31 @@ class ClaudeAgentRuntime:
         append the per-session instructions, if any. (The agent's
         ``instructions`` is a UI-side default; the session is the runtime's
         source of truth.)
+
+        ``session.mode == "plan"`` additionally appends the plan-mode
+        discipline section (``PLAN_MODE_DISCIPLINE``). The CLI's native
+        plan mode only gates MUTATING tools — a pure research/analysis
+        task never trips the gate and the model sails straight to the
+        final deliverable (field-verified). The product contract is
+        "align on the plan first" for EVERY task type, so the prompt has
+        to carry that. Mode transitions cold-reload the client (see the
+        ``_reconcile_session_levers`` mode arm), which is what keeps
+        this build-time section in sync with the session's mode.
         """
-        if session.instructions:
+        if is_bare_completion(session):
+            # Bare one-shot completion: the claude_code preset (the full
+            # Claude Code system prompt) is pure uncached prefill for a
+            # session that lives one turn and calls no tools — send ONLY
+            # the session's own instructions as a plain string.
+            return session.instructions or ""
+        append = session.instructions or ""
+        if session.mode == "plan":
+            append = f"{append}{PLAN_MODE_DISCIPLINE}" if append else PLAN_MODE_DISCIPLINE
+        if append:
             return SystemPromptPreset(
                 type="preset",
                 preset="claude_code",
-                append=session.instructions,
+                append=append,
             )
         return SystemPromptPreset(type="preset", preset="claude_code")
 
@@ -1808,6 +2342,7 @@ class ClaudeAgentRuntime:
                 ExecContext(
                     workspace=self.workspace_root,
                     session_id=self._cur_session_id,
+                    user_id=self._cur_user_id,
                 ),
             )
             return {
@@ -1872,10 +2407,11 @@ class ClaudeAgentRuntime:
         ]
         | None
     ):
-        if not self.config.hooks:
+        configured_hooks = self.config.hooks
+        if not configured_hooks and not self._citation_compaction_enabled:
             return None
 
-        hooks: Hooks = self.config.hooks
+        hooks: Hooks | None = configured_hooks
         sdk_hooks: dict[
             Literal[
                 "PreToolUse",
@@ -1892,40 +2428,225 @@ class ClaudeAgentRuntime:
             list[HookMatcher],
         ] = {}
 
-        if hooks._handlers.get("before_tool"):
+        if self._citation_compaction_enabled or (
+            hooks is not None and hooks._handlers.get("before_tool")
+        ):
 
             async def pre_tool_use(
                 input_data: HookInput, tool_use_id: str | None, context: HookContext
             ) -> SyncHookJSONOutput:
                 data: dict[str, Any] = dict(input_data)
-                r = await hooks.fire(
-                    "before_tool",
-                    tool_name=data.get("tool_name", ""),
-                    input=data.get("tool_input", {}),
-                )
-                if r.action == "block":
-                    return SyncHookJSONOutput(continue_=False, stopReason=r.reason or "blocked")
+                if hooks is not None and hooks._handlers.get("before_tool"):
+                    r = await hooks.fire(
+                        "before_tool",
+                        tool_name=data.get("tool_name", ""),
+                        input=data.get("tool_input", {}),
+                    )
+                    if r.action == "block":
+                        return SyncHookJSONOutput(
+                            continue_=False,
+                            stopReason=r.reason or "blocked",
+                        )
                 return SyncHookJSONOutput()
 
             sdk_hooks["PreToolUse"] = [HookMatcher(hooks=[pre_tool_use])]
 
-        if hooks._handlers.get("after_tool"):
+        if self._citation_compaction_enabled or (
+            hooks is not None and hooks._handlers.get("after_tool")
+        ):
+
+            def post_tool_output(
+                tool_name: str,
+                value: Any,
+                *,
+                mcp_response_uses_content_blocks: bool,
+            ) -> SyncHookJSONOutput:
+                if tool_name.startswith("mcp__"):
+                    return SyncHookJSONOutput(
+                        hookSpecificOutput={
+                            "hookEventName": "PostToolUse",
+                            "updatedMCPToolOutput": (
+                                _normalize_mcp_tool_output(value)
+                                if mcp_response_uses_content_blocks
+                                else value
+                            ),
+                        }
+                    )
+                return SyncHookJSONOutput(
+                    hookSpecificOutput={
+                        "hookEventName": "PostToolUse",
+                        "updatedToolOutput": value,
+                    }
+                )
 
             async def post_tool_use(
                 input_data: HookInput, tool_use_id: str | None, context: HookContext
             ) -> SyncHookJSONOutput:
                 data: dict[str, Any] = dict(input_data)
-                await hooks.fire(
-                    "after_tool",
-                    tool_name=data.get("tool_name", ""),
-                    input=data.get("tool_input", {}),
-                    result=ToolResult(content=str(data.get("tool_response", ""))),
+                tool_name = str(data.get("tool_name") or "")
+                tool_response = data.get("tool_response", "")
+                mcp_response_uses_content_blocks = tool_name.startswith("mcp__") and isinstance(
+                    tool_response, list
                 )
-                return SyncHookJSONOutput()
+                if hooks is not None and hooks._handlers.get("after_tool"):
+                    _, _, hook_tool_response = unwrap_mcp_source_content_transport(tool_response)
+                    await hooks.fire(
+                        "after_tool",
+                        tool_name=tool_name,
+                        input=data.get("tool_input", {}),
+                        result=ToolResult(
+                            content=str(
+                                hook_tool_response
+                                if hook_tool_response is not None
+                                else tool_response
+                            )
+                        ),
+                    )
+                if not self._citation_compaction_enabled:
+                    return SyncHookJSONOutput()
+                serialized_tool_response = _stringify_tool_result_content(tool_response)
+                persisted_tool_response = (
+                    _load_persisted_tool_result_content(
+                        serialized_tool_response,
+                        tool_use_id=str(tool_use_id or ""),
+                    )
+                    if tool_use_id
+                    else None
+                )
+                effective_tool_response: Any = (
+                    persisted_tool_response
+                    if persisted_tool_response is not None
+                    else tool_response
+                )
+                (
+                    transport_descriptor,
+                    transport_structured_content,
+                    restored_tool_response,
+                ) = unwrap_mcp_source_content_transport(effective_tool_response)
+                source_content_transport_handled = restored_tool_response is not None
+                if source_content_transport_handled:
+                    effective_tool_response = restored_tool_response
+                source_adaptation = adapt_mcp_source_result(
+                    effective_tool_response,
+                    tool_name=tool_name or None,
+                    descriptor=transport_descriptor,
+                    structured_content=transport_structured_content,
+                )
+                source_metadata_handled = source_adaptation is not None
+                if source_adaptation is not None and source_adaptation.resource_kinds != {
+                    "operational"
+                }:
+                    effective_tool_response = source_adaptation.model_content
+                simple_name = tool_name.rsplit("__", 1)[-1].lower()
+                if (
+                    source_adaptation is not None
+                    and not source_adaptation.citable
+                    and simple_name == "kb_search"
+                ):
+                    # Keep parity with DeepAgents during rolling MCP metadata
+                    # upgrades: an exact indexed chunk remains locally
+                    # provable even when the provider temporarily labels the
+                    # result as discovery/non-citable.
+                    augmented_indexed_content = augment_indexed_document_evidence(
+                        effective_tool_response,
+                        tool_name=tool_name,
+                        captured_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    )
+                    if augmented_indexed_content is not None:
+                        effective_tool_response = augmented_indexed_content
+                self._record_citation_discovery_documents(
+                    tool_response=effective_tool_response,
+                )
+                if simple_name == "document_raw_content":
+                    raw_document = extract_raw_document(effective_tool_response)
+                    if raw_document is not None:
+                        document_id = str(
+                            raw_document.get("doc_id") or raw_document.get("document_id") or ""
+                        )
+                        metadata = self._citation_document_metadata.get(document_id, {})
+                        for key in ("title", "url", "file_url", "category"):
+                            if not raw_document.get(key) and metadata.get(key):
+                                raw_document[key] = metadata[key]
+                        cache_key = str(tool_use_id or document_id or "")
+                        if cache_key:
+                            if len(self._citation_raw_documents) >= 8:
+                                self._citation_raw_documents.pop(
+                                    next(iter(self._citation_raw_documents))
+                                )
+                            self._citation_raw_documents[cache_key] = raw_document
+                if simple_name in {"grep", "bash"}:
+                    focused = grep_document_evidence(
+                        effective_tool_response,
+                        tool_args=dict(_tool_input_mapping(data.get("tool_input"))),
+                        raw_documents=self._citation_raw_documents,
+                        captured_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    )
+                    if focused is not None:
+                        visible, envelope = focused
+                        if tool_use_id:
+                            self._citation_tool_result_sidecars[tool_use_id] = json.dumps(
+                                {"_valuz_evidence": [envelope]},
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            )
+                        return post_tool_output(
+                            tool_name,
+                            visible,
+                            mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
+                        )
+                if not source_metadata_handled:
+                    augmented_indexed_content = augment_indexed_document_evidence(
+                        effective_tool_response,
+                        tool_name=tool_name,
+                        captured_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    )
+                    if augmented_indexed_content is not None:
+                        effective_tool_response = augmented_indexed_content
+                # Claude Agent receives the task-selected Model Content with
+                # repeated trusted metadata removed. The private sidecar keeps
+                # only immutable Evidence/Collection descriptors; it is not a
+                # second copy of document text or structured data. Long filings
+                # and transcripts frequently place the requested metric well
+                # after the first dozen chunks, so preserve the complete
+                # selected chunk window instead of replacing it with evidence
+                # excerpts or forcing repeated small-page reads.
+                # Citation capture must not select the Primary Agent's search
+                # candidates. Preserve provider row order, duplicates,
+                # summaries, and result cardinality exactly as returned.
+                model_projection = effective_tool_response
+                model_projection = rebase_collection_projections(model_projection)
+                compacted = compact_citation_tool_content(model_projection)
+                private_citation_content = private_citation_tool_content(
+                    model_projection,
+                    model_content=compacted if compacted is not None else model_projection,
+                )
+                if (
+                    tool_use_id
+                    and private_citation_content is not None
+                    and len(private_citation_content.encode())
+                    <= _MAX_PERSISTED_CITATION_CONTENT_BYTES
+                ):
+                    self._citation_tool_result_sidecars[tool_use_id] = private_citation_content
+                    self._citation_tool_result_model_contents[tool_use_id] = (
+                        compacted if compacted is not None else model_projection
+                    )
+                if compacted is None:
+                    if source_content_transport_handled:
+                        return post_tool_output(
+                            tool_name,
+                            effective_tool_response,
+                            mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
+                        )
+                    return SyncHookJSONOutput()
+                return post_tool_output(
+                    tool_name,
+                    compacted,
+                    mcp_response_uses_content_blocks=mcp_response_uses_content_blocks,
+                )
 
             sdk_hooks["PostToolUse"] = [HookMatcher(hooks=[post_tool_use])]
 
-        if hooks._handlers.get("on_stop"):
+        if hooks is not None and hooks._handlers.get("on_stop"):
 
             async def stop_hook(
                 input_data: HookInput, tool_use_id: str | None, context: HookContext
@@ -1936,6 +2657,26 @@ class ClaudeAgentRuntime:
             sdk_hooks["Stop"] = [HookMatcher(hooks=[stop_hook])]
 
         return sdk_hooks if sdk_hooks else None
+
+    def _record_citation_discovery_documents(
+        self,
+        *,
+        tool_response: Any,
+    ) -> None:
+        for payload in _iter_tool_response_mappings(tool_response):
+            docs = payload.get("docs")
+            if not isinstance(docs, list):
+                continue
+            for doc in docs:
+                if not isinstance(doc, Mapping):
+                    continue
+                doc_id = str(doc.get("doc_id") or doc.get("document_id") or "")
+                if doc_id:
+                    self._citation_document_metadata[doc_id] = {
+                        key: doc.get(key)
+                        for key in ("title", "url", "file_url", "category")
+                        if doc.get(key)
+                    }
 
     # -- Permission handler --
 
@@ -1981,15 +2722,37 @@ class ClaudeAgentRuntime:
             return await self._await_host_decision(tool_name, input_data, context)
 
         simple_name = tool_name
-        if tool_name.startswith("mcp__harness__"):
-            simple_name = tool_name[len("mcp__harness__") :]
+        # Kernel-bridged ToolDefs surface as ``mcp__harness_toolkit__*``;
+        # the legacy ``mcp__harness__`` strip stays for host-toolkit names
+        # (their bare names are not in ``self.toolkit``, so it is inert).
+        for prefix in ("mcp__harness_toolkit__", "mcp__harness__"):
+            if tool_name.startswith(prefix):
+                simple_name = tool_name[len(prefix) :]
+                break
 
         tdef = self.toolkit.get(simple_name)
         if tdef:
-            if tdef.read_only or tdef.permission == "auto":
-                return PermissionResultAllow(updated_input=input_data)
             if tdef.permission == "deny":
                 return PermissionResultDeny(message=f"{tool_name} denied by policy")
+            # Plan mode's read-only guarantee for kernel toolkit tools.
+            # The CLI's plan gate only blocks its own built-in mutating
+            # tools; MCP tools route here, where ``full_access`` /
+            # ``permission == "auto"`` would happily wave through
+            # ``execute_code`` (arbitrary code — field-verified running
+            # mid-plan). Deny every non-read-only toolkit tool while the
+            # client is plan-built; the ExitPlanMode approve hook flips
+            # ``_applied_mode`` to default, so post-approval execution in
+            # the same turn passes normally.
+            if self._applied_mode == "plan" and not tdef.read_only:
+                return PermissionResultDeny(
+                    message=(
+                        f"Plan mode is active — {simple_name} is disabled until "
+                        "the plan is approved. Present your plan via ExitPlanMode "
+                        "first; execution tools unlock after approval."
+                    )
+                )
+            if tdef.read_only or tdef.permission == "auto":
+                return PermissionResultAllow(updated_input=input_data)
 
         if self._cached_permission_mode != "default":
             return PermissionResultAllow(updated_input=input_data)
@@ -2194,6 +2957,24 @@ class ClaudeAgentRuntime:
                 # docs/design/session-modes.md §Per-runtime / Claude.
                 await self._on_exit_plan_mode_approved()
             return PermissionResultAllow(updated_input=input_data)
+        if tool_name == "ExitPlanMode":
+            # The deny message is what the model reads as the tool
+            # result. Passing the user's feedback verbatim is fatally
+            # ambiguous — field case: a bare "write the results to a
+            # file" feedback made the model announce the plan was
+            # approved and start executing. Wrap it in an unambiguous
+            # NOT-approved envelope.
+            feedback = (message or "").strip()
+            detail = f' Their feedback: "{feedback}"' if feedback else ""
+            return PermissionResultDeny(
+                message=(
+                    "The user did NOT approve this plan. Plan mode is still "
+                    "active — do not execute anything and do not claim "
+                    "approval. Revise the plan to address the user's "
+                    "feedback, then present the updated plan via "
+                    f"ExitPlanMode again.{detail}"
+                )
+            )
         return PermissionResultDeny(message=message or "User rejected.")
 
     async def _on_exit_plan_mode_approved(self) -> None:
@@ -2321,10 +3102,50 @@ class ClaudeAgentRuntime:
 
     # -- Message conversion --
 
+    def _note_turn_anchor(self, session: Session, message: Any) -> None:
+        """Track the fork anchor from a main-chain stream message.
+
+        ``message.uuid`` is the transcript-entry uuid — what
+        ``fork_session(up_to_message_id=...)`` slices on. Sidechain
+        messages (``parent_tool_use_id`` set) are skipped: forked
+        transcripts drop sidechains, so their uuids are not valid
+        anchors. Last write wins, so at end of turn the anchor is the
+        turn's final main-chain transcript entry.
+        """
+        uuid_value = getattr(message, "uuid", None)
+        if not uuid_value or getattr(message, "parent_tool_use_id", None) is not None:
+            return
+        native_session_id = session.runtime_session_id
+        if not native_session_id:
+            return
+        self._turn_anchor = {
+            "provider": "claude_agent",
+            "native_session_id": str(native_session_id),
+            "message_uuid": str(uuid_value),
+        }
+
     async def _handle_message(self, session: Session, message: Any) -> None:
         if isinstance(message, StreamEvent):
+            # ``parent_tool_use_id`` is set when this stream event was
+            # produced INSIDE a subagent (Task/Agent tool run — including
+            # run_in_background agents executing CONCURRENTLY with the
+            # lead's own streaming). Thread it onto every emitted delta so
+            # the frontend can route each delta into its own flow instead
+            # of splicing a subagent's stream into the lead's open text
+            # block (verified incident: a background agent's events
+            # interleaved with the lead's text_delta frames shredded the
+            # streamed message into fragments). Emission itself is
+            # unchanged — subagent streaming stays live.
+            parent = message.parent_tool_use_id
+            parent_extra = {"parent_tool_use_id": parent} if parent is not None else {}
             event = message.event
             event_type = event.get("type")
+            if not getattr(self, "_egress_first_model_event_recorded", False) and event_type in {
+                "message_start",
+                "content_block_start",
+                "content_block_delta",
+            }:
+                await self._record_egress_model_first_event()
             if event_type == "content_block_start":
                 block = event.get("content_block") or {}
                 if block.get("type") == "tool_use":
@@ -2337,14 +3158,17 @@ class ClaudeAgentRuntime:
                         and isinstance(block_index, int)
                         and block_name != CLAUDE_TODO_TOOL_NAME
                     ):
-                        # Register index -> (id, name) so subsequent
+                        # Register (parent, index) -> (id, name) so subsequent
                         # input_json_delta chunks (which only carry an
-                        # index, not the id) can be routed. We do NOT
-                        # emit a tool_use here — that would duplicate the
-                        # canonical one from AssistantMessage. The first
+                        # index, not the id) can be routed. Keyed by parent
+                        # too: content-block indices restart per stream, so
+                        # a subagent running concurrently with the lead
+                        # would otherwise collide on the same index. We do
+                        # NOT emit a tool_use here — that would duplicate
+                        # the canonical one from AssistantMessage. The first
                         # tool_input_delta serves as the frontend's
-                        # build-card signal instead.
-                        self._tool_block_by_index[block_index] = (
+                        # build-the-card signal instead.
+                        self._tool_block_by_index[(parent, block_index)] = (
                             block_id,
                             block_name,
                         )
@@ -2352,7 +3176,10 @@ class ClaudeAgentRuntime:
                 delta = event.get("delta", {})
                 if delta.get("type") == "text_delta":
                     await self.event_sink.emit(
-                        Event(type="text_delta", data={"text": delta.get("text", "")})
+                        Event(
+                            type="text_delta",
+                            data={"text": delta.get("text", ""), **parent_extra},
+                        )
                     )
                 elif delta.get("type") == "thinking_delta":
                     # Streamed extended-thinking text. Surfacing each chunk
@@ -2361,14 +3188,14 @@ class ClaudeAgentRuntime:
                     await self.event_sink.emit(
                         Event(
                             type="thinking_delta",
-                            data={"text": delta.get("thinking", "")},
+                            data={"text": delta.get("thinking", ""), **parent_extra},
                         )
                     )
                 elif delta.get("type") == "input_json_delta":
                     block_index = event.get("index")
                     partial = delta.get("partial_json", "")
                     if isinstance(block_index, int) and isinstance(partial, str) and partial:
-                        binding = self._tool_block_by_index.get(block_index)
+                        binding = self._tool_block_by_index.get((parent, block_index))
                         if binding is not None:
                             tool_id, tool_name = binding
                             await self.event_sink.emit(
@@ -2378,6 +3205,7 @@ class ClaudeAgentRuntime:
                                         "id": tool_id,
                                         "name": tool_name,
                                         "text": partial,
+                                        **parent_extra,
                                     },
                                 )
                             )
@@ -2430,15 +3258,23 @@ class ClaudeAgentRuntime:
                 if sdk_session_id:
                     session.runtime_session_id = str(sdk_session_id)
             elif message.subtype == "task_updated":
-                # Not modeled by the SDK (generic SystemMessage); the raw
-                # payload carries {task_id, patch: {status, ...}}.
+                # Since SDK 0.2.101 this arrives as ``TaskUpdatedMessage`` — a
+                # ``SystemMessage`` SUBCLASS, so this branch still matches and
+                # ``data`` still carries the raw {task_id, patch: {status, ...}}
+                # payload; the dict access below stays valid on both shapes.
+                task_id = message.data.get("task_id")
+                patch = message.data.get("patch") or {}
+                # A terminal patch may be the ONLY end-of-task signal (see
+                # ``_TERMINAL_BG_TASK_STATUSES``) — release the live-task
+                # marker here too, or ``has_live_background_tasks`` pins the
+                # runtime (and every runs-derived "running" indicator) until
+                # the bg-busy TTL eviction, long after the task ended.
+                if task_id is not None and patch.get("status") in _TERMINAL_BG_TASK_STATUSES:
+                    self._live_bg_tasks.pop(str(task_id), None)
                 await self.event_sink.emit(
                     Event(
                         type="bg_task_updated",
-                        data={
-                            "task_id": message.data.get("task_id"),
-                            "patch": message.data.get("patch") or {},
-                        },
+                        data={"task_id": task_id, "patch": patch},
                     )
                 )
             elif message.subtype == "compact_boundary":
@@ -2453,18 +3289,39 @@ class ClaudeAgentRuntime:
                 await self.event_sink.emit(Event(type="compaction", data=dict(meta)))
 
         elif isinstance(message, AssistantMessage):
+            if not getattr(self, "_egress_first_model_event_recorded", False):
+                await self._record_egress_model_first_event()
+            self._note_turn_anchor(session, message)
+            # ``parent_tool_use_id`` is set when this message was produced
+            # INSIDE a subagent (Task/Agent tool run). Thread it onto every
+            # emitted event so downstream consumers can tell out-of-band
+            # subagent activity apart from the lead's own sequential flow —
+            # a background agent's events arrive interleaved with the lead's
+            # live stream, and the untagged form made the frontend shred the
+            # lead's streaming text at every interleaved tool event.
+            parent_extra = (
+                {"parent_tool_use_id": message.parent_tool_use_id}
+                if message.parent_tool_use_id is not None
+                else {}
+            )
             for block in message.content:
                 if isinstance(block, TextBlock):
                     text_value = getattr(block, "text", "")
                     if text_value:
                         await self.event_sink.emit(
-                            Event(type="assistant_message", data={"text": text_value})
+                            Event(
+                                type="assistant_message",
+                                data={"text": text_value, **parent_extra},
+                            )
                         )
                 elif isinstance(block, ToolUseBlock):
                     if block.name == CLAUDE_TODO_TOOL_NAME:
                         # Planning channel — emit todo_update from the tool
                         # input, remember the id so the matching ToolResultBlock
-                        # is also suppressed.
+                        # is also suppressed. (Deliberately NOT gated on
+                        # ``parent_tool_use_id``: a subagent's TodoWrite has
+                        # always fed the session Todos panel; whether to scope
+                        # that is a separate product decision.)
                         self._todo_tool_use_ids.add(block.id)
                         todos = block.input.get("todos") if isinstance(block.input, dict) else None
                         if isinstance(todos, list):
@@ -2480,7 +3337,12 @@ class ClaudeAgentRuntime:
                         await self.event_sink.emit(
                             Event(
                                 type="tool_use",
-                                data={"id": block.id, "name": block.name, "input": block.input},
+                                data={
+                                    "id": block.id,
+                                    "name": block.name,
+                                    "input": block.input,
+                                    **parent_extra,
+                                },
                             )
                         )
                 elif isinstance(block, ThinkingBlock):
@@ -2489,20 +3351,55 @@ class ClaudeAgentRuntime:
                     # ``text_delta`` streaming is done — UI uses deltas for
                     # live rendering and this block for history.
                     await self.event_sink.emit(
-                        Event(type="thinking", data={"text": block.thinking})
+                        Event(type="thinking", data={"text": block.thinking, **parent_extra})
                     )
 
         elif isinstance(message, SdkUserMessage):
+            self._note_turn_anchor(session, message)
             content = message.content
             if isinstance(content, list):
+                # Same subagent attribution as AssistantMessage above: tool
+                # results produced inside a Task/Agent run carry the parent
+                # tool_use id so consumers can tell them from the lead's flow.
+                parent_extra = (
+                    {"parent_tool_use_id": message.parent_tool_use_id}
+                    if message.parent_tool_use_id is not None
+                    else {}
+                )
                 for block in content:
                     if isinstance(block, ToolResultBlock):
                         if block.tool_use_id in self._todo_tool_use_ids:
                             # Matching TodoWrite result — suppress (todo_update
                             # already carried the structured payload).
                             continue
-                        result_content = (
-                            block.content if isinstance(block.content, str) else str(block.content)
+                        result_content = _stringify_tool_result_content(block.content)
+                        citation_content = self._citation_tool_result_sidecars.pop(
+                            block.tool_use_id,
+                            None,
+                        ) or _load_persisted_tool_result_content(
+                            result_content,
+                            tool_use_id=block.tool_use_id,
+                        )
+                        model_contents = getattr(
+                            self,
+                            "_citation_tool_result_model_contents",
+                            {},
+                        )
+                        citation_model_content = model_contents.pop(
+                            block.tool_use_id,
+                            None,
+                        )
+                        citation_extra = (
+                            {
+                                "_citation_content": citation_content,
+                                **(
+                                    {"_citation_model_content": citation_model_content}
+                                    if citation_model_content is not None
+                                    else {}
+                                ),
+                            }
+                            if citation_content is not None
+                            else {}
                         )
                         await self.event_sink.emit(
                             Event(
@@ -2511,6 +3408,8 @@ class ClaudeAgentRuntime:
                                     "id": block.tool_use_id,
                                     "content": result_content,
                                     "is_error": bool(block.is_error),
+                                    **citation_extra,
+                                    **parent_extra,
                                 },
                             )
                         )
@@ -2552,11 +3451,30 @@ class ClaudeAgentRuntime:
                     case "error_max_budget_usd":
                         session.stop_reason = BudgetExhausted(reason="max_cost")
                     case "error_during_execution":
-                        session.stop_reason = Error(
-                            category="execution_error",
-                            retry_status="exhausted",
-                            message=_result_error_message(message),
-                        )
+                        ede_detail = _ede_interrupt_detail(message)
+                        if ede_detail is not None:
+                            # A marker-only result is the CLI misreporting an
+                            # interrupted turn (see ``_ede_interrupt_detail``):
+                            # stamp the quiet ``interrupted`` category — same
+                            # rendering as a runtime teardown — instead of a
+                            # scary execution_error card for a turn the user
+                            # (or the CLI's own steering) deliberately cut.
+                            logger.info(
+                                "claude: error_during_execution carried only an "
+                                "interrupt diagnostic, downgrading: %s",
+                                ede_detail,
+                            )
+                            session.stop_reason = Error(
+                                category="interrupted",
+                                retry_status="terminal",
+                                message=f"turn interrupted before completion ({ede_detail})",
+                            )
+                        else:
+                            session.stop_reason = Error(
+                                category="execution_error",
+                                retry_status="exhausted",
+                                message=_result_error_message(message),
+                            )
                     case _:
                         session.stop_reason = Error(
                             category=message.subtype,
@@ -2564,7 +3482,7 @@ class ClaudeAgentRuntime:
                             message=_result_error_message(message),
                         )
 
-            usage_payload = _build_usage_payload(self.model, message)
+            usage_payload = self._usage_delta_payload(message)
             await self.event_sink.emit(Event(type="usage_update", data=usage_payload))
 
             num_turns = message.num_turns or 1
@@ -2577,6 +3495,40 @@ class ClaudeAgentRuntime:
                     },
                 )
             )
+
+
+# The Claude Code CLI's turn engine ends every turn with a last-message
+# sanity check (last assistant message ends in text/thinking, OR last user
+# message is purely tool_result blocks, OR stop_reason == end_turn). An
+# *interrupted* turn always fails it: the CLI appends a synthetic plain-text
+# user message ("[Request interrupted by user…]") behind the in-flight
+# tool's rejection, so the loop ends on a non-tool_result user message with
+# stop_reason still ``tool_use`` — and the CLI reports THAT as
+# ``subtype="error_during_execution"`` whose ``errors`` carry only a
+# ``[ede_diagnostic] result_type=… last_content_type=… stop_reason=…``
+# marker (ede = error_during_execution). Observed triggers: a host Stop
+# racing the turn boundary, the CLI's own queued-input / task-notification
+# steering, and an upstream turn that produced no assistant message. The
+# CLI's own UI mapper filters ``[ede_diagnostic]`` strings out and renders
+# nothing for such results — the marker is a debug artifact, not a
+# user-facing error — so a marker-only errors array is an interruption
+# signature, not an execution failure.
+_EDE_DIAGNOSTIC_PREFIX = "[ede_diagnostic]"
+
+
+def _ede_interrupt_detail(message: Any) -> str | None:
+    """The joined diagnostic detail if a failing ``ResultMessage`` carries
+    ONLY ``[ede_diagnostic]`` marker lines (no API status, no result text,
+    no real error line), else ``None`` — anything more falls through to the
+    ``execution_error`` path."""
+    if getattr(message, "api_error_status", None) is not None:
+        return None
+    if getattr(message, "result", None):
+        return None
+    errors = [str(e) for e in (getattr(message, "errors", None) or [])]
+    if not errors or not all(e.startswith(_EDE_DIAGNOSTIC_PREFIX) for e in errors):
+        return None
+    return "; ".join(errors)
 
 
 def _result_error_message(message: Any) -> str:
@@ -2619,6 +3571,146 @@ def _stop_reason_to_dict(reason: Any) -> dict[str, Any]:
     return asdict(reason)
 
 
+def _stringify_tool_result_content(content: Any) -> str:
+    """Preserve structured MCP content blocks as valid JSON text."""
+
+    if isinstance(content, str):
+        return content
+
+    def default(value: Any) -> Any:
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            return model_dump(mode="json")
+        return str(value)
+
+    try:
+        return json.dumps(content, ensure_ascii=False, default=default)
+    except (TypeError, ValueError):
+        return str(content)
+
+
+def _is_mcp_content_block(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    block_type = value.get("type")
+    if block_type == "text":
+        return isinstance(value.get("text"), str)
+    if block_type in {"image", "audio"}:
+        return isinstance(value.get("data"), str) and isinstance(value.get("mimeType"), str)
+    if block_type == "resource":
+        resource = value.get("resource")
+        return (
+            isinstance(resource, Mapping)
+            and isinstance(resource.get("uri"), str)
+            and (isinstance(resource.get("text"), str) or isinstance(resource.get("blob"), str))
+        )
+    if block_type == "resource_link":
+        return isinstance(value.get("name"), str) and isinstance(value.get("uri"), str)
+    return False
+
+
+def _is_mcp_content_block_list(value: Any) -> bool:
+    return isinstance(value, list) and all(_is_mcp_content_block(block) for block in value)
+
+
+def _normalize_mcp_tool_output(value: Any) -> list[Any]:
+    """Keep PostToolUse replacements inside Claude's MCP content contract.
+
+    Claude Code accepts strings or content-block lists when it budgets a tool
+    result, but structured projections from hooks are often mappings, scalars,
+    or ordinary JSON lists.  Passing those values through makes the CLI call
+    ``reduce`` on a non-list or silently ignore JSON list items.  Preserve a
+    real MCP content list and serialize every other JSON value into one text
+    block.  An empty list is already a valid empty MCP result.
+    """
+
+    if _is_mcp_content_block_list(value):
+        return cast(list[Any], value)
+    return [{"type": "text", "text": _stringify_tool_result_content(value)}]
+
+
+def _iter_tool_response_mappings(value: Any) -> Iterator[Mapping[str, Any]]:
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return
+        yield from _iter_tool_response_mappings(parsed)
+        return
+    if isinstance(value, Mapping):
+        yield value
+        for key in ("structuredContent", "structured_content", "result", "data"):
+            if key in value:
+                yield from _iter_tool_response_mappings(value[key])
+        text = value.get("text")
+        if isinstance(text, str):
+            yield from _iter_tool_response_mappings(text)
+        return
+    if isinstance(value, list):
+        for item in value:
+            yield from _iter_tool_response_mappings(item)
+
+
+def _tool_input_mapping(value: Any) -> Mapping[str, Any]:
+    if isinstance(value, Mapping):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, Mapping) else {}
+    return {}
+
+
+def _load_persisted_tool_result_content(
+    content: str,
+    *,
+    tool_use_id: str,
+    projects_root: Path | None = None,
+) -> str | None:
+    """Read a Claude-owned large tool result for citation registration only.
+
+    A tool can print arbitrary text, including a forged persisted-output
+    notice.  Treat the embedded path as untrusted and accept it only when it
+    resolves to the exact ``tool-results/<tool_use_id>.txt`` file beneath
+    Claude's own projects directory.  Symlinks, non-files and oversized
+    payloads fail closed.
+    """
+
+    match = _PERSISTED_OUTPUT_PATH_RE.match(content)
+    if match is None or not tool_use_id:
+        return None
+
+    root = (projects_root or (Path.home() / ".claude" / "projects")).resolve()
+    candidate = Path(match.group(1).strip())
+    if candidate.name != f"{tool_use_id}.txt" or candidate.parent.name != "tool-results":
+        return None
+    try:
+        if candidate.is_symlink():
+            return None
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(root)
+        stat = resolved.stat()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not resolved.is_file() or stat.st_size > _MAX_PERSISTED_CITATION_CONTENT_BYTES:
+        return None
+    try:
+        return resolved.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+
+
+# The cross-runtime flat token fields every ``usage_update`` carries.
+_FLAT_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+)
+
+
 def _normalize_anthropic_usage(raw: Any) -> dict[str, int]:
     """Project the Anthropic-native usage shape onto our four flat fields.
 
@@ -2651,12 +3743,19 @@ def _normalize_anthropic_usage(raw: Any) -> dict[str, int]:
     }
 
 
-def _build_usage_payload(default_model: str, result_msg: Any) -> dict[str, Any]:
-    """Build the ``usage_update`` event payload from a ResultMessage.
+def _build_cumulative_usage_snapshot(default_model: str, result_msg: Any) -> dict[str, Any]:
+    """Project a ResultMessage's usage onto our payload shape, AS REPORTED.
 
     Aggregate fields are the totals across all models that participated in
     the run (e.g. main agent + sub-agents). ``model_usage`` retains the
     SDK-native per-model breakdown so consumers can do per-model attribution.
+
+    What the SDK reports here is **cumulative for the CLI process**, not this
+    turn: the CLI records every model request (including ones it never writes
+    to the transcript, e.g. conversation-title generation) into one global
+    per-model accumulator and echoes that accumulator on every ``result``
+    message. Callers must difference two snapshots before emitting a
+    ``usage_update`` — see ``ClaudeAgentRuntime._usage_delta_payload``.
     """
     raw_usage = getattr(result_msg, "usage", None) or {}
     raw_model_usage = getattr(result_msg, "model_usage", None)
@@ -2684,33 +3783,3 @@ def _build_usage_payload(default_model: str, result_msg: Any) -> dict[str, Any]:
     if cost is not None:
         payload["cost_usd"] = float(cost)
     return payload
-
-
-def _to_sdk_mcp_server(
-    cfg: McpServerConfig,
-) -> SdkMcpHttpServerConfig | SdkMcpSSEServerConfig | SdkMcpStdioServerConfig:
-    """Translate kernel `McpServerConfig` to the SDK's wire-format dict."""
-    if isinstance(cfg, McpStdioServerConfig):
-        stdio: SdkMcpStdioServerConfig = {
-            "type": "stdio",
-            "command": cfg.command,
-            "args": list(cfg.args),
-        }
-        # Only include ``env`` when the user supplied something — once the
-        # SDK forwards an env dict, the Claude CLI uses it as-is for the
-        # MCP child, replacing the parent env entirely. Omitting lets the
-        # CLI inherit naturally (HOME / PATH / etc.), which ``npx``-style
-        # commands depend on.
-        env = resolve_stdio_env(cfg)
-        if env is not None:
-            stdio["env"] = env
-        return stdio
-    if cfg.transport == "sse":
-        sse: SdkMcpSSEServerConfig = {"type": "sse", "url": cfg.url}
-        if cfg.headers:
-            sse["headers"] = dict(cfg.headers)
-        return sse
-    http: SdkMcpHttpServerConfig = {"type": "http", "url": cfg.url}
-    if cfg.headers:
-        http["headers"] = dict(cfg.headers)
-    return http

@@ -19,6 +19,7 @@
 
 import {
   getDefaultExecutionTarget,
+  selectableExecutionTargets,
   useExecutionTargets,
   useTranslation,
 } from "@valuz/core";
@@ -30,20 +31,10 @@ import {
   DropdownMenuTrigger,
   cn,
 } from "@valuz/ui";
-import {
-  Check,
-  ChevronDown,
-  Cloud,
-  FolderOpen,
-  HardDrive,
-  X,
-} from "lucide-react";
+import { Check, ChevronDown, FolderOpen, X } from "lucide-react";
+import { executionTargetIcon } from "./execution-target-icon";
 
 type TK = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
-
-function targetIcon(targetId: string) {
-  return targetId === "cloud" ? Cloud : HardDrive;
-}
 
 export interface ExecutionLocationBarProject {
   id: string;
@@ -74,8 +65,12 @@ export interface ExecutionLocationBarProps {
   className?: string;
 }
 
+// ``min-w-0`` (not ``shrink-0``): this row sits under a composer that can be
+// as narrow as a resized chat card, and a chip that refuses to shrink pushes
+// the row past the card edge instead of truncating inside it. Both labels
+// stay visible — they just truncate.
 const CHIP_CLASS =
-  "flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs text-ink-body outline-none";
+  "flex h-7 min-w-0 items-center gap-1.5 rounded-lg px-2 text-xs text-ink-body outline-none";
 const CHIP_INTERACTIVE_CLASS =
   "cursor-default transition-colors hover:bg-surface-border data-[state=open]:bg-surface-border";
 
@@ -91,6 +86,9 @@ export function ExecutionLocationBar({
 }: ExecutionLocationBarProps) {
   const { t } = useTranslation();
   const targets = useExecutionTargets();
+  // Choices exclude unselectable targets; ``targets`` itself still resolves
+  // the label of wherever this conversation actually runs.
+  const targetChoices = selectableExecutionTargets(targets);
   const multiTarget = targets.length >= 2;
 
   const selectedProject =
@@ -119,7 +117,9 @@ export function ExecutionLocationBar({
       ? t("conversation.tempChat" as TK)
       : t("conversation.execSelectProject" as TK);
 
-  const LocationIcon = effectiveTarget ? targetIcon(effectiveTarget.id) : null;
+  const LocationIcon = effectiveTarget
+    ? executionTargetIcon(effectiveTarget.id, effectiveTarget)
+    : null;
   const locationChipBody =
     effectiveTarget && LocationIcon ? (
       <>
@@ -185,8 +185,8 @@ export function ExecutionLocationBar({
               className="min-w-[160px]"
               onCloseAutoFocus={(e) => e.preventDefault()}
             >
-              {targets.map((target) => {
-                const Icon = targetIcon(target.id);
+              {targetChoices.map((target) => {
+                const Icon = executionTargetIcon(target.id, target);
                 return (
                   <DropdownMenuItem
                     key={target.id}

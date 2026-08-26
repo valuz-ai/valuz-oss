@@ -25,6 +25,7 @@ from valuz_agent.modules.memory.extraction import Completer, MemoryExtractor
 from valuz_agent.modules.providers.service import (
     resolve_model_provider_for_user as resolve_model_provider,
 )
+from valuz_agent.ports.sandbox_allocator import SandboxScope
 
 logger = logging.getLogger(__name__)
 
@@ -72,13 +73,25 @@ def _format_project_context(name: str, instructions: str | None) -> str:
     return "\n".join(out)
 
 
-def _make_completer(*, user_id: str, runtime_provider: Any, model: str, mp: Any) -> Completer:
+def _make_completer(
+    *,
+    user_id: str,
+    runtime_provider: Any,
+    model: str,
+    mp: Any,
+    source_scope: SandboxScope | None = None,
+) -> Completer:
     """Build the ``complete`` seam backed by a throwaway no-tools kernel session
     cloning the source's runtime/provider/model. Each call is a fresh ephemeral
     session (deleted after), but all of them share ONE fixed scratch cwd:
     runtimes key per-project artifacts on the session cwd (claude-agent-sdk
     keeps transcripts under ``~/.claude/projects/<encoded-cwd>/``), so a
-    per-call cwd leaked one such directory per extraction."""
+    per-call cwd leaked one such directory per extraction.
+
+    ``source_scope`` (the reviewed session's / task's sandbox scope, when known)
+    lets the review run INSIDE the source's still-warm sandbox — the sandbox the
+    post-turn idle clamp keeps alive for exactly this window — instead of
+    cold-provisioning a separate one. See the reuse block in ``_complete``."""
 
     async def _complete(prompt: str) -> str:
         from app.schemas import AgentConfigSchema, CreateSessionRequest, ModelProviderInputSchema
@@ -96,9 +109,13 @@ def _make_completer(*, user_id: str, runtime_provider: Any, model: str, mp: Any)
         )
         ephem_id = uuid4().hex
         review_cwd = fs_registry.memory_review_cwd(user_id)
-        # Marker so the runner's recursion guard skips this session if it is ever
-        # finalized through the normal path (it isn't — run_turn bypasses it).
-        marker = {"valuz": {"ephemeral_memory_review": True}}
+        # ``ephemeral_memory_review``: recursion guard so the idle extractor
+        # skips this session if it is ever finalized through the normal path
+        # (it isn't — run_turn bypasses it). ``bare_completion``: the
+        # kernel-recognized strip switch (``src.core.types.is_bare_completion``)
+        # — every runtime drops its agentic scaffolding for this one-shot
+        # no-tool review session.
+        marker = {"bare_completion": True, "valuz": {"ephemeral_memory_review": True}}
         req = CreateSessionRequest(
             id=ephem_id,
             agent_config=AgentConfigSchema(
@@ -116,6 +133,23 @@ def _make_completer(*, user_id: str, runtime_provider: Any, model: str, mp: Any)
             permission_mode="default",
             metadata=marker,
         )
+        # Prefer the SOURCE's still-warm sandbox. Under per-scope allocation the
+        # reviewed chat session (``session:{id}``) / task (``task:{id}``) sandbox
+        # is kept alive by the post-turn idle clamp for exactly this review
+        # window. Running here reuses it WITHOUT renewing its TTL (the clamp's
+        # countdown stays intact), so we skip a cold provision AND avoid the
+        # orphan the old separate ephemeral scope left behind — that scope was
+        # provisioned at the 24h active TTL and, never emitting a finish event,
+        # was never clamped, so a failed best-effort release lingered ~24h.
+        # ``run_ephemeral_review_in_scope`` returns ``None`` only when the source
+        # sandbox is already gone → fall through to our own throwaway sandbox.
+        if source_scope is not None:
+            reused = await kernel_client.run_ephemeral_review_in_scope(
+                user_id, req, prompt, reuse_scope=source_scope
+            )
+            if reused is not None:
+                return reused
+
         await kernel_client.create_session(user_id, req)
         try:
             msg = await kernel_client.run_turn(user_id, ephem_id, prompt)
@@ -125,6 +159,22 @@ def _make_completer(*, user_id: str, runtime_provider: Any, model: str, mp: Any)
                 await kernel_client.delete_session(user_id, ephem_id)
             except Exception:  # noqa: BLE001
                 logger.debug("memory review: ephemeral session cleanup failed")
+            # Own-sandbox fallback ONLY (the reuse path above returns early and
+            # never reaches here): we cold-provisioned a throwaway
+            # ``session:{ephem_id}`` sandbox, so release it. ``delete_session``
+            # is the kernel-direct adapter and BYPASSES the sessions service's
+            # scope-release hook, so without this the throwaway sandbox lingers
+            # its full TTL. Best-effort; the OSS BootSingletonAllocator no-ops.
+            try:
+                from valuz_agent.ports.extensions import ext
+
+                await ext.sandbox_allocator.release(
+                    owner_user_id=user_id, scope=SandboxScope(kind="session", id=ephem_id)
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "memory review: sandbox release failed for %s", ephem_id, exc_info=True
+                )
 
     return _complete
 
@@ -202,6 +252,8 @@ async def run_extraction_for_session(session_id: str, user_id: str | None) -> No
             runtime_provider=source.runtime_provider,
             model=source.model,
             mp=mp,
+            # Reuse the reviewed chat session's still-warm sandbox.
+            source_scope=SandboxScope(kind="session", id=session_id),
         )
         await MemoryExtractor(complete=completer).extract(
             user_id=user_id,
@@ -281,9 +333,9 @@ async def run_task_finish_extraction(task_id: str, user_id: str | None) -> None:
         return
     token = set_current_user_id(user_id)
     try:
-        from valuz_agent.modules.tasks import queries
+        from valuz_agent.modules.tasks import service as task_queries
 
-        task, runs = await queries.get_task_with_runs(user_id, task_id)
+        task, runs = await task_queries.get_task_with_runs(user_id, task_id)
         # Only graduate lessons from a successfully completed task.
         if task is None or task.status != "completed":
             return
@@ -341,6 +393,9 @@ async def run_task_finish_extraction(task_id: str, user_id: str | None) -> None:
             runtime_provider=source.runtime_provider,
             model=source.model,
             mp=mp,
+            # Reuse the finished task's shared sandbox (kept warm by the
+            # task.finalized clamp) for the review.
+            source_scope=SandboxScope(kind="task", id=task_id),
         )
         await MemoryExtractor(complete=completer).extract(
             user_id=user_id,

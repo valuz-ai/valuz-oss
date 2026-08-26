@@ -53,10 +53,18 @@ const DEFAULT_BACKOFF = [1000, 2000, 4000, 8000, 16000];
  * Manages a single SSE subscription with auto-reconnect on transient
  * failure and a manual recovery path when retries are exhausted.
  *
- * The controller tracks ``lastSeq`` from each incoming envelope so a
- * reconnect picks up from exactly the right cursor — ``after_seq`` on
- * the server side then replays any persisted events the client missed
- * during the gap, and the in-memory broadcast handles live deltas.
+ * ``lastSeq`` is a HISTORY-space cursor (the durable store's seq): on
+ * reconnect it is handed to the server as ``after_seq``, which replays
+ * persisted events the client missed during the gap.
+ *
+ * The cursor is advanced ONLY from heartbeat frames. Live frames carry
+ * the kernel's LOCAL seq — an independent space that must never feed a
+ * history cursor — and the wire does not distinguish a backfill frame
+ * (history seq) from a live one, so no event frame's seq is safe to
+ * persist. The host emits heartbeats regularly with the stream's current
+ * HISTORY cursor as ``seq``; between heartbeats a reconnect simply
+ * replays a little more history, and the consumer's ``event_uid`` dedup
+ * collapses the duplicates.
  */
 export const createSessionStreamController = (
   opts: SessionStreamOptions,
@@ -110,15 +118,25 @@ export const createSessionStreamController = (
           if (snap.state !== "connected") {
             setState("connected", { attempt: 0 });
           }
-          if (event.seq > snap.lastSeq) {
-            snap.lastSeq = event.seq;
-            // Don't emit() for every event — the consumer of onEvent
-            // already drives re-renders via its own store.
-          }
+          // Deliberately do NOT advance ``lastSeq`` from event frames:
+          // live frames carry the kernel-local seq (a different space),
+          // and backfill frames are indistinguishable from them on the
+          // wire. Only heartbeat frames (below) carry a guaranteed
+          // history-space cursor.
           opts.onEvent(event);
         },
         snap.lastSeq > 0 ? snap.lastSeq : undefined,
         abort.signal,
+        (historySeq) => {
+          // Heartbeat: the server's HISTORY cursor for this stream —
+          // the only frame kind safe to persist as the reconnect
+          // ``after_seq``. Monotonic guard for safety.
+          if (historySeq > snap.lastSeq) {
+            snap.lastSeq = historySeq;
+            // Don't emit() — cursor movement alone isn't a UI state
+            // change; the consumer re-renders via its own store.
+          }
+        },
       )
       .then(() => {
         if (stopped) return;

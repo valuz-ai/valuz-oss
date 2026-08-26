@@ -11,12 +11,21 @@ from fastapi import Depends
 from valuz_agent.infra import auth_context
 from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.infra.eventbus import event_bus
-from valuz_agent.integrations.docs_embedded import EmbeddedDocsRuntime
 from valuz_agent.integrations.skills_filesystem import FilesystemSkillSource
 from valuz_agent.integrations.skills_official import OfficialSkillSource
 from valuz_agent.modules.agents.datastore import ProjectMemberDatastore
 from valuz_agent.modules.automations.datastore import AutomationDatastore
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
+
+# Decision Inbox (ADR-022): the process-scoped singleton is owned by the
+# decisions module itself — the API layer is only one of its consumers.
+# Re-exported so routes keep writing ``Depends(get_decision_aggregator)``.
+from valuz_agent.modules.decisions.aggregator import (
+    get_decision_aggregator as get_decision_aggregator,
+)
+from valuz_agent.modules.decisions.aggregator import (
+    set_decision_aggregator as set_decision_aggregator,
+)
 from valuz_agent.modules.docs.datastore import DocumentDatastore
 from valuz_agent.modules.docs.service import DocumentLibraryService
 from valuz_agent.modules.parser import ParserRouter, build_default_registry
@@ -36,12 +45,13 @@ from valuz_agent.modules.tasks.datastore import (
     TaskEventDatastore,
     TaskSessionDatastore,
 )
+from valuz_agent.ports.docs_runtime import get_docs_runtime
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from valuz_agent.modules.automations.service import AutomationService
-    from valuz_agent.modules.decisions.aggregator import DecisionAggregator
+    from valuz_agent.modules.channels.service import ChannelIngressService
     from valuz_agent.modules.project_packs.service import ProjectPackService
 
 
@@ -109,12 +119,8 @@ async def get_skill_service_for_user(
 async def get_skill_service(
     user_id: str = Depends(get_current_user_id),
 ) -> AsyncGenerator[SkillLibraryService, None]:
-    gen = get_skill_service_for_user(user_id)
-    svc = await gen.__anext__()
-    try:
+    async for svc in get_skill_service_for_user(user_id):
         yield svc
-    finally:
-        await gen.aclose()
 
 
 @lru_cache
@@ -190,8 +196,17 @@ async def build_parser_router(db: AsyncSession, user_id: str) -> ParserRouter:
     closed by the time it runs.
     """
     from valuz_agent.modules.settings.parser_routing import load_routing_config
+    from valuz_agent.ports.extensions import ext
 
-    routing_config = await load_routing_config(db, user_id=user_id)
+    # The deployment gets the last word. OSS's policy returns the snapshot
+    # unchanged, so this is a no-op here; a managed deployment where parsing is
+    # an operator-provided capability rather than an account preference binds
+    # one that fixes the engine. It reads the loaded snapshot rather than
+    # replacing this load, because ``plugin_configs`` (secret refs, options) is
+    # still settings' to supply.
+    routing_config = ext.parser_routing_policy.decide(
+        await load_routing_config(db, user_id=user_id), user_id=user_id
+    )
     return ParserRouter(
         registry=_parser_registry(),
         secret_resolver=_SecretResolver(user_id),
@@ -205,8 +220,7 @@ async def get_document_service() -> AsyncGenerator[DocumentLibraryService, None]
 
     user_id = get_current_user_id()
     async with async_unit_of_work() as db:
-        preview_dir = fs_registry.docs_preview_dir(user_id)
-        docs_runtime = EmbeddedDocsRuntime(preview_dir=preview_dir)
+        docs_runtime = get_docs_runtime(user_id)
         # ``ParserRouter`` reads its routing config from an immutable snapshot
         # resolved here (one async read per request) instead of opening a sync
         # session per parse.
@@ -289,6 +303,43 @@ async def get_settings_service() -> AsyncGenerator[SettingsService, None]:
         )
 
 
+async def get_channel_ingress_service() -> AsyncGenerator[ChannelIngressService, None]:
+    from valuz_agent.adapters.channel_placement_reader import (
+        DatastoreAgentPlacementReader,
+        DatastoreProjectMemberReader,
+    )
+    from valuz_agent.adapters.channel_session_runner import SessionServiceChannelRunner
+    from valuz_agent.modules.channels.datastore import (
+        ChannelChatBindingDatastore,
+        ChannelThreadBindingDatastore,
+    )
+    from valuz_agent.modules.channels.service import ChannelIngressService
+
+    async with async_unit_of_work() as db:
+        project_ds = ProjectDatastore(db)
+        session_service = SessionService(
+            event_bus=event_bus,
+            project_svc=ProjectService(datastore=project_ds, event_bus=event_bus),
+            providers=ProviderDatastore(db),
+            skills=SkillDatastore(db),
+            projects=project_ds,
+            docs=DocumentDatastore(db),
+            connectors=ConnectorDatastore(db),
+            skill_source=FilesystemSkillSource(),
+            extra_skill_sources=[OfficialSkillSource()],
+        )
+        yield ChannelIngressService(
+            placements=DatastoreAgentPlacementReader(
+                members=ProjectMemberDatastore(db),
+                projects=project_ds,
+            ),
+            bindings=ChannelThreadBindingDatastore(db),
+            chat_bindings=ChannelChatBindingDatastore(db),
+            project_members=DatastoreProjectMemberReader(members=ProjectMemberDatastore(db)),
+            sessions=SessionServiceChannelRunner(session_service),
+        )
+
+
 async def get_project_pack_service() -> AsyncGenerator[ProjectPackService, None]:
     """Construct a ``ProjectPackService`` per request.
 
@@ -352,28 +403,3 @@ async def get_runs_service() -> AsyncGenerator[RunsService, None]:
             task_events=TaskEventDatastore(db),
             automations=AutomationDatastore(db),
         )
-
-
-# ---------------------------------------------------------------------------
-# Decision Inbox (ADR-022) — process-scoped singleton, set at startup
-# ---------------------------------------------------------------------------
-
-_decision_aggregator: DecisionAggregator | None = None
-
-
-def set_decision_aggregator(agg: DecisionAggregator) -> None:
-    """Register the process-scoped aggregator. Called by app startup."""
-    global _decision_aggregator
-    _decision_aggregator = agg
-
-
-def get_decision_aggregator() -> DecisionAggregator:
-    """FastAPI Depends provider for the inbox aggregator.
-
-    Returns the singleton wired up at startup. Raises ``RuntimeError`` if
-    called before startup — defensive: indicates a misconfigured app
-    (route is registered but the lifecycle hook didn't fire).
-    """
-    if _decision_aggregator is None:
-        raise RuntimeError("decision aggregator not initialized — startup hook didn't run")
-    return _decision_aggregator

@@ -62,7 +62,16 @@ class UserMixin:
 # ADR-020 hazard is sync-on-loop), own no session, and read no business data.
 # They are data-preserving — a DB on a known alembic revision is migrated
 # forward in place; only an unknown/foreign/corrupt stamp is dropped + rebuilt.
-async_engine: AsyncEngine = create_async_engine(db_url_async(), echo=settings.debug)
+# Non-SQLite (server PG) pools sit behind idle-timeout middleboxes (LB / k8s
+# conntrack) and PG restarts: an idle pooled connection can die silently and
+# the next checkout raises asyncpg "connection is closed" mid-request.
+# pre_ping validates on checkout; recycle retires connections before typical
+# idle-timeout windows. SQLite needs neither (in-process file handles).
+_pool_kwargs: dict[str, object] = (
+    {} if is_sqlite_runtime() else {"pool_pre_ping": True, "pool_recycle": 1800}
+)
+
+async_engine: AsyncEngine = create_async_engine(db_url_async(), echo=settings.debug, **_pool_kwargs)
 
 if is_sqlite_runtime():
 

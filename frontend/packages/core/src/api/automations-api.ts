@@ -14,6 +14,8 @@
 
 import { createFetchJson } from "./fetch-json";
 import { resolveApiBase } from "./base-resolver";
+import { fanOutTargets, getListFanOutTargets } from "../edition/list-fanout";
+import { recordEntityOrigins } from "../edition/entity-origin";
 
 let _apiBase =
   (import.meta as unknown as Record<string, Record<string, string> | undefined>)
@@ -83,6 +85,9 @@ export interface AutomationItem {
   action_kind: ActionKind;
   /** Worktree isolation flag (both action kinds; git-repo projects only). */
   worktree: boolean;
+  /** Optional immutable Playbook contract executed by each fire. */
+  playbook_definition_id: string | null;
+  playbook_version: number | null;
 
   trigger: Trigger;
   /** Localized "every day at 9" / "every 5 minutes". */
@@ -92,6 +97,10 @@ export interface AutomationItem {
   next_run_at: number | null;
   last_run_at: number | null;
   last_run_status: string | null;
+  /** CLIENT-side tag on multi-target editions: which execution target
+   * answered the list row (e.g. "local"/"cloud"). Never sent by the server;
+   * absent on single-backend builds. */
+  exec_origin?: string;
 }
 
 export interface AutomationGroup {
@@ -131,6 +140,8 @@ export interface AutomationRunItem {
   error_message: string | null;
   session_id: string | null;
   created_files: string[];
+  /** Canonical PlaybookRun created for this fire, when a Playbook is pinned. */
+  playbook_run_id: string | null;
   // The task this run kicked off (task automations only) — id + title deep-link
   // to it ("→ 任务《title》"). `null` for non-task runs.
   task_id: string | null;
@@ -198,6 +209,10 @@ export interface AutomationCreatePayload {
    * every member in one worktree. Silently dropped for chat-only projects.
    */
   worktree?: boolean;
+  /** Definition + exact immutable version. Omitting the version asks the
+   * backend to resolve and persist the Definition's current version once. */
+  playbook_definition_id?: string | null;
+  playbook_version?: number | null;
 }
 
 export interface AutomationUpdatePayload {
@@ -207,6 +222,18 @@ export interface AutomationUpdatePayload {
   agent_slug?: string | null;
   action_kind?: ActionKind | null;
   worktree?: boolean | null;
+  playbook_definition_id?: string | null;
+  playbook_version?: number | null;
+}
+
+/** Minimal Definition projection needed by the Automation contract picker. */
+export interface AutomationPlaybookChoice {
+  id: string;
+  project_id: string | null;
+  name: string;
+  status: "draft" | "active" | "retired";
+  current_version: number;
+  revision: number;
 }
 
 export interface AutomationRunAccepted {
@@ -250,6 +277,8 @@ export interface AutomationProposalSpec {
   action_kind: ActionKind;
   /** Worktree isolation (both action kinds; git-repo projects only). */
   worktree: boolean;
+  playbook_definition_id: string | null;
+  playbook_version: number | null;
   trigger_human_readable: string;
   next_run_at: number | null;
 }
@@ -264,6 +293,8 @@ export interface AutomationProposalConfirmPayload {
   agent_slug?: string | null;
   action_kind?: ActionKind;
   worktree?: boolean;
+  playbook_definition_id?: string | null;
+  playbook_version?: number | null;
 }
 
 export interface AutomationProposalStatusResult {
@@ -271,34 +302,117 @@ export interface AutomationProposalStatusResult {
 }
 
 const fetchJson = createFetchJson(() => _apiBase);
+const automationBase = (automationId: string): string | undefined =>
+  resolveApiBase({ automationId }, "") || undefined;
+const sessionBase = (sessionId: string): string | undefined =>
+  resolveApiBase({ sessionId }, "") || undefined;
 
 export const automationsApi = {
-  listGroups(projectId?: string): Promise<{ groups: AutomationGroup[] }> {
+  /** List Playbook Definitions on the same execution target as the future
+   * Automation. Definition ownership and execution Project may differ; this
+   * intentionally does not filter by project_id. */
+  listPlaybooks(opts?: {
+    baseUrl?: string;
+  }): Promise<AutomationPlaybookChoice[]> {
+    return fetchJson("/v1/playbooks", { baseUrl: opts?.baseUrl });
+  },
+
+  async listGroups(projectId?: string): Promise<{ groups: AutomationGroup[] }> {
     const qs = new URLSearchParams();
     if (projectId) qs.set("project_id", projectId);
     const suffix = qs.toString() ? `?${qs}` : "";
-    // Project-scoped list follows the project's execution origin
-    // (multi-target editions); global list stays on the module default.
-    return fetchJson(`/v1/automations${suffix}`, {
-      baseUrl: projectId
-        ? resolveApiBase({ projectId }, "") || undefined
-        : undefined,
-    });
+    // Project-scoped list follows the project's execution origin.
+    if (projectId) {
+      return fetchJson(`/v1/automations${suffix}`, {
+        baseUrl: resolveApiBase({ projectId }, "") || undefined,
+      });
+    }
+    // Global list: fan out to every registered target on multi-target
+    // editions, tag each automation's ``exec_origin``, and feed the origin
+    // index so automation-scoped calls route to the owning backend. Zero
+    // targets (OSS) keeps the single-backend path unchanged. A project lives
+    // on exactly one backend, so groups never overlap across targets — a flat
+    // concat is the merge.
+    if (getListFanOutTargets().length === 0) {
+      return fetchJson(`/v1/automations${suffix}`);
+    }
+    const outcome = await fanOutTargets((target) =>
+      fetchJson<{ groups: AutomationGroup[] }>(`/v1/automations`, {
+        baseUrl: target.baseUrl,
+      }),
+    );
+    recordEntityOrigins(
+      outcome.values.flatMap(({ target, value }) =>
+        value.groups.flatMap((g) =>
+          g.automations.map(
+            (a) => [a.automation_id, target.id] as [string, string],
+          ),
+        ),
+      ),
+    );
+    const merged: AutomationGroup[] = [];
+    for (const { target, value } of outcome.values) {
+      for (const g of value.groups) {
+        merged.push({
+          ...g,
+          automations: g.automations.map((a) => ({
+            ...a,
+            exec_origin: target.id,
+          })),
+        });
+      }
+    }
+    return { groups: merged };
   },
 
-  listProjectTargets(): Promise<{ targets: AutomationProjectTarget[] }> {
-    return fetchJson(`/v1/automations/project-targets`);
+  async listProjectTargets(): Promise<{ targets: AutomationProjectTarget[] }> {
+    // The target picker must show BOTH backends' projects on multi-target
+    // editions. The Chat sentinel ("chat-default", project_id=null) is
+    // returned by every backend — keep only the first; its backend is chosen
+    // by the location picker at create time, not by which backend listed it.
+    if (getListFanOutTargets().length === 0) {
+      return fetchJson(`/v1/automations/project-targets`);
+    }
+    const outcome = await fanOutTargets((target) =>
+      fetchJson<{ targets: AutomationProjectTarget[] }>(
+        `/v1/automations/project-targets`,
+        { baseUrl: target.baseUrl },
+      ),
+    );
+    recordEntityOrigins(
+      outcome.values.flatMap(({ target, value }) =>
+        value.targets
+          .filter((t) => t.project_id)
+          .map((t) => [t.project_id!, target.id] as [string, string]),
+      ),
+    );
+    const seen = new Set<string>();
+    const merged: AutomationProjectTarget[] = [];
+    for (const { value } of outcome.values) {
+      for (const t of value.targets) {
+        if (seen.has(t.id)) continue;
+        seen.add(t.id);
+        merged.push(t);
+      }
+    }
+    return { targets: merged };
   },
 
   get(automationId: string): Promise<AutomationDetail> {
-    return fetchJson(`/v1/automations/${encodeURIComponent(automationId)}`);
+    return fetchJson(`/v1/automations/${encodeURIComponent(automationId)}`, {
+      baseUrl: automationBase(automationId),
+    });
   },
 
-  create(payload: AutomationCreatePayload): Promise<AutomationDetail> {
+  create(
+    payload: AutomationCreatePayload,
+    opts?: { baseUrl?: string },
+  ): Promise<AutomationDetail> {
     return fetchJson("/v1/automations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      baseUrl: opts?.baseUrl,
     });
   },
 
@@ -310,33 +424,35 @@ export const automationsApi = {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      baseUrl: automationBase(automationId),
     });
   },
 
   delete(automationId: string): Promise<void> {
     return fetchJson(`/v1/automations/${encodeURIComponent(automationId)}`, {
       method: "DELETE",
+      baseUrl: automationBase(automationId),
     });
   },
 
   pause(automationId: string): Promise<AutomationDetail> {
     return fetchJson(
       `/v1/automations/${encodeURIComponent(automationId)}/pause`,
-      { method: "POST" },
+      { method: "POST", baseUrl: automationBase(automationId) },
     );
   },
 
   resume(automationId: string): Promise<AutomationDetail> {
     return fetchJson(
       `/v1/automations/${encodeURIComponent(automationId)}/resume`,
-      { method: "POST" },
+      { method: "POST", baseUrl: automationBase(automationId) },
     );
   },
 
   runNow(automationId: string): Promise<AutomationRunAccepted> {
     return fetchJson(
       `/v1/automations/${encodeURIComponent(automationId)}/run-now`,
-      { method: "POST" },
+      { method: "POST", baseUrl: automationBase(automationId) },
     );
   },
 
@@ -351,6 +467,7 @@ export const automationsApi = {
     const suffix = qs.toString() ? `?${qs}` : "";
     return fetchJson(
       `/v1/automations/${encodeURIComponent(automationId)}/runs${suffix}`,
+      { baseUrl: automationBase(automationId) },
     );
   },
 
@@ -374,7 +491,8 @@ export const automationsApi = {
   },
 
   /** Confirm an automation the ``create`` tool proposed (the user clicked
-   *  "Create" on the proposal card). Persists + returns the created row. */
+   *  "Create" on the proposal card). Persists + returns the created row.
+   *  Routes to the backend that owns the proposing session. */
   confirmProposal(
     sessionId: string,
     payload: AutomationProposalConfirmPayload,
@@ -385,12 +503,14 @@ export const automationsApi = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+        baseUrl: sessionBase(sessionId),
       },
     );
   },
 
   /** Map proposing ``tool_call_id``s → already-created automations, so the page
-   *  can seed confirmed proposal cards on session re-entry. */
+   *  can seed confirmed proposal cards on session re-entry. Routes to the
+   *  backend that owns the proposing session. */
   proposalStatus(
     sessionId: string,
     toolCallIds: string[],
@@ -401,6 +521,7 @@ export const automationsApi = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tool_call_ids: toolCallIds }),
+        baseUrl: sessionBase(sessionId),
       },
     );
   },

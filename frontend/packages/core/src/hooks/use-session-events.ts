@@ -22,6 +22,9 @@ const SKIP_TYPES: ReadonlySet<string> = new Set([
   "session.idle",
   "session.update",
   "session.mode_changed",
+  // Citation/Audit metadata is consumed by the conversation renderer and is
+  // not a user-authored assistant milestone.
+  "message.assistant.sidecar",
   // ``tool.call.completed`` mirrors ``tool.call.started`` one-for-one — it
   // would double every tool entry on the dashboard without adding info.
   "tool.call.completed",

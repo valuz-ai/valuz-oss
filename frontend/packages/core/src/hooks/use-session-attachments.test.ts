@@ -5,28 +5,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionAttachmentItem } from "../api/sessions-api";
 
 const listAttachments = vi.fn();
-const uploadAttachment = vi.fn();
-const addKbAttachments = vi.fn();
 const deleteAttachment = vi.fn();
 
 vi.mock("../api/sessions-api", () => ({
   sessionsApi: {
     listAttachments: (...a: unknown[]) => listAttachments(...a),
-    uploadAttachment: (...a: unknown[]) => uploadAttachment(...a),
-    addKbAttachments: (...a: unknown[]) => addKbAttachments(...a),
     deleteAttachment: (...a: unknown[]) => deleteAttachment(...a),
   },
 }));
 
 import { useSessionAttachments } from "./use-session-attachments";
 
-const row = (over: Partial<SessionAttachmentItem>): SessionAttachmentItem => ({
+const row = (
+  over: Partial<SessionAttachmentItem> = {},
+): SessionAttachmentItem => ({
   id: "a1",
   session_id: "s1",
   filename: "f.pdf",
-  stored_path: "/raw.pdf",
+  stored_path: "attachments/a1/f.pdf",
   parsed_path: null,
-  parse_status: "parsing",
+  parse_status: "ready",
   size_bytes: 1,
   mime_type: null,
   created_at: 0,
@@ -35,143 +33,156 @@ const row = (over: Partial<SessionAttachmentItem>): SessionAttachmentItem => ({
   ...over,
 });
 
-describe("useSessionAttachments", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    listAttachments.mockResolvedValue({ items: [] });
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  listAttachments.mockResolvedValue({ items: [] });
+});
+afterEach(() => vi.useRealTimers());
 
-  it("loads the session's attachments on mount", async () => {
-    listAttachments.mockResolvedValueOnce({
-      items: [row({ parse_status: "ready", parsed_path: "/p.md" })],
-    });
+describe("useSessionAttachments", () => {
+  it("reads the conversation's own attachments", async () => {
+    listAttachments.mockResolvedValue({ items: [row()] });
     const { result } = renderHook(() => useSessionAttachments("s1"));
+
     await waitFor(() => expect(result.current.attachments).toHaveLength(1));
     expect(listAttachments).toHaveBeenCalledWith("s1");
-    expect(result.current.hasParsing).toBe(false);
   });
 
-  it("clears attachments when sessionId is null", async () => {
+  it("asks nothing when there is no session", async () => {
     const { result } = renderHook(() => useSessionAttachments(null));
+
     await waitFor(() => expect(result.current.attachments).toHaveLength(0));
     expect(listAttachments).not.toHaveBeenCalled();
   });
 
-  it("a late/empty load does not clobber an optimistic upload (eager-create race)", async () => {
-    // The new-conversation flow sets sessionId to the freshly-minted session,
-    // firing the load BEFORE the upload commits → the server returns empty. If
-    // that resolves after the upload appended its row, the row must survive.
-    let resolveLoad: (v: { items: never[] }) => void = () => {};
-    const loadPromise = new Promise<{ items: never[] }>((r) => {
-      resolveLoad = r;
-    });
-    listAttachments.mockReturnValueOnce(loadPromise); // the racing, empty load
-    uploadAttachment.mockResolvedValue(
-      row({ id: "u1", session_id: "s1", parse_status: "parsing" }),
+  it("replaces the list across a session switch", async () => {
+    // The panel shows ONE conversation. Carrying a previous session's files
+    // into the next one would misattribute them.
+    listAttachments
+      .mockResolvedValueOnce({ items: [row({ id: "old" })] })
+      .mockResolvedValue({ items: [row({ id: "new", session_id: "s2" })] });
+    const { result, rerender } = renderHook(
+      ({ sid }: { sid: string | null }) => useSessionAttachments(sid),
+      { initialProps: { sid: "s1" as string | null } },
     );
-    const ensureSession = vi.fn().mockResolvedValue({ id: "s1" });
+    await waitFor(() => expect(result.current.attachments[0].id).toBe("old"));
 
-    const { result } = renderHook(() => useSessionAttachments("s1"));
-    // Upload appends u1 while the load is still pending.
-    await act(async () => {
-      await result.current.attachLocalFiles(
-        [new File(["x"], "f.pdf", { type: "application/pdf" })],
-        ensureSession,
-      );
-    });
-    expect(result.current.attachments.some((a) => a.id === "u1")).toBe(true);
+    rerender({ sid: "s2" });
 
-    // The stale empty load resolves last — it must NOT wipe the appended row.
-    await act(async () => {
-      resolveLoad({ items: [] });
-      await loadPromise;
-    });
-    expect(result.current.attachments.some((a) => a.id === "u1")).toBe(true);
+    await waitFor(() => expect(result.current.attachments[0].id).toBe("new"));
+    expect(result.current.attachments).toHaveLength(1);
   });
 
-  it("polls a parsing row until it settles to ready (S1-03)", async () => {
-    vi.useFakeTimers();
-    // First call = initial load (parsing); subsequent calls = poll (ready).
+  it("polls only while a bound attachment is still parsing", async () => {
+    // A turn can be sent mid-parse, so a bound row may still settle — but an
+    // ordinary conversation must not poll forever.
     listAttachments
       .mockResolvedValueOnce({ items: [row({ parse_status: "parsing" })] })
-      .mockResolvedValue({
-        items: [row({ parse_status: "ready", parsed_path: "/p.md" })],
-      });
-    const { result } = renderHook(() => useSessionAttachments("s1"));
-    // Flush the initial load microtask.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(result.current.hasParsing).toBe(true);
-    // Advance one poll interval (1000ms) → poller re-fetches → ready.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
-    });
-    expect(result.current.attachments[0].parse_status).toBe("ready");
-    expect(result.current.hasParsing).toBe(false);
-  });
-
-  it("uploads local files on attach and appends the parsing row", async () => {
-    uploadAttachment.mockResolvedValue(row({ id: "u1", parse_status: "parsing" }));
-    const ensureSession = vi.fn().mockResolvedValue({ id: "s1" });
-    const { result } = renderHook(() => useSessionAttachments("s1"));
-    await waitFor(() => expect(listAttachments).toHaveBeenCalled());
-
-    const file = new File(["hi"], "f.pdf", { type: "application/pdf" });
-    await act(async () => {
-      await result.current.attachLocalFiles([file], ensureSession);
-    });
-    expect(ensureSession).toHaveBeenCalledTimes(1);
-    expect(uploadAttachment).toHaveBeenCalledWith("s1", file);
-    expect(result.current.attachments.some((a) => a.id === "u1")).toBe(true);
-    expect(result.current.hasParsing).toBe(true);
-  });
-
-  it("markPendingConsumed stamps consumed_at on pending rows only (X-05)", async () => {
-    const { result } = renderHook(() => useSessionAttachments("s1"));
-    await waitFor(() => expect(listAttachments).toHaveBeenCalled());
-    act(() => {
-      result.current.setAttachments([
-        row({ id: "p1", consumed_at: null }),
-        row({ id: "c1", consumed_at: 123 }),
-      ]);
-    });
-    act(() => {
-      result.current.markPendingConsumed();
-    });
-    const byId = Object.fromEntries(
-      result.current.attachments.map((a) => [a.id, a.consumed_at]),
-    );
-    expect(byId.p1).toBeTruthy(); // freshly stamped
-    expect(byId.c1).toBe(123); // already-consumed untouched
-  });
-
-  it("poll merge preserves an optimistic consumed_at (no chip flash-back)", async () => {
+      .mockResolvedValue({ items: [row({ parse_status: "ready" })] });
     vi.useFakeTimers();
-    listAttachments
-      .mockResolvedValueOnce({ items: [row({ id: "p1", parse_status: "parsing" })] })
-      // Server still reports the row as pending (turn hasn't consumed it yet).
-      .mockResolvedValue({
-        items: [row({ id: "p1", parse_status: "ready", consumed_at: null })],
-      });
     const { result } = renderHook(() => useSessionAttachments("s1"));
+
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    // Optimistically consume (as a send would).
-    act(() => {
-      result.current.markPendingConsumed();
-    });
-    expect(result.current.attachments[0].consumed_at).toBeTruthy();
-    // A poll fires while the row is still server-side pending …
+    expect(result.current.hasParsing).toBe(true);
+
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(2000);
     });
-    // … but the optimistic consumed_at survives the merge.
-    expect(result.current.attachments[0].consumed_at).toBeTruthy();
-    expect(result.current.attachments[0].parse_status).toBe("ready");
+    expect(result.current.hasParsing).toBe(false);
+
+    const settled = listAttachments.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(listAttachments).toHaveBeenCalledTimes(settled);
+  });
+
+  it("drops a removed attachment without waiting for the server", async () => {
+    listAttachments.mockResolvedValue({ items: [row()] });
+    deleteAttachment.mockResolvedValue(undefined);
+    const { result } = renderHook(() => useSessionAttachments("s1"));
+    await waitFor(() => expect(result.current.attachments).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.remove("a1");
+    });
+
+    expect(result.current.attachments).toHaveLength(0);
+    expect(deleteAttachment).toHaveBeenCalledWith("a1");
+  });
+
+  it("waits for a file another page said it sent", async () => {
+    // The project composer posts and navigates in that order, so this read
+    // races a bind that has not happened. One mount-time read and nothing
+    // else refreshing left the file missing from the panel until the person
+    // switched away and back.
+    listAttachments
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValue({ items: [row({ id: "sent-elsewhere" })] });
+    vi.useFakeTimers();
+    const { result } = renderHook(() =>
+      useSessionAttachments("s1", ["sent-elsewhere"]),
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(result.current.attachments.map((a) => a.id)).toEqual([
+      "sent-elsewhere",
+    ]);
+  });
+
+  it("stops waiting for a file that never arrives", async () => {
+    // The promise can be broken: the page that sent the turn owns the POST,
+    // and a failure there means the bind never happens. Polling a conversation
+    // forever over it is worse than giving up.
+    listAttachments.mockResolvedValue({ items: [] });
+    vi.useFakeTimers();
+    renderHook(() => useSessionAttachments("s1", ["never-lands"]));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    // The mount read plus a bounded run of polls — not one per second forever.
+    expect(listAttachments.mock.calls.length).toBeLessThanOrEqual(22);
+  });
+
+  it("does not poll when everything expected is already here", async () => {
+    listAttachments.mockResolvedValue({ items: [row({ id: "a1" })] });
+    vi.useFakeTimers();
+    renderHook(() => useSessionAttachments("s1", ["a1"]));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const settled = listAttachments.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    expect(listAttachments).toHaveBeenCalledTimes(settled);
+  });
+
+  it("refreshes the session the caller names, not the one it was built with", async () => {
+    // A send creates the session and then binds its files. The closure that
+    // runs afterwards was built while the id was still null, so a refresh that
+    // read the hook's own prop would read the wrong session — or none — and the
+    // panel would stay empty through the whole turn. That is what happened.
+    const { result } = renderHook(() => useSessionAttachments(null));
+    await waitFor(() => expect(result.current.attachments).toHaveLength(0));
+    listAttachments.mockResolvedValue({
+      items: [row({ session_id: "s-new" })],
+    });
+
+    await act(async () => {
+      await result.current.refresh("s-new");
+    });
+
+    expect(listAttachments).toHaveBeenCalledWith("s-new");
+    expect(result.current.attachments).toHaveLength(1);
   });
 });

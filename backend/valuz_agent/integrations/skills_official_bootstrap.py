@@ -60,6 +60,20 @@ def _hash_directory(root: Path) -> str:
     return h.hexdigest()
 
 
+def _has_manifest(skill_dir: Path) -> bool:
+    """Whether a landed package still carries the file that makes it a skill.
+
+    The marker alone is not proof the package is intact — it is written last
+    and can outlive the content (see ``_copy_skill``). Anything that lost its
+    manifest is not a skill any more: ``OfficialSkillSource`` skips it, while
+    the always-on baseline still injects the directory because it exists, so
+    the runtime materializes an empty shell. Checking one more path here is
+    what lets a damaged package heal on the next sync instead of being trusted
+    forever.
+    """
+    return (skill_dir / "SKILL.md").is_file() or (skill_dir / "skill.md").is_file()
+
+
 def _list_bundled_skill_dirs(resources_root: Path) -> list[Path]:
     if not resources_root.exists():
         return []
@@ -68,13 +82,67 @@ def _list_bundled_skill_dirs(resources_root: Path) -> list[Path]:
     ]
 
 
+# One package's copy, retried. Cheap: a retry only re-walks that package.
+_COPY_ATTEMPTS = 3
+
+
 def _copy_skill(src: Path, dest: Path, version_hash: str) -> None:
-    if dest.exists():
-        # Wipe and re-copy. Bundled skills are managed artifacts; users who want to
-        # tweak one should "Copy" it into the user scope first instead of editing in place.
-        shutil.rmtree(dest)
-    shutil.copytree(src, dest)
-    (dest / BUNDLED_VERSION_FILE).write_text(version_hash, encoding="utf-8")
+    """Bring ``dest`` to ``src``'s content, in place and without a destructive phase.
+
+    Bundled skills are still managed artifacts — a user who wants to tweak one
+    should "Copy" it into the user scope rather than editing in place. What
+    changed is HOW the managed copy is replaced.
+
+    This used to ``rmtree`` and then ``copytree``. On a single-user install
+    that is fine: one writer, local disk, nothing can interleave. On a shared
+    deployment it corrupts packages, because the three steps — delete, copy,
+    stamp — are not atomic and several processes converge on the same per-user
+    directory:
+
+        A: copytree finished        -> SKILL.md present
+        B: rmtree                   -> SKILL.md deleted
+        A: writes .bundled-version  -> marker present, content gone
+        B: copytree fails/aborts    -> never restored
+
+    The marker then certifies a package that is not there. Measured on a
+    managed deployment 2026-08-07: 17 of 160 landed OSS packages had lost their
+    manifest while keeping a valid marker, the worst hit being the largest
+    package (widest window). Zero of 240 packages landed by the same caller's
+    other tree — which already copies in place — were damaged.
+
+    So: no delete phase. Overwrite in place, then remove only the files this
+    version no longer ships, then stamp. Concurrent writers now write identical
+    bytes over each other, which converges; nothing can disappear. Retry
+    absorbs the transient errors a network filesystem raises on any single op.
+    """
+    last: Exception | None = None
+    for _attempt in range(_COPY_ATTEMPTS):
+        try:
+            marker = dest / BUNDLED_VERSION_FILE
+            marker.unlink(missing_ok=True)
+            shutil.copytree(src, dest, dirs_exist_ok=True)
+            _remove_withdrawn_files(src, dest)
+            marker.write_text(version_hash, encoding="utf-8")
+            return
+        except (OSError, shutil.Error) as exc:
+            last = exc
+    raise last if last is not None else RuntimeError(f"copy failed: {src} -> {dest}")
+
+
+def _remove_withdrawn_files(src: Path, dest: Path) -> None:
+    """Delete files under ``dest`` that this version of the package dropped.
+
+    Scoped to one package directory and to files the source no longer has —
+    the narrow replacement for the wholesale rmtree above, which is what used
+    to keep a package from accumulating its own history. Directories are left
+    alone: an empty one is harmless, and not removing them keeps this from ever
+    walking above ``dest``.
+    """
+    keep = {path.relative_to(src).as_posix() for path in src.rglob("*") if path.is_file()}
+    keep.add(BUNDLED_VERSION_FILE)
+    for path in dest.rglob("*"):
+        if path.is_file() and path.relative_to(dest).as_posix() not in keep:
+            path.unlink(missing_ok=True)
 
 
 def sync_bundled_official_skills(user_id: str) -> list[str]:
@@ -93,7 +161,7 @@ def sync_bundled_official_skills(user_id: str) -> list[str]:
     dest_root.mkdir(parents=True, exist_ok=True)
 
     # Official skills (skill-creator, …) and builtin skills (valuz-project-docs,
-    # browser) land in the SAME per-user root — builtin skills are not given a
+    # citation, browser) land in the SAME per-user root — builtin skills are not given a
     # separate directory. Slugs never collide across the two source trees.
     src_skills = _list_bundled_skill_dirs(_resources_root()) + _list_bundled_skill_dirs(
         _builtin_resources_root()
@@ -106,7 +174,7 @@ def sync_bundled_official_skills(user_id: str) -> list[str]:
         try:
             version_hash = _hash_directory(src_skill)
             existing_marker = dest_skill / BUNDLED_VERSION_FILE
-            if dest_skill.exists() and existing_marker.exists():
+            if dest_skill.exists() and existing_marker.exists() and _has_manifest(dest_skill):
                 if existing_marker.read_text(encoding="utf-8").strip() == version_hash:
                     continue  # up to date
             _copy_skill(src_skill, dest_skill, version_hash)

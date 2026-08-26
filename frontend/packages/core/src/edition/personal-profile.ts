@@ -38,6 +38,14 @@ const personalBranding: BrandingProfile = {
 // longer a top-level entry — they live inside a Project.
 const personalNavItems: NavItemModule[] = [
   {
+    id: "playbooks",
+    label: "sidebar.playbooks",
+    href: "/playbooks",
+    position: "top",
+    navGroup: "main",
+    edition: "personal",
+  },
+  {
     // Sidebar entry points at the new ADR-021 automation page. The
     // sentinel id stays ``scheduled`` for now so the navigation tests'
     // hard-coded ids keep passing — the visible href + label both
@@ -66,17 +74,9 @@ const personalNavItems: NavItemModule[] = [
     edition: "personal",
   },
   {
-    id: "skills",
-    label: "sidebar.skills",
-    href: "/skills",
-    position: "bottom",
-    navGroup: "library",
-    edition: "personal",
-  },
-  {
-    id: "connectors",
-    label: "nav.connectors",
-    href: "/connectors",
+    id: "plugins",
+    label: "plugin.title",
+    href: "/plugins",
     position: "bottom",
     navGroup: "library",
     edition: "personal",

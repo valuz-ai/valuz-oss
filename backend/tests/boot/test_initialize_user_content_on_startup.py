@@ -213,7 +213,7 @@ async def test_init_kernel_skips_browser_cli_bootstrap_when_startup_user_content
         lambda: (),
     )
     monkeypatch.setattr(
-        "valuz_agent.modules.tasks.dispatch_mcp.build_task_tool_defs",
+        "valuz_agent.modules.tasks.tools.handlers.build_task_tool_defs",
         lambda _orchestrator: (),
     )
 
@@ -285,17 +285,16 @@ async def test_start_skills_uses_startup_flag_not_deployment_type(monkeypatch) -
 
 
 @pytest.mark.asyncio
-async def test_start_automation_runner_keeps_runner_but_skips_scanners(monkeypatch) -> None:
+async def test_start_automation_runtime_uses_bound_port(monkeypatch) -> None:
     settings.initialize_user_content_on_startup = False
     calls: list[str] = []
 
+    from valuz_agent.ports.extensions import ext
+
     monkeypatch.setattr(
-        "valuz_agent.modules.automations.in_process_runner.automation_runner.startup",
-        lambda: _async_call(calls, "runner"),
-    )
-    monkeypatch.setattr(
-        "valuz_agent.modules.automations.failure_monitor.automation_failure_monitor.startup",
-        lambda: _async_call(calls, "failure-monitor"),
+        ext.automation_runtime,
+        "startup",
+        lambda: _async_call(calls, "automation-runtime"),
     )
     monkeypatch.setattr(
         "valuz_agent.modules.docs.scheduler.start_auto_discovery",
@@ -306,9 +305,84 @@ async def test_start_automation_runner_keeps_runner_but_skips_scanners(monkeypat
         lambda: (_ for _ in ()).throw(AssertionError("skill scanner must not start")),
     )
 
-    await steps.start_automation_runner(SimpleNamespace())
+    await steps.start_automation_runtime(SimpleNamespace())
 
-    assert calls == ["runner", "failure-monitor"]
+    assert calls == ["automation-runtime"]
+
+
+@pytest.mark.asyncio
+async def test_host_background_services_skip_scanners_when_disabled(monkeypatch) -> None:
+    settings.initialize_user_content_on_startup = False
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "valuz_agent.modules.tasks.recovery.task_health_monitor.startup",
+        lambda: _async_call(calls, "task-health"),
+    )
+    monkeypatch.setattr(
+        "valuz_agent.modules.docs.scheduler.start_auto_discovery",
+        lambda: (_ for _ in ()).throw(AssertionError("docs scanner must not start")),
+    )
+    monkeypatch.setattr(
+        "valuz_agent.modules.skills.scheduler.start_skill_auto_scan",
+        lambda: (_ for _ in ()).throw(AssertionError("skill scanner must not start")),
+    )
+
+    await steps.start_host_background_services(SimpleNamespace())
+
+    assert calls == ["task-health"]
+
+
+@pytest.mark.asyncio
+async def test_host_background_services_do_not_start_agent_channels(monkeypatch) -> None:
+    settings.initialize_user_content_on_startup = True
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "valuz_agent.modules.tasks.recovery.task_health_monitor.startup",
+        lambda: _async_call(calls, "task-health"),
+    )
+    monkeypatch.setattr(
+        "valuz_agent.modules.docs.scheduler.start_auto_discovery",
+        lambda: calls.append("docs-scan"),
+    )
+    monkeypatch.setattr(
+        "valuz_agent.modules.skills.scheduler.start_skill_auto_scan",
+        lambda: calls.append("skill-scan"),
+    )
+    monkeypatch.setattr(
+        "valuz_agent.modules.backup.scheduler.start_backup_scheduler",
+        lambda: calls.append("backup"),
+    )
+    monkeypatch.setattr(
+        "valuz_agent.integrations.wecom_aibot_long_connection.wecom_aibot_supervisor.startup",
+        lambda: (_ for _ in ()).throw(AssertionError("channels start only post boot")),
+    )
+    monkeypatch.setattr(
+        "valuz_agent.integrations.feishu_long_connection.feishu_supervisor.startup",
+        lambda: (_ for _ in ()).throw(AssertionError("channels start only post boot")),
+    )
+
+    await steps.start_host_background_services(SimpleNamespace())
+
+    assert calls == ["task-health", "docs-scan", "skill-scan", "backup"]
+
+
+@pytest.mark.asyncio
+async def test_post_boot_agent_channels_starts_after_boot(monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "valuz_agent.integrations.wecom_aibot_long_connection.wecom_aibot_supervisor.startup",
+        lambda: _async_call(calls, "wecom-aibot"),
+    )
+    monkeypatch.setattr(
+        "valuz_agent.integrations.feishu_long_connection.feishu_supervisor.startup",
+        lambda: _async_call(calls, "feishu"),
+    )
+
+    await steps.start_post_boot_agent_channels(SimpleNamespace())
+
+    assert calls == ["wecom-aibot", "feishu"]
 
 
 @pytest.mark.asyncio
@@ -339,7 +413,7 @@ async def test_bind_data_service_skips_local_owner_secret_when_startup_user_cont
         lambda _engine: _async_call(calls, "schema"),
     )
     monkeypatch.setattr(
-        "valuz_agent.boot.kernel.make_host_data_service_verifier_per_owner",
+        "valuz_agent.ports.sandbox_credential.get_sandbox_credential_verifier",
         lambda: "verifier",
     )
     monkeypatch.setattr("valuz_agent.adapters.data_reader.bind_data_reader", lambda _reader: None)

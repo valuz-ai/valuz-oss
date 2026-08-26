@@ -4,8 +4,9 @@
 ``mcp_servers`` headers at create-time. A session resumed after a backend
 restart carries a stale ``X-Valuz-Internal`` → the in-process MCP gate 403s →
 Claude Code parks the server in ``needsAuth`` (only OAuth stubs, real
-``automation``/``doc_search``/``create_mcp`` tools hidden). ``send_message``
-re-stamps the trio every turn so the stale token self-heals.
+``automation``/``playbook``/``doc_search``/``create_mcp`` tools hidden).
+``send_message`` re-stamps the always-on set every turn so the stale token
+self-heals.
 """
 
 from __future__ import annotations
@@ -38,17 +39,19 @@ def _make_session(*, mcp_servers):
     )
 
 
-def _trio(token: str, *, base: str):
-    trio = tuple(
+def _always_on_set(token: str, *, base: str, tool_timeout_sec: float | None = None):
+    servers = tuple(
         McpHttpServerConfigSchema(
             name=name,
             url=f"{base}/{slug}/mcp",
             transport="http",
             headers={"X-Valuz-Internal": token, "X-Valuz-Session-Id": "sess-1"},
+            tool_timeout_sec=tool_timeout_sec,
         )
         for name, slug in (
             ("valuz_docs", "docs"),
             ("valuz_automations", "automations"),
+            ("valuz_playbooks", "playbooks"),
             ("valuz_connectors", "connectors"),
         )
     )
@@ -57,8 +60,9 @@ def _trio(token: str, *, base: str):
         url=f"{base}/toolkit/base/mcp",
         transport="http",
         headers={"X-Valuz-Internal": token, "X-Valuz-Session-Id": "sess-1"},
+        tool_timeout_sec=tool_timeout_sec,
     )
-    return (*trio, harness)
+    return (*servers, harness)
 
 
 def _stale_trio(token: str):
@@ -66,7 +70,7 @@ def _stale_trio(token: str):
     (models a session created before the rename; ``refresh_always_on_mcp_for_session``
     must self-heal it onto the current ``/_internal/mcp`` path, not just the
     token — see ``test_restamps_stale_token_and_preserves_external``)."""
-    return _trio(token, base="http://127.0.0.1:8000/internal/mcp")
+    return _always_on_set(token, base="http://127.0.0.1:8000/internal/mcp")
 
 
 def _current_trio(token: str):
@@ -76,7 +80,15 @@ def _current_trio(token: str):
     up-to-date" (see ``test_noop_when_token_already_current``); using the
     legacy base here would make every field EXCEPT the token differ, forcing
     a PATCH the test asserts must NOT happen."""
-    return _trio(token, base="http://127.0.0.1:8000/_internal/mcp")
+    from valuz_agent.adapters.capability_resolver import (
+        _INTERNAL_MCP_TOOL_TIMEOUT_SEC,
+    )
+
+    return _always_on_set(
+        token,
+        base="http://127.0.0.1:8000/_internal/mcp",
+        tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
+    )
 
 
 def _patch_client(monkeypatch, session):
@@ -105,23 +117,27 @@ async def test_restamps_stale_token_and_preserves_external(monkeypatch):
 
     external = McpHttpServerConfigSchema(
         name="valuz-search",
-        url="https://mcp.reportify.cn/search/mcp",
+        url="https://data.valuz.cn/mcp/search",
         transport="http",
         headers={"Authorization": "Bearer xyz"},
     )
     session = _make_session(mcp_servers=(external, *_stale_trio("OLDTOKEN")))
     updates = _patch_client(monkeypatch, session)
 
-    changed = await capabilities.refresh_always_on_mcp_for_session(
-        "sess-1", "local-test-owner"
-    )
+    changed = await capabilities.refresh_always_on_mcp_for_session("sess-1", "local-test-owner")
 
     assert changed is True
     assert len(updates) == 1
     _sid, req = updates[0]
     by_name = {m.name: m for m in req.mcp_servers}
     # Every always-on entry (incl. the harness toolkit) carries the live per-owner token.
-    for name in ("valuz_docs", "valuz_automations", "valuz_connectors", "harness"):
+    for name in (
+        "valuz_docs",
+        "valuz_automations",
+        "valuz_playbooks",
+        "valuz_connectors",
+        "harness",
+    ):
         assert by_name[name].headers["X-Valuz-Internal"] == current
     # The user-attached external connector is untouched.
     assert by_name["valuz-search"].headers == {"Authorization": "Bearer xyz"}
@@ -136,9 +152,7 @@ async def test_noop_when_token_already_current(monkeypatch):
     session = _make_session(mcp_servers=_current_trio(current))
     updates = _patch_client(monkeypatch, session)
 
-    changed = await capabilities.refresh_always_on_mcp_for_session(
-        "sess-1", "local-test-owner"
-    )
+    changed = await capabilities.refresh_always_on_mcp_for_session("sess-1", "local-test-owner")
 
     assert changed is False
     assert updates == []
@@ -150,7 +164,7 @@ async def test_external_oauth_connector_headers_refresh_on_restamp(monkeypatch):
     sessions, not only brand-new ones (Reportify tokens live ~1h)."""
     stale_external = McpHttpServerConfigSchema(
         name="valuz-search",
-        url="https://mcp.reportify.cn/search/mcp",
+        url="https://data.valuz.cn/mcp/search",
         transport="http",
         headers={"Authorization": "Bearer STALE-JWT"},
     )
@@ -158,7 +172,7 @@ async def test_external_oauth_connector_headers_refresh_on_restamp(monkeypatch):
 
     fresh_external = McpHttpServerConfigSchema(
         name="valuz-search",
-        url="https://mcp.reportify.cn/search/mcp",
+        url="https://data.valuz.cn/mcp/search",
         transport="http",
         headers={"Authorization": "Bearer FRESH-JWT"},
     )

@@ -103,8 +103,6 @@ class TestTaskOwnerScoping:
             ds = TaskEventDatastore(db)
             assert {r.id for r in await ds.list_events("user-A", "p1", "t1")} == {ev.id}
             assert await ds.list_events("user-B", "p1", "t1") == []
-            assert (await ds.get_event("user-A", ev.id)) is not None
-            assert (await ds.get_event("user-B", ev.id)) is None
             assert (await ds.latest_event("user-A", "t1")) is not None
             assert (await ds.latest_event("user-B", "t1")) is None
 
@@ -115,9 +113,7 @@ class TestTaskOwnerScoping:
             ds = TaskSessionDatastore(db)
             assert {x.id for x in await ds.list_runs("user-A", "t1")} == {r.id}
             assert await ds.list_runs("user-B", "t1") == []
-            assert {x.id for x in await ds.list_all("user-A")} == {r.id}
-            assert await ds.list_all("user-B") == []
-            assert (await ds.get_run_by_id("user-A", r.id)) is not None
-            assert (await ds.get_run_by_id("user-B", r.id)) is None
+            assert {x.id for x in await ds.list_by_session_ids("user-A", ["s1"])} == {r.id}
+            assert await ds.list_by_session_ids("user-B", ["s1"]) == []
             # get_run is keyed on the globally-unique kernel session id (system).
             assert (await ds.get_run("s1")) is not None

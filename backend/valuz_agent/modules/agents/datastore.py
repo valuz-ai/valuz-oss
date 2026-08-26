@@ -13,8 +13,8 @@ stamps the owner explicitly (no ContextVar write-stamp default).
 
 from __future__ import annotations
 
+from sqlalchemy import case, select
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.modules.agents.models import AgentRow, ProjectMemberRow
@@ -26,7 +26,14 @@ class AgentDatastore:
         self._db = db
 
     async def list_agents(self, user_id: str, source: str | None = None) -> list[AgentRow]:
-        stmt = select(AgentRow).where(AgentRow.user_id == user_id).order_by(AgentRow.created_at)
+        stmt = (
+            select(AgentRow)
+            .where(AgentRow.user_id == user_id)
+            .order_by(
+                case((AgentRow.kind == "system", 0), else_=1),
+                AgentRow.created_at,
+            )
+        )
         if source is not None:
             stmt = stmt.where(AgentRow.source == source)
         return list((await self._db.execute(stmt)).scalars().all())
@@ -83,8 +90,13 @@ class AgentDatastore:
             existing.model = row.model
             existing.skills = row.skills
             existing.connector_types = row.connector_types
+            existing.knowledge_scope = row.knowledge_scope
             existing.provider_id = row.provider_id
             existing.effort = row.effort
+            existing.kind = row.kind
+            existing.resource_policy = row.resource_policy
+            existing.inherit_global_instructions = row.inherit_global_instructions
+            existing.permission_mode = row.permission_mode
             existing.source = row.source
             existing.readonly = row.readonly
             existing.deletable = row.deletable
@@ -116,6 +128,38 @@ class ProjectMemberDatastore:
             .scalars()
             .all()
         )
+
+    async def display_names_by_slug(
+        self, user_id: str, project_id: str, agent_slugs: list[str]
+    ) -> dict[str, str]:
+        """Map member ``agent_slug`` → library-agent display name, in ONE query.
+
+        A display name is the ONLY thing several hot paths want, and the
+        general route to it — resolve the membership, then build the member's
+        full ``AgentConfig`` — also resolves connectors and can refresh an
+        OAuth token. Plan snapshots stamp a name per node on every plan write,
+        so that route cost roughly nine queries per write for text that never
+        changes. Slugs with no membership, no ``source_agent_slug`` or no
+        library row are simply absent; callers fall back to the slug.
+        """
+        if not agent_slugs:
+            return {}
+        rows = (
+            await self._db.execute(
+                select(ProjectMemberRow.agent_slug, AgentRow.name)
+                .join(
+                    AgentRow,
+                    (AgentRow.slug == ProjectMemberRow.source_agent_slug)
+                    & (AgentRow.user_id == ProjectMemberRow.user_id),
+                )
+                .where(
+                    ProjectMemberRow.project_id == project_id,
+                    ProjectMemberRow.user_id == user_id,
+                    ProjectMemberRow.agent_slug.in_(agent_slugs),
+                )
+            )
+        ).all()
+        return {slug: name for slug, name in rows if name}
 
     async def get(self, user_id: str, project_id: str, agent_slug: str) -> ProjectMemberRow | None:
         return (

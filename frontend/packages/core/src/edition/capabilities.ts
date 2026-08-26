@@ -23,8 +23,22 @@ export interface Capabilities {
    * System / managed providers are always read-only and unaffected.
    */
   configureModelChannel: boolean;
+  /**
+   * Whether the platform provisions this install's baseline runtime — its model
+   * channels and its built-in assistant — instead of the user setting them up.
+   *
+   * It changes what "nothing here" *means*. A personal install with no channel
+   * or no agent has not been configured yet, and pointing at setup is the right
+   * advice. A managed install is supposed to receive both, so the same emptiness
+   * means they have not arrived — and sending that user to a setup screen offers
+   * them a job that is not theirs and a page that cannot help.
+   *
+   * Off in OSS: a personal install owns its own setup by definition.
+   */
+  managedRuntimeSetup: boolean;
 }
 
 export const DEFAULT_CAPABILITIES: Capabilities = {
   configureModelChannel: true,
+  managedRuntimeSetup: false,
 };

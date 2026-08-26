@@ -29,6 +29,7 @@ from datetime import datetime
 from typing import Literal
 
 import pytest
+from conftest import reimported_modules
 
 
 class _FakeRuntime:
@@ -101,31 +102,31 @@ async def _store_and_orchestrator(tmp_path, monkeypatch):
     # settings``) and ``_set_kernel_env`` writes ``DATABASE_URL`` from
     # that binding. A stale binding points the kernel store at the real
     # dev DB — the test's fixture rows then leak into ~/.valuz-oss/valuz.db.
-    import sys
+    #
+    # The window MUST be scoped: this fixture used to pop the modules and never
+    # put them back, which left every later test running against a throwaway
+    # ``Settings`` / ``FsRegistry`` reachable through the ``valuz_agent.infra``
+    # package attributes.
+    with reimported_modules("valuz_agent.infra.config", "valuz_agent.boot.kernel"):
+        # Side-effect: puts ``src.core`` on sys.path.
+        import valuz_agent.boot.kernel as kb  # noqa: F401
 
-    for name in list(sys.modules):
-        if name.startswith(("valuz_agent.infra.config", "valuz_agent.boot.kernel")):
-            sys.modules.pop(name, None)
+        # Drive the kernel's alembic chain via the host helper.
+        kb.run_kernel_migrations()
 
-    # Side-effect: puts ``src.core`` on sys.path.
-    import valuz_agent.boot.kernel as kb  # noqa: F401
+        from app.config import AppConfig  # type: ignore[import-not-found]
+        from app.dependencies import (  # type: ignore[import-not-found]
+            get_orchestrator,
+            get_store,
+            init_dependencies,
+            shutdown_dependencies,
+        )
 
-    # Drive the kernel's alembic chain via the host helper.
-    kb.run_kernel_migrations()
-
-    from app.config import AppConfig  # type: ignore[import-not-found]
-    from app.dependencies import (  # type: ignore[import-not-found]
-        get_orchestrator,
-        get_store,
-        init_dependencies,
-        shutdown_dependencies,
-    )
-
-    await init_dependencies(AppConfig())
-    try:
-        yield get_store(), get_orchestrator(), db_path
-    finally:
-        await shutdown_dependencies()
+        await init_dependencies(AppConfig())
+        try:
+            yield get_store(), get_orchestrator(), db_path
+        finally:
+            await shutdown_dependencies()
 
 
 @pytest.mark.asyncio
@@ -433,15 +434,15 @@ async def test_should_seal_orphan_pendings_on_startup_walk(_store_and_orchestrat
 
     pid, aid, sid, mid = (uuid.uuid4().hex for _ in range(4))
     pending_id = "pending-stale"
-    # Status must be ``running`` for the scan to find it (simulates a
-    # crash mid-turn).
+    # A previous recovery pass may already have reset the session to idle
+    # before this scan runs. The pending still cannot survive that restart.
     await store.save_session(
         Session(
             user_id="local-test-owner",
             id=sid,
             agent_config=AgentConfig(id=aid, name="a", model="m"),
             cwd=str(tmp_path),
-            status="running",
+            status="idle",
         )
     )
     await store.save_message(
@@ -463,7 +464,6 @@ async def test_should_seal_orphan_pendings_on_startup_walk(_store_and_orchestrat
             data={
                 "pending_id": pending_id,
                 "subject": "shell_command",
-                "message_id": mid,
                 "available_decisions": ["approve", "reject"],
                 "payload": {"command": "x"},
             },
@@ -480,6 +480,70 @@ async def test_should_seal_orphan_pendings_on_startup_walk(_store_and_orchestrat
     assert len(expired) == 1
     assert expired[0].data["decision"] == "expired"
     assert expired[0].data["resolved_by"] == "system"
+
+
+@pytest.mark.asyncio
+async def test_should_expire_pending_when_runtime_is_no_longer_available(
+    _store_and_orchestrator, tmp_path
+):
+    """A dead runtime closes its durable card instead of leaving a retryable zombie."""
+    from src.core.agent_config import AgentConfig  # type: ignore[import-not-found]
+    from src.core.events import Event  # type: ignore[import-not-found]
+    from src.core.orchestrator import PendingActionExpiredError  # type: ignore[import-not-found]
+    from src.core.types import Message, Session, UserMessage  # type: ignore[import-not-found]
+
+    store, orchestrator, _ = _store_and_orchestrator
+    aid, sid, mid = (uuid.uuid4().hex for _ in range(3))
+    pending_id = "pending-after-host-restart"
+    await store.save_session(
+        Session(
+            user_id="local-test-owner",
+            id=sid,
+            agent_config=AgentConfig(id=aid, name="a", model="m"),
+            cwd=str(tmp_path),
+            status="idle",
+        )
+    )
+    await store.save_message(
+        "local-test-owner",
+        Message(
+            id=mid,
+            session_id=sid,
+            user_message=UserMessage(text="hi"),
+            started_at=datetime.now(),
+            status="errored",
+        ),
+    )
+    await store.append_event(
+        "local-test-owner",
+        sid,
+        mid,
+        Event(
+            type="requires_action",
+            data={
+                "pending_id": pending_id,
+                "subject": "clarifying_questions",
+                "available_decisions": ["answer", "reject"],
+                "payload": {"questions": []},
+            },
+        ),
+    )
+
+    with pytest.raises(PendingActionExpiredError):
+        await orchestrator.submit_action(
+            "local-test-owner",
+            sid,
+            pending_id=pending_id,
+            decision="answer",
+            answers={"question": "answer"},
+        )
+
+    _, resolved = await orchestrator._derive_pending(
+        "local-test-owner", sid, pending_id
+    )
+    assert resolved is not None
+    assert resolved.data["decision"] == "expired"
+    assert resolved.data["resolved_by"] == "system"
 
 
 # ---------------------------------------------------------------------------

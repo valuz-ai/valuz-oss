@@ -161,7 +161,7 @@ export const SkillSubmissionCard = memo(function SkillSubmissionCard({
                 {stagedFiles.filter((f) => f.type === "file").length})
               </button>
               {filesOpen ? (
-                <ul className="mt-1 space-y-0.5 font-mono text-[11px] leading-tight text-ink-meta">
+                <ul className="mt-1 space-y-0.5 font-mono text-2xs leading-tight text-ink-meta">
                   {stagedFiles.map((node) => (
                     <li
                       key={`${node.type}-${node.path}`}
@@ -184,7 +184,7 @@ export const SkillSubmissionCard = memo(function SkillSubmissionCard({
               ) : null}
             </div>
           ) : filesTouched.length > 0 && !isAwaiting ? (
-            <ul className="mt-2 space-y-0.5 font-mono text-[11px] leading-tight text-ink-meta">
+            <ul className="mt-2 space-y-0.5 font-mono text-2xs leading-tight text-ink-meta">
               {filesTouched.slice(0, 6).map((path) => (
                 <li key={path} className="truncate">
                   {path}
@@ -202,7 +202,7 @@ export const SkillSubmissionCard = memo(function SkillSubmissionCard({
             <div className="mt-2 space-y-1">
               <p className="text-xs text-ink-body">{t("skill.waitingForAI")}</p>
               {stagingPath ? (
-                <p className="break-all font-mono text-[11px] text-ink-label">
+                <p className="break-all font-mono text-2xs text-ink-label">
                   {stagingPath}
                 </p>
               ) : null}
@@ -232,7 +232,7 @@ export const SkillSubmissionCard = memo(function SkillSubmissionCard({
       </div>
 
       {!isTerminal ? (
-        <div className="flex items-center justify-end gap-2 border-t border-surface-border px-4 py-2">
+        <div className="flex items-center justify-end gap-2 px-4 py-2">
           <button
             type="button"
             disabled={isBusy}

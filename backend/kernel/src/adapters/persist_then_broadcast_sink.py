@@ -38,16 +38,23 @@ class PersistThenBroadcastSink(EventSink):
 
     async def emit(self, event: Event) -> None:
         seq: int | None = None
+        event_uid: str | None = None
         try:
-            seq = await self._db.persist(event)
+            seq, event_uid = await self._db.persist(event)
         except Exception:  # noqa: BLE001 — live delivery must survive DB hiccups
             logger.exception("event persistence failed for %s", event.type)
 
         stamped = event
         if seq is not None:
+            # ``seq`` is this kernel's LOCAL row id (per-store counter);
+            # ``event_uid`` is the store-independent identity — live consumers
+            # dedup against history (durable seqs) by uid, never by seq.
+            extra: dict = {"seq": seq}
+            if event_uid is not None:
+                extra["event_uid"] = event_uid
             stamped = Event(
                 type=event.type,
-                data={**event.data, "seq": seq},
+                data={**event.data, **extra},
                 timestamp=event.timestamp,
             )
         elif "seq" in event.data:

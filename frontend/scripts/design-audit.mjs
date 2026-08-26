@@ -51,7 +51,7 @@ const examples = Object.fromEntries(rules.map((rule) => [rule.id, []]));
 for (const file of files) {
   const rel = relative(root, file);
   const content = readFileSync(file, "utf8");
-  const lines = content.split(/\r?\n/);
+  const lines = stripComments(content.split(/\r?\n/));
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     const line = lines[lineIndex];
     for (const rule of rules) {
@@ -133,6 +133,39 @@ function printSummary(current, baseline) {
   console.log(["Design audit summary:", ...rows].join("\n"));
 }
 
+// Comments are prose, not shipped styling. Scanning them made this audit count
+// things that are not design debt at all — the worst offender being the repo's
+// own PR references: `#879` / `#590` are valid `#[0-9a-fA-F]{3,8}` matches, so
+// every issue link written in a code comment was reported as a hardcoded color,
+// and the totals crept upward on their own. Blank the comment spans (keeping
+// line numbering intact for the example output) before matching.
+function stripComments(lines) {
+  let inBlock = false;
+  return lines.map((line) => {
+    let out = "";
+    for (let i = 0; i < line.length; i += 1) {
+      if (inBlock) {
+        if (line.startsWith("*/", i)) {
+          inBlock = false;
+          i += 1;
+        }
+        continue;
+      }
+      if (line.startsWith("/*", i)) {
+        inBlock = true;
+        i += 1;
+        continue;
+      }
+      // `:` before `//` means a URL scheme (`https://…`), not a line comment —
+      // otherwise a line holding a link would be truncated and any real
+      // violation after it would go uncounted.
+      if (line.startsWith("//", i) && line[i - 1] !== ":") break;
+      out += line[i];
+    }
+    return out;
+  });
+}
+
 function collectFiles(dir) {
   if (!existsSync(dir)) return [];
   const out = [];
@@ -154,8 +187,29 @@ function shouldSkipPath(rel) {
   return (
     rel.includes("/node_modules/") ||
     rel.includes("/dist/") ||
+    (rel.includes("/dist-demo/") || rel.endsWith("/dist-demo")) ||
     rel.includes("/.turbo/") ||
     rel.startsWith("apps/desktop/src/renderer/assets/") ||
-    rel === "packages/ui/src/styles/project.css"
+    isTokenSource(rel)
+  );
+}
+
+// The hex-color rule is "hardcoded hex OUTSIDE token files" — the files that
+// *define* the palette are where literal color values are supposed to live, so
+// counting them reports the design system as its own debt. Keep this list in
+// sync when a package gains a token/theme layer: `packages/a2ui` shipped
+// `themes/` + `chart-theme.ts` without being added here, which alone accounts
+// for ~200 of the "new" violations.
+function isTokenSource(rel) {
+  return (
+    // Valuz semantic tokens: CSS source of truth + its typed mirror.
+    rel === "packages/ui/src/styles/project.css" ||
+    rel === "packages/ui/tailwind.preset.ts" ||
+    // A2UI owns a separate token layer (`--va2-*`); the renderer never reads
+    // host tokens, so its base + theme files are palette definitions too.
+    rel === "packages/a2ui/src/styles/base.css" ||
+    rel.startsWith("packages/a2ui/src/themes/") ||
+    // Published chart palettes, pinned verbatim ("do not hue-rotate").
+    rel === "packages/a2ui/src/react/chart-theme.ts"
   );
 }

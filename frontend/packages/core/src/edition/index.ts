@@ -7,6 +7,8 @@ export * from "./branding";
 export * from "./execution-targets";
 export * from "./entity-origin";
 export * from "./list-fanout";
+export * from "./project-activity";
+export * from "./composer-catalog";
 export { hydrateOverlayIfPresent } from "./hydrate-overlay";
 
 import type { EditionProfile } from "./profile";

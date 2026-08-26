@@ -65,6 +65,7 @@ def _make_runtime(client: _ScriptedClient | None = None) -> ClaudeAgentRuntime:
 
     rt.event_sink = SimpleNamespace(emit=_emit)
     rt._cancelled = False
+    rt._usage_snapshot = None
     rt._bracket_open = False
     rt._open_bracket_is_wakeup = False
     rt._pending_wakeups = 0
@@ -336,6 +337,71 @@ async def test_destroy_client_flushes_stopped_for_live_bg_tasks() -> None:
     assert finished.data["status"] == "stopped"
     assert "pet_names.sh" in finished.data["summary"]
     assert rt._live_bg_tasks == {}
+
+
+async def test_terminal_task_updated_clears_live_tracking() -> None:
+    """A task whose output the model retrieves synchronously gets NO
+    ``task_notification`` from the CLI — the result lands in the pending
+    tool_result and the terminal ``task_updated`` patch is the only
+    end-of-task signal. It must release the busy marker too, or the runtime
+    reports live background work (and pins every runs-derived "running"
+    indicator) until the bg-busy TTL eviction."""
+    rt = _make_runtime()
+    session = _session()
+    await rt._handle_message(
+        session,
+        TaskStartedMessage(
+            subtype="task_started",
+            data={},
+            task_id="t-live",
+            description="pet_names.sh",
+            uuid="uuid-s",
+            session_id="s",
+        ),
+    )
+    assert rt.has_live_background_tasks is True
+
+    await rt._handle_message(
+        session,
+        SystemMessage(
+            subtype="task_updated",
+            data={"task_id": "t-live", "patch": {"status": "completed", "end_time": 1}},
+        ),
+    )
+
+    assert rt.has_live_background_tasks is False
+    assert [e.type for e in rt._emitted] == ["bg_task_started", "bg_task_updated"]
+    # A later destroy flushes nothing — the task already ended for real.
+    await rt._destroy_client()
+    assert [e.type for e in rt._emitted] == ["bg_task_started", "bg_task_updated"]
+
+
+async def test_non_terminal_task_updated_keeps_live_tracking() -> None:
+    """Non-terminal patches (e.g. a description change) must not release the
+    busy marker — the background process is still running."""
+    rt = _make_runtime()
+    session = _session()
+    await rt._handle_message(
+        session,
+        TaskStartedMessage(
+            subtype="task_started",
+            data={},
+            task_id="t-live",
+            description="pet_names.sh",
+            uuid="uuid-s",
+            session_id="s",
+        ),
+    )
+
+    await rt._handle_message(
+        session,
+        SystemMessage(
+            subtype="task_updated",
+            data={"task_id": "t-live", "patch": {"description": "renamed"}},
+        ),
+    )
+
+    assert rt.has_live_background_tasks is True
 
 
 async def test_finished_notification_clears_live_tracking() -> None:

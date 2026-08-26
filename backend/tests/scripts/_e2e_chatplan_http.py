@@ -206,7 +206,6 @@ def main() -> int:
         "POST",
         f"{base}/v1/tasks/{task_id}/plan",
         {
-            "lead_session_id": chat_session_id,
             "subtasks": [
                 {"key": "extract", "title": "Pull annual reports", "goal": "Fetch 5yr 10-K"},
                 {
@@ -240,7 +239,6 @@ def main() -> int:
         "PATCH",
         f"{base}/v1/tasks/{task_id}/plan",
         {
-            "lead_session_id": chat_session_id,
             "add": [
                 {"key": "valuate", "title": "Valuation", "goal": "DCF + EVA"},
             ],
@@ -256,7 +254,6 @@ def main() -> int:
         "PATCH",
         f"{base}/v1/tasks/{task_id}/plan",
         {
-            "lead_session_id": chat_session_id,
             "add": [
                 {"key": "doomed", "title": "Doomed", "goal": "Won't land"},
             ],
@@ -379,7 +376,6 @@ async def _make_task_active_with_mailbox(
         TaskDatastore,
         TaskSessionDatastore,
     )
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
     from valuz_agent.modules.tasks.models import TaskRow, TaskSessionRow
 
     lead_session_id = f"lead-{uuid.uuid4().hex[:8]}"
@@ -423,7 +419,6 @@ async def _make_task_active_with_mailbox(
         await run_ds.create_run(lead_run)
 
     # Mailbox is per-event-loop; register here.
-    mailbox_registry.register(lead_session_id)
 
 
 if __name__ == "__main__":

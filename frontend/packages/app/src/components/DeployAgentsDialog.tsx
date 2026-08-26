@@ -13,6 +13,7 @@ import {
 } from "@valuz/ui";
 import {
   agentsApi,
+  resolveApiBase,
   useTranslation,
   type Agent,
   type MemberWithAgent,
@@ -62,15 +63,19 @@ export const DeployAgentsDialog = ({
   }, [agents]);
 
   const refresh = async () => {
+    // Re-source from the project's owning backend (same reason as the parent
+    // page's library load) so post-deploy refresh stays on the right target.
+    const baseUrl = resolveApiBase({ projectId }, "") || undefined;
     const [agentsRes] = await Promise.all([
-      agentsApi.listAgents(),
+      agentsApi.listAgents(undefined, baseUrl ? { baseUrl } : undefined),
       onChanged(),
     ]);
     setLiveAgents(agentsRes.agents);
   };
 
   const deployedSourceSlugs = useMemo(
-    () => new Set(members.map((m) => m.member.source_agent_slug).filter(Boolean)),
+    () =>
+      new Set(members.map((m) => m.member.source_agent_slug).filter(Boolean)),
     [members],
   );
   const memberBySourceSlug = useMemo(
@@ -161,14 +166,14 @@ export const DeployAgentsDialog = ({
                         {isDeployed && (
                           <Badge
                             variant="outline"
-                            className="shrink-0 px-1.5 py-0 text-[10px] font-normal"
+                            className="shrink-0 px-1.5 py-0 text-micro font-normal"
                           >
                             {t("agent.deployed")}
                           </Badge>
                         )}
                         <Badge
                           variant="outline"
-                          className="shrink-0 px-1.5 py-0 text-[10px] font-normal text-ink-meta"
+                          className="shrink-0 px-1.5 py-0 text-micro font-normal text-ink-meta"
                         >
                           {agent.source === "official"
                             ? t("agent.groupOfficial")

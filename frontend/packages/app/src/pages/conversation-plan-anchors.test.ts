@@ -37,6 +37,35 @@ describe("extractToolOutputJson", () => {
     });
   });
 
+  it("pulls the inner JSON object out of a JSON content block", () => {
+    // The shape the kernel actually produces now. It differs from the repr
+    // above in one way that matters: it is VALID JSON, so `JSON.parse`
+    // succeeds and returns the envelope array. Reading fields off that array
+    // gives `undefined` for every one of them — a delivered inject rendered
+    // as "not delivered (unknown)" because `delivered` and `reason` were
+    // missing rather than false.
+    const envelope = JSON.stringify([
+      { type: "text", text: '{"delivered": true, "lead_session_id": "s1", "reason": null}' },
+    ]);
+    expect(extractToolOutputJson(envelope)).toEqual({
+      delivered: true,
+      lead_session_id: "s1",
+      reason: null,
+    });
+  });
+
+  it("keeps a payload that is genuinely an array", () => {
+    // Unwrapping unconditionally would be a different kind of wrong: some
+    // tools return a list, and handing back its first element would silently
+    // drop the rest.
+    expect(extractToolOutputJson('[{"a":1},{"b":2}]')).toEqual([{ a: 1 }, { b: 2 }]);
+  });
+
+  it("keeps the envelope when its text block is prose, not a payload", () => {
+    const envelope = JSON.stringify([{ type: "text", text: "no JSON here" }]);
+    expect(extractToolOutputJson(envelope)).toEqual([{ type: "text", text: "no JSON here" }]);
+  });
+
   it("returns null when there is no embedded object", () => {
     expect(extractToolOutputJson("ERROR: nope")).toBeNull();
   });

@@ -14,7 +14,8 @@
  * the dot reappears for it too, even between those resets.
  *
  * A single module-level poller backs every mount (the nav badge), so we never
- * open N intervals — mirrors {@link useRunningRuns}.
+ * open N intervals — the shared-singleton pattern also used by
+ * {@link useRunningRuns} (which is stream-driven rather than interval-polled).
  */
 
 import { useEffect, useState } from "react";

@@ -44,12 +44,19 @@ from valuz_agent.adapters.capability_resolver import (
     resolve_skill_slugs_to_paths,
 )
 from valuz_agent.adapters.system_prompt_builder import (
+    AUTHORIZATION_BOUNDARY_INSTRUCTIONS,
     OUTPUT_FORMAT_INSTRUCTIONS,
     assemble_session_instructions,
     build_project_system_prompt,
+    ensure_citation_system_policy,
 )
+from valuz_agent.i18n import t
 from valuz_agent.modules.agents.datastore import ProjectMemberDatastore
-from valuz_agent.ports.instructions import global_instructions_preamble
+from valuz_agent.modules.memory.injection import memory_instructions_block
+from valuz_agent.ports.instructions import (
+    agent_inherits_global_instructions,
+    resolve_global_instructions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -248,14 +255,22 @@ def assert_goal_brief_length(brief: str, *, limit: int = GOAL_BRIEF_MAX_CHARS) -
 
 
 def _goal_brief_pointer(doc_path: str, *, is_lead: bool) -> str:
-    """Build the short ``/goal`` pointer that stands in for a spilled brief."""
-    noun = "任务" if is_lead else "子任务"
+    """Build the short ``/goal`` pointer that stands in for a spilled brief.
+
+    Localized: this text BECOMES the goal condition for an over-budget brief,
+    so hardcoding one language silently turns another user's task goal into a
+    foreign-language instruction — and the model answers in the language it
+    was prompted in.
+    """
+    params: dict[str, str | int | float] = {
+        "budget": GOAL_BRIEF_MAX_TOKENS,
+        "path": doc_path,
+    }
+    # Literal keys, not a variable — ``t`` is typed on the generated key union.
     return (
-        f"本{noun}的完整目标内容较长(超出 {GOAL_BRIEF_MAX_TOKENS} token 预算),已落地为"
-        f"文档,无法直接作为 goal 条件传入。\n\n"
-        f"请先用文件读取工具完整阅读下面这份文档——它包含本{noun}的完整目标、参考资料"
-        f"与验收标准——然后据此开展工作,直到达成其中描述的目标:\n\n"
-        f"{doc_path}"
+        t("task.brief.goalSpilledLead", params=params)
+        if is_lead
+        else t("task.brief.goalSpilledMember", params=params)
     )
 
 
@@ -305,23 +320,105 @@ def spill_goal_brief_if_too_long(
 # Explains the collaboration protocol to the lead LLM.
 # ---------------------------------------------------------------------------
 
-DISPATCH_PLAYBOOK = """\
+# The two lead playbooks below are ONE body with two headers. They used to be
+# two hand-maintained copies that were ~60% identical, and they drifted: each
+# kept guidance the other lacked (the committed copy taught a parameter name
+# the handler rejects; the kickoff copy never explained <user-instruction> or
+# expected_version). Sharing the protocol is what stops that recurring.
+_LEAD_GOAL_BUDGET_NOTE = """\
+NOTE — the goal-mode length budget (~2000 tokens per goal). Two directions:
+  • RECEIVING: if THIS task's goal was too long to pass inline you'll get a
+    short pointer to a doc file instead of the full goal — read that doc FIRST
+    (file-read tool) for the complete goal / references / criteria.
+  • DISPATCHING / modify_plan: keep each subtask's `goal` concise. When a
+    subtask needs a lot of context (over ~2000 tokens), FIRST write it to a
+    file in the project (e.g. tasks/_briefs/<name>.md) and put the FILE PATH
+    in the subtask `goal` (or in refs) — do NOT inline a huge goal. (Over-long
+    goals are auto-spilled to a doc as a safety net, but writing the file
+    yourself keeps the plan readable and the member focused.)"""
+
+# Steps 2..9 — identical for both variants; only step 1 differs (plan first vs
+# read the committed plan).
+_LEAD_PROTOCOL_TAIL = """\
+2. DISPATCH INDEPENDENT SUBTASKS IN PARALLEL. dispatch(subtask_key=...) is
+   NON-BLOCKING — it returns immediately and the member runs concurrently. For
+   every subtask whose deps are satisfied (get_plan's `ready` list), call
+   dispatch once per key, back to back, so they run AT THE SAME TIME. Never
+   serialize independent work. (`ready` omits nodes in `rework` — dispatch
+   those by key directly.)
+3. COLLECT with await_members(mode="any") in a loop: it blocks until the next
+   member finishes and returns its result — review that one immediately, then
+   loop to collect the rest. Use mode="all" only when you genuinely need the
+   whole batch before continuing. Omit `keys` to wait for all outstanding
+   subtasks.
+4. REVIEW each finished subtask with
+   review_subtask(subtask_key=..., decision=..., feedback=...) — judge against
+   that node's `review_criteria` (get_plan shows them). "approve" (optionally
+   with a one-line reason) marks it done and unlocks dependents. "rework"
+   sends it back: READ THE REPLY — `delivered_to_live_member: true` means the
+   member is already redoing it (just await_members again); `false` means the
+   node is parked in `rework`, so dispatch(subtask_key=...) to re-run it. Read
+   result files directly to judge.
+5. LOOP, AND EXTEND THE PLAN IF NEEDED. Once a batch is reviewed, dispatch the
+   newly-ready dependents → await_members → review, until every subtask is
+   done. If execution reveals the plan needs more nodes (a missed step, a
+   verification, a follow-up the user implicitly wanted), call
+   modify_plan(add=[...], expected_version=N) where N is the last
+   `current_version` you saw. On PLAN_VERSION_CONFLICT call get_plan() to
+   refresh and retry — a user inject may have just edited the plan from chat.
+   Subtasks cannot be removed; to retire one, re-scope its goal.
+6. You are the ONLY agent allowed to dispatch (single layer; members can't).
+   NEVER use the built-in `Agent` / `Task` tool to spawn sub-agents — it runs
+   a redundant nested agent that BLOCKS you for minutes. Delegate ALL sub-work
+   exclusively through `dispatch` + `await_members`. Likewise do not re-do a
+   member's work yourself; dispatch it.
+7. finish_task IS THE ONLY COMPLETION SIGNAL. EVERY plan node must be done
+   first — including a final summary/aggregation node (it becomes ready once
+   its deps finish, so dispatch + review it like any other). finish_task with
+   status="completed" is REJECTED while any node is still planned/in_progress/
+   in_review/rework/paused; it returns the pending keys — dispatch and review
+   them, then finish. Keep orchestrating until the goal is truly achieved; do
+   NOT stop just because intermediate results look complete. Then call
+   finish_task(summary, artifacts, status="completed") (list key result files
+   in `artifacts`); use status="stopped" only when the user explicitly asked
+   you to stop via an injected instruction, or when the goal has become
+   unreachable. Do not continue working after finish_task. (Task-level
+   "failed" is not a valid status — use "stopped".)
+8. EXTERNAL INSTRUCTIONS. You may receive turn-boundary messages tagged
+   <user-instruction source="chat"> — user follow-ups injected from a chat
+   session. Read them as authoritative user intent; typically translate them
+   into modify_plan + dispatch (or a rework for an in-flight subtask), then
+   continue. Each wake-up also restates your <task-goal>: that goal is
+   unchanged and is still what you are driving.
+9. RECOVERY: if your session is resumed after an app restart or user stop, you
+   may receive a <system-recovery> reconcile brief. ALWAYS call get_plan FIRST
+   to align with the reconciled truth (members may now be in_review, rework or
+   re-running) before dispatching, reviewing or finishing — never assume the
+   pre-restart state still holds."""
+
+_LEAD_PRECEDENCE_NOTE = """\
+THIS SECTION OVERRIDES EVERYTHING BELOW wherever they disagree about planning
+or delegation. The instructions that follow describe how this agent works on
+its own; they were not written for a task lead. In particular: any planning,
+todo-list or sub-agent guidance further down — and any built-in todo / Task /
+Agent tool your runtime offers — does NOT apply here. Work you plan or delegate
+that way is invisible to the task: it produces no plan, no members, no results
+anyone can collect, and the task cannot be completed from it. Follow those
+instructions for HOW to do the work; follow this section for how the work is
+planned, split up and finished.
+"""
+
+DISPATCH_PLAYBOOK = (
+    """\
 ## Dispatch Playbook (lead session only)
 
 You are the lead for this Task. Drive the WHOLE task in this one turn —
 dispatch, collect, review, repeat — until you call finish_task.
 
-NOTE — the goal-mode length budget (~2000 tokens per goal). Two directions:
-  • RECEIVING: if THIS task's goal was too long to pass inline you'll get a
-    short pointer to a doc file instead of the full goal — read that doc FIRST
-    (file-read tool) for the complete goal / references / criteria before you
-    plan.
-  • DISPATCHING: keep each subtask's `goal` concise. When a subtask needs a lot
-    of context or instructions (over ~2000 tokens), FIRST write that content to
-    a file in the project (e.g. tasks/_briefs/<name>.md) and put the FILE PATH
-    in the subtask `goal` (or in refs) — do NOT inline a huge goal. (Over-long
-    goals are auto-spilled to a doc as a safety net, but writing the file
-    yourself keeps the plan readable and the member focused.)
+"""
+    + _LEAD_PRECEDENCE_NOTE
+    + _LEAD_GOAL_BUDGET_NOTE
+    + """
 
 Protocol:
 
@@ -335,60 +432,19 @@ Protocol:
    time so you judge against your own stated criteria. You CANNOT dispatch
    before you plan. Members/roles are under "Team members" above (or
    list_members()).
-2. DISPATCH INDEPENDENT SUBTASKS IN PARALLEL. dispatch(subtask_key) is
-   NON-BLOCKING — it returns immediately and the member runs concurrently. For
-   every subtask whose deps are satisfied (get_plan() shows ready keys), call
-   dispatch once per key, back to back, so they run AT THE SAME TIME. Never
-   wait for one independent subtask before starting another.
-3. COLLECT with await_members. After dispatching, call
-   await_members(mode="any") in a loop: it blocks until the next member
-   finishes and returns its SubtaskResult — review that one immediately, then
-   loop to collect the rest. (Or await_members(mode="all") to get the whole
-   batch at once.) Omit `keys` to wait for all outstanding subtasks.
-4. REVIEW each finished subtask: review_subtask(subtask_key, decision, feedback)
-   — judge it against that subtask's `review_criteria` (call get_plan to see
-   the criteria). "approve" (optionally with a one-line reason) marks it done
-   and unlocks dependents; "rework" sends it back with feedback (then dispatch
-   that key again). Read result files directly to judge.
-5. LOOP: once a batch is reviewed, dispatch the newly-ready dependent subtasks
-   (get_plan() to see them) → await_members → review. Repeat until every
-   subtask is done. Use modify_plan(...) to add/patch subtasks mid-flight.
-6. You are the ONLY agent allowed to dispatch (single layer; members can't).
-   NEVER use the built-in `Agent` / `Task` tool to spawn sub-agents — it runs
-   a redundant nested agent that BLOCKS you for minutes. Delegate ALL sub-work
-   exclusively through `dispatch` + `await_members`. Likewise do not re-do a
-   member's work yourself; dispatch it.
-7. finish_task IS THE ONLY COMPLETION SIGNAL. EVERY plan node must be done
-   first — including a final summary/aggregation node (it becomes ready once
-   its deps finish, so dispatch + review it like any other). finish_task with
-   status="completed" is REJECTED while any node is still planned/in_progress/
-   in_review/rework; it returns the pending keys — dispatch and review them,
-   then finish. Keep orchestrating until the goal is truly achieved; do NOT
-   stop just because intermediate results look complete. Then call
-   finish_task(summary, artifacts, status="completed") (list key result files
-   in `artifacts`); use status="stopped" only when the user explicitly asked
-   you to stop via an injected instruction, or when the goal has become
-   unreachable. Do not continue working after finish_task. (Task-level
-   "failed" is not a valid status — use "stopped".)
-8. RECOVERY: if your session is resumed after an app restart or user stop, you
-   may receive a <system-recovery> reconcile brief. ALWAYS call get_plan FIRST
-   to align with the reconciled truth (members may now be in_review, rework, or
-   re-running) before dispatching, reviewing, or finishing — never assume the
-   pre-restart state still holds.
 """
-
-# Single unified protocol now that dispatch is non-blocking + await_members
-# collects (v0.14). The async kickoff path reuses the same playbook.
-DISPATCH_PLAYBOOK_V2 = DISPATCH_PLAYBOOK
-
+    + _LEAD_PROTOCOL_TAIL
+    + "\n"
+)
 
 # Playbook variant for leads spawned from a chat draft commit_task path
 # (VALUZ-CHATPLAN). The plan is already laid out (and signed off by the user),
-# so the lead skips step 1 "PLAN FIRST" and goes straight to dispatch. The
-# handler-level gate also rejects plan_task when ``plan`` is non-empty, so this
-# is belt-and-suspenders: tell the model the right path, AND refuse the wrong
+# so step 1 reads the committed plan instead of writing one. The handler-level
+# gate also rejects plan_task when ``plan`` is non-empty, so this is
+# belt-and-suspenders: tell the model the right path, AND refuse the wrong
 # call if it tries anyway.
-COMMITTED_LEAD_PLAYBOOK = """\
+COMMITTED_LEAD_PLAYBOOK = (
+    """\
 ## Dispatch Playbook (lead session — plan pre-committed)
 
 You are the lead for this Task. Your plan was ALREADY laid down and approved
@@ -396,15 +452,10 @@ by the user during a chat draft session — DO NOT call plan_task (the handler
 will reject it because the plan is non-empty). Drive execution in this one
 turn until finish_task.
 
-NOTE — the goal-mode length budget (~2000 tokens per goal). Two directions:
-  • RECEIVING: if THIS task's goal was too long to pass inline you'll get a
-    short pointer to a doc file instead of the full goal — read that doc FIRST
-    (file-read tool) for the complete goal / references / criteria.
-  • DISPATCHING / modify_plan: keep each subtask's `goal` concise. When a
-    subtask needs a lot of context (over ~2000 tokens), FIRST write it to a
-    file in the project and put the FILE PATH in the subtask `goal` (or refs)
-    — do NOT inline a huge goal. (Over-long goals are auto-spilled as a safety
-    net, but writing the file yourself keeps the plan readable.)
+"""
+    + _LEAD_PRECEDENCE_NOTE
+    + _LEAD_GOAL_BUDGET_NOTE
+    + """
 
 Protocol:
 
@@ -412,40 +463,10 @@ Protocol:
    DAG: each node carries a stable `key`, target `agent`, dependencies, and
    the `review_criteria` the user signed off on. The response includes
    `current_version` — remember this for any modify_plan call you make.
-2. DISPATCH INDEPENDENT SUBTASKS IN PARALLEL. For every key whose deps are
-   already satisfied (the `ready` list from get_plan), call dispatch(key)
-   back-to-back — dispatch is NON-BLOCKING, members run concurrently. Never
-   serialize independent work.
-3. COLLECT with await_members(mode="any") in a loop, reviewing each result as
-   it arrives. Use await_members(mode="all") only when you genuinely need
-   the whole batch at once before continuing.
-4. REVIEW each finished subtask with review_subtask(key, decision, feedback)
-   — judge against the node's `review_criteria`. "approve" marks done and
-   unlocks dependents; "rework" sends it back with feedback (then dispatch
-   that key again). Read result files directly to judge.
-5. EXTEND THE PLAN IF NEEDED. If during execution you discover the plan
-   needs new nodes (a missed step, a dependency to verify, a follow-up the
-   user implicitly wanted), call modify_plan(add=[...], expected_version=N)
-   where N is the last `current_version` you saw. On
-   PLAN_VERSION_CONFLICT, call get_plan() to refresh and retry — someone
-   else (a user inject) may have just edited the plan from a chat session.
-6. You are the ONLY agent allowed to dispatch (single layer; members can't).
-   NEVER use the built-in `Agent` / `Task` tool to spawn sub-agents.
-7. finish_task IS THE ONLY COMPLETION SIGNAL. Every plan node must be done
-   first. Call finish_task(summary, artifacts, status="completed"); use
-   status="stopped" when the user explicitly asked you to stop via an
-   injected instruction, or when the goal has become unreachable. Do not
-   continue working after finish_task. (Task-level "failed" is not a valid
-   status — use "stopped".)
-8. EXTERNAL INSTRUCTIONS. You may receive turn-boundary messages tagged
-   <user-instruction source="chat"> — these are user follow-ups injected
-   from the chat that drafted you. Read them as authoritative user intent;
-   typically translate them into modify_plan + dispatch (or rework for an
-   in-flight subtask), then continue.
-9. RECOVERY: if your session is resumed after an app restart, you may
-   receive a <system-recovery> reconcile brief. ALWAYS call get_plan FIRST
-   to align with the reconciled truth before dispatching or reviewing.
 """
+    + _LEAD_PROTOCOL_TAIL
+    + "\n"
+)
 
 
 # Max chars of a member's instructions surfaced in the lead roster / list_members.
@@ -479,12 +500,11 @@ task the user meant to amend is the #1 failure mode.
      task_id)`` to read its current subtask DAG (keys, agents, statuses).
   b. Route by the task's status — the goal is to touch SUBTASKS of the
      EXISTING task, not spawn a new task:
-       - ``active`` / ``paused`` → ``inject_into_task(task_id, text)`` with
-         a clear instruction ("加一个子任务 X：…" / "把子任务 Y 改成 …" /
-         "删掉子任务 Z"). The running lead turns it into modify_plan +
-         dispatch. (For ``paused``, ``resume_task`` first, then inject.)
-       - ``blocked`` / ``stopped`` → ``resume_task(task_id)`` to revive the
-         lead, then ``inject_into_task`` with the subtask change.
+       - ``active`` / ``paused`` / ``blocked`` / ``stopped`` →
+         ``inject_into_task(task_id, text)`` with a clear instruction
+         ("加一个子任务 X：…" / "把子任务 Y 改成 …"). ONE call: a halted task
+         is revived automatically (the reply says ``reason=TASK_RESUMED``)
+         and the running lead turns the text into modify_plan + dispatch.
        - ``completed`` → **区分场景** (judge the user's intent):
            · SUPPLEMENT / ADJUST subtasks of the SAME goal ("再补一个子任务"
              / "那一步重做一下") → ``resume_task(task_id)`` to REOPEN it
@@ -550,46 +570,12 @@ You may modify the plan of a DRAFT task directly with ``modify_plan``
 6. ABANDON ON USER REQUEST. If the user says "forget it" / "drop it",
    call ``abandon_task(task_id, reason)`` — terminal, no lead starts.
 
-Mid-execution intervention. If the task is already running (you see
-an entry from ``list_tasks(mine_only=true, status="active")``) and the
-user adds an instruction like "also add a competitor analysis":
-
-  → Call ``inject_into_task(task_id, text)`` to push the instruction
-    into the lead's mailbox. DO NOT start a new task. The lead reads
-    the message at its next turn boundary and typically translates it
-    into a ``modify_plan`` + ``dispatch``.
-  → If ``delivered=false`` with ``reason=LEAD_OFFLINE``, the lead has
-    already finished — see "Reviving a stopped lead" below.
-
-Reviving a paused/blocked/stopped/completed lead. If the user wants to
-continue (or reopen) a task whose lead has gone away:
-
-  → Call ``resume_task(task_id)``. This respawns the lead session and
-    flips the task back to ``active``; you can then inject_into_task as
-    normal. Qualifying sources:
-      - ``paused`` — REST /intervene action=pause
-      - ``blocked`` — auto-finalize couldn't close (or lead turn crashed)
-      - ``stopped`` — the user previously stopped it (typical: "停止此任务"
-        then they change their mind).
-      - ``completed`` — REOPEN a finished task to supplement/adjust its
-        subtasks (区分场景: only when the user is amending the SAME goal;
-        a brand-new goal → fresh follow-up draft_task instead).
-  → Only ``abandoned`` CANNOT be resumed — a discarded draft has no plan
-    to revive; if the user wants that plan back, draft_task + plan_task
-    from scratch.
-
-Quick rules of thumb:
-  - The user references an EXISTING task / names a subtask to add/change
-    → Step 0: inject_into_task (active/paused) or resume_task then inject
-    (blocked/stopped/completed). NEVER create a new task for an amendment.
-  - Single-step / one-off answer → answer in chat directly. No task.
-  - Brand-new multi-step goal / "go produce X" → draft_task + plan_task,
-    confirm, then commit_task.
-  - User talks while a task runs → inject_into_task.
-  - User wants to continue/reopen a paused/blocked/stopped/completed task
-    → resume_task (then inject the change).
-  - Genuinely new goal that builds on a finished task → new draft_task
-    with ``refs`` to the old one (follow-up), not a reopen.
+Two edges Step 0 does not cover:
+  - ``abandoned`` CANNOT be revived — a discarded draft has no plan left.
+    If the user wants it back, draft_task + plan_task from scratch.
+  - ``resume_task(task_id)`` exists for reopening WITHOUT a message to
+    deliver; when you have the user's instruction in hand, inject_into_task
+    already does both.
 """
 
 
@@ -722,9 +708,16 @@ async def resolve_agent_display_names(
     removed agents — the "成员智能体名称查询不到" bug).
 
     Resolves every unique non-empty slug in a **single** read-only unit of work
-    (its own, so a failure can't poison a caller's in-flight write transaction).
-    Each slug maps to its library-agent name, or to the slug itself when the
-    membership / source agent can't be resolved. Empty slugs are skipped.
+    (its own, so a failure can't poison a caller's in-flight write transaction)
+    and a single QUERY. Each slug maps to its library-agent name, or to the
+    slug itself when the membership / source agent can't be resolved. Empty
+    slugs are skipped.
+
+    Deliberately does NOT go through ``resolve_member_agent``: that builds the
+    member's whole ``AgentConfig`` — connectors, MCP servers, possibly an OAuth
+    refresh — and a plan snapshot stamps a name per node on EVERY plan write,
+    so the general route cost roughly nine queries per write for text that is
+    constant for the task's lifetime.
     """
     slugs = {s for s in agent_slugs if s}
     if not slugs:
@@ -734,10 +727,9 @@ async def resolve_agent_display_names(
     out: dict[str, str] = {}
     try:
         async with async_unit_of_work(commit=False) as db:
-            members = ProjectMemberDatastore(db)
-            for slug in slugs:
-                agent = await resolve_member_agent(project_id, slug, members, user_id)
-                out[slug] = agent.name if agent and agent.name else slug
+            out = await ProjectMemberDatastore(db).display_names_by_slug(
+                user_id, project_id, sorted(slugs)
+            )
     except Exception:  # noqa: BLE001 — name resolution must never fail a dispatch/review
         logger.warning(
             "resolve_agent_display_names: failed to resolve names for %s — falling back to slugs",
@@ -763,6 +755,40 @@ async def resolve_agent_display_name(
     return names.get(agent_slug, agent_slug)
 
 
+async def _model_hosted_provider_id(
+    *,
+    model: str,
+    providers: object,
+    user_id: str,
+) -> str | None:
+    """Chat-parity fallback: the first enabled, credential-bearing provider
+    hosting *model*, or ``None`` when no configured provider hosts it.
+
+    Mirrors the session-service provider resolution (``sessions/service.py``):
+    agents routinely carry no pin — provider ids are install-local, so
+    pack-imported / source-instantiated agents arrive unpinned — and the chat
+    path quietly binds them to any enabled provider hosting their model. Task
+    dispatch used to skip this step, so the same agent worked in chat but
+    failed the dispatch pre-flight ("no model provider configured").
+    """
+    if not model:
+        return None
+    try:
+        from valuz_agent.infra.eventbus import event_bus
+        from valuz_agent.modules.providers.service import ProviderService
+
+        svc = ProviderService(datastore=providers, event_bus=event_bus)  # type: ignore[arg-type]
+        match = await svc.resolve_provider_for_model(user_id, model)
+        return match.id if match is not None else None
+    except Exception:
+        logger.warning(
+            "agent_resolver: model-hosted provider lookup failed for model %s",
+            model,
+            exc_info=True,
+        )
+        return None
+
+
 async def _resolve_agent_provider(
     *,
     agent: AgentConfig,
@@ -770,41 +796,59 @@ async def _resolve_agent_provider(
     providers: object | None,
     user_id: str,
 ) -> object | None:
-    """Resolve a concrete ModelProvider for an agent's pinned provider_id.
+    """Resolve a concrete ModelProvider for an agent, chat-parity fallbacks included.
 
-    Returns None (env fallback) when no provider is pinned or the resolver
-    deps weren't wired by the caller. Resolution failures are logged and
-    downgraded to None so a misconfigured pin never hard-fails a dispatch.
+    Resolution order matches the session-service path: the agent's pinned
+    ``metadata.provider_id`` when present, else any enabled provider hosting
+    the model (``_model_hosted_provider_id``); a pin that fails to resolve
+    also falls back to a model-hosted provider once. Returns None (env
+    fallback) when the resolver deps weren't wired by the caller, when the
+    effective provider is an OAuth subscription (healthy — the CLI supplies
+    the credential out-of-band), or when nothing resolved.
     """
     meta = agent.metadata or {}
     provider_id = meta.get("provider_id")
-    # Diagnostic: most "no model provider configured" reports trace to one
-    # of these three gaps (metadata-empty / pre-fix legacy agent / caller
-    # forgot to wire deps). Log once per resolve so the failure is debuggable
-    # in production without attaching a debugger.
+    if providers is None:
+        # Nothing to resolve against. With a pin present this is a caller
+        # bug — kickoff/dispatch should pass _provider_resolver_deps.
+        if provider_id:
+            logger.warning(
+                "agent_resolver: agent %s has provider_id=%s but resolver deps "
+                "are not wired. This is a caller bug — kickoff/dispatch should "
+                "pass _provider_resolver_deps.",
+                agent.id,
+                provider_id,
+            )
+        return None
+
+    from valuz_agent.adapters.provider_resolver import resolve_model_provider
+
+    pinned = bool(provider_id)
     if not provider_id:
-        logger.warning(
-            "agent_resolver: agent %s (%s) has no provider_id in metadata — "
-            "metadata keys=%s. Re-add the agent via the project "
-            "dialog so the provider pin is written.",
+        provider_id = await _model_hosted_provider_id(
+            model=model, providers=providers, user_id=user_id
+        )
+        if not provider_id:
+            logger.warning(
+                "agent_resolver: agent %s (%s) has no provider_id in metadata "
+                "and no enabled provider hosts model %s — metadata keys=%s. "
+                "Pin a model channel on the agent or enable a provider for "
+                "the model.",
+                agent.id,
+                agent.name,
+                model,
+                sorted(meta.keys()) if isinstance(meta, dict) else type(meta).__name__,
+            )
+            return None
+        logger.info(
+            "agent_resolver: agent %s (%s) has no provider pin — using "
+            "provider %s (hosts model %s), same fallback as the chat path.",
             agent.id,
             agent.name,
-            sorted(meta.keys()) if isinstance(meta, dict) else type(meta).__name__,
-        )
-        return None
-    if providers is None:
-        logger.warning(
-            "agent_resolver: agent %s has provider_id=%s but resolver deps "
-            "are not wired (providers=%s). This is a "
-            "caller bug — kickoff/dispatch should pass _provider_resolver_deps.",
-            agent.id,
             provider_id,
-            providers is not None,
+            model,
         )
-        return None
     try:
-        from valuz_agent.adapters.provider_resolver import resolve_model_provider
-
         resolved = await resolve_model_provider(
             provider_id=provider_id,
             model_id=model,
@@ -830,10 +874,42 @@ async def _resolve_agent_provider(
         return resolved
     except Exception:
         logger.warning(
-            "build_member_session: provider %s not resolvable for agent %s — falling back to env",
+            "build_member_session: provider %s not resolvable for agent %s — "
+            "trying a model-hosted fallback",
             provider_id,
             agent.id,
         )
+        # A broken pin (row deleted / disabled / credential gone) gets one
+        # shot at the same fallback an unpinned agent uses. Skip when the
+        # failing id already CAME from the fallback lookup.
+        if pinned:
+            fallback_id = await _model_hosted_provider_id(
+                model=model, providers=providers, user_id=user_id
+            )
+            if fallback_id and fallback_id != provider_id:
+                try:
+                    resolved = await resolve_model_provider(
+                        provider_id=fallback_id,
+                        model_id=model,
+                        providers=providers,  # type: ignore[arg-type]
+                        runtime_provider=agent.runtime_provider,
+                        user_id=user_id,
+                    )
+                    logger.info(
+                        "agent_resolver: pinned provider %s failed; resolved "
+                        "fallback provider %s for agent %s.",
+                        provider_id,
+                        fallback_id,
+                        agent.id,
+                    )
+                    return resolved
+                except Exception:
+                    logger.warning(
+                        "agent_resolver: fallback provider %s not resolvable "
+                        "for agent %s either — falling back to env.",
+                        fallback_id,
+                        agent.id,
+                    )
         return None
 
 
@@ -864,11 +940,11 @@ async def build_member_session(
     model_override: str | None = None,
     providers: object | None = None,
     lead_session_id: str | None = None,
-    dispatch_mode: str = "sync",
     goal_mode: bool = False,
     plan_pre_committed: bool = False,
     worktree_notice: str | None = None,
     user_id: str,
+    task_title: str | None = None,
 ) -> CreateSessionRequest | None:
     """Construct the kernel create-session request for a dispatch member or lead.
 
@@ -882,8 +958,8 @@ async def build_member_session(
         is_lead: True for the task lead session; False for subtask sessions.
         task_id: The valuz task id (for metadata).
         run_dir: Absolute path to this session's working directory. Under v2.1
-                 both lead and members default to the shared project cwd;
-                 subrun_dir is only used for opt-in repo-worktree isolation.
+                 both lead and members run in the shared project cwd (a
+                 task-level worktree relocates that cwd wholesale).
         brief: Text injected as the session brief — for leads this is the
                full task goal/md; for subtasks it is the scoped goal+refs.
         project_name: Optional project display name (for system prompt).
@@ -895,7 +971,7 @@ async def build_member_session(
         instructions = [deployment global preamble +] agent.instructions
                        + project_prompt
                        + (DISPATCH_PLAYBOOK if is_lead else "") + brief
-        metadata["valuz"] = {project_id, agent_slug, task_id, run_kind}
+        metadata["valuz"] = {project_id, agent_slug, task_id, task_title, run_kind}
         runtime_provider, model, skills, mcp_servers, permission_mode from agent
     """
     member_row = await members.get(user_id, project_id, agent_slug)
@@ -911,6 +987,28 @@ async def build_member_session(
             agent_slug,
         )
         return None
+
+    agent_meta = agent.metadata or {}
+    all_available_manifest = None
+    if agent_meta.get("resource_policy") == "all_available":
+        from valuz_agent.modules.agents.effective_resources import (
+            EffectiveResourceResolver,
+            current_execution_supports_stdio,
+        )
+        from valuz_agent.modules.connectors.datastore import ConnectorDatastore
+        from valuz_agent.modules.docs.datastore import DocumentDatastore
+        from valuz_agent.modules.skills.datastore import SkillDatastore
+
+        db = members._db  # noqa: SLF001 — same owner-scoped unit of work
+        all_available_manifest = await EffectiveResourceResolver(
+            skills=SkillDatastore(db),
+            connectors=ConnectorDatastore(db),
+            docs=DocumentDatastore(db),
+        ).resolve(
+            user_id,
+            runtime=str(agent.runtime_provider),
+            supports_stdio=current_execution_supports_stdio(),
+        )
 
     # Goal-mode payload fence (see ``spill_goal_brief_if_too_long``). Only the
     # runtimes whose kernel wrap_for_mode prepends ``/goal `` (claude_agent +
@@ -944,7 +1042,7 @@ async def build_member_session(
             # non-empty plan as belt-and-suspenders.
             playbook_block = COMMITTED_LEAD_PLAYBOOK
         else:
-            playbook_block = DISPATCH_PLAYBOOK_V2 if dispatch_mode == "async" else DISPATCH_PLAYBOOK
+            playbook_block = DISPATCH_PLAYBOOK
     roster_block = (
         await build_member_roster(
             project_id=project_id,
@@ -961,11 +1059,19 @@ async def build_member_session(
     # resolver, so inject the same set here. Dedupe against the agent's own
     # skills by basename so an agent that explicitly lists one isn't doubled.
     baseline_skill_paths = always_on_skill_paths(user_id=user_id)
-    own_skill_names = [(s.name if hasattr(s, "name") else str(s)) for s in (agent.skills or [])]
+    own_skill_names = (
+        [item.slug for item in all_available_manifest.skills]
+        if all_available_manifest is not None
+        else [(s.name if hasattr(s, "name") else str(s)) for s in (agent.skills or [])]
+    )
     # Resolve the agent's skill slugs → absolute source dirs (the kernel
     # materializer needs paths, not slugs); display names stay as the slugs.
     # Shared chokepoint — same resolver the chat path uses.
-    own_skill_paths = await resolve_skill_slugs_to_paths(agent.skills, run_dir, user_id=user_id)
+    own_skill_paths = (
+        all_available_manifest.skill_paths
+        if all_available_manifest is not None
+        else await resolve_skill_slugs_to_paths(agent.skills, run_dir, user_id=user_id)
+    )
     baseline_skill_names = [os.path.basename(p) for p in baseline_skill_paths]
     extra_skill_paths = tuple(
         p for p in baseline_skill_paths if os.path.basename(p) not in set(own_skill_names)
@@ -992,17 +1098,51 @@ async def build_member_session(
             "\nIgnore any other skills present in the working directory not listed above."
         )
     skills_block = "\n".join(block_lines)
+    # Frozen memory snapshot (memory-system-design §8): lead and members share
+    # the same project memory (design §2), each frozen into its own session's
+    # instructions at create time — one copy per session, never per turn.
+    mem_block = await memory_instructions_block(user_id=user_id, project_id=project_id)
+
     # Wrap each block in an XML tag (shared chokepoint with the chat/project
     # path) so the agent / task guidance / project instructions / roster /
     # skills / brief are delineated instead of one undelimited blob.
+    inherits_global = agent_inherits_global_instructions(
+        kind=agent_meta.get("agent_kind", "standard"),
+        inherit_global_instructions=agent_meta.get("inherit_global_instructions", True),
+    )
+    prompt_snapshot = await resolve_global_instructions(user_id) if inherits_global else None
     instructions = assemble_session_instructions(
         [
-            ("global-instructions", await global_instructions_preamble()),
+            ("authorization-boundary", AUTHORIZATION_BOUNDARY_INSTRUCTIONS),
+            # Lead-only, and ahead of the standing instructions on purpose.
+            # These two are what make the session a task LEAD rather than an
+            # ordinary run of the agent, and they used to come last. Measured on
+            # a real qa lead: a 49,939-character prompt of which the user's own
+            # global instructions were 39,710 (79.5%) — carrying their own
+            # "## Task Planning" section at 10.2% — while the playbook that
+            # forbids planning any other way started at 82.6%. The lead followed
+            # the guidance it met first, planned with the runtime's built-in
+            # todo tool, delegated with the built-in subagent tool, and never
+            # wrote a plan or dispatched anyone. The task closed with an empty
+            # plan. An instruction that arrives after its competitor, 40k
+            # characters in, is not an instruction.
+            #
+            # The standing instructions still apply — the playbook says so, and
+            # says which of the two wins where they disagree. They just no
+            # longer get to define the session's job before it does.
+            #
+            # Roster before playbook: the playbook says the members are listed
+            # "above".
+            ("member-roster", roster_block),
+            ("task-playbook", playbook_block),
+            (
+                "global-instructions",
+                prompt_snapshot.content if prompt_snapshot is not None else "",
+            ),
             ("agent-instructions", agent.instructions or ""),
             ("project-instructions", project_prompt),
-            ("member-roster", roster_block),
+            ("memory", mem_block),
             ("available-skills", skills_block),
-            ("task-playbook", playbook_block),
             # Task-level worktree (design §5): every session of the task
             # shares one worktree cwd; the notice keeps the agent from
             # wandering back into the main workspace or force-pushing.
@@ -1011,6 +1151,7 @@ async def build_member_session(
             ("output-format", OUTPUT_FORMAT_INSTRUCTIONS),
         ]
     )
+    instructions = ensure_citation_system_policy(instructions)
 
     run_kind = "lead" if is_lead else "subtask"
 
@@ -1029,7 +1170,7 @@ async def build_member_session(
     # Surface the agent's pinned provider id as the session's locked provider
     # so the conversation composer can match (provider, model) and display the
     # agent's actual configuration instead of falling back to a default.
-    pinned_provider_id = (agent.metadata or {}).get("provider_id")
+    pinned_provider_id = agent_meta.get("provider_id")
 
     # Agent-level reasoning-effort budget flows into the session here (effort
     # is configured on the agent, not per-conversation). ``None`` leaves
@@ -1042,15 +1183,40 @@ async def build_member_session(
     # That's a per-model constraint — clear effort on those agents — not a
     # reason to strip it for every deepagents session.
     agent_effort = getattr(agent, "effort", None)
-    model_settings = ModelSettingsSchema(effort=agent_effort) if agent_effort else None
+    # Channel-declared input window (gateway aliases only; None otherwise).
+    # Consults the agent's pinned provider when set — falling back to any
+    # channel hosting the model, mirroring ``_resolve_agent_provider``'s own
+    # provider fallback. Skipped when the caller didn't wire resolver deps
+    # (same env-fallback path as the provider resolution above).
+    declared_window: int | None = None
+    if providers is not None:
+        from valuz_agent.adapters.provider_resolver import resolve_model_max_input_tokens
+
+        declared_window = await resolve_model_max_input_tokens(
+            provider_id=pinned_provider_id,
+            model_id=model_override or agent.model,
+            providers=providers,  # type: ignore[arg-type]
+            user_id=user_id,
+        )
+    model_settings = (
+        ModelSettingsSchema(effort=agent_effort, max_input_tokens=declared_window)
+        if agent_effort or declared_window
+        else None
+    )
 
     # Session-modes (docs/exec-plans/active/task-goal-mode.md): when the
     # caller opts into goal mode (lead whole-task / member sub-run), set
-    # ``Session.mode="goal"`` so the kernel wraps this session's first
-    # message into ``/goal <brief>`` and the runtime auto-loops until the
-    # goal is met (Claude Haiku evaluator / codex goal protocol). Gated on
-    # runtime support — deepagents has no native goal mode (kernel routes
-    # 400), so it falls back to a single ``default`` run_turn.
+    # ``Session.mode="goal"`` so the kernel wraps the session's messages
+    # into ``/goal <text>`` and the runtime auto-loops until the goal is met
+    # (Claude Haiku evaluator / codex goal protocol). Gated on runtime
+    # support — deepagents has no native goal mode (kernel routes 400), so
+    # it falls back to a single ``default`` run_turn.
+    #
+    # NOTE the wrap is per-MESSAGE, not first-message-only (``wrap_for_mode``:
+    # "each turn enters its native mode for that turn"). This comment used to
+    # say "first message", and the task actor loop was written against that
+    # belief — see ActorRunner._with_goal_restated for what the real contract
+    # forces on every lead wake-up.
     session_mode = (
         "goal" if goal_mode and agent.runtime_provider in ("claude_agent", "codex") else "default"
     )
@@ -1060,21 +1226,57 @@ async def build_member_session(
     # servers (docs / schedules / connectors) must be injected here. Generate
     # the session id up front so it can scope those servers' request headers.
     session_id = uuid4().hex
-    builtin_mcp = always_on_http_mcp_servers(
+    builtin_mcp = await always_on_http_mcp_servers(
         session_id, owner_user_id=user_id, toolkit="lead" if is_lead else "base"
     )
     # De-dupe by name in case the agent's own mcp_servers already carry a
     # reserved ``valuz_*`` name (shouldn't, but keep injection idempotent).
-    existing_names = {getattr(m, "name", None) for m in (agent.mcp_servers or ())}
+    external_mcp = []
+    if all_available_manifest is not None:
+        from valuz_agent.adapters.mcp_resolver import resolve_mcp_servers
+        from valuz_agent.modules.connectors.datastore import ConnectorDatastore
+
+        external_mcp = await resolve_mcp_servers(
+            enabled_slugs=all_available_manifest.connector_slugs,
+            connectors=ConnectorDatastore(members._db),  # noqa: SLF001
+            user_id=user_id,
+        )
+    existing_names = {
+        getattr(m, "name", None)
+        for m in (external_mcp if all_available_manifest is not None else (agent.mcp_servers or ()))
+    }
     from app.serializers import mcp_to_schema as _mcp_to_schema
 
-    mcp_servers = [_mcp_to_schema(m) for m in (agent.mcp_servers or ())] + [
-        m for m in builtin_mcp if m.name not in existing_names
-    ]
+    mcp_servers = (
+        list(external_mcp)
+        if all_available_manifest is not None
+        else [_mcp_to_schema(m) for m in (agent.mcp_servers or ())]
+    ) + [m for m in builtin_mcp if m.name not in existing_names]
 
     from app.serializers import (
         agent_config_to_schema,
     )
+
+    valuz_metadata: dict[str, object] = {
+        "project_id": project_id,
+        "agent_slug": agent_slug,
+        "task_id": task_id,
+        # Snapshot the durable Task label into every lead/member execution
+        # session.  Consumers can attribute model use without an extra task
+        # lookup or a separate control-plane metadata request.
+        **({"task_title": task_title} if task_title else {}),
+        "run_kind": run_kind,
+        # Composer reads locked_provider_id from valuz metadata to match
+        # the session's locked (provider, model) pair.
+        **({"locked_provider_id": pinned_provider_id} if pinned_provider_id else {}),
+        # v2 actor dispatch: members carry their lead's session id so
+        # member_done notifications can be routed back (M10 附录 B).
+        **({"lead_session_id": lead_session_id} if lead_session_id else {}),
+    }
+    if prompt_snapshot is not None:
+        valuz_metadata["global_instructions"] = prompt_snapshot.metadata()
+    if all_available_manifest is not None:
+        valuz_metadata["capability_manifest"] = all_available_manifest.session_metadata()
 
     session = CreateSessionRequest(
         id=session_id,
@@ -1089,19 +1291,6 @@ async def build_member_session(
         skills=list(session_skills),
         mcp_servers=list(mcp_servers),
         permission_mode=agent.permission_mode,
-        metadata={
-            "valuz": {
-                "project_id": project_id,
-                "agent_slug": agent_slug,
-                "task_id": task_id,
-                "run_kind": run_kind,
-                # Composer reads locked_provider_id from valuz metadata to match
-                # the session's locked (provider, model) pair.
-                **({"locked_provider_id": pinned_provider_id} if pinned_provider_id else {}),
-                # v2 actor dispatch: members carry their lead's session id so
-                # member_done notifications can be routed back (M10 附录 B).
-                **({"lead_session_id": lead_session_id} if lead_session_id else {}),
-            }
-        },
+        metadata={"valuz": valuz_metadata},
     )
     return session

@@ -1,10 +1,16 @@
 """Per-turn ``<additional-context>`` assembly.
 
-Composes the cache-friendly per-turn context block (pending attachments +
-bound KB scope + memory injection) that rides ``UserMessage.additional_context``.
+Composes the cache-friendly per-turn context block (current time + pending
+attachments + bound KB scope + delivered artifacts) that rides
+``UserMessage.additional_context``.
 Kept out of the system prompt on purpose: attachments and KB bindings churn,
 but the system prompt / skills / MCP list must stay stable for prompt-cache
 hits. Shared by the session run path and the task orchestrator.
+
+Memory is NOT part of this block: injecting it here put a full copy of the
+frozen snapshot inside every user message of the transcript (N copies for an
+N-turn session). It now freezes once into ``Session.instructions`` at create
+time — see ``modules/memory/injection.py`` (memory-system-design §8).
 """
 
 from __future__ import annotations
@@ -12,8 +18,27 @@ from __future__ import annotations
 import logging
 
 from valuz_agent.infra.db import async_unit_of_work
+from valuz_agent.ports.message_context import HostRef
 
 logger = logging.getLogger(__name__)
+
+
+def worktree_name_of(session: object) -> str:
+    """The worktree a session runs in, or ``""`` for the project's own cwd.
+
+    Read from the ``metadata["valuz"]["worktree"]`` snapshot stamped at session
+    creation. Only the name is taken: the snapshot's ``path`` is the worktree
+    ROOT as it was then, while a session runs in the project's subdirectory
+    inside it, and the worktree may since have been removed.
+    """
+    meta = getattr(session, "metadata", None) or {}
+    if not isinstance(meta, dict):
+        return ""
+    valuz = meta.get("valuz") or {}
+    snapshot = valuz.get("worktree") if isinstance(valuz, dict) else None
+    if not isinstance(snapshot, dict):
+        return ""
+    return str(snapshot.get("name") or "")
 
 
 async def _build_additional_context(
@@ -21,6 +46,8 @@ async def _build_additional_context(
     project_id: str,
     attachment_rows=None,  # type: ignore[no-untyped-def]
     user_id: str | None = None,
+    worktree: str = "",
+    host_ref: HostRef | None = None,
 ) -> str:
     if user_id is None:
         raise ValueError("user_id is required")
@@ -41,14 +68,24 @@ async def _build_additional_context(
     ``None`` the function loads the pending set itself (kept as a
     safety fallback; callers should pass the captured list).
 
-    Emitted only when the turn has pending attachments OR the project
-    has KB bindings; otherwise returns ``""`` so the kernel omits the
-    block entirely.
+    ``worktree`` is the session's worktree name (``""`` on the project's
+    own cwd). Artifacts are scoped to the directory a session runs in, so
+    a worktree session must be shown its own deliverables and not the
+    main line's — otherwise the listed paths would not be the ones its
+    ``ls .artifact/`` finds.
+
+    Emitted only when the turn has pending attachments, the project has
+    KB bindings, or the scope holds delivered artifacts; otherwise
+    returns ``""`` so the kernel omits the block entirely.
     """
+    from valuz_agent.modules.artifacts.context import build_artifacts_section
     from valuz_agent.modules.docs.datastore import DocumentDatastore
     from valuz_agent.modules.sessions.datastore import SessionDatastore
 
     sections: list[str] = []
+    # Resolved once and shared: the clock section and the artifact timestamps
+    # must not disagree about what "today" means for this user.
+    tz_name: str | None = None
     async with async_unit_of_work() as db:
         # 0) Current wall-clock + the user's effective timezone. Without this
         #    the model has no idea what time it is or where the user lives, so
@@ -112,36 +149,52 @@ async def _build_additional_context(
         except Exception:  # noqa: BLE001 — never block a turn on docs lookup
             bindings = []
         if bindings:
-            kb_section = await _format_kb_scope(ds, bindings)
+            kb_section = await _format_kb_scope(ds, bindings, user_id)
             if kb_section:
                 sections.append(kb_section)
 
-        # 3) Memory (memory-system-design §8): a frozen snapshot — USER +
-        #    cross-project MEMORY + (in a project) that project's MEMORY,
-        #    captured once per session and reused byte-for-byte (prefix-cache
-        #    friendly). Rides additional-context, not the frozen system prompt,
-        #    so it never pollutes the user-visible instructions_md. Guarded so a
-        #    memory lookup never blocks a turn.
+        # 3) Delivered artifacts for this session's scope. Last, because it is
+        #    the section most likely to be truncated by the model's attention
+        #    and the least urgent of the three — the tool works without it.
         try:
-            from valuz_agent.modules.settings.preferences import get_memory_enabled
+            artifacts_section = await build_artifacts_section(
+                db,
+                user_id=user_id,
+                project_id=project_id,
+                worktree=worktree,
+                tz_name=tz_name,
+            )
+        except Exception:  # noqa: BLE001 — never block a turn on an artifact lookup
+            logger.debug("artifacts context skipped", exc_info=True)
+            artifacts_section = ""
+        if artifacts_section:
+            sections.append(artifacts_section)
 
-            if await get_memory_enabled(db, user_id=user_id):
-                from valuz_agent.modules.memory.injection import injection_assembler
+    # 4) Edition-registered per-turn context providers (ports/message_context).
+    #    Each turns the client-declared ``host_ref`` (validated server-side by
+    #    the provider itself) into one extra section. Outside the shared db
+    #    scope on purpose — providers open their own if they need one. A
+    #    failing provider is skipped: never block a turn on overlay context.
+    from valuz_agent.ports.extensions import ext
 
-                mem_block = injection_assembler.snapshot_for_session(
-                    user_id=user_id,
-                    session_id=session_id,
-                    project_id=project_id or None,
-                )
-                if mem_block.strip():
-                    sections.append(mem_block.strip())
-        except Exception:  # noqa: BLE001 — never block a turn on memory
-            logger.debug("memory injection skipped", exc_info=True)
+    for provider in list(ext.message_context_providers):
+        try:
+            section = await provider.build(
+                user_id=user_id,
+                session_id=session_id,
+                project_id=project_id,
+                host_ref=host_ref,
+            )
+        except Exception:  # noqa: BLE001 — never block a turn on overlay context
+            logger.debug("message context provider skipped", exc_info=True)
+            continue
+        if section:
+            sections.append(section)
 
     return "\n\n".join(sections)
 
 
-async def _format_kb_scope(ds, bindings, user_id: str | None = None) -> str:  # type: ignore[no-untyped-def]
+async def _format_kb_scope(ds, bindings, user_id: str) -> str:  # type: ignore[no-untyped-def]
     """Render the KB binding set as a compact, model-readable summary.
 
     Walks ``ProjectKbBindingRow`` rows (kb / folder / document kinds)
@@ -151,22 +204,31 @@ async def _format_kb_scope(ds, bindings, user_id: str | None = None) -> str:  # 
     tree). Returns an empty string when nothing resolves (orphaned
     bindings, etc.).
     """
+    # ``user_id`` is REQUIRED, and every datastore call below must carry it.
+    # The datastore went owner-scoped and four calls here kept their old
+    # one-argument shape, so the first ``kb``-kind binding raised TypeError —
+    # which took the WHOLE additional-context block down with it (the caller
+    # swallows), including the current-time section. The docs skill tells the
+    # model "the binding scope is announced in <additional-context>; consult it
+    # before guessing" — so an empty announcement reads as "no knowledge base",
+    # and the agent web-searched a question whose answer sat in a bound KB.
+    # Binding a knowledge base is exactly what switched its retrieval off.
     max_docs_per_kb = 8
 
     by_kb: dict[str, dict[str, object]] = {}
 
     for b in bindings:
         if b.binding_kind == "kb":
-            kb = await ds.get_kb(b.target_id)
+            kb = await ds.get_kb(user_id, b.target_id)
             if not kb:
                 continue
             entry = by_kb.setdefault(kb.id, {"name": kb.name, "all": False, "items": []})
             entry["all"] = True
         elif b.binding_kind == "folder":
-            folder = await ds.get_folder(b.target_id)
+            folder = await ds.get_folder(user_id, b.target_id)
             if not folder:
                 continue
-            kb = await ds.get_kb(folder.kb_id)
+            kb = await ds.get_kb(user_id, folder.kb_id)
             if not kb:
                 continue
             entry = by_kb.setdefault(kb.id, {"name": kb.name, "all": False, "items": []})
@@ -177,7 +239,7 @@ async def _format_kb_scope(ds, bindings, user_id: str | None = None) -> str:  # 
             doc = await ds.get_by_id(user_id, b.target_id)
             if not doc:
                 continue
-            kb = await ds.get_kb(doc.kb_id)
+            kb = await ds.get_kb(user_id, doc.kb_id)
             if not kb:
                 continue
             entry = by_kb.setdefault(kb.id, {"name": kb.name, "all": False, "items": []})

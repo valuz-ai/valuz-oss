@@ -27,15 +27,18 @@ from valuz_agent.ports.extensions import ext
 class RecordingConnectorHook(ConnectorLifecycleHook):
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.sessions: list[Any] = []
 
     async def after_connector_saved(
         self,
         *,
+        db,
         user_id: str,
         connector,
         secret_snapshot: ConnectorSecretSnapshot,
         origin: str,
     ) -> None:
+        self.sessions.append(db)
         self.calls.append(
             (
                 "saved",
@@ -53,10 +56,12 @@ class RecordingConnectorHook(ConnectorLifecycleHook):
     async def after_connector_oauth_authorized(
         self,
         *,
+        db,
         user_id: str,
         connector,
         oauth_snapshot: ConnectorOAuthSnapshot,
     ) -> None:
+        self.sessions.append(db)
         self.calls.append(
             (
                 "oauth",
@@ -70,7 +75,8 @@ class RecordingConnectorHook(ConnectorLifecycleHook):
             )
         )
 
-    async def before_connector_delete(self, *, user_id: str, connector) -> None:
+    async def before_connector_delete(self, *, db, user_id: str, connector) -> None:
+        self.sessions.append(db)
         self.calls.append(("delete", {"user_id": user_id, "slug": connector.slug}))
 
 
@@ -110,6 +116,7 @@ async def test_connector_lifecycle_hook_runs_on_create_update_delete(svc_and_hoo
     assert await svc.delete_connector("owner-1", created.id) is True
 
     assert [name for name, _ in hook.calls] == ["saved", "saved", "delete"]
+    assert hook.sessions == [svc._ds.session, svc._ds.session, svc._ds.session]
     first = hook.calls[0][1]
     assert first["user_id"] == "owner-1"
     assert first["slug"] == "github"
@@ -164,7 +171,7 @@ async def test_connector_lifecycle_hook_runs_after_oauth_authorized(svc_and_hook
     row.oauth_token_expires_at = 1780000000000
     updated = await svc._ds.update(row)
 
-    await after_connector_oauth_authorized_hook("owner-1", updated)
+    await after_connector_oauth_authorized_hook(svc._ds.session, "owner-1", updated)
 
     assert hook.calls[-1] == (
         "oauth",

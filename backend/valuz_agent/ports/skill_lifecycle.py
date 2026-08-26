@@ -11,6 +11,8 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from valuz_agent.modules.skills.models import SkillView
 
 SkillSaveOrigin = Literal["created", "imported"]
@@ -20,33 +22,54 @@ class SkillLifecycleHook(ABC):
     """Callbacks around user-visible skill writes and deletes."""
 
     @abstractmethod
-    async def after_skill_saved(
+    async def after_bundled_skills_materialized(
         self,
         *,
         user_id: str,
-        skill: "SkillView",
+        slugs: tuple[str, ...],
+    ) -> None:
+        """Called after bundled Agent Pack skills are materialized and indexed."""
+        ...
+
+    @abstractmethod
+    async def after_skill_saved(
+        self,
+        *,
+        db: AsyncSession,
+        user_id: str,
+        skill: SkillView,
         creation_origin: SkillSaveOrigin,
     ) -> None:
-        """Called after a user-visible skill has been written and indexed."""
+        """Called after indexing with the still-uncommitted owning unit of work."""
         ...
 
     @abstractmethod
     async def before_skill_delete(
         self,
         *,
+        db: AsyncSession,
         user_id: str,
-        skill: "SkillView",
+        skill: SkillView,
     ) -> None:
-        """Called before a skill is deleted locally; raising aborts deletion."""
+        """Called before delete with the same unit of work; raising aborts deletion."""
         ...
 
 
 class NoopSkillLifecycleHook(SkillLifecycleHook):
-    async def after_skill_saved(
+    async def after_bundled_skills_materialized(
         self,
         *,
         user_id: str,
-        skill: "SkillView",
+        slugs: tuple[str, ...],
+    ) -> None:
+        return None
+
+    async def after_skill_saved(
+        self,
+        *,
+        db: AsyncSession,
+        user_id: str,
+        skill: SkillView,
         creation_origin: SkillSaveOrigin,
     ) -> None:
         return None
@@ -54,8 +77,9 @@ class NoopSkillLifecycleHook(SkillLifecycleHook):
     async def before_skill_delete(
         self,
         *,
+        db: AsyncSession,
         user_id: str,
-        skill: "SkillView",
+        skill: SkillView,
     ) -> None:
         return None
 

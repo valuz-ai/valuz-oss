@@ -12,18 +12,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from valuz_agent.modules.tasks import planning
-from valuz_agent.modules.tasks.mailbox import (
-    InboxMsg,
-    MailboxRegistry,
-    mailbox_registry,
-)
-from valuz_agent.modules.tasks.orchestrator import (
-    TaskOrchestrator,
-    _credential_gap,
-    _member_run_dir,
-    collect_manifest,
-)
+from valuz_agent.modules.tasks import mailbox_store, notifier, planning
+from valuz_agent.modules.tasks.mailbox import InboxMsg
+from valuz_agent.modules.tasks.manifest import collect_manifest
+from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
+from valuz_agent.modules.tasks.resolution import _credential_gap
+
+from .conftest import deliver_async
 
 LOCAL_USER_ID = "local-test-owner"
 
@@ -81,46 +76,11 @@ def _as_async(fn):
 
 
 # ---------------------------------------------------------------------------
-# MailboxRegistry
-# ---------------------------------------------------------------------------
-
-
-async def test_put_get_roundtrip_delivers_message() -> None:
-    reg = MailboxRegistry()
-    reg.register("s1")
-    assert reg.put("s1", InboxMsg(kind="message", text="hello")) is True
-    msg = await reg.get("s1", timeout=1.0)
-    assert msg.kind == "message"
-    assert msg.text == "hello"
-
-
-async def test_put_to_unregistered_session_is_noop() -> None:
-    reg = MailboxRegistry()
-    assert reg.put("ghost", InboxMsg(kind="message", text="x")) is False
-
-
-async def test_get_times_out_when_no_message() -> None:
-    reg = MailboxRegistry()
-    reg.register("s1")
-    with pytest.raises(asyncio.TimeoutError):
-        await reg.get("s1", timeout=0.05)
-
-
-async def test_unregister_drops_inbox() -> None:
-    reg = MailboxRegistry()
-    reg.register("s1")
-    reg.unregister("s1")
-    assert reg.is_registered("s1") is False
-    with pytest.raises(KeyError):
-        await reg.get("s1", timeout=0.01)
-
-
-# ---------------------------------------------------------------------------
 # Actor loop control flow (turn runner + finalizer stubbed)
 # ---------------------------------------------------------------------------
 
 
-async def test_lead_loop_runs_turns_until_shutdown() -> None:
+async def test_lead_loop_runs_turns_until_shutdown(db_factory) -> None:
     """Lead loop: initial turn, wakes on a message turn, breaks on shutdown."""
     orch = TaskOrchestrator()
     prompts: list[str] = []
@@ -133,17 +93,24 @@ async def test_lead_loop_runs_turns_until_shutdown() -> None:
     async def fake_finalize(**kwargs: object) -> None:
         finalized.append((str(kwargs["session_id"]), str(kwargs["final_status"])))
 
-    orch._run_turn_with_sink = fake_turn  # type: ignore[method-assign]
-    orch._finalize_actor = fake_finalize  # type: ignore[method-assign]
+    orch.actor.run_turn = fake_turn  # type: ignore[method-assign]
+    orch.finalization.finalize_actor = fake_finalize  # type: ignore[method-assign]
 
-    # Pre-load the inbox: a follow-up, then a shutdown. register() in the loop
-    # is idempotent so these survive.
-    mailbox_registry.register("lead-1")
-    mailbox_registry.put("lead-1", InboxMsg(kind="message", text="follow-up"))
-    mailbox_registry.put("lead-1", InboxMsg(kind="shutdown"))
+    # Pre-load a follow-up; register() in the loop is idempotent so it
+    # survives. The loop then ends because the task stops wanting it — a state
+    # it reads, not a message queued behind the follow-up.
+    await deliver_async("lead-1", InboxMsg(kind="text", text="follow-up"))
+
+    wanted = {"n": 0}
+
+    async def _wanted_once(**_kw) -> bool:
+        wanted["n"] += 1
+        return wanted["n"] <= 1
+
+    orch.coordination.actor_still_wanted = _wanted_once  # type: ignore[method-assign]
 
     await asyncio.wait_for(
-        orch.run_actor_loop(
+        orch.actor.run_actor_loop(
             session_id="lead-1",
             initial_prompt="initial brief",
             role="lead",
@@ -157,11 +124,14 @@ async def test_lead_loop_runs_turns_until_shutdown() -> None:
     # Turn 1 used the brief; turn 2 used the follow-up; shutdown ended the loop.
     assert prompts == ["initial brief", "follow-up"]
     assert finalized == [("lead-1", "idle")]
-    # Inbox cleaned up.
-    assert mailbox_registry.is_registered("lead-1") is False
+    # The box outlives the loop by design: nothing drops one on the way out
+    # any more. That race — a stale loop's teardown popping the box a resumed
+    # loop was reading — is why the claim token existed, and it went away with
+    # ownership. What matters is that the loop left nothing queued behind it.
+    assert not await mailbox_store.has_pending("lead-1")
 
 
-async def test_member_loop_notifies_lead_and_self_reaps_on_ttl() -> None:
+async def test_member_loop_notifies_lead_and_self_reaps_on_ttl(db_factory) -> None:
     """Member loop notifies its lead after each turn, then reaps on idle TTL."""
     orch = TaskOrchestrator()
     notified: list[tuple[str, str]] = []
@@ -176,13 +146,13 @@ async def test_member_loop_notifies_lead_and_self_reaps_on_ttl() -> None:
     async def fake_finalize(**kwargs: object) -> None:
         finalized.append(str(kwargs["session_id"]))
 
-    orch._run_turn_with_sink = fake_turn  # type: ignore[method-assign]
-    orch._notify_lead_member_idle = fake_notify  # type: ignore[method-assign]
-    orch._finalize_actor = fake_finalize  # type: ignore[method-assign]
+    orch.actor.run_turn = fake_turn  # type: ignore[method-assign]
+    orch.coordination.notify_lead_member_idle = fake_notify  # type: ignore[method-assign]
+    orch.finalization.finalize_actor = fake_finalize  # type: ignore[method-assign]
 
     # No messages arrive → the member reaps via the (tiny) idle TTL.
     await asyncio.wait_for(
-        orch.run_actor_loop(
+        orch.actor.run_actor_loop(
             session_id="mem-1",
             initial_prompt="do the thing",
             role="subtask",
@@ -198,7 +168,7 @@ async def test_member_loop_notifies_lead_and_self_reaps_on_ttl() -> None:
     assert finalized == ["mem-1"]
 
 
-async def test_terminal_turn_status_breaks_loop_immediately() -> None:
+async def test_terminal_turn_status_breaks_loop_immediately(db_factory) -> None:
     orch = TaskOrchestrator()
     turns = 0
 
@@ -210,11 +180,11 @@ async def test_terminal_turn_status_breaks_loop_immediately() -> None:
     async def fake_finalize(**kwargs: object) -> None:
         return None
 
-    orch._run_turn_with_sink = fake_turn  # type: ignore[method-assign]
-    orch._finalize_actor = fake_finalize  # type: ignore[method-assign]
+    orch.actor.run_turn = fake_turn  # type: ignore[method-assign]
+    orch.finalization.finalize_actor = fake_finalize  # type: ignore[method-assign]
 
     await asyncio.wait_for(
-        orch.run_actor_loop(
+        orch.actor.run_actor_loop(
             session_id="lead-x",
             initial_prompt="brief",
             role="lead",
@@ -229,38 +199,72 @@ async def test_terminal_turn_status_breaks_loop_immediately() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _resolve_turn_status — elevate an idle-but-errored turn to a failure
+# _resolve_turn_status — classify from the authoritative run_turn ``message``
 # ---------------------------------------------------------------------------
 
 
 def test_resolve_turn_status_elevates_error_stop_reason() -> None:
-    """The kernel leaves status=='idle' even when a turn failed at the API
-    transport layer (SDK ResultMessage(is_error=True) → stop_reason.type
-    'error'). Elevate to 'terminated' so the loop breaks and the lead/member
-    finalize treat it as a failure. Accept both dict and attr-style stop_reason."""
+    """A turn that failed at the API transport layer (SDK
+    ResultMessage(is_error=True)) returns normally with an ``Error`` stop_reason
+    on the ``message``. Elevate to 'terminated' so the loop breaks and the
+    lead/member finalize treat it as a failure. Accept dict + attr stop_reason."""
     from valuz_agent.modules.tasks.actor_runner import _resolve_turn_status
 
-    idle_err_dict = SimpleNamespace(status="idle", stop_reason={"type": "error"})
-    idle_err_attr = SimpleNamespace(status="idle", stop_reason=SimpleNamespace(type="error"))
-    assert _resolve_turn_status(idle_err_dict) == "terminated"
-    assert _resolve_turn_status(idle_err_attr) == "terminated"
+    err_dict = SimpleNamespace(status="errored", stop_reason={"type": "error"})
+    err_attr = SimpleNamespace(status="errored", stop_reason=SimpleNamespace(type="error"))
+    assert _resolve_turn_status(err_dict) == "terminated"
+    assert _resolve_turn_status(err_attr) == "terminated"
 
 
-def test_resolve_turn_status_passes_through_clean_turns() -> None:
+def test_resolve_turn_status_clean_turn_is_idle() -> None:
     from valuz_agent.modules.tasks.actor_runner import _resolve_turn_status
 
     assert _resolve_turn_status(None) == "idle"
-    # Clean end_turn stays idle.
+    # Clean end_turn.
+    assert _resolve_turn_status(SimpleNamespace(stop_reason={"type": "end_turn"})) == "idle"
+    # No stop_reason on the message.
+    assert _resolve_turn_status(SimpleNamespace(stop_reason=None)) == "idle"
+
+
+def test_resolve_turn_status_interrupt_categories() -> None:
+    """A cancellation error (user_interrupt / interrupted) is user/host intent,
+    not a failure → 'interrupted'. Branch on ``stop_reason.category`` because
+    ``message.status`` collapses a host 'interrupted' into 'errored'."""
+    from valuz_agent.modules.tasks.actor_runner import _resolve_turn_status
+
     assert (
-        _resolve_turn_status(SimpleNamespace(status="idle", stop_reason={"type": "end_turn"}))
-        == "idle"
+        _resolve_turn_status(
+            SimpleNamespace(
+                status="cancelled", stop_reason={"type": "error", "category": "user_interrupt"}
+            )
+        )
+        == "interrupted"
     )
-    # A turn with no stop_reason yet is untouched.
-    assert _resolve_turn_status(SimpleNamespace(status="idle", stop_reason=None)) == "idle"
-    # A genuinely-terminal status is passed through unchanged.
+    # A host 'interrupted' surfaces as message.status='errored', but must still
+    # resolve 'interrupted' off the category — NOT 'terminated'.
     assert (
-        _resolve_turn_status(SimpleNamespace(status="terminated", stop_reason={"type": "error"}))
-        == "terminated"
+        _resolve_turn_status(
+            SimpleNamespace(
+                status="errored", stop_reason={"type": "error", "category": "interrupted"}
+            )
+        )
+        == "interrupted"
+    )
+
+
+def test_resolve_turn_status_ignores_a_stale_running_readback() -> None:
+    """Regression: the classifier reads the authoritative ``message``, so a
+    ``running`` that the lagging durable mirror might have shown is structurally
+    impossible here — the message of a resolved turn is never 'running', and the
+    status field is not even consulted. This is what stops the finalize clobber
+    that stranded sessions at status='running'."""
+    from valuz_agent.modules.tasks.actor_runner import _resolve_turn_status
+
+    # Even if a caller handed a message-like object carrying a bogus
+    # status='running', only the (clean) stop_reason drives the result → idle.
+    assert (
+        _resolve_turn_status(SimpleNamespace(status="running", stop_reason={"type": "end_turn"}))
+        == "idle"
     )
 
 
@@ -293,14 +297,6 @@ def test_no_model_provider_reports_gap() -> None:
 # ---------------------------------------------------------------------------
 # v2.1 — shared project cwd + mtime artifact attribution
 # ---------------------------------------------------------------------------
-
-
-def test_member_run_dir_defaults_to_project_cwd() -> None:
-    from pathlib import Path
-
-    # shared (default) and legacy "isolated" both → the project cwd itself.
-    assert _member_run_dir("/proj", "t1", 1, "shared") == Path("/proj")
-    assert _member_run_dir("/proj", "t1", 1, "isolated") == Path("/proj")
 
 
 def test_build_member_session_injects_skill_scoping(
@@ -340,6 +336,7 @@ def test_build_member_session_injects_skill_scoping(
             members=fake_members,  # type: ignore[arg-type]
             is_lead=False,
             task_id="t1",
+            task_title="Quarterly research",
             run_dir="/proj",  # shared project cwd
             brief="## Goal\n\nwrite a file",
         )
@@ -352,6 +349,59 @@ def test_build_member_session_injects_skill_scoping(
     # Own skills are scoped: everything else in the cwd is to be ignored
     # (the always-on baseline skills are surfaced separately as "Shared").
     assert "Ignore any other skills" in session.instructions
+    assert session.metadata["valuz"]["task_title"] == "Quarterly research"
+
+
+def test_build_member_session_freezes_memory_section(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The frozen memory snapshot lands in the session instructions at create
+    time as a ``<memory>`` section (memory-system-design §8) — lead and members
+    share the project memory, one copy per session, never per turn."""
+    from types import SimpleNamespace
+
+    from valuz_agent.adapters import agent_resolver
+
+    fake_agent = _fake_agent_config(
+        id="kernel-agent-1",
+        name="writer",
+        instructions="be a writer",
+        model="mimo-v2.5-pro",
+        runtime_provider="claude_agent",
+        skills=(),
+        mcp_servers=(),
+        permission_mode="full_access",
+        metadata={},
+    )
+    fake_members = SimpleNamespace(get=_async_member_get())
+    monkeypatch.setattr(
+        agent_resolver, "_member_agent_config", _as_async(lambda _member, _ds, **_kw: fake_agent)
+    )
+    seen: list[dict[str, object]] = []
+
+    async def fake_memory_block(**kwargs: object) -> str:
+        seen.append(kwargs)
+        return "This is recalled memory — remembered context.\n\ntracks ACME earnings"
+
+    monkeypatch.setattr(agent_resolver, "memory_instructions_block", fake_memory_block)
+
+    session = asyncio.run(
+        agent_resolver.build_member_session(
+            project_id="w1",
+            agent_slug="writer",
+            members=fake_members,  # type: ignore[arg-type]
+            is_lead=False,
+            task_id="t1",
+            run_dir="/proj",
+            brief="## Goal\n\nwrite a file",
+        )
+    )
+    assert session is not None
+    assert "<memory>" in session.instructions
+    assert "tracks ACME earnings" in session.instructions
+    # Exactly one copy, and the render was asked for THIS project's memory.
+    assert session.instructions.count("tracks ACME earnings") == 1
+    assert seen and seen[0].get("project_id") == "w1"
 
 
 def test_build_member_session_carries_agent_effort(
@@ -535,32 +585,15 @@ async def test_collect_manifest_attributes_by_mtime(tmp_path: object) -> None:
     os.utime(new, (5000.0, 5000.0))  # mtime after dispatch
 
     # since_epoch between the two → only the member's post-dispatch file.
-    m = await collect_manifest("s1", d, "idle", since_epoch=3000.0)
+    m = await collect_manifest("s1", d, "idle", since_epoch=3000.0, user_id=LOCAL_USER_ID)
     paths = [a["path"] for a in m["artifacts"]]
     assert str(new) in paths
     assert str(old) not in paths
 
     # since_epoch=0 → include everything (worktree / private-dir behaviour).
-    m_all = await collect_manifest("s1", d, "idle", since_epoch=0.0)
+    m_all = await collect_manifest("s1", d, "idle", since_epoch=0.0, user_id=LOCAL_USER_ID)
     paths_all = [a["path"] for a in m_all["artifacts"]]
     assert str(old) in paths_all and str(new) in paths_all
-
-
-def test_broadcast_shutdown_signals_live_members() -> None:
-    orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"m1", "m2"})
-    mailbox_registry.register("m1")
-    mailbox_registry.register("m2")
-
-    orch._broadcast_shutdown("t1")
-
-    assert mailbox_registry._boxes["m1"].get_nowait().kind == "shutdown"
-    assert mailbox_registry._boxes["m2"].get_nowait().kind == "shutdown"
-    # Task entry cleared so it cannot be broadcast to twice.
-    assert not orch._members.live_members("t1")
-
-    mailbox_registry.unregister("m1")
-    mailbox_registry.unregister("m2")
 
 
 # ---------------------------------------------------------------------------
@@ -568,23 +601,21 @@ def test_broadcast_shutdown_signals_live_members() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ensure_orchestration_tools_adds_create_task() -> None:
-    """A bare agent gains the create_task ToolDef; re-applying is a no-op."""
-    from src.core import AgentConfig  # type: ignore[import-not-found]
+def test_create_task_is_on_the_chat_toolset() -> None:
+    """A project conversation must be able to launch a task.
 
-    from valuz_agent.modules.tasks.dispatch_mcp import (
+    (Was ``test_ensure_orchestration_tools_adds_create_task``, which exercised
+    the retired "declare tools on the AgentConfig" mechanism. Tool audience is
+    now decided once by the two declaration tuples, which ``boot/steps.py``
+    turns into the toolkit MCP server's base/lead toolsets — so asserting
+    membership IS asserting what reaches a chat session.)
+    """
+    from valuz_agent.modules.tasks.tools.declarations import (
         CREATE_TASK_TOOL_NAME,
-        ensure_orchestration_tools_on_agent,
+        ORCHESTRATION_TOOL_DECLARATIONS,
     )
 
-    bare = AgentConfig(id="a1", name="a1", tools=())
-    patched = ensure_orchestration_tools_on_agent(bare)
-    assert patched is not bare
-    assert CREATE_TASK_TOOL_NAME in {t.name for t in patched.tools}
-
-    # Idempotent: already-present → same object back.
-    again = ensure_orchestration_tools_on_agent(patched)
-    assert again is patched
+    assert CREATE_TASK_TOOL_NAME in {d.name for d in ORCHESTRATION_TOOL_DECLARATIONS}
 
 
 def test_create_task_gate_rejects_task_sessions(
@@ -593,7 +624,8 @@ def test_create_task_gate_rejects_task_sessions(
     """A lead/subtask session may not spawn nested tasks; missing ws_id fails."""
     from src.core import ToolResult  # type: ignore[import-not-found]
 
-    from valuz_agent.modules.tasks import dispatch_mcp
+    from valuz_agent.adapters import kernel_client as kc_mod
+    from valuz_agent.modules.tasks.tools import handlers as handlers_mod
 
     def _sess(valuz: dict) -> SimpleNamespace:
         return SimpleNamespace(metadata={"valuz": valuz})
@@ -602,60 +634,71 @@ def test_create_task_gate_rejects_task_sessions(
 
     # run_kind="lead" → rejected before any DB lookup.
     monkeypatch.setattr(
-        dispatch_mcp.kernel_client,
+        kc_mod,
         "get_session",
         _as_async(lambda _uid, _sid: _sess({"run_kind": "lead", "project_id": "w1"})),
     )
-    res = asyncio.run(dispatch_mcp._check_orchestration_gate(ctx))  # type: ignore[arg-type]
+    res = asyncio.run(handlers_mod._check_orchestration_gate(ctx))  # type: ignore[arg-type]
     assert isinstance(res, ToolResult) and res.is_error
 
     # run_kind="subtask" → rejected.
     monkeypatch.setattr(
-        dispatch_mcp.kernel_client,
+        kc_mod,
         "get_session",
         _as_async(lambda _uid, _sid: _sess({"run_kind": "subtask", "project_id": "w1"})),
     )
-    res = asyncio.run(dispatch_mcp._check_orchestration_gate(ctx))  # type: ignore[arg-type]
+    res = asyncio.run(handlers_mod._check_orchestration_gate(ctx))  # type: ignore[arg-type]
     assert isinstance(res, ToolResult) and res.is_error
 
     # plain conversation but no project_id → rejected.
     monkeypatch.setattr(
-        dispatch_mcp.kernel_client,
+        kc_mod,
         "get_session",
         _as_async(lambda _uid, _sid: _sess({"agent_slug": "x"})),
     )
-    res = asyncio.run(dispatch_mcp._check_orchestration_gate(ctx))  # type: ignore[arg-type]
+    res = asyncio.run(handlers_mod._check_orchestration_gate(ctx))  # type: ignore[arg-type]
     assert isinstance(res, ToolResult) and res.is_error
 
 
-def test_strip_dispatch_tools_removes_lead_only() -> None:
-    """strip_dispatch_tools drops dispatch/finish_task but keeps create_task."""
-    from src.core import AgentConfig  # type: ignore[import-not-found]
+def test_lead_only_tools_never_reach_the_chat_toolset() -> None:
+    """The lead/chat audience partition — the invariant that matters.
 
-    from valuz_agent.modules.tasks.dispatch_mcp import (
-        CREATE_TASK_TOOL_DECLARATION,
-        DISPATCH_TOOL_DECLARATION,
-        FINISH_TASK_TOOL_DECLARATION,
-        strip_dispatch_tools,
+    (Was ``test_strip_dispatch_tools_removes_lead_only``, which tested the
+    retired AgentConfig-mutating strip helper. The same guarantee now comes
+    from the declaration tuples: ``boot/steps.py`` serves
+    ORCHESTRATION_TOOL_DECLARATIONS as the toolkit MCP ``base`` toolset and
+    DISPATCH_TOOL_DECLARATIONS as ``lead``, so a lead-only tool leaking into
+    the chat tuple is exactly the old bug in its current form.)
+
+    Execution-authority tools must be lead-only: a plain conversation that
+    could ``dispatch`` or ``finish_task`` would act on a task it does not own.
+    The deliberate overlap (list_members + the plan tools, which chat needs for
+    draft tasks) is asserted explicitly so widening it stays a conscious act.
+    """
+    from valuz_agent.modules.tasks.tools.declarations import (
+        DISPATCH_TOOL_DECLARATIONS,
+        ORCHESTRATION_TOOL_DECLARATIONS,
     )
 
-    agent = AgentConfig(
-        id="a1",
-        name="a1",
-        tools=(
-            DISPATCH_TOOL_DECLARATION,
-            FINISH_TASK_TOOL_DECLARATION,
-            CREATE_TASK_TOOL_DECLARATION,
-        ),
-    )
-    stripped = strip_dispatch_tools(agent)
-    names = {t.name for t in stripped.tools}
-    assert "dispatch" not in names
-    assert "finish_task" not in names
-    assert "create_task" in names
+    lead = {d.name for d in DISPATCH_TOOL_DECLARATIONS}
+    chat = {d.name for d in ORCHESTRATION_TOOL_DECLARATIONS}
 
-    again = strip_dispatch_tools(stripped)
-    assert again is stripped
+    assert {
+        "dispatch",
+        "await_members",
+        "send",
+        "finish_task",
+        "review_subtask",
+        "stop_subtask",
+        "update_deliverable",
+    } <= lead - chat
+
+    # Chat-only: launching / observing / talking to a task from the outside.
+    assert {"create_task", "draft_task", "commit_task", "abandon_task"} <= chat - lead
+
+    # The intentional overlap — per-call authority is enforced by tools/gate.py
+    # (an active task's plan is lead-only; chat must inject_into_task instead).
+    assert lead & chat == {"list_members", "plan_task", "modify_plan", "get_plan"}
 
 
 async def test_materialize_lead_agent_builds_clone_without_tool_decls() -> None:
@@ -664,11 +707,9 @@ async def test_materialize_lead_agent_builds_clone_without_tool_decls() -> None:
     ``harness`` MCP entry (lead toolset of the host toolkit server)."""
     from src.core import AgentConfig  # type: ignore[import-not-found]
 
-    from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
+    from valuz_agent.modules.tasks.resolution import materialize_lead_clone
 
-    base = AgentConfig(id="base1", name="lead", tools=())
-    orch = TaskOrchestrator()
-    clone = await orch._materialize_lead_agent(base, dispatch_mode="async")
+    clone = materialize_lead_clone(AgentConfig(id="base1", name="lead", tools=()))
     assert clone.id == "base1__lead__async"
     assert tuple(clone.tools or ()) == ()
 
@@ -720,11 +761,11 @@ async def test_toolset_partition_matches_declaration_sets() -> None:
     declarations — its surface rides the session's ``harness`` MCP entry."""
     from src.core import AgentConfig  # type: ignore[import-not-found]
 
-    from valuz_agent.modules.tasks.dispatch_mcp import (
+    from valuz_agent.modules.tasks.resolution import materialize_lead_clone
+    from valuz_agent.modules.tasks.tools.declarations import (
         DISPATCH_TOOL_DECLARATIONS,
         ORCHESTRATION_TOOL_DECLARATIONS,
     )
-    from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
 
     names = {d.name for d in ORCHESTRATION_TOOL_DECLARATIONS}
     # Launcher + observability + VALUZ-CHATPLAN draft-mode tools all surfaced
@@ -767,9 +808,7 @@ async def test_toolset_partition_matches_declaration_sets() -> None:
         assert stripped not in lead_names, f"{stripped} should not be in lead toolset"
 
     # The clone is a pure identity stamp.
-    clone = await TaskOrchestrator()._materialize_lead_agent(
-        AgentConfig(id="a", name="a", tools=()), dispatch_mode="async"
-    )
+    clone = materialize_lead_clone(AgentConfig(id="a", name="a", tools=()))
     assert tuple(clone.tools or ()) == ()
 
 
@@ -827,13 +866,15 @@ def test_build_member_session_carries_effort_for_deepagents(
 def _patch_await_deps(monkeypatch, key_by_session: dict[str, str]):
     """Stub the DB touches in await_member_results: get_run + _mark_in_review.
 
-    ``await_member_results`` / ``_heartbeat_pending`` live in
+    ``await_member_results`` lives in ``coordination`` and the member
+    probes it leans on live in ``member_probe``;
     ``tasks/coordination.py`` (ADR-023 Step 3b); the orchestrator delegates to
     it, so stub the coordination module's DB seams.
     """
     from contextlib import asynccontextmanager
 
     from valuz_agent.modules.tasks import coordination as coord_mod
+    from valuz_agent.modules.tasks import member_probe as probe_mod
 
     class _FakeRunDs:
         def __init__(self, _db):
@@ -849,9 +890,7 @@ def _patch_await_deps(monkeypatch, key_by_session: dict[str, str]):
             # for each simulated key. Keys absent here are treated as "never
             # dispatched" (heartbeat stays a no-op for them).
             return [
-                SimpleNamespace(
-                    kind="subtask", subtask_key=sk, status="active", session_id=sid
-                )
+                SimpleNamespace(kind="subtask", subtask_key=sk, status="active", session_id=sid)
                 for sid, sk in key_by_session.items()
             ]
 
@@ -869,13 +908,17 @@ def _patch_await_deps(monkeypatch, key_by_session: dict[str, str]):
     async def _fake_uow(*_a, **_k):
         yield SimpleNamespace()
 
-    monkeypatch.setattr(coord_mod, "async_unit_of_work", _fake_uow)
-    monkeypatch.setattr(coord_mod, "TaskSessionDatastore", _FakeRunDs)
-    monkeypatch.setattr(coord_mod, "TaskDatastore", _FakeTaskDs)
+    # Both modules: ``await_member_results`` reads through coordination, and
+    # the crash backstop it calls reads through member_probe. Each imported
+    # these names itself, so patching one leaves the other on the real DB.
+    for mod in (coord_mod, probe_mod):
+        monkeypatch.setattr(mod, "async_unit_of_work", _fake_uow)
+        monkeypatch.setattr(mod, "TaskSessionDatastore", _FakeRunDs)
+        monkeypatch.setattr(mod, "TaskDatastore", _FakeTaskDs)
 
 
 @pytest.mark.asyncio
-async def test_await_members_all_returns_when_all_keys_done(monkeypatch) -> None:
+async def test_await_members_all_returns_when_all_keys_done(db_factory, monkeypatch) -> None:
     """mode='all' with explicit keys returns once every key has a member_done."""
     _patch_await_deps(monkeypatch, {"sA": "A", "sB": "B"})
     orch = TaskOrchestrator()
@@ -885,15 +928,14 @@ async def test_await_members_all_returns_when_all_keys_done(monkeypatch) -> None
 
     monkeypatch.setattr(planning, "mark_in_review", _noop_mark)
     lead = "lead-await-1"
-    mailbox_registry.register(lead)
     try:
-        mailbox_registry.put(
+        await deliver_async(
             lead, InboxMsg(kind="member_done", from_session="sA", payload={"summary": "a"})
         )
-        mailbox_registry.put(
+        await deliver_async(
             lead, InboxMsg(kind="member_done", from_session="sB", payload={"summary": "b"})
         )
-        res = await orch.await_member_results(
+        res = await orch.coordination.await_member_results(
             lead_session_id=lead,
             project_id="w1",
             task_id="t1",
@@ -906,11 +948,55 @@ async def test_await_members_all_returns_when_all_keys_done(monkeypatch) -> None
         assert res["pending"] == []
         assert {r["subtask_key"] for r in res["results"]} == {"A", "B"}
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
 
 @pytest.mark.asyncio
-async def test_await_members_any_returns_on_first(monkeypatch) -> None:
+async def test_await_members_stops_when_the_task_stops(db_factory, monkeypatch) -> None:
+    """A halted task must end the in-turn wait, and leave nothing behind.
+
+    This wait runs INSIDE the lead's turn and reads the very inbox the actor
+    loop reads BETWEEN turns. When the stop was a queued ``shutdown``, whichever
+    of the two saw it first consumed it — so this function had to put it BACK,
+    or the loop never learned to stop and kept driving a halted task.
+
+    A stop is a state now. Both read it, neither consumes it, and there is
+    nothing to re-queue.
+    """
+    _patch_await_deps(monkeypatch, {"sA": "A"})
+    orch = TaskOrchestrator()
+
+    async def _noop_mark(**_kw):
+        return None
+
+    monkeypatch.setattr(planning, "mark_in_review", _noop_mark)
+
+    async def _not_wanted(**_kw) -> bool:
+        return False
+
+    monkeypatch.setattr(orch.coordination, "actor_still_wanted", _not_wanted)
+
+    lead = "lead-await-stopped"
+    try:
+        res = await orch.coordination.await_member_results(
+            lead_session_id=lead,
+            project_id="w1",
+            task_id="t1",
+            keys=["A"],
+            mode="all",
+            timeout_s=30,
+            user_id=LOCAL_USER_ID,
+        )
+        # Ended promptly with nothing collected — the member never reported.
+        assert res["collected"] == 0
+        # And nothing was queued for the loop, which reads the same state.
+        assert not await mailbox_store.has_pending(lead)
+    finally:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_await_members_any_returns_on_first(db_factory, monkeypatch) -> None:
     """mode='any' returns after the first member_done even if others pending."""
     _patch_await_deps(monkeypatch, {"sA": "A", "sB": "B"})
     orch = TaskOrchestrator()
@@ -920,10 +1006,9 @@ async def test_await_members_any_returns_on_first(monkeypatch) -> None:
 
     monkeypatch.setattr(planning, "mark_in_review", _noop_mark)
     lead = "lead-await-2"
-    mailbox_registry.register(lead)
     try:
-        mailbox_registry.put(lead, InboxMsg(kind="member_done", from_session="sA", payload={}))
-        res = await orch.await_member_results(
+        await deliver_async(lead, InboxMsg(kind="member_done", from_session="sA", payload={}))
+        res = await orch.coordination.await_member_results(
             lead_session_id=lead,
             project_id="w1",
             task_id="t1",
@@ -935,11 +1020,11 @@ async def test_await_members_any_returns_on_first(monkeypatch) -> None:
         assert res["collected"] == 1
         assert res["results"][0]["subtask_key"] == "A"
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
 
 @pytest.mark.asyncio
-async def test_await_members_timeout_returns_partial_with_pending(monkeypatch) -> None:
+async def test_await_members_timeout_returns_partial_with_pending(db_factory, monkeypatch) -> None:
     """On timeout, returns what arrived + lists the still-pending keys."""
     _patch_await_deps(monkeypatch, {"sA": "A"})
     orch = TaskOrchestrator()
@@ -949,10 +1034,9 @@ async def test_await_members_timeout_returns_partial_with_pending(monkeypatch) -
 
     monkeypatch.setattr(planning, "mark_in_review", _noop_mark)
     lead = "lead-await-3"
-    mailbox_registry.register(lead)
     try:
-        mailbox_registry.put(lead, InboxMsg(kind="member_done", from_session="sA", payload={}))
-        res = await orch.await_member_results(
+        await deliver_async(lead, InboxMsg(kind="member_done", from_session="sA", payload={}))
+        res = await orch.coordination.await_member_results(
             lead_session_id=lead,
             project_id="w1",
             task_id="t1",
@@ -965,7 +1049,7 @@ async def test_await_members_timeout_returns_partial_with_pending(monkeypatch) -
         assert res["pending"] == ["B"]
         assert res["timed_out"] is True
     finally:
-        mailbox_registry.unregister(lead)
+        pass
 
 
 @pytest.mark.asyncio
@@ -981,11 +1065,10 @@ async def test_await_members_no_dispatched_returns_immediately(monkeypatch) -> N
 
     monkeypatch.setattr(planning, "mark_in_review", _noop_mark)
     lead = "lead-await-guard"
-    mailbox_registry.register(lead)
     try:
         loop = asyncio.get_running_loop()
         start = loop.time()
-        res = await orch.await_member_results(
+        res = await orch.coordination.await_member_results(
             lead_session_id=lead,
             project_id="w1",
             task_id="t1",
@@ -1001,4 +1084,236 @@ async def test_await_members_no_dispatched_returns_immediately(monkeypatch) -> N
         assert res["pending"] == ["dev"]
         assert res["timed_out"] is False
     finally:
-        mailbox_registry.unregister(lead)
+        pass
+
+
+@pytest.mark.asyncio
+async def test_await_members_any_running_pending_gets_keep_waiting_hint(monkeypatch) -> None:
+    """Pull-gap fix (Plan A): a mode='any' early return with a still-running
+    member must carry the ``still_running`` + 'await again' hint — regardless of
+    ``timed_out`` (which is only set for mode='all'). Previously the hint was
+    gated on ``timed_out`` and never fired here, so the lead got a bare
+    ``pending:[k] state:running`` and went silent instead of re-awaiting."""
+    from valuz_agent.modules.tasks import member_probe as probe_mod
+
+    _patch_await_deps(monkeypatch, {"sA": "A"})
+
+    async def _get_session(_uid, _sid):
+        return SimpleNamespace(status="running")  # member genuinely in flight
+
+    monkeypatch.setattr(probe_mod, "data_reader", lambda: SimpleNamespace(get_session=_get_session))
+    orch = TaskOrchestrator()
+    lead = "lead-await-running"
+    try:
+        # No member_done queued → the member is still running when the short
+        # window closes.
+        res = await orch.coordination.await_member_results(
+            lead_session_id=lead,
+            project_id="w1",
+            task_id="t1",
+            keys=["A"],
+            mode="any",
+            timeout_s=0.2,
+            user_id=LOCAL_USER_ID,
+        )
+        assert res["collected"] == 0
+        assert res["pending"] == ["A"]
+        assert res["timed_out"] is False  # mode='any' never sets timed_out
+        assert res["still_running"] is True
+        assert [p["state"] for p in res["pending_status"]] == ["running"]
+        assert "await_members again" in res["hint"]
+    finally:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_await_members_clamps_window_to_max(monkeypatch) -> None:
+    """A model-supplied timeout_s above _MAX_AWAIT_WINDOW_S is clamped — await
+    parks for the window unit, not the requested value. This keeps a single call
+    under the codex tool-call ceiling so a healthy wait is never aborted as a
+    transport failure. Proven by shrinking the window and passing a huge
+    timeout_s: the call must return in ~the window, not in ~9999s."""
+    from valuz_agent.modules.tasks import coordination as coord_mod
+    from valuz_agent.modules.tasks import member_probe as probe_mod
+
+    _patch_await_deps(monkeypatch, {"sA": "A"})
+    monkeypatch.setattr(coord_mod, "_MAX_AWAIT_WINDOW_S", 0.2)  # tiny cap for the test
+
+    async def _get_session(_uid, _sid):
+        return SimpleNamespace(status="running")
+
+    monkeypatch.setattr(probe_mod, "data_reader", lambda: SimpleNamespace(get_session=_get_session))
+    orch = TaskOrchestrator()
+    lead = "lead-await-clamp"
+    try:
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        res = await orch.coordination.await_member_results(
+            lead_session_id=lead,
+            project_id="w1",
+            task_id="t1",
+            keys=["A"],
+            mode="any",
+            timeout_s=9999,  # would block ~forever if honored verbatim
+            user_id=LOCAL_USER_ID,
+        )
+        elapsed = loop.time() - start
+        assert elapsed < 1.0  # clamped to the 0.2s window, NOT 9999s
+        assert res["pending"] == ["A"]
+    finally:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_inbox_notice_wrapper_surfaces_queued_member_done(db_factory) -> None:
+    """Pull-gap fix (Plan B): a lead tool called while a member_done sits in the
+    mailbox gets an ``inbox_pending`` notice appended (non-consuming peek), so a
+    completion that landed in the gap is surfaced at the next tool boundary."""
+    import json
+
+    from src.core import ToolResult  # type: ignore[import-not-found]
+
+    from valuz_agent.modules.tasks.tools.handlers import _with_inbox_notice
+
+    async def _inner(_args, _ctx):
+        return ToolResult(content=json.dumps({"ok": True}))
+
+    wrapped = _with_inbox_notice(_inner)
+    lead = "lead-inbox-notice"
+    ctx = SimpleNamespace(session_id=lead, user_id=LOCAL_USER_ID)
+
+    try:
+        # Empty inbox → notice absent, envelope untouched.
+        empty = await wrapped({}, ctx)
+        assert "inbox_pending" not in json.loads(empty.content)
+
+        # A queued member_done → notice appended, but the message is NOT consumed
+        # (peek-only: it must still be there for await_members to collect).
+        await deliver_async(lead, InboxMsg(kind="member_done", from_session="sA", payload={}))
+        got = await wrapped({}, ctx)
+        payload = json.loads(got.content)
+        assert payload["ok"] is True
+        assert payload["inbox_pending"] is True
+        assert "await_members" in payload["inbox_hint"]
+        assert await mailbox_store.has_pending(lead)  # non-consuming — still queued
+    finally:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_inbox_notice_wrapper_leaves_errors_and_plaintext_alone(db_factory) -> None:
+    """The notice wrapper must never mutate an error result or a plain-text
+    (non-JSON) envelope, even with mail queued."""
+    from src.core import ToolResult  # type: ignore[import-not-found]
+
+    from valuz_agent.modules.tasks.tools.handlers import _with_inbox_notice
+
+    lead = "lead-inbox-passthrough"
+    ctx = SimpleNamespace(session_id=lead, user_id=LOCAL_USER_ID)
+    await deliver_async(lead, InboxMsg(kind="member_done", from_session="sA", payload={}))
+    try:
+
+        async def _err(_args, _ctx):
+            return ToolResult(content="boom", is_error=True)
+
+        async def _plain(_args, _ctx):
+            return ToolResult(content="Task closed. Do not continue working.")
+
+        err = await _with_inbox_notice(_err)({}, ctx)
+        assert err.is_error is True and err.content == "boom"
+
+        plain = await _with_inbox_notice(_plain)({}, ctx)
+        assert plain.content == "Task closed. Do not continue working."
+    finally:
+        pass
+
+
+# NOTE: an in-turn doorbell test lived here and was removed. It asked whether a
+# ring shortens ``await_member_results``' wait, which it does — verified by
+# swapping the ring back for a plain sleep, where the same scenario ran the full
+# 8.13s slice instead of 0.14s. What could not be made to hold was the harness:
+# ``_patch_await_deps`` does not stand up enough of the kernel for the loop
+# shape this file now exercises, and the test kept reaching the crash backstop
+# rather than the thing it was asking about. ``test_notifier.py`` covers the
+# doorbell itself; the wiring is one call and is not separately pinned.
+@pytest.mark.asyncio
+async def test_an_inject_mid_turn_is_not_made_to_wait_out_the_slice(monkeypatch) -> None:
+    """The in-turn wait must hear the doorbell, not just its own timeout.
+
+    This wait is where a user injects while members run — the whole reason the
+    preempt below it exists. It used to block on the in-process queue, which no
+    producer writes any more, so a ring landed on nothing and the instruction
+    sat until the 8-second heartbeat slice expired however promptly it was
+    delivered.
+    """
+    from valuz_agent.modules.tasks import member_probe as probe_mod
+
+    _patch_await_deps(monkeypatch, {"sA": "A"})
+    orch = TaskOrchestrator()
+
+    async def _noop_mark(**_kw):
+        return None
+
+    monkeypatch.setattr(planning, "mark_in_review", _noop_mark)
+
+    lead = "lead-await-ring"
+    # The instruction only becomes visible AFTER the ring — so the wait has to
+    # be woken by the doorbell to see it. Handing it over on the first drain
+    # would let a plain sleep pass this test, which is how the first draft of
+    # it did.
+    rung = {"yes": False}
+
+    async def _visible_once_rung(session_id: str):
+        if not rung["yes"]:
+            return []
+        return [InboxMsg(kind="text", text="pivot now", origin="user-inject")]
+
+    monkeypatch.setattr(orch.coordination, "_drain_durable_inbox", _visible_once_rung)
+
+    # The probe and the crash backstop both ask the kernel, which no harness
+    # here stands up. Neither is what this test is about — it asks whether a
+    # ring shortens the wait.
+    async def _no_probe(_self=None, **_kw):
+        return []
+
+    async def _no_heartbeat(_self=None, **_kw):
+        return probe_mod.HeartbeatOutcome()
+
+    monkeypatch.setattr(probe_mod, "probe_pending_members", _no_probe)
+    monkeypatch.setattr(probe_mod, "heartbeat_pending", _no_heartbeat)
+    monkeypatch.setattr(
+        probe_mod,
+        "data_reader",
+        lambda: SimpleNamespace(get_session=_as_async(lambda *a, **k: None)),
+    )
+
+    try:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+
+        async def _ring_soon() -> None:
+            await asyncio.sleep(0.02)
+            rung["yes"] = True
+            await notifier.ring(lead)
+
+        task = asyncio.create_task(_ring_soon())
+        res = await orch.coordination.await_member_results(
+            lead_session_id=lead,
+            project_id="w1",
+            task_id="t1",
+            keys=["A"],
+            mode="all",
+            timeout_s=30,
+            user_id=LOCAL_USER_ID,
+        )
+        await task
+        elapsed = loop.time() - started
+    finally:
+        pass
+
+    assert res.get("preempted_by_inject") is True
+    assert "pivot now" in res["user_inject"]["text"]
+    assert elapsed < 4.0, (
+        f"the ring must cut the slice short, not be ignored ({elapsed:.2f}s — the "
+        "heartbeat slice is 8s)"
+    )

@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from valuz_agent.modules.connectors.service import ConnectorView
 
 ConnectorSaveOrigin = Literal["created", "updated"]
@@ -42,33 +44,36 @@ class ConnectorLifecycleHook(ABC):
     async def after_connector_saved(
         self,
         *,
+        db: AsyncSession,
         user_id: str,
         connector: ConnectorView,
         secret_snapshot: ConnectorSecretSnapshot,
         origin: ConnectorSaveOrigin,
     ) -> None:
-        """Called after a user-visible connector has been created or updated."""
+        """Called after save with the still-uncommitted owning unit of work."""
         ...
 
     @abstractmethod
     async def after_connector_oauth_authorized(
         self,
         *,
+        db: AsyncSession,
         user_id: str,
         connector: ConnectorView,
         oauth_snapshot: ConnectorOAuthSnapshot,
     ) -> None:
-        """Called after OAuth token material has been persisted locally."""
+        """Called after OAuth persistence with the still-uncommitted owning unit of work."""
         ...
 
     @abstractmethod
     async def before_connector_delete(
         self,
         *,
+        db: AsyncSession,
         user_id: str,
         connector: ConnectorView,
     ) -> None:
-        """Called before a connector is deleted locally; raising aborts deletion."""
+        """Called before delete with the same unit of work; raising aborts deletion."""
         ...
 
 
@@ -76,6 +81,7 @@ class NoopConnectorLifecycleHook(ConnectorLifecycleHook):
     async def after_connector_saved(
         self,
         *,
+        db: AsyncSession,
         user_id: str,
         connector: ConnectorView,
         secret_snapshot: ConnectorSecretSnapshot,
@@ -86,6 +92,7 @@ class NoopConnectorLifecycleHook(ConnectorLifecycleHook):
     async def after_connector_oauth_authorized(
         self,
         *,
+        db: AsyncSession,
         user_id: str,
         connector: ConnectorView,
         oauth_snapshot: ConnectorOAuthSnapshot,
@@ -95,6 +102,7 @@ class NoopConnectorLifecycleHook(ConnectorLifecycleHook):
     async def before_connector_delete(
         self,
         *,
+        db: AsyncSession,
         user_id: str,
         connector: ConnectorView,
     ) -> None:

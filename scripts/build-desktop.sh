@@ -352,6 +352,40 @@ else
 fi
 
 # ============================================================
+# Phase A5: Stage DeepSeek Harness runtime (vendored npm closure)
+# ============================================================
+# The kernel's deepseek_harness runtime spawns the dsh SDK runtime as
+# `node <packaged-bin.js>` from a vendored deploy-root closure
+# (backend/vendor/dsh-runtime — the manifest defines the plugin set,
+# including dsh-mcp-client, which the upstream runtime-bin closure lacks).
+# Same distribution pattern as chrome-devtools-mcp above: only pins +
+# lockfile are committed, `npm ci` fetches the tree at build time, and the
+# packaged app runs it under its own Electron binary as plain Node
+# (sidecar.ts sets VALUZ_DSH_RUNTIME_ENTRY + VALUZ_NODE_PATH +
+# VALUZ_NODE_IS_ELECTRON=1).
+
+if ! $SKIP_NODE; then
+  log "=== Phase A5: Staging DeepSeek Harness runtime (dsh closure) ==="
+
+  DSH_VENDOR_DIR="$BACKEND_DIR/vendor/dsh-runtime"
+  DSH_ENTRY_REL="@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js"
+  [ -f "$DSH_VENDOR_DIR/package-lock.json" ] || \
+    die "Missing $DSH_VENDOR_DIR/package-lock.json. Refresh: bash scripts/vendor-dsh-runtime.sh --update"
+  log "Installing dsh runtime closure (npm ci) ..."
+  ( cd "$DSH_VENDOR_DIR" && npm ci --omit=dev --no-audit --no-fund --loglevel=error )
+  [ -f "$DSH_VENDOR_DIR/node_modules/$DSH_ENTRY_REL" ] || \
+    die "npm ci did not produce $DSH_ENTRY_REL"
+
+  DSH_TARGET="$RESOURCES_LIBEXEC/dsh-runtime"
+  rm -rf "$DSH_TARGET"
+  mkdir -p "$DSH_TARGET"
+  cp -R "$DSH_VENDOR_DIR/node_modules" "$DSH_TARGET/"
+  log "dsh runtime staged at: $DSH_TARGET/node_modules ($(du -sh "$DSH_TARGET" | cut -f1))"
+else
+  log "=== Phase A5: Skipping dsh runtime staging (--skip-node) ==="
+fi
+
+# ============================================================
 # Phase B: Build frontend (Electron)
 # ============================================================
 
@@ -423,7 +457,11 @@ if ! $SKIP_FRONTEND; then
   pnpm typecheck
 
   log "Building renderer..."
-  pnpm exec vite build --config vite.renderer.config.ts
+  # The renderer bundle outgrew Node's default heap on the 7 GB mac runners
+  # (v0.4.0: both mac jobs died in vite with "Ineffective mark-compacts near
+  # heap limit"). 6 GB fits the smallest runner; harmless where RAM is larger.
+  NODE_OPTIONS="--max-old-space-size=6144" \
+    pnpm exec vite build --config vite.renderer.config.ts
 
   log "Building main process..."
   pnpm exec vite build --config vite.main.config.ts

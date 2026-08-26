@@ -179,8 +179,17 @@ def test_rapidocr_is_complete_reads_marker_file(tmp_path: Path, monkeypatch):
     """The router's capability gate relies on ``is_complete`` being a
     pure filesystem probe — no DB, no network. The marker also encodes
     the model version so a stale PP-OCRv4/v5 directory doesn't read as
-    "ready" after the v6 cutover; pin that contract here too."""
-    from valuz_agent.modules.parser.setup_jobs.rapidocr import RapidOcrSetupJob
+    "ready" after the v6 cutover; pin that contract here too.
+
+    The probe now also requires the model files themselves. The marker records
+    that a download once finished, which stops being true the moment a file is
+    deleted — and a marker that outlives its files used to report "installed"
+    forever. See ``tests/integrations/test_rapidocr_broken_bundle.py``.
+    """
+    from valuz_agent.modules.parser.setup_jobs.rapidocr import (
+        REQUIRED_MODEL_FILENAMES,
+        RapidOcrSetupJob,
+    )
 
     job = RapidOcrSetupJob()
     monkeypatch.setattr(
@@ -193,9 +202,13 @@ def test_rapidocr_is_complete_reads_marker_file(tmp_path: Path, monkeypatch):
     # Marker without the expected model_version line → still not complete.
     (tmp_path / "READY").write_text("2026-05-15T00:00:00+00:00", encoding="utf-8")
     assert job.is_complete() is False
-    # Marker with the v6 model_version line → complete.
+    # Right marker, but no model files behind it → still not complete.
     (tmp_path / "READY").write_text(
         "timestamp=2026-05-15T00:00:00+00:00\nmodel_version=PP-OCRv6\n",
         encoding="utf-8",
     )
+    assert job.is_complete() is False
+    # Marker with the v6 model_version line AND the bundle present → complete.
+    for name in REQUIRED_MODEL_FILENAMES:
+        (tmp_path / name).write_text("x", encoding="utf-8")
     assert job.is_complete() is True

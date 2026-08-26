@@ -147,11 +147,18 @@ async def resolve_model(
             runtime_hint=request_runtime_id,
         )
 
+    # Factory default from the ``ext.model_defaults`` port (Settings env /
+    # distribution override / cloud-delivered). ``DEFAULT_MODEL`` remains the
+    # defensive last line should the bound port return an empty model.
+    from valuz_agent.ports.extensions import ext
+
+    factory_model = (await ext.model_defaults.get(user_id)).default_model or DEFAULT_MODEL
+
     # System provider fallback — commercial version injects a hosted key
     # pool via ``set_system_provider()``. OSS: ``_system_provider`` is None.
     if _system_provider is not None:
         system_model = _system_provider.resolve_system_provider(
-            request_model_id or DEFAULT_MODEL,
+            request_model_id or factory_model,
         )
         if system_model:
             return ModelResolution(
@@ -161,7 +168,7 @@ async def resolve_model(
             )
 
     return ModelResolution(
-        DEFAULT_MODEL,
+        factory_model,
         source="fallback",
         runtime_hint=request_runtime_id,
     )

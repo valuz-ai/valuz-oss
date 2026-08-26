@@ -8,8 +8,14 @@ import { useEffect, useRef, useState } from "react";
 
 import { useTranslation } from "@valuz/core";
 import type { ActivityFeed, ActivityItem } from "@valuz/core";
-import { Badge } from "@valuz/ui";
-import { Clock3, ListChecks, Loader2, MessageSquare } from "lucide-react";
+import { Badge, cn } from "@valuz/ui";
+import {
+  BookOpenText,
+  Clock3,
+  ListChecks,
+  Loader2,
+  MessageSquare,
+} from "lucide-react";
 
 import { BUCKET_KEY, groupByTimeBucket } from "../lib/time-buckets";
 import { RenameInput } from "./RenameInput";
@@ -46,6 +52,16 @@ const TASK_STATUS_KEY: Record<string, string> = {
   blocked: "task.statusBlocked",
 };
 
+const PLAYBOOK_STATUS_KEY: Record<string, string> = {
+  queued: "activity.statusIdle",
+  planning: "activity.statusRunning",
+  running: "activity.statusRunning",
+  waiting_approval: "task.statusBlocked",
+  completed: "task.statusCompleted",
+  failed: "task.statusFailed",
+  stopped: "task.statusStopped",
+};
+
 const activityStatusVariant = (
   status: string,
 ): "brand" | "success" | "warning" | "error" | "outline" => {
@@ -61,8 +77,16 @@ export interface ActivityFeedListProps {
   feed: ActivityFeed;
   onOpenSession: (id: string) => void;
   onOpenTask: (id: string) => void;
+  onOpenPlaybookRun?: (id: string, linkedSessionId: string | null) => void;
   onRenameConfirm: (id: string, value: string) => void;
   onDeleteSession: (id: string, title: string) => void;
+  /** Whole-session fork (docs/design/session-fork.md). Rendered on chat
+   * rows that are not running; origin gating (automation/task chats) is
+   * server-side — a 422 surfaces as the caller's failure toast. */
+  onForkSession?: (id: string) => void;
+  /** Session whose fork request is in flight (#879) — that row shows a
+   * spinner and every Fork entry is disabled until the request settles. */
+  forkPendingSessionId?: string | null;
   /** Hide the leading 对话/任务/自动化 chip (the 自动化 tab is already scoped). */
   hideScopeTag?: boolean;
   /** Append the project name after the title — the global 动态 list wants it. */
@@ -74,8 +98,11 @@ export const ActivityFeedList = ({
   feed,
   onOpenSession,
   onOpenTask,
+  onOpenPlaybookRun,
   onRenameConfirm,
   onDeleteSession,
+  onForkSession,
+  forkPendingSessionId,
   hideScopeTag,
   showProjectName,
   emptyLabel,
@@ -121,16 +148,23 @@ export const ActivityFeedList = ({
   const grouped = groupByTimeBucket(items, (item) => item.sort_at);
 
   const renderItem = (item: ActivityItem) => {
-    const Icon = item.is_automation
-      ? Clock3
-      : item.kind === "task"
+    const Icon =
+      item.kind === "playbook"
+        ? BookOpenText
+        : item.is_automation
+          ? Clock3
+          : item.kind === "task"
         ? ListChecks
         : MessageSquare;
     const statusKey =
-      item.kind === "task"
+      item.kind === "playbook"
+        ? PLAYBOOK_STATUS_KEY[item.status]
+        : item.kind === "task"
         ? TASK_STATUS_KEY[item.status]
         : SESSION_STATUS_KEY[item.status];
-    const kindLabel = item.is_automation
+    const kindLabel = item.kind === "playbook"
+      ? t("playbook.title" as Parameters<typeof t>[0])
+      : item.is_automation
       ? t("activity.automationTag" as Parameters<typeof t>[0])
       : item.kind === "task"
         ? t("project.tasksColumn" as Parameters<typeof t>[0])
@@ -163,20 +197,25 @@ export const ActivityFeedList = ({
         <div
           role="button"
           tabIndex={0}
-          onClick={() =>
-            item.kind === "task" ? onOpenTask(item.id) : onOpenSession(item.id)
-          }
+          onClick={() => {
+            if (item.kind === "task") onOpenTask(item.id);
+            else if (item.kind === "playbook")
+              onOpenPlaybookRun?.(item.id, item.linked_session_id);
+            else onOpenSession(item.id);
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
               if (item.kind === "task") onOpenTask(item.id);
+              else if (item.kind === "playbook")
+                onOpenPlaybookRun?.(item.id, item.linked_session_id);
               else onOpenSession(item.id);
             }
           }}
           className="flex w-full cursor-default items-center gap-2 rounded-xl px-3 py-3 text-left outline-none transition-colors hover:bg-surface-soft focus-visible:bg-surface-soft"
         >
           {!hideScopeTag && (
-            <span className="inline-flex max-w-[45%] shrink-0 items-center gap-1 text-[11px] text-ink-muted">
+            <span className="inline-flex max-w-[45%] shrink-0 items-center gap-1 text-2xs text-ink-muted">
               <Icon className="h-3 w-3 shrink-0" strokeWidth={2} />
               <span className="truncate">{scopeText}</span>
             </span>
@@ -186,7 +225,7 @@ export const ActivityFeedList = ({
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-heading">
             {item.title}
           </span>
-          <span className="shrink-0 whitespace-nowrap text-[11px] text-ink-meta">
+          <span className="shrink-0 whitespace-nowrap text-2xs text-ink-meta">
             {formatCreatedAt(item.sort_at, t)}
           </span>
           <span className="relative inline-flex min-w-6 shrink-0 items-center justify-center">
@@ -195,7 +234,12 @@ export const ActivityFeedList = ({
                 variant={activityStatusVariant(item.status)}
                 className={
                   item.kind === "chat"
-                    ? "transition-opacity group-hover:opacity-0 group-has-[[data-state=open]]:opacity-0"
+                    ? cn(
+                        "transition-opacity group-hover:opacity-0 group-has-[[data-state=open]]:opacity-0",
+                        // The pending spinner paints over this slot — keep
+                        // the status text out of its way (#879).
+                        forkPendingSessionId === item.id && "opacity-0",
+                      )
                     : undefined
                 }
               >
@@ -206,6 +250,13 @@ export const ActivityFeedList = ({
               <RowActionsMenu
                 onRename={() => setRenamingId(item.id)}
                 onDelete={() => onDeleteSession(item.id, item.title)}
+                onFork={
+                  onForkSession && item.status !== "running"
+                    ? () => onForkSession(item.id)
+                    : undefined
+                }
+                forkPending={forkPendingSessionId === item.id}
+                forkDisabled={forkPendingSessionId != null}
               />
             )}
           </span>

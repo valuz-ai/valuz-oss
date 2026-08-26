@@ -32,10 +32,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 import uuid
 
 import pytest
+
+from conftest import reimported_modules
 
 
 @pytest.fixture
@@ -44,43 +45,29 @@ async def kernel_app(tmp_path, monkeypatch):
     monkeypatch.setenv("VALUZ_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("VALUZ_DB_FILENAME", "stream-dedup.db")
 
-    saved_modules = {
-        name: mod
-        for name, mod in sys.modules.items()
-        if name.startswith(("valuz_agent.infra.config", "valuz_agent.boot.kernel"))
-    }
-    for name in saved_modules:
-        sys.modules.pop(name, None)
+    with reimported_modules("valuz_agent.infra.config", "valuz_agent.boot.kernel"):
+        import valuz_agent.boot.kernel as kb
 
-    import valuz_agent.boot.kernel as kb
+        kb.run_kernel_migrations()
 
-    kb.run_kernel_migrations()
+        from fastapi import FastAPI
 
-    from fastapi import FastAPI
+        from app.config import AppConfig  # type: ignore[import-not-found]
+        from app.dependencies import (  # type: ignore[import-not-found]
+            get_orchestrator,
+            get_store,
+            init_dependencies,
+            shutdown_dependencies,
+        )
 
-    from app.config import AppConfig  # type: ignore[import-not-found]
-    from app.dependencies import (  # type: ignore[import-not-found]
-        get_orchestrator,
-        get_store,
-        init_dependencies,
-        shutdown_dependencies,
-    )
-
-    await init_dependencies(AppConfig())
-    app = FastAPI()
-    for router in kb.get_kernel_routers():
-        app.include_router(router)
-    try:
-        yield app, get_store(), get_orchestrator()
-    finally:
-        await shutdown_dependencies()
-        for name in [
-            n
-            for n in sys.modules
-            if n.startswith(("valuz_agent.infra.config", "valuz_agent.boot.kernel"))
-        ]:
-            sys.modules.pop(name, None)
-        sys.modules.update(saved_modules)
+        await init_dependencies(AppConfig())
+        app = FastAPI()
+        for router in kb.get_kernel_routers():
+            app.include_router(router)
+        try:
+            yield app, get_store(), get_orchestrator()
+        finally:
+            await shutdown_dependencies()
 
 
 @pytest.mark.asyncio

@@ -24,6 +24,7 @@ its own orphan scans at startup and owns its runtime cache.
 from __future__ import annotations
 
 import json
+from urllib.parse import quote
 from collections.abc import AsyncIterator
 from typing import Any, NoReturn
 
@@ -37,6 +38,8 @@ from app.schemas import (  # noqa: E402
     EventPayload,
     EventWindowData,
     FinalizeSessionRequest,
+    ForkSessionRequest,
+    ImportMessageRequest,
     MessageData,
     SessionData,
     SubmitActionRequest,
@@ -240,9 +243,7 @@ class HttpKernelClient:
 
     async def delete_session(self, user_id: str, session_id: str) -> bool:
         try:
-            await self._request(
-                "DELETE", f"{self._prefix}/v1/sessions/{session_id}", owner=user_id
-            )
+            await self._request("DELETE", f"{self._prefix}/v1/sessions/{session_id}", owner=user_id)
         except KernelSessionNotFoundError:
             return False
         return True
@@ -328,8 +329,15 @@ class HttpKernelClient:
         ):
             yield item
 
-    async def subscribe_all_events(self) -> AsyncIterator[EventData]:
-        async for item in self._stream_sse(f"{self._prefix}/v1/events/stream", owner=None):
+    async def subscribe_all_events(
+        self, types: tuple[str, ...] | None = None
+    ) -> AsyncIterator[EventData]:
+        # Filter server-side: a lifecycle-only consumer must not have token
+        # deltas shipped across the wire just to discard them.
+        path = f"{self._prefix}/v1/events/stream"
+        if types:
+            path += f"?types={quote(','.join(types))}"
+        async for item in self._stream_sse(path, owner=None):
             yield item
 
     async def _stream_sse(self, path: str, *, owner: str | None) -> AsyncIterator[EventData]:
@@ -374,6 +382,45 @@ class HttpKernelClient:
         )
         return [MessageData(**item) for item in result["data"]]
 
+    async def get_message(self, user_id: str, message_id: str) -> MessageData | None:
+        try:
+            result = await self._request(
+                "GET",
+                f"{self._prefix}/v1/messages/{message_id}",
+                owner=user_id,
+            )
+        except KernelSessionNotFoundError:
+            return None
+        return MessageData(**result["data"])
+
+    async def import_message(
+        self,
+        user_id: str,
+        session_id: str,
+        req: ImportMessageRequest,
+    ) -> MessageData:
+        result = await self._request(
+            "POST",
+            f"{self._prefix}/v1/sessions/{session_id}/messages/import",
+            json_body=req.model_dump(mode="json"),
+            owner=user_id,
+        )
+        return MessageData(**result["data"])
+
+    async def fork_session(
+        self,
+        user_id: str,
+        session_id: str,
+        req: ForkSessionRequest,
+    ) -> SessionData:
+        result = await self._request(
+            "POST",
+            f"{self._prefix}/v1/sessions/{session_id}/fork",
+            json_body=req.model_dump(mode="json"),
+            owner=user_id,
+        )
+        return SessionData(**result["data"])
+
     async def submit_action(
         self, user_id: str, session_id: str, req: SubmitActionRequest
     ) -> dict[str, Any]:
@@ -396,6 +443,19 @@ class HttpKernelClient:
         except KernelSessionNotFoundError:
             return
 
+    async def prepare_runtime(
+        self,
+        user_id: str,
+        session_id: str,
+        runtime_context: dict[str, str] | None = None,
+    ) -> None:
+        await self._request(
+            "POST",
+            f"{self._prefix}/v1/sessions/{session_id}/prepare",
+            json_body={"runtime_context": runtime_context},
+            owner=user_id,
+        )
+
     async def run_turn(
         self,
         user_id: str,
@@ -403,6 +463,7 @@ class HttpKernelClient:
         text: str,
         attachments: list[dict[str, Any]] | None = None,
         additional_context: str = "",
+        runtime_context: dict[str, str] | None = None,
     ) -> MessageData:
         import websockets
 
@@ -425,13 +486,15 @@ class HttpKernelClient:
         url = f"{ws_base}{self._prefix}/v1/sessions/{session_id}/run"
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
         headers["X-Valuz-Owner-Id"] = user_id
-        payload = {
+        payload: dict[str, Any] = {
             "message": {
                 "text": text,
                 "attachments": attachments or [],
                 "additional_context": additional_context,
             }
         }
+        if runtime_context is not None:
+            payload["runtime_context"] = runtime_context
         try:
             # The run channel carries a whole agent turn, which can legitimately
             # go quiet for long stretches (a slow tool call, a model streaming

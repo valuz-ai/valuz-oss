@@ -26,6 +26,11 @@ class StoredEvent:
     type: str
     data: dict[str, Any] = field(default_factory=dict)
     timestamp: int = 0  # Unix epoch ms (UTC)
+    # Store-independent identity (the append ``request_id``). ``seq`` is a
+    # PER-STORE autoincrement — the execution-local store and the durable each
+    # assign their own — so cross-store dedup/merge keys on ``event_uid``,
+    # never on seq. ``None`` only for legacy rows written before uid minting.
+    event_uid: str | None = None
 
 
 @dataclass(frozen=True)
@@ -159,6 +164,27 @@ class StorePort(Protocol):
         than ``after_seq``, ordered by row id ascending.
 
         The row id doubles as the client paging cursor (``seq``)."""
+        ...
+
+    async def get_events_after_for_user(
+        self,
+        user_id: str,
+        *,
+        after_seq: int = 0,
+        types: tuple[str, ...] | None = None,
+        limit: int = 200,
+    ) -> list[StoredEvent]:
+        """Cross-session cursor read: ALL of one owner's events (across every
+        session) with row id strictly greater than ``after_seq``, ordered by
+        row id ascending.
+
+        ``types`` restricts the read to those event types at the store — the
+        user-level control-plane stream passes the lifecycle set
+        (``user_message`` / ``session_idle`` / ``session_error`` /
+        ``session_update``) so it never scans per-token rows.
+
+        Powers the always-on user event stream; the row id is the single global
+        cursor (see docs/design/event-delivery-unification.md §1)."""
         ...
 
     async def get_events_window(

@@ -8,7 +8,11 @@ download is complete (without us having to mutate the descriptor — see
 ``ParserRouter._kind_is_ready``).
 
 All other kinds (pdf / office / spreadsheet / web / text) remain
-``ready`` — their backends ship as Python packages with no extra assets.
+``ready`` — their backends ship as ordinary wheels with NO package data to
+collect. That is load-bearing for the frozen build: the previous office
+backend (MarkItDown) loaded magika's ONNX model from package data, and a
+build that missed it broke every office parse (PR #231). anydoc is a compiled
+extension with no such assets.
 """
 
 from __future__ import annotations
@@ -49,9 +53,9 @@ _DESCRIPTOR = ParserPluginDescriptor(
     id=LIGHT_LOCAL_PLUGIN_ID,
     name_zh="本地解析",
     description_zh=(
-        "进程内解析:PyMuPDF4LLM(PDF)、MarkItDown(Office/Excel)、"
-        "html-to-markdown(HTML)、RapidOCR(图片)。除图片 OCR 模型需用户授权下载外,"
-        "全部无需联网。"
+        "进程内解析:PyMuPDF4LLM(PDF)、anydoc(Office/Excel/ODF/RTF/EPUB)、"
+        "html-to-markdown(HTML)、RapidOCR(图片)。"
+        "除图片 OCR 模型需用户授权下载外,全部无需联网。"
     ),
     name_key="parser_light_local.descriptor.name",
     description_key="parser_light_local.descriptor.description",

@@ -1,3 +1,9 @@
+import {
+  DESKTOP_CAPABILITIES_CHANNEL,
+  NETWORK_EGRESS_CHANNELS,
+  NETWORK_EGRESS_EVENTS,
+} from "@valuz/desktop-network-egress/contracts";
+
 export const DESKTOP_CHANNELS = {
   getServicesStatus: "get_services_status",
   startAllServices: "start_all_services",
@@ -9,10 +15,18 @@ export const DESKTOP_CHANNELS = {
   listServiceDescriptors: "list_service_descriptors",
   registerServiceDescriptor: "register_service_descriptor",
   unregisterServiceDescriptor: "unregister_service_descriptor",
+  desktopGetCapabilities: DESKTOP_CAPABILITIES_CHANNEL,
+  egressGetDiagnostics: NETWORK_EGRESS_CHANNELS.getDiagnostics,
+  egressGetSnapshots: NETWORK_EGRESS_CHANNELS.getSnapshots,
+  egressGetMode: NETWORK_EGRESS_CHANNELS.getMode,
+  egressGetStatus: NETWORK_EGRESS_CHANNELS.getStatus,
+  egressGetRuntimePhases: NETWORK_EGRESS_CHANNELS.getRuntimePhases,
+  egressSetMode: NETWORK_EGRESS_CHANNELS.setMode,
   selectDirectory: "select_directory",
   openExternalUrl: "open_external_url",
   appGetVersion: "app_get_version",
   appQuit: "app_quit",
+  appRelaunch: "app_relaunch",
   windowOpenNew: "window_open_new",
   windowMinimize: "window_minimize",
   windowMaximize: "window_maximize",
@@ -41,6 +55,7 @@ export const DESKTOP_CHANNELS = {
 export const DESKTOP_EVENTS = {
   serviceStatusChanged: "service-status-changed",
   serviceDescriptorsChanged: "service-descriptors-changed",
+  egressStatusChanged: NETWORK_EGRESS_EVENTS.statusChanged,
   updaterChecking: "updater:checking",
   updaterAvailable: "updater:available",
   updaterNotAvailable: "updater:not-available",

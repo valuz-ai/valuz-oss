@@ -25,18 +25,34 @@ from valuz_agent.modules.agents.service import (
 from valuz_agent.modules.projects.datastore import ProjectDatastore
 from valuz_agent.modules.projects.models import ProjectRow
 from valuz_agent.modules.projects.service import ProjectService
+from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 
 
 @pytest.fixture
-async def db(tmp_path) -> AsyncIterator:
+async def db(tmp_path, monkeypatch) -> AsyncIterator:
     db_file = tmp_path / "agents_ref.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
     async with engine.begin() as conn:
         await conn.run_sync(
             Base.metadata.create_all,
-            tables=[AgentRow.__table__, ProjectMemberRow.__table__, ProjectRow.__table__],
+            tables=[
+                AgentRow.__table__,
+                ProjectMemberRow.__table__,
+                ProjectRow.__table__,
+                # Project deletion cascades into the task tables.
+                TaskRow.__table__,
+                TaskSessionRow.__table__,
+                TaskEventRow.__table__,
+            ],
         )
     factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+    # Bind the global unit of work to this engine too: project deletion
+    # cascades into the task tables through ``tasks.purge``, which opens its
+    # own ``async_unit_of_work`` (every datastore method self-commits, so
+    # there is no single transaction to keep it inside of).
+    import valuz_agent.infra.db as db_mod
+
+    monkeypatch.setattr(db_mod, "AsyncSessionLocal", factory)
     session = factory()
     try:
         yield session

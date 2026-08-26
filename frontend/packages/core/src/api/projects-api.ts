@@ -29,8 +29,42 @@ export interface ProjectListItem {
   exec_origin?: string;
 }
 
+/**
+ * Projects an edition can reach that no execution target lists.
+ *
+ * A narrow grant (an agent shared to you, execution-endpoints.md §3) opens
+ * exactly ONE project on someone else's machine: the list fan-out cannot ask
+ * that host for its projects — it would rightly refuse — but the project the
+ * agent works in is readable and has to appear, or the user is blind to the
+ * files the agent is changing.
+ *
+ * The provider owns tagging ``exec_origin`` and feeding the origin index, so
+ * every project-scoped call routes back to the machine that answered.
+ */
+export type ExtraProjectsProvider = () => Promise<ProjectListItem[]>;
+
+let _extraProjects: ExtraProjectsProvider | null = null;
+
+export function setExtraProjectsProvider(
+  provider: ExtraProjectsProvider | null,
+): void {
+  _extraProjects = provider;
+}
+
+async function extraProjects(): Promise<ProjectListItem[]> {
+  if (!_extraProjects) return [];
+  try {
+    return await _extraProjects();
+  } catch {
+    // Never let a narrow-grant host's hiccup empty the project list.
+    return [];
+  }
+}
+
 export interface ProjectDetail extends ProjectListItem {
   instructions_md: string | null;
+  /** Member slug that leads a task when the caller names none; null = unset. */
+  default_lead_agent_slug?: string | null;
 }
 
 export interface ProjectDeletePreview {
@@ -247,16 +281,28 @@ export const projectsApi = {
     // index so entity-scoped calls route to the owning backend. Zero targets
     // (OSS) keeps the single-backend path byte-identical.
     if (getListFanOutTargets().length === 0) {
-      return fetchJson("/v1/projects", { cache: PROJECTS_LIST_CACHE });
+      const [mine, extra] = await Promise.all([
+        fetchJson<{ projects: ProjectListItem[] }>("/v1/projects", {
+          cache: PROJECTS_LIST_CACHE,
+        }),
+        extraProjects(),
+      ]);
+      return { projects: [...mine.projects, ...extra] };
     }
-    const outcome = await fanOutTargets((target) =>
+    const outcome = await fanOutTargets((target, signal) =>
       fetchJson<{ projects: ProjectListItem[] }>("/v1/projects", {
         cache: PROJECTS_LIST_CACHE,
         baseUrl: target.baseUrl,
+        signal,
       }),
     );
     const seen = new Set<string>();
     const merged: ProjectListItem[] = [];
+    for (const project of await extraProjects()) {
+      if (seen.has(project.id)) continue;
+      seen.add(project.id);
+      merged.push(project);
+    }
     for (const { target, value } of outcome.values) {
       recordEntityOrigins(value.projects.map((w) => [w.id, target.id]));
       for (const project of value.projects) {
@@ -324,6 +370,25 @@ export const projectsApi = {
       `/v1/projects/${encodeURIComponent(projectId)}?${qs}`,
       {
         method: "PATCH",
+        baseUrl: projectBase(projectId),
+      },
+    );
+    invalidateProjects();
+    return result;
+  },
+
+  /** Set the project's default task lead; pass null to clear it. */
+  async setDefaultLead(
+    projectId: string,
+    agentSlug: string | null,
+  ): Promise<ProjectDetail> {
+    const qs = new URLSearchParams();
+    if (agentSlug) qs.set("agent_slug", agentSlug);
+    const suffix = qs.toString() ? `?${qs}` : "";
+    const result = await fetchJson<ProjectDetail>(
+      `/v1/projects/${encodeURIComponent(projectId)}/default-lead${suffix}`,
+      {
+        method: "PUT",
         baseUrl: projectBase(projectId),
       },
     );
@@ -449,6 +514,8 @@ export const projectsApi = {
   async importProjectConfirm(
     previewId: string,
     rootPath?: string,
+    /** Rename on the way in; omitted keeps the name carried by the pack. */
+    name?: string,
   ): Promise<ImportProjectConfirmResult> {
     const result = await fetchJson<ImportProjectConfirmResult>(
       "/v1/projects/import/confirm",
@@ -458,6 +525,7 @@ export const projectsApi = {
         body: JSON.stringify({
           preview_id: previewId,
           root_path: rootPath || null,
+          name: name?.trim() || null,
         }),
       },
     );

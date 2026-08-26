@@ -53,11 +53,12 @@ must carry the caller's identity across the wire".
 
 from __future__ import annotations
 
+import itertools
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 import valuz_agent.boot.kernel  # noqa: F401 — sys.path side-effect
 
@@ -88,6 +89,15 @@ class HostExecContext(ExecContext):
     """
 
     user_id: str = ""
+    # Heartbeat for a long, silent tool call. A client that sent a
+    # ``progressToken`` gets an MCP ``notifications/progress`` frame. This
+    # buys VISIBILITY, not time: measured, no client extends its deadline on a
+    # beat — a tool that legitimately runs for minutes without partial output
+    # (``generate_ui`` streams a whole document out of a model before it can
+    # answer) survives on its server's declared ``tool_timeout_sec``, not on
+    # its heartbeat. No token / no client support → this is a no-op the
+    # handler can call unconditionally.
+    report_progress: Callable[[str], Awaitable[None]] | None = None
 
 
 TOOLSET_NAMES = ("base", "lead")
@@ -156,12 +166,52 @@ def _build_server(toolset: str) -> Server:
         tdef = by_name.get(tool_name)
         if tdef is None or tdef.handler is None:
             raise ValueError(f"unknown tool: {tool_name}")
-        ctx = HostExecContext(session_id=_current_session_id(), user_id=_current_user_id())
+        ctx = HostExecContext(
+            session_id=_current_session_id(),
+            user_id=_current_user_id(),
+            report_progress=_progress_reporter(server),
+        )
         result = await tdef.handler(dict(arguments), ctx)
         text = result.content if not result.is_error else f"ERROR: {result.content}"
         return [TextContent(type="text", text=text)]
 
     return server
+
+
+def _progress_reporter(server: Server) -> Callable[[str], Awaitable[None]] | None:
+    """Bind a progress sender to THIS call's request context, or ``None``.
+
+    Read at call time because ``request_context`` is a ContextVar scoped to
+    the in-flight request. Returns ``None`` when the client did not ask for
+    progress (no ``progressToken``) so handlers can skip the work entirely.
+    Sending is best-effort: a heartbeat that fails must never fail the tool.
+    """
+    try:
+        request_context = server.request_context
+    except LookupError:
+        return None
+    token = getattr(getattr(request_context, "meta", None), "progressToken", None)
+    if token is None:
+        return None
+    session = request_context.session
+    counter = itertools.count(1)
+
+    async def _report(message: str) -> None:
+        try:
+            await session.send_progress_notification(
+                progress_token=token,
+                progress=float(next(counter)),
+                message=message,
+                # Streamable HTTP keys its per-request SSE streams by
+                # ``str(request_id)``; relating the notification is what puts
+                # it on the caller's own stream instead of the standalone GET
+                # one, which a tool-calling client need not have open.
+                related_request_id=str(request_context.request_id),
+            )
+        except Exception:  # noqa: BLE001 — a heartbeat is never load-bearing
+            logger.debug("progress notification failed", exc_info=True)
+
+    return _report
 
 
 def _ensure_manager(toolset: str) -> StreamableHTTPSessionManager:

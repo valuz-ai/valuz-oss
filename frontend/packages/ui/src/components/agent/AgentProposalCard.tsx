@@ -101,11 +101,11 @@ export const AgentProposalCard = memo(function AgentProposalCard({
           <p className="mt-2 text-2xs uppercase tracking-wider text-ink-label">
             {t("agent.proposalBrain")}
           </p>
-          <p className="font-mono text-[11px] text-ink-meta">
+          <p className="font-mono text-2xs text-ink-meta">
             {runtime} · {model}
           </p>
 
-          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-ink-meta">
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-2xs text-ink-meta">
             <span className="inline-flex items-center gap-1">
               <Wrench className="h-3 w-3 shrink-0 text-ink-label" />
               {t("agent.proposalSkills")}: {skills.length > 0 ? skills.join(", ") : none}
@@ -144,7 +144,7 @@ export const AgentProposalCard = memo(function AgentProposalCard({
       </div>
 
       {!isTerminal ? (
-        <div className="flex items-center justify-end gap-2 border-t border-surface-border px-4 py-2">
+        <div className="flex items-center justify-end gap-2 px-4 py-2">
           <button
             type="button"
             disabled={isBusy}

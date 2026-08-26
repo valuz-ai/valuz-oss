@@ -7,9 +7,25 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any
 
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import PlainTextResponse
 
 logger = logging.getLogger(__name__)
+
+
+def internal_mcp_transport_security() -> TransportSecuritySettings:
+    """Transport security for the built-in MCP servers: rebinding check off.
+
+    ``FastMCP`` auto-enables DNS-rebinding protection when constructed with its
+    default ``host="127.0.0.1"``, allowing only localhost ``Host`` headers — so
+    a kernel reaching the host callback through a public ingress hostname gets
+    ``421 Misdirected Request``. That protection defends *unauthenticated*
+    localhost servers against browsers; these endpoints are only reachable
+    through ``build_internal_mcp_asgi``, which rejects any request lacking a
+    valid per-owner signed token, and the deployment's public hostname isn't
+    knowable here. Auth stays with the token wrapper; the Host allowlist is off.
+    """
+    return TransportSecuritySettings(enable_dns_rebinding_protection=False)
 
 
 @dataclass(frozen=True)
@@ -60,7 +76,7 @@ async def _resolve_session_owner(session_id: str) -> str | None:
     return sessions[0].user_id if sessions else None
 
 
-def _verify_token_owner(token: str | None) -> str | None:
+async def _verify_token_owner(token: str | None):  # noqa: ANN201
     """Verified owner from a per-owner MCP token, or None if invalid/absent.
 
     Same per-owner signing/verification as the data service (unifies the two
@@ -69,15 +85,14 @@ def _verify_token_owner(token: str | None) -> str | None:
     """
     if not token:
         return None
-    from src.core.token_signer import InvalidTokenError
-
-    from valuz_agent.boot.kernel import make_host_data_service_verifier_per_owner
+    from valuz_agent.ports.sandbox_credential import get_sandbox_credential_verifier
 
     try:
-        claims = make_host_data_service_verifier_per_owner().verify(token)
-    except InvalidTokenError:
+        claims = await get_sandbox_credential_verifier().verify(token)
+    except Exception:  # noqa: BLE001 — auth backend failure must fail closed
+        logger.warning("Internal MCP: sandbox credential verification failed", exc_info=True)
         return None
-    return claims.user_id if claims else None
+    return claims
 
 
 def build_internal_mcp_asgi(inner: Any) -> Any:
@@ -101,9 +116,29 @@ def build_internal_mcp_asgi(inner: Any) -> Any:
         }
         # Owner comes from the VERIFIED token — never a shared secret or a trusted
         # header. A forged sub / unknown owner fails verification.
-        owner_id = _verify_token_owner(headers.get("x-valuz-internal"))
-        if not owner_id:
-            response = PlainTextResponse("Forbidden", status_code=403)
+        raw_token = headers.get("x-valuz-internal")
+        credential_claims = await _verify_token_owner(raw_token)
+        if credential_claims is None:
+            # Say WHY. A 403 with a bare body cost a multi-hour hunt across
+            # ingress, secrets, and kernel images: every sandbox call to every
+            # built-in MCP was failing here and the access log showed only the
+            # status. The reason goes to the log AND the body — this is an
+            # internal endpoint, its only callers are our own runtimes, and
+            # "no header" vs "bad token" is exactly the fork the next person
+            # needs first.
+            reason = "missing X-Valuz-Internal header" if not raw_token else "credential rejected"
+            # The first 8 chars distinguish every credential shape in play —
+            # a per-owner JWT ("eyJhbGci"), a managed capability ("vxe_…"),
+            # and an unresolved runtime-context marker ("__runtim") — and none
+            # of them is secret at that length.
+            logger.warning(
+                "Internal MCP 403 (%s): path=%s token_len=%d token_head=%s",
+                reason,
+                scope.get("path", ""),
+                len(raw_token or ""),
+                (raw_token or "")[:8],
+            )
+            response = PlainTextResponse(f"Forbidden: {reason}", status_code=403)
             await response(scope, receive, send)
             return
 
@@ -113,10 +148,39 @@ def build_internal_mcp_asgi(inner: Any) -> Any:
             await response(scope, receive, send)
             return
 
+        # A managed credential may be bound to one session. Legacy owner
+        # credentials have ``session_id=None`` and retain owner-wide behavior.
+        if credential_claims.session_id is not None and credential_claims.session_id != session_id:
+            logger.warning(
+                "Internal MCP 403 (session-bound credential mismatch): "
+                "credential session=%s request session=%s path=%s",
+                credential_claims.session_id,
+                session_id,
+                scope.get("path", ""),
+            )
+            response = PlainTextResponse(
+                "Forbidden: credential bound to another session", status_code=403
+            )
+            await response(scope, receive, send)
+            return
+        owner_id = credential_claims.user_id
+
         # The session must belong to the authenticated owner (cross-owner guard).
         session_owner = await _resolve_session_owner(session_id)
         if session_owner != owner_id:
-            response = PlainTextResponse("Forbidden", status_code=403)
+            logger.warning(
+                "Internal MCP 403 (session owner mismatch): session=%s "
+                "resolved_owner=%s token_owner=%s path=%s",
+                session_id,
+                session_owner,
+                owner_id,
+                scope.get("path", ""),
+            )
+            response = PlainTextResponse(
+                "Forbidden: session not owned by credential owner"
+                + (" (session unknown here)" if session_owner is None else ""),
+                status_code=403,
+            )
             await response(scope, receive, send)
             return
 
@@ -132,6 +196,7 @@ def build_internal_mcp_asgi(inner: Any) -> Any:
 __all__ = [
     "BuiltinMCPContext",
     "build_internal_mcp_asgi",
+    "internal_mcp_transport_security",
     "get_current_mcp_context",
     "get_current_mcp_session_id",
     "get_current_mcp_user_id",

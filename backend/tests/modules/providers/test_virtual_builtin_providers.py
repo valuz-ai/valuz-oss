@@ -368,11 +368,12 @@ class TestGetVirtualTemplate:
 
 
 class TestSubscriptionLoginGate:
-    """A logged-out subscription channel keeps its card but drops its models — but
-    ONLY on the per-channel detail path (``get_provider``), which is what the chat
-    composer fetches. ``list_providers`` (which feeds model-options →
-    onboarding ConnectStep + Settings default-model picker) is deliberately NOT
-    gated: those surfaces already gate client-side on the keychain probe, and
+    """A logged-out subscription channel keeps its card but drops its models — on
+    the per-channel detail path (``get_provider``) and on the opt-in gated list
+    (``list_providers(gated=True)``, the composer's single-request feed). The
+    DEFAULT ``list_providers`` (which feeds model-options → onboarding
+    ConnectStep + Settings default-model picker) is deliberately NOT gated:
+    those surfaces already gate client-side on the keychain probe, and
     stripping there would drop the channel from model-options and break the
     onboarding login card. Covers the virtual template AND a persisted
     ``cli_keychain`` row (the real-world repro — logged in once, keychain since
@@ -400,6 +401,22 @@ class TestSubscriptionLoginGate:
         # onboarding gate client-side, and an empty list drops the login card.
         self._set_logged_out(monkeypatch)
         by_id = {i.id: i for i in await svc.service.list_providers(OWNER)}
+        assert by_id["ch-claude-subscription"].models
+
+    async def test_gated_list_hides_models_when_logged_out(
+        self, svc: _SvcHandle, monkeypatch
+    ) -> None:
+        # The composer's single-request feed (``?gated=1``): a logged-out
+        # subscription channel keeps its card but its models are stripped,
+        # exactly like the per-channel detail path.
+        self._set_logged_out(monkeypatch)
+        by_id = {i.id: i for i in await svc.service.list_providers(OWNER, gated=True)}
+        assert by_id["ch-claude-subscription"].models == []
+        assert by_id["ch-claude-subscription"].default_model is None
+
+    async def test_gated_list_keeps_models_when_logged_in(self, svc: _SvcHandle) -> None:
+        # Default autouse fixture = logged in → the gate is a no-op.
+        by_id = {i.id: i for i in await svc.service.list_providers(OWNER, gated=True)}
         assert by_id["ch-claude-subscription"].models
 
     async def test_detail_models_shown_when_logged_in(self, svc: _SvcHandle) -> None:

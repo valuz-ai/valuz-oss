@@ -1,22 +1,51 @@
 /** @vitest-environment jsdom */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "@valuz/shared/i18n";
-import type { Task } from "@valuz/core";
-import { useSessionStore } from "@valuz/core";
+import type { ChatProjectBinding, Task } from "@valuz/core";
+import { channelsApi, useSessionStore } from "@valuz/core";
 import type { SessionListItem } from "@valuz/shared";
 
 // ── Shared, hoisted test state the module mocks read from ────────────────────
 const h = vi.hoisted(() => ({
   currentId: "A",
   currentSearch: "",
+  // Ordered log of "navigate" / "send" so a test can pin which happens first.
+  sendOrder: [] as string[],
   tasksByProject: new Map<string, unknown[]>(),
   sessions: [] as unknown[],
   members: [] as unknown[],
+  playbooks: [] as unknown[],
+  chatBindings: [] as ChatProjectBinding[],
+  rightPanel: null as unknown,
+  playbookDialog: null as unknown,
+  setRightPanel: vi.fn(),
+  setHeader: vi.fn(),
+  setMainClassName: vi.fn(),
+  setContentInnerClassName: vi.fn(),
+  kbTree: [] as never[],
+  kbBindings: [] as never[],
+  handleToggleBinding: vi.fn(),
+  handleExpandKbFolder: vi.fn(),
+  handleSetAddedKbs: vi.fn(),
+  handleRemoveKb: vi.fn(),
+  handleSelectAllInKb: vi.fn(),
+  stagedAttachments: [] as never[],
+  attachLocalFiles: vi.fn(),
+  removeAttachment: vi.fn(),
+  markPendingConsumed: vi.fn(),
+  platform: {
+    deleteFile: vi.fn(),
+    revealInFinder: vi.fn(),
+    isElectron: false,
+    isMac: false,
+  },
 }));
 
-const navigate = vi.fn();
+const navigate = vi.fn(() => {
+  h.sendOrder.push("navigate");
+});
 
 vi.mock("react-router-dom", async (orig) => {
   const actual = await orig<typeof import("react-router-dom")>();
@@ -38,29 +67,24 @@ vi.mock("react-router-dom", async (orig) => {
 // is never actually rendered, which keeps the test light).
 vi.mock("@valuz/app/layout", () => ({
   useProjectOutlet: () => ({
-    setRightPanel: vi.fn(),
-    setHeader: vi.fn(),
-    setMainClassName: vi.fn(),
-    setContentInnerClassName: vi.fn(),
+    setRightPanel: h.setRightPanel,
+    setHeader: h.setHeader,
+    setMainClassName: h.setMainClassName,
+    setContentInnerClassName: h.setContentInnerClassName,
   }),
 }));
 vi.mock("@valuz/app/platform", () => ({
-  usePlatform: () => ({
-    deleteFile: vi.fn(),
-    revealInFinder: vi.fn(),
-    isElectron: false,
-    isMac: false,
-  }),
+  usePlatform: () => h.platform,
 }));
 vi.mock("@valuz/app/hooks", () => ({
   useProjectKbBindings: () => ({
-    kbTree: [],
-    bindings: [],
-    handleToggleBinding: vi.fn(),
-    handleExpandKbFolder: vi.fn(),
-    handleSetAddedKbs: vi.fn(),
-    handleRemoveKb: vi.fn(),
-    handleSelectAllInKb: vi.fn(),
+    kbTree: h.kbTree,
+    bindings: h.kbBindings,
+    handleToggleBinding: h.handleToggleBinding,
+    handleExpandKbFolder: h.handleExpandKbFolder,
+    handleSetAddedKbs: h.handleSetAddedKbs,
+    handleRemoveKb: h.handleRemoveKb,
+    handleSelectAllInKb: h.handleSelectAllInKb,
   }),
   useKbDocTree: () => ({ kbTree: [], loading: false, expandFolder: vi.fn() }),
 }));
@@ -103,7 +127,18 @@ vi.mock("@valuz/app/components", () => ({
       </div>
     );
   },
+  BindChatDialog: (props: { onBound: () => void | Promise<void> }) => (
+    <button
+      type="button"
+      data-testid="refresh-chat-bindings"
+      onClick={() => void props.onBound()}
+    />
+  ),
   CreateAutomationDialog: () => null,
+  CreatePlaybookDialog: (props: unknown) => {
+    h.playbookDialog = props;
+    return null;
+  },
   DeployAgentsDialog: () => null,
   RenameInput: () => null,
   RowActionsMenu: () => null,
@@ -120,8 +155,20 @@ vi.mock("@valuz/ui", async (orig) => {
   const actual = await orig<typeof import("@valuz/ui")>();
   return {
     ...actual,
-    Composer: (props: { selectedAgentSlug?: string | null }) => (
-      <div data-testid="composer" data-agent={props.selectedAgentSlug ?? ""} />
+    Composer: (props: {
+      selectedAgentSlug?: string | null;
+      value?: string;
+      onChange?: (v: string) => void;
+      onSend?: () => void;
+    }) => (
+      <div data-testid="composer" data-agent={props.selectedAgentSlug ?? ""}>
+        <input
+          data-testid="composer-input"
+          value={props.value ?? ""}
+          onChange={(e) => props.onChange?.(e.target.value)}
+        />
+        <button data-testid="composer-send" onClick={() => props.onSend?.()} />
+      </div>
     ),
   };
 });
@@ -153,6 +200,11 @@ vi.mock("../../../core/src/api/sessions-api", async (orig) => {
           (s) => (s as SessionListItem).project_id === pid,
         ),
       })),
+      create: vi.fn(async () => ({ id: "new-session" })),
+      sendMessage: vi.fn(async () => {
+        h.sendOrder.push("send");
+        return undefined;
+      }),
     },
   };
 });
@@ -189,6 +241,20 @@ vi.mock("../../../core/src/api/automations-api", async (orig) => {
     },
   };
 });
+vi.mock("../../../core/src/api/playbooks-api", async (orig) => {
+  const actual = await orig<typeof import("@valuz/core")>();
+  return {
+    ...actual,
+    playbooksApi: {
+      ...(actual as { playbooksApi: object }).playbooksApi,
+      list: vi.fn(async () => h.playbooks),
+      get: vi.fn(),
+      create: vi.fn(),
+      updateDefinition: vi.fn(),
+      createVersion: vi.fn(),
+    },
+  };
+});
 vi.mock("../../../core/src/api/connectors-api", async (orig) => {
   const actual = await orig<typeof import("@valuz/core")>();
   return {
@@ -207,6 +273,23 @@ vi.mock("../../../core/src/api/agents-api", async (orig) => {
       ...(actual as { agentsApi: object }).agentsApi,
       listMembers: vi.fn(async () => ({ agents: h.members })),
       listAgents: vi.fn(async () => ({ agents: [] })),
+    },
+  };
+});
+vi.mock("../../../core/src/api/channels-api", async (orig) => {
+  const actual = await orig<typeof import("@valuz/core")>();
+  return {
+    ...actual,
+    channelsApi: {
+      ...(actual as { channelsApi: object }).channelsApi,
+      listChatBindings: vi.fn(async () => h.chatBindings),
+      deleteFeishuChat: vi.fn(async (externalChatId: string) => {
+        h.chatBindings = h.chatBindings.filter(
+          (chat) => chat.external_chat_id !== externalChatId,
+        );
+      }),
+      unbindChat: vi.fn(async () => undefined),
+      feishuChatLink: vi.fn(async () => null),
     },
   };
 });
@@ -235,6 +318,15 @@ vi.mock("../../../core/src/hooks/use-model-defaults", () => ({
 }));
 vi.mock("../../../core/src/hooks/use-project-last-used", () => ({
   useProjectLastUsed: () => ({ pick: null, loading: false }),
+}));
+vi.mock("../../../core/src/hooks/use-session-attachments", () => ({
+  useSessionAttachments: () => ({
+    attachments: h.stagedAttachments,
+    hasParsing: false,
+    attachLocalFiles: h.attachLocalFiles,
+    remove: h.removeAttachment,
+    markPendingConsumed: h.markPendingConsumed,
+  }),
 }));
 vi.mock("../../../core/src/hooks/use-activity-feed", () => ({
   useActivityFeed: () => ({
@@ -302,6 +394,37 @@ const anchorKeys = (root: HTMLElement, prefix: string): string[] =>
     .map((el) => el.getAttribute("data-anchor-key") ?? "")
     .filter((k) => k.startsWith(prefix));
 
+type RightPanelProps = {
+  chatBindings: Array<{ id: string; name: string }>;
+  onDeleteChat: (chatId: string) => void;
+  playbooks: Array<{
+    id: string;
+    name: string;
+    version: number;
+    status: string;
+    running?: boolean;
+  }>;
+  onAddPlaybook: () => void;
+};
+
+type PlaybookDialogProps = {
+  open: boolean;
+  fixedProjectId?: string;
+  fixedProjectName?: string;
+};
+
+const playbookDialogProps = (): PlaybookDialogProps | null =>
+  h.playbookDialog && typeof h.playbookDialog === "object"
+    ? (h.playbookDialog as PlaybookDialogProps)
+    : null;
+
+const rightPanelProps = (): RightPanelProps | null =>
+  h.rightPanel &&
+  typeof h.rightPanel === "object" &&
+  "props" in h.rightPanel
+    ? (h.rightPanel as { props: RightPanelProps }).props
+    : null;
+
 describe("ProjectDetailPage auto-refresh wiring", () => {
   beforeEach(() => {
     initI18n({ locale: "en-US", fallbackLocale: "en-US" });
@@ -310,6 +433,24 @@ describe("ProjectDetailPage auto-refresh wiring", () => {
     h.tasksByProject = new Map([["A", [task({ id: "t1", title: "Alpha" })]]]);
     h.sessions = [session({ id: "s1", project_id: "A" })];
     h.members = [];
+    h.playbooks = [];
+    h.chatBindings = [
+      {
+        channel_instance_id: "channel-1",
+        external_chat_id: "chat-1",
+        external_chat_name: "Alpha group",
+        platform: "feishu_bot",
+        project_id: "A",
+        created_by_valuz: false,
+        needs_join: false,
+      },
+    ];
+    h.rightPanel = null;
+    h.playbookDialog = null;
+    h.setRightPanel.mockReset();
+    h.setRightPanel.mockImplementation((panel: unknown) => {
+      h.rightPanel = panel;
+    });
     useSessionStore.setState({
       sessions: [session({ id: "s1", project_id: "A" })],
     });
@@ -338,6 +479,110 @@ describe("ProjectDetailPage auto-refresh wiring", () => {
     fireEvent.click(getByRole("tab", { name: /task|任务/i }));
     await waitFor(() =>
       expect(container.querySelector('[data-anchor-key="task-t1"]')).toBeTruthy(),
+    );
+  });
+
+  it("refreshes the right panel when the add-group dialog changes bindings", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(rightPanelProps()?.chatBindings.map((chat) => chat.id)).toEqual([
+        "chat-1",
+      ]),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    h.chatBindings = [
+      ...h.chatBindings,
+      {
+        channel_instance_id: "channel-2",
+        external_chat_id: "chat-2",
+        external_chat_name: "Beta group",
+        platform: "feishu_bot",
+        project_id: "A",
+        created_by_valuz: true,
+        needs_join: true,
+      },
+    ];
+    h.setRightPanel.mockClear();
+    vi.mocked(channelsApi.listChatBindings).mockClear();
+
+    fireEvent.click(screen.getByTestId("refresh-chat-bindings"));
+
+    await waitFor(() =>
+      expect(channelsApi.listChatBindings).toHaveBeenCalledWith("A"),
+    );
+    await waitFor(() =>
+      expect(rightPanelProps()?.chatBindings.map((chat) => chat.id)).toEqual([
+        "chat-1",
+        "chat-2",
+      ]),
+    );
+  });
+
+  it("projects associated Playbooks into the right panel", async () => {
+    h.playbooks = [
+      {
+        id: "pb-1",
+        project_id: "A",
+        name: "Quarterly review",
+        status: "active",
+        origin: "user",
+        source_definition_id: null,
+        current_version: 3,
+        revision: 2,
+        created_at: 1,
+        updated_at: 2,
+      },
+    ];
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(rightPanelProps()?.playbooks).toEqual([
+        {
+          id: "pb-1",
+          name: "Quarterly review",
+          version: 3,
+          status: "active",
+          running: false,
+        },
+      ]),
+    );
+    expect(rightPanelProps()?.onAddPlaybook).toBeTypeOf("function");
+
+    act(() => rightPanelProps()?.onAddPlaybook());
+    expect(playbookDialogProps()).toMatchObject({
+      open: true,
+      fixedProjectId: "A",
+      fixedProjectName: "Proj",
+    });
+  });
+
+  it("removes a deleted group from the right panel", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(rightPanelProps()?.chatBindings.map((chat) => chat.id)).toEqual([
+        "chat-1",
+      ]),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    h.setRightPanel.mockClear();
+
+    await act(async () => {
+      rightPanelProps()?.onDeleteChat("chat-1");
+    });
+    fireEvent.click(screen.getByRole("button", { name: /delete|删除/i }));
+
+    await waitFor(() =>
+      expect(channelsApi.deleteFeishuChat).toHaveBeenCalledWith("chat-1", "A"),
+    );
+    await waitFor(() => expect(h.setRightPanel).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(rightPanelProps()?.chatBindings).toEqual([]),
     );
   });
 
@@ -390,6 +635,78 @@ describe("ProjectDetailPage auto-refresh wiring", () => {
         "lead-agent",
       ),
     );
+  });
+
+  it("hands the draft to /conversation/new without minting a session first", async () => {
+    // The composer used to await ``sessionsApi.create`` before it could
+    // navigate, so a cloud project froze for the whole round trip. 新对话
+    // never had that problem because the user is already on the conversation
+    // page, which paints the optimistic turn before minting. Both entries now
+    // take that same path, so nothing is awaited here at all.
+    h.sendOrder = [];
+    h.members = [
+      {
+        member: {
+          id: "pm-lead",
+          project_id: "A",
+          agent_slug: "lead-agent",
+          source_agent_slug: "lead-agent",
+        },
+        agent: {
+          id: "a-lead",
+          name: "Lead Agent",
+          model: "claude-sonnet-4",
+          runtime_provider: "claude_agent",
+          instructions: "",
+          skills: [],
+          connectors: [],
+          provider_id: null,
+          effort: null,
+        },
+      },
+    ];
+
+    renderPage("/projects/A?agent=lead-agent");
+    await waitFor(() =>
+      expect(screen.getByTestId("composer").getAttribute("data-agent")).toBe(
+        "lead-agent",
+      ),
+    );
+
+    fireEvent.change(screen.getByTestId("composer-input"), {
+      target: { value: "你好" },
+    });
+    fireEvent.click(screen.getByTestId("composer-send"));
+
+    await waitFor(() => expect(h.sendOrder).toContain("navigate"));
+    // No session was created and no message was posted from this page.
+    expect(h.sendOrder).toEqual(["navigate"]);
+
+    const [path, options] = navigate.mock.calls.at(-1) as unknown as [
+      string,
+      { state?: { projectSend?: Record<string, unknown> } },
+    ];
+    expect(path).toContain("/conversation/new");
+    expect(path).toContain("project=A");
+    expect(path).toContain("agent=lead-agent");
+    expect(options?.state?.projectSend?.text).toBe("你好");
+    // Everything else the composer holds must ride along. The conversation
+    // page has its own state under most of these names, so an omission is
+    // silent: it mints the session with that page's defaults instead of what
+    // the user picked here. Execution location travels as an origin
+    // observation because that is what routes the create.
+    const sent = options?.state?.projectSend as Record<string, unknown>;
+    expect(sent.projectId).toBe("A");
+    expect(sent.execOrigin).toBeDefined();
+    expect("permissionMode" in sent).toBe(true);
+    // ...but NOT provider/model. This composer picks an AGENT, not a model —
+    // its provider/model state only ever holds the project's last-used channel
+    // or the global default. Handing them over made the create override the
+    // agent's own brain (backend ADR-006), so an agent pinned to one channel
+    // silently ran on whatever the project's previous chat had used. The
+    // conversation page derives the brain from ``agent`` in the URL.
+    expect("providerId" in sent).toBe(false);
+    expect("modelId" in sent).toBe(false);
   });
 
   it("auto-refresh adds a newly-appearing task without duplicating existing rows", async () => {

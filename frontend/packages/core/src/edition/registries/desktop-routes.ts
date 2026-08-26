@@ -13,7 +13,7 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "conversation-detail",
     path: "/conversation/:id",
-    label: "Conversation",
+    label: "nav.chat",
     description: "Active conversation with tool calls and streaming output.",
     layout: "project",
     showInNav: false,
@@ -22,7 +22,7 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "projects",
     path: "/projects",
-    label: "Projects",
+    label: "sidebar.projects",
     description: "Project lists with files, notes, and scoped agent context.",
     layout: "project",
     showInNav: true,
@@ -31,7 +31,7 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "project-detail",
     path: "/projects/:id",
-    label: "Project Detail",
+    label: "route.projectDetail",
     description: "Files, knowledge, and conversations scoped to one project.",
     layout: "project",
     showInNav: false,
@@ -40,7 +40,7 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "knowledge",
     path: "/knowledge",
-    label: "Knowledge",
+    label: "nav.knowledge",
     description: "Imported documents and local knowledge collections.",
     layout: "project",
     showInNav: true,
@@ -49,7 +49,7 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "agents",
     path: "/agents",
-    label: "Agents",
+    label: "nav.agents",
     description: "Official agents available to instantiate.",
     layout: "project",
     showInNav: true,
@@ -58,7 +58,7 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "agent-detail",
     path: "/agents/:slug",
-    label: "Agent Detail",
+    label: "route.agentDetail",
     description: "Read-only agent view and instantiation into a project.",
     layout: "project",
     showInNav: false,
@@ -67,7 +67,7 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "task-detail",
     path: "/tasks/:taskId",
-    label: "Task Detail",
+    label: "task.detailTitle",
     description: "Lead-dispatch task timeline, runs, and interventions.",
     layout: "project",
     showInNav: false,
@@ -76,7 +76,7 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "skills",
     path: "/skills",
-    label: "Skills",
+    label: "sidebar.skills",
     description: "Official and custom skills available to the local agent.",
     layout: "project",
     showInNav: true,
@@ -94,7 +94,7 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "skill-detail",
     path: "/skills/:skillId",
-    label: "Skill Detail",
+    label: "route.skillDetail",
     description: "Detailed view and editing of a skill.",
     layout: "project",
     showInNav: false,
@@ -110,18 +110,37 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
     edition: "personal",
   },
   {
+    id: "plugins",
+    path: "/plugins",
+    label: "plugin.title",
+    description:
+      "Installed Agent Plugins (skill suites and skills + connectors bundles).",
+    layout: "project",
+    showInNav: false,
+    edition: "personal",
+  },
+  {
     id: "settings",
     path: "/settings",
-    label: "Settings",
+    label: "nav.settings",
     description: "Models, credentials, and local desktop preferences.",
     layout: "project",
     showInNav: true,
     edition: "personal",
   },
   {
+    id: "component-gallery",
+    path: "/developer/components",
+    label: "route.componentGallery",
+    description: "Shared component catalog with distribution extension groups.",
+    layout: "project",
+    showInNav: false,
+    edition: "personal",
+  },
+  {
     id: "onboarding",
     path: "/onboarding",
-    label: "Onboarding",
+    label: "route.onboarding",
     description: "First-run experience for new desktop users.",
     layout: "standalone",
     showInNav: false,
@@ -130,7 +149,7 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "first-launch",
     path: "/welcome",
-    label: "Welcome",
+    label: "onboarding.welcome",
     description: "Connection selector for first-time setup.",
     layout: "standalone",
     showInNav: false,
@@ -139,7 +158,7 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "api-key-config",
     path: "/auth/api-key",
-    label: "API Key Config",
+    label: "route.apiKeyConfig",
     description: "Manual API key configuration.",
     layout: "standalone",
     showInNav: false,
@@ -148,7 +167,7 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "tool-calls",
     path: "/tool-calls",
-    label: "Tool Calls",
+    label: "route.toolCalls",
     description: "Prototype gallery for tool invocation states.",
     layout: "project",
     showInNav: false,
@@ -157,7 +176,7 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "context-panel",
     path: "/context-panel",
-    label: "Context Panel",
+    label: "route.contextPanel",
     description: "Right-rail examples for chat and project context.",
     layout: "project",
     showInNav: false,
@@ -166,8 +185,26 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "overlays",
     path: "/overlays",
-    label: "Overlays",
+    label: "route.overlays",
     description: "Prototype command palette and confirmation surfaces.",
+    layout: "project",
+    showInNav: false,
+    edition: "personal",
+  },
+  {
+    id: "playbooks",
+    path: "/playbooks",
+    label: "playbook.title",
+    description: "Reusable versioned executable prompts and their runs.",
+    layout: "project",
+    showInNav: false,
+    edition: "personal",
+  },
+  {
+    id: "playbook-detail",
+    path: "/playbooks/:playbookId",
+    label: "route.playbookDetail",
+    description: "Playbook detail view with its run history.",
     layout: "project",
     showInNav: false,
     edition: "personal",
@@ -175,7 +212,7 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "automation",
     path: "/automations",
-    label: "Automation",
+    label: "automation.title",
     description: "Recurring agent runs (cron + interval triggers).",
     layout: "project",
     showInNav: false,
@@ -184,7 +221,7 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "automation-detail",
     path: "/automations/:automationId",
-    label: "Automation Detail",
+    label: "route.automationDetail",
     description: "Automation detail view with execution log.",
     layout: "project",
     showInNav: false,
@@ -193,7 +230,7 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
   {
     id: "activity",
     path: "/activity",
-    label: "Activity",
+    label: "nav.activity",
     description: "Overview of running (and recently finished) runs.",
     layout: "project",
     showInNav: false,

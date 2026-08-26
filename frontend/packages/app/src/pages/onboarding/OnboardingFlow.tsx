@@ -37,9 +37,9 @@ export const OnboardingFlow = () => {
 
   const go = (next: Step) => setStep(next);
 
-  // Terminal (skip path): best-effort seed the Valuz 小助手 so the user never
+  // Terminal (skip path): best-effort ensure Valurion so the user never
   // lands in an empty agent library, then mark done and route into the app —
-  // ConversationPage defaults to `valuz-helper` when present, so it's pre-
+  // Valurion is installed independently of team selection and is available
   // selected on arrival. Creation is best-effort: when no model channel is
   // configured yet it 422s (e.g. skipping before ConnectStep), and any other
   // failure is equally non-fatal. We swallow it and finish anyway — the
@@ -73,7 +73,7 @@ export const OnboardingFlow = () => {
     }
   };
 
-  // Terminal (no-team path): create just the Valuz 小助手 and land in 临时对话
+  // Terminal (no-team path): ensure Valurion and land in 临时对话
   // with it pre-selected (?agent=). No project deployed.
   const enterAssistant = async () => {
     try {
@@ -207,7 +207,7 @@ const OnboardingChrome = ({
 
         <div className="flex items-center gap-3">
           {showProgress && (
-            <span className="font-mono text-[11px] tracking-wide text-ink-muted">
+            <span className="font-mono text-2xs tracking-wide text-ink-muted">
               {t("onboarding.stepCounter" as Parameters<typeof t>[0], {
                 current: stepIndex,
                 total: 2,

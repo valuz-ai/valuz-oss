@@ -268,10 +268,15 @@ def list_provider_descriptors(
 
 @router.get("")
 async def list_providers(
+    gated: bool = False,
     user_id: str = Depends(get_current_user_id),
     svc: ProviderService = Depends(get_provider_service),
 ) -> dict[str, list[LLMChannel]]:
-    return {"providers": await svc.list_providers(user_id)}
+    """``gated=1`` applies the subscription-login gate to the whole list so
+    composer surfaces can build their model pickers from one request (instead
+    of a per-channel detail fan-out). The default stays ungated — see
+    ``_gate_subscription_login`` for why model-options must not be gated."""
+    return {"providers": await svc.list_providers(user_id, gated=gated)}
 
 
 @router.get("/{provider_id}")

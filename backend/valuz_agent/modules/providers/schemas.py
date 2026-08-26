@@ -27,6 +27,9 @@ class LLMModel:
         id: Wire id; rides the request ``model`` field as-is.
         label: Display name; ``None`` → the frontend falls back to
             ``modelLabel(id)``.
+        selection_hint: Optional, presentation-only suffix rendered by model
+            pickers (for example ``"1.5×"``). It is deliberately separate
+            from ``label`` so readonly model names stay stable and clean.
         runtimes: The runtimes this model can drive (``claude_agent`` / ``codex``
             / ``deepagents``), declared by the producing side. ``None`` → "not
             declared": the consumer derives them from the channel's
@@ -34,11 +37,24 @@ class LLMModel:
             A producer declares them only when derivation can't know — e.g. the
             Valuz codex gateway card declares ``("codex",)`` because a Responses
             wire alone wouldn't otherwise imply codex.
+        max_input_tokens: The model's maximum INPUT context size in tokens,
+            declared by the producing side. This is langchain model-profile
+            semantics, NOT the vendor total "context window": for split-budget
+            models enter the input cap (e.g. 272000 for a 400k-window GPT-5
+            class model); for Anthropic models the two numbers coincide.
+            ``None`` → "not declared": runtimes keep their SDK / CLI tuned
+            per-model defaults. Declare it only for models those defaults
+            can't know — gateway aliases like ``valuz-pro-anthropic`` — so
+            auto-compaction triggers at the real window instead of a fixed
+            fallback. At session creation the host snapshots it into kernel
+            ``ModelSettings.max_input_tokens``.
     """
 
     id: str
     label: str | None = None
+    selection_hint: str | None = None
     runtimes: tuple[str, ...] | None = None
+    max_input_tokens: int | None = None
 
 
 @dataclass

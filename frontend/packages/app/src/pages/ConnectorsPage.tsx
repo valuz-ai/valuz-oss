@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Link2, Plus, Search, Store, Trash2 } from "lucide-react";
 import {
@@ -15,7 +15,10 @@ import {
   EmptyState,
   PageLoader,
 } from "@valuz/ui";
-import { ResourceActionSlot } from "../components/ResourceActionSlot";
+import {
+  ResourceActionSlot,
+  ResourceDetailActionSlot,
+} from "../components/ResourceActionSlot";
 import {
   acknowledgeConnectorAlert,
   connectorsApi,
@@ -38,6 +41,8 @@ import {
 } from "@valuz/app/components";
 import type { ConnectorAddMode } from "@valuz/app/components";
 import { reauthorizePayload, shouldReauthorize } from "./connector-reconnect";
+import { isCloudOnlyResource } from "./agent-list-state";
+import { usePluginMemberships } from "../components/plugins/use-plugin-memberships";
 
 /* ── Status labels ──────────────────────────────────────────────── */
 
@@ -158,6 +163,9 @@ export const ConnectorsPage = () => {
     setMainClassName,
   } = useProjectOutlet();
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
+  const [searchParams] = useSearchParams();
+  // ``?connector=<slug>`` deep link (e.g. from a plugin's member list).
+  const connectorParam = searchParams.get("connector");
 
   const [connectors, setConnectors] = useState<ConnectorItem[]>([]);
   const [catalog, setCatalog] = useState<CatalogFlat[]>([]);
@@ -308,22 +316,39 @@ export const ConnectorsPage = () => {
     const assigned = new Set<string>();
     for (const cat of categories) {
       const matching = unifiedList.filter(
-        (e) => !assigned.has(entryKey(e)) && cat.filter(e),
+        (e) =>
+          !isCloudOnlyResource(e) &&
+          !assigned.has(entryKey(e)) &&
+          cat.filter(e),
       );
       if (matching.length > 0) return matching[0];
       for (const e of unifiedList) {
         if (cat.filter(e)) assigned.add(entryKey(e));
       }
     }
-    return unifiedList[0] ?? null;
+    return unifiedList.find((entry) => !isCloudOnlyResource(entry)) ?? null;
   }, [unifiedList, categories]);
 
+  const deepLinkKey = useMemo(() => {
+    if (!connectorParam) return null;
+    const match = connectors.find((c) => c.slug === connectorParam);
+    return match ? `installed:${match.id}` : null;
+  }, [connectorParam, connectors]);
+
   const effectiveKey =
-    activeKey && unifiedList.some((e) => entryKey(e) === activeKey)
+    activeKey &&
+    unifiedList.some(
+      (e) => entryKey(e) === activeKey && !isCloudOnlyResource(e),
+    )
       ? activeKey
-      : firstEntry
-        ? entryKey(firstEntry)
-        : null;
+      : (deepLinkKey ?? (firstEntry ? entryKey(firstEntry) : null));
+
+  // Plugin ownership badges (D6): one batched lookup per list load.
+  const connectorSlugs = useMemo(
+    () => connectors.map((c) => c.slug),
+    [connectors],
+  );
+  const pluginBadgeFor = usePluginMemberships("connector", connectorSlugs);
 
   const selectedEntry = useMemo(
     () => unifiedList.find((e) => entryKey(e) === effectiveKey) ?? null,
@@ -470,6 +495,32 @@ export const ConnectorsPage = () => {
 
   // Reconnect an already-added connector that isn't currently connected.
   // Test first — the probe now self-heals an expired OAuth token server-side
+  // Disconnecting a built-in means switching it off: the backend refuses to
+  // delete one, and the credential is what the owner wants gone anyway. Giving
+  // them no disconnect at all was the trap — a built-in whose grant had died
+  // still displayed "connected", the one state that hides the Connect button.
+  const handleDisableBuiltin = useCallback(
+    (connector: ConnectorItem) => {
+      setBusyKey(`installed:${connector.id}`);
+      invalidateConnectorTools(connector.id);
+      void (async () => {
+        try {
+          await connectorsApi.disable(connector.id);
+          await loadAll();
+        } catch (err) {
+          toast.error(
+            err instanceof Error
+              ? err.message
+              : _t("settings.connectors.operationFailed"),
+          );
+        } finally {
+          setBusyKey(null);
+        }
+      })();
+    },
+    [loadAll],
+  );
+
   // (refresh + retry). Only a still-failing OAuth connector escalates to full
   // re-authorization (browser re-consent); see ``connector-reconnect``.
   const handleReconnectInstalled = useCallback(
@@ -542,7 +593,16 @@ export const ConnectorsPage = () => {
           toolsError={activeToolsError}
           busy={busyKey === `installed:${c.id}`}
           onConnect={() => handleReconnectInstalled(c)}
-          onDisconnect={() => canDeleteConnector(c) && setDeleteTarget(c)}
+          systemManaged={!canDeleteConnector(c)}
+          onDisconnect={() =>
+            canDeleteConnector(c) ? setDeleteTarget(c) : handleDisableBuiltin(c)
+          }
+          headerActions={
+            <ResourceDetailActionSlot
+              resourceType="connector"
+              resource={c as unknown as Record<string, unknown>}
+            />
+          }
         />,
       );
     } else if (selectedCatalog) {
@@ -577,15 +637,19 @@ export const ConnectorsPage = () => {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-2 px-5">
-        <span className="shrink-0 whitespace-nowrap text-base font-semibold text-ink-heading">
-          {t("connector.title")}
-        </span>
-        <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
+      <header className="flex shrink-0 items-center justify-between gap-4 h-15 px-5">
+        <div className="flex min-w-0 flex-col justify-center">
+          <span className="text-base font-semibold leading-5 text-ink-heading">
+            {t("connector.title")}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-brand transition-colors hover:bg-brand-light/60 hover:text-brand"
-            onClick={() => navigate("/marketplace?tab=connectors&from=connectors")}
+            onClick={() =>
+              navigate("/marketplace?tab=connectors&from=connectors")
+            }
           >
             <Store className="h-3.5 w-3.5" />
             {t("marketplace.title" as Parameters<typeof t>[0])}
@@ -651,25 +715,32 @@ export const ConnectorsPage = () => {
               categories={categories}
               selectedId={effectiveKey}
               getId={entryKey}
-              onSelect={(e: ConnectorListEntry) => setActiveKey(entryKey(e))}
+              onSelect={(e: ConnectorListEntry) => {
+                if (!isCloudOnlyResource(e)) setActiveKey(entryKey(e));
+              }}
               renderItem={(entry: ConnectorListEntry, isSelected: boolean) => {
                 if (entry.kind === "installed") {
                   const c = entry.item;
+                  const cloudOnly = isCloudOnlyResource(entry);
                   return (
                     <ConnectorListItem
                       name={c.display_name}
                       iconUrl={entry.iconUrl}
+                      pluginBadge={pluginBadgeFor(c.slug)}
                       status={c.status}
                       statusLabel={
                         STATUS_LABEL_KEY[c.status]
                           ? t(STATUS_LABEL_KEY[c.status])
                           : null
                       }
-                      active={isSelected}
-                      onClick={() => setActiveKey(`installed:${c.id}`)}
+                      active={!cloudOnly && isSelected}
+                      onClick={() => {
+                        if (!cloudOnly) setActiveKey(`installed:${c.id}`);
+                      }}
                       actions={
                         <>
-                          {c.connector_type !== "builtin" &&
+                          {!cloudOnly &&
+                            c.connector_type !== "builtin" &&
                             c.status !== "connected" && (
                               <button
                                 type="button"

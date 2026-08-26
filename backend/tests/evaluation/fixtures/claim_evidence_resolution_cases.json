@@ -1,0 +1,345 @@
+{
+  "version": 3,
+  "owner_layer": "oss",
+  "resolverRevision": "claim-evidence-resolver-v1",
+  "generated_case_families": [
+    "unit-ontology"
+  ],
+  "cases": [
+    {
+      "resolver_case_id": "OSS-TEXT-001",
+      "parent_e2e_case_id": "E2E-EXACT-QUOTE",
+      "business_group": "document-exact",
+      "claim": {
+        "exact": "Customer demand continues to exceed available supply.",
+        "semanticText": "Customer demand continues to exceed available supply.",
+        "kind": "factual-claim",
+        "citationRequired": true,
+        "normalized": {},
+        "explicitBindings": []
+      },
+      "evidence_pool": [
+        {
+          "evidenceHandle": "ev_oss_doc_exact",
+          "source": {
+            "providerId": "docs",
+            "documentId": "document-a"
+          },
+          "evidence": {
+            "kind": "text",
+            "quote": "Customer demand continues to exceed available supply."
+          }
+        }
+      ],
+      "gold_evidence_ids": ["ev_oss_doc_exact"],
+      "gold_relation": "entailed",
+      "expected_status": "verified",
+      "expected_binding_action": "auto-bind",
+      "expected_user_visible_severity": "none",
+      "notes": "逐字原文是所有版本共用的确定性基线。"
+    },
+    {
+      "resolver_case_id": "OSS-TEXT-002",
+      "parent_e2e_case_id": "E2E-PARAPHRASE-UNRESOLVED",
+      "business_group": "document-paraphrase",
+      "claim": {
+        "exact": "Premium products improved profitability.",
+        "semanticText": "Premium products improved profitability.",
+        "kind": "factual-claim",
+        "citationRequired": true,
+        "normalized": {},
+        "explicitBindings": []
+      },
+      "evidence_pool": [
+        {
+          "evidenceHandle": "ev_oss_doc_paraphrase",
+          "source": {
+            "providerId": "docs",
+            "documentId": "document-b"
+          },
+          "evidence": {
+            "kind": "text",
+            "quote": "The richer mix was the principal driver of margin expansion."
+          }
+        }
+      ],
+      "gold_evidence_ids": ["ev_oss_doc_paraphrase"],
+      "gold_relation": "unresolved",
+      "expected_status": "unresolved",
+      "expected_binding_action": "none",
+      "expected_user_visible_severity": "none",
+      "notes": "OSS 只召回候选，不用 token overlap 冒充语义支持。"
+    },
+    {
+      "resolver_case_id": "OSS-BIND-001",
+      "parent_e2e_case_id": "E2E-EXPLICIT-KEEP",
+      "business_group": "explicit-binding",
+      "claim": {
+        "exact": "In 2025 the facility had 1 GW of available capacity.",
+        "semanticText": "In 2025 the facility had 1 GW of available capacity.",
+        "kind": "structured-fact",
+        "citationRequired": true,
+        "normalized": {
+          "metric": "capacity",
+          "period": "2025 FY",
+          "value": "1",
+          "unit": "GW",
+          "valueBase": "1000000000",
+          "unitBase": "watt"
+        },
+        "explicitBindings": ["ev_oss_capacity"]
+      },
+      "evidence_pool": [
+        {
+          "evidenceHandle": "ev_oss_capacity",
+          "source": {
+            "providerId": "local-tool",
+            "sourceId": "capacity-a"
+          },
+          "evidence": {
+            "kind": "structured-data",
+            "metric": "capacity",
+            "period": "2025 FY",
+            "value": 1000000000,
+            "unit": "W"
+          }
+        }
+      ],
+      "gold_evidence_ids": ["ev_oss_capacity"],
+      "gold_relation": "entailed",
+      "expected_status": "verified",
+      "expected_binding_action": "keep",
+      "expected_user_visible_severity": "none",
+      "notes": "OSS SI 单位和有效显式绑定属于通用协议能力。"
+    },
+    {
+      "resolver_case_id": "OSS-BIND-002",
+      "parent_e2e_case_id": "E2E-EXPLICIT-REBIND",
+      "business_group": "explicit-binding",
+      "claim": {
+        "exact": "In 2025 the facility had 1 GW of available capacity.",
+        "semanticText": "In 2025 the facility had 1 GW of available capacity.",
+        "kind": "structured-fact",
+        "citationRequired": true,
+        "normalized": {
+          "metric": "capacity",
+          "period": "2025 FY",
+          "value": "1",
+          "unit": "GW",
+          "valueBase": "1000000000",
+          "unitBase": "watt"
+        },
+        "explicitBindings": ["ev_oss_wrong_metric"]
+      },
+      "evidence_pool": [
+        {
+          "evidenceHandle": "ev_oss_wrong_metric",
+          "source": {
+            "providerId": "local-tool",
+            "sourceId": "capacity-a"
+          },
+          "evidence": {
+            "kind": "structured-data",
+            "metric": "capacity",
+            "period": "2024 FY",
+            "value": 1000000000,
+            "unit": "W"
+          }
+        },
+        {
+          "evidenceHandle": "ev_oss_rebind_capacity",
+          "source": {
+            "providerId": "local-tool",
+            "sourceId": "capacity-a"
+          },
+          "evidence": {
+            "kind": "structured-data",
+            "metric": "capacity",
+            "period": "2025 FY",
+            "value": 1000000000,
+            "unit": "W"
+          }
+        }
+      ],
+      "gold_evidence_ids": ["ev_oss_rebind_capacity"],
+      "gold_relation": "entailed",
+      "expected_status": "verified",
+      "expected_binding_action": "auto-rebind",
+      "expected_user_visible_severity": "none",
+      "notes": "只有唯一完整支持替代项时才自动换绑。"
+    },
+    {
+      "resolver_case_id": "OSS-BIND-003",
+      "parent_e2e_case_id": "E2E-AMBIGUOUS-SOURCES",
+      "business_group": "ambiguity",
+      "claim": {
+        "exact": "The service launched in May.",
+        "semanticText": "The service launched in May.",
+        "kind": "factual-claim",
+        "citationRequired": true,
+        "normalized": {},
+        "explicitBindings": []
+      },
+      "evidence_pool": [
+        {
+          "evidenceHandle": "ev_oss_source_a",
+          "source": {
+            "providerId": "docs",
+            "documentId": "document-a"
+          },
+          "evidence": {
+            "kind": "text",
+            "quote": "The service launched in May."
+          }
+        },
+        {
+          "evidenceHandle": "ev_oss_source_b",
+          "source": {
+            "providerId": "docs",
+            "documentId": "document-b"
+          },
+          "evidence": {
+            "kind": "text",
+            "quote": "The service launched in May."
+          }
+        }
+      ],
+      "gold_evidence_ids": ["ev_oss_source_a", "ev_oss_source_b"],
+      "gold_relation": "entailed",
+      "expected_status": "ambiguous",
+      "expected_binding_action": "none",
+      "expected_user_visible_severity": "none",
+      "notes": "多个独立来源都支持时不按数组顺序静默选择。"
+    },
+    {
+      "resolver_case_id": "OSS-TEXT-003",
+      "parent_e2e_case_id": "E2E-COMPOSITE-TEXT",
+      "business_group": "multi-evidence-coverage",
+      "claim": {
+        "exact": "In 2025 the facility had 1 GW of generation and 2 GW of storage.",
+        "semanticText": "In 2025 the facility had 1 GW of generation and 2 GW of storage.",
+        "kind": "factual-claim",
+        "citationRequired": true,
+        "normalized": {
+          "period": "2025 FY"
+        },
+        "explicitBindings": []
+      },
+      "evidence_pool": [
+        {
+          "evidenceHandle": "ev_oss_generation_capacity",
+          "source": {
+            "providerId": "docs",
+            "documentId": "facility-generation",
+            "period": "2025 FY"
+          },
+          "evidence": {
+            "kind": "text",
+            "quote": "In 2025 the facility had 1 GW of generation capacity."
+          }
+        },
+        {
+          "evidenceHandle": "ev_oss_storage_capacity",
+          "source": {
+            "providerId": "docs",
+            "documentId": "facility-storage",
+            "period": "2025 FY"
+          },
+          "evidence": {
+            "kind": "text",
+            "quote": "In 2025 the facility had 2 GW of storage capacity."
+          }
+        }
+      ],
+      "gold_evidence_ids": [
+        "ev_oss_generation_capacity",
+        "ev_oss_storage_capacity"
+      ],
+      "gold_relation": "entailed",
+      "expected_status": "verified",
+      "expected_binding_action": "auto-bind",
+      "expected_user_visible_severity": "none",
+      "notes": "一个 Claim 的不同数值由最多三条文本 Evidence 联合覆盖。"
+    },
+    {
+      "resolver_case_id": "OSS-BIND-004",
+      "parent_e2e_case_id": "E2E-MISSING-EXPLICIT-HANDLE",
+      "business_group": "invalid-binding",
+      "claim": {
+        "exact": "The service launched in June.",
+        "semanticText": "The service launched in June.",
+        "kind": "factual-claim",
+        "citationRequired": true,
+        "normalized": {},
+        "explicitBindings": ["ev_oss_missing_handle"]
+      },
+      "evidence_pool": [],
+      "gold_evidence_ids": [],
+      "gold_relation": "unresolved",
+      "expected_status": "invalid-binding",
+      "expected_binding_action": "none",
+      "expected_user_visible_severity": "advisory",
+      "notes": "显式 handle 不存在时必须报告无效绑定，不能伪装成普通无证据。"
+    },
+    {
+      "resolver_case_id": "OSS-NEG-001",
+      "parent_e2e_case_id": "E2E-NO-EVIDENCE",
+      "business_group": "no-evidence",
+      "claim": {
+        "exact": "The market is generally cyclical.",
+        "semanticText": "The market is generally cyclical.",
+        "kind": "factual-claim",
+        "citationRequired": true,
+        "normalized": {},
+        "explicitBindings": []
+      },
+      "evidence_pool": [],
+      "gold_evidence_ids": [],
+      "gold_relation": "unresolved",
+      "expected_status": "unresolved",
+      "expected_binding_action": "none",
+      "expected_user_visible_severity": "none",
+      "notes": "没有 Evidence 不是确认错误，也不能触发 repair。"
+    },
+    {
+      "resolver_case_id": "OSS-NEG-002",
+      "parent_e2e_case_id": "E2E-CONFIRMED-CONFLICT",
+      "business_group": "confirmed-conflict",
+      "claim": {
+        "exact": "The facility has 2 GW of available capacity.",
+        "semanticText": "The facility has 2 GW of available capacity.",
+        "kind": "structured-fact",
+        "citationRequired": true,
+        "normalized": {
+          "metric": "capacity",
+          "value": "2",
+          "unit": "GW",
+          "valueBase": "2000000000",
+          "unitBase": "watt"
+        },
+        "explicitBindings": ["ev_oss_conflicting_capacity"]
+      },
+      "evidence_pool": [
+        {
+          "evidenceHandle": "ev_oss_conflicting_capacity",
+          "source": {
+            "providerId": "local-tool",
+            "sourceId": "capacity-a"
+          },
+          "evidence": {
+            "kind": "structured-data",
+            "metric": "capacity",
+            "value": 1000000000,
+            "unit": "W"
+          }
+        }
+      ],
+      "gold_evidence_ids": ["ev_oss_conflicting_capacity"],
+      "gold_relation": "contradicted",
+      "expected_status": "contradicted",
+      "expected_binding_action": "none",
+      "expected_user_visible_severity": "warning",
+      "notes": "身份和单位明确后值不一致才是可操作冲突。"
+    }
+  ]
+}

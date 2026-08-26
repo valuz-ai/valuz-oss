@@ -9,17 +9,19 @@
     "./styles/project.css": "./src/styles/project.css",
     "./components/ui/*": "./src/components/ui/*.tsx",
     "./hooks/*": "./src/hooks/*.ts",
-    "./lib/*": "./src/lib/*.ts"
+    "./lib/*": "./src/lib/*.ts",
+    "./genui-channel": "./src/components/conversation/genui-channel/index.ts"
   },
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",
+    "gen:a2ui-catalog": "vite-node --config ../../vitest.config.ts scripts/gen_a2ui_catalog.mjs",
     "test": "vitest run --passWithNoTests --config ../../vitest.config.ts",
-    "gen:openui-prompt": "node scripts/gen_openui_prompt.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src --ext .ts,.tsx",
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@valuz/a2ui": "workspace:*",
     "@base-ui/react": "^1.4.1",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-html": "^6.4.11",
@@ -33,9 +35,6 @@
     "@codemirror/state": "^6.7.0",
     "@codemirror/view": "^6.43.3",
     "@hookform/resolvers": "^5.2.2",
-    "@openuidev/react-headless": "^0.9.1",
-    "@openuidev/react-lang": "^0.2.8",
-    "@openuidev/react-ui": "^0.12.1",
     "@streamdown/cjk": "^1.0.3",
     "@streamdown/code": "^1.1.1",
     "@streamdown/math": "^1.0.2",
@@ -56,10 +55,11 @@
     "katex": "^0.16.45",
     "lucide-react": "^1.8.0",
     "next-themes": "^0.4.6",
+    "pdfjs-dist": "^6.2.108",
     "radix-ui": "^1.4.3",
-    "react": "^19.2.0",
+    "react": "^19.2.7",
     "react-day-picker": "^9.14.0",
-    "react-dom": "^19.2.0",
+    "react-dom": "^19.2.7",
     "react-hook-form": "^7.73.1",
     "react-resizable-panels": "^4.10.0",
     "recharts": "3.8.0",
@@ -69,5 +69,8 @@
     "vaul": "^1.1.2",
     "xlsx": "^0.18.5",
     "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "vite-node": "^3.2.4"
   }
 }

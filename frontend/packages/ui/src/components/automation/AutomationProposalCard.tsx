@@ -12,10 +12,27 @@
  * the proposal (``ok === false`` — e.g. a bad cron / task-in-chat): the card
  * renders the message and offers no Confirm button.
  */
-import { memo, useCallback, useState } from "react";
-import { AlarmClock, Check, Loader2, Sparkles, User, X } from "lucide-react";
+import { memo, useState } from "react";
+import {
+  AlarmClock,
+  BookOpen,
+  Check,
+  Maximize2,
+  Sparkles,
+  User,
+  X,
+} from "lucide-react";
 import { cn } from "@valuz/ui/lib/utils";
 import { useI18n } from "../../hooks/use-i18n";
+import { MarkdownContent } from "../conversation/MarkdownContent";
+import { Button } from "../ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../ui/dialog";
 
 export type AutomationProposalState =
   | "pending"
@@ -35,6 +52,8 @@ interface AutomationProposalCardProps {
   actionKind: "chat" | "task";
   /** Both action kinds: each fire runs in an isolated git worktree. */
   worktree?: boolean;
+  /** Immutable Playbook version the server resolved for this proposal. */
+  playbookVersion?: number | null;
   state: AutomationProposalState;
   /** When ``state === "error"``, the confirm failure to display. */
   errorMessage?: string;
@@ -51,6 +70,7 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
   agentName,
   actionKind,
   worktree = false,
+  playbookVersion,
   state,
   errorMessage,
   validationError,
@@ -58,21 +78,7 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
   onDismiss,
 }: AutomationProposalCardProps) {
   const { t } = useI18n();
-  const [promptExpanded, setPromptExpanded] = useState(false);
-  const [promptOverflowing, setPromptOverflowing] = useState(false);
-  // Measure in the collapsed (line-clamp-3) state: only offer the expand toggle
-  // when the instruction actually overflows 3 lines. A callback ref keeps the
-  // measurement out of an effect (no cascading-render lint); it re-runs when the
-  // template streams in.
-  const measurePromptRef = useCallback(
-    (el: HTMLDivElement | null) => {
-      // Re-attaches (re-measures) whenever ``promptTemplate`` changes — e.g. as
-      // the tool input streams in — so the toggle appears once it overflows.
-      if (el && promptTemplate)
-        setPromptOverflowing(el.scrollHeight > el.clientHeight + 1);
-    },
-    [promptTemplate],
-  );
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   // The create tool rejected the proposal outright — render a terminal error
   // with no actions (there's nothing to confirm).
@@ -90,25 +96,28 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
 
   const isBusy = state === "confirming" || state === "dismissing";
   const isTerminal = state === "confirmed" || state === "dismissed";
-  const canConfirm = state === "pending" && name.trim().length > 0;
+  const canConfirm =
+    (state === "pending" || state === "error") && name.trim().length > 0;
   const modeLabel =
     actionKind === "task"
       ? t("automation.actionKindTask")
       : t("automation.actionKindChat");
 
   return (
-    <div
-      className={cn(
-        "rounded-lg border bg-surface-soft transition-colors",
-        state === "confirmed" &&
-          "border-[rgba(83,188,118,0.5)] bg-[rgba(83,188,118,0.06)]",
-        state === "dismissed" && "border-surface-border bg-surface-2 opacity-80",
-        state === "error" && "border-error/40 bg-error-light/40",
-        state !== "confirmed" && state !== "dismissed" && state !== "error"
-          ? "border-surface-border"
-          : "",
-      )}
-    >
+    <>
+      <div
+        data-slot="automation-proposal-card"
+        className={cn(
+          "rounded-lg border bg-surface-soft transition-colors",
+          state === "confirmed" && "border-success/40 bg-success/5",
+          state === "dismissed" &&
+            "border-surface-border bg-surface-2 opacity-80",
+          state === "error" && "border-error/40 bg-error-light/40",
+          state !== "confirmed" && state !== "dismissed" && state !== "error"
+            ? "border-surface-border"
+            : "",
+        )}
+      >
       <div className="flex items-start gap-3 px-4 py-3">
         <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brand/10 text-brand">
           {state === "confirmed" ? (
@@ -137,8 +146,8 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
             ) : null}
           </div>
 
-          {triggerHuman || agentName ? (
-            <div className="mt-1 flex items-center gap-3 text-xs">
+          {triggerHuman || agentName || playbookVersion ? (
+            <div className="mt-1 flex flex-wrap items-center gap-3 text-xs">
               {triggerHuman ? (
                 <span className="flex shrink-0 items-center gap-1 text-ink-body">
                   <Sparkles className="h-3 w-3 shrink-0 text-ink-label" />
@@ -155,38 +164,34 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
                   </span>
                 </span>
               ) : null}
+              {playbookVersion ? (
+                <span className="flex shrink-0 items-center gap-1 text-ink-meta">
+                  <BookOpen className="h-3 w-3 shrink-0 text-ink-label" />
+                  Playbook v{playbookVersion}
+                </span>
+              ) : null}
             </div>
           ) : null}
 
           {promptTemplate ? (
-            <div className="relative mt-2">
-              {/* Collapsed: the original 3-line clamp. Expanded: full text in a
-                  fixed-height scroll region so a long prompt scrolls in place
-                  instead of stretching the card (newlines preserved). The
-                  toggle sits INLINE at the bottom-right (end of the clamped 3rd
-                  line), masked by the card background — never on its own line. */}
-              <div
-                ref={measurePromptRef}
-                className={cn(
-                  "text-xs leading-snug text-ink-body",
-                  promptExpanded
-                    ? "max-h-40 overflow-y-auto whitespace-pre-wrap break-words"
-                    : "line-clamp-3",
-                )}
-              >
+            <div
+              data-slot="automation-prompt-preview"
+              className="relative mt-2 pr-9"
+            >
+              <div className="line-clamp-3 whitespace-pre-wrap break-words text-xs leading-snug text-ink-body">
                 {promptTemplate}
               </div>
-              {promptOverflowing || promptExpanded ? (
-                <button
-                  type="button"
-                  onClick={() => setPromptExpanded((v) => !v)}
-                  className="absolute bottom-0 right-0 bg-surface-soft pl-4 text-2xs font-medium text-brand hover:underline"
-                >
-                  {promptExpanded
-                    ? t("automation.proposalCollapse")
-                    : t("automation.proposalExpand")}
-                </button>
-              ) : null}
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => setDetailsOpen(true)}
+                className="absolute right-0 top-0"
+                title={t("automation.viewPrompt")}
+                aria-label={t("automation.viewPrompt")}
+              >
+                <Maximize2 />
+              </Button>
             </div>
           ) : null}
 
@@ -209,39 +214,47 @@ export const AutomationProposalCard = memo(function AutomationProposalCard({
       </div>
 
       {!isTerminal ? (
-        <div className="flex items-center justify-end gap-2 border-t border-surface-border px-4 py-2">
-          <button
+        <div className="flex items-center justify-end gap-2 px-4 py-2">
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             disabled={isBusy}
+            loading={state === "dismissing"}
             onClick={onDismiss}
-            className={cn(
-              "inline-flex h-7 items-center rounded-md px-3 text-xs font-medium",
-              "border border-surface-border text-ink-body hover:bg-surface-2",
-              "disabled:cursor-not-allowed disabled:opacity-50",
-            )}
           >
-            {state === "dismissing" ? (
-              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-            ) : null}
             {t("common.cancel")}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            size="sm"
             disabled={!canConfirm || isBusy}
+            loading={state === "confirming"}
             onClick={onConfirm}
-            className={cn(
-              "inline-flex h-7 items-center rounded-md px-3 text-xs font-medium",
-              "bg-brand text-white hover:bg-brand-hover",
-              "disabled:cursor-not-allowed disabled:opacity-50",
-            )}
           >
-            {state === "confirming" ? (
-              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-            ) : null}
-            {t("automation.actionCreate")}
-          </button>
+            {state === "error" ? t("common.retry") : t("automation.actionCreate")}
+          </Button>
         </div>
       ) : null}
-    </div>
+      </div>
+
+      {promptTemplate ? (
+        <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+          <DialogContent className="flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
+            <DialogHeader className="border-b border-surface-border px-5 pb-4 pt-5 pr-12">
+              <DialogTitle>{name || t("automation.proposalUnnamed")}</DialogTitle>
+              <DialogDescription>{t("automation.promptLabel")}</DialogDescription>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+              <MarkdownContent
+                content={promptTemplate}
+                showCitationSources={false}
+                className="text-sm leading-6 text-ink-body [&_h1]:mb-3 [&_h1]:mt-0 [&_h1]:text-xl [&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-lg [&_h3]:mb-2 [&_h3]:mt-4 [&_h3]:text-base [&_li]:my-1 [&_ol]:my-3 [&_p]:my-2 [&_table]:text-xs [&_ul]:my-3"
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+    </>
   );
 });

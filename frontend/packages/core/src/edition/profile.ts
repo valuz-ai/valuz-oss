@@ -30,6 +30,7 @@ export interface ServiceDescriptor {
 }
 
 export type DesktopRouteLayout = "project" | "standalone";
+export type DesktopRoutePresentation = "page" | "overlay";
 
 export interface DesktopRouteModule {
   id: string;
@@ -38,6 +39,15 @@ export interface DesktopRouteModule {
   description: string;
   /** Which layout shell wraps this route. Project routes nest inside DesktopProjectLayout. */
   layout: DesktopRouteLayout;
+  /**
+   * How a project-layout route is presented.
+   *
+   * `overlay` keeps the current page mounted underneath the destination, so
+   * transient detail readers can close back without losing page state,
+   * loaded data, or nested scroll positions. A direct deep link has no
+   * background page and therefore renders as a normal full page.
+   */
+  presentation?: DesktopRoutePresentation;
   /** Whether the route appears in the project sidebar nav. */
   showInNav: boolean;
   /** Optional inline component. If omitted, the app resolves via its local COMPONENT_MAP by id. */
@@ -53,6 +63,15 @@ export interface SettingsSectionModule {
   description: string;
   /** Icon identifier — mapped to Lucide component in SettingsPage */
   icon?: string;
+  /**
+   * Optional sidebar group. Groups are rendered in first-appearance order, so
+   * an edition can add a section without changing a central settings enum.
+   * ``label`` is an i18n key, consistent with the section label/description.
+   */
+  group?: {
+    id: string;
+    label: string;
+  };
   /** Optional content component for overlay/plugin sections. Built-in tabs use dedicated rendering. */
   component?: ComponentType;
   edition: Edition;

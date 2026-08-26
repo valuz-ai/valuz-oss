@@ -21,6 +21,55 @@ def _startup_user_content_enabled() -> bool:
     return bool(settings.initialize_user_content_on_startup)
 
 
+def guard_source_run_data_dir() -> None:
+    """Refuse to run a source (non-frozen) backend on the packaged app's data dir.
+
+    Recurring incident class: a dev/test backend pointed at the real
+    ``~/.valuz-oss`` runs host migrations and pushes ``alembic_version_host``
+    ahead of the released build, which then fail-louds at its next boot
+    (``ensure_host_schema_migratable``). The packaged ``valuz-server`` is
+    PyInstaller-frozen (``sys.frozen``) and exempt; every other process must
+    bring its own root (dev.sh pins ``~/.valuz-oss-dev``; the test conftest
+    pins a tmp sandbox). ``VALUZ_ALLOW_PACKAGED_DATA_DIR=1`` is the explicit
+    escape hatch for deliberately operating on the packaged store from source.
+
+    Runs FIRST in the lifespan — before logging config (``log_dir`` writes
+    under the root) and before the single-writer lock (the lock file is a
+    root write). Also called by ``main.main`` and the management CLI commands,
+    which touch the data dir without going through the lifespan.
+    """
+    import os
+    import sys as _sys
+
+    if getattr(_sys, "frozen", False):
+        return
+    if os.environ.get("VALUZ_ALLOW_PACKAGED_DATA_DIR") == "1":
+        return
+
+    from valuz_agent.infra.config import PACKAGED_DATA_DIR
+
+    packaged_root = PACKAGED_DATA_DIR.resolve()
+    if fs_registry.shared_root_path().resolve() == packaged_root:
+        raise RuntimeError(
+            "refusing to start: this backend runs from source (not the packaged "
+            f"valuz-server) but its data dir resolves to {PACKAGED_DATA_DIR} — the "
+            "packaged app's store. A source backend migrating that store strands "
+            "the released app (its schema stamp moves past the release's migration "
+            "chain). Use scripts/dev.sh (defaults VALUZ_DATA_DIR=~/.valuz-oss-dev) "
+            "or set VALUZ_DATA_DIR. To operate on the packaged store on purpose, "
+            "set VALUZ_ALLOW_PACKAGED_DATA_DIR=1."
+        )
+    if settings.log_file_path.expanduser().resolve().parent == (packaged_root / "logs").resolve():
+        raise RuntimeError(
+            "refusing to start: this backend runs from source but its log dir "
+            f"resolves to {PACKAGED_DATA_DIR / 'logs'} — the packaged app's logs "
+            "(source-run log lines there corrupt release forensics). The default "
+            "log path follows VALUZ_DATA_DIR; unset VALUZ_LOG_FILE_PATH or point it "
+            "elsewhere, or set VALUZ_ALLOW_PACKAGED_DATA_DIR=1 to operate on "
+            "the packaged store on purpose."
+        )
+
+
 def configure_structured_logging() -> None:
     """Install JSON-line file handler on the root logger.
 
@@ -101,6 +150,20 @@ def acquire_single_writer_lock() -> None:
         _sys.exit(2)
 
 
+async def enrich_login_shell_path() -> None:
+    """Merge the user's login-shell PATH into this process's PATH.
+
+    A Finder / launchd-launched backend inherits launchd's minimal PATH and
+    can't see user-installed tools (nvm's ``npx``, ``uv``, homebrew) that
+    stdio MCP connectors, the CLI login probe and the browser dev fallback
+    resolve by name. Append-only, fail-open, ``VALUZ_DISABLE_LOGIN_PATH=1``
+    opts out — see ``boot/login_path.py``.
+    """
+    from valuz_agent.boot.login_path import enrich_login_shell_path as _enrich
+
+    await _enrich()
+
+
 def migrate_data_dir() -> None:
     """One-time data-dir cutover: carry a pre-rename ``~/.valuz/app`` install
     into the new flat ``~/.valuz-oss`` root (copy → rewrite DB path prefixes →
@@ -126,6 +189,23 @@ def migrate_data_dir() -> None:
 
     migrate_legacy_data_dir()
     migrate_unscoped_data_root()
+
+
+def apply_backup_restore() -> None:
+    """Apply a staged local-backup restore, if one is pending.
+
+    Runs under the single-writer lock, AFTER the data-dir cutover and BEFORE
+    ``ensure_local_identity`` / any engine opens the SQLite files — a restore
+    replaces ``valuz.db`` / ``kernel.db`` / ``installation.json`` at file
+    level, which is only safe while nothing has them open. No-op (one ``stat``)
+    when nothing is pending. See docs/design/client-local-backup.md §8.
+    """
+    if not _startup_user_content_enabled():
+        return
+
+    from valuz_agent.boot.backup_restore import apply_pending_backup_restore
+
+    apply_pending_backup_restore()
 
 
 async def bootstrap_schema() -> None:
@@ -259,7 +339,47 @@ async def colocate_kernel_history() -> None:
         logging.getLogger(__name__).warning("kernel-history co-locate skipped", exc_info=True)
 
 
+def init_tracing() -> None:
+    """Langfuse tracing bootstrap — no-op unless the LANGFUSE_* env is set
+    and the optional ``tracing`` extra is installed (see ``src.core.tracing``).
+
+    Runs in the HOST process: covers the in-process kernel (desktop/local).
+    The standalone sandbox kernel initializes itself in
+    ``kernel/app/dependencies.init_dependencies``.
+    """
+    from src.core.tracing import init_tracing as _init_tracing
+
+    _init_tracing()
+
+
+def initialize_network_egress() -> None:
+    # Desktop egress bootstrap is delivered once over the sidecar's stdin.
+    # Consume it before the kernel creates any runtime or child process; the
+    # non-secret marker is removed from os.environ inside the helper.
+    # Import for its path-injection side effect before resolving ``src``.
+    __import__("kernel")
+
+    from src.runtimes.network_egress import (
+        configure_network_egress,
+        consume_network_egress_bootstrap,
+        get_network_egress_registry,
+    )
+
+    try:
+        consume_network_egress_bootstrap()
+    except RuntimeError:
+        # A malformed/stale one-shot payload is an egress failure, not a
+        # reason to take the renderer and non-model backend APIs down. Keep
+        # booting with the same fail-loud boundary as manager startup failure.
+        logger.error("desktop egress bootstrap rejected; admitted model traffic is blocked")
+        configure_network_egress(None, required_unavailable=True)
+    if registry := get_network_egress_registry():
+        registry.start_keepalive()
+
+
 async def init_kernel(app: FastAPI) -> None:
+    initialize_network_egress()
+
     # In-process kernel singletons (store + orchestrator) are NOT created
     # in http mode — the kernel runs as a separate process and the host
     # reaches it only through ``HttpKernelClient`` (B3). The host toolkit
@@ -284,16 +404,19 @@ async def init_kernel(app: FastAPI) -> None:
     from valuz_agent.integrations.tools_skill_creator import build_submit_skill_tool_defs
     from valuz_agent.modules.browser import service as browser_service
     from valuz_agent.modules.browser.tools import build_browser_tool_defs
+    from valuz_agent.modules.citations.calculation_tool import (
+        build_citation_calculation_tool_defs,
+    )
     from valuz_agent.modules.genui.tools import build_generative_ui_tool_defs
     from valuz_agent.modules.memory.tools import build_memory_tool_defs
     from valuz_agent.modules.projects.tools import build_project_instructions_tool_defs
     from valuz_agent.modules.sessions.artifacts_tool import build_deliver_artifacts_tool_defs
-    from valuz_agent.modules.tasks.dispatch_mcp import build_task_tool_defs
     from valuz_agent.modules.tasks.orchestrator import task_orchestrator
     from valuz_agent.modules.tasks.tools.declarations import (
         DISPATCH_TOOL_DECLARATIONS,
         ORCHESTRATION_TOOL_DECLARATIONS,
     )
+    from valuz_agent.modules.tasks.tools.handlers import build_task_tool_defs
 
     task_defs = build_task_tool_defs(task_orchestrator)
     by_name = {t.name: t for t in task_defs}
@@ -305,6 +428,7 @@ async def init_kernel(app: FastAPI) -> None:
         + build_submit_skill_tool_defs()
         + build_agent_proposal_tool_defs()
         + build_deliver_artifacts_tool_defs()
+        + build_citation_calculation_tool_defs()
         + build_generative_ui_tool_defs()
     )
     # browser_start/browser_stop only work when the engine (Node +
@@ -341,6 +465,11 @@ async def init_kernel(app: FastAPI) -> None:
     # Task-finish trigger (§7.1): when a multi-agent task completes, graduate its
     # durable multi-agent lessons + project progress into project memory.
     task_finish_scheduler.set_runner(run_task_finish_extraction)
+    # Event-first memory trigger: graduate a completed task's lessons when
+    # tasks/events.finalize_task announces task.finalized.
+    from valuz_agent.modules.memory.scheduler import wire_task_finalized_trigger
+
+    wire_task_finalized_trigger()
 
 
 async def bind_data_service(app: FastAPI) -> None:
@@ -387,7 +516,9 @@ async def bind_data_service(app: FastAPI) -> None:
         # owner's secret exists up-front (mint side also does; idempotent).
         if _startup_user_content_enabled():
             get_or_create_ds_secret(resolve_local_user_id())
-        ds_app.state.verifier = kb.make_host_data_service_verifier_per_owner()
+        from valuz_agent.ports.sandbox_credential import get_sandbox_credential_verifier
+
+        ds_app.state.verifier = get_sandbox_credential_verifier()
         app.state._data_service_engine = engine
         # Unify host reads (sessions + events) through the DataService
         # (in-process), so reads never depend on the sandbox being alive. Bind
@@ -396,6 +527,12 @@ async def bind_data_service(app: FastAPI) -> None:
         from valuz_agent.adapters.data_service_local import LocalDataServiceReader
 
         bind_data_reader(LocalDataServiceReader(store))
+        # …and bind the host DATA PLANE onto the same store: non-runtime
+        # kernel_client facades (reads + at-rest control writes + stranded
+        # reset) run the kernel route semantics against the durable copy.
+        from valuz_agent.adapters import kernel_client
+
+        kernel_client.bind_host_data_store(lambda: store)
         logging.getLogger(__name__).info("host DataService bound (backend=%s)", store_mode)
     except Exception:  # noqa: BLE001 — DS binding must never break boot
         logging.getLogger(__name__).warning("host DataService bind skipped", exc_info=True)
@@ -456,14 +593,20 @@ def install_binding_change_listener() -> None:
 
 
 async def recover_stranded_sessions() -> None:
-    """Clear ``running`` sessions left over from a previous process.
+    """Reset genuinely-stranded ``running`` sessions from a previous process.
 
-    See ``domains.execution.sessions.recovery`` for rationale. Runs
-    after ``init_kernel`` so the kernel store is reachable.
+    Liveness-aware (``modules.sessions.recovery``): a ``running`` row whose
+    sandbox scope still holds a live remote sandbox is left alone (the turn may
+    be executing there — critical with multiple host replicas + per-scope
+    sandboxes on one shared durable); only confirmed-dead sessions are reset,
+    to ``idle`` + resumable ``host_restart`` (so ``recover_active_tasks`` can
+    re-drive interrupted task members). Runs after ``init_kernel`` so the
+    kernel store is reachable.
     """
-    # The orphan scans run inside the kernel store — in http mode the
-    # standalone kernel runs them itself at its own startup (B2); the
-    # HttpKernelClient deliberately has no scan_orphan_* methods.
+    # In http mode the standalone kernel reconciles its own store at its own
+    # startup (B2) — and without a sandbox allocator the host cannot prove the
+    # kernel process is NOT mid-turn, so a host-side durable reset here could
+    # clobber a live turn. Skip; the kernel's own boot scan covers it.
     if settings.is_http_kernel:
         return
 
@@ -528,18 +671,93 @@ async def recover_active_tasks() -> None:
     tasks orphaned by the previous process exit.
 
     Runs after ``recover_stranded_sessions`` / ``seal_orphan_pendings`` so the
-    kernel session rows are already reconciled (``scan_orphan_runs`` left
-    interrupted members at ``idle`` + ``host_restart``). Only ``active`` tasks
+    kernel session rows are already reconciled (stranded members sit at
+    ``idle`` + ``host_restart`` — stamped by the liveness-aware host recovery,
+    or by the kernel's own boot scan on the ``local`` tier). Only ``active`` tasks
     are touched; ``paused`` (user-stopped) wait for explicit resume.
     """
     import logging
 
+    from valuz_agent.adapters import kernel_client
     from valuz_agent.modules.tasks.orchestrator import task_orchestrator
+    from valuz_agent.modules.tasks.sandbox_scope import resolve_sandbox_scope
+
+    # Task sessions execute in their task's sandbox (one instance per task,
+    # lead + members together). Bind the session→scope lookup so every EXEC op
+    # on a task session routes there; non-task sessions fall back to
+    # per-session scope. No-op routing under the default BootSingletonAllocator.
+    kernel_client.bind_sandbox_scope_resolver(resolve_sandbox_scope)
 
     try:
-        await task_orchestrator.recover_active_tasks()
+        await task_orchestrator.recovery.recover_active_tasks()
     except Exception:  # noqa: BLE001 — startup must not block on bookkeeping
         logging.getLogger(__name__).exception("recover_active_tasks failed")
+
+
+async def purge_tasks_of_deleted_projects() -> None:
+    """Remove tasks whose project is gone. Must run BEFORE recovery.
+
+    Project deletion now cascades, but installs created before that carry the
+    orphans it used to leave: an ``active`` task with no kernel sessions, which
+    recovery respawns against a dead session id and the health monitor then
+    announces as "blocked" — for a project the user deleted, on a row with no
+    delete path. Ordering matters: after ``recover_active_tasks`` this sweep
+    would still fire that notification once per boot before cleaning up.
+
+    Cross-owner, like the recovery sweep it precedes. A no-op once drained.
+    """
+    import logging
+
+    from sqlalchemy import select
+
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.projects.models import ProjectRow
+    from valuz_agent.modules.tasks.models import TaskRow
+    from valuz_agent.modules.tasks.purge import purge_tasks
+
+    try:
+        async with async_unit_of_work(commit=False) as db:
+            live = {pid for pid in (await db.execute(select(ProjectRow.id))).scalars().all()}
+            orphans: dict[str, list[str]] = {}
+            for task_id, user_id, project_id in (
+                await db.execute(select(TaskRow.id, TaskRow.user_id, TaskRow.project_id))
+            ).all():
+                if project_id not in live:
+                    orphans.setdefault(user_id, []).append(task_id)
+        purged = 0
+        for user_id, task_ids in orphans.items():
+            purged += await purge_tasks(user_id, task_ids)
+        if purged:
+            logging.getLogger(__name__).warning(
+                "tasks: purged %d task(s) whose project no longer exists", purged
+            )
+    except Exception:  # noqa: BLE001 — startup must not block on bookkeeping
+        logging.getLogger(__name__).exception("deleted-project task sweep failed")
+
+
+async def resolve_informational_notification_backlog() -> None:
+    """Close notifications that report a FINISHED thing but were left open.
+
+    Completions are ingested already-resolved, so they toast and land in
+    history without occupying the action inbox. Rows written before that sat
+    in "未处理" wearing a Resume button, and nothing else would ever clear
+    them — a day of successful runs buried the failures that do need
+    attention. One sweep at boot; a no-op once drained.
+    """
+    import logging
+
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.notifications.datastore import NotificationDatastore
+
+    try:
+        async with async_unit_of_work() as db:
+            closed = await NotificationDatastore(db).resolve_informational_backlog()
+        if closed:
+            logging.getLogger(__name__).info(
+                "notifications: closed %d informational notification(s) left open", closed
+            )
+    except Exception:  # noqa: BLE001 — startup must not block on bookkeeping
+        logging.getLogger(__name__).exception("informational notification sweep failed")
 
 
 async def start_mcp_session_managers(app: FastAPI) -> None:
@@ -561,6 +779,9 @@ async def start_mcp_session_managers(app: FastAPI) -> None:
     from valuz_agent.integrations.automations_mcp_server import (
         automations_mcp_session_manager_run,
     )
+    from valuz_agent.integrations.playbooks_mcp_server import (
+        playbooks_mcp_session_manager_run,
+    )
     from valuz_agent.integrations.connectors_mcp_server import (
         connectors_mcp_session_manager_run,
     )
@@ -570,9 +791,23 @@ async def start_mcp_session_managers(app: FastAPI) -> None:
     )
 
     stack = AsyncExitStack()
+
+    from valuz_agent.infra.config import settings as _settings
+
+    if not _settings.is_http_kernel:
+        # The kernel's ``/mcp/toolkit/{session_id}`` bridge (codex's path to
+        # kernel-owned ToolDefs, e.g. PTC's execute_code) is mounted on the
+        # host app in in-process mode (api/app.py); its
+        # StreamableHTTPSessionManager must be running or every request dies
+        # with "Session terminated". The standalone kernel runs it inside its
+        # own lifespan instead.
+        from app.mcp_toolkit_router import mcp_router_lifespan
+
+        await stack.enter_async_context(mcp_router_lifespan())
     await stack.__aenter__()
     await stack.enter_async_context(docs_mcp_session_manager_run())
     await stack.enter_async_context(automations_mcp_session_manager_run())
+    await stack.enter_async_context(playbooks_mcp_session_manager_run())
     await stack.enter_async_context(connectors_mcp_session_manager_run())
     await stack.enter_async_context(toolkit_mcp_session_managers_run())
     app.state.docs_mcp_stack = stack
@@ -585,23 +820,18 @@ async def stop_mcp_session_managers(app: FastAPI) -> None:
         app.state.docs_mcp_stack = None
 
 
-async def start_automation_runner(app: FastAPI) -> None:
-    from valuz_agent.modules.automations.failure_monitor import (
-        automation_failure_monitor,
-    )
-    from valuz_agent.modules.automations.in_process_runner import (
-        automation_runner,
-    )
+async def start_automation_runtime(app: FastAPI) -> None:
+    """Start the deployment-bound automation scheduling/runtime transport."""
+    from valuz_agent.ports.extensions import ext
 
-    await automation_runner.startup()
-    # ADR-012: auto-pause runaway-failing automations. Lives alongside
-    # the runner; same lifecycle, no shared state, single SQLite writer
-    # (ADR-011) keeps DB access safe.
-    await automation_failure_monitor.startup()
+    await ext.automation_runtime.startup()
 
+
+async def start_host_background_services(app: FastAPI) -> None:
+    """Start non-automation host monitors and optional content scanners."""
     # Task watchdog: detect a lead that died without finalizing (the hole boot
     # recovery can't see mid-process) → mark blocked so it surfaces + resumes.
-    from valuz_agent.modules.tasks.health_monitor import task_health_monitor
+    from valuz_agent.modules.tasks.recovery import task_health_monitor
 
     await task_health_monitor.startup()
 
@@ -616,6 +846,16 @@ async def start_automation_runner(app: FastAPI) -> None:
     from valuz_agent.modules.skills.scheduler import start_skill_auto_scan
 
     start_skill_auto_scan()
+
+    from valuz_agent.modules.backup.scheduler import start_backup_scheduler
+
+    start_backup_scheduler()
+
+
+async def start_automation_runner(app: FastAPI) -> None:
+    """Backward-compatible aggregate used by older embedding tests/callers."""
+    await start_automation_runtime(app)
+    await start_host_background_services(app)
 
 
 async def start_polling_scheduler() -> None:
@@ -634,7 +874,7 @@ async def stop_polling_scheduler() -> None:
 
 def warm_parse_pool() -> None:
     """Pre-spawn the document-parser worker processes. Local parses
-    (pymupdf4llm / markitdown) run in a separate process so their GIL-bound
+    (pymupdf4llm) run in a separate process so their GIL-bound
     work can't stall the event loop; warming here pays the spawn + import cost
     at boot instead of on the first upload. Best-effort, never fatal."""
     from valuz_agent.infra import parse_pool
@@ -767,18 +1007,18 @@ async def start_skills(app: FastAPI) -> None:
     asyncio.get_event_loop().create_task(watcher.start())
 
 
-async def stop_automation_runner(app: FastAPI) -> None:
-    from valuz_agent.modules.automations.failure_monitor import (
-        automation_failure_monitor,
-    )
-    from valuz_agent.modules.automations.in_process_runner import (
-        automation_runner,
-    )
-    from valuz_agent.modules.tasks.health_monitor import task_health_monitor
+async def stop_automation_runtime(app: FastAPI) -> None:
+    """Stop the deployment-bound automation scheduling/runtime transport."""
+    from valuz_agent.ports.extensions import ext
+
+    await ext.automation_runtime.shutdown()
+
+
+async def stop_host_background_services(app: FastAPI) -> None:
+    """Stop non-automation host monitors and optional content scanners."""
+    from valuz_agent.modules.tasks.recovery import task_health_monitor
 
     await task_health_monitor.shutdown()
-    await automation_failure_monitor.shutdown()
-    await automation_runner.shutdown()
 
     from valuz_agent.modules.docs.scheduler import stop_auto_discovery
 
@@ -788,9 +1028,27 @@ async def stop_automation_runner(app: FastAPI) -> None:
 
     stop_skill_auto_scan()
 
+    from valuz_agent.modules.backup.scheduler import stop_backup_scheduler
+
+    stop_backup_scheduler()
+
+    from valuz_agent.integrations.wecom_aibot_long_connection import wecom_aibot_supervisor
+
+    await wecom_aibot_supervisor.shutdown()
+
+    from valuz_agent.integrations.feishu_long_connection import feishu_supervisor
+
+    await feishu_supervisor.shutdown()
+
     watcher = getattr(app.state, "skill_watcher", None)
     if watcher is not None:
         await watcher.stop()
+
+
+async def stop_automation_runner(app: FastAPI) -> None:
+    """Backward-compatible aggregate used by older embedding tests/callers."""
+    await stop_host_background_services(app)
+    await stop_automation_runtime(app)
 
 
 async def start_decision_aggregator(app: FastAPI) -> None:
@@ -800,8 +1058,10 @@ async def start_decision_aggregator(app: FastAPI) -> None:
     then subscribes to the kernel broadcast bus for live updates.
     Lives for the whole app lifetime.
     """
-    from valuz_agent.api.deps import set_decision_aggregator
-    from valuz_agent.modules.decisions.aggregator import DecisionAggregator
+    from valuz_agent.modules.decisions.aggregator import (
+        DecisionAggregator,
+        set_decision_aggregator,
+    )
 
     agg = DecisionAggregator()
     await agg.start()
@@ -813,11 +1073,9 @@ async def stop_decision_aggregator(app: FastAPI) -> None:
     agg = getattr(app.state, "decision_aggregator", None)
     if agg is not None:
         await agg.stop()
-    # Close any open notification SSE streams cleanly (the ledger itself is
-    # durable — nothing to flush, just release subscribers).
-    from valuz_agent.modules.notifications.service import notification_service
-
-    await notification_service.stop()
+    # The notification ledger is durable and its SSE stream holds no in-process
+    # subscriber state (it polls the table) — open streams end on their own when
+    # the client disconnects / the server shuts down. Nothing to release here.
 
 
 def mark_boot_complete() -> None:
@@ -830,6 +1088,23 @@ def mark_boot_complete() -> None:
     from valuz_agent.modules.system.service import record_boot_complete
 
     record_boot_complete()
+
+
+async def start_post_boot_agent_channels(app: FastAPI) -> None:
+    """Schedule channel long connections after the host has finished booting."""
+    from valuz_agent.modules.channels.config import agent_channels_active
+
+    if not agent_channels_active():
+        logger.info("agent channel long connections disabled for this deployment")
+        return
+
+    from valuz_agent.integrations.wecom_aibot_long_connection import wecom_aibot_supervisor
+
+    await wecom_aibot_supervisor.startup()
+
+    from valuz_agent.integrations.feishu_long_connection import feishu_supervisor
+
+    await feishu_supervisor.startup()
 
 
 async def stop_managed_browser() -> None:
@@ -845,6 +1120,26 @@ async def stop_managed_browser() -> None:
 
 
 async def shutdown_kernel() -> None:
+    from src.runtimes.network_egress import (
+        configure_network_egress,
+        get_network_egress_registry,
+    )
+
     from valuz_agent.boot.kernel import shutdown_kernel_dependencies
 
     await shutdown_kernel_dependencies()
+    if registry := get_network_egress_registry():
+        await registry.close()
+    # Reset the fail-loud sentinel as well as a live registry.  Production
+    # exits after this hook, but tests and embedded hosts may initialize the
+    # backend again in the same interpreter.
+    configure_network_egress(None)
+
+
+def shutdown_tracing() -> None:
+    """Flush + stop Langfuse tracing. Runs AFTER ``shutdown_kernel`` so every
+    runtime has stopped emitting spans before the final flush. No-op when
+    tracing was never enabled."""
+    from src.core.tracing import shutdown_tracing as _shutdown_tracing
+
+    _shutdown_tracing()

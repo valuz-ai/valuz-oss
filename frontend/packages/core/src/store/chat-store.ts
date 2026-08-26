@@ -4,6 +4,7 @@ import {
   parseTodosUpdate,
   sessionsApi,
   type SessionEventDTO,
+  type SessionMessageHostRef,
 } from "../api/sessions-api";
 import { queueApi, type QueuedInput } from "../api/queue-api";
 import {
@@ -11,6 +12,7 @@ import {
   type SessionStreamSnapshot,
   type SessionStreamState,
 } from "../agent/session-stream";
+import { isLiveSnapshot } from "../conversation/conversation-utils";
 
 export type ChatRole = "user" | "assistant";
 
@@ -20,6 +22,9 @@ export interface ChatToolUse {
   input: string;
   output: string | null;
   isError: boolean;
+  /** Tool-scoped reasoning stream (``tool.call.thinking_delta``, live-only).
+   * Kept apart from ``output`` — output is the tool's result stream. */
+  thinking?: string;
 }
 
 export interface ChatMessage {
@@ -36,6 +41,17 @@ export interface ChatMessage {
 interface ChatStreamCursor {
   /** Current ``message_id`` whose deltas are being accumulated. */
   messageId: string | null;
+  /**
+   * Store id of the assistant entry currently receiving committed output
+   * (thinking flushes / tool cards / canonical text). Kernel streams reuse
+   * the TURN's ``message_id`` — the same id the ``message.user`` echo
+   * carries — for every assistant event of the turn, so the entry cannot
+   * be keyed by ``message_id`` alone: the cursor pins the open entry and a
+   * canonical ``message.assistant.delta`` closes it, letting a later
+   * thinking/tool block in the same turn open a fresh entry instead of
+   * overwriting this one.
+   */
+  assistantId: string | null;
   text: string;
   thinking: string;
 }
@@ -55,7 +71,14 @@ export interface ChatStoreState {
   queue: QueuedInput[];
   /** True when an interrupt soft-paused the queue; awaits explicit resume. */
   queuePaused: boolean;
-  /** Last seen event seq — used as resume cursor. */
+  /**
+   * HISTORY cursor (durable-store seq) — used as the SSE resume
+   * ``after_seq``. Advanced ONLY by history/replay envelopes (the REST
+   * ``listEvents`` results ingested at attach); live SSE frames carry the
+   * kernel-LOCAL seq — an independent space — and must never advance it.
+   * (The stream controller additionally advances its own copy from
+   * heartbeat frames, which are guaranteed history-space.)
+   */
   lastSeq: number;
   /** Connection lifecycle from session-stream controller. */
   connection: SessionStreamSnapshot;
@@ -65,7 +88,11 @@ export interface ChatStoreState {
   detach: () => void;
   send: (
     prompt: string,
-    opts?: { providerId?: string | null; modelId?: string | null },
+    opts?: {
+      providerId?: string | null;
+      modelId?: string | null;
+      hostRef?: SessionMessageHostRef | null;
+    },
   ) => Promise<void>;
   interrupt: () => Promise<void>;
   /** Append a follow-up input to the queue (drains after the active turn). */
@@ -82,12 +109,25 @@ export interface ChatStoreState {
   reconnect: () => void;
   // Test/internal helper — feed an event into the reducer. Exposed so
   // the hook can pipe controller events through and so unit tests can
-  // exercise reducer logic without a live SSE source.
-  _ingest: (event: SessionEventDTO) => void;
+  // exercise reducer logic without a live SSE source. ``source`` tells the
+  // reducer which seq space the envelope's ``seq`` belongs to (defaults to
+  // ``"history"`` — REST replay); live SSE frames must pass ``"live"`` so
+  // their kernel-local seq never advances the history cursor. Duplicate
+  // deliveries across the two paths are collapsed by ``event_uid``.
+  _ingest: (event: SessionEventDTO, opts?: { source?: IngestSource }) => void;
 }
+
+/**
+ * Which seq space an envelope's ``seq`` belongs to. ``history`` = the
+ * durable store (REST listEvents replay); ``live`` = the kernel's local
+ * store (SSE frames). The two are independent counters — only history
+ * envelopes may advance the resume cursor.
+ */
+export type IngestSource = "history" | "live";
 
 const emptyCursor = (): ChatStreamCursor => ({
   messageId: null,
+  assistantId: null,
   text: "",
   thinking: "",
 });
@@ -105,6 +145,33 @@ const generateId = () =>
 
 let activeController: ReturnType<typeof createSessionStreamController> | null =
   null;
+
+// Bounded remember-set of ``event_uid``s already ingested for the attached
+// session. Persisted events can arrive through BOTH paths — the attach-time
+// REST history replay and the live SSE stream (whose reconnect backfill
+// re-reads history) — with per-store seqs that cannot be compared, so the
+// store-independent uid is the only valid dedup key. Reset on attach/detach.
+// FIFO-trimmed so an arbitrarily long session can't grow it unbounded.
+const SEEN_UIDS_MAX = 8192;
+const seenEventUids = new Set<string>();
+const seenEventUidOrder: string[] = [];
+
+const resetSeenUids = () => {
+  seenEventUids.clear();
+  seenEventUidOrder.length = 0;
+};
+
+/** Returns true when the uid is NEW (process the event); false = duplicate. */
+const rememberUid = (uid: string): boolean => {
+  if (seenEventUids.has(uid)) return false;
+  seenEventUids.add(uid);
+  seenEventUidOrder.push(uid);
+  while (seenEventUidOrder.length > SEEN_UIDS_MAX) {
+    const evicted = seenEventUidOrder.shift();
+    if (evicted !== undefined) seenEventUids.delete(evicted);
+  }
+  return true;
+};
 
 // Monotonic token guarding ``attach`` against React-StrictMode (dev) double
 // mount + the detach/attach race it triggers: the effect runs
@@ -141,6 +208,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
     if (get().sessionId === sessionId) return;
     const myGen = ++attachGeneration;
     stopActiveController();
+    resetSeenUids();
     set({
       sessionId,
       sessionStatus: null,
@@ -171,20 +239,24 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
     void get().refreshQueue();
 
     // 2. Replay history events so the chat list is hydrated before the
-    //    live subscription starts.
+    //    live subscription starts. These are REST reads — durable-store
+    //    seq space — so they (and only they) advance the history cursor.
     const history = await sessionsApi.listEvents(sessionId, 0);
     if (myGen !== attachGeneration) return;
     for (const item of history.items) {
-      get()._ingest(item);
+      get()._ingest(item, { source: "history" });
     }
 
-    // 3. Open live SSE subscription. The controller resumes from the
-    //    seq it last saw, so a mid-flight reconnect won't double-replay
-    //    the history we already ingested.
+    // 3. Open live SSE subscription. ``startSeq`` is the HISTORY cursor
+    //    hydrated by the replay above, so the server-side backfill starts
+    //    right after what we already ingested. Live frames are kernel-seq
+    //    space: they never advance the cursor (the controller advances its
+    //    own copy from heartbeats only) and dedup against the replay via
+    //    ``event_uid``.
     activeController = createSessionStreamController({
       sessionId,
       startSeq: get().lastSeq,
-      onEvent: (event) => get()._ingest(event),
+      onEvent: (event) => get()._ingest(event, { source: "live" }),
       onStateChange: (snapshot) => {
         if (get().sessionId !== sessionId) return;
         set({ connection: snapshot });
@@ -198,6 +270,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
     // reset (StrictMode cleanup runs detach between the two attach mounts).
     attachGeneration += 1;
     stopActiveController();
+    resetSeenUids();
     set({
       sessionId: null,
       sessionStatus: null,
@@ -244,6 +317,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
         prompt,
         opts.providerId ?? null,
         opts.modelId ?? null,
+        opts.hostRef ?? null,
       );
     } catch (err) {
       // Roll back optimistic state — the turn never started.
@@ -333,9 +407,15 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
     activeController?.reconnect();
   },
 
-  _ingest: (event: SessionEventDTO) => {
+  _ingest: (event: SessionEventDTO, opts?: { source?: IngestSource }) => {
+    // Cross-path dedup: a persisted event can be delivered by BOTH the
+    // attach-time REST replay and the live SSE stream (reconnect backfill
+    // included). Their seqs live in different spaces, so the uid is the
+    // only valid identity; uid-less envelopes (live-only deltas, legacy
+    // rows) flow through untouched — exactly today's behavior for them.
+    if (event.event_uid && !rememberUid(event.event_uid)) return;
     const before = get().isStreaming;
-    set((state) => reduce(state, event));
+    set((state) => reduce(state, event, opts));
     // Turn boundary (streaming true → false): a drained queue item just
     // dispatched / the queue settled. Resync the queue view so bubbles drop
     // as they run and ``paused`` / ``blocked`` states surface. See §8.4.
@@ -348,17 +428,27 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
 /**
  * Pure reducer: given current state and an SSE envelope, return the
  * next state. Extracted for unit tests.
+ *
+ * ``opts.source`` declares the envelope's seq space: ``"history"``
+ * (default — REST listEvents replay, durable-store seq) advances the
+ * resume cursor; ``"live"`` (SSE frames, kernel-LOCAL seq) must NOT —
+ * the two counters are independent and comparing/merging them corrupts
+ * the ``after_seq`` handed back to the server on reconnect.
  */
 export const reduce = (
   state: ChatStoreState,
   envelope: SessionEventDTO,
+  opts?: { source?: IngestSource },
 ): Partial<ChatStoreState> => {
   const seq = envelope.seq;
   const { event_type, payload } = envelope.event;
   const messageId = payload.message_id ?? null;
 
-  // Always advance the resume cursor.
-  const nextLastSeq = Math.max(state.lastSeq, seq);
+  // Advance the resume cursor from HISTORY envelopes only (see above).
+  const nextLastSeq =
+    (opts?.source ?? "history") === "history"
+      ? Math.max(state.lastSeq, seq)
+      : state.lastSeq;
 
   switch (event_type) {
     case "message.user": {
@@ -404,13 +494,19 @@ export const reduce = (
       };
     }
 
+    // A ``live_snapshot`` frame carries the stream's absolute state rather
+    // than the next increment — the kernel sends one per open stream when
+    // a client joins mid-turn, because deltas emitted before it connected
+    // are never persisted. Replace instead of append, or a reconnect
+    // renders the recovered prefix twice. See
+    // ``kernel/src/core/live_partial.py``.
     case "message.assistant.text_delta": {
       const text = payload.text ?? "";
       return {
         streaming: {
+          ...state.streaming,
           messageId: messageId ?? state.streaming.messageId,
-          text: state.streaming.text + text,
-          thinking: state.streaming.thinking,
+          text: isLiveSnapshot(payload) ? text : state.streaming.text + text,
         },
         isStreaming: true,
         lastSeq: nextLastSeq,
@@ -421,9 +517,11 @@ export const reduce = (
       const text = payload.text ?? "";
       return {
         streaming: {
+          ...state.streaming,
           messageId: messageId ?? state.streaming.messageId,
-          text: state.streaming.text,
-          thinking: state.streaming.thinking + text,
+          thinking: isLiveSnapshot(payload)
+            ? text
+            : state.streaming.thinking + text,
         },
         isStreaming: true,
         lastSeq: nextLastSeq,
@@ -435,15 +533,15 @@ export const reduce = (
       // committed assistant message. The renderer shows thinking[]
       // dimmed/italic above the assistant turn body.
       const text = payload.text ?? state.streaming.thinking;
-      const target = ensureAssistantMessage(state.messages, messageId);
+      const target = ensureAssistantMessage(state, messageId);
       const updatedMessages = upsertAssistantMessage(state.messages, target, {
         thinking: [...target.thinking, text],
       });
       return {
         messages: updatedMessages,
         streaming: {
-          messageId: state.streaming.messageId,
-          text: state.streaming.text,
+          ...state.streaming,
+          assistantId: target.id,
           thinking: "",
         },
         lastSeq: nextLastSeq,
@@ -452,9 +550,13 @@ export const reduce = (
 
     case "message.assistant.delta": {
       // Canonical end-of-message text — flush streamingText into the
-      // committed assistant message and clear the cursor.
+      // committed assistant message and clear the cursor. Clearing
+      // ``assistantId`` closes the entry: the kernel can emit several
+      // assistant messages per turn (text → tools → text), and the next
+      // thinking/tool event must open a fresh entry rather than overwrite
+      // this one's text.
       const text = payload.text ?? state.streaming.text;
-      const target = ensureAssistantMessage(state.messages, messageId);
+      const target = ensureAssistantMessage(state, messageId);
       const updatedMessages = upsertAssistantMessage(state.messages, target, {
         text,
       });
@@ -462,6 +564,7 @@ export const reduce = (
         messages: updatedMessages,
         streaming: {
           messageId: null,
+          assistantId: null,
           text: "",
           thinking: state.streaming.thinking,
         },
@@ -470,8 +573,9 @@ export const reduce = (
     }
 
     case "tool.call.started": {
-      const target = ensureAssistantMessage(state.messages, messageId);
-      const toolId = payload.tool_use_id ?? payload.id ?? `tool-${generateId()}`;
+      const target = ensureAssistantMessage(state, messageId);
+      const toolId =
+        payload.tool_use_id ?? payload.id ?? `tool-${generateId()}`;
       // A preceding tool.call.input_delta may already have built a
       // provisional card for this id (streaming the partial input).
       const streamed = target.tools.find((t) => t.id === toolId);
@@ -489,7 +593,11 @@ export const reduce = (
       const updatedMessages = upsertAssistantMessage(state.messages, target, {
         tools,
       });
-      return { messages: updatedMessages, lastSeq: nextLastSeq };
+      return {
+        messages: updatedMessages,
+        streaming: { ...state.streaming, assistantId: target.id },
+        lastSeq: nextLastSeq,
+      };
     }
 
     case "tool.call.input_delta": {
@@ -500,7 +608,7 @@ export const reduce = (
       const toolId = payload.tool_use_id ?? "";
       if (!toolId) return { lastSeq: nextLastSeq };
       const text = payload.text ?? "";
-      const target = ensureAssistantMessage(state.messages, messageId);
+      const target = ensureAssistantMessage(state, messageId);
       const existing = target.tools.find((t) => t.id === toolId);
       const nextTool: ChatToolUse = existing
         ? { ...existing, input: existing.input + text }
@@ -519,6 +627,7 @@ export const reduce = (
       });
       return {
         messages: updatedMessages,
+        streaming: { ...state.streaming, assistantId: target.id },
         isStreaming: true,
         lastSeq: nextLastSeq,
       };
@@ -547,6 +656,29 @@ export const reduce = (
       };
     }
 
+    case "tool.call.thinking_delta": {
+      // Tool-scoped reasoning stream (live-only) — same accumulation shape as
+      // output_delta but onto ``thinking``, never ``output`` (the result
+      // stream, e.g. the A2UI JSONL generate_ui renders progressively).
+      const toolId = payload.tool_use_id ?? "";
+      if (!toolId) return { lastSeq: nextLastSeq };
+      const text = payload.text ?? "";
+      const updatedMessages = state.messages.map((msg) => {
+        if (!msg.tools.some((t) => t.id === toolId)) return msg;
+        return {
+          ...msg,
+          tools: msg.tools.map((t) =>
+            t.id === toolId ? { ...t, thinking: (t.thinking ?? "") + text } : t,
+          ),
+        };
+      });
+      return {
+        messages: updatedMessages,
+        isStreaming: true,
+        lastSeq: nextLastSeq,
+      };
+    }
+
     case "tool.call.completed": {
       const toolId = payload.tool_use_id ?? payload.id ?? "";
       const isError = payload.is_error === "true";
@@ -565,8 +697,12 @@ export const reduce = (
     }
 
     case "session.todos.update": {
+      // Carry-forward on a malformed frame (parser returns null) — same
+      // semantics as the conversation page's SSE handler: a frame that
+      // can't be parsed must not wipe the snapshot the panel already has.
+      // A cleared todo list arrives as ``[]`` (truthy) and still lands.
       const todos = parseTodosUpdate(envelope);
-      return { todos, lastSeq: nextLastSeq };
+      return { todos: todos ?? state.todos, lastSeq: nextLastSeq };
     }
 
     case "session.idle": {
@@ -624,7 +760,7 @@ export const reduce = (
         messages = [
           ...messages,
           {
-            id: messageId ?? `error-${generateId()}`,
+            id: assistantEntryId(messages, messageId),
             role: "assistant",
             text: `[${message}]`,
             thinking: [],
@@ -649,10 +785,35 @@ export const reduce = (
   }
 };
 
-const ensureAssistantMessage = (
+/**
+ * Pick the store id for a NEW assistant entry. The natural choice is the
+ * event's ``message_id`` — but kernel streams reuse the TURN's id (the one
+ * the ``message.user`` echo already claimed) for every assistant event, and
+ * ids key both React rendering and upsert lookups, so a taken id must never
+ * be shared across entries: fall back to a locally generated one.
+ */
+const assistantEntryId = (
   messages: ChatMessage[],
   messageId: string | null,
+): string => {
+  if (messageId && !messages.some((m) => m.id === messageId)) return messageId;
+  return `assistant-${generateId()}`;
+};
+
+const ensureAssistantMessage = (
+  state: Pick<ChatStoreState, "messages" | "streaming">,
+  messageId: string | null,
 ): ChatMessage => {
+  const { messages } = state;
+  // The open entry pinned by the streaming cursor wins — with turn-scoped
+  // message_ids the id alone cannot identify the entry (see ChatStreamCursor).
+  const openId = state.streaming.assistantId;
+  if (openId) {
+    const open = messages.find(
+      (m) => m.id === openId && m.role === "assistant",
+    );
+    if (open) return open;
+  }
   const existing = messageId
     ? messages.find((m) => m.id === messageId && m.role === "assistant")
     : messages
@@ -661,7 +822,7 @@ const ensureAssistantMessage = (
         .find((m) => m.role === "assistant" && !m.stopReason);
   if (existing) return existing;
   return {
-    id: messageId ?? `assistant-${generateId()}`,
+    id: assistantEntryId(messages, messageId),
     role: "assistant",
     text: "",
     thinking: [],
@@ -676,7 +837,12 @@ const upsertAssistantMessage = (
   target: ChatMessage,
   patch: Partial<ChatMessage>,
 ): ChatMessage[] => {
-  const idx = messages.findIndex((m) => m.id === target.id);
+  // Role-scoped lookup: the turn's user echo can share ``target.id`` when
+  // the kernel reuses the turn id — matching on id alone would patch the
+  // assistant payload onto the user bubble.
+  const idx = messages.findIndex(
+    (m) => m.id === target.id && m.role === "assistant",
+  );
   if (idx === -1) {
     return [...messages, { ...target, ...patch }];
   }

@@ -1,5 +1,6 @@
 import { ShieldCheck, Sparkles } from "lucide-react";
 import { useTranslation } from "@valuz/core";
+import { assetUrl } from "@valuz/shared";
 import { WELCOME_FEED, type FeedCard, type FeedStatus } from "./mock";
 
 /**
@@ -11,6 +12,8 @@ import { WELCOME_FEED, type FeedCard, type FeedStatus } from "./mock";
  */
 export const WelcomeStep = ({ onStart }: { onStart: () => void }) => {
   const { t } = useTranslation();
+  const logoUrl = assetUrl("logo.png");
+  const wordmarkUrl = assetUrl("valuz-wordmark.svg");
   return (
     <div className="relative grid min-h-screen grid-cols-1 overflow-hidden bg-background lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
       {/* ---------- Left: pitch ---------- */}
@@ -20,25 +23,21 @@ export const WelcomeStep = ({ onStart }: { onStart: () => void }) => {
           {/* Brand eyebrow */}
           <div className="mb-10 flex items-center gap-5">
             <img
-              src="./logo.png"
+              src={logoUrl}
               alt=""
               className="h-[60px] w-[60px] rounded-2xl"
               aria-hidden
             />
-            <img
-              src="./valuz-wordmark.svg"
-              alt="Valuz"
-              className="sr-only"
-            />
+            <img src={wordmarkUrl} alt="Valuz" className="sr-only" />
             <span
               className="h-[30px] w-[91px] -translate-x-[18px] translate-y-0.5 bg-ink-heading"
               aria-hidden
               style={{
-                maskImage: "url(./valuz-wordmark.svg)",
+                maskImage: `url(${wordmarkUrl})`,
                 maskRepeat: "no-repeat",
                 maskSize: "contain",
                 maskPosition: "center",
-                WebkitMaskImage: "url(./valuz-wordmark.svg)",
+                WebkitMaskImage: `url(${wordmarkUrl})`,
                 WebkitMaskRepeat: "no-repeat",
                 WebkitMaskSize: "contain",
                 WebkitMaskPosition: "center",
@@ -56,7 +55,7 @@ export const WelcomeStep = ({ onStart }: { onStart: () => void }) => {
             {t("onboarding.heroTitleSuffix" as Parameters<typeof t>[0])}
           </h1>
 
-          <p className="mt-[5px] max-w-[424px] text-[15px] leading-7 text-ink-body">
+          <p className="mt-[5px] max-w-[424px] text-lg leading-7 text-ink-body">
             {t("onboarding.heroSubtitlePrefix" as Parameters<typeof t>[0])}
             <span className="font-medium text-ink-body">
               {t("onboarding.heroSubtitleAccent" as Parameters<typeof t>[0])}
@@ -67,15 +66,15 @@ export const WelcomeStep = ({ onStart }: { onStart: () => void }) => {
           <button
             type="button"
             onClick={onStart}
-            className="mt-9 inline-flex w-[180px] items-center justify-center gap-2 rounded-md bg-brand px-9 py-3 text-[14px] font-medium text-white transition-all hover:bg-brand-hover focus-visible:border-ring focus-visible:ring-[1px] focus-visible:ring-ring/50 active:scale-[0.99]"
+            className="mt-9 inline-flex w-[180px] items-center justify-center gap-2 rounded-md bg-brand px-9 py-3 text-base font-medium text-white transition-all hover:bg-brand-hover focus-visible:border-ring focus-visible:ring-[1px] focus-visible:ring-ring/50 active:scale-[0.99]"
           >
             {t("onboarding.startButton" as Parameters<typeof t>[0])}
-            <span aria-hidden className="text-[15px]">
+            <span aria-hidden className="text-lg">
               →
             </span>
           </button>
 
-          <p className="mt-7 flex items-center gap-2 text-[12px] leading-5 text-ink-meta">
+          <p className="mt-7 flex items-center gap-2 text-xs leading-5 text-ink-meta">
             <ShieldCheck className="h-4 w-4 shrink-0 text-current" />
             {t("onboarding.heroFootnote" as Parameters<typeof t>[0])}
           </p>
@@ -165,13 +164,13 @@ const FeedCardView = ({ card }: { card: FeedCard }) => {
     >
       <div className="flex items-center gap-2.5">
         <div
-          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[14px] ${
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-base ${
             isYou ? "bg-ink-heading text-white" : "bg-surface-soft"
           }`}
         >
           {isYou ? youGlyph : card.avatar}
         </div>
-        <span className="text-[13px] font-semibold text-ink-heading">
+        <span className="text-sm font-semibold text-ink-heading">
           {author}
         </span>
         <span className="ml-auto font-mono text-micro tracking-wide text-ink-muted">
@@ -179,24 +178,24 @@ const FeedCardView = ({ card }: { card: FeedCard }) => {
         </span>
       </div>
 
-      <p className="mt-2.5 text-[13px] leading-[1.55] text-ink-body">
+      <p className="mt-2.5 text-sm leading-[1.55] text-ink-body">
         {renderMentions(body)}
       </p>
 
       {!isYou && (
         <div className="mt-3 flex items-center gap-2">
           <span
-            className={`inline-flex h-5 items-center gap-1.5 rounded-[4px] px-2 py-0 text-[11px] font-medium ${meta.pill}`}
+            className={`inline-flex h-5 items-center gap-1.5 rounded-sm px-2 py-0 text-2xs font-medium ${meta.pill}`}
           >
             <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
             {meta.labelKey ? t(meta.labelKey as Parameters<typeof t>[0]) : ""}
           </span>
-          {when && <span className="text-[11px] text-ink-muted">· {when}</span>}
+          {when && <span className="text-2xs text-ink-muted">· {when}</span>}
         </div>
       )}
 
       {isYou && (
-        <div className="mt-3 flex items-center gap-1.5 text-[11px] text-ink-muted">
+        <div className="mt-3 flex items-center gap-1.5 text-2xs text-ink-muted">
           <Sparkles className="h-3 w-3" />
           {t("onboarding.assignedToTeam" as Parameters<typeof t>[0])}
         </div>

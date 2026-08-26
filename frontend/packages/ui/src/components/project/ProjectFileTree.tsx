@@ -181,7 +181,7 @@ const TreeNode = ({
       onClick={() => onFileClick?.(node.path)}
       onDoubleClick={() => onFileDoubleClick?.(node.path)}
       className={cn(
-        "relative flex w-full items-center gap-1.5 rounded-[4px] px-2 py-1 text-xs transition-colors",
+        "relative flex w-full items-center gap-1.5 rounded-sm px-2 py-1 text-xs transition-colors",
         isActive
           ? "bg-surface-soft text-ink-heading"
           : "text-ink-heading hover:bg-[color:var(--fg-1)]",

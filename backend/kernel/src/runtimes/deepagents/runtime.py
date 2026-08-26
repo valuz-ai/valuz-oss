@@ -4,8 +4,10 @@ Maps AgentConfig + ToolKit → create_deep_agent(...) graph, harness Tools →
 StructuredTool, SubAgentDef → SubAgent (typed dict), and streams the graph's
 ``astream_events`` output to harness Events.
 
-Filesystem operations are bound to the project's cwd via FilesystemBackend
-(virtual_mode=True so absolute / parent-traversal paths are rejected).
+Filesystem operations resolve against the project's cwd via
+``_WorkspaceLocalShellBackend`` (virtual_mode=True: parent-traversal rejected,
+virtual "/" = workspace root, dead-end mappings fall through to existing host
+paths — see the class docstring).
 
 Approval contract (Phase 3 of the cross-runtime approval contract — see
 ``docs/design/cross-runtime-approval-contract.md`` §5.3, §9 Phase 3):
@@ -26,24 +28,38 @@ hard-400'd at the route layer because DeepAgents has no classifier.
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import logging
 import os
+import re
+import shutil
+import sqlite3
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict
+from datetime import timedelta
+from pathlib import Path
 from typing import Any, Literal
 
+import httpx
 from deepagents import SubAgent, create_deep_agent
 from deepagents.backends import LocalShellBackend
+from deepagents.backends.protocol import FileData, ReadResult
+from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 from src.core.agent_config import AgentConfig, SubAgentDef
 from src.core.approval_rule_matcher import ExactArgsRuleMatcher, RuntimeApprovalRuleMatcher
+from src.core.citation import EvidenceRegistry
 from src.core.events import AVAILABLE_DECISIONS_EDITABLE_WITH_SESSION, Event, EventSink
+from src.core.mcp_source_metadata import wrap_mcp_result_metadata_for_transport
 from src.core.rule_canonicalize import reduce_args_for_subject
 from src.core.session_approval_cache import SessionRule
+from src.core.task_coverage_continuation import TASK_COVERAGE_NOOP_TOOL_NAME
 from src.core.tools import ExecContext, ToolDef, ToolKit, ToolResult
+from src.core.tracing import langchain_config_overlay
 from src.core.types import (
     EndTurn,
     Error,
@@ -53,6 +69,7 @@ from src.core.types import (
     Session,
     StopReason,
     UserMessage,
+    is_bare_completion,
 )
 from src.runtimes.deepagents._patches import (
     MAIN_GRAPH_RECURSION_LIMIT,
@@ -62,11 +79,71 @@ from src.runtimes.deepagents.approval_bridge import (
     _build_pending_payload,
     _classify_subject,
 )
-from src.runtimes.deepagents.middleware import ToolErrorTolerantMiddleware
-from src.runtimes.interruption import describe_exception, is_runtime_interruption
+from src.runtimes.deepagents.middleware import (
+    CitationEvidenceCompactionMiddleware,
+    InvalidToolCallPairMiddleware,
+    ToolErrorTolerantMiddleware,
+    WindowsPathVirtualizerMiddleware,
+    citation_artifact_content,
+)
+from src.runtimes.interruption import (
+    absorb_interrupt_cancellations,
+    describe_exception,
+    is_runtime_interruption,
+)
 from src.runtimes.mcp_env import resolve_stdio_env
+from src.runtimes.network_egress import ForwardProxyDescriptor, record_runtime_egress_phase
 
 logger = logging.getLogger(__name__)
+
+
+def _is_internal_summarization_event(chunk: dict[str, Any]) -> bool:
+    """Return whether a LangChain model event belongs to history compaction.
+
+    LangChain tags the nested summarizer invocation with this metadata.  Its
+    response is runtime state, not an Agent message: publishing it exposes the
+    private handoff prompt and makes Citation Audit treat the summary as a
+    second user-facing answer.  Normal primary, tool-adjacent, repair, and
+    continuation model events do not carry this marker and remain visible.
+    """
+
+    metadata = chunk.get("metadata")
+    return isinstance(metadata, dict) and metadata.get("lc_source") == "summarization"
+
+
+async def _log_mcp_progress(
+    progress: float,
+    total: float | None,
+    message: str | None,
+    context: Any = None,
+) -> None:
+    """Consume MCP ``notifications/progress`` for a tool call.
+
+    Registering ANY callback is what makes the SDK attach a
+    ``progressToken`` to the request, which is what permits servers to
+    report at all. This one only logs: nothing here resets a timer (the
+    request timeout is a hard ceiling), so progress is an observability
+    signal, not a lifeline. No measured client does otherwise: codex and the
+    Claude CLI both abort exactly at their configured ceiling with beats
+    still arriving.
+    """
+    logger.debug(
+        "mcp progress: %s/%s %s",
+        progress,
+        total if total is not None else "?",
+        message or "",
+    )
+
+
+async def _preserve_mcp_source_metadata(request: Any, handler: Any) -> Any:
+    """Keep result-level MCP citation metadata through LangChain conversion."""
+
+    result = await handler(request)
+    return wrap_mcp_result_metadata_for_transport(
+        result,
+        server_name=str(getattr(request, "server_name", "") or "unknown"),
+    )
+
 
 # Apply third-party deepagents shims once, before any graph is built. See
 # ``_patches`` — raises *subagents* above langgraph's default 25-step recursion
@@ -82,15 +159,78 @@ apply_deepagents_patches()
 DEFAULT_CHECKPOINT_DB = "./deepagents_checkpoints.db"
 CHECKPOINT_DB_ENV = "DEEPAGENTS_CHECKPOINT_DB"
 
+_CITATION_SYSTEM_POLICY_BLOCK_RE = re.compile(
+    r'<citation-system-policy(?:\s+revision="[^"]*")?>\s*.*?'
+    r"</citation-system-policy>",
+    re.DOTALL,
+)
+
+
+def _citation_system_policy_block(instructions: str) -> str:
+    """Extract only the immutable Evidence protocol for nested agents."""
+
+    matches = list(_CITATION_SYSTEM_POLICY_BLOCK_RE.finditer(instructions or ""))
+    return matches[-1].group(0).strip() if matches else ""
+
+
+def _sanitize_anthropic_request_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop malformed signature-only thinking blocks from model history.
+
+    Some Anthropic-compatible streaming gateways emit the terminal signature
+    delta as a separate ``thinking`` content block. LangChain preserves that
+    block in the checkpoint, but Anthropic rejects it on the next round because
+    the required ``thinking`` field is absent. The signature-only block carries
+    no user-visible reasoning and is not the tool call, so remove only that
+    invalid transport fragment while preserving every complete thinking, text,
+    and tool-use block.
+    """
+
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return payload
+    dropped = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        filtered: list[Any] = []
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "thinking"
+                and not isinstance(block.get("thinking"), str)
+            ):
+                dropped += 1
+                continue
+            filtered.append(block)
+        if len(filtered) != len(content):
+            message["content"] = filtered
+    if dropped:
+        logger.warning(
+            "deepagents: removed %s malformed signature-only thinking history block(s)",
+            dropped,
+        )
+    return payload
+
+
 # In an ephemeral cloud sandbox the checkpoint must be EXTERNALIZED (per-owner
 # COS mount) so it survives sandbox recreation ("resume in a fresh sandbox").
 # sqlite CANNOT live on COS — sqlite-on-COS-FUSE corrupts (WAL -shm mmap, no
 # fcntl locking, whole-object PUT → SIGBUS / "database disk image is malformed").
 # So IN-SANDBOX we use FileCheckpointSaver (write-once JSON files, corruption-free
-# on COS). The LOCAL resident process keeps the sqlite store above (durable local
-# disk, single host — no reason to change it). Gate: _in_sandbox().
+# on COS). The LOCAL resident process defaults to the sqlite store above (durable
+# local disk, single host). Gate: _in_sandbox(), overridable per deployment via
+# ``DEEPAGENTS_CHECKPOINT_BACKEND`` (see _checkpoint_backend).
 DEFAULT_CHECKPOINT_ROOT = "./deepagents_checkpoints"
 CHECKPOINT_ROOT_ENV = "DEEPAGENTS_CHECKPOINT_ROOT"
+
+# Explicit backend override. Unset (default) keeps the historical behaviour:
+# sandbox → file, local → sqlite. A deployment that wants the SAME on-disk
+# checkpoint shape in both places (e.g. so one collector/backup path can read
+# local and sandbox runs alike) sets ``file`` locally.
+CHECKPOINT_BACKEND_ENV = "DEEPAGENTS_CHECKPOINT_BACKEND"
 
 
 def _in_sandbox() -> bool:
@@ -101,14 +241,308 @@ def _in_sandbox() -> bool:
         os.getenv("KERNEL_STORE", "local").strip().lower() == "remote"
     )
 
+
+def _checkpoint_backend() -> str:
+    """``"file"`` or ``"sqlite"`` — which checkpoint store this process uses.
+
+    ``DEEPAGENTS_CHECKPOINT_BACKEND`` wins when set to a recognised value;
+    otherwise fall back to the deployment gate (:func:`_in_sandbox`), so the
+    default behaviour is unchanged. An unrecognised value is ignored rather
+    than raising: a typo in an env var must not take the runtime down.
+    """
+    raw = os.getenv(CHECKPOINT_BACKEND_ENV, "").strip().lower()
+    if raw in ("file", "sqlite"):
+        return raw
+    return "file" if _in_sandbox() else "sqlite"
+
+
+def _expand_embedded_json(value: Any, *, depth: int = 0) -> Any:
+    """Decode JSON strings embedded inside an offloaded MCP envelope.
+
+    MCP adapters commonly return a JSON content-block array whose ``text``
+    field is itself serialized JSON.  Pretty-printing only the outer array
+    leaves the useful dataset on one enormous line, so line-based pagination
+    still cannot advance.  Decode only strings that visibly contain JSON and
+    cap recursion to keep hostile or accidental nesting bounded.
+    """
+
+    if depth >= 6:
+        return value
+    if isinstance(value, dict):
+        return {key: _expand_embedded_json(item, depth=depth + 1) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_expand_embedded_json(item, depth=depth + 1) for item in value]
+    if not isinstance(value, str):
+        return value
+    candidate = value.strip()
+    if len(candidate) < 2 or candidate[0] not in "[{" or candidate[-1] not in "]}":
+        return value
+    try:
+        decoded = json.loads(candidate)
+    except (TypeError, ValueError):
+        return value
+    return _expand_embedded_json(decoded, depth=depth + 1)
+
+
+def _logical_large_result_content(content: str) -> str:
+    """Expose one-line structured tool results as stable logical lines."""
+
+    if len(content.splitlines()) > 1:
+        return content
+    try:
+        decoded = json.loads(content)
+    except (TypeError, ValueError):
+        decoded = None
+    if decoded is not None:
+        rendered = json.dumps(
+            _expand_embedded_json(decoded),
+            ensure_ascii=False,
+            indent=2,
+        )
+        if len(rendered.splitlines()) > 1:
+            return rendered
+    # Non-JSON output can still be a single minified/log line.  Fixed-width
+    # logical lines make read_file pagination usable without mutating the
+    # immutable artifact consumed by Citation extraction.
+    width = 1_000
+    if len(content) > width:
+        return "\n".join(content[index : index + width] for index in range(0, len(content), width))
+    return content
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    """Lexical containment — deliberately WITHOUT ``resolve()``.
+
+    Resolving first is what makes a materialized skill link (whose target lives
+    outside the workspace by design) read as an escape attempt.
+    """
+
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _raise_if_symlink_loop(path: Path) -> None:
+    """Raise ``OSError(ELOOP)`` if ``path`` is an unresolvable symlink loop.
+
+    Python 3.13+ made ``Path.resolve(strict=False)`` return the unresolved path
+    for a symlink loop instead of raising. Upstream restores the pre-3.13
+    contract with an equivalent probe; the lexical resolution below skips
+    ``resolve()`` entirely, so it carries its own copy rather than importing an
+    upstream private helper (a rename there would otherwise break app boot).
+    Windows reports NTFS reparse cycles as ``winerror=1921`` without a reliable
+    ``errno`` mapping, hence the explicit second check.
+    """
+
+    if not path.is_symlink():
+        return
+    try:
+        path.stat()
+    except OSError as exc:
+        if exc.errno == errno.ELOOP or getattr(exc, "winerror", None) == 1921:
+            raise
+
+
+class _WorkspaceLocalShellBackend(LocalShellBackend):
+    """Keep DeepAgents virtual artifacts readable by both file and shell tools.
+
+    Also makes ``virtual_mode`` compatible with how the harness materializes
+    skills. Upstream resolves every path with ``Path.resolve()`` and then
+    requires the result to sit under ``cwd``, which breaks two things this
+    runtime depends on:
+
+    1. ``_materialize_skills`` hands ``create_deep_agent(skills=[...])`` the
+       ABSOLUTE root ``<cwd>/.agents/skills``. Read back as a *virtual* path it
+       becomes ``<cwd>/<cwd>/.agents/skills`` — nonexistent, so skill discovery
+       silently finds zero packages and a direct read reports "not found" while
+       quoting the real path.
+    2. ``skills_materialize`` links each package (symlink / junction) at its
+       source outside the workspace, deliberately, so edits to the source are
+       live. ``resolve()`` lands on that source and the containment check then
+       rejects it, so even a correct virtual path lists nothing.
+
+    Both are fixed by judging containment **lexically** — before symlink
+    resolution — and by accepting an absolute path that is already inside the
+    workspace as-is. ``..`` and ``~`` stay rejected.
+
+    Out-of-workspace absolutes get a host fallthrough: virtual resolution
+    wins whenever ``cwd / key`` names something real (so "/", every
+    workspace path, and the virtual dialect behave exactly as before), and
+    only a dead-end virtual mapping falls through to an existing host
+    location. Without it, ``ls /Users/x/test`` mapped to
+    ``<cwd>/Users/x/test`` and returned ``[]`` while the shell tool could
+    read the same directory freely — an inconsistency, not a boundary
+    (upstream documents ``virtual_mode`` as path semantics and explicitly
+    NOT a security control, ``execute()`` below runs with un-translated
+    host paths anyway, and claude/codex file tools reach the whole host
+    subject to the same approval gating). Flipping ``virtual_mode=False``
+    instead would break the virtual artifact namespaces — summarization
+    writes ``/conversation_history/<thread>.md`` and the large-result
+    offload uses ``/large_tool_results/`` — landing them on the filesystem
+    root, the exact desktop fail/retry bug ``virtual_mode=True`` fixed,
+    and would strand the Windows path virtualizer's ``/…`` outputs.
+    """
+
+    _VIRTUAL_ARTIFACT_PREFIXES = (
+        "/large_tool_results/",
+        "/conversation_history/",
+    )
+
+    def _resolve_path(self, key: str) -> Path:
+        if not self.virtual_mode:
+            return super()._resolve_path(key)
+
+        if ".." in key or key.startswith("~"):
+            msg = "Path traversal not allowed"
+            raise ValueError(msg)
+
+        # Tested on the raw key, not a "/"-prefixed copy: on Windows an
+        # in-workspace absolute path is ``C:\...`` and prefixing would make it
+        # unrecognizable. A driveless POSIX-style key is not absolute there and
+        # falls through to the virtual mapping, as intended.
+        raw = Path(key)
+        if raw.is_absolute() and _is_within(raw, self.cwd):
+            _raise_if_symlink_loop(raw)
+            return raw
+
+        # Virtual-first: the workspace mapping wins whenever it names
+        # something real, so every path that resolved before keeps resolving
+        # identically. Only a dead-end mapping may fall through to the host.
+        candidate = self.cwd / key.lstrip("/")
+        if not candidate.exists() and self._host_anchored(key, raw):
+            _raise_if_symlink_loop(raw)
+            return raw
+        if not _is_within(candidate, self.cwd):
+            msg = f"Path:{candidate} outside root directory: {self.cwd}"
+            raise ValueError(msg)
+        _raise_if_symlink_loop(candidate)
+        return candidate
+
+    def _host_anchored(self, key: str, raw: Path) -> bool:
+        """Whether an absolute key names a real host location outside cwd.
+
+        Anchored means the path itself exists, or its parent directory does —
+        so a new file can be written into an existing host directory, while a
+        typo still resolves against the host and errors honestly. The
+        filesystem root is never an anchor: a bare top-level key like
+        ``/notes.md`` stays in the virtual dialect (parent ``/`` proves
+        nothing), and ``/`` itself always means the workspace root. The
+        DeepAgents artifact namespaces are pinned to the workspace regardless
+        of what exists on the host.
+        """
+        if not raw.is_absolute() or raw == Path(raw.anchor):
+            return False
+        if key.startswith(self._VIRTUAL_ARTIFACT_PREFIXES):
+            return False
+        if raw.exists():
+            return True
+        parent = raw.parent
+        return parent != Path(parent.anchor) and parent.exists()
+
+    def _to_virtual_path(self, path: Path) -> str:
+        # ``ls`` renders each child through here. Upstream resolves first, so a
+        # materialized skill link renders as its out-of-workspace source and is
+        # dropped as "outside root" — the reason a populated skills root listed
+        # as empty. Children come from ``iterdir()`` on an already-absolute
+        # parent, so a lexical relative path is both correct and stable.
+        # Out-of-workspace host paths (accepted by the ``_resolve_path``
+        # fallthrough) render as their absolute POSIX form, which round-trips
+        # through the same fallthrough.
+        p = Path(path)
+        try:
+            return "/" + p.relative_to(self.cwd).as_posix()
+        except ValueError:
+            return p.as_posix()
+
+    def read(
+        self,
+        file_path: str,
+        offset: int = 0,
+        limit: int = 2_000,
+    ) -> ReadResult:
+        if not file_path.startswith("/large_tool_results/"):
+            return super().read(file_path, offset=offset, limit=limit)
+
+        raw = super().read(file_path, offset=0, limit=1)
+        if raw.error or raw.file_data is None or raw.file_data.get("encoding") != "utf-8":
+            return raw
+        content = str(raw.file_data.get("content") or "")
+        logical = _logical_large_result_content(content)
+        if logical == content:
+            return super().read(file_path, offset=offset, limit=limit)
+        lines = logical.splitlines(keepends=True)
+        if offset >= len(lines):
+            return ReadResult(
+                error=f"Line offset {offset} exceeds file length ({len(lines)} lines)"
+            )
+        return ReadResult(
+            file_data=FileData(
+                content="".join(lines[offset : offset + limit]),
+                encoding="utf-8",
+            )
+        )
+
+    def execute(self, command: str, *, timeout: int | None = None) -> Any:
+        # Filesystem tools use a virtual root, while LocalShellBackend executes
+        # with the workspace as cwd and does not translate virtual paths.
+        # Convert only the two DeepAgents-owned artifact namespaces to relative
+        # paths; ordinary absolute user paths retain their existing semantics.
+        translated = command
+        for prefix in self._VIRTUAL_ARTIFACT_PREFIXES:
+            translated = translated.replace(prefix, prefix.removeprefix("/"))
+        return super().execute(translated, timeout=timeout)
+
+
+def _build_local_shell_backend(workspace_root: str | None) -> LocalShellBackend:
+    """Create a backend that maps DeepAgents virtual paths into the workspace.
+
+    Built-in summarization writes to virtual absolute paths such as
+    ``/conversation_history/<thread>.md``. Without ``virtual_mode=True`` those
+    paths target the host filesystem root, where desktop runs fail and retry
+    summarization instead of completing the turn.
+    """
+
+    if workspace_root:
+        return _WorkspaceLocalShellBackend(
+            root_dir=workspace_root,
+            inherit_env=True,
+            virtual_mode=True,
+        )
+    return _WorkspaceLocalShellBackend(inherit_env=True, virtual_mode=True)
+
+
 # langchain TodoListMiddleware tool name (auto-included by deepagents). Treated
 # as a planning channel: emit `todo_update` and suppress the generic tool_use /
 # tool_result pair so the UI trace doesn't double-render it.
 DEEPAGENTS_TODO_TOOL_NAME = "write_todos"
 
 
+def _session_gateway_headers(session: Session) -> dict[str, str]:
+    """Build headers to forward to the gateway on each LLM call.
+
+    ``X-Valuz-Session-Id`` tags gateway_debit ledger rows with the session.
+    Ignored by first-party providers (api.openai.com / api.anthropic.com).
+    """
+    return {"X-Valuz-Session-Id": str(session.id)}
+
+
+def _session_evidence_binding_enabled(session: Session) -> bool:
+    """Whether the model needs the minimal private Evidence binding protocol."""
+
+    metadata = session.metadata if isinstance(session.metadata, dict) else {}
+    valuz = metadata.get("valuz")
+    return bool(
+        isinstance(valuz, dict)
+        and (valuz.get("citation_enabled") or valuz.get("citation_verification_enabled"))
+    )
+
+
 class DeepAgentsRuntime:
     """Wraps deepagents `create_deep_agent` as a RuntimePort implementation."""
+
+    supports_native_continuation = True
 
     def __init__(
         self,
@@ -121,6 +555,7 @@ class DeepAgentsRuntime:
         checkpoint_root: str | None = None,
         model_provider: ModelProvider | None = None,
         model_settings: ModelSettings | None = None,
+        egress_descriptor: ForwardProxyDescriptor | None = None,
     ) -> None:
         self.config = config
         self.model = model
@@ -133,14 +568,42 @@ class DeepAgentsRuntime:
         )
         self.model_provider = model_provider
         self.model_settings = model_settings
+        self.egress_descriptor = egress_descriptor
+        # Only the model client's HTTP transport receives this explicit
+        # proxy. Local shell, MCP and other process clients retain their
+        # existing environment and can never read the proxy capability.
+        self._egress_http_client: httpx.Client | None = None
+        self._egress_http_async_client: httpx.AsyncClient | None = None
         self._graph: Any | None = None
         self._checkpointer: Any | None = None
         self._checkpointer_cm: Any | None = None
         self._active_task: asyncio.Task[Any] | None = None
+        # ``interrupt()`` cancels of ``_active_task`` this turn; balanced by
+        # ``run()`` after it swallows the injected ``CancelledError`` (see
+        # ``absorb_interrupt_cancellations``).
+        self._interrupt_cancels = 0
         self._cancelled: bool = False
+        # Native fork anchor for the turn most recently completed:
+        # ``{"provider": "deepagents", "thread_id": ..., "checkpoint_id":
+        # ..., "parent_checkpoint_id": ...}``. ``checkpoint_id`` is the
+        # langgraph checkpoint the turn settled on; ``parent_checkpoint_id``
+        # is the pre-input checkpoint (``None`` on a fresh thread). Set only
+        # on a cleanly-completed graph turn — bare completions have no
+        # checkpoints and cancelled turns have no settled checkpoint.
+        # Read-and-cleared by the orchestrator (``consume_turn_anchor``)
+        # into ``Message.metadata["runtime_native"]`` — the
+        # message-granularity fork seam (docs/design/session-fork.md).
+        self._turn_anchor: dict[str, Any] | None = None
+        # One immutable Evidence namespace per user turn, shared by the main
+        # agent and every nested subagent.  The graph and its middleware live
+        # across turns, so ``run`` resets this object instead of replacing it.
+        self._turn_evidence_registry = EvidenceRegistry()
+        self._continuing_same_user_turn = False
         # Identity of the session currently being run — exposed to
         # custom-tool handlers through ExecContext.
         self._cur_session_id: str = ""
+        self._cur_user_id: str = ""
+        self._egress_turn_attempt_id: str | None = None
 
         # Approval bridge state (Phase 3 of the cross-runtime approval
         # contract). ``_pending_futures`` maps pending_id → future that
@@ -151,9 +614,11 @@ class DeepAgentsRuntime:
         # change ``interrupt_on`` for an already-built graph (cold-reload
         # semantics, mirrors Claude/Codex). ``_mcp_tool_names`` is the
         # set tracked at graph construction so subject classification can
-        # tell MCP-origin tools from harness/built-in ones (langchain-mcp
-        # tool names don't carry server prefixes — membership is the only
-        # signal we have).
+        # tell MCP-origin tools from runtime built-ins. The separate
+        # ``_external_mcp_tool_names`` set excludes the host harness so the
+        # orchestrator only gates post-run checks on external information.
+        # langchain-mcp tool names don't carry server prefixes, so membership
+        # is the only signal available at event-emission time.
         # 3-tuple: ``(decision, message, modified_input)``. The 3rd slot
         # is set only when ``decision == "approve_with_changes"`` —
         # ``submit_action``'s validator pair guarantees it; carries the
@@ -171,6 +636,7 @@ class DeepAgentsRuntime:
         self._cached_permission_mode: Literal["default", "auto_review", "full_access"] = (
             "full_access"
         )
+
         # Last value actually applied to a turn. Used by ``run()`` to
         # detect a PATCH on ``session.permission_mode`` /
         # ``session.model_settings.effort`` between turns and trigger a
@@ -184,7 +650,9 @@ class DeepAgentsRuntime:
             None
         )
         self._applied_effort: str | None = None
+        self._applied_citation_mode: bool | None = None
         self._mcp_tool_names: set[str] = set()
+        self._external_mcp_tool_names: set[str] = set()
         # Per-session callable injected by the orchestrator via
         # ``set_session_rule_finder``. Closes over (session_id, cache,
         # this runtime's matcher) so this runtime can check the kernel
@@ -206,6 +674,27 @@ class DeepAgentsRuntime:
         # runtimes' phases. Held as a single instance — matcher is
         # stateless and re-instantiation per call would be wasteful.
         self._approval_rule_matcher: RuntimeApprovalRuleMatcher = ExactArgsRuleMatcher()
+
+    async def _emit_citation_evidence(
+        self,
+        citation_join_id: str,
+        tool_name: str | None,
+        model_content: Any,
+        citation_content: str,
+    ) -> None:
+        """Bridge a completed middleware sidecar into the generic event layer."""
+
+        await self.event_sink.emit(
+            Event(
+                type="citation_evidence",
+                data={
+                    "tool_name": tool_name,
+                    "model_content": model_content,
+                    "content": citation_content,
+                    "citation_join_id": citation_join_id,
+                },
+            )
+        )
 
     APPROVAL_TIMEOUT_SECONDS: float = 3600.0  # 1h; class attr for test override
 
@@ -232,6 +721,77 @@ class DeepAgentsRuntime:
     def update_sink(self, sink: EventSink) -> None:
         self.event_sink = sink
 
+    def consume_turn_anchor(self) -> dict[str, Any] | None:
+        """Return and clear the native anchor captured by the last ``run()``.
+
+        Read-and-clear so a turn that never settles on a checkpoint
+        (bare completion, cancel, graph failure) cannot inherit a stale
+        anchor from the previous message.
+        """
+        anchor, self._turn_anchor = self._turn_anchor, None
+        return anchor
+
+    async def fork_session(
+        self,
+        session: Session,
+        *,
+        source_native_session_id: str,
+        anchor: str | None = None,
+    ) -> str:
+        """Branch a source langgraph thread into this session's thread.
+
+        Copies the source thread's checkpoint rows into a NEW thread keyed
+        by this session's id — so the standard ``thread_id == session.id``
+        binding holds for forks with zero special-casing. ``anchor`` is a
+        turn-end checkpoint id (``runtime_native.checkpoint_id``); the copy
+        walks the ``parent_checkpoint_id`` chain from it, so the new
+        thread's latest checkpoint IS the anchor and later turns are
+        excluded. Tail fork (``anchor=None``) copies the whole thread; a
+        source with no checkpoints (bare completion / never ran) copies
+        zero rows, which is legal there and a ``ValueError`` with an
+        anchor. Pure store re-keying — no graph compile, no model client,
+        and the source thread is never written.
+
+        Only the sqlite backend is wired: the file backend is retired
+        (local and cloud both run sqlite), so fork fails loud there
+        instead of copying a store nothing reads.
+        """
+        if _checkpoint_backend() != "sqlite":
+            raise NotImplementedError(
+                "deepagents fork supports the sqlite checkpoint backend only "
+                "(the file backend is retired)."
+            )
+        from src.runtimes.deepagents.checkpoint_fork import fork_sqlite_thread
+
+        new_thread_id = str(session.id)
+        copied = await fork_sqlite_thread(
+            self.checkpoint_db,
+            source_native_session_id,
+            new_thread_id,
+            anchor_checkpoint_id=anchor,
+        )
+        logger.info(
+            "deepagents fork: copied %d checkpoints from thread %s to %s",
+            copied,
+            source_native_session_id,
+            new_thread_id,
+        )
+        session.runtime_session_id = new_thread_id
+        return new_thread_id
+
+    async def prepare(self, session: Session) -> None:
+        """DeepAgents has no external CLI cold start to prepare separately."""
+        del session
+
+    async def _emit_turn_phase(self, phase: str, **fields: Any) -> None:
+        """Persisted latency marker — see ``turn_phase`` in ``events.py``."""
+        await self.event_sink.emit(Event(type="turn_phase", data={"phase": phase, **fields}))
+        await record_runtime_egress_phase(
+            getattr(self, "_cur_session_id", "") or None,
+            getattr(self, "_egress_turn_attempt_id", None),
+            phase,
+        )
+
     async def run(self, session: Session, user_message: UserMessage) -> None:
         from datetime import datetime
 
@@ -239,7 +799,13 @@ class DeepAgentsRuntime:
 
         session.status = "running"
         self._cancelled = False
+        self._interrupt_cancels = 0
         self._cur_session_id = session.id
+        # getattr: run() is exercised with synthetic session stubs in tests.
+        self._cur_user_id = getattr(session, "user_id", "") or ""
+        self._egress_turn_attempt_id = uuid.uuid4().hex
+        if not self._continuing_same_user_turn:
+            self._turn_evidence_registry.reset()
 
         try:
             # Reconcile live session-driven levers BEFORE ``_ensure_graph``
@@ -261,7 +827,19 @@ class DeepAgentsRuntime:
                 cwd=self.workspace_root,
                 now=datetime.now().astimezone(),
             )
-            stream_input: Any = {"messages": [{"role": "user", "content": prompt}]}
+            bare = is_bare_completion(session)
+            if bare:
+                # Raw chat model (see ``_ensure_graph``): it takes a plain
+                # message list, not the graph's ``{"messages": [...]}``
+                # state dict, and the session instructions must ride as an
+                # explicit system message (the graph normally injects them).
+                bare_messages: list[dict[str, str]] = []
+                if session.instructions:
+                    bare_messages.append({"role": "system", "content": session.instructions})
+                bare_messages.append({"role": "user", "content": prompt})
+                stream_input: Any = bare_messages
+            else:
+                stream_input = {"messages": [{"role": "user", "content": prompt}]}
             # ``recursion_limit`` MUST be set here, in the call-time config:
             # ``astream_events`` (below) ignores the budget deepagents binds onto
             # the graph with ``.with_config``, so without this the main loop runs
@@ -271,6 +849,23 @@ class DeepAgentsRuntime:
                 "configurable": {"thread_id": str(thread_id)},
                 "recursion_limit": MAIN_GRAPH_RECURSION_LIMIT,
             }
+            # Langfuse tracing (empty overlay unless active): the shared
+            # LangChain callback handler must ride in the CALL-TIME config —
+            # same reason as ``recursion_limit`` above.
+            stream_config.update(
+                langchain_config_overlay(session_id=session.id, user_id=session.user_id)
+            )
+            known_citation_tool_messages: set[str] = set()
+            start_checkpoint_id: str | None = None
+            if not bare:
+                initial_state = await graph.aget_state(stream_config)
+                start_checkpoint_id = _state_checkpoint_id(initial_state)
+                known_citation_tool_messages = {
+                    key
+                    for key, _tool_name, _model_content, _private_content in (
+                        _state_citation_artifacts(initial_state)
+                    )
+                }
 
             usage_totals = {
                 "input_tokens": 0,
@@ -285,6 +880,10 @@ class DeepAgentsRuntime:
             todo_run_ids: set[str] = set()
 
             self._active_task = asyncio.current_task()
+            # Observability: the gap from this row to the first thinking/text
+            # delta = langgraph dispatch + model TTFT. Emitted once per turn
+            # (before the first stream pass, not per resume iteration).
+            await self._emit_turn_phase("dispatch")
             # Outer interrupt-resume loop. Each pass: stream events from
             # the graph until it pauses or completes; if it paused on a
             # HITL interrupt, park on host decisions and re-enter the
@@ -295,6 +894,12 @@ class DeepAgentsRuntime:
             # suspenders safety net — a runaway graph that re-interrupts
             # forever should fail visibly, not loop forever.
             max_resume_iters = 32
+            saw_model_event = False
+            # The state snapshot the turn settled on — feeds the fork
+            # anchor below. Stays ``None`` for bare completions (no
+            # checkpointer) and for turns cancelled before the first
+            # ``aget_state``.
+            settled_state: Any = None
             for _resume_iter in range(max_resume_iters):
                 if self._cancelled:
                     break
@@ -315,26 +920,39 @@ class DeepAgentsRuntime:
 
                     if event_name == "on_chat_model_stream":
                         chunk_obj = data.get("chunk")
+                        internal_summarization = _is_internal_summarization_event(chunk)
                         text = _extract_chunk_text(chunk_obj)
-                        if text:
+                        thinking_text = _extract_chunk_thinking(chunk_obj)
+                        if (
+                            not saw_model_event
+                            and not internal_summarization
+                            and (text or thinking_text)
+                        ):
+                            saw_model_event = True
+                            await record_runtime_egress_phase(
+                                self._cur_session_id or None,
+                                self._egress_turn_attempt_id,
+                                "model_first_event",
+                            )
+                        if text and not internal_summarization:
                             await self.event_sink.emit(
                                 Event(type="text_delta", data={"text": text})
                             )
-                        thinking_text = _extract_chunk_thinking(chunk_obj)
-                        if thinking_text:
+                        if thinking_text and not internal_summarization:
                             await self.event_sink.emit(
                                 Event(type="thinking_delta", data={"text": thinking_text})
                             )
 
                     elif event_name == "on_chat_model_end":
                         output = data.get("output")
+                        internal_summarization = _is_internal_summarization_event(chunk)
                         full_text = _extract_full_text(output)
-                        if full_text:
+                        if full_text and not internal_summarization:
                             await self.event_sink.emit(
                                 Event(type="assistant_message", data={"text": full_text})
                             )
                         full_thinking = _extract_full_thinking(output)
-                        if full_thinking:
+                        if full_thinking and not internal_summarization:
                             await self.event_sink.emit(
                                 Event(type="thinking", data={"text": full_thinking})
                             )
@@ -365,6 +983,11 @@ class DeepAgentsRuntime:
                                         "id": run_id,
                                         "name": tool_name,
                                         "input": _jsonify(data.get("input", {}) or {}),
+                                        **(
+                                            {"external": True}
+                                            if tool_name in self._external_mcp_tool_names
+                                            else {}
+                                        ),
                                     },
                                 )
                             )
@@ -377,24 +1000,56 @@ class DeepAgentsRuntime:
                             continue
                         output = data.get("output")
                         is_error = _output_is_error(output)
+                        citation_content = citation_artifact_content(output)
+                        event_data = {
+                            "id": run_id,
+                            "content": _stringify_tool_output(output),
+                            "is_error": is_error,
+                        }
+                        raw_tool_call_id = getattr(output, "tool_call_id", None)
+                        if raw_tool_call_id is None and isinstance(output, dict):
+                            raw_tool_call_id = output.get("tool_call_id")
+                        if raw_tool_call_id:
+                            event_data["citation_join_id"] = str(raw_tool_call_id)
+                        if citation_content is not None:
+                            event_data["_citation_content"] = citation_content
                         await self.event_sink.emit(
                             Event(
                                 type="tool_result",
-                                data={
-                                    "id": run_id,
-                                    "content": _stringify_tool_output(output),
-                                    "is_error": is_error,
-                                },
+                                data=event_data,
                             )
                         )
 
                 if self._cancelled:
                     break
 
+                if bare:
+                    # Raw chat model: no tools, no HITL, no ``aget_state`` —
+                    # a cleanly-ended stream IS the completed turn.
+                    break
+
                 # The stream loop exited cleanly — either the graph completed
                 # the turn or it paused on an interrupt. Snapshot state to
                 # find out which.
                 state = await graph.aget_state(stream_config)
+                settled_state = state
+                for key, tool_name, model_content, citation_content in _state_citation_artifacts(
+                    state
+                ):
+                    if key in known_citation_tool_messages:
+                        continue
+                    known_citation_tool_messages.add(key)
+                    await self.event_sink.emit(
+                        Event(
+                            type="citation_evidence",
+                            data={
+                                "tool_name": tool_name,
+                                "model_content": model_content,
+                                "content": citation_content,
+                                "citation_join_id": key,
+                            },
+                        )
+                    )
                 pending_interrupts = list(getattr(state, "interrupts", ()) or ())
                 if not pending_interrupts:
                     break
@@ -449,6 +1104,14 @@ class DeepAgentsRuntime:
                 )
             else:
                 session.stop_reason = EndTurn()
+                checkpoint_id = _state_checkpoint_id(settled_state)
+                if checkpoint_id:
+                    self._turn_anchor = {
+                        "provider": "deepagents",
+                        "thread_id": str(thread_id),
+                        "checkpoint_id": checkpoint_id,
+                        "parent_checkpoint_id": start_checkpoint_id,
+                    }
 
             session.status = "idle"
             await self._emit_usage_update(usage_totals)
@@ -460,6 +1123,8 @@ class DeepAgentsRuntime:
                 retry_status="terminal",
                 message="cancelled",
             )
+            absorb_interrupt_cancellations(self._interrupt_cancels)
+            self._interrupt_cancels = 0
         except Exception as exc:
             session.status = "idle"
             if is_runtime_interruption(exc):
@@ -508,6 +1173,44 @@ class DeepAgentsRuntime:
                     },
                 )
             )
+            await record_runtime_egress_phase(
+                self._cur_session_id or None,
+                self._egress_turn_attempt_id,
+                (
+                    "interrupted"
+                    if getattr(session.stop_reason, "category", None)
+                    in {"user_interrupt", "interrupted"}
+                    else "turn_complete"
+                ),
+            )
+
+    async def run_task_coverage(
+        self,
+        session: Session,
+        user_message: UserMessage,
+        *,
+        no_op_tool: ToolDef,
+    ) -> None:
+        """Resume this Runtime/thread with one private terminal no-gap tool."""
+
+        previous = self.toolkit.get(no_op_tool.name)
+        self.toolkit.register(no_op_tool)
+        # The compiled graph freezes its tool list.  Recompile on the same
+        # runtime and checkpointer; ``session.runtime_session_id`` remains the
+        # LangGraph thread id, so history and native continuity are preserved.
+        self._graph = None
+        self._continuing_same_user_turn = True
+        try:
+            await self.run(session, user_message)
+        finally:
+            self._continuing_same_user_turn = False
+            if previous is None:
+                self.toolkit.unregister(no_op_tool.name)
+            else:
+                self.toolkit.register(previous)
+            # Primary turns after Coverage must regain the exact public tool
+            # surface instead of inheriting the private protocol tool.
+            self._graph = None
 
     async def interrupt(self) -> None:
         self._cancelled = True
@@ -526,6 +1229,7 @@ class DeepAgentsRuntime:
         task = self._active_task
         if task is not None and not task.done():
             task.cancel()
+            self._interrupt_cancels += 1
 
     async def submit_action(
         self,
@@ -584,6 +1288,14 @@ class DeepAgentsRuntime:
                 logger.debug("Error closing deepagents checkpointer", exc_info=True)
             self._checkpointer_cm = None
         self._active_task = None
+        if getattr(self, "_egress_http_client", None) is not None:
+            assert self._egress_http_client is not None
+            self._egress_http_client.close()
+            self._egress_http_client = None
+        if getattr(self, "_egress_http_async_client", None) is not None:
+            assert self._egress_http_async_client is not None
+            await self._egress_http_async_client.aclose()
+            self._egress_http_async_client = None
 
     # -- Approval bridge --
 
@@ -865,13 +1577,22 @@ class DeepAgentsRuntime:
         # the graph wasn't built via the normal path (most often a test
         # that mocked ``self._graph``). Reconcile only after we have a
         # real "previously applied" value to compare against.
-        if self._applied_permission_mode is None and self._applied_effort is None:
+        if (
+            self._applied_permission_mode is None
+            and self._applied_effort is None
+            and self._applied_citation_mode is None
+        ):
             return
 
         new_mode = session.permission_mode
         new_effort = session.model_settings.effort if session.model_settings else None
+        new_citation_mode = _session_evidence_binding_enabled(session)
 
-        if new_mode == self._applied_permission_mode and new_effort == self._applied_effort:
+        if (
+            new_mode == self._applied_permission_mode
+            and new_effort == self._applied_effort
+            and new_citation_mode == self._applied_citation_mode
+        ):
             return
 
         # Drop the cached graph so ``_ensure_graph`` rebuilds cleanly.
@@ -884,19 +1605,33 @@ class DeepAgentsRuntime:
         if self._graph is not None:
             return self._graph
 
+        # Bare one-shot completion (``is_bare_completion``): skip the
+        # deepagents graph entirely — no base agent prompt, no built-in
+        # planning/filesystem/subagent tools, no checkpointer, no HITL.
+        # The raw langchain chat model is itself a Runnable, so ``run()``
+        # streams it through the same ``astream_events`` loop; the
+        # bare-mode branches there feed it a plain message list and skip
+        # the graph-only interrupt/state machinery.
+        if is_bare_completion(session):
+            self._graph = self._build_model_client(session)
+            self._cached_permission_mode = session.permission_mode
+            self._applied_permission_mode = session.permission_mode
+            self._applied_effort = session.model_settings.effort if session.model_settings else None
+            self._applied_citation_mode = _session_evidence_binding_enabled(session)
+            return self._graph
+
         # inherit_env=True so the agent shell sees the host's PATH / HOME / etc.
         # (parity with Claude/Codex, which inherit os.environ). Its default is an
         # EMPTY env — no PATH — so anything outside the shell's compiled-in
         # default path fails to resolve: the chrome-devtools wrapper, and in dev
         # even npx/node (nvm). See docs/design/browser-feature.md §8.
-        backend = (
-            LocalShellBackend(root_dir=self.workspace_root, inherit_env=True)
-            if self.workspace_root
-            else LocalShellBackend(inherit_env=True)
-        )
+        backend = _build_local_shell_backend(self.workspace_root)
 
+        t_build = time.monotonic()
         tools = self._build_tools()
+        t_mcp = time.monotonic()
         mcp_tools = await self._build_mcp_tools(session)
+        mcp_tools_ms = int((time.monotonic() - t_mcp) * 1000)
         # Capture MCP-origin tool names *before* concatenating so subject
         # classification can distinguish MCP tool calls from harness/builtin
         # ones at approval time. langchain-mcp's ``MultiServerMCPClient``
@@ -907,10 +1642,18 @@ class DeepAgentsRuntime:
         if mcp_tools:
             tools = [*tools, *mcp_tools]
 
-        subagents = self._build_subagents()
-        await self._open_checkpointer()
-
         skill_roots = self._materialize_skills(session)
+        subagents = self._build_subagents(
+            citation_protocol=(
+                _citation_system_policy_block(session.instructions)
+                if _session_evidence_binding_enabled(session)
+                else ""
+            ),
+            skill_roots=skill_roots,
+        )
+        t_ckpt = time.monotonic()
+        await self._open_checkpointer()
+        checkpointer_ms = int((time.monotonic() - t_ckpt) * 1000)
 
         # D9: session is the runtime's source of truth for ``permission_mode``;
         # the agent value was prefilled at session creation but is decoupled
@@ -924,6 +1667,7 @@ class DeepAgentsRuntime:
         self._cached_permission_mode = session.permission_mode
         self._applied_permission_mode = session.permission_mode
         self._applied_effort = session.model_settings.effort if session.model_settings else None
+        self._applied_citation_mode = _session_evidence_binding_enabled(session)
         interrupt_on = self._build_interrupt_on(session.permission_mode, tools)
 
         graph_kwargs: dict[str, Any] = {
@@ -932,7 +1676,19 @@ class DeepAgentsRuntime:
             "subagents": subagents or None,
             "backend": backend,
             "checkpointer": self._checkpointer,
-            "middleware": [ToolErrorTolerantMiddleware()],
+            "middleware": [
+                InvalidToolCallPairMiddleware(),
+                ToolErrorTolerantMiddleware(),
+                WindowsPathVirtualizerMiddleware(self.workspace_root),
+                CitationEvidenceCompactionMiddleware(
+                    # Evidence Registry is shared infrastructure.  Always
+                    # publish trusted source metadata to the Host; Citation
+                    # and Audit switches decide only which post-run sidecars
+                    # consume it.
+                    evidence_registry=self._turn_evidence_registry,
+                    citation_artifact_emitter=self._emit_citation_evidence,
+                ),
+            ],
         }
         # DeepAgents prepends our ``system_prompt`` argument to its base
         # prompt; we pass the per-session ``instructions`` straight through
@@ -950,6 +1706,14 @@ class DeepAgentsRuntime:
             graph_kwargs["interrupt_on"] = interrupt_on
 
         self._graph = create_deep_agent(**graph_kwargs)
+        # Observability: MCP connect + tools/list is this runtime's dominant
+        # variable build cost — surfaced as its own field.
+        await self._emit_turn_phase(
+            "runtime_init",
+            duration_ms=int((time.monotonic() - t_build) * 1000),
+            mcp_tools_ms=mcp_tools_ms,
+            checkpointer_ms=checkpointer_ms,
+        )
         return self._graph
 
     def _build_interrupt_on(
@@ -1007,10 +1771,38 @@ class DeepAgentsRuntime:
         # graph is rebuilt on PATCH via ``_reconcile_session_levers``,
         # so this method re-runs with the fresh value on the next turn.
         effort = session.model_settings.effort if session.model_settings is not None else None
+        # Channel-declared input window for models the langchain profile
+        # registry can't know (gateway aliases like ``valuz-pro-anthropic``).
+        # Without a profile, deepagents' SummarizationMiddleware falls back
+        # to a fixed 170k trigger instead of 0.85 x the real window; the
+        # explicit ``profile`` kwarg restores fraction-based compaction.
+        # Known model names already get a registry profile — the host only
+        # sets ``max_input_tokens`` for declared aliases, never guesses.
+        max_input_tokens = (
+            session.model_settings.max_input_tokens if session.model_settings is not None else None
+        )
+        profile = {"max_input_tokens": max_input_tokens} if max_input_tokens else None
         from pydantic import SecretStr
 
         if protocol == "anthropic":
             from langchain_anthropic import ChatAnthropic
+
+            class _ValuzChatAnthropic(ChatAnthropic):
+                """ChatAnthropic with gateway-history compatibility cleanup."""
+
+                def _get_request_payload(
+                    self,
+                    input_: Any,
+                    *,
+                    stop: list[str] | None = None,
+                    **kwargs: Any,
+                ) -> dict[str, Any]:
+                    payload = super()._get_request_payload(
+                        input_,
+                        stop=stop,
+                        **kwargs,
+                    )
+                    return _sanitize_anthropic_request_payload(payload)
 
             # ChatAnthropic streams already include usage on the final
             # AIMessageChunk — no opt-in flag needed. ``effort`` is
@@ -1023,11 +1815,22 @@ class DeepAgentsRuntime:
                 model_name=self.model,
                 timeout=None,
                 stop=None,
+                default_headers=_session_gateway_headers(session),
             )
             if self.model_provider.base_url is not None:
                 kwargs["base_url"] = self.model_provider.base_url
+            egress_descriptor = getattr(self, "egress_descriptor", None)
+            if egress_descriptor is not None:
+                # ChatAnthropic forwards this to both of its locked httpx
+                # transports. Unlike global proxy env, it is scoped to this
+                # model client and is not inherited by agent tools.
+                kwargs["anthropic_proxy"] = egress_descriptor.proxy_url
             if effort is not None:
                 kwargs["effort"] = effort
+            if profile is not None:
+                # Does not disturb the max_tokens default fill below — that
+                # reads the bundled registry directly, not ``self.profile``.
+                kwargs["profile"] = profile
             # Unset max_tokens lets ChatAnthropic default from its profile
             # registry, which bottoms out at 4096 for model names it doesn't
             # know (gateway aliases, compatible third-party models) — pass an
@@ -1035,7 +1838,7 @@ class DeepAgentsRuntime:
             max_tokens = _resolve_anthropic_max_tokens(self.model)
             if max_tokens is not None:
                 kwargs["max_tokens"] = max_tokens
-            return ChatAnthropic(**kwargs)
+            return _ValuzChatAnthropic(**kwargs)
 
         if protocol == "gemini":
             from langchain_google_genai import ChatGoogleGenerativeAI
@@ -1055,6 +1858,8 @@ class DeepAgentsRuntime:
                 }
             if effort is not None:
                 gemini_kwargs["thinking_level"] = _map_effort_for_gemini(effort)
+            if profile is not None:
+                gemini_kwargs["profile"] = profile
             return ChatGoogleGenerativeAI(**gemini_kwargs)
 
         # openai_completion path (default for any non-anthropic /
@@ -1087,28 +1892,56 @@ class DeepAgentsRuntime:
             # `usage_update` event has real numbers.
             stream_usage=True,
             extra_body=extra_body,
+            # Forward session identity to the gateway so gateway_debit rows
+            # are tagged with this conversation's session_id and title. Ignored by
+            # first-party providers (api.openai.com etc.).
+            default_headers=_session_gateway_headers(session),
         )
+        egress_descriptor = getattr(self, "egress_descriptor", None)
+        if egress_descriptor is not None:
+            if getattr(self, "_egress_http_client", None) is None:
+                self._egress_http_client = httpx.Client(
+                    proxy=egress_descriptor.proxy_url,
+                    # Preserve the OpenAI SDK's locked default budget while
+                    # replacing only its transport routing.
+                    timeout=httpx.Timeout(600.0, connect=5.0),
+                    trust_env=False,
+                )
+            if getattr(self, "_egress_http_async_client", None) is None:
+                self._egress_http_async_client = httpx.AsyncClient(
+                    proxy=egress_descriptor.proxy_url,
+                    timeout=httpx.Timeout(600.0, connect=5.0),
+                    trust_env=False,
+                )
+            openai_kwargs["http_client"] = self._egress_http_client
+            openai_kwargs["http_async_client"] = self._egress_http_async_client
         if self.model_provider.base_url is not None:
             openai_kwargs["base_url"] = self.model_provider.base_url
         if effort is not None:
             openai_kwargs["reasoning_effort"] = _map_effort_for_openai(effort)
+        if profile is not None:
+            openai_kwargs["profile"] = profile
         return ChatOpenAI(**openai_kwargs)
 
     async def _open_checkpointer(self) -> Any:
         """Open the checkpointer once per runtime instance (cached until close()).
 
         Thread-id (= session.id) lets langgraph rehydrate conversation state on
-        the next turn. Two backends by deployment (see ``_in_sandbox``):
+        the next turn. Two backends, selected by :func:`_checkpoint_backend`
+        (deployment gate by default, ``DEEPAGENTS_CHECKPOINT_BACKEND`` to pin):
 
-        - **Sandbox (ephemeral cloud):** ``FileCheckpointSaver`` over a per-owner
+        - **file** (sandbox default): ``FileCheckpointSaver`` over a per-owner
           COS mount — write-once JSON files survive sandbox recreation and, unlike
           sqlite, never corrupt on COS FUSE. No CM / no ``setup()``.
-        - **Local resident process:** the SQLite store on durable local disk. The
+        - **sqlite** (local default): the SQLite store on durable local disk. The
           CM is held until ``close()`` so the cached graph keeps a live connection.
+
+        The two stores are independent: switching backends starts from an empty
+        checkpoint history, so in-flight sessions cannot rehydrate across a flip.
         """
         if self._checkpointer is not None:
             return self._checkpointer
-        if _in_sandbox():
+        if _checkpoint_backend() == "file":
             from src.adapters.file_checkpoint_saver import FileCheckpointSaver
 
             os.makedirs(self.checkpoint_root, exist_ok=True)
@@ -1120,10 +1953,31 @@ class DeepAgentsRuntime:
         directory = os.path.dirname(self.checkpoint_db)
         if directory:
             os.makedirs(directory, exist_ok=True)
-        self._checkpointer_cm = AsyncSqliteSaver.from_conn_string(self.checkpoint_db)
-        self._checkpointer = await self._checkpointer_cm.__aenter__()
-        await self._checkpointer.setup()
-        return self._checkpointer
+        # A warm-runtime eviction closes the previous session's SQLite saver
+        # immediately before the next session opens its own one.  On macOS,
+        # removing/recreating WAL sidecars can briefly surface as SQLITE_IOERR
+        # even though the database itself is healthy.  Never retain the
+        # half-open saver: close it, yield once for the sidecar cleanup, and
+        # retry exactly once.  Other SQLite errors still fail immediately.
+        for attempt in range(2):
+            checkpointer_cm = AsyncSqliteSaver.from_conn_string(self.checkpoint_db)
+            checkpointer = await checkpointer_cm.__aenter__()
+            try:
+                await checkpointer.setup()
+            except sqlite3.OperationalError as exc:
+                await checkpointer_cm.__aexit__(type(exc), exc, exc.__traceback__)
+                if attempt > 0 or "disk i/o error" not in str(exc).lower():
+                    raise
+                logger.warning(
+                    "DeepAgents SQLite checkpointer setup hit a transient disk I/O "
+                    "error; retrying once"
+                )
+                await asyncio.sleep(0.05)
+                continue
+            self._checkpointer_cm = checkpointer_cm
+            self._checkpointer = checkpointer
+            return checkpointer
+        raise RuntimeError("unreachable")
 
     def _materialize_skills(self, session: Session) -> list[str]:
         if not self.workspace_root or not session.skills:
@@ -1140,9 +1994,11 @@ class DeepAgentsRuntime:
         uses ``http`` — translate here. Returns an empty list when no MCP
         servers are configured or the adapter is unavailable.
         """
+        self._external_mcp_tool_names = set()
         if not session.mcp_servers:
             return []
         try:
+            from langchain_mcp_adapters.callbacks import Callbacks
             from langchain_mcp_adapters.client import MultiServerMCPClient
         except ImportError:
             logger.warning(
@@ -1154,6 +2010,17 @@ class DeepAgentsRuntime:
         spec: dict[str, dict[str, Any]] = {}
         for cfg in session.mcp_servers:
             if isinstance(cfg, McpStdioServerConfig):
+                # A stdio child is spawned by THIS process, so a which() miss
+                # here is definitive — spawning anyway would surface as a bare
+                # ``FileNotFoundError: [Errno 2]`` from deep inside anyio with
+                # no hint of which server or command was at fault.
+                if shutil.which(cfg.command) is None:
+                    logger.warning(
+                        "mcp server %r skipped: stdio command %r not found on PATH",
+                        cfg.name,
+                        cfg.command,
+                    )
+                    continue
                 # LangChain StdioConnection requires args even when empty;
                 # env_vars resolution happens harness-side via the shared
                 # resolver so the SDK only sees a flat env dict. Omit
@@ -1176,10 +2043,67 @@ class DeepAgentsRuntime:
             entry: dict[str, Any] = {"transport": transport, "url": cfg.url}
             if cfg.headers:
                 entry["headers"] = dict(cfg.headers)
+            # A server that declares how long its tools may run must have that
+            # honoured here too. Measured, every client aborts exactly at its
+            # ceiling with progress still arriving (codex at ``tool_timeout_sec``,
+            # the Claude CLI at its per-server ``timeout``), and here
+            # ``mcp.shared.session`` wraps the receive in ``anyio.fail_after``,
+            # which no notification restarts. The ceiling is therefore the only
+            # lever, and a long generation dies on the default unless BOTH the
+            # transport read and the session read are raised.
+            timeout_sec = getattr(cfg, "tool_timeout_sec", None)
+            if isinstance(timeout_sec, (int, float)) and timeout_sec > 0:
+                # The two transports type this field differently
+                # (``SSEConnection`` seconds-as-float vs
+                # ``StreamableHttpConnection`` timedelta); give each its own.
+                entry["sse_read_timeout"] = (
+                    timedelta(seconds=float(timeout_sec))
+                    if transport == "streamable_http"
+                    else float(timeout_sec)
+                )
+                entry["session_kwargs"] = {
+                    "read_timeout_seconds": timedelta(seconds=float(timeout_sec))
+                }
             spec[cfg.name] = entry
 
-        client = MultiServerMCPClient(spec)  # type: ignore[arg-type]
-        return list(await client.get_tools())
+        if not spec:
+            return []
+        client = MultiServerMCPClient(
+            spec,  # type: ignore[arg-type]
+            tool_interceptors=[_preserve_mcp_source_metadata],
+            # The MCP SDK only attaches ``_meta.progressToken`` when a progress
+            # callback exists, so a client with none tells servers "do not
+            # bother" and gets silence back. Registering one makes long tools
+            # observable (the host's ``generate_ui`` heartbeats through it);
+            # it cannot extend this client's hard timeout, so it is for
+            # visibility, not for survival — see the timeout mapping above.
+            callbacks=Callbacks(on_progress=_log_mcp_progress),
+        )
+        # Load per server instead of one ``get_tools()`` over everything: the
+        # aggregate call fails the WHOLE turn when any single server is
+        # unreachable. The CLI runtimes degrade to "server unavailable, tools
+        # absent" — match that here. ``gather`` keeps the adapter's previous
+        # concurrent-connect behavior.
+        names = list(spec)
+        results = await asyncio.gather(
+            *(client.get_tools(server_name=name) for name in names),
+            return_exceptions=True,
+        )
+        tools: list[Any] = []
+        external_tool_names: set[str] = set()
+        for name, result in zip(names, results, strict=True):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, BaseException):
+                logger.warning("mcp server %r unavailable — skipping its tools: %s", name, result)
+                continue
+            tools.extend(result)
+            if name not in {"harness", "harness_toolkit"}:
+                external_tool_names.update(
+                    tool.name for tool in result if isinstance(getattr(tool, "name", None), str)
+                )
+        self._external_mcp_tool_names = external_tool_names
+        return tools
 
     # -- Tool conversion --
 
@@ -1208,6 +2132,7 @@ class DeepAgentsRuntime:
                 ExecContext(
                     workspace=captured_workspace,
                     session_id=self._cur_session_id,
+                    user_id=self._cur_user_id,
                 ),
             )
             if captured_hooks and captured_hooks._handlers.get("after_tool"):
@@ -1221,15 +2146,61 @@ class DeepAgentsRuntime:
             name=tdef.name,
             description=tdef.description or tdef.name,
             args_schema=tdef.parameters or None,
+            # A no-gap decision must terminate the agent loop at the tool
+            # boundary.  Otherwise LangGraph invokes the model once more and
+            # many providers manufacture a visible "(empty)" confirmation.
+            return_direct=tdef.name == TASK_COVERAGE_NOOP_TOOL_NAME,
         )
 
-    def _build_subagents(self) -> list[SubAgent]:
+    def _build_subagents(
+        self,
+        *,
+        citation_protocol: str = "",
+        skill_roots: list[str] | None = None,
+    ) -> list[SubAgent]:
         subagents: list[SubAgent] = []
         for sub_def in self.config.callable_agents:
-            subagents.append(self._to_subagent(sub_def))
+            subagents.append(
+                self._to_subagent(
+                    sub_def,
+                    citation_protocol=citation_protocol,
+                )
+            )
+        if citation_protocol and not any(
+            subagent["name"] == GENERAL_PURPOSE_SUBAGENT["name"] for subagent in subagents
+        ):
+            # DeepAgents auto-creates ``general-purpose`` with a private
+            # system prompt and middleware stack. Explicitly mirror that
+            # default only while Evidence binding is active so nested source
+            # tools expose the same handles and the nested assistant knows the
+            # same minimal protocol. Parent task instructions, Host plans, and
+            # other session text are intentionally not copied.
+            general_purpose: SubAgent = {
+                "name": GENERAL_PURPOSE_SUBAGENT["name"],
+                "description": GENERAL_PURPOSE_SUBAGENT["description"],
+                "system_prompt": (
+                    f"{GENERAL_PURPOSE_SUBAGENT['system_prompt']}\n\n{citation_protocol}"
+                ),
+                "middleware": [
+                    InvalidToolCallPairMiddleware(),
+                    WindowsPathVirtualizerMiddleware(self.workspace_root),
+                    CitationEvidenceCompactionMiddleware(
+                        evidence_registry=self._turn_evidence_registry,
+                        citation_artifact_emitter=self._emit_citation_evidence,
+                    ),
+                ],
+            }
+            if skill_roots:
+                general_purpose["skills"] = list(skill_roots)
+            subagents.insert(0, general_purpose)
         return subagents
 
-    def _to_subagent(self, sub_def: SubAgentDef) -> SubAgent:
+    def _to_subagent(
+        self,
+        sub_def: SubAgentDef,
+        *,
+        citation_protocol: str = "",
+    ) -> SubAgent:
         sub_tools: list[StructuredTool] = []
         if sub_def.tools:
             for name in sub_def.tools:
@@ -1240,8 +2211,24 @@ class DeepAgentsRuntime:
         entry: SubAgent = {
             "name": sub_def.name,
             "description": sub_def.description,
-            "system_prompt": sub_def.prompt,
+            "system_prompt": (
+                f"{sub_def.prompt}\n\n{citation_protocol}".strip()
+                if citation_protocol
+                else sub_def.prompt
+            ),
         }
+        # Subagent ``middleware`` is additive (appended to deepagents' default
+        # stack), so always carry the Windows-path normalizer; the citation
+        # pair stays gated on the protocol as before.
+        entry["middleware"] = [WindowsPathVirtualizerMiddleware(self.workspace_root)]
+        if citation_protocol:
+            entry["middleware"] += [
+                InvalidToolCallPairMiddleware(),
+                CitationEvidenceCompactionMiddleware(
+                    evidence_registry=self._turn_evidence_registry,
+                    citation_artifact_emitter=self._emit_citation_evidence,
+                ),
+            ]
         if sub_tools:
             entry["tools"] = sub_tools
         if sub_def.model:
@@ -1413,8 +2400,21 @@ def _extract_full_thinking(output: Any) -> str:
 def _extract_usage(output: Any) -> dict[str, int] | None:
     """Project LangChain's ``UsageMetadata`` onto our four flat token fields.
 
-    LangChain has no notion of cache_write/creation, so cache_write_tokens
-    is always zero on the deepagents path.
+    LangChain's ``input_tokens`` is the SUM of every input bucket — its own
+    ``total_tokens`` is ``input_tokens + output_tokens`` — and
+    ``input_token_details.cache_read`` / ``cache_creation`` are subsets of it.
+    The cross-runtime contract is the opposite: the four flat fields are
+    DISJOINT, because every usage surface adds them up (session panel,
+    monthly rollup, task usage, billing meter). Passing LangChain's total
+    through unchanged therefore counted the cached prefix twice — on a real
+    session, a turn with 77,859 prompt tokens of which 75,904 were cache hits
+    was reported as 153,763, +97%, and dragged the displayed cache hit rate
+    down from 97.5% to 49.4%. Subtract the cached buckets out, the same way
+    the codex runtime does with ``cached_input_tokens``.
+
+    The ``response_metadata`` fallback below carries no cache detail at all,
+    so its ``prompt_tokens`` is reported as fully uncached — nothing to
+    subtract, and no double count either.
     """
     if output is None:
         return None
@@ -1427,7 +2427,7 @@ def _extract_usage(output: Any) -> dict[str, int] | None:
             cache_read = int(details.get("cache_read", 0) or 0)
             cache_write = int(details.get("cache_creation", 0) or 0)
         return {
-            "input_tokens": int(metadata.get("input_tokens", 0)),
+            "input_tokens": max(0, int(metadata.get("input_tokens", 0)) - cache_read - cache_write),
             "output_tokens": int(metadata.get("output_tokens", 0)),
             "cache_read_tokens": cache_read,
             "cache_write_tokens": cache_write,
@@ -1452,6 +2452,55 @@ def _output_is_error(output: Any) -> bool:
     return False
 
 
+def _state_checkpoint_id(state: Any) -> str | None:
+    """Extract the langgraph checkpoint id a ``StateSnapshot`` points at.
+
+    ``aget_state`` returns the id under ``config["configurable"]
+    ["checkpoint_id"]``; a fresh thread (no checkpoints yet) has none.
+    """
+    config = getattr(state, "config", None)
+    if not isinstance(config, dict):
+        return None
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return None
+    value = configurable.get("checkpoint_id")
+    return str(value) if value else None
+
+
+def _state_citation_artifacts(state: Any) -> list[tuple[str, str | None, Any, str]]:
+    """Return private evidence sidecars added by graph tool middleware.
+
+    LangChain emits the underlying tool's ``on_tool_end`` event before
+    ``awrap_tool_call`` has attached its compacted evidence artifact. The
+    completed graph state contains the final ToolMessage, so replay only those
+    private artifacts into Citation Guard before the answer is sealed.
+    """
+
+    values = getattr(state, "values", None)
+    if not isinstance(values, dict):
+        return []
+    messages = values.get("messages")
+    if not isinstance(messages, list):
+        return []
+    artifacts: list[tuple[str, str | None, Any, str]] = []
+    for index, message in enumerate(messages):
+        artifact = getattr(message, "artifact", None)
+        if not isinstance(artifact, dict):
+            continue
+        citation_content = artifact.get("_valuz_citation_content")
+        if not isinstance(citation_content, str):
+            continue
+        raw_id = getattr(message, "tool_call_id", None) or getattr(message, "id", None)
+        key = str(raw_id or f"tool-message-{index}")
+        raw_name = getattr(message, "name", None)
+        model_content = getattr(message, "content", None)
+        artifacts.append(
+            (key, str(raw_name) if raw_name else None, model_content, citation_content)
+        )
+    return artifacts
+
+
 def _stringify_tool_output(output: Any) -> str:
     if output is None:
         return ""
@@ -1459,7 +2508,7 @@ def _stringify_tool_output(output: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "".join(str(p) for p in content)
+        return json.dumps(_jsonify(content), ensure_ascii=False)
     return str(output)
 
 

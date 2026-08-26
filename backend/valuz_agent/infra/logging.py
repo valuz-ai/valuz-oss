@@ -8,7 +8,7 @@ Two handlers are installed on the root logger:
    don't change this so existing tooling keeps working.
 
 2. **Rotating JSON file handler** — writes structured JSON-line logs
-   to ``settings.log_file`` (``~/.valuz-oss/logs/backend.log`` by
+   to ``settings.log_file_path`` (``~/.valuz-oss/logs/backend.log`` by
    default). Rotates at 10 MB, keeps 5 backups. The desktop ``服务``
    panel reads these lines for KV-aware rendering, and "open log file
    in editor" jumps to the same file.
@@ -275,13 +275,13 @@ def configure_logging(level: int = logging.INFO) -> None:
     setattr(console, _HANDLER_TAG, True)
 
     # 2) Rotating JSON file handler — the canonical structured stream
-    #    the desktop ``服务`` panel reads. ``settings.log_dir`` may not
-    #    exist yet on first boot; create it on demand.
-    log_dir = settings.log_dir
-    log_dir.mkdir(parents=True, exist_ok=True)
+    #    the desktop ``服务`` panel reads. The configured file's parent may
+    #    not exist yet on first boot; create it on demand.
+    log_file_path = settings.log_file_path
+    log_file_path.parent.mkdir(parents=True, exist_ok=True)
 
     file_handler = RotatingFileHandler(
-        settings.log_file,
+        log_file_path,
         maxBytes=10 * 1024 * 1024,  # 10 MB per file
         backupCount=5,
         encoding="utf-8",

@@ -44,7 +44,9 @@ backend/
 Two SQLite files under `~/.valuz-oss/`: the host's `valuz.db` (the
 `valuz_*`-prefixed business tables + `alembic_version_host`) and the kernel's
 own `kernel.db` (the 3 unprefixed kernel tables `sessions` / `messages` /
-`events`, its langgraph checkpoint tables, and `alembic_version`). The split
+`events` and `alembic_version`; the DeepAgents runtime's langgraph checkpoints
+live in a sibling `deepagents_checkpoints.db` — or a file-based checkpoint tree
+in the cloud sandbox — never in `kernel.db`). The split
 (config `kernel_db_url`, default-on for SQLite) lets a sandboxed/remote kernel
 own its file and gives `make dev` + `make dev-sandbox` one shared history; an
 explicit `database_url` (Postgres) co-locates both instead. `kernel.db` is the
@@ -56,40 +58,46 @@ kernel tables *out* of `valuz.db` — is retired; it contradicts co-location.)
 Both layers run **async** SQLAlchemy on aiosqlite; WAL +
 per-connection `busy_timeout` make concurrent access safe.
 
-**Kernel store.** The kernel ALWAYS binds the local `SQLAlchemyStore` on
-`database_url`. `KERNEL_STORE` then selects whether a **durable** store fronts it:
+**Kernel store — ONE composition, everywhere.** The kernel's runtime
+persistence source is ALWAYS its local sqlite (`SQLAlchemyStore` on
+`database_url` = `kernel.db`), and every write is dual-written to the
+DataService mirror (`RuntimeStore`, `src/adapters/runtime_store.py`).
+`KERNEL_STORE` selects only the MIRROR BACKEND — never a different
+composition (`app/dependencies.init_dependencies` is the one factory):
 
-| `KERNEL_STORE` | Durable backend (transport) |
-|----------------|------------------------------|
-| `local` (default) | in-process `SQLAlchemyStore` on the **host `valuz.db`** (the host injects it as `VALUZ_DURABLE_DATABASE_URL` in `_set_kernel_env`) — the DataService IS the data layer, not a bypass (design §3 form 1) |
-| `pg` | in-process `SQLAlchemyStore` on `VALUZ_DURABLE_DATABASE_URL` (schema auto-created, `_ensure_durable_schema`) |
-| `remote` | `RemoteStoreHttp` → the HTTP DataService; the sandbox holds ONLY a JWT (`VALUZ_DATA_API_*`), never a DSN |
+| `KERNEL_STORE` | Mirror backend |
+|----------------|----------------|
+| `local` (default) | the host `valuz.db` DataService backend (in-process `SQLAlchemyStore` on `VALUZ_DURABLE_DATABASE_URL`; the host injects `valuz.db`). |
+| `pg` | central Postgres (`VALUZ_DURABLE_DATABASE_URL`) — the SaaS host / a sovereign process on its own Postgres. |
+| `remote` | the HTTP DataService (`RemoteStoreHttp`, JWT via `VALUZ_DATA_API_*` — the sandbox never holds a DSN). |
 
-**All three tiers are the SAME behaviour** — one config→backend factory
-(`_build_durable_store`), no per-tier branch. Each wraps the local store
-(`kernel.db`) in a `WriteThroughStore(authority="durable")`: the **durable is the
-system of record** (reads + the central event seq come from it; the durable write
-is **fail-loud**), and `kernel.db` is the execution-local write **buffer**, never
-the read source. The only difference is the durable backend: `local` → host
-`valuz.db` sqlite, `pg` → in-process Postgres, `remote` → HTTP DataService. If the
-durable DSN equals the kernel's own `database_url` (a shared/co-located DB) the
-dual-write **collapses** to a single write. A one-time boot step
-(`boot/kernel_db_colocate.py`) seeds `valuz.db` from a pre-flip `kernel.db` so
-existing history stays visible. Each store owns its own `events` autoincrement (the seqs
-are independent; `event_uid` bridges identity) — NEVER force one store's seq onto
-the other's PK (collides with overlapping local ids and drops events).
+No mirror resolvable (no durable DSN, or it equals `database_url` — already
+one file) → the plain local store alone.
 
-Because the SaaS sandbox is **ephemeral**, in `remote` mode the host reads event
-history straight from the DataService (`DataServiceReadClient`, routed in
-`event_sse_adapter._history_reader`) so a dead sandbox still serves history; live
-deltas still come from the kernel SSE when the sandbox is alive. The data service
-(`kernel/app/data_service.py`, `POST /rpc/{op}` per StorePort method) has its
-route↔client↔StorePort contract pinned by `test_data_service_contract.py`.
+The contract: the kernel has **no remote read path** — runtime reads (turn
+state, the event seq the broadcast carries, WS replay, pending derivation,
+unconditional own-lineage boot scans) are local; non-runtime readers (host
+UI, reconciliation) read the durable HOST-side (`kernel_client` data plane,
+below). The mirror is sequential-inline (durable receives ops in local commit
+order) and best-effort — a down durable never blocks a turn; a lost mirror op
+is a logged gap (recovery/reconciliation is an explicit later step). Seqs are
+per-store — the cross-store identity is `event_uid` (the append
+`request_id`), stamped on live frames and store reads alike; dedup/merge keys
+on the uid, never on seq, and mirror redelivery is uid-idempotent. NEVER
+force one store's seq onto the other's PK.
 
-> Note: `WriteThroughStore` still carries a dormant `authority="local"` +
-> `DurableOutbox` best-effort path (local-first read, queued durable
-> compensation). It is currently unused — no tier wires it — and is a candidate
-> for removal.
+**Host data plane.** The host never reads history/state out of an execution
+kernel. `boot/steps.bind_data_service` builds the DataService backend store
+and binds it twice: as the typed `data_reader` (SSE history) and as the
+`kernel_client` data plane (`bind_host_data_store`) — an in-process kernel
+client over the durable, serving all non-runtime facade reads, at-rest
+control writes and the liveness-driven stranded reset (`src/core/recovery`).
+Session CONTROL writes (update/mode/finalize/append/delete) route
+live-kernel-first: while a kernel holds the session its runtime sqlite is the
+authority (the write mirrors down); only an at-rest session is written on the
+durable directly. The data service (`kernel/app/data_service.py`,
+`POST /rpc/{op}` per StorePort method) has its route↔client↔StorePort
+contract pinned by `test_data_service_contract.py`.
 
 ## The two boundary contracts
 
@@ -287,10 +295,12 @@ cd backend
 uv sync                          # create .venv, install deps
 uv sync --extra dev              # + pytest, mypy, ruff
 
-VALUZ_DATA_DIR=~/.valuz-oss-dev VALUZ_LOG_DIR=~/.valuz-oss-dev/logs \
+VALUZ_DATA_DIR=~/.valuz-oss-dev VALUZ_LOG_FILE_PATH=~/.valuz-oss-dev/logs/backend.log \
 uv run python -m valuz_agent --port 8000 --reload   # what dev.sh spawns
-# Direct invocation defaults to the PRODUCTION ~/.valuz-oss — always pin
-# VALUZ_DATA_DIR (dev.sh does this for you; see scripts/dev.sh header).
+# Direct invocation REQUIRES VALUZ_DATA_DIR: a source-run backend refuses to
+# boot on the packaged app's ~/.valuz-oss (boot/steps.py
+# guard_source_run_data_dir; override: VALUZ_ALLOW_PACKAGED_DATA_DIR=1).
+# dev.sh and `valuz start` pin ~/.valuz-oss-dev for you.
 uv run python -m valuz_agent.cli serve --port 8000  # Typer CLI
 uv run python -m valuz_agent.cli reset-providers
 
@@ -306,13 +316,58 @@ logs land under `.ai/dev/{backend,frontend}.log`.
 ## Gotchas
 
 - **Python 3.12–3.13 only** (`requires-python >=3.12,<3.14`); `uv sync`
-  resolves 3.13. Don't use system Python — parser deps (`markitdown`,
-  `pymupdf4llm`) lack 3.14 wheels.
+  resolves 3.13. Don't use system Python — parser deps (`pymupdf4llm`,
+  `firecrawl-anydoc`) lack 3.14 wheels.
 - **Port 8000 is load-bearing** — it matches the frontend's default
   `VITE_API_BASE_URL`. Change it on both sides or not at all.
 - **ruff**: line-length 100, target `py312`. **mypy**: the kernel is on
   `mypy_path` but `src.*` / `kernel.*` use `follow_imports = "skip"`, so host
   mypy never type-checks kernel internals — keep host code self-contained.
+- **Login-shell PATH**: at boot the host merges the user's login-shell PATH
+  into `os.environ["PATH"]` (`boot/login_path.py`; append-only, fail-open,
+  opt out with `VALUZ_DISABLE_LOGIN_PATH=1`). A Finder/launchd-launched
+  backend otherwise only sees launchd's minimal PATH and can't resolve
+  user-installed tools (nvm `npx`, `uv`, homebrew) needed by stdio MCP
+  connectors, the CLI login probe, and the browser dev fallback.
+- **`max_input_tokens` is the model's INPUT cap, not the vendor "context
+  window"** (GPT-5 class: 272k input ≠ 400k total; Anthropic: the two
+  coincide). Channel model entries declare it (`LLMModel.max_input_tokens`,
+  producer-declared per ADR-011) ONLY for gateway aliases the SDK/CLI
+  per-model defaults can't know; the host snapshots it into kernel
+  `ModelSettings.max_input_tokens` at session create and each runtime derives
+  the runtime's WINDOW declaration — the compaction *threshold* stays the
+  runtime's own (deepagents langchain `profile`, whose middleware applies its
+  0.85; claude `CLAUDE_CODE_MAX_CONTEXT_TOKENS` in the CLI env, never
+  `autoCompactWindow` — the CLI reports that key as the window in `/context`;
+  codex `model_context_window`, whose auto-compact limit codex derives at 90%
+  and clamps any explicit value to). Never guess it from a model name.
+- **`usage_update` carries ONE TURN's increment**, never a running total. A
+  `Message` row is the durable per-turn record that every usage surface sums
+  (session panel, monthly rollup, task usage, billing meter), so a runtime
+  whose SDK reports a cumulative counter must difference two snapshots before
+  emitting: claude differences the CLI's process-wide `modelUsage` accumulator
+  (`ClaudeAgentRuntime._usage_delta_payload`, baseline dropped with the CLI
+  subprocess), codex differences `ThreadTokenUsage.total` across the turn
+  (`_TurnUsageTracker`; the pre-turn baseline is recovered from the first
+  notification's `total - last`, so nothing crosses a turn boundary). A turn
+  is NOT one model request — every runtime here can call the model several
+  times per turn, so an SDK's per-request view has to be accumulated, not
+  latched. Add/subtract rules for the per-model breakdown live in
+  `src/core/usage.py` — counters accumulate, `contextWindow`/`canonicalModel`
+  and friends do not. Note that the CLI's accumulator also counts requests it
+  never writes to its transcript (conversation-title generation, ~540 input
+  tokens a session), so kernel totals legitimately exceed a `.jsonl` replay.
+- **The four flat token fields are DISJOINT** — `input_tokens` is the
+  *uncached* prompt, with cache hits in `cache_read_tokens` / writes in
+  `cache_write_tokens`, and `output_tokens` already contains reasoning
+  tokens. Consumers add all four up, so any bucket that is a *subset*
+  upstream must be subtracted out in the runtime: codex's
+  `cached_input_tokens` ⊂ `input_tokens` and `reasoning_output_tokens` ⊂
+  `output_tokens` (its `total_tokens = input + output` is the proof);
+  LangChain's `usage_metadata.input_tokens` is the sum of every input bucket
+  with `input_token_details.cache_read` / `cache_creation` inside it.
+  Anthropic's shape is natively disjoint and dsh declares disjointness in its
+  `TokenUsage` contract, so those two pass through.
 - **`rg`** (ripgrep) is a runtime helper for `integrations/docs_embedded`,
   located via the `VALUZ_RG_PATH` env the Electron sidecar sets to the packaged
   `libexec/rg`. The binary is vendored per platform at

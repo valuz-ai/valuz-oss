@@ -67,6 +67,11 @@ export interface PreferencesResponse {
   detected_timezone: string;
   theme: string;
   font_size: string;
+  conversation_citations_enabled: boolean;
+  conversation_verification_enabled: boolean;
+  conversation_task_coverage_enabled: boolean;
+  /** Programmatic Tool Calling — agents batch data-tool calls via Python. */
+  ptc_enabled: boolean;
 }
 
 export interface PreferencesPatchPayload {
@@ -74,6 +79,10 @@ export interface PreferencesPatchPayload {
   default_locale?: string | null;
   theme?: string | null;
   font_size?: string | null;
+  conversation_citations_enabled?: boolean;
+  conversation_verification_enabled?: boolean;
+  conversation_task_coverage_enabled?: boolean;
+  ptc_enabled?: boolean;
 }
 
 /**
@@ -92,6 +101,8 @@ export interface ModelOption {
    *  from the card's ``provider_id`` when same-named system descriptors merge. */
   provider_id: string;
   label: string;
+  /** Optional suffix rendered only while choosing a model. */
+  selection_hint?: string | null;
   /** Every runtime this model can run on, priority-ordered. */
   runtimes: RuntimeId[];
   /** Preferred runtime for a one-click pick (= ``runtimes[0]``). */

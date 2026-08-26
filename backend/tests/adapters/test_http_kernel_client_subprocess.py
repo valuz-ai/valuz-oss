@@ -39,6 +39,8 @@ from app.schemas import (  # type: ignore[import-not-found]
 from valuz_agent.adapters.kernel_client import KernelClientError
 from valuz_agent.adapters.kernel_client_http import HttpKernelClient
 
+from conftest import reimported_modules
+
 TOKEN = "test-kernel-token"
 
 
@@ -57,18 +59,14 @@ def _migrate_kernel_db(db_path) -> None:
         "valuz_agent.infra.db_urls",
         "valuz_agent.boot.kernel",
     )
-    saved_modules = {
-        name: mod for name, mod in sys.modules.items() if name.startswith(reimport_prefixes)
-    }
     previous_kernel_url = os.environ.get("VALUZ_KERNEL_DATABASE_URL")
     previous_db_url = os.environ.get("DATABASE_URL")
     os.environ["VALUZ_KERNEL_DATABASE_URL"] = f"sqlite:///{db_path}"
     try:
-        for name in saved_modules:
-            sys.modules.pop(name, None)
-        import valuz_agent.boot.kernel as kb_fresh
+        with reimported_modules(*reimport_prefixes):
+            import valuz_agent.boot.kernel as kb_fresh
 
-        kb_fresh.run_kernel_migrations()
+            kb_fresh.run_kernel_migrations()
     finally:
         if previous_kernel_url is None:
             os.environ.pop("VALUZ_KERNEL_DATABASE_URL", None)
@@ -78,9 +76,6 @@ def _migrate_kernel_db(db_path) -> None:
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = previous_db_url
-        for name in [n for n in sys.modules if n.startswith(reimport_prefixes)]:
-            sys.modules.pop(name, None)
-        sys.modules.update(saved_modules)
 
 
 @pytest.fixture(scope="module")
@@ -247,13 +242,26 @@ async def test_tokenless_ws_run_channel_is_rejected(kernel_proc) -> None:
 
 def test_http_client_covers_the_full_protocol_surface() -> None:
     """Method-for-method parity with the contract table (minus the declared
-    in-process-only supervision hooks)."""
+    in-process-only supervision hooks and host-side composites).
+
+    ``run_ephemeral_review_in_scope`` is a composite (create + run + delete
+    reusing an existing scope's kernel — the contract table marks it "no 1:1
+    endpoint"): it is orchestrated by the module facade ABOVE the transport,
+    so a pure HTTP transport never implements it as a method.
+    ``reset_stranded_session`` runs on the host data plane (the durable-bound
+    in-process client, ``src.core.recovery``) — never over an HTTP kernel."""
     from tests.adapters.test_kernel_client_contract import (
         EXPECTED_ROUTES,
         EXPECTED_STREAMS,
     )
 
-    in_process_only = {"scan_orphan_pendings", "scan_orphan_runs", "cleanup_runtime"}
+    in_process_only = {
+        "scan_orphan_pendings",
+        "scan_orphan_runs",
+        "reset_stranded_session",
+        "run_ephemeral_review_in_scope",
+        "cleanup_runtime",
+    }
     for name in (set(EXPECTED_ROUTES) | set(EXPECTED_STREAMS)) - in_process_only:
         assert hasattr(HttpKernelClient, name), f"HttpKernelClient lacks {name}"
 

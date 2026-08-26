@@ -45,6 +45,11 @@ from valuz_agent.modules.skills.contracts import (
     SkillManifest,
 )
 from valuz_agent.modules.skills.datastore import SkillDatastore
+from valuz_agent.ports.runtime_resource import (
+    RuntimeResourceContractError,
+    ensure_managed_root_containment,
+    validate_skill_reference,
+)
 
 
 class _SkillSource(Protocol):
@@ -52,48 +57,70 @@ class _SkillSource(Protocol):
 
     Used to type the optional ``extra_skill_sources`` (e.g. ``OfficialSkillSource``)
     without importing each implementation here.
+
+    ``compute_content_hash`` is part of the contract, not an implementation
+    detail: it gates a full read of every file in every package, which every
+    real source implements and which this resolver never wants.
     """
 
-    def list_skills(self, ctx: RuntimeContext) -> list[SkillManifest]: ...
+    def list_skills(
+        self, ctx: RuntimeContext, *, compute_content_hash: bool = True
+    ) -> list[SkillManifest]: ...
 
 
 logger = logging.getLogger(__name__)
 
 # Bundled builtin skills — ``valuz-project-docs`` (teaches KB ``doc_search`` /
-# ``list_doc_scope``) and ``browser`` (teaches the ``chrome-devtools`` CLI, paired
-# with the ``browser_start``/``browser_stop`` toolkit tools). They ship under this
-# package's ``resources/builtin_skills`` tree, but are MATERIALIZED per-user into
-# ``fs_registry.official_skill_root`` by ``sync_bundled_official_skills`` — the same
-# COS-synced landing dir as ``skill-creator``.
+# ``list_doc_scope``), ``citation``, ``skill-creator`` and ``browser`` (teaches the
+# ``chrome-devtools`` CLI, paired with the ``browser_start``/``browser_stop``
+# toolkit tools).
 #
-# Session skill paths MUST resolve to that per-user location, NOT this
-# ``/srv``-side package path: a remote kernel runs INSIDE a sandbox that mounts
-# only the user's data subtree (official-skills), not the host's package tree, so
-# a package path would fail materialization with "Skill source path not found".
-# The two accessors below are the single source of truth for those paths — both
-# ``always_on_skill_paths`` and ``sessions.capabilities`` go through them so the
-# injected path strings match exactly (dedup depends on it).
-_BUILTIN_SKILLS_DIR = Path(__file__).resolve().parents[1] / "resources" / "builtin_skills"
+# A session skill path must resolve somewhere the process that MATERIALIZES it
+# can see. A remote kernel runs inside a sandbox that mounts only the owner's
+# data subtrees, so a host-side package path resolves to nothing there and
+# materialization fails with "Skill source path not found". Two locations
+# satisfy the requirement, and ``official_skill_dir`` is the single source of
+# truth for choosing between them: a declared system root (an image-wide
+# location the deployment has put in EVERY image, sandbox included), else the
+# per-user official root the sandbox mounts. Both ``always_on_skill_paths`` and
+# ``sessions.capabilities`` go through it so the injected path strings match
+# exactly — dedup depends on that.
 
 
-def project_docs_skill_dir(user_id: str) -> Path:
-    """Absolute path to the materialized ``valuz-project-docs`` skill for a user.
+def official_skill_dir(slug: str, user_id: str) -> Path:
+    """Absolute path to an official-scope skill directory for a user.
 
-    Resolves under ``fs_registry.official_skill_root`` (per-user data dir), so the
-    path is valid both in-process and inside a remote sandbox that mounts the
-    user's official-skills subtree. The materialized copy is produced by
-    ``sync_bundled_official_skills``.
+    Prefers the copy that ships with the install (``system_skill_roots``) and
+    falls back to the per-user official root, which is where an on-demand
+    template skill or an externally installed official skill lives. The
+    returned path is valid in-process and inside a sandbox alike: a shipped
+    package sits at the same absolute path in every image, and the per-user
+    root is mounted into the sandbox.
+
+    The path may not exist — every caller already treats a missing directory as
+    "this skill is not installed" and skips it.
     """
     from valuz_agent.infra.fs_registry import fs_registry
 
-    return fs_registry.official_skill_root(user_id=user_id) / "valuz-project-docs"
+    shipped = fs_registry.find_system_skill(slug)
+    if shipped is not None:
+        return shipped
+    return fs_registry.official_skill_root(user_id=user_id) / slug
+
+
+def project_docs_skill_dir(user_id: str) -> Path:
+    """Absolute path to the ``valuz-project-docs`` skill (see ``official_skill_dir``)."""
+    return official_skill_dir("valuz-project-docs", user_id)
 
 
 def browser_skill_dir(user_id: str) -> Path:
-    """Absolute path to the materialized ``browser`` skill (see ``project_docs_skill_dir``)."""
-    from valuz_agent.infra.fs_registry import fs_registry
+    """Absolute path to the ``browser`` skill (see ``official_skill_dir``)."""
+    return official_skill_dir("browser", user_id)
 
-    return fs_registry.official_skill_root(user_id=user_id) / "browser"
+
+def citation_skill_dir(user_id: str) -> Path:
+    """Absolute path to the always-on citation protocol skill."""
+    return official_skill_dir("citation", user_id)
 
 
 @dataclass(frozen=True)
@@ -119,6 +146,7 @@ async def resolve_session_capabilities(
     docs: DocumentDatastore | None = None,
     session_id: str | None = None,
     user_id: str | None = None,
+    all_available_skill_paths: list[str] | None = None,
 ) -> ResolvedCapabilities:
     if user_id is None:
         raise ValueError("user_id is required")
@@ -138,13 +166,23 @@ async def resolve_session_capabilities(
     skill_paths: list[str] = []
     warnings: list[str] = []
     seen: set[str] = set()
+    all_available = all_available_skill_paths is not None
+    for path in all_available_skill_paths or []:
+        absolute = str(Path(path).expanduser().resolve(strict=False))
+        if absolute in seen:
+            continue
+        if not Path(absolute).is_dir():
+            warnings.append(f"all-available skill path does not exist: {absolute!r}")
+            continue
+        seen.add(absolute)
+        skill_paths.append(absolute)
 
     # 1) Project-enabled skills — read from the filesystem-based
     #    ``project-config.json`` which is the canonical source of truth
     #    for which skills are enabled for a project.  The DB-backed
     #    ``ProjectSkillConfigRow`` table is not currently populated by the
     #    UI's ``set_skill_enabled`` flow; it writes to JSON instead.
-    enabled_paths = skills.enabled_skill_paths(project)
+    enabled_paths = [] if all_available else skills.enabled_skill_paths(project)
     for path in enabled_paths:
         absolute = _resolve_to_absolute(path, project.root_path)
         if absolute is None:
@@ -163,11 +201,25 @@ async def resolve_session_capabilities(
         skill_paths.append(absolute)
 
     # 1b) For non-project (chat) projects, every user-library skill is
-    #     implicitly enabled. The skills panel UI advertises them as enabled
+    #     implicitly enabled.
+    #
+    #     Both scans below pass ``compute_content_hash=False``. The resolver
+    #     reads only ``path`` / ``scope`` / ``origin_label`` off each manifest —
+    #     it has never used ``content_hash``, which only the indexer needs for
+    #     change detection. Computing it reads EVERY file of EVERY package:
+    #     measured on a managed deployment 2026-08-07, 20 packages / 260 files
+    #     / 3.9 MiB on a network mount, **21–28 seconds**, paid at session
+    #     creation. ``FilesystemSkillSource.list_skills`` already documents the
+    #     flag as "display/catalog listing passes False"; this is one of those
+    #     callers and had simply never said so. The skills panel UI advertises them as enabled
     #     for chat (datastore.list_project_skills sets ``enabled=True`` for
     #     project.kind == "chat") and there is no per-project toggle to
     #     opt out, so the resolver must mirror that for the runtime.
-    if project.kind != "project" and (skill_source is not None or extra_skill_sources):
+    if (
+        not all_available
+        and project.kind != "project"
+        and (skill_source is not None or extra_skill_sources)
+    ):
         ctx = RuntimeContext(
             user_id=user_id,
             project=ProjectRef(
@@ -178,7 +230,7 @@ async def resolve_session_capabilities(
             ),
         )
         if skill_source is not None:
-            for manifest in skill_source.list_skills(ctx):
+            for manifest in skill_source.list_skills(ctx, compute_content_hash=False):
                 if manifest.scope != "user":
                     continue
                 absolute = _resolve_to_absolute(manifest.path, project.root_path)
@@ -197,7 +249,7 @@ async def resolve_session_capabilities(
         #     manifests are surfaced in the UI for marketing but never
         #     materialized into the runtime cwd.
         for source in extra_skill_sources or []:
-            for manifest in source.list_skills(ctx):
+            for manifest in source.list_skills(ctx, compute_content_hash=False):
                 if manifest.scope != "official":
                     continue
                 is_bundled = manifest.origin_label == "Built-in"
@@ -285,7 +337,7 @@ async def resolve_session_capabilities(
     #      inject the same set — task lead/member sessions don't flow through
     #      this resolver but must still carry these built-in tools.
     if session_id:
-        mcp_configs_list.extend(always_on_http_mcp_servers(session_id, owner_user_id=user_id))
+        mcp_configs_list.extend(await always_on_http_mcp_servers(session_id, owner_user_id=user_id))
     else:
         logger.warning(
             "session_id not provided — skipping always-on HTTP MCP injection "
@@ -310,7 +362,7 @@ async def resolve_session_capabilities(
 
 
 def always_on_skill_paths(*, user_id: str) -> list[str]:
-    """Bundled skills every session carries: project-docs + skill-creator (+ browser).
+    """Bundled skills every session carries: docs + citation + skill-creator (+ browser).
 
     These are the skill half of the always-on baseline (the MCP half lives in
     ``always_on_http_mcp_servers``). ``valuz-project-docs`` teaches the
@@ -325,12 +377,12 @@ def always_on_skill_paths(*, user_id: str) -> list[str]:
     is identical everywhere. A missing dir is skipped + logged so a partial
     install can't break session creation.
     """
-    from valuz_agent.infra.fs_registry import fs_registry
     from valuz_agent.modules.browser import service as browser_service
 
     candidates = [
         project_docs_skill_dir(user_id),
-        fs_registry.official_skill_root(user_id=user_id) / "skill-creator",
+        citation_skill_dir(user_id),
+        official_skill_dir("skill-creator", user_id),
     ]
     # The browser skill teaches the ``chrome-devtools`` CLI, which only works
     # when the engine (Node + chrome-devtools-mcp) is available; don't inject a
@@ -374,7 +426,36 @@ def _mint_internal_mcp_token(owner_user_id: str) -> str:
     return token
 
 
-def always_on_http_mcp_servers(
+# Tool-call timeout (ceiling) for the first-party harness MCP servers. Their
+# tools can block longer than a runtime client's default cap (codex aborts at
+# 120s): the ``harness`` toolkit's ``await_members`` parks up to one window unit,
+# and generate_ui can stream a large page for minutes on a slow provider.
+# Derive the ceiling from the await window + a margin so a healthy long wait is
+# never mis-reported as a transport failure, while a genuinely hung tool still
+# fails in minutes (not the arbitrary 1h it used to be). Kept in sync with
+# ``coordination._MAX_AWAIT_WINDOW_S`` (600) — 600 + 120 margin = 720.
+#
+# ``VALUZ_INTERNAL_MCP_TOOL_TIMEOUT_SEC`` overrides it (default unchanged) for
+# deployments whose provider gateway is genuinely slow — a finance workbench
+# page on a congested channel can legitimately take longer than the default.
+def _internal_mcp_tool_timeout_sec() -> float:
+    import os
+
+    raw = os.environ.get("VALUZ_INTERNAL_MCP_TOOL_TIMEOUT_SEC")
+    if raw:
+        try:
+            value = float(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    return 720.0
+
+
+_INTERNAL_MCP_TOOL_TIMEOUT_SEC = _internal_mcp_tool_timeout_sec()
+
+
+async def always_on_http_mcp_servers(
     session_id: str, *, owner_user_id: str, toolkit: str = "base"
 ) -> list[McpHttpServerConfig]:
     """Built-in HTTP MCP servers every session carries: docs, schedules,
@@ -401,10 +482,13 @@ def always_on_http_mcp_servers(
     from valuz_agent.integrations.automations_mcp_server import automations_mcp_url
     from valuz_agent.integrations.connectors_mcp_server import connectors_mcp_url
     from valuz_agent.integrations.docs_mcp_server import docs_mcp_url
+    from valuz_agent.integrations.playbooks_mcp_server import playbooks_mcp_url
     from valuz_agent.integrations.toolkit_mcp_server import toolkit_mcp_url
+    from valuz_agent.ports.sandbox_credential import get_sandbox_credential_verifier
 
+    internal_credential = await get_sandbox_credential_verifier().credential_for(owner_user_id)
     headers = {
-        "X-Valuz-Internal": _mint_internal_mcp_token(owner_user_id),
+        "X-Valuz-Internal": internal_credential,
         "X-Valuz-Session-Id": session_id,
     }
     base = _settings.backend_base_url
@@ -414,26 +498,63 @@ def always_on_http_mcp_servers(
             url=docs_mcp_url(base_url=base),
             transport="http",
             headers=dict(headers),
+            tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
         ),
         McpHttpServerConfig(
             name="valuz_automations",
             url=automations_mcp_url(base_url=base),
             transport="http",
             headers=dict(headers),
+            tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
+        ),
+        McpHttpServerConfig(
+            name="valuz_playbooks",
+            url=playbooks_mcp_url(base_url=base),
+            transport="http",
+            headers=dict(headers),
+            tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
         ),
         McpHttpServerConfig(
             name="valuz_connectors",
             url=connectors_mcp_url(base_url=base),
             transport="http",
             headers=dict(headers),
+            tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
         ),
         McpHttpServerConfig(
             name="harness",
             url=toolkit_mcp_url(base_url=base, toolset=toolkit),
             transport="http",
             headers=dict(headers),
+            tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
         ),
+        *_edition_always_on_servers(base, headers),
     ]
+
+
+def _edition_always_on_servers(base: str, headers: dict[str, str]) -> list[McpHttpServerConfig]:
+    """Edition-registered always-on servers (ports/mcp_always_on).
+
+    Same internal credential headers and timeout as the built-ins; reserved
+    built-in names are skipped so an edition can never shadow them.
+    """
+    from valuz_agent.ports.extensions import ext
+    from valuz_agent.ports.mcp_always_on import RESERVED_ALWAYS_ON_NAMES
+
+    servers: list[McpHttpServerConfig] = []
+    for spec in list(ext.always_on_mcp_specs):
+        if spec.name in RESERVED_ALWAYS_ON_NAMES:
+            continue
+        servers.append(
+            McpHttpServerConfig(
+                name=spec.name,
+                url=f"{base}{spec.path}/mcp",
+                transport="http",
+                headers=dict(headers),
+                tool_timeout_sec=_INTERNAL_MCP_TOOL_TIMEOUT_SEC,
+            )
+        )
+    return servers
 
 
 def harness_toolkit_for_run_kind(run_kind: str | None) -> str:
@@ -484,6 +605,7 @@ async def resolve_skill_slugs_to_paths(
     import os
 
     from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.infra.fs_registry import fs_registry
     from valuz_agent.modules.skills.datastore import SkillDatastore
 
     if user_id is None:
@@ -504,16 +626,80 @@ async def resolve_skill_slugs_to_paths(
                 by_slug.setdefault(row.slug, row.source_path)
 
     resolved: list[str] = []
+    managed_root = fs_registry.user_skill_root(user_id)
+
+    def _is_managed_or_project(path: str) -> bool:
+        roots: list[Path] = [managed_root]
+        if project_root:
+            roots.append(Path(project_root).expanduser())
+        for root in roots:
+            try:
+                ensure_managed_root_containment(root, path)
+                return True
+            except RuntimeResourceContractError:
+                continue
+        return False
+
+    def _is_system_skill(path: str, slug: str) -> bool:
+        system_path = fs_registry.find_system_skill(slug)
+        if system_path is None:
+            return False
+        try:
+            return Path(system_path).resolve(strict=False) == Path(path).resolve(strict=False)
+        except OSError:
+            return False
+
+    def _safe_skill_tree(path: str) -> bool:
+        """Reject symlink/reparse and special-file entries before execution."""
+        try:
+            root = Path(path)
+            for candidate in (root, *root.rglob("*")):
+                info = candidate.lstat()
+                if candidate.is_symlink() or not (candidate.is_dir() or candidate.is_file()):
+                    return False
+                if candidate.is_file() and info.st_nlink > 1:
+                    return False
+        except OSError:
+            return False
+        return True
+
+    def _eligible(path: str, slug: str) -> bool:
+        if not _safe_skill_tree(path):
+            return False
+        if _is_managed_or_project(path) or _is_system_skill(path, slug):
+            return True
+        from valuz_agent.ports.extensions import ext
+
+        result = ext.external_skill_discovery_policy.decide(
+            user_id=user_id,
+            source_path=path,
+            slug=slug,
+        )
+        if not result.execution_eligible:
+            logger.warning(
+                "resolve_skill_slugs: external Skill is not claimed, skipping: %s",
+                path,
+            )
+        return result.execution_eligible
+
     for entry in entries:
         s = entry if isinstance(entry, str) else getattr(entry, "name", str(entry))
         if os.path.isabs(s):  # already an absolute path
-            if os.path.isdir(s):
-                resolved.append(s)
+            if os.path.isdir(s) and _eligible(s, Path(s).name):
+                try:
+                    resolved.append(str(Path(s).resolve(strict=True)))
+                except OSError:
+                    logger.warning("resolve_skill_slugs: skill path cannot be resolved: %s", s)
             else:
                 logger.warning("resolve_skill_slugs: skill path missing, skipping: %s", s)
             continue
+        try:
+            validate_skill_reference(s)
+        except RuntimeResourceContractError:
+            logger.warning("resolve_skill_slugs: unsafe skill reference, skipping: %s", s)
+            continue
         absolute = _resolve_to_absolute(by_slug.get(s), project_root)
-        if absolute and os.path.isdir(absolute):
+        if absolute and os.path.isdir(absolute) and _eligible(absolute, s):
             resolved.append(absolute)
         else:
             logger.warning("resolve_skill_slugs: unresolved skill slug, skipping: %s", s)

@@ -2,9 +2,10 @@
 
 Dispatch is now an explicit enum chosen by the caller at session creation:
 
-* ``"claude_agent"`` -> ClaudeAgentRuntime
-* ``"codex"``        -> CodexRuntime
-* ``"deepagents"``   -> DeepAgentsRuntime
+* ``"claude_agent"``     -> ClaudeAgentRuntime
+* ``"codex"``            -> CodexRuntime
+* ``"deepagents"``       -> DeepAgentsRuntime
+* ``"deepseek_harness"`` -> DeepSeekHarnessRuntime
 
 ``model`` and ``model_provider`` are optional for the first two — each SDK
 falls back to its ambient credentials. DeepAgents needs an explicit
@@ -26,8 +27,14 @@ from src.core.agent_config import AgentConfig
 from src.core.events import EventSink
 from src.core.runtime_port import RuntimePort
 from src.core.tool_registry import build_toolkit_for_config
+from src.ptc.executor import maybe_expose_execute_code
 from src.core.tools import ToolKit
 from src.core.types import ApiProtocol, RuntimeProvider, Session
+from src.runtimes.network_egress import (
+    EgressDescriptor,
+    ForwardProxyDescriptor,
+    ModelIngressDescriptor,
+)
 
 # Per-runtime allowlist for ``ModelProvider.api_protocol``. Source of
 # truth for the cross-runtime "which gateway protocol can which runtime
@@ -40,10 +47,14 @@ from src.core.types import ApiProtocol, RuntimeProvider, Session
 # * ``deepagents`` — three langchain backends:
 #   ``anthropic`` (ChatAnthropic), ``openai_completion`` (ChatOpenAI
 #   chat completions), ``gemini`` (ChatGoogleGenerativeAI).
+# * ``deepseek_harness`` — the dsh DeepSeek adapter speaks an
+#   OpenAI-compatible chat-completions SSE endpoint (``DEEPSEEK_BASE_URL``
+#   overrides the gateway), so only ``openai_completion``.
 ALLOWED_PROTOCOLS_BY_RUNTIME: dict[RuntimeProvider, frozenset[ApiProtocol]] = {
     "claude_agent": frozenset({"anthropic"}),
     "codex": frozenset({"openai_response"}),
     "deepagents": frozenset({"anthropic", "openai_completion", "gemini"}),
+    "deepseek_harness": frozenset({"openai_completion"}),
 }
 
 
@@ -80,9 +91,15 @@ def create_runtime(
     event_sink: EventSink,
     toolkit: ToolKit | None = None,
     workspace_root: str = "",
+    egress_descriptor: EgressDescriptor | None = None,
 ) -> RuntimePort:
     """Create the runtime that hosts ``session.model`` for this agent."""
     resolved_toolkit = toolkit or build_toolkit_for_config(config.tools)
+    # PTC: a session whose host stamped ``metadata["ptc"].servers`` gets the
+    # kernel-owned ``execute_code`` tool without any agent_config surgery —
+    # the metadata key is the opt-in signal, updatable through the existing
+    # session PATCH surface, and the exposure reverses when the key goes.
+    maybe_expose_execute_code(resolved_toolkit, session)
     provider = session.runtime_provider
 
     # Validate api_protocol against the chosen runtime as defense in
@@ -91,6 +108,10 @@ def create_runtime(
         validate_api_protocol(provider, session.model_provider.api_protocol)
 
     if provider == "claude_agent":
+        if egress_descriptor is not None and not isinstance(
+            egress_descriptor, ModelIngressDescriptor
+        ):
+            raise ValueError("claude_agent requires a model-ingress descriptor")
         from src.runtimes.claude_agent.runtime import ClaudeAgentRuntime
 
         return ClaudeAgentRuntime(
@@ -101,9 +122,14 @@ def create_runtime(
             workspace_root=workspace_root,
             model_provider=session.model_provider,
             model_settings=session.model_settings,
+            egress_descriptor=egress_descriptor,
         )
 
     if provider == "codex":
+        if egress_descriptor is not None and not isinstance(
+            egress_descriptor, ModelIngressDescriptor
+        ):
+            raise ValueError("codex requires a model-ingress descriptor")
         from src.runtimes.codex.runtime import CodexRuntime
 
         return CodexRuntime(
@@ -114,9 +140,46 @@ def create_runtime(
             workspace_root=workspace_root,
             model_provider=session.model_provider,
             model_settings=session.model_settings,
+            egress_descriptor=egress_descriptor,
+        )
+
+    if provider == "deepseek_harness":
+        if egress_descriptor is not None:
+            raise ValueError(
+                "deepseek_harness does not support managed egress yet; "
+                "the runtime keeps its existing direct/env-proxy path"
+            )
+        if session.model_provider is None or not session.model.strip():
+            raise ValueError(
+                "DeepSeekHarnessRuntime requires both `model` and `model_provider` "
+                "(the dsh subprocess reads credentials from its environment)."
+            )
+        if not (session.model_provider.base_url or "").strip():
+            # dsh's own empty-endpoint fallback is DeepSeek's public API —
+            # silently wrong for any other channel's key. Fail at creation
+            # with an actionable message instead of a confusing 401 later.
+            raise ValueError(
+                "DeepSeekHarnessRuntime requires an explicit `model_provider.base_url` "
+                "(the dsh adapter posts to `{base_url}/chat/completions` and has no "
+                "safe first-party default for a non-DeepSeek channel)."
+            )
+        from src.runtimes.deepseek_harness.runtime import DeepSeekHarnessRuntime
+
+        return DeepSeekHarnessRuntime(
+            config,
+            session.model,
+            event_sink,
+            resolved_toolkit,
+            workspace_root=workspace_root,
+            model_provider=session.model_provider,
+            model_settings=session.model_settings,
         )
 
     if provider == "deepagents":
+        if egress_descriptor is not None and not isinstance(
+            egress_descriptor, ForwardProxyDescriptor
+        ):
+            raise ValueError("deepagents requires a forward-proxy descriptor")
         if session.model_provider is None or not session.model.strip():
             raise ValueError(
                 "DeepAgentsRuntime requires both `model` and `model_provider` "
@@ -132,6 +195,7 @@ def create_runtime(
             workspace_root=workspace_root,
             model_provider=session.model_provider,
             model_settings=session.model_settings,
+            egress_descriptor=egress_descriptor,
         )
 
     raise ValueError(f"Unsupported runtime_provider: {provider!r}")

@@ -10,13 +10,21 @@ export { OverlaysPage } from "./OverlaysPage";
 export { ToolCallsPage } from "./ToolCallsPage";
 export { ContextPanelPage } from "./ContextPanelPage";
 export { AutomationPage } from "./AutomationPage";
+export { PlaybookPage } from "./PlaybookPage";
 export { AutomationDetailPage } from "./AutomationDetailPage";
+export { PlaybookDetailPage } from "./PlaybookDetailPage";
 export { SkillDetailPage } from "./SkillDetailPage";
 export { ProjectsPage } from "./ProjectsPage";
 export { ConversationPage } from "./ConversationPage";
+export {
+  ConversationView,
+  type ConversationViewProps,
+} from "./conversation/ConversationView";
+export type { ConversationViewVariant } from "./conversation/useConversationRouting";
 export { OnboardingFlow } from "./onboarding";
 export { KnowledgePage } from "./KnowledgePage";
 export { MarketplacePage } from "./MarketplacePage";
+export { PluginsPage } from "./PluginsPage";
 export { ProjectDetailPage } from "./ProjectDetailPage";
 export { SettingsPage } from "./SettingsPage";
 export { SkillsPage } from "./SkillsPage";

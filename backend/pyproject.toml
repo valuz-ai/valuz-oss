@@ -13,14 +13,22 @@ dependencies = [
     "typer>=0.12",
     "python-multipart>=0.0.9",
     "sse-starlette>=2.0",
+    "cryptography>=43.0",
     # Bundles the Claude Code CLI; floor must match upstream agent-harness.
     # Kernel pin eec331f (dynamic workflows) needs the CLI's ``Workflow`` tool;
     # session-modes (cb25177) needs the ``/goal`` slash (CLI >=2.1.146). The old
     # ``>=0.1.68`` bundled a CLI without ``/goal`` → goal-mode turns no-op'd
     # (0-token end_turn); a stale-but-present SDK throws no ImportError, so the
     # floor must be reconciled by hand on every kernel bump (upgrade SOP §2b).
-    # >=0.2.95 bundles CLI 2.1.170 — required for the claude-fable-5 model.
-    "claude-agent-sdk>=0.2.95",
+    # >=0.2.95 bundled CLI 2.1.170 — required for the claude-fable-5 model.
+    # >=0.2.123 bundles CLI 2.1.215; picks up the typed ``TaskUpdatedMessage``
+    # (0.2.101, a SystemMessage subclass — our task_updated branch still
+    # matches), zombie-subprocess + NDJSON large-line fixes (0.2.111), and the
+    # ``--resume=``/``--session-id=`` argv-injection hardening (0.2.121).
+    # >=0.2.128 bundles CLI 2.1.220 — required for the claude-opus-5 model
+    # (added in CLI 2.1.219 / first bundled by 0.2.127); also picks up the
+    # premature-stdin-closure fix for in-flight background tasks (0.2.127).
+    "claude-agent-sdk>=0.2.128",
     "openai-agents>=0.14.6",
     # Routes OpenAI-compatible models (incl. Reportify proxy on
     # http://172.20.2.240:8080) through the kernel's deepagents runtime.
@@ -62,14 +70,22 @@ dependencies = [
     "httpx[socks]>=0.27",
     "python-dotenv>=1.0",
     "pymupdf4llm==1.27.2.3",
-    "markitdown[xlsx,pptx,docx]==0.1.5",
-    # HTML→Markdown for LightLocal. MarkItDown's HTML path corrupts non-ASCII
-    # (CLAUDE.md pitfall), so we use html-to-markdown (MIT, modernized
-    # markdownify fork by Goldziher / Na'aman Hirschfeld). Pinned to the
-    # 1.x line which is pure-Python; the 2.x+ rewrite under the Kreuzberg
-    # org introduces a Rust core we don't need for this scale of HTML.
-    # Provides ``markdownify`` callable as a drop-in markdownify alias.
+    # Office/spreadsheet backend for LightLocal (Rust, MIT). Replaced
+    # ``markitdown``, which converted only docx/xlsx/pptx and routed sheets
+    # through pandas (a large revenue cell rendered as ``8.630000e+10``, every
+    # empty cell as ``NaN``). anydoc covers the whole ``_OFFICE_EXTS`` table —
+    # legacy OLE (.doc/.ppt/.xls), OpenDocument, RTF, EPUB — detects the format
+    # from the bytes, and ships cp310-abi3 wheels for every platform we package:
+    # mac arm64/x64, linux x64/aarch64, win x64.
+    "firecrawl-anydoc>=0.1.6,<0.2",
+    # HTML→Markdown for LightLocal (MIT, a modernized markdownify fork by
+    # Goldziher / Na'aman Hirschfeld). Pinned to the 1.x line which is
+    # pure-Python; the 2.x+ rewrite under the Kreuzberg org introduces a Rust
+    # core we don't need for this scale of HTML. Exposes a ``markdownify``
+    # callable, which is how ``_parse_html`` calls it.
     "html-to-markdown>=1.0,<2.0",
+    # Deterministic block/list/table positions for Citation Claim Audit.
+    "markdown-it-py>=4.0,<5.0",
     # Image OCR for the LightLocal parser (KB image documents). rapidocr 3.x
     # supports PP-OCRv5 (the older ``rapidocr-onnxruntime`` package is frozen at
     # PP-OCRv4); its public API uses OmegaConf params
@@ -80,16 +96,18 @@ dependencies = [
     "rapidocr>=3.3.0",
     # rapidocr's inference engine. rapidocr defaults to ``engine_name:
     # onnxruntime`` but does NOT declare it (its deps are only opencv/numpy/…),
-    # so it must be installed explicitly — otherwise OCR has no backend. It was
-    # only present transitively via ``magika`` (markitdown's filetype detector);
-    # declare it directly so OCR never breaks if that transitive path changes.
+    # so it must be installed explicitly — otherwise OCR has no backend. It
+    # used to arrive transitively via magika (markitdown's filetype detector);
+    # that whole tail left with markitdown, so this direct pin is now the ONLY
+    # thing keeping an inference engine in the tree.
     #
     # Platform split — onnxruntime dropped macOS *x86_64* (Intel) wheels after
     # 1.19.2: 1.17–1.19 ship a ``macosx_11_0_universal2`` build (runs on both
     # Intel + Apple Silicon), but 1.20.0+ ship arm64-only mac wheels. So an
     # Intel-Mac dev box has no wheel for the modern line and ``uv sync`` aborts
-    # the whole install. magika + pymupdf-layout (the other two requesters)
-    # declare NO onnxruntime floor, so OUR pin is the only upward pressure;
+    # the whole install. pymupdf-layout (the only other requester, now that
+    # magika left with markitdown) declares NO onnxruntime floor, so OUR pin is
+    # the only upward pressure;
     # capping Intel Mac at <1.20 lets it resolve to the 1.19.2 universal2 wheel
     # (OCR/layout still work, just on the older engine). Every other platform —
     # Apple Silicon, Linux, Windows — stays on the modern line.
@@ -117,22 +135,21 @@ dependencies = [
     # protect against a future transitive-dep drop.
     "pyyaml>=6.0",
     # Required by the kernel's ``CodexRuntime`` (``from openai_codex import
-    # CodexConfig``). Codex is dormant in valuz today (provider_resolver only
-    # produces ``claude_agent`` / ``deepagents``), but the kernel's
-    # ``runtimes/codex/__init__.py`` re-exports CodexRuntime eagerly, so any
-    # import of ``src.runtimes.codex`` would explode with ``ModuleNotFoundError:
-    # No module named 'openai_codex'``. Kernel pin eec331f moved codex off the
-    # vendored 0.131.0a4 wheel (``AppServerConfig``) to the PUBLISHED PyPI beta
-    # (``CodexConfig``). ``openai-codex`` is prerelease-only, so a ``>=`` floor on
-    # a beta is needed for uv to advance (a bare ``openai-codex`` sticks at the
-    # prerelease the lock first captured and won't move on ``--upgrade``). Floored
-    # at ``0.1.0b3``: the first release whose pinned ``openai-codex-cli-bin``
-    # (``==0.137.0a4``) ships ``manylinux`` glibc wheels, so the binary installs
-    # natively on the glibc Linux cloud image with NO per-platform override (see
-    # the ``[tool.uv]`` note below). The binary is pulled transitively and KEPT on
-    # every platform so ``_resolve_codex_bin`` prefers it over a stray PATH
-    # ``codex``.
-    "openai-codex>=0.1.0b3",
+    # CodexConfig``). The kernel's ``runtimes/codex/__init__.py`` re-exports
+    # CodexRuntime eagerly, so any import of ``src.runtimes.codex`` would
+    # explode with ``ModuleNotFoundError: No module named 'openai_codex'``.
+    # Kernel pin eec331f moved codex off the vendored 0.131.0a4 wheel
+    # (``AppServerConfig``) to the published PyPI package (``CodexConfig``).
+    # Floored at ``0.144.4`` — the first STABLE release (upstream PR #33213):
+    # the SDK version line switched from ``0.1.0bX`` betas to tracking the
+    # Codex CLI version, and its pinned ``openai-codex-cli-bin==0.144.4``
+    # ships wheels for every ``required-environment`` (manylinux glibc both
+    # arches, Intel + arm64 macOS — see the ``[tool.uv]`` note below). The
+    # binary is pulled transitively and KEPT on every platform so
+    # ``_resolve_codex_bin`` prefers it over a stray PATH ``codex``.
+    "openai-codex>=0.144.4",
+    "python-socks[asyncio]>=2.4",
+    "lark-oapi>=1.7.1",
 ]
 
 # Note: built-in parser plugins live in ``backend/parser_plugins/`` and
@@ -165,6 +182,12 @@ dev = [
     "ruff>=0.5",
     "jsonschema>=4.23",
     "httpx[socks]>=0.27",
+    # Test-fixture builder only — writes the .xlsx that pins anydoc's
+    # spreadsheet output (no pandas artifacts). It used to arrive at runtime via
+    # markitdown's ``xlsx`` extra; anydoc reads sheets in Rust and needs nothing
+    # from Python, so openpyxl belongs here and must NOT return to the runtime
+    # dependency list.
+    "openpyxl>=3.1",
 ]
 # PostgreSQL async driver for the remote data-service deployment (SaaS / B-real).
 # Opt-in: OSS local-first runs on SQLite (aiosqlite) and never needs this, so the
@@ -173,6 +196,19 @@ dev = [
 # ``postgresql://…`` → ``postgresql+asyncpg://…`` so SQLAlchemy picks this driver.
 postgres = [
     "asyncpg>=0.29",
+]
+# Langfuse LLM observability (self-hosted or cloud). Opt-in: the default
+# local-first deployment never traces, so the desktop bundle stays lean.
+# Activation ALSO requires the LANGFUSE_BASE_URL/PUBLIC_KEY/SECRET_KEY env —
+# with the extra installed but no env, ``src.core.tracing`` stays a no-op.
+# langfuse>=4.14 — v4 line (``propagate_attributes``; v3's ``update_trace``
+# APIs are gone). ONLY langfuse: claude_agent/codex turns are traced from
+# the kernel's own cross-runtime event stream (``TurnTrace`` — no SDK
+# instrumentation package; openinference's claude instrumentor only spans
+# ``receive_response()``, which our runtime never calls), and deepagents
+# uses langfuse's own LangChain callback handler.
+tracing = [
+    "langfuse>=4.14",
 ]
 
 [tool.uv]
@@ -193,12 +229,14 @@ postgres = [
 #
 # The constraint below is NOT a dependency — ``openai-codex`` alone owns which
 # ``openai-codex-cli-bin`` ships (its transitive ``==`` pin). It exists because
-# that pin is a PRERELEASE and uv only accepts a transitive prerelease when the
-# package appears with a prerelease specifier in direct dependencies or
-# constraints. A constraint keeps the resolver hint without a second dependency
-# to hand-maintain: the floor never needs bumping when ``openai-codex`` advances
-# (it also documents the first codex binary with a ``manylinux`` wheel, which
-# the glibc Linux cloud image depends on).
+# uv only accepts a transitive PRERELEASE pin when the package appears with a
+# prerelease specifier in direct dependencies or constraints. Since
+# ``openai-codex`` 0.144.4 the transitive pin is a stable version, so the hint
+# is currently dormant — kept because it costs nothing and re-arms
+# automatically if upstream ever pins a prerelease binary again. The floor
+# never needs bumping when ``openai-codex`` advances (it also documents the
+# first codex binary with a ``manylinux`` wheel, which the glibc Linux cloud
+# image depends on).
 constraint-dependencies = ["openai-codex-cli-bin>=0.137.0a4"]
 
 # The lockfile MUST stay installable on Intel macOS (x86_64 darwin) — our

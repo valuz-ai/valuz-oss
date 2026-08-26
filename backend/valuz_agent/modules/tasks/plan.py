@@ -29,13 +29,42 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, get_args
 
 # Internal subtask lifecycle (task-plan-review.md §5).
-# ``paused`` is a transient halt: when the user pauses/stops the parent task
-# the in-flight node is parked here so the panel stops showing it as actively
-# running (it projects to ``pending``, not ``active``). It is NOT ``planned``
-# on purpose — ``ready_nodes`` must not re-dispatch a parked node as fresh;
-# resume reconciliation (recovery.reconcile) flips it back to ``in_progress``.
+# ``paused`` = parked by a task pause/stop; re-dispatchable on resume.
+# ``failed`` is UNREACHABLE as a write target — every failure path parks the
+# node in ``rework`` (recoverable; ``failed`` would strand it). Kept for
+# legacy rows + the frontend contract; do not revive as a write target
+# without also making it dispatchable.
 SubtaskStatus = Literal["planned", "in_progress", "in_review", "rework", "done", "failed", "paused"]
 SUBTASK_STATUSES: tuple[str, ...] = get_args(SubtaskStatus)
+
+# Legal node transitions, enforced inside :meth:`TaskPlan.update_node` (the one
+# choke point every status write already goes through). Same-status writes are
+# no-ops. The edges mirror the real writers:
+#   dispatch (planned/rework/paused → in_progress) · member done (→ in_review,
+#   also from paused via recovery reconcile) · failure/stop parks (→ rework) ·
+#   task pause (in_progress → paused) · review (→ done / rework / in_progress).
+# ``done`` is terminal (un-approving is a plan revision, not a status flip) and
+# ``failed`` has exactly one edge — ``→ planned`` — so a legacy stranded node
+# can be revived via modify_plan, while nothing can ever write ``failed``:
+# a failed-stamped node would silently pass the finish_task(completed) guard
+# (it is not "unresolved"), letting planned work be skipped by relabeling it.
+NODE_TRANSITIONS: dict[str, frozenset[str]] = {
+    "planned": frozenset({"in_progress"}),
+    "in_progress": frozenset({"in_review", "rework", "paused", "done"}),
+    "in_review": frozenset({"done", "rework", "in_progress"}),
+    "rework": frozenset({"in_progress", "in_review", "done"}),
+    "paused": frozenset({"in_progress", "in_review", "rework"}),
+    "done": frozenset(),
+    "failed": frozenset({"planned"}),
+}
+
+# The ONE definition of "is there work left?" — every caller goes through
+# :meth:`TaskPlan.unresolved_keys`. ``paused`` is load-bearing: omit it and a
+# task halted mid-flight closes ``completed`` with a subtask that never ran
+# (``ready_keys`` treats paused as dispatchable — the two views must agree).
+_UNRESOLVED_STATUSES: frozenset[str] = frozenset(
+    {"planned", "in_progress", "in_review", "rework", "paused"}
+)
 
 # Frontend panel statuses (TaskContextPanel ``task_plan_update`` contract).
 # ``paused`` is a first-class display state (NOT collapsed to ``pending``) so
@@ -108,6 +137,38 @@ class Subtask:
             ),
             review_feedback=(str(d["review_feedback"]) if d.get("review_feedback") else None),
         )
+
+
+# Fields whose value is stored as-is when falsy-but-present (nullable strings).
+_NULLABLE_STR_FIELDS = frozenset(
+    {"agent", "parallel_group", "latest_run_session_id", "review_feedback"}
+)
+_PLAIN_STR_FIELDS = frozenset({"title", "goal", "review_criteria"})
+
+
+def _coerce_node_field(key: str, name: str, value: Any) -> Any:
+    """Normalize ONE patched field the way ``Subtask.from_dict`` normalizes it.
+
+    The two paths into a node must agree: a plan rebuilt from JSON and a plan
+    patched in place should not be able to hold different types in the same
+    field.
+    """
+    if name in _PLAIN_STR_FIELDS:
+        return str(value or "")
+    if name in _NULLABLE_STR_FIELDS:
+        return str(value) if value else None
+    if name == "attempts":
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            raise PlanError(f"subtask {key!r}: 'attempts' must be an integer") from None
+    if name == "depends_on":
+        deps = value or []
+        if not isinstance(deps, list) or not all(isinstance(x, str) for x in deps):
+            raise PlanError(f"subtask {key!r}: 'depends_on' must be a list of keys")
+        return list(deps)
+    # ``status`` is validated (enum + transition table) by the caller above.
+    return value
 
 
 class TaskPlan:
@@ -189,6 +250,14 @@ class TaskPlan:
             if n.status in ("planned", "paused") and all(d in done for d in n.depends_on)
         ]
 
+    def unresolved_keys(self) -> list[str]:
+        """Keys with work outstanding — THE "is this task done?" predicate,
+        shared by the lead idle check, auto-finalize and finish_task's guard.
+        Unlike ``not all_done()``, an empty plan has no unresolved keys (an
+        inline-satisfied goal must still be allowed to finish).
+        """
+        return [n.key for n in self._nodes if n.status in _UNRESOLVED_STATUSES]
+
     def all_done(self) -> bool:
         return bool(self._nodes) and all(n.status == "done" for n in self._nodes)
 
@@ -206,15 +275,38 @@ class TaskPlan:
         self.validate()
 
     def update_node(self, key: str, **fields: Any) -> Subtask:
+        """Patch one node's fields, coercing exactly like :meth:`Subtask.from_dict`.
+
+        ``modify_plan`` feeds this MODEL-SUPPLIED patch dicts verbatim, so the
+        coercion is not a nicety: without it ``attempts="many"`` went through
+        ``setattr`` untouched, serialized into the persisted plan document, and
+        detonated a turn later at ``mark_node_dispatched``'s ``attempts + 1``
+        (a TypeError on a plan that looks fine). Reject at the write instead —
+        the caller gets an actionable PlanError, the document stays sane.
+
+        ``key`` is structurally unpatchable: it is this method's positional
+        selector, so a ``key`` entry in the patch collides before the body
+        runs. Renaming a node would orphan every ``depends_on`` pointing at it
+        anyway — add a new node instead.
+        """
         node = self.get(key)
         if node is None:
             raise PlanError(f"no subtask with key {key!r}")
-        if "status" in fields and fields["status"] not in SUBTASK_STATUSES:
-            raise PlanError(f"invalid status {fields['status']!r}")
+        if "status" in fields:
+            new_status = fields["status"]
+            if new_status not in SUBTASK_STATUSES:
+                raise PlanError(f"invalid status {new_status!r}")
+            if new_status != node.status and new_status not in NODE_TRANSITIONS.get(
+                node.status, frozenset()
+            ):
+                raise PlanError(
+                    f"illegal subtask transition {node.status!r} → {new_status!r} "
+                    f"for {key!r}"
+                )
         for name, value in fields.items():
             if not hasattr(node, name):
                 raise PlanError(f"unknown subtask field {name!r}")
-            setattr(node, name, value)
+            setattr(node, name, _coerce_node_field(key, name, value))
         self.validate()
         return node
 

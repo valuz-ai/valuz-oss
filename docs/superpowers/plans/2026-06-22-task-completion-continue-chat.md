@@ -1,5 +1,11 @@
 # 任务完成后继续对话(收尾微调)实现计划
 
+> **HISTORICAL (executed 2026-06; APIs renamed since).** 本文引用的
+> `register_dispatch_tools()` 闭包机制已在 2026-07 重构中退役——现为
+> `tools/handlers.build_task_tool_defs`(模块级 handler + 声明表 zip),
+> orchestrator 方法经 `task_orchestrator.<service>.<method>` 访问。
+> 本文仅作实施记录保留,不再反映当前代码。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 让 `completed` 任务的详情页内嵌一段与 lead 的收尾对话,用户可基于交付结果做二次微调,lead 改完交付文件后用一个新工具刷新交付卡片。

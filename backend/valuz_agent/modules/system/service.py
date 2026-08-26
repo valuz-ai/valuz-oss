@@ -22,8 +22,8 @@ from pathlib import Path
 
 from valuz_agent.adapters.data_reader import data_reader
 from valuz_agent.infra.config import settings
-from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.infra.db_urls import db_url, sqlite_path_from_url
+from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.infra.local_identity import resolve_local_user_id
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.system.schemas import SystemStatusResponse
@@ -121,7 +121,7 @@ def _runtimes_available() -> list[str]:
     ``GET /v1/runtimes`` in more detail. Keeping this list minimal here
     avoids duplicating that probe on every status hit.
     """
-    return ["claude_agent", "codex", "deepagents"]
+    return ["claude_agent", "codex", "deepagents", "deepseek_harness"]
 
 
 # ── Public API ─────────────────────────────────────────────────────────
@@ -144,8 +144,8 @@ async def collect_system_status(*, port: int) -> SystemStatusResponse:
     else:
         status = "running"
 
-    log_dir = settings.log_dir
-    log_file = settings.log_file
+    log_file = settings.log_file_path
+    log_dir = log_file.parent
 
     db_path = sqlite_path_from_url(db_url())
 

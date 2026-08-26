@@ -44,6 +44,9 @@ class FakeRuntime:
     def update_sink(self, sink: object) -> None:
         self.sink = sink
 
+    async def prepare(self, session: object) -> None:
+        del session
+
     def set_session_rule_finder(self, finder: object) -> None:  # pragma: no cover
         pass
 
@@ -56,9 +59,19 @@ class FakeRuntime:
 
 def _patch_factory(monkeypatch) -> None:
     """Make ``_ensure_runtime`` mint a ``FakeRuntime`` instead of a real one."""
+    async def no_egress(*_args, **_kwargs):
+        return None
+
     monkeypatch.setattr(
         "src.runtimes.factory.create_runtime",
         lambda *a, **k: FakeRuntime(),
+    )
+    # These tests intentionally pass bare objects for agent/session because
+    # they exercise only cache eviction.  Keep the independent network-egress
+    # admission/registration boundary out of this unit-test fixture.
+    monkeypatch.setattr(
+        "src.runtimes.network_egress.prepare_runtime_egress",
+        no_egress,
     )
 
 
@@ -85,6 +98,26 @@ async def test_lru_cap_evicts_least_recently_used(monkeypatch) -> None:
     assert r2.closed is False and r3.closed is False
     assert set(orch._runtimes) == {"s2", "s3"}
     assert "s1" not in orch._runtime_last_used
+
+
+async def test_network_reconfigure_candidates_keep_explicit_owner(monkeypatch) -> None:
+    _patch_factory(monkeypatch)
+    orch = SessionOrchestrator(object(), max_warm_runtimes=3, runtime_idle_ttl_s=0)
+
+    first = await orch._ensure_runtime(
+        "s1", object(), object(), object(), "/tmp", user_id="owner-1"
+    )
+    second = await orch._ensure_runtime(
+        "s2", object(), object(), object(), "/tmp", user_id="owner-2"
+    )
+    orch._runtime_last_used["s1"] = 1.0
+    orch._runtime_last_used["s2"] = 2.0
+
+    assert orch.warm_runtime_candidates(limit=1) == [("owner-2", "s2")]
+    await orch.evict_all_warm_runtimes()
+    assert first.closed is True
+    assert second.closed is True
+    assert orch.warm_runtime_candidates(limit=1) == []
 
 
 async def test_idle_ttl_sweep_closes_stale_runtime(monkeypatch) -> None:

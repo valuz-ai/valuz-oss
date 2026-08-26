@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import codecs
 import logging
 import mimetypes
 import os
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,7 +13,7 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.infra.eventbus import EventBus
-from valuz_agent.infra.fs_registry import fs_registry
+from valuz_agent.infra.fs_registry import KB_KIND_DEFAULT, fs_registry
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.docs.datastore import DocumentDatastore
 from valuz_agent.modules.docs.errors import (
@@ -30,7 +31,7 @@ from valuz_agent.modules.docs.models import (
     ProjectKbBindingRow,
 )
 from valuz_agent.ports.docs_runtime import DocsRuntimePort
-from valuz_agent.ports.parser_backend import ParserBackend, ParseResult
+from valuz_agent.ports.parser_backend import ParseOptions, ParserBackend, ParseResult
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,10 @@ _ENGINE_TO_PLUGIN_ID: dict[str, str] = {
     # light_local internal engines (one per file-kind handler).
     "rapidocr": "light_local",
     "pymupdf4llm": "light_local",
+    "anydoc": "light_local",
+    # ``markitdown`` is RETIRED as an engine but stays mapped so rows written
+    # before anydoc replaced it still resolve to a plugin instead of ``None``.
+    # Requeuing them is NOT this table's job — see ``_RETIRED_ENGINE_FOR_KIND``.
     "markitdown": "light_local",
     "html_to_markdown": "light_local",
     "plain_text": "light_local",
@@ -58,6 +63,30 @@ _ENGINE_TO_PLUGIN_ID: dict[str, str] = {
     "mineru": "mineru",
     "paddleocr": "paddleocr",
 }
+
+
+# ``(parser_mode, kind)`` pairs a rescan must re-parse even though the plugin
+# id is unchanged. ``_run_rescan``'s Trigger 3 compares PLUGIN ids, so swapping
+# one light_local engine for another is invisible to it — both sides resolve to
+# ``light_local`` and the doc keeps its stale content forever.
+#
+# Both entries below exist because anydoc replaced MarkItDown:
+#   * ``markitdown`` — office/spreadsheet docs whose markdown carries the pandas
+#     artifacts anydoc does not produce (``8.630000e+10``, ``NaN``).
+#   * ``plain_text`` on an ``office`` kind — only ``.rtf`` reaches this state: it
+#     had no parser, but RTF source is ASCII so it slipped past the strict-UTF-8
+#     guard and was stored as its own control words. Legitimate plain_text docs
+#     (.md/.txt/.csv) classify as ``text`` and are untouched.
+#
+# Entries are permanent: an install can skip any number of releases, so the
+# ability to recognise a stale engine must outlive the engine itself.
+_RETIRED_ENGINE_FOR_KIND: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("markitdown", "office"),
+        ("markitdown", "spreadsheet"),
+        ("plain_text", "office"),
+    }
+)
 
 
 def _engine_to_plugin_id(engine: str | None) -> str | None:
@@ -83,17 +112,46 @@ def _resolve_data_file_path(user_id: str, ref: str | None) -> Path | None:
     return target
 
 
+# Document types with a dedicated parser backend. NOT the full ingestion gate —
+# see ``is_ingestible``, which also accepts any UTF-8 text file so source code
+# and undeclared plain-text formats are read rather than skipped. This set must
+# stay in step with what the parsers actually read; the drift is pinned by
+# ``tests/modules/docs/test_supported_exts_cover_parser.py``.
 SUPPORTED_EXTS = {
     ".pdf",
+    # Word / PowerPoint / Excel, including the legacy OLE and macro-enabled
+    # variants — all handled locally by anydoc (see parser_light_local).
+    ".doc",
     ".docx",
-    ".xlsx",
-    ".csv",
+    ".docm",
+    ".ppt",
+    ".pps",
+    ".pot",
     ".pptx",
+    ".pptm",
+    ".ppsx",
+    ".ppsm",
+    ".xls",
+    ".xlsx",
+    ".xlsm",
+    ".xlsb",
+    # OpenDocument + other document containers
+    ".odt",
+    ".ods",
+    ".odp",
+    ".rtf",
+    ".epub",
+    # Plain text / markup
+    ".csv",
     ".html",
+    # ``.htm`` parsed fine but was absent here, so the KB scan skipped it
+    # while ``.html`` worked — found by the drift test, not by a user.
+    ".htm",
     ".txt",
     ".xml",
     ".json",
     ".md",
+    # Images (OCR; requires the RapidOCR model download)
     ".png",
     ".jpg",
     ".jpeg",
@@ -104,7 +162,84 @@ SUPPORTED_EXTS = {
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
 
 
+# How much of a file to sniff when deciding "is this text?". One read, capped —
+# phase 3 only sniffs files it has never seen before.
+_TEXT_SNIFF_BYTES = 64 * 1024
+
+# How much parsed text one preview request returns unless it asks for less.
+#
+# 256 KiB is roughly where a markdown renderer stops being interactive on a
+# table-heavy document — the measured freeze was a 1.05 MiB spreadsheet
+# preview, and the next largest document in the same library was 232 KB and
+# fine. Chosen to keep the common document in a single request while making
+# the pathological one pageable rather than fatal.
+PREVIEW_WINDOW_BYTES = 256 * 1024
+# A caller may ask for less, never for more: an unbounded ``limit`` would put
+# the old behaviour back one query parameter away.
+PREVIEW_MAX_WINDOW_BYTES = 1024 * 1024
+
+
+def is_text_payload(data: bytes, *, complete: bool = True) -> bool:
+    """Whether ``LightLocalParser``'s unknown-extension fallback will keep this
+    file's content as-is.
+
+    Mirrors that fallback deliberately: it strict-decodes as UTF-8 so source
+    code (``.py`` / ``.go`` / ``.sh``) and undeclared plain-text formats stay
+    usable, and only genuinely binary payloads are refused. Keeping the gate
+    and the parser on the same rule is what stops a file from being accepted
+    here and then rejected there (or the reverse — silently skipped).
+
+    ``complete=False`` says ``data`` is only the head of a longer file. The
+    decode is then non-final, so a multi-byte character cut at the boundary is
+    not mistaken for corruption — an invalid sequence anywhere still fails.
+    A NUL byte is the usual binary tell and never appears in UTF-8 text.
+    """
+    head = data[:_TEXT_SNIFF_BYTES]
+    if b"\x00" in head:
+        return False
+    final = complete and len(data) <= _TEXT_SNIFF_BYTES
+    try:
+        codecs.getincrementaldecoder("utf-8")().decode(head, final=final)
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def is_ingestible(filename: str, data: bytes) -> bool:
+    """Whether the KB can produce real content from this file.
+
+    A declared extension wins outright; anything else has to prove it is text.
+    The policy lives here rather than at the HTTP layer because both callers
+    need the same answer — the directory scan (phase 3) and the upload
+    endpoint — and any disagreement between them shows up as a file that
+    uploads cleanly and then never becomes a document.
+    """
+    if Path(filename).suffix.lower() in SUPPORTED_EXTS:
+        return True
+    return is_text_payload(data)
+
+
 # ── Value Objects ─────────────────────────────────────────────────────
+
+
+@dataclass
+class DocumentPreview:
+    """One window of a document's parsed text.
+
+    ``total_bytes`` is the whole file, not the window, so a caller can tell
+    "this is everything" from "this is the first page of six" without a second
+    request — and so a UI that shows a truncation notice is stating a measured
+    fact rather than a guess.
+    """
+
+    markdown: str
+    offset: int
+    returned_bytes: int
+    total_bytes: int
+
+    @property
+    def truncated(self) -> bool:
+        return self.offset + self.returned_bytes < self.total_bytes
 
 
 @dataclass
@@ -150,11 +285,40 @@ class ParserAttempt:
 @dataclass
 class DocumentDetail(DocumentListItem):
     source_path: str | None = None
+    content_hash: str | None = None
     parser_mode: str | None = None
     docs_runtime_id: str | None = None
     last_error_code: str | None = None
     last_error_message: str | None = None
     parser_attempts: list[ParserAttempt] = field(default_factory=list)
+
+
+@dataclass
+class DocumentRead:
+    """One document's identity, where it lives, and its parsed text.
+
+    ``markdown`` is the parse product, not the original bytes — it is what the
+    index was built from, so it is also what a citation was taken from.
+    ``source_path`` is the original file and ``parsed_path`` the markdown on
+    disk, for a caller that would rather open them than be handed the text.
+
+    Both paths are ``None`` for a document owned by someone else. They would be
+    accurate and unopenable: a shared document lives under its uploader's tree,
+    which the caller's runtime does not have. A path that cannot be opened is
+    worse than no path — the caller spends a turn discovering that.
+    """
+
+    document_id: str
+    filename: str
+    title: str | None
+    relative_path: str | None
+    source_path: str | None
+    parsed_path: str | None
+    mime_type: str | None
+    file_size_bytes: int
+    status: str
+    parser_mode: str | None
+    markdown: str
 
 
 @dataclass
@@ -165,6 +329,8 @@ class DocSearchHit:
     snippet: str
     page_ref: str | None = None
     chunk_ref: str | None = None
+    match_line: int | None = None
+    total_lines: int | None = None
 
 
 @dataclass
@@ -308,6 +474,7 @@ def _row_to_detail(row: DocumentRecordRow) -> DocumentDetail:
         relative_path=row.relative_path,
         created_at=row.created_at,
         source_path=row.source_path,
+        content_hash=row.content_hash,
         parser_mode=row.parser_mode,
         docs_runtime_id=row.docs_runtime_id,
         last_error_code=row.last_error_code,
@@ -388,6 +555,7 @@ class DocumentLibraryService:
         root_path: str | None = None,
         parser_routing: str = "local_only",
         auto_discover: bool = False,
+        kind: str = KB_KIND_DEFAULT,
     ) -> KbDetail:
         kb_id = uuid.uuid4().hex
         if root_path and root_path.strip():
@@ -398,7 +566,9 @@ class DocumentLibraryService:
             # Managed root (cloud / headless parity): allocate
             # ``kb_root/{id}/`` so the KB works without a caller-supplied
             # local directory, which a remote backend could not reach.
-            root = fs_registry.kb_root(user_id) / kb_id
+            # ``kind`` lets an embedding host route classes of KB to
+            # different roots (default: the single ``<data_dir>/kb``).
+            root = fs_registry.kb_root(user_id, kind) / kb_id
             root.mkdir(parents=True, exist_ok=True)
         root_str = str(root)
         if await self._ds.kb_root_path_exists(user_id, root_str):
@@ -408,6 +578,7 @@ class DocumentLibraryService:
             id=kb_id,
             name=name,
             root_path=root_str,
+            kind=kind,
             parser_routing=parser_routing,
             auto_discover=auto_discover,
         )
@@ -746,8 +917,9 @@ class DocumentLibraryService:
                 # parser_mode (e.g. ``"unknown"`` from a legacy row)
                 # leaves the doc alone to avoid loops.
                 elif doc.status == "ready":
+                    kind = classify(doc.relative_path)
                     actual_plugin = _engine_to_plugin_id(doc.parser_mode)
-                    expected_plugin = kind_to_plugin.get(classify(doc.relative_path))
+                    expected_plugin = kind_to_plugin.get(kind)
                     if (
                         actual_plugin is not None
                         and expected_plugin is not None
@@ -762,6 +934,19 @@ class DocumentLibraryService:
                             doc.parser_mode,
                             actual_plugin,
                             expected_plugin,
+                        )
+                    # Trigger 4: the plugin is unchanged but the ENGINE inside
+                    # it is retired for this kind. Trigger 3 compares plugin
+                    # ids, so a swap of one light_local engine for another is
+                    # invisible to it — both sides resolve to ``light_local``.
+                    elif (doc.parser_mode, kind) in _RETIRED_ENGINE_FOR_KIND:
+                        requeue = True
+                        logger.info(
+                            "rescan: doc %s parser_mode=%s is retired for kind "
+                            "%s — queuing for re-parse",
+                            doc.id,
+                            doc.parser_mode,
+                            kind,
                         )
 
                 if requeue:
@@ -789,8 +974,6 @@ class DocumentLibraryService:
         # ── Phase 3: new file ingestion ──
         for file_rel in current_files:
             ext = Path(file_rel).suffix.lower()
-            if ext not in SUPPORTED_EXTS:
-                continue
             file_path = str(root / file_rel)
             try:
                 stat = os.stat(file_path)
@@ -798,6 +981,18 @@ class DocumentLibraryService:
                 continue
             if stat.st_size > MAX_FILE_SIZE:
                 continue
+            # A declared extension is enough; anything else must prove it is
+            # text, which is exactly what the parser's unknown-extension
+            # fallback will do with it. Sniffing costs one capped read and only
+            # happens for files this scan has never seen before.
+            if ext not in SUPPORTED_EXTS:
+                try:
+                    with open(file_path, "rb") as fh:
+                        head = fh.read(_TEXT_SNIFF_BYTES)
+                except OSError:
+                    continue
+                if not is_text_payload(head, complete=stat.st_size <= len(head)):
+                    continue
             dir_rel = os.path.dirname(file_rel)
             folder_id = folder_map.get(dir_rel, "") if dir_rel else ""
             mime, _ = mimetypes.guess_type(file_rel)
@@ -840,7 +1035,7 @@ class DocumentLibraryService:
                 total_items=len(queued_ids),
             )
             await self._ds.create_import_task(user_id, reindex_task)
-            self._schedule_background_reindex(queued_ids, reindex_task.id)
+            await self._schedule_background_reindex(queued_ids, reindex_task.id, user_id)
 
         self._bus.publish("kb.rescanned", kb_id=kb_id)
         return _task_to_result(task)
@@ -914,7 +1109,9 @@ class DocumentLibraryService:
 
         threading.Thread(target=_runner, name="docs-bg-rescan", daemon=True).start()
 
-    def _schedule_background_reindex(self, doc_ids: list[str], task_id: str) -> None:
+    async def _schedule_background_reindex(
+        self, doc_ids: list[str], task_id: str, user_id: str
+    ) -> None:
         """Spawn a daemon thread that reindexes ``doc_ids`` using a
         fresh DB session (the request's session is closed when the
         HTTP handler returns).
@@ -931,6 +1128,23 @@ class DocumentLibraryService:
         Owner is derived from the loaded task row — no ambient ContextVar is
         read or set here.
         """
+        from valuz_agent.ports.extensions import ext
+
+        # A deployment that parses elsewhere takes the documents here. It may
+        # decline (the OSS default always does), in which case we spawn the
+        # thread below exactly as before.
+        try:
+            # Awaited, so the answer is the truth. A dispatcher that only
+            # SCHEDULED its publish and answered optimistically got believed —
+            # and this ``return`` is not revocable, so when the publish was
+            # then cancelled with the loop that carried it, the documents sat
+            # queued with nobody coming.
+            if await ext.docs_reindex_dispatcher.dispatch(user_id, doc_ids, task_id):
+                return
+        except Exception:  # noqa: BLE001 — a broken dispatcher must not strand
+            # the documents; fall through to the in-process path.
+            logger.exception("docs reindex dispatch failed; parsing in-process")
+
         import asyncio
         import threading
 
@@ -1015,15 +1229,58 @@ class DocumentLibraryService:
             await self._update_folder_counts(user_id, row.kb_id)
         self._bus.publish("doc.deleted", document_id=doc_id)
 
-    async def get_document_preview(self, user_id: str, doc_id: str) -> str:
+    async def get_document_preview(
+        self,
+        user_id: str,
+        doc_id: str,
+        *,
+        offset: int = 0,
+        limit: int = PREVIEW_WINDOW_BYTES,
+    ) -> DocumentPreview:
+        """A window onto the parsed text, and how much of it there is.
+
+        **Bounded by default, not on request.** This used to return the file
+        whole, and one 1.05 MB spreadsheet preview was enough to hang the
+        browser tab that rendered it — a megabyte of markdown tables is a DOM
+        node per cell. An optional cap would not have helped: the caller that
+        froze was the one that did not know to ask for one.
+
+        The blob on disk stays whole, deliberately. It is not only a preview:
+        ``doc_read`` serves it to the agent as the document's text and reports
+        ``total_chars`` from its length, and where no remote index is
+        configured it *is* what gets searched. Cutting it at rest would tell
+        the agent it had read a document it had only seen half of — a bug this
+        code has already had once. So the cut belongs here, at the edge, where
+        it can be described.
+
+        Byte offsets rather than characters: the caller pages through a file
+        whose size it is told in bytes, and a character window would make
+        ``offset + returned`` disagree with ``total`` on any non-ASCII
+        document. The window is decoded leniently so a boundary landing inside
+        a multi-byte sequence yields a replacement character rather than an
+        error.
+        """
         row = await self._ds.get_by_id(user_id, doc_id)
         if not row:
             raise DocumentNotFound()
-        if row.preview_text_path:
-            local = _resolve_data_file_path(user_id, row.preview_text_path)
-            if local and local.exists():
-                return local.read_text(encoding="utf-8")
-        return ""
+        if not row.preview_text_path:
+            return DocumentPreview(markdown="", offset=0, returned_bytes=0, total_bytes=0)
+        local = _resolve_data_file_path(user_id, row.preview_text_path)
+        if not local or not local.exists():
+            return DocumentPreview(markdown="", offset=0, returned_bytes=0, total_bytes=0)
+
+        total = local.stat().st_size
+        start = max(0, min(offset, total))
+        size = max(0, min(limit, PREVIEW_MAX_WINDOW_BYTES))
+        with local.open("rb") as handle:
+            handle.seek(start)
+            chunk = handle.read(size)
+        return DocumentPreview(
+            markdown=chunk.decode("utf-8", errors="replace"),
+            offset=start,
+            returned_bytes=len(chunk),
+            total_bytes=total,
+        )
 
     async def reindex_documents(self, user_id: str, document_ids: list[str]) -> ImportTaskResult:
         """Create a reindex task and dispatch the per-doc parse loop to a
@@ -1037,7 +1294,7 @@ class DocumentLibraryService:
             total_items=len(document_ids),
         )
         await self._ds.create_import_task(user_id, task)
-        self._schedule_background_reindex(document_ids, task.id)
+        await self._schedule_background_reindex(document_ids, task.id, user_id)
         return _task_to_result(task)
 
     async def _run_reindex_loop(self, document_ids: list[str], task: DocumentImportTaskRow) -> None:
@@ -1064,7 +1321,7 @@ class DocumentLibraryService:
             row.status = "processing"
             await self._ds.update(row)
 
-            result = self._parser_parse_sync(row.source_path)
+            result = self._parser_parse_sync(row.source_path, user_id)
 
             # ── Record per-plugin attempt history on the doc + task ──
             # ``fallback_from`` is set by ``ParserRouter`` when it
@@ -1170,6 +1427,39 @@ class DocumentLibraryService:
 
     # ── Search ────────────────────────────────────────────────────────
 
+    async def _contribute_shared_scope(
+        self, user_id: str, scope_ids: list[str]
+    ) -> tuple[list[str], dict[str, str]]:
+        """Union in documents shared with ``user_id`` by the host.
+
+        Each contributed id is re-authorized under the owner the host named,
+        exactly like the pre-authorized branch — the host decides *who may
+        read*, this still decides *whether the row is readable* (it exists and
+        is ready). A contributor that fails is logged and ignored: a shared
+        library being briefly invisible is recoverable, a search that dies is
+        not.
+        """
+        from valuz_agent.ports.extensions import ext
+
+        try:
+            extra = await ext.docs_scope_contributor(user_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("docs scope contributor failed; using own scope only")
+            return scope_ids, {}
+
+        owner_of: dict[str, str] = {}
+        merged = list(scope_ids)
+        seen = set(scope_ids)
+        for owner_id, doc_id in extra:
+            if doc_id in seen:
+                continue
+            row = await self._ds.get_by_id(owner_id, doc_id)
+            if row is not None and row.status == "ready":
+                merged.append(doc_id)
+                seen.add(doc_id)
+                owner_of[doc_id] = owner_id
+        return merged, owner_of
+
     async def search_docs(
         self,
         user_id: str,
@@ -1178,10 +1468,143 @@ class DocumentLibraryService:
         top_k: int = 5,
         folder_ids: list[str] | None = None,
         document_ids: list[str] | None = None,
+        knowledge_base_ids: list[str] | None = None,
+        authorized_document_ids: list[str] | None = None,
+        authorized_documents: Sequence[tuple[str, str]] | None = None,
     ) -> list[DocSearchHit]:
-        scope_ids = await self.resolve_doc_scope(user_id, project_id)
+        """Search documents the caller is allowed to see.
+
+        Scope comes from exactly one of three sources, in precedence order:
+
+        1. ``authorized_documents`` — ``(owner_user_id, doc_id)`` pairs a host
+           pre-authorized server-side. Each id is re-authorized under **its own
+           owner**, which is what makes shared collections (documents another
+           user uploaded) reachable. The trust boundary is the calling host
+           code, which must have done its own membership check first; this
+           parameter is never populated from model or tool input.
+        2. ``authorized_document_ids`` — caller-owned ids (document-research
+           sessions). Re-authorized under ``user_id``.
+        3. project bindings (the default).
+
+        ``document_ids`` narrowing applies to all three. ``folder_ids``
+        narrowing resolves within the **caller's own** folders, so cross-owner
+        callers should narrow with ``document_ids`` instead.
+        """
+        scope_ids, owner_of = await self.authorized_doc_scope(
+            user_id,
+            project_id=project_id,
+            folder_ids=folder_ids,
+            document_ids=document_ids,
+            knowledge_base_ids=knowledge_base_ids,
+            authorized_document_ids=authorized_document_ids,
+            authorized_documents=authorized_documents,
+        )
         if not scope_ids:
             return []
+
+        doc_paths: dict[str, str] = {}
+        doc_names: dict[str, str] = {}
+        for did in scope_ids:
+            # Cross-owner hits resolve under their own owner — both the row
+            # lookup and the preview path, whose containment check is scoped
+            # to that owner's data dir.
+            owner = owner_of.get(did, user_id)
+            row = await self._ds.get_by_id(owner, did)
+            if row:
+                doc_names[did] = row.source_filename
+                if row.preview_text_path:
+                    local = _resolve_data_file_path(owner, row.preview_text_path)
+                    if local:
+                        doc_paths[did] = str(local)
+
+        # Single path through the ``DocsRuntimePort`` contract — no
+        # runtime-class special-casing (valuz-oss#838). The embedded runtime
+        # wraps its blocking ripgrep search in ``asyncio.to_thread``
+        # internally; alternative runtimes receive the same arguments.
+        results = await self._docs_rt.search(
+            query,
+            scope_ids,
+            top_k,
+            doc_paths=doc_paths or None,
+        )
+
+        return [
+            DocSearchHit(
+                document_id=r.document_id,
+                filename=doc_names.get(r.document_id, ""),
+                score=r.score,
+                snippet=r.snippet,
+                page_ref=r.page_ref,
+                chunk_ref=r.chunk_ref,
+                match_line=r.match_line,
+                total_lines=r.total_lines,
+            )
+            for r in results
+        ]
+
+    async def authorized_doc_scope(
+        self,
+        user_id: str,
+        *,
+        project_id: str,
+        folder_ids: list[str] | None = None,
+        document_ids: list[str] | None = None,
+        knowledge_base_ids: list[str] | None = None,
+        authorized_document_ids: list[str] | None = None,
+        authorized_documents: Sequence[tuple[str, str]] | None = None,
+    ) -> tuple[list[str], dict[str, str]]:
+        """The documents this caller may see, and who owns each.
+
+        The single answer to "which documents is this caller allowed to reach",
+        shared by every caller that needs one — searching them and reading one
+        are the same question asked twice. Split out precisely because they
+        must not drift: a read path that re-derived its own scope would be a
+        second, unreviewed authorization rule, and the one that is easier to
+        get wrong (a search leaks a snippet; a read leaks the document).
+
+        Returns ``(doc_ids, owner_by_doc_id)``. ``owner_by_doc_id`` carries
+        only the ids whose owner is NOT ``user_id`` — cross-owner documents a
+        deployment shared with this caller. Look up rows and preview paths
+        under that owner, never under the caller.
+        """
+        # doc_id -> owning user id. Only populated for pre-authorized
+        # cross-owner scope; every other path is caller-owned.
+        owner_of: dict[str, str] = {}
+        if authorized_documents is not None:
+            # Pre-authorized cross-owner scope. Re-authorize every id through
+            # this datastore under the owner the host supplied — never accept
+            # model-supplied ids, and never widen to a whole owner.
+            scope_ids = []
+            for owner_id, doc_id in dict.fromkeys(authorized_documents):
+                row = await self._ds.get_by_id(owner_id, doc_id)
+                if row is not None and row.status == "ready":
+                    scope_ids.append(doc_id)
+                    owner_of[doc_id] = owner_id
+        elif authorized_document_ids is not None:
+            # Document-research sessions carry an exact, owner-authorized
+            # server-side scope. Re-authorize every id through this datastore;
+            # do not depend on project bindings and never accept model-supplied
+            # ids as authority.
+            scope_ids = []
+            for doc_id in dict.fromkeys(authorized_document_ids):
+                row = await self._ds.get_by_id(user_id, doc_id)
+                if row is not None and row.status == "ready":
+                    scope_ids.append(doc_id)
+        else:
+            scope_ids = await self.resolve_doc_scope(
+                user_id,
+                project_id,
+                knowledge_base_ids=knowledge_base_ids,
+            )
+            # Documents shared with this caller by a deployment that has such a
+            # notion (team libraries, subscriptions). Additive: a member still
+            # sees their own project-bound documents. Not applied to either
+            # pre-authorized branch above — those scopes are exact by
+            # construction and widening one would defeat the point.
+            scope_ids, contributed_owners = await self._contribute_shared_scope(user_id, scope_ids)
+            owner_of.update(contributed_owners)
+        if not scope_ids:
+            return [], owner_of
 
         if folder_ids:
             folder_doc_ids: set[str] = set()
@@ -1192,44 +1615,64 @@ class DocumentLibraryService:
         if document_ids:
             scope_ids = [d for d in scope_ids if d in set(document_ids)]
 
-        if not scope_ids:
-            return []
+        return scope_ids, owner_of
 
-        doc_paths: dict[str, str] = {}
-        doc_names: dict[str, str] = {}
-        uid = user_id
-        for did in scope_ids:
-            row = await self._ds.get_by_id(uid, did)
-            if row:
-                doc_names[did] = row.source_filename
-                if row.preview_text_path:
-                    local = _resolve_data_file_path(user_id, row.preview_text_path)
-                    if local:
-                        doc_paths[did] = str(local)
+    async def read_document_in_scope(
+        self,
+        user_id: str,
+        *,
+        project_id: str,
+        document_id: str,
+        knowledge_base_ids: list[str] | None = None,
+        authorized_document_ids: list[str] | None = None,
+        authorized_documents: Sequence[tuple[str, str]] | None = None,
+    ) -> DocumentRead | None:
+        """One authorized document, with its parsed text — or ``None``.
 
-        from valuz_agent.integrations.docs_embedded import EmbeddedDocsRuntime
+        ``None`` means "not yours", "does not exist" and "not readable" alike.
+        The caller cannot tell them apart, and that is the point: a model that
+        can distinguish "no such document" from "not authorized" can enumerate
+        a library it was never given.
 
-        if isinstance(self._docs_rt, EmbeddedDocsRuntime):
-            results = self._docs_rt.search_sync(
-                query,
-                scope_ids,
-                top_k,
-                doc_paths=doc_paths or None,
-            )
-        else:
-            results = await self._docs_rt.search(query, scope_ids, top_k)
-
-        return [
-            DocSearchHit(
-                document_id=r.document_id,
-                filename=doc_names.get(r.document_id, ""),
-                score=r.score,
-                snippet=r.snippet,
-                page_ref=r.page_ref,
-                chunk_ref=r.chunk_ref,
-            )
-            for r in results
-        ]
+        Scope comes from ``authorized_doc_scope`` — the same answer
+        ``search_docs`` gets, so an id the search returned is an id this reads,
+        and an id it did not is an id this refuses.
+        """
+        scope_ids, owner_of = await self.authorized_doc_scope(
+            user_id,
+            project_id=project_id,
+            document_ids=[document_id],
+            knowledge_base_ids=knowledge_base_ids,
+            authorized_document_ids=authorized_document_ids,
+            authorized_documents=authorized_documents,
+        )
+        if document_id not in set(scope_ids):
+            return None
+        owner = owner_of.get(document_id, user_id)
+        row = await self._ds.get_by_id(owner, document_id)
+        if row is None:
+            return None
+        markdown = ""
+        parsed_path: str | None = None
+        if row.preview_text_path:
+            local = _resolve_data_file_path(owner, row.preview_text_path)
+            if local and local.exists():
+                markdown = local.read_text(encoding="utf-8")
+                parsed_path = str(local)
+        own = owner == user_id
+        return DocumentRead(
+            document_id=document_id,
+            filename=row.source_filename,
+            title=row.title,
+            relative_path=row.relative_path,
+            source_path=row.source_path if own else None,
+            parsed_path=parsed_path if own else None,
+            mime_type=row.mime_type,
+            file_size_bytes=row.file_size_bytes,
+            status=row.status,
+            parser_mode=row.parser_mode,
+            markdown=markdown,
+        )
 
     # ── Project binding (D3 minimal cover) ────────────────────────────
 
@@ -1265,7 +1708,22 @@ class DocumentLibraryService:
 
     # ── Scope resolution ──────────────────────────────────────────────
 
-    async def resolve_doc_scope(self, user_id: str, project_id: str) -> list[str]:
+    async def resolve_doc_scope(
+        self,
+        user_id: str,
+        project_id: str,
+        knowledge_base_ids: list[str] | None = None,
+    ) -> list[str]:
+        if knowledge_base_ids is not None:
+            doc_ids: set[str] = set()
+            for kb_id in knowledge_base_ids:
+                # Re-authorize at use time: a deleted/revoked KB immediately
+                # falls out even when an older session snapshot names it.
+                if await self._ds.get_kb(user_id, kb_id) is None:
+                    continue
+                doc_ids.update(await self._ds.list_doc_ids_by_kb(user_id, kb_id, status="ready"))
+            return list(doc_ids)
+
         bindings = await self._ds.list_bindings(user_id, project_id)
         doc_ids: set[str] = set()
         for b in bindings:
@@ -1296,8 +1754,25 @@ class DocumentLibraryService:
                     result[did] = str(local)
         return result
 
-    async def build_doc_scope_tree(self, user_id: str, project_id: str) -> DocScopeTreeView:
-        bindings = await self._ds.list_bindings(user_id, project_id)
+    async def build_doc_scope_tree(
+        self,
+        user_id: str,
+        project_id: str,
+        knowledge_base_ids: list[str] | None = None,
+    ) -> DocScopeTreeView:
+        if knowledge_base_ids is None:
+            bindings = await self._ds.list_bindings(user_id, project_id)
+        else:
+            bindings = [
+                ProjectKbBindingRow(
+                    user_id=user_id,
+                    project_id=project_id,
+                    binding_kind="kb",
+                    target_id=kb_id,
+                )
+                for kb_id in knowledge_base_ids
+                if await self._ds.get_kb(user_id, kb_id) is not None
+            ]
         if not bindings:
             return DocScopeTreeView(knowledge_bases=(), total_documents=0)
 
@@ -1556,7 +2031,10 @@ class DocumentLibraryService:
         target.write_text(markdown, encoding="utf-8")
         return key
 
-    def _parser_parse_sync(self, file_path: str) -> ParseResult:
+    def _parser_parse_sync(self, file_path: str, user_id: str | None = None) -> ParseResult:
+        # ``user_id`` is the document owner — ASYNC_POLL backends stamp it on
+        # their durable polling rows (valuz-oss#841); local parsers ignore it.
+        options = ParseOptions(user_id=user_id)
         # Fast path: any backend that exposes ``parse_sync`` is invoked
         # directly without an event loop. ``LightLocalParser`` is the
         # production case; in-memory test fakes (``FakeParser``) also
@@ -1564,8 +2042,10 @@ class DocumentLibraryService:
         # — using ``hasattr`` keeps the service decoupled from concrete
         # classes (was an ``isinstance(LightLocalParser)`` check before,
         # which forced every alternative parser through the async path).
+        # The duck-typed contract mirrors ``ParserBackend.parse``:
+        # ``parse_sync(file_path, options=None)``.
         if hasattr(self._parser, "parse_sync"):
-            return self._parser.parse_sync(file_path)
+            return self._parser.parse_sync(file_path, options)
 
         import asyncio
 
@@ -1579,4 +2059,21 @@ class DocumentLibraryService:
                 markdown="*Cannot run async parser in sync context*",
                 metadata={"error": "async_not_supported"},
             )
-        return asyncio.run(self._parser.parse(file_path))
+        return asyncio.run(self._parser.parse(file_path, options))
+
+
+async def owner_kb_root_paths(user_id: str) -> list[str]:
+    """Every knowledge base's own ``root_path`` for ``user_id``.
+
+    The file-resolve owner boundary needs these as prefixes: on the desktop a
+    library can point at any folder the user picked, so its documents live
+    outside both the managed project root and the managed KB tree. Mirrors
+    ``projects.service.project_root_paths`` — the datastore stays private and
+    the caller gets paths, not rows.
+    """
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.docs.datastore import DocumentDatastore
+
+    async with async_unit_of_work(commit=False) as db:
+        rows = await DocumentDatastore(db).list_kbs(user_id)
+    return [row.root_path for row in rows if row.root_path]

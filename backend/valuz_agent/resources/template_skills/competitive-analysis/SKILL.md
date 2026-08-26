@@ -1,6 +1,6 @@
 ---
 name: competitive-analysis
-description: Competitive landscape analysis for global equities (focus US / HK / A-shares, also other markets). Maps competitors, compares positioning, and assesses relative strengths across markets. Uses `valuz-stock` (industry_constituents, company_overview, revenue_breakdown, income_statement, company_shareholders) for peer sets, financials, and share data, and `valuz-search` (reports_search, conferences_search, filings_search) for research, earnings calls, and filings. Triggers on "竞争格局", "行业竞争分析", "competitive landscape", "competitive analysis", or "[company] competitors".
+description: Competitive landscape analysis for global equities (focus US / HK / A-shares, also other markets). Maps competitors, compares positioning, and assesses relative strengths across markets. Uses `valuz-data` (get_industries, get_company, get_financial_statements, get_financial_statements, get_ownership) for peer sets, financials, and share data, and `valuz-search` (search_documents, search_documents, search_documents) for research, earnings calls, and filings. Triggers on "竞争格局", "行业竞争分析", "competitive landscape", "competitive analysis", or "[company] competitors".
 ---
 
 # competitive-analysis
@@ -13,34 +13,35 @@ Analyze **全球股票市场（美股/港股/A 股为主，兼顾其他市场）
 
 Two Valuz connectors cover everything this skill needs:
 
-- `valuz-stock` — 行情、财务、份额/指标数值数据 (quotes, financials, market-share and indicator figures).
+- `valuz-data` — 行情、财务、份额/指标数值数据 (quotes, financials, market-share and indicator figures).
 - `valuz-search` — 财报、公告、研报、纪要、电话会检索 (earnings reports, filings, research, minutes, earnings calls).
 
-Rule of thumb: 用 `valuz-stock` 取财务/份额数据，用 `valuz-search` 取定性资料。
+Rule of thumb: 用 `valuz-data` 取财务/份额数据，用 `valuz-search` 取定性资料。
 
-**Symbol format (重要):** `valuz-stock` 用裸代码 (`AAPL` / `00700` / `600519`)；
+> **Symbol format:** `valuz-search` and `valuz-data` both use canonical `MARKET:LOCAL` symbols (`US:AAPL` / `HK:00700` / `SH:600519`). Call `resolve_symbols` first for aliases or non-canonical input. Search on `valuz-search`; read selected documents and all structured data on `valuz-data`.
 `valuz-search` 用 `market:ticker` (`US:AAPL` / `HK:00700` / `SH:600519`)。
 
 ```text
-industry_constituents(industry="...")           (valuz-stock) → 同行/竞争集 peer list
-company_overview(symbol=...)                     (valuz-stock) → 业务描述、估值、市值
-revenue_breakdown(symbol=..., period="annual")   (valuz-stock) → 营收/业务结构、份额拆分
-income_statement(symbol=..., period="annual")    (valuz-stock) → 营收、毛利、净利
-balance_sheet(symbol=..., period="annual")       (valuz-stock) → 资产、负债
-company_shareholders(symbol=...)                 (valuz-stock) → 股东/控制权
-reports_search(query=..., symbols=[...])         (valuz-search) → 卖方研报、竞争定性
-conferences_search(query=..., symbols=[...])     (valuz-search) → 电话会、管理层口径
-filings_search(query=..., symbols=[...])         (valuz-search) → 公告、招股书、分部披露
+get_industries(kind="list", ...) then get_industries(kind="constituents", industry_id=...)
+get_company(kind="profile", symbol=...)                    → 业务描述
+get_valuations(kind="latest", symbol=...)                  → 估值、市值
+get_financial_statements(statement_type="revenue_breakdown", symbol=..., period="annual") → 营收结构
+get_financial_statements(statement_type="income", symbol=..., period="annual") → 营收、毛利、净利
+get_financial_statements(statement_type="balance", symbol=..., period="annual") → 资产、负债
+get_ownership(symbol=...)                 (valuz-data) → 股东/控制权
+search_documents(category="all", query=..., symbols=[...])         (valuz-search) → 卖方研报、竞争定性
+search_documents(category="all", query=..., symbols=[...])     (valuz-search) → 电话会、管理层口径
+search_documents(category="all", query=..., symbols=[...])         (valuz-search) → 公告、招股书、分部披露
 ```
 
 Tickers span markets — US (`AAPL` / `US:AAPL`), HK (`00700` / `HK:00700`),
 A-share (`600519` / `SH:600519`), and others.
 
 ### Secondary Sources
-- Annual / segment reports — detailed segment data (`filings_search` via `valuz-search`)
-- Sell-side industry reports — analyst competitive analysis (`reports_search` via `valuz-search`)
-- Earnings-call commentary — management framing of rivals (`conferences_search` via `valuz-search`)
-- Market-share / revenue-mix data — `revenue_breakdown` via `valuz-stock`
+- Annual / segment reports — detailed segment data (`search_documents` via `valuz-search`)
+- Sell-side industry reports — analyst competitive analysis (`search_documents` via `valuz-search`)
+- Earnings-call commentary — management framing of rivals (`search_documents` via `valuz-search`)
+- Market-share / revenue-mix data — `get_financial_statements` via `valuz-data`
 - Industry associations — industry statistics
 
 ## Workflow
@@ -49,11 +50,12 @@ A-share (`600519` / `SH:600519`), and others.
 
 **Industry definition:**
 ```text
-# Get full industry composition (cross-market peers) — valuz-stock 裸代码输出
-industry_constituents(industry="spirits / liquor")
+# Get full industry composition (cross-market peers) — valuz-data MARKET:LOCAL 规范代码输出
+get_industries(kind="list", classification_system="GICS", level="industry")
+# Select the matching spirits / liquor industry_id, then request constituents.
 ```
 
-提示：`valuz-stock` 用裸代码 (`AAPL` / `00700` / `600519`)，`valuz-search` 用 `market:ticker` (`US:AAPL` / `HK:00700` / `SH:600519`)。
+提示：`valuz-data` 用MARKET:LOCAL 规范代码 (`US:AAPL` / `HK:00700` / `SH:600519`)，`valuz-search` 用 `market:ticker` (`US:AAPL` / `HK:00700` / `SH:600519`)。
 
 **Tier the competitors:**
 
@@ -68,10 +70,10 @@ Peer/competitor sets are cross-market — a leader in one market may compete wit
 
 ### Step 2: Competitive Comparison Matrix
 
-每家竞争者用 `company_overview` (valuz-stock) 取业务描述/估值/市值，
-`income_statement` (valuz-stock) 取营收、毛利、净利，`revenue_breakdown`
-(valuz-stock) 比业务结构与份额；控制权/股东差异用 `company_shareholders`
-(valuz-stock)。全部传裸代码 (`AAPL` / `00700` / `600519`)。
+每家竞争者用 `get_company` (valuz-data) 取业务描述/估值/市值，
+`get_financial_statements` (valuz-data) 取营收、毛利、净利，`get_financial_statements`
+(valuz-data) 比业务结构与份额；控制权/股东差异用 `get_ownership`
+(valuz-data)。全部传MARKET:LOCAL 规范代码 (`US:AAPL` / `HK:00700` / `SH:600519`)。
 
 **Core comparison table:**
 
@@ -92,8 +94,8 @@ Peer/competitor sets are cross-market — a leader in one market may compete wit
 
 ### Step 3: Market Share Analysis
 
-份额/营收结构逐年取自 `revenue_breakdown`(symbol, period="annual") (valuz-stock)；
-官方口径的市场地位/份额引述用 `reports_search` 或 `filings_search`
+份额/营收结构逐年取自 `get_financial_statements`(symbol, period="annual") (valuz-data)；
+官方口径的市场地位/份额引述用 `search_documents` 或 `search_documents`
 (valuz-search，`market:ticker` 代码，如 `US:AAPL`)。
 
 **Share trends:**
@@ -109,8 +111,8 @@ Peer/competitor sets are cross-market — a leader in one market may compete wit
 
 ### Step 4: Competitive Positioning
 
-战略定位/护城河/管理层对竞争的定性判断，用 `reports_search`、`conferences_search`、
-`filings_search` (valuz-search，`market:ticker` 代码) 检索研报观点、电话会口径与公告披露。
+战略定位/护城河/管理层对竞争的定性判断，用 `search_documents`、
+`search_documents` (valuz-search，`market:ticker` 代码) 检索研报观点、电话会口径与公告披露。
 
 **Positioning map:**
 
@@ -171,10 +173,10 @@ Example for {{EXAMPLE_SECTOR}}:
 
 ### Step 7: Competitive Dynamics
 
-价格战、产能扩张、并购、新品等竞争动态的定性证据，用 `conferences_search`
-(管理层口径)、`reports_search` (卖方观点)、`filings_search` (公告/交易披露)
-(valuz-search，`market:ticker` 代码)；扩张/并购对营收结构的影响用 `revenue_breakdown`
-(valuz-stock) 印证。
+价格战、产能扩张、并购、新品等竞争动态的定性证据，用 `search_documents`
+(管理层口径)、`search_documents` (卖方观点)、`search_documents` (公告/交易披露)
+(valuz-search，`market:ticker` 代码)；扩张/并购对营收结构的影响用 `get_financial_statements`
+(valuz-data) 印证。
 
 **Historical evolution:**
 - How has competitive landscape changed?
@@ -249,8 +251,8 @@ Example for {{EXAMPLE_SECTOR}}:
 ## Quality Checks
 
 Before delivering:
-- [ ] Competitive set complete and relevant (`industry_constituents`)
-- [ ] Market share / revenue mix sourced (`revenue_breakdown` + `reports_search`/`filings_search`)
+- [ ] Competitive set complete and relevant (`get_industries`)
+- [ ] Market share / revenue mix sourced (`get_financial_statements` + `search_documents`)
 - [ ] Comparison matrix comprehensive
 - [ ] Barriers analyzed
 - [ ] Competitive dynamics explained

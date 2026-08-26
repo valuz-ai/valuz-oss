@@ -30,7 +30,6 @@ import {
   XCircle,
 } from "lucide-react";
 import {
-  ArtifactViewerShell,
   BackLink,
   Badge,
   Button,
@@ -44,23 +43,23 @@ import {
   PageLoader,
   Textarea,
   cn,
+  type RuntimeStartLocation,
 } from "@valuz/ui";
 import {
   agentsApi,
   tasksApi,
   projectsApi,
-  filesApi,
-  buildFileRef,
   useNotifications,
   useTaskEvents,
   useTranslation,
-  type ArtifactContent,
-  type ArtifactDescriptor,
   type IntervenePayload,
   type MemberWithAgent,
   type TaskDetail,
   type TaskEvent,
+  type TaskTokenUsage,
   recordEntityOrigin,
+  useDefaultRuntimeLocation,
+  useEntityOrigin,
 } from "@valuz/core";
 import type { FileTreeNode } from "@valuz/ui";
 import { useProjectOutlet } from "@valuz/app/layout";
@@ -70,8 +69,8 @@ import {
   type PlannedSubtask,
 } from "../components/TaskContextPanel";
 import { toFileTree } from "../lib/file-tree";
-import { resolvedToArtifactFile } from "../lib/resolve-artifact";
 import { TaskStatusLabel } from "../components/TaskStatusLabel";
+import { TaskTokenUsagePopover } from "../components/TaskTokenUsagePopover";
 import { NotificationCard } from "../components/NotificationInbox";
 import {
   useLeadFollowUpChat,
@@ -79,6 +78,10 @@ import {
   useSkillSubmissionCards,
 } from "../hooks";
 import { deriveDeliverable } from "./task-detail/deliverable";
+import { ArtifactSplitPane } from "../components/ArtifactSplitPane";
+import { useArtifactFile } from "../hooks/use-artifact-file";
+import { eventDetail } from "../lib/task-event-detail";
+import { toAbsoluteProjectPath, toProjectRelativePath } from "../lib/project-paths";
 
 interface EventMeta {
   icon: ComponentType<{ className?: string }>;
@@ -93,12 +96,25 @@ const EVENT_META: Record<string, EventMeta> = {
     node: "bg-brand/10 text-brand",
     labelKey: "task.event.kickoff",
   },
+  // Chat-plan flow (draft → commit): without these entries both events fell
+  // into FALLBACK_META and rendered as "任务已发起" — twice, with the raw
+  // originating-session UUID as the actor.
+  task_drafted: {
+    icon: FileText,
+    node: "bg-ink-meta/10 text-ink-body",
+    labelKey: "task.event.taskDrafted",
+  },
+  committed: {
+    icon: Flag,
+    node: "bg-brand/10 text-brand",
+    labelKey: "task.event.committed",
+  },
   // Kickoff couldn't start the lead (missing credentials / build failure).
   // Without this entry the row fell back to the generic "kickoff" label and
   // read as "任务已发起" on a run that actually failed.
   kickoff_failed: {
     icon: XCircle,
-    node: "bg-red-500/10 text-red-500",
+    node: "bg-error-light text-error-text",
     labelKey: "task.event.kickoffFailed",
   },
   subtask_spawned: {
@@ -124,10 +140,19 @@ const EVENT_META: Record<string, EventMeta> = {
     node: "bg-amber-500/10 text-amber-500",
     labelKey: "task.event.subtaskStopped",
   },
+  // Lead → member: the lead sent a running member a follow-up instruction.
+  // (Before 2026-07 this type also covered the member → lead direction, split
+  // apart only by `payload.direction`; historical rows still land here.)
   subtask_message: {
     icon: MessageSquare,
     node: "bg-indigo-500/10 text-indigo-500",
     labelKey: "task.event.subtaskMessage",
+  },
+  // Member → lead: the member finished a round of work and reported back.
+  subtask_reported: {
+    icon: MessageSquare,
+    node: "bg-indigo-500/10 text-indigo-500",
+    labelKey: "task.event.subtaskReported",
   },
   user_note: {
     icon: MessageSquare,
@@ -145,12 +170,12 @@ const EVENT_META: Record<string, EventMeta> = {
   // Amber = needs your attention, not a failure.
   awaiting_user: {
     icon: MessageCircleQuestion,
-    node: "bg-amber-500/10 text-amber-500",
+    node: "bg-warning-light text-warning-text",
     labelKey: "task.event.awaitingUser",
   },
   user_answered: {
     icon: CheckCircle2,
-    node: "bg-emerald-500/10 text-emerald-500",
+    node: "bg-success-light text-success-text",
     labelKey: "task.event.userAnswered",
   },
   goal_revised: {
@@ -213,10 +238,13 @@ const EVENT_META: Record<string, EventMeta> = {
   },
 };
 
+// Unknown / newly-added event types. The label must stay NEUTRAL: this used
+// to be ``task.event.kickoff``, so an ``abandoned`` draft and a DROPPED user
+// instruction both rendered as "任务已发起".
 const FALLBACK_META: EventMeta = {
   icon: MessageSquare,
   node: "bg-ink-meta/10 text-ink-body",
-  labelKey: "task.event.kickoff",
+  labelKey: "task.event.unknown",
 };
 
 function formatEventTime(ms: number): string {
@@ -235,35 +263,6 @@ type Translator = (
   params?: Record<string, string | number>,
 ) => string;
 
-/** Resolve an artifact path to an absolute filesystem location. Agents
- *  typically pass project-relative paths to ``finish_task`` (e.g.
- *  ``"reports/desktop.md"``), but some pass absolute paths too. Join
- *  with the project cwd when relative, leave alone when absolute or
- *  cwd is unknown. */
-function resolveArtifactPath(path: string, rootPath: string): string {
-  if (!path) return path;
-  if (path.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(path)) return path;
-  if (!rootPath) return path;
-  const sep = rootPath.includes("\\") ? "\\" : "/";
-  const trimmed = rootPath.endsWith(sep) ? rootPath.slice(0, -1) : rootPath;
-  return `${trimmed}${sep}${path}`;
-}
-
-function toProjectRelativeArtifactPath(
-  path: string,
-  rootPath: string,
-): string | null {
-  if (!path) return null;
-  const normalizedPath = path.replace(/\\/g, "/");
-  if (!normalizedPath.startsWith("/") && !/^[a-zA-Z]:\//.test(normalizedPath)) {
-    return normalizedPath.replace(/^\/+/, "");
-  }
-  if (!rootPath) return null;
-  const normalizedRoot = rootPath.replace(/\\/g, "/").replace(/\/+$/, "");
-  if (normalizedPath === normalizedRoot) return null;
-  if (!normalizedPath.startsWith(`${normalizedRoot}/`)) return null;
-  return normalizedPath.slice(normalizedRoot.length + 1);
-}
 
 function artifactIconClassName(filename: string): string {
   const extension = filename.split(".").pop()?.toLowerCase();
@@ -319,64 +318,6 @@ function formatDuration(ms: number, t: Translator): string {
   });
 }
 
-/** Resolve a one-line, type-specific detail string for the timeline.
- *  Reads the right payload field per event type so each row carries
- *  useful info instead of a generic label — e.g. ``task_planned``
- *  surfaces "拆解为 N 个子任务", ``subtask_reviewed`` surfaces the
- *  approve/rework decision + feedback. Falls back to the legacy
- *  ``text|summary|goal|error`` lookup for event types without a
- *  custom rule. */
-function eventDetail(evt: TaskEvent, t: Translator): string {
-  const p = (evt.payload ?? {}) as Record<string, unknown>;
-  switch (evt.type) {
-    case "task_planned": {
-      const subs = (p as { subtasks?: unknown[] }).subtasks;
-      const n = Array.isArray(subs) ? subs.length : 0;
-      if (n > 0) return t("task.event.planSummary", { count: n });
-      break;
-    }
-    case "plan_revised": {
-      const add = Array.isArray((p as { add?: unknown[] }).add)
-        ? (p as { add: unknown[] }).add.length
-        : 0;
-      const upd = Array.isArray((p as { update?: unknown[] }).update)
-        ? (p as { update: unknown[] }).update.length
-        : 0;
-      const rem = Array.isArray((p as { remove?: unknown[] }).remove)
-        ? (p as { remove: unknown[] }).remove.length
-        : 0;
-      const parts: string[] = [];
-      if (add) parts.push(t("task.event.planAdd", { count: add }));
-      if (upd) parts.push(t("task.event.planUpdate", { count: upd }));
-      if (rem) parts.push(t("task.event.planRemove", { count: rem }));
-      if (parts.length > 0) return parts.join(" · ");
-      break;
-    }
-    case "subtask_reviewed": {
-      const decision = String((p as { decision?: unknown }).decision || "");
-      const feedback =
-        typeof (p as { feedback?: unknown }).feedback === "string"
-          ? ((p as { feedback: string }).feedback || "").trim()
-          : "";
-      if (decision === "approve") {
-        return feedback
-          ? t("task.event.subtaskReviewApproveReason", { feedback })
-          : t("task.event.subtaskReviewApprove");
-      }
-      if (decision === "rework") {
-        return feedback
-          ? t("task.event.subtaskReviewRework", { feedback })
-          : t("task.event.subtaskReviewReworkNoFeedback");
-      }
-      break;
-    }
-  }
-  for (const key of ["text", "summary", "goal", "error"]) {
-    const v = p[key];
-    if (typeof v === "string" && v.trim()) return v;
-  }
-  return "";
-}
 
 export const TaskDetailPage = () => {
   const { taskId = "" } = useParams<{ taskId: string }>();
@@ -395,6 +336,7 @@ export const TaskDetailPage = () => {
   );
 
   const [detail, setDetail] = useState<TaskDetail | null>(null);
+  const [tokenUsage, setTokenUsage] = useState<TaskTokenUsage | null>(null);
   const [members, setMembers] = useState<MemberWithAgent[]>([]);
   const [fileTree, setFileTree] = useState<FileTreeNode[]>([]);
   const [rootPath, setRootPath] = useState<string>("");
@@ -403,14 +345,6 @@ export const TaskDetailPage = () => {
   const [projectName, setProjectName] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [selectedArtifactPath, setSelectedArtifactPath] = useState<
-    string | null
-  >(null);
-  const [artifact, setArtifact] = useState<ArtifactDescriptor | null>(null);
-  const [artifactContent, setArtifactContent] =
-    useState<ArtifactContent | null>(null);
-  const [artifactLoading, setArtifactLoading] = useState(false);
-  const [artifactError, setArtifactError] = useState<string | null>(null);
   const selectedFileParam = searchParams.get("file");
 
   // Deep-link origin fast path (multi-target editions): task links can carry
@@ -447,6 +381,15 @@ export const TaskDetailPage = () => {
     void Promise.resolve().then(loadData);
   }, [loadData]);
 
+  const loadTokenUsage = useCallback(async () => {
+    try {
+      setTokenUsage(await tasksApi.getTaskUsage(taskId));
+    } catch {
+      // Usage is diagnostic metadata; a read failure must not obscure the task.
+      setTokenUsage(null);
+    }
+  }, [taskId]);
+
   useEffect(() => {
     // Task detail is self-titled (the goal card carries the task name +
     // status badge) — hide the project header strip entirely so the
@@ -466,6 +409,17 @@ export const TaskDetailPage = () => {
     const interval = setInterval(() => void loadData(), 3000);
     return () => clearInterval(interval);
   }, [status, loadData]);
+
+  const runCount = detail?.runs.length ?? 0;
+  useEffect(() => {
+    void Promise.resolve().then(loadTokenUsage);
+  }, [loadTokenUsage, status, runCount]);
+
+  useEffect(() => {
+    if (status !== "active") return;
+    const interval = setInterval(() => void loadTokenUsage(), 10_000);
+    return () => clearInterval(interval);
+  }, [status, loadTokenUsage]);
 
   // Pull project members so the right-rail Team panel can show each
   // agent's bound model alongside the slug.
@@ -536,11 +490,40 @@ export const TaskDetailPage = () => {
     void openArtifact(rootPath, t as Translator);
   }, [rootPath, t]);
 
+  const locateArtifactFile = useCallback(
+    (path: string) => ({
+      absolutePath: toAbsoluteProjectPath(path, rootPath),
+      relativePath: toProjectRelativePath(path, rootPath) ?? path,
+    }),
+    [rootPath],
+  );
+  const artifactFile = useArtifactFile({
+    projectId: projectId ?? null,
+    platform,
+    locate: locateArtifactFile,
+    missingErrorMessage: t("task.artifactOpenInFinder" as Parameters<typeof t>[0]),
+    // The file lives on the backend that owns the task — route the resolve with
+    // the same ref the rest of this page uses.
+    baseRef: { taskId: taskId || undefined, projectId: projectId ?? undefined },
+    // The preview pane carries a tab strip, so opening a second document adds
+    // to the set instead of replacing what's on screen.
+    multiTab: true,
+  });
+  // The split pane consumes the loaded document itself; the page keeps only
+  // what it needs for URL sync and the copy / reveal actions.
+  const {
+    activePath: activeArtifactPath,
+    selectedPath: selectedArtifactPath,
+    content: artifactContent,
+    open: loadArtifact,
+    reload: reloadArtifact,
+    close: closeArtifact,
+  } = artifactFile;
+
   const openArtifactFile = useCallback(
     async (relPath: string, options?: { syncUrl?: boolean }) => {
       if (!projectId) return;
-      const normalized = toProjectRelativeArtifactPath(relPath, rootPath);
-      const absPath = resolveArtifactPath(relPath, rootPath);
+      const normalized = toProjectRelativePath(relPath, rootPath);
       if (
         options?.syncUrl !== false &&
         normalized &&
@@ -555,78 +538,83 @@ export const TaskDetailPage = () => {
           { replace: false },
         );
       }
-      setSelectedArtifactPath(normalized ?? relPath);
-      setArtifactLoading(true);
-      setArtifactError(null);
-      try {
-        // Resolve identity -> access address; the client fetches bytes from the
-        // address (never proxied). See docs/design/file-address-resolution.md.
-        const descriptor = await filesApi.resolveOne(buildFileRef(absPath));
-        if (!descriptor || descriptor.error || !descriptor.exists) {
-          setArtifact(null);
-          setArtifactContent(null);
-          setArtifactError(
-            t("task.artifactOpenInFinder" as Parameters<typeof t>[0]),
-          );
-          return;
-        }
-        const result = await resolvedToArtifactFile(descriptor, {
-          projectId,
-          relPath: normalized ?? descriptor.name,
-          platform,
-        });
-        setArtifact(result.artifact);
-        setArtifactContent(result.content);
-      } catch (error) {
-        setArtifact(null);
-        setArtifactContent(null);
-        setArtifactError(
-          error instanceof Error ? error.message : String(error),
-        );
-      } finally {
-        setArtifactLoading(false);
-      }
+      await loadArtifact(relPath);
     },
-    [projectId, rootPath, searchParams, setSearchParams, t, platform],
+    [loadArtifact, projectId, rootPath, searchParams, setSearchParams],
   );
+
+  // ?file is an output of the focused tab, and only an input when it changed
+  // from outside this page. Without that distinction the two effects below
+  // ping-pong: each reads the other's not-yet-settled value and "corrects" it.
+  // ?file names the focused document. It is an *output* while anything is
+  // open — the tab strip is the source of truth — and only an input when the
+  // preview is closed, i.e. on load or after a deep link. Treating a stale
+  // param as an instruction is what made these two effects ping-pong: each
+  // read the other's not-yet-settled value and "corrected" it.
+  const authoredFileParamRef = useRef<string | null>(null);
+  const hadArtifactRef = useRef(false);
+
+  useEffect(() => {
+    if (activeArtifactPath) {
+      hadArtifactRef.current = true;
+      if (activeArtifactPath === selectedFileParam) return;
+      authoredFileParamRef.current = activeArtifactPath;
+      setSearchParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          next.set("file", activeArtifactPath);
+          return next;
+        },
+        { replace: true },
+      );
+      return;
+    }
+    // Nothing open. Clear the param only if something *was* open — on mount it
+    // just means the deep link hasn't been consumed yet.
+    if (!hadArtifactRef.current || !selectedFileParam) return;
+    hadArtifactRef.current = false;
+    // Claim the value being removed, not null: effects run in declaration
+    // order, so the reader below sees this stale param before the clear lands
+    // and would otherwise reopen what was just closed.
+    authoredFileParamRef.current = selectedFileParam;
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.delete("file");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [activeArtifactPath, selectedFileParam, setSearchParams]);
 
   useEffect(() => {
     if (!selectedFileParam) {
-      if (selectedArtifactPath) {
-        const timer = window.setTimeout(() => {
-          setSelectedArtifactPath(null);
-          setArtifact(null);
-          setArtifactContent(null);
-          setArtifactError(null);
-        }, 0);
-        return () => window.clearTimeout(timer);
-      }
+      // The clear has landed; drop the claim so a later deep link to the same
+      // document is honoured rather than mistaken for our own echo.
+      authoredFileParamRef.current = null;
       return;
     }
-    if (
-      selectedFileParam === selectedArtifactPath &&
-      (artifact || artifactLoading || artifactError)
-    ) {
-      return;
-    }
+    // Something is already focused, so the param is this effect's own trailing
+    // output rather than a request.
+    if (activeArtifactPath) return;
+    // Nothing is focused but the param still names what we last wrote — the
+    // reader just closed it and the clear hasn't landed. Reopening it here is
+    // how "close the last tab" used to bounce straight back.
+    if (selectedFileParam === authoredFileParamRef.current) return;
+    // The project root arrives with the detail fetch, and the path the deep
+    // link names is relative to it. Resolving before it lands builds a bogus
+    // absolute path and lands the tab in an error state it never retries out
+    // of — wait for the root, then open.
+    if (!rootPath) return;
     const timer = window.setTimeout(() => {
       void openArtifactFile(selectedFileParam, { syncUrl: false });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [
-    artifact,
-    artifactError,
-    artifactLoading,
-    openArtifactFile,
-    selectedArtifactPath,
-    selectedFileParam,
-  ]);
+  }, [rootPath, activeArtifactPath, openArtifactFile, selectedFileParam]);
 
   const handleArtifactReload = useCallback(() => {
-    if (selectedArtifactPath) {
-      void openArtifactFile(selectedArtifactPath);
-    }
-  }, [openArtifactFile, selectedArtifactPath]);
+    void reloadArtifact();
+  }, [reloadArtifact]);
 
   const handleArtifactClose = useCallback(() => {
     setSearchParams(
@@ -637,11 +625,8 @@ export const TaskDetailPage = () => {
       },
       { replace: true },
     );
-    setSelectedArtifactPath(null);
-    setArtifact(null);
-    setArtifactContent(null);
-    setArtifactError(null);
-  }, [setSearchParams]);
+    closeArtifact();
+  }, [closeArtifact, setSearchParams]);
 
   const handleArtifactCopy = useCallback(() => {
     if (artifactContent?.kind !== "text") return;
@@ -652,12 +637,12 @@ export const TaskDetailPage = () => {
   }, [artifactContent, t]);
 
   const handleArtifactOpenExternal = useCallback(() => {
-    if (!rootPath || !selectedArtifactPath) return;
+    if (!selectedArtifactPath) return;
     void openArtifact(
-      resolveArtifactPath(selectedArtifactPath, rootPath),
+      locateArtifactFile(selectedArtifactPath).absolutePath,
       t as Translator,
     );
-  }, [rootPath, selectedArtifactPath, t]);
+  }, [locateArtifactFile, selectedArtifactPath, t]);
 
   // Open a project file from the right-rail file tree (double-click /
   // right-click → open). The tree node's ``path`` is project-relative, so
@@ -668,7 +653,7 @@ export const TaskDetailPage = () => {
     (relPath: string) => {
       if (!rootPath) return;
       void openArtifact(
-        resolveArtifactPath(relPath, rootPath),
+        toAbsoluteProjectPath(relPath, rootPath),
         t as Translator,
       );
     },
@@ -724,6 +709,27 @@ export const TaskDetailPage = () => {
     handleOpenFileExternal,
   ]);
 
+  const [draftBusy, setDraftBusy] = useState<"commit" | "abandon" | null>(null);
+  const runDraftAction = useCallback(
+    async (action: "commit" | "abandon") => {
+      setDraftBusy(action);
+      try {
+        const caller = detail?.task.id ?? "";
+        if (action === "commit") {
+          await tasksApi.commit(taskId, { caller_session_id: caller });
+        } else {
+          await tasksApi.abandon(taskId, { caller_session_id: caller });
+        }
+        await loadData();
+      } catch (err) {
+        console.warn(`${action}_task from TaskDetailPage failed`, err);
+      } finally {
+        setDraftBusy(null);
+      }
+    },
+    [taskId, detail, loadData],
+  );
+
   const runIntervene = useCallback(
     async (payload: IntervenePayload, successKey: string): Promise<boolean> => {
       setBusy(true);
@@ -773,6 +779,18 @@ export const TaskDetailPage = () => {
     leadSessionId: isCompleted ? leadSessionId : null,
     sinceTs: completionInfo?.completedAt ?? null,
   });
+  // Startup phase for the follow-up turn header, mirroring the conversation
+  // page: while the lead's runtime is coming up the header names that rather
+  // than claiming to process. A single-backend build observes no origin, so it
+  // falls back to whatever that build declared its one backend to be.
+  const leadExecOrigin = useEntityOrigin(leadSessionId, "session");
+  const defaultRuntimeLocation = useDefaultRuntimeLocation();
+  const followUpStartingRuntime: RuntimeStartLocation | null =
+    followUp.awaitingRuntime
+      ? (leadExecOrigin ?? defaultRuntimeLocation) === "cloud"
+        ? "cloud"
+        : "local"
+      : null;
   // Render the Lead's ``AskUserQuestion`` tool as the interactive question card
   // (matching the main chat), driven by the follow-up event stream.
   const askCards = useAskUserQuestionCards({
@@ -1143,6 +1161,15 @@ export const TaskDetailPage = () => {
 
   const { task, events } = detail;
   const isActive = task.status === "active";
+  // A task is addressable the moment it is registered — its lead comes up
+  // behind the kickoff response, because starting one provisions a sandbox for
+  // a brand-new scope (a cold instance, ~17s on the cloud backend). So this
+  // page opens on a task that legitimately has no runs and no events yet, and
+  // "no events" would read as "nothing is happening" when the truth is "it is
+  // starting". The poller above swaps this out for the real timeline the
+  // moment the lead lands. A halted/terminal task with an empty timeline is
+  // NOT starting — it never got there, and its own state bar says so.
+  const isStarting = isActive && events.length === 0 && detail.runs.length === 0;
   const isPaused = task.status === "paused";
   // ``blocked`` is the failed-but-resumable terminal (lead turn errored — e.g.
   // an API/socket drop — or unresolved subtasks). Surface a retry/继续 entry
@@ -1166,23 +1193,6 @@ export const TaskDetailPage = () => {
   // distinct from the title, or staged attachments.
   const goalDiffersFromTitle = task.goal.trim() !== task.title.trim();
 
-  if (selectedArtifactPath || artifactLoading || artifactError) {
-    return (
-      <div className="flex h-full min-h-0 flex-col p-3">
-        <ArtifactViewerShell
-          artifact={artifact}
-          content={artifactContent}
-          loading={artifactLoading}
-          error={artifactError}
-          onReload={handleArtifactReload}
-          onClose={handleArtifactClose}
-          onCopyContent={handleArtifactCopy}
-          onOpenExternal={handleArtifactOpenExternal}
-        />
-      </div>
-    );
-  }
-
   // ``leadSessionId`` / ``subtaskRuns`` / ``activeSubtask`` used to live here
   // for the inline right-rail aside. The aside now lives in the AppShell's
   // panel slot via ``setRightPanel(<TaskContextPanel … />)`` (see the effect
@@ -1198,11 +1208,19 @@ export const TaskDetailPage = () => {
     <>
       <div className="mb-3 flex items-center gap-2">
         <ListTodo className="h-3.5 w-3.5 text-[#6b63e8]" />
-        <h2 className="text-[14px] font-semibold text-[#131313]">
+        <h2 className="text-base font-semibold text-[#131313]">
           {t("task.eventsTitle")}
         </h2>
       </div>
-      {events.length === 0 ? (
+      {isStarting ? (
+        <div className="flex items-start gap-2 text-xs text-ink-meta">
+          <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
+          <span>
+            <span className="text-ink-body">{t("task.starting")}</span>
+            <span className="ml-1">{t("task.startingHint")}</span>
+          </span>
+        </div>
+      ) : events.length === 0 ? (
         <p className="text-xs text-ink-meta">{t("task.noEvents")}</p>
       ) : (
         <ol className="flex flex-col gap-4">
@@ -1264,6 +1282,7 @@ export const TaskDetailPage = () => {
                     members={members}
                     leadAgentName={leadAgentName}
                     leadAgentSlug={task.lead_agent_slug}
+                    taskStatus={task.status}
                     t={t}
                     onOpenSession={(sid) =>
                       navigate(
@@ -1296,13 +1315,13 @@ export const TaskDetailPage = () => {
                   full context. */}
               <div className="-mt-1 flex min-w-0 flex-1 flex-col gap-2">
                 <span className="flex items-center gap-1.5">
-                  <span className="text-sm font-semibold text-amber-900 dark:text-amber-400">
+                  <span className="text-sm font-semibold text-warning-text">
                     {t("task.needsConfirm" as Parameters<typeof t>[0])}
                   </span>
                   {taskPending.length > 1 && (
                     <Badge
                       variant="warning"
-                      className="px-1.5 py-0 text-[10px] leading-4"
+                      className="px-1.5 py-0 text-micro leading-4"
                     >
                       {taskPending.length}
                     </Badge>
@@ -1346,13 +1365,30 @@ export const TaskDetailPage = () => {
   // TaskContextPanel itself — no derived state at the page level.
 
   return (
-    // In-flight: ``min-h-full`` lets the wrapper fill the scrolling viewport so
-    // the sticky action bar can pin to its bottom edge even when content is
-    // short (``mt-auto`` on the bar pushes it down). Completed: ``h-full`` locks
-    // the wrapper to exactly the viewport so the follow-up chat below can flex
-    // to fill the remaining height and pin its composer to the bottom — the
-    // page becomes a chat surface, not a scrolling document.
-    <div
+    <ArtifactSplitPane
+      file={artifactFile}
+      onReload={handleArtifactReload}
+      onClose={handleArtifactClose}
+      onCopyContent={handleArtifactCopy}
+      onOpenExternal={handleArtifactOpenExternal}
+    >
+      {/* THIS surface owns its scroll. It used to lean on the AppShell's own
+          scroll box, which stopped working the moment the page moved inside
+          ``ArtifactSplitPane``: the split's content column is a viewport-height
+          panel carrying an inline ``overflow: hidden`` (so a drag can never
+          spill one column into the other). That clips FIRST, so the shell's
+          box never sees overflowing content and never grows a scrollbar — the
+          timeline was simply cut off at the fold, with no wheel or bar to
+          reach the rest. */}
+      <div className="h-full overflow-y-auto">
+      {/* In-flight: ``min-h-full`` lets the wrapper fill the scrolling viewport
+          so the sticky action bar can pin to its bottom edge even when content
+          is short (``mt-auto`` on the bar pushes it down). Completed:
+          ``h-full`` locks the wrapper to exactly the viewport so the follow-up
+          chat below can flex to fill the remaining height and pin its composer
+          to the bottom — the page becomes a chat surface, not a scrolling
+          document. */}
+      <div
       ref={contentRef}
       className={cn(
         "flex w-full flex-col px-5 pb-5 pt-5",
@@ -1404,7 +1440,7 @@ export const TaskDetailPage = () => {
             <h1 className="text-[18px] font-semibold leading-6 text-ink-heading">
               {task.title}
             </h1>
-            <div className="mt-2 flex flex-wrap items-center text-[11px] font-normal leading-4">
+            <div className="mt-2 flex flex-wrap items-center text-2xs font-normal leading-4">
               <span
                 className={cn(
                   "inline-flex items-center gap-1",
@@ -1431,7 +1467,7 @@ export const TaskDetailPage = () => {
                   header just says "Running" and the user has no signal the task
                   needs them. Amber, tappable to the inline card below. */}
               {taskPending.length > 0 && (
-                <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
+                <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-warning-light px-2 py-0.5 text-2xs font-medium text-warning-text">
                   <MessageCircleQuestion className="h-3 w-3" />
                   {t("task.awaitingUserChip" as Parameters<typeof t>[0])}
                   {taskPending.length > 1 && ` · ${taskPending.length}`}
@@ -1439,11 +1475,17 @@ export const TaskDetailPage = () => {
               )}
               <span className="mx-3 h-3 w-px bg-[#f3f4f6]" />
               <span className="inline-flex items-center gap-1.5 text-[#898f9c]">
-                <span className="inline-flex h-4 shrink-0 items-center rounded-[4px] bg-brand-light px-1 text-[10px] font-normal leading-none text-brand-700">
+                <span className="inline-flex h-4 shrink-0 items-center rounded-sm bg-brand-light px-1 text-micro font-normal leading-none text-brand-700">
                   Lead
                 </span>
                 {leadAgentName ?? task.lead_agent_slug}
               </span>
+              {tokenUsage && (
+                <>
+                  <span className="mx-3 h-3 w-px bg-surface-border" />
+                  <TaskTokenUsagePopover usage={tokenUsage} />
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -1457,7 +1499,7 @@ export const TaskDetailPage = () => {
               <ClampText
                 text={task.goal}
                 t={t}
-                className="text-[12px] leading-5 text-[#131313]"
+                className="text-xs leading-5 text-[#131313]"
               />
             )}
             {/* Attachment chips — files staged by the user when launching
@@ -1491,7 +1533,7 @@ export const TaskDetailPage = () => {
           <button
             type="button"
             onClick={() => setRunTimelineOpen((v) => !v)}
-            className="mt-4 flex w-full items-center gap-1.5 rounded-md text-[12px] text-ink-meta transition-colors hover:text-ink-heading focus-visible:outline-none focus-visible:ring-[1px] focus-visible:ring-ring/50"
+            className="mt-4 flex w-full items-center gap-1.5 rounded-md text-xs text-ink-meta transition-colors hover:text-ink-heading focus-visible:outline-none focus-visible:ring-[1px] focus-visible:ring-ring/50"
             aria-expanded={runTimelineOpen}
           >
             <ChevronRight
@@ -1555,7 +1597,7 @@ export const TaskDetailPage = () => {
               show the basename so long project-relative paths don't
               dominate the row. */}
             {deliverableOpen && (
-              <div className="overflow-hidden rounded-[8px] border border-[#e6e7e9] bg-white">
+              <div className="overflow-hidden rounded-lg border border-[#e6e7e9] bg-white">
                 {completionInfo.artifacts.length > 0 && (
                   // ``max-h-[240px] overflow-y-auto`` caps the artifact list
                   // so a 30-file deliverable doesn't push the summary
@@ -1564,7 +1606,7 @@ export const TaskDetailPage = () => {
                   <ul className="flex max-h-[280px] flex-col overflow-y-auto">
                     {completionInfo.artifacts.map((path) => {
                       const basename = path.split(/[\\/]/).pop() || path;
-                      const absolute = resolveArtifactPath(path, rootPath);
+                      const absolute = toAbsoluteProjectPath(path, rootPath);
                       return (
                         <li key={path}>
                           <button
@@ -1575,7 +1617,7 @@ export const TaskDetailPage = () => {
                           >
                             <span
                               className={cn(
-                                "flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px]",
+                                "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
                                 artifactIconBgClassName(basename),
                               )}
                             >
@@ -1588,13 +1630,13 @@ export const TaskDetailPage = () => {
                             </span>
                             <div className="flex min-w-0 flex-1 flex-col justify-center">
                               <span
-                                className="truncate text-[13px] font-semibold leading-5 text-[#1f2937]"
+                                className="truncate text-sm font-semibold leading-5 text-[#1f2937]"
                                 title={absolute}
                               >
                                 {basename}
                               </span>
                               {leadAgentName && (
-                                <span className="relative -top-0.5 text-[11px] leading-4 text-[#9aa3b2]">
+                                <span className="relative -top-0.5 text-2xs leading-4 text-[#9aa3b2]">
                                   {t(
                                     "task.artifactBy" as Parameters<
                                       typeof t
@@ -1624,11 +1666,11 @@ export const TaskDetailPage = () => {
                 >
                   <summary className="flex h-12 cursor-pointer items-center gap-3 px-4 text-left list-none [&::-webkit-details-marker]:hidden">
                     <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[#98a1b2] transition-transform group-open/d:rotate-90" />
-                    <span className="min-w-0 flex-1 text-[13px] font-semibold leading-5 text-[#131313]">
+                    <span className="min-w-0 flex-1 text-sm font-semibold leading-5 text-[#131313]">
                       {t("task.completionSummary" as Parameters<typeof t>[0])}
                     </span>
                   </summary>
-                  <div className="whitespace-pre-wrap px-3 pb-3 pt-0 text-[12px] leading-6 text-ink-body">
+                  <div className="whitespace-pre-wrap px-3 pb-3 pt-0 text-xs leading-6 text-ink-body">
                     {completionInfo.summary}
                   </div>
                 </details>
@@ -1648,7 +1690,7 @@ export const TaskDetailPage = () => {
           // an invisible 0-height scroll box. Sizing to content lets the turns
           // render and the page scroll instead.
           <section className="mt-6 flex w-full flex-col">
-            <div className="mb-3 flex shrink-0 items-center gap-2 text-[12px] font-medium text-ink-heading">
+            <div className="mb-3 flex shrink-0 items-center gap-2 text-xs font-medium text-ink-heading">
               <span className="h-px flex-1 bg-surface-border" />
               {t("task.followUp.heading")}
               <span className="h-px flex-1 bg-surface-border" />
@@ -1668,6 +1710,7 @@ export const TaskDetailPage = () => {
                   loading={false}
                   error={null}
                   renderToolCall={renderFollowUpToolCall}
+                  startingRuntime={followUpStartingRuntime}
                 />
               )}
             </div>
@@ -1704,7 +1747,7 @@ export const TaskDetailPage = () => {
               <div className="flex items-center justify-end px-2 pb-2">
                 <Button
                   size="sm"
-                  className="text-[12px]"
+                  className="text-xs"
                   onClick={() => void handleFollowUpSend()}
                   disabled={followUp.sending || !followUpDraft.trim()}
                   loading={followUp.sending}
@@ -1792,7 +1835,7 @@ export const TaskDetailPage = () => {
             <Button
               size="sm"
               variant="outline"
-              className="text-[12px]"
+              className="text-xs"
               onClick={() => {
                 setReviseGoal(task.goal);
                 setReviseOpen(true);
@@ -1804,7 +1847,7 @@ export const TaskDetailPage = () => {
             <Button
               size="sm"
               variant="outline"
-              className="text-[12px]"
+              className="text-xs"
               onClick={() =>
                 void runIntervene({ action: "pause" }, "task.paused")
               }
@@ -1817,7 +1860,7 @@ export const TaskDetailPage = () => {
             <Button
               size="sm"
               variant="destructive"
-              className="bg-[#f54b4b] text-[12px] hover:bg-[#f54b4b]/90 focus-visible:ring-[#f54b4b]/20"
+              className="bg-[#f54b4b] text-xs hover:bg-[#f54b4b]/90 focus-visible:ring-[#f54b4b]/20"
               onClick={() =>
                 void runIntervene({ action: "stop" }, "task.stopped")
               }
@@ -1877,7 +1920,7 @@ export const TaskDetailPage = () => {
                   <Button
                     size="sm"
                     variant="outline"
-                    className="text-[12px]"
+                    className="text-xs"
                     onClick={() => {
                       setReviseGoal(task.goal);
                       setReviseOpen(true);
@@ -1892,7 +1935,7 @@ export const TaskDetailPage = () => {
                     <Button
                       size="sm"
                       variant="outline"
-                      className="text-[12px] text-red-600 hover:text-red-600"
+                      className="text-xs text-error-text hover:text-error-text"
                       onClick={() =>
                         void runIntervene({ action: "stop" }, "task.stopped")
                       }
@@ -1904,7 +1947,7 @@ export const TaskDetailPage = () => {
                 </div>
                 <Button
                   size="sm"
-                  className="text-[12px]"
+                  className="text-xs"
                   onClick={() =>
                     void runIntervene(
                       {
@@ -1927,6 +1970,37 @@ export const TaskDetailPage = () => {
                 </Button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* A draft is neither active nor halted, so neither bar above renders —
+          the page used to be a dead end for the two actions the backend does
+          expose (:commit / :abandon), which only the chat card offered. */}
+      {task.status === "draft" && (
+        <div className="sticky bottom-0 -mx-5 mt-auto overflow-hidden px-5 py-3">
+          <div className="absolute inset-0 bg-card/94 backdrop-blur-3xl" />
+          <div className="relative z-10 mx-auto flex w-full max-w-[760px] items-center justify-end gap-2 px-6">
+            <button
+              type="button"
+              disabled={draftBusy !== null}
+              onClick={() => void runDraftAction("abandon")}
+              className="rounded-md border border-surface-border bg-surface px-3 py-1.5 text-xs font-medium text-ink-body transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {draftBusy === "abandon"
+                ? t("common.processing")
+                : t("conversation.taskAbandon")}
+            </button>
+            <button
+              type="button"
+              disabled={draftBusy !== null}
+              onClick={() => void runDraftAction("commit")}
+              className="rounded-md bg-brand px-3.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {draftBusy === "commit"
+                ? t("common.processing")
+                : t("conversation.taskExecute")}
+            </button>
           </div>
         </div>
       )}
@@ -1971,7 +2045,9 @@ export const TaskDetailPage = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+      </div>
+      </div>
+    </ArtifactSplitPane>
   );
 };
 
@@ -2002,6 +2078,20 @@ function resolveActor(
 ): string {
   const { actor, type } = evt;
   if (actor === "user") return t("task.actorYou");
+  // Chat-plan events carry the ORIGINATING CHAT session id as actor (the
+  // draft/commit came from the user's conversation) — show "你", never the
+  // raw session UUID.
+  if (type === "task_drafted" || type === "committed") {
+    return t("task.actorYou");
+  }
+  // Historical chat-created kickoffs carry the raw chat session UUID as actor
+  // (the create_task tool used to pass its session id as ``created_by``; new
+  // rows carry "user"). The log is append-only, so those rows are permanent —
+  // collapse them to "你" instead of rendering bare hex. Gated on the id shape
+  // so an "automation" kickoff keeps its own label.
+  if (type === "kickoff" && /^[0-9a-f]{32}$/.test(actor)) {
+    return t("task.actorYou");
+  }
   // Lead-driven events carry the lead SESSION id as actor — collapse to the
   // lead agent name (VALUZ-TASK adds plan/review events on this path).
   if (
@@ -2017,8 +2107,23 @@ function resolveActor(
     type === "kickoff_failed" ||
     type === "task_planned" ||
     type === "plan_revised" ||
-    type === "subtask_reviewed"
+    type === "subtask_reviewed" ||
+    // Host-decided halts: ``paused`` from an auto-finalize kickoff-cancel and
+    // ``abandoned`` from a discarded draft both stamp the session id.
+    type === "paused" ||
+    type === "abandoned"
   ) {
+    return leadAgentName ?? leadAgentSlug;
+  }
+  // A chat inject (delivered or dropped) carries the ORIGINATING chat session
+  // id — that is the user talking, not an agent.
+  if (type === "user_inject" || type === "user_inject_dropped") {
+    return t("task.actorYou");
+  }
+  // Belt-and-braces for every remaining type: a bare 32-hex actor is a session
+  // id, never a name. Rendering it raw is the "看到一串 id" bug; the log is
+  // append-only so old rows keep arriving this way forever.
+  if (/^[0-9a-f]{32}$/.test(actor)) {
     return leadAgentName ?? leadAgentSlug;
   }
   const payloadName = evt.payload?.agent_name;
@@ -2126,7 +2231,7 @@ function ClampText({
               e.stopPropagation();
               setExpanded((v) => !v);
             }}
-            className="text-[11px] font-medium text-brand transition-colors hover:text-brand/80"
+            className="text-2xs font-medium text-brand transition-colors hover:text-brand/80"
           >
             {t(
               (expanded ? "common.collapse" : "common.expand") as Parameters<
@@ -2209,18 +2314,18 @@ function EventBody({
       }
     >
       <div className="flex items-center gap-2">
-        <span className="text-[12px] font-semibold leading-5 text-ink-heading">
+        <span className="text-xs font-semibold leading-5 text-ink-heading">
           {actorLabel}
         </span>
-        <span className="text-[11px] font-semibold leading-5 text-ink-meta">
+        <span className="text-2xs font-semibold leading-5 text-ink-meta">
           {t(meta.labelKey as Parameters<typeof t>[0])}
         </span>
         <span className="ml-auto flex min-w-[112px] items-center justify-end gap-2 text-right opacity-0 transition-opacity group-hover:opacity-100">
-          <span className="text-[11px] tabular-nums text-ink-meta">
+          <span className="text-2xs tabular-nums text-ink-meta">
             {formatEventTime(evt.created_at)}
           </span>
           {clickable && (
-            <span className="text-[11px] text-brand">
+            <span className="text-2xs text-brand">
               {t("task.viewSession" as Parameters<typeof t>[0])}
             </span>
           )}
@@ -2230,7 +2335,7 @@ function EventBody({
         <ClampText
           text={detail}
           t={t}
-          className="mt-1 text-[12px] leading-5 text-ink-body"
+          className="mt-1 text-xs leading-5 text-ink-body"
         />
       )}
     </div>
@@ -2245,6 +2350,7 @@ function GroupedEventCard({
   members,
   leadAgentName,
   leadAgentSlug,
+  taskStatus,
   t,
   onOpenSession,
 }: {
@@ -2255,6 +2361,7 @@ function GroupedEventCard({
   members: MemberWithAgent[];
   leadAgentName: string | null;
   leadAgentSlug: string;
+  taskStatus: string;
   t: Translator;
   onOpenSession: (sid: string) => void;
 }) {
@@ -2273,7 +2380,11 @@ function GroupedEventCard({
           typeof t
         >[0],
       )
-    : t("task.subtaskWaiting" as Parameters<typeof t>[0]);
+    : // No outcome AND the task is halted: those members are gone, so
+      // "等待回执" would promise a receipt that can never arrive.
+      taskStatus === "active"
+      ? t("task.subtaskWaiting" as Parameters<typeof t>[0])
+      : t("task.subtaskHalted" as Parameters<typeof t>[0]);
   const outcomeTime = outcome ? formatEventTime(outcome.created_at) : "";
 
   return (
@@ -2287,18 +2398,18 @@ function GroupedEventCard({
       }
     >
       <div className="flex items-center gap-2">
-        <span className="text-[12px] font-semibold leading-5 text-ink-heading">
+        <span className="text-xs font-semibold leading-5 text-ink-heading">
           {spawnActor}
         </span>
-        <span className="text-[11px] font-semibold leading-5 text-ink-meta">
+        <span className="text-2xs font-semibold leading-5 text-ink-meta">
           {t(spawnMeta.labelKey as Parameters<typeof t>[0])}
         </span>
         <span className="ml-auto flex min-w-[112px] items-center justify-end gap-2 text-right opacity-0 transition-opacity group-hover:opacity-100">
-          <span className="text-[11px] tabular-nums text-ink-meta">
+          <span className="text-2xs tabular-nums text-ink-meta">
             {formatEventTime(spawn.created_at)}
           </span>
           {clickable && (
-            <span className="text-[11px] text-brand">
+            <span className="text-2xs text-brand">
               {t("task.viewSession" as Parameters<typeof t>[0])}
             </span>
           )}
@@ -2308,12 +2419,12 @@ function GroupedEventCard({
         <ClampText
           text={spawnDetail}
           t={t}
-          className="mt-1 text-[12px] leading-5 text-ink-body"
+          className="mt-1 text-xs leading-5 text-ink-body"
         />
       )}
       <div
         className={cn(
-          "mt-2 inline-flex h-5 items-center rounded-[4px] px-2 py-0 text-[10px] leading-4",
+          "mt-2 inline-flex h-5 items-center rounded-sm px-2 py-0 text-micro leading-4",
           outcome
             ? "bg-emerald-50 text-emerald-700"
             : "bg-surface-soft text-ink-meta",

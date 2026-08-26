@@ -61,7 +61,7 @@ async def test_task_kickoff_leaves_duration_unset_and_titles_summary() -> None:
     )
 
     fake_task = SimpleNamespace(id="task-abc-123")
-    lead_run = SimpleNamespace(kind="lead", session_id="lead-sess-1")
+    lead_run = SimpleNamespace(kind="lead", session_id="lead-sess-1", status="active")
     ts_ds = Mock()
     ts_ds.list_runs = AsyncMock(return_value=[lead_run])
 
@@ -73,7 +73,7 @@ async def test_task_kickoff_leaves_duration_unset_and_titles_summary() -> None:
             side_effect=itertools.count(1000, 100),
         ),
         patch(
-            "valuz_agent.modules.tasks.orchestrator.task_orchestrator.kickoff",
+            "valuz_agent.modules.tasks.orchestrator.task_orchestrator.lifecycle.kickoff",
             new=AsyncMock(return_value=fake_task),
         ),
         patch(

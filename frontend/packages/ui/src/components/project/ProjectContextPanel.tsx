@@ -15,6 +15,8 @@ import {
   Loader2,
   Paperclip,
   Trash2,
+  Unlink,
+  Crown,
   X,
   Plus,
   MoreHorizontal,
@@ -29,8 +31,11 @@ import {
   AlertTriangle,
   GitBranch,
   Link2,
+  LogIn,
+  MessageSquare,
   MessageSquarePlus,
   Sparkles,
+  BookOpenText,
 } from "lucide-react";
 import { modelLabel } from "@valuz/shared";
 import {
@@ -75,7 +80,7 @@ function FileTypeIcon({ filename }: { filename: string }) {
 
   return (
     <span
-      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[8px] bg-surface-muted"
+      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-surface-muted"
       data-testid="uploaded-file-type-icon"
     >
       <Icon aria-hidden="true" className="h-3.5 w-3.5 text-ink-muted" />
@@ -125,6 +130,17 @@ export interface ScheduledTaskSummary {
   humanReadable: string;
   status: "on" | "off";
   nextRun: string;
+}
+
+/** A Playbook Definition associated with this project. The panel is only a
+ *  project-scoped projection of the shared Playbook model; versioning and runs
+ *  remain owned by the Playbook APIs. */
+export interface ProjectPlaybookSummary {
+  id: string;
+  name: string;
+  version: number;
+  status: "draft" | "active" | "retired";
+  running?: boolean;
 }
 
 /** One project worktree row for the panel's "Worktrees" section. Mirrors the
@@ -194,8 +210,53 @@ export interface GeneratedArtifactItem {
   name: string;
   /** Optional human-readable byte size, e.g. "1.2 MB". */
   size?: string;
-  /** Absolute path the row opens via ``onOpenGeneratedFile``. */
+  /**
+   * Absolute path the row opens via ``onOpenGeneratedFile``. Points at this
+   * version's immutable snapshot, so it keeps working after the agent edits
+   * its working copy.
+   */
   path: string;
+  /**
+   * 1-based version of the deliverable, when the backend reports one. Shown as
+   * "v2" from the second version on — a lone "v1" would be noise on every row.
+   */
+  versionNo?: number;
+  /**
+   * Whether this is still the deliverable's latest version. ``false`` means a
+   * later turn or another session superseded it; the row dims so a stale
+   * version is not mistaken for the current deliverable.
+   */
+  isCurrent?: boolean;
+  /**
+   * Stable id of the deliverable this is a version of. Required to offer the
+   * version history — without it the row is just a file, as before.
+   */
+  artifactId?: string;
+}
+
+/**
+ * One entry in a deliverable's history, oldest first.
+ *
+ * Loaded on demand: a session panel can list many deliverables and almost none
+ * of their histories get opened, so fetching every one up front would be
+ * traffic spent on nothing.
+ */
+export interface GeneratedArtifactVersion {
+  id: string;
+  versionNo: number;
+  /** Absolute path of THIS version's snapshot. Empty when its bytes are gone. */
+  path: string;
+  /** Human-readable size, e.g. "1.2 MB". */
+  size?: string;
+  /** Human-readable timestamp for the row's right edge. */
+  when?: string;
+  /**
+   * False when the version was recorded but its bytes are no longer on disk —
+   * a removed worktree, most often. Shown, but not offered as openable: the
+   * deliverable did have this generation, and hiding it would misrepresent the
+   * history.
+   */
+  openable: boolean;
 }
 
 /**
@@ -240,6 +301,25 @@ export interface ProjectContextPanelProps {
   onOpenMember?: (slug: string) => void;
   /** Remove a member from the project (undeploy). The host is expected to confirm. */
   onRemoveMember?: (slug: string) => void;
+  /** Member slug that leads tasks when none is named; null/undefined = unset. */
+  defaultLeadSlug?: string | null;
+  /** Set (or clear, with null) the project's default task lead. */
+  onSetDefaultLead?: (slug: string | null) => void;
+  /** IM groups bound to this project ("this group is that project"). */
+  chatBindings?: {
+    id: string;
+    name: string;
+    platformLabel?: string;
+    /** Valuz created it, so the bot owns it and may dissolve it. */
+    createdByValuz?: boolean;
+    /** …and nobody has joined yet, so a join link is the only way in. */
+    needsJoin?: boolean;
+  }[];
+  /** Open the group picker; undefined hides the section entirely. */
+  onBindChat?: () => void;
+  onUnbindChat?: (externalChatId: string) => void;
+  onJoinChat?: (externalChatId: string) => void;
+  onDeleteChat?: (externalChatId: string) => void;
   skills?: ProjectSkill[];
   onAddSkill?: () => void;
   onCreateProjectSkill?: () => void;
@@ -265,6 +345,24 @@ export interface ProjectContextPanelProps {
     targetId: string,
   ) => void;
   onExpandKbFolder?: (kbId: string, folderId: string) => Promise<void>;
+  /**
+   * Every deliverable the project holds, at its current version — regardless of
+   * which conversation produced it. Distinct from ``generatedFiles``, which is
+   * one session's output: a project view has no session to scope to, and a
+   * session that delivered nothing would otherwise show nothing at all while
+   * the workspace is full of deliverables.
+   *
+   * Pass ``undefined`` to hide the section.
+   */
+  projectArtifacts?: GeneratedArtifactItem[];
+  /**
+   * Fetch a deliverable's version history. Provide it to make the version badge
+   * expandable; omit it and rows stay plain files. Called at most once per
+   * artifact — the panel caches what it gets back.
+   */
+  onLoadArtifactVersions?: (
+    artifactId: string,
+  ) => Promise<GeneratedArtifactVersion[]>;
   /** Remove a whole KB from the project (the ``×`` on a KB header row). */
   onRemoveKb?: (kbId: string) => void;
   /** Reset a KB back to "whole knowledge base in scope" (the ``select-all``
@@ -285,6 +383,13 @@ export interface ProjectContextPanelProps {
    * open via {@link onOpenGeneratedFile}.
    */
   generatedFiles?: GeneratedArtifactItem[];
+  /**
+   * Host-supplied control rendered in the generated-files section header
+   * (share, export…). Passed straight through to
+   * {@link AccordionSection}'s existing ``action`` slot, so OSS renders
+   * unchanged when it is absent.
+   */
+  generatedFilesAction?: React.ReactNode;
   /** Open one delivered artifact (its absolute path) in the OS. */
   onOpenGeneratedFile?: (path: string) => void;
   /**
@@ -317,6 +422,12 @@ export interface ProjectContextPanelProps {
   onDeleteScheduledTask?: (taskId: string) => void;
   onRunScheduledTask?: (taskId: string) => void;
   onManageScheduledTasks?: () => void;
+  /** Project-associated Playbook Definitions. ``undefined`` hides the
+   * section; an empty array keeps the creation entry visible. */
+  playbooks?: ProjectPlaybookSummary[];
+  onAddPlaybook?: () => void;
+  onOpenPlaybook?: (definitionId: string) => void;
+  onRunPlaybook?: (definitionId: string) => void;
   fileTree?: FileTreeNode[];
   /** Section title for the file-tree accordion. Project projects use
    * "{t("project.projectFiles")}"; chat projects use "generated files" — the underlying tree
@@ -903,7 +1014,7 @@ export function AccordionSection({
             )}
             strokeWidth={1.9}
           />
-          <span className="flex-1 text-left text-[13px] font-medium text-ink-heading">
+          <span className="flex-1 text-left text-sm font-medium text-ink-heading">
             {title}
           </span>
           {count !== undefined && (
@@ -953,6 +1064,13 @@ export const ProjectDetailContextPanel = ({
   onAddMember,
   onOpenMember,
   onRemoveMember,
+  defaultLeadSlug,
+  onSetDefaultLead,
+  chatBindings,
+  onBindChat,
+  onUnbindChat,
+  onJoinChat,
+  onDeleteChat,
   skills,
   onAddSkill,
   onRemoveSkill,
@@ -965,11 +1083,14 @@ export const ProjectDetailContextPanel = ({
   bindings = [],
   onToggleBinding,
   onExpandKbFolder,
+  projectArtifacts,
+  onLoadArtifactVersions,
   onRemoveKb,
   onSelectAllInKb,
   uploadedFiles,
   onRemoveUploadedFile,
   generatedFiles,
+  generatedFilesAction,
   onOpenGeneratedFile,
   todos,
   worktrees,
@@ -982,6 +1103,10 @@ export const ProjectDetailContextPanel = ({
   onToggleScheduledTask,
   onDeleteScheduledTask,
   onRunScheduledTask,
+  playbooks,
+  onAddPlaybook,
+  onOpenPlaybook,
+  onRunPlaybook,
   fileTree,
   fileTreeTitle,
   fileTreeInTab = false,
@@ -1040,17 +1165,26 @@ export const ProjectDetailContextPanel = ({
       ? initialOpenSection
       : showInstructions
         ? "instructions"
-        : todos && todos.length > 0
-          ? "todos"
-          : visibleUploadedFiles.length > 0
-            ? "uploads"
-            : (fileTree?.length ?? 0) > 0
-              ? "files"
-              : (scheduledTasks ?? []).length > 0
-                ? "scheduled"
-                : null;
+        : playbooks !== undefined
+          ? "playbooks"
+          : todos && todos.length > 0
+            ? "todos"
+            : visibleUploadedFiles.length > 0
+              ? "uploads"
+              : (fileTree?.length ?? 0) > 0
+                ? "files"
+                : (scheduledTasks ?? []).length > 0
+                  ? "scheduled"
+                  : null;
   const [internalCollapsed, setInternalCollapsed] = useState(false);
   const [connectorPickerOpen, setConnectorPickerOpen] = useState(false);
+  // Version history, keyed by artifact id. Undefined = never asked, null =
+  // asked and it failed. Cached because a history does not change while the
+  // panel is open — a new delivery reloads the whole list anyway.
+  const [openVersions, setOpenVersions] = useState<Record<string, boolean>>({});
+  const [versionsById, setVersionsById] = useState<
+    Record<string, GeneratedArtifactVersion[] | null>
+  >({});
   const [userOpenSection, setUserOpenSection] = useState<string | null>(null);
   const [hasUserToggledSection, setHasUserToggledSection] = useState(false);
   const openSection = hasUserToggledSection
@@ -1288,7 +1422,7 @@ export const ProjectDetailContextPanel = ({
                   <button
                     type="button"
                     onClick={() => onRemoveUploadedFile(f.id)}
-                    className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-meta opacity-0 transition group-hover:opacity-100 hover:bg-red-50 hover:text-red-500"
+                    className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-meta opacity-0 transition group-hover:opacity-100 hover:bg-error-light hover:text-error-text"
                     title={t("common.remove")}
                   >
                     <X className="h-3 w-3" />
@@ -1304,6 +1438,138 @@ export const ProjectDetailContextPanel = ({
     </AccordionSection>
   ) : null;
 
+  // Shared by the session list and the project list: a row is a deliverable
+  // with its version badge, and the badge expands into the deliverable's whole
+  // history. Which set of deliverables is on screen is the caller's question;
+  // how one is drawn is not.
+  const renderArtifactRow = (f: GeneratedArtifactItem) => {
+    // Offer history wherever there IS history — which is not the same
+    // as "this row is a later version". A session that delivered v1 and
+    // was then superseded by another session shows a v1 row, and the
+    // versions it cannot see are exactly the ones worth reaching.
+    const hasHistory =
+      (f.versionNo != null && f.versionNo > 1) || f.isCurrent === false;
+    const canExpand = Boolean(
+      onLoadArtifactVersions && f.artifactId && hasHistory,
+    );
+    // Gated on ``canExpand`` too: the open flag is keyed by artifact, so
+    // a row that offers no expander must not sprout one because another
+    // row of the same deliverable was opened.
+    const expanded = Boolean(
+      canExpand && f.artifactId && openVersions[f.artifactId],
+    );
+    const versions = f.artifactId ? versionsById[f.artifactId] : undefined;
+
+    const toggle = () => {
+      const id = f.artifactId;
+      if (!id || !onLoadArtifactVersions) return;
+      setOpenVersions((prev) => ({ ...prev, [id]: !prev[id] }));
+      if (versionsById[id] !== undefined) return; // already fetched
+      void onLoadArtifactVersions(id)
+        .then((items) => setVersionsById((prev) => ({ ...prev, [id]: items })))
+        .catch(() => setVersionsById((prev) => ({ ...prev, [id]: null })));
+    };
+
+    return (
+      <div key={f.id}>
+        <div className="group -mx-2 flex w-[calc(100%+1rem)] items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-surface-muted/60">
+          <button
+            type="button"
+            onClick={() => onOpenGeneratedFile?.(f.path)}
+            disabled={!onOpenGeneratedFile}
+            className="flex min-w-0 flex-1 items-center gap-2.5 text-left disabled:cursor-default"
+            title={f.path}
+          >
+            <FileTypeIcon filename={f.name} />
+            <span
+              className={`flex-1 truncate ${
+                f.isCurrent === false ? "text-ink-meta" : "text-ink-heading"
+              }`}
+            >
+              {f.name}
+            </span>
+          </button>
+          {f.versionNo != null && (f.versionNo > 1 || canExpand) ? (
+            canExpand ? (
+              <button
+                type="button"
+                onClick={toggle}
+                aria-expanded={expanded}
+                className="flex shrink-0 items-center gap-0.5 rounded bg-surface-muted px-1 text-2xs text-ink-meta transition-colors hover:bg-surface-muted/80"
+                title={t("conversation.artifactShowVersions")}
+              >
+                <ChevronRight
+                  className={`h-2.5 w-2.5 transition-transform ${
+                    expanded ? "rotate-90" : ""
+                  }`}
+                />
+                v{f.versionNo}
+              </button>
+            ) : (
+              <span
+                className="shrink-0 rounded bg-surface-muted px-1 text-2xs text-ink-meta"
+                title={
+                  f.isCurrent === false
+                    ? t("conversation.artifactSupersededHint")
+                    : undefined
+                }
+              >
+                v{f.versionNo}
+              </span>
+            )
+          ) : null}
+          {f.size ? (
+            <span className="shrink-0 text-2xs text-ink-meta">{f.size}</span>
+          ) : null}
+        </div>
+
+        {expanded ? (
+          <div className="ml-5 border-l border-[#f3f4f6] pl-2">
+            {versions === undefined ? (
+              <p className="py-1 text-2xs text-ink-meta">
+                {t("conversation.artifactVersionsLoading")}
+              </p>
+            ) : versions === null ? (
+              <p className="py-1 text-2xs text-ink-meta">
+                {t("conversation.artifactVersionsFailed")}
+              </p>
+            ) : (
+              versions
+                .slice()
+                .reverse()
+                .map((v) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    onClick={() =>
+                      v.openable ? onOpenGeneratedFile?.(v.path) : undefined
+                    }
+                    disabled={!v.openable || !onOpenGeneratedFile}
+                    className="flex w-full items-center gap-2 rounded px-1 py-1 text-left text-2xs text-ink-meta transition-colors hover:bg-surface-muted/60 disabled:cursor-default disabled:hover:bg-transparent"
+                    title={
+                      v.openable
+                        ? v.path
+                        : t("conversation.artifactVersionUnavailable")
+                    }
+                  >
+                    <span className="w-6 shrink-0 tabular-nums">
+                      v{v.versionNo}
+                    </span>
+                    <span className="flex-1 truncate">
+                      {v.openable
+                        ? (v.when ?? "")
+                        : t("conversation.artifactVersionUnavailable")}
+                    </span>
+                    {v.size ? <span className="shrink-0">{v.size}</span> : null}
+                  </button>
+                ))
+            )}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   const generatedFilesSection = showGeneratedFiles ? (
     <AccordionSection
       {...sectionState("generated", visibleGeneratedFiles.length > 0)}
@@ -1312,27 +1578,11 @@ export const ProjectDetailContextPanel = ({
       iconClassName="text-brand"
       contentClassName="px-5 py-2"
       count={visibleGeneratedFiles.length || undefined}
+      action={generatedFilesAction}
     >
       {visibleGeneratedFiles.length > 0 ? (
         <div className="space-y-1">
-          {visibleGeneratedFiles.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              onClick={() => onOpenGeneratedFile?.(f.path)}
-              disabled={!onOpenGeneratedFile}
-              className="group -mx-2 flex w-[calc(100%+1rem)] items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-surface-muted/60 disabled:cursor-default disabled:hover:bg-transparent"
-              title={f.path}
-            >
-              <FileTypeIcon filename={f.name} />
-              <span className="flex-1 truncate text-ink-heading">{f.name}</span>
-              {f.size ? (
-                <span className="shrink-0 text-2xs text-ink-meta">
-                  {f.size}
-                </span>
-              ) : null}
-            </button>
-          ))}
+          {visibleGeneratedFiles.map(renderArtifactRow)}
         </div>
       ) : (
         <p className="text-2xs text-ink-meta">
@@ -1439,6 +1689,8 @@ export const ProjectDetailContextPanel = ({
               <div>
                 {members.map((member, index) => {
                   const isOrphan = member.orphan === true;
+                  const isDefaultLead =
+                    !!defaultLeadSlug && member.slug === defaultLeadSlug;
                   return (
                     <div key={member.id}>
                       {index > 0 ? (
@@ -1500,6 +1752,53 @@ export const ProjectDetailContextPanel = ({
                               </div>
                             </div>
                           </button>
+                          {onSetDefaultLead && !isOrphan && (
+                            // The current lead stays visible without hovering —
+                            // "who leads this project" should be readable at a
+                            // glance, not discovered by pointing at rows.
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.currentTarget.blur();
+                                onSetDefaultLead(
+                                  isDefaultLead ? null : member.slug,
+                                );
+                              }}
+                              className={`flex h-6 w-6 shrink-0 items-center justify-center rounded transition-opacity ${
+                                isDefaultLead
+                                  ? "text-brand opacity-100"
+                                  : "text-ink-muted opacity-0 hover:text-ink-body group-hover:opacity-100"
+                              }`}
+                              title={
+                                isDefaultLead
+                                  ? t(
+                                      "agent.clearDefaultLead" as Parameters<
+                                        typeof t
+                                      >[0],
+                                    )
+                                  : t(
+                                      "agent.setDefaultLead" as Parameters<
+                                        typeof t
+                                      >[0],
+                                    )
+                              }
+                              aria-label={
+                                isDefaultLead
+                                  ? t(
+                                      "agent.clearDefaultLead" as Parameters<
+                                        typeof t
+                                      >[0],
+                                    )
+                                  : t(
+                                      "agent.setDefaultLead" as Parameters<
+                                        typeof t
+                                      >[0],
+                                    )
+                              }
+                            >
+                              <Crown className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                           {onRemoveMember && (
                             <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
                               <button
@@ -1508,7 +1807,7 @@ export const ProjectDetailContextPanel = ({
                                   event.currentTarget.blur();
                                   onRemoveMember(member.slug);
                                 }}
-                                className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-red-50 hover:text-red-600"
+                                className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-error-light hover:text-error-text"
                                 title={t(
                                   "agent.deleteMember" as Parameters<
                                     typeof t
@@ -1539,6 +1838,163 @@ export const ProjectDetailContextPanel = ({
         </AccordionSection>
       )}
 
+      {/* Playbooks are durable, versioned work logic. This is deliberately a
+          compact project-scoped projection placed after the team that may run
+          it. The same Definitions can also be reached from the global library,
+          invoked by an Agent, or pinned by an Automation. */}
+      {playbooks !== undefined && (
+        <AccordionSection
+          {...sectionState("playbooks", playbooks.length > 0)}
+          title={t("playbook.title" as Parameters<typeof t>[0])}
+          icon={BookOpenText}
+          iconClassName="text-context-icon"
+          count={playbooks.length || undefined}
+          action={
+            onAddPlaybook ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.currentTarget.blur();
+                  onAddPlaybook();
+                }}
+                className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted"
+                title={t("playbook.createAction" as Parameters<typeof t>[0])}
+                aria-label={t(
+                  "playbook.createAction" as Parameters<typeof t>[0],
+                )}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            ) : undefined
+          }
+        >
+          {playbooks.length > 0 ? (
+            <div className="-mr-3 max-h-[25vh] overflow-y-auto overflow-x-hidden pr-3">
+              {playbooks.map((playbook, index) => {
+                const canRun =
+                  Boolean(onRunPlaybook) && playbook.status !== "retired";
+                const statusLabel = t(
+                  `playbook.status.${playbook.status}` as Parameters<
+                    typeof t
+                  >[0],
+                );
+                return (
+                  <div key={playbook.id}>
+                    {index > 0 ? (
+                      <div className="h-px w-full bg-surface-border" />
+                    ) : null}
+                    <div className="group relative rounded-lg bg-card">
+                      <div className="pointer-events-none absolute inset-0 rounded-lg transition-colors group-hover:bg-surface-muted/60" />
+                      <div className="relative z-10 flex items-center gap-2.5 px-2 py-2.5">
+                        <button
+                          type="button"
+                          disabled={!onOpenPlaybook}
+                          onClick={(event) => {
+                            event.currentTarget.blur();
+                            onOpenPlaybook?.(playbook.id);
+                          }}
+                          className="flex min-w-0 flex-1 items-center gap-2.5 text-left disabled:cursor-default"
+                        >
+                          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-brand/8 text-brand">
+                            <BookOpenText className="h-3 w-3" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-xs font-medium text-ink-heading">
+                              {playbook.name}
+                            </div>
+                            <div className="truncate text-2xs text-ink-meta">
+                              {t(
+                                "playbook.versionMeta" as Parameters<
+                                  typeof t
+                                >[0],
+                                { version: playbook.version },
+                              )}
+                              {" · "}
+                              {statusLabel}
+                            </div>
+                          </div>
+                        </button>
+                        {onOpenPlaybook ? (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.currentTarget.blur();
+                              onOpenPlaybook(playbook.id);
+                            }}
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-ink-muted opacity-0 transition-opacity hover:bg-surface-muted hover:text-ink-body group-hover:opacity-100"
+                            title={t("common.edit" as Parameters<typeof t>[0])}
+                            aria-label={`${t(
+                              "common.edit" as Parameters<typeof t>[0],
+                            )}: ${playbook.name}`}
+                          >
+                            <FilePenLine className="h-3.5 w-3.5" />
+                          </button>
+                        ) : null}
+                        {onRunPlaybook ? (
+                          <button
+                            type="button"
+                            disabled={!canRun || playbook.running}
+                            onClick={(event) => {
+                              event.currentTarget.blur();
+                              onRunPlaybook(playbook.id);
+                            }}
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-brand transition-colors hover:bg-brand/8 disabled:cursor-not-allowed disabled:text-ink-muted"
+                            title={
+                              playbook.running
+                                ? t(
+                                    "playbook.running" as Parameters<
+                                      typeof t
+                                    >[0],
+                                  )
+                                : t(
+                                    "playbook.runAction" as Parameters<
+                                      typeof t
+                                    >[0],
+                                  )
+                            }
+                            aria-label={`${t(
+                              (playbook.running
+                                ? "playbook.running"
+                                : "playbook.runAction") as Parameters<
+                                typeof t
+                              >[0],
+                            )}: ${playbook.name}`}
+                          >
+                            {playbook.running ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Play className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-ink-heading">
+                {t("playbook.emptyTitle" as Parameters<typeof t>[0])}
+              </p>
+              <p className="text-2xs leading-5 text-ink-meta">
+                {t("playbook.emptyDescription" as Parameters<typeof t>[0])}
+              </p>
+              {onAddPlaybook ? (
+                <button
+                  type="button"
+                  onClick={onAddPlaybook}
+                  className="text-xs font-medium text-brand hover:underline"
+                >
+                  {t("playbook.createAction" as Parameters<typeof t>[0])}
+                </button>
+              ) : null}
+            </div>
+          )}
+        </AccordionSection>
+      )}
+
       {/* Worktrees — isolated branch copies sessions run in (git projects
           only). Rows are computed on read; ``null`` counts render as
           "unknown" and the caller's confirm dialog owns the fail-closed
@@ -1554,8 +2010,10 @@ export const ProjectDetailContextPanel = ({
         >
           <div className="-mr-3 max-h-[25vh] overflow-y-auto overflow-x-hidden pr-3">
             {worktrees.map((wt, index) => {
-              const verified = wt.dirtyFiles !== null && wt.aheadCommits !== null;
-              const clean = verified && wt.dirtyFiles === 0 && wt.aheadCommits === 0;
+              const verified =
+                wt.dirtyFiles !== null && wt.aheadCommits !== null;
+              const clean =
+                verified && wt.dirtyFiles === 0 && wt.aheadCommits === 0;
               const statusText = !verified
                 ? t("project.worktreeUnknown" as Parameters<typeof t>[0])
                 : clean
@@ -1623,7 +2081,7 @@ export const ProjectDetailContextPanel = ({
                               event.currentTarget.blur();
                               onDiscardWorktree(wt);
                             }}
-                            className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-red-50 hover:text-red-600"
+                            className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-error-light hover:text-error-text"
                             title={t(
                               "project.worktreeDiscard" as Parameters<
                                 typeof t
@@ -1719,7 +2177,7 @@ export const ProjectDetailContextPanel = ({
                       <button
                         type="button"
                         onClick={() => onRemoveSkill(skill.id)}
-                        className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-ink-meta opacity-0 transition group-hover:opacity-100 hover:bg-red-50 hover:text-red-500"
+                        className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-ink-meta opacity-0 transition group-hover:opacity-100 hover:bg-error-light hover:text-error-text"
                         title={t("common.remove")}
                       >
                         <X className="h-3 w-3" />
@@ -1785,7 +2243,7 @@ export const ProjectDetailContextPanel = ({
                       <button
                         type="button"
                         onClick={() => onToggleMcpServer(server.slug, false)}
-                        className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-ink-meta opacity-0 transition group-hover:opacity-100 hover:bg-red-50 hover:text-red-500"
+                        className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-ink-meta opacity-0 transition group-hover:opacity-100 hover:bg-error-light hover:text-error-text"
                         title={t("common.remove" as Parameters<typeof t>[0])}
                       >
                         <X className="h-3 w-3" />
@@ -2214,6 +2672,162 @@ export const ProjectDetailContextPanel = ({
                 </p>
               )}
             </>
+          )}
+        </AccordionSection>
+      )}
+      {/* Everything the project holds, whoever produced it. The 生成文件 section
+          above is one conversation's output; this is the workspace, which is
+          what a session that has delivered nothing has to read from. */}
+      {projectArtifacts !== undefined && (
+        <AccordionSection
+          {...sectionState("projectArtifacts", projectArtifacts.length > 0)}
+          title={t("project.deliverables" as Parameters<typeof t>[0])}
+          icon={Sparkles}
+          iconClassName="text-brand"
+          contentClassName="px-5 py-2"
+          count={projectArtifacts.length || undefined}
+        >
+          {projectArtifacts.length > 0 ? (
+            <div className="space-y-1">
+              {projectArtifacts.map(renderArtifactRow)}
+            </div>
+          ) : (
+            <p className="text-2xs text-ink-meta">
+              {t("project.noDeliverables" as Parameters<typeof t>[0])}
+            </p>
+          )}
+        </AccordionSection>
+      )}
+      {/* IM groups bound to this project. A group standing for a project is
+          how channel conversations get a project without anyone typing its
+          name; see docs/design/channel-project-binding-and-default-lead.md. */}
+      {chatBindings !== undefined && onBindChat && (
+        <AccordionSection
+          {...sectionState("chatBindings")}
+          title={t("project.chatBindingsTitle" as Parameters<typeof t>[0])}
+          icon={MessageSquare}
+          iconClassName="text-context-icon"
+          count={chatBindings.length || undefined}
+          action={
+            <button
+              type="button"
+              onClick={(event) => {
+                event.currentTarget.blur();
+                onBindChat();
+              }}
+              className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted"
+              title={t("project.bindChat" as Parameters<typeof t>[0])}
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          }
+        >
+          {chatBindings.length > 0 ? (
+            <div className="flex flex-col">
+              {chatBindings.map((chat) => (
+                <div
+                  key={chat.id}
+                  className="group relative flex items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-[#f7f8fa]"
+                >
+                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-brand/8 text-brand">
+                    <MessageSquare className="h-3 w-3" />
+                  </div>
+                  <div className="min-w-0 flex-1 truncate text-xs text-ink-heading">
+                    {chat.platformLabel ? (
+                      <span className="text-ink-meta">
+                        {chat.platformLabel} ·{" "}
+                      </span>
+                    ) : null}
+                    {chat.name}
+                  </div>
+                  {/* Same actions the picker offers, in the same order —
+                      whichever surface you reach a group from behaves alike. */}
+                  <TooltipProvider delayDuration={0}>
+                    <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                      {onJoinChat && chat.needsJoin && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.currentTarget.blur();
+                                onJoinChat(chat.id);
+                              }}
+                              className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted"
+                              aria-label={t(
+                                "project.createChatJoin" as Parameters<
+                                  typeof t
+                                >[0],
+                              )}
+                            >
+                              <LogIn className="h-3.5 w-3.5" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {t(
+                              "project.createChatJoin" as Parameters<
+                                typeof t
+                              >[0],
+                            )}
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
+                      {onUnbindChat && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.currentTarget.blur();
+                                onUnbindChat(chat.id);
+                              }}
+                              className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-surface-muted"
+                              aria-label={t(
+                                "project.unbindChat" as Parameters<typeof t>[0],
+                              )}
+                            >
+                              <Unlink className="h-3.5 w-3.5" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {t("project.unbindChat" as Parameters<typeof t>[0])}
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
+                      {onDeleteChat && chat.createdByValuz && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.currentTarget.blur();
+                                onDeleteChat(chat.id);
+                              }}
+                              className="flex h-6 w-6 items-center justify-center rounded text-ink-body transition-colors hover:bg-error-light hover:text-error-text"
+                              aria-label={t(
+                                "project.deleteChat" as Parameters<typeof t>[0],
+                              )}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {t("project.deleteChat" as Parameters<typeof t>[0])}
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
+                    </div>
+                  </TooltipProvider>
+                </div>
+              ))}
+            </div>
+          ) : (
+            // Matches the knowledge-base empty state: same type scale, same
+            // flush alignment. Two empty states in one panel should not read
+            // as two different components.
+            <p className="text-2xs text-ink-meta">
+              {t("project.chatBindingsEmpty" as Parameters<typeof t>[0])}
+            </p>
           )}
         </AccordionSection>
       )}

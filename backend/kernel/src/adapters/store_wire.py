@@ -19,8 +19,10 @@ stamps an empty placeholder; ``row_to_*`` never trusts a body ``user_id``.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
+from sqlalchemy import DateTime
 from sqlalchemy import inspect as sa_inspect
 from src.adapters.sqlalchemy_store.converters import (
     message_to_model,
@@ -40,9 +42,19 @@ def _model_to_row(model: Base) -> dict[str, Any]:
     Iterates the mapper's column attributes (not ``__table__.columns``) so a
     renamed column maps correctly: attribute ``metadata_`` -> column name
     ``metadata`` (``getattr`` by the attribute key, key the row by column name).
+
+    Datetimes are ISO-encoded: the row must survive JSON (the HTTP DataService
+    wire), where a native ``datetime`` raises ``TypeError``. ``_row_to_kwargs``
+    parses them back symmetrically.
     """
     mapper = sa_inspect(type(model))
-    return {attr.columns[0].name: getattr(model, attr.key) for attr in mapper.column_attrs}
+    out: dict[str, Any] = {}
+    for attr in mapper.column_attrs:
+        value = getattr(model, attr.key)
+        if isinstance(value, datetime):
+            value = value.isoformat()
+        out[attr.columns[0].name] = value
+    return out
 
 
 def _row_to_kwargs(model_cls: type[Base], row: dict[str, Any]) -> dict[str, Any]:
@@ -52,11 +64,18 @@ def _row_to_kwargs(model_cls: type[Base], row: dict[str, Any]) -> dict[str, Any]
     ``metadata_``). Columns absent from ``row`` are left to model defaults.
     """
     mapper = sa_inspect(model_cls)
-    return {
-        attr.key: row[attr.columns[0].name]
-        for attr in mapper.column_attrs
-        if attr.columns[0].name in row
-    }
+    out: dict[str, Any] = {}
+    for attr in mapper.column_attrs:
+        name = attr.columns[0].name
+        if name not in row:
+            continue
+        value = row[name]
+        # Symmetric to ``_model_to_row``: ISO strings back to datetimes for
+        # DateTime-typed columns (JSON round-trip).
+        if isinstance(value, str) and isinstance(attr.columns[0].type, DateTime):
+            value = datetime.fromisoformat(value)
+        out[attr.key] = value
+    return out
 
 
 # -- Session --
@@ -109,6 +128,7 @@ def stored_event_to_row(ev: StoredEvent) -> dict[str, Any]:
         "type": ev.type,
         "data": ev.data,
         "timestamp": ev.timestamp,
+        "event_uid": ev.event_uid,
     }
 
 
@@ -120,6 +140,7 @@ def row_to_stored_event(row: dict[str, Any]) -> StoredEvent:
         type=row["type"],
         data=row.get("data") or {},
         timestamp=int(row.get("timestamp", 0)),
+        event_uid=row.get("event_uid"),
     )
 
 

@@ -7,17 +7,19 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, matchPath, useLocation, useNavigate } from "react-router-dom";
 import { initI18n } from "@valuz/shared/i18n";
 import {
   applyBrandColors,
   hydrateTheme,
   runsApi,
   sessionsApi,
+  subscribeUserStream,
   useBranding,
   useGlobalShortcuts,
   usePanelStore,
   useConnectorAlert,
+  SlotRenderer,
   refreshConnectorAlert,
   useRegistryStore,
   useRunningRuns,
@@ -31,6 +33,8 @@ import {
   type RunSummary,
   useDegradedListTargets,
   getExecutionTargets,
+  useExecutionTargetsRevision,
+  recordEntityOrigin,
 } from "@valuz/core";
 import {
   AppShell,
@@ -52,10 +56,6 @@ import {
   ErrorBoundary,
   Input,
   OfflineBanner,
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
   TopBar,
   WindowControls,
   type DesktopSidebarBottomItem,
@@ -92,7 +92,11 @@ import {
   useProjectExecutionLocation,
 } from "../components/ProjectLocationFields";
 import { OriginIcon } from "../components/ExecutionLocationPicker";
-import { outletTransitionKey } from "./outlet-key";
+import { useForkSession } from "../hooks/use-fork-session";
+import { FORKABLE_RUNTIMES } from "../pages/conversation/useTitleActions";
+import { PreservedRouteOutlet } from "./PreservedRouteOutlet";
+import { RightPanelControls } from "./RightPanelControls";
+import { resolveRightPanelAutoFold } from "./right-panel-autofold";
 import type { ProjectOutletContext } from "./types";
 
 export type DirectoryFieldMode = "input" | "picker" | "managed";
@@ -112,18 +116,24 @@ export interface ProjectLayoutBaseProps {
   topbarActions?: ReactNode;
   projectDialogExtraFields?: ReactNode;
   rightPanel?: ReactNode;
-  mascotSrc?: string | null;
 }
+
+// How many runs each project's own sidebar window asks for. The accordion
+// shows 5 before "show more", and every row costs one kernel enrichment read
+// server-side — a small window keeps N projects × one request cheap.
+const PROJECT_RUNS_LIMIT = 20;
 
 const NAV_ICON_MAP: Record<string, DesktopSidebarBottomItem["icon"]> = {
   assistant: "assistant",
   skills: "skills",
   scheduled: "scheduled",
+  playbooks: "playbooks",
   activity: "activity",
   knowledge: "knowledge",
   settings: "settings",
   agents: "agents",
   connectors: "connectors",
+  plugins: "plugins",
   marketplace: "marketplace",
 };
 
@@ -166,7 +176,6 @@ export function ProjectLayoutBase({
   topbarActions,
   projectDialogExtraFields,
   rightPanel: controlledRightPanel,
-  mascotSrc = null,
 }: ProjectLayoutBaseProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -174,10 +183,25 @@ export function ProjectLayoutBase({
   useGlobalShortcuts();
 
   const { t } = useTranslation();
+  const { fork: forkSession, forkingSessionId } = useForkSession();
   const branding = useBranding();
   const navItemsList = useNavItems();
   const navGroupsList = useNavGroups();
   const desktopRoutes = useRegistryStore((state) => state.desktopRoutes);
+  const routeIsOverlay = useMemo(
+    () =>
+      desktopRoutes.some(
+        (route) =>
+          route.layout === "project" &&
+          route.presentation === "overlay" &&
+          matchPath({ path: route.path, end: true }, location.pathname),
+      ),
+    [desktopRoutes, location.pathname],
+  );
+  const hasProjectAddMenuItems = useRegistryStore(
+    (state) =>
+      (state.slots["sidebar.projects.add.menu-items"]?.length ?? 0) > 0,
+  );
   const fetchSessions = useSessionStore((state) => state.fetchSessions);
   const openConversationProjectId = useSessionStore(
     (state) => state.activeProjectId,
@@ -189,10 +213,15 @@ export function ProjectLayoutBase({
   const togglePanel = usePanelStore((state) => state.toggle);
 
   const [rightPanel, setRightPanel] = useState<ReactNode | null>(null);
+  const [rightPanelMaximized, setRightPanelMaximized] = useState(false);
   const [pageHeader, setPageHeader] = useState<ReactNode | null>(null);
   const [headerClassName, setHeaderClassName] = useState<string | undefined>();
   const [hideHeader, setHideHeader] = useState(false);
   const [asideClassName, setAsideClassName] = useState<string | undefined>();
+  const [rightPanelDefaultSize, setRightPanelDefaultSize] = useState<
+    string | undefined
+  >();
+  const [masterDetailLayout, setMasterDetailLayout] = useState(false);
   const [mainClassName, setMainClassName] = useState<string | undefined>();
   const [contentInnerClassName, setContentInnerClassName] = useState<
     string | undefined
@@ -219,11 +248,20 @@ export function ProjectLayoutBase({
   const [newName, setNewName] = useState("");
   const [newRootPath, setNewRootPath] = useState("");
   const [createError, setCreateError] = useState("");
-  // Initial members for the create dialog (shared with the projects-page entry).
-  const memberPicker = useAgentDeployPicker();
   // Execution location for the create dialog (multi-target editions; inert
   // no-target state on single-backend builds).
   const execLocation = useProjectExecutionLocation();
+  // A target with its own directory chooser (remote desktop) turns the
+  // directory field into a picker even on platforms that cannot pick local
+  // folders themselves (browser builds).
+  const effectiveDirectoryFieldMode: DirectoryFieldMode =
+    execLocation.hasOwnDirectoryPicker ? "picker" : directoryFieldMode;
+  // Initial members for the create dialog (shared with the projects-page
+  // entry). Source candidates from the chosen target's backend so a cloud-
+  // bound project only lists cloud-deployable agents.
+  const memberPicker = useAgentDeployPicker(
+    execLocation.effectiveTarget?.baseUrl,
+  );
   const [historyIdx, setHistoryIdx] = useState<number>(
     () => (window.history.state as { idx?: number } | null)?.idx ?? 0,
   );
@@ -256,6 +294,8 @@ export function ProjectLayoutBase({
   const handleOpenUpdateWindow = useCallback(() => {
     useUpdaterStore.getState().show();
   }, []);
+
+  const targetsRevision = useExecutionTargetsRevision();
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -294,17 +334,45 @@ export function ProjectLayoutBase({
     return () => mq.removeEventListener("change", handler);
   }, []);
 
+  // See resolveRightPanelAutoFold for the fold/unfold rule; the ref carries the
+  // "this collapse was ours" claim across width changes.
+  const autoCollapsedRef = useRef(false);
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 1400px)");
-    const setCollapsed = usePanelStore.getState().setCollapsed;
     const sync = (matches: boolean) => {
-      if (matches) setCollapsed(true);
+      const { collapsed, setCollapsed } = usePanelStore.getState();
+      const action = resolveRightPanelAutoFold({
+        narrow: matches,
+        collapsed,
+        autoCollapsed: autoCollapsedRef.current,
+      });
+      autoCollapsedRef.current = action.autoCollapsed;
+      if (action.setCollapsed !== null) setCollapsed(action.setCollapsed);
     };
     sync(mq.matches);
     const handler = (event: MediaQueryListEvent) => sync(event.matches);
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   }, []);
+
+  // Any deliberate re-open drops our claim, so a later manual close can't be
+  // undone by a resize.
+  useEffect(
+    () =>
+      usePanelStore.subscribe((state, previous) => {
+        if (previous.collapsed && !state.collapsed) {
+          autoCollapsedRef.current = false;
+        }
+      }),
+    [],
+  );
+
+  // A collapsed panel always reopens at the last manually resized normal
+  // width. Keeping a hidden panel in the maximized state would make the
+  // expand affordance unexpectedly reopen at half-window size.
+  useEffect(() => {
+    if (rightPanelCollapsed) setRightPanelMaximized(false);
+  }, [rightPanelCollapsed]);
 
   useEffect(() => {
     const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
@@ -314,13 +382,18 @@ export function ProjectLayoutBase({
     });
   }, [location.key]);
 
+  // ``targetsRevision`` re-runs these when the set a list fans out to changes.
+  // Targets land asynchronously (an edition resolves them from its control
+  // plane after the tree is painted), and these rails are otherwise fetched
+  // once on mount — so a desktop that becomes reachable a second after launch
+  // stayed missing from 项目 / 对话 until something remounted the page.
   useEffect(() => {
     void fetchProjects();
-  }, [fetchProjects]);
+  }, [fetchProjects, targetsRevision]);
 
   useEffect(() => {
     void fetchSessions();
-  }, [fetchSessions]);
+  }, [fetchSessions, targetsRevision]);
 
   useEffect(() => {
     void fetchAllTasks();
@@ -365,12 +438,12 @@ export function ProjectLayoutBase({
   // by ``updated_at`` desc, hand the top-8 to the sidebar (it slices to 3
   // when folded). The fetch + refetch logic is intentionally lean:
   //
-  // 1. ``liveRuns`` is the array returned by the global 2.5s
-  //    ``useRunningRuns`` poller — its REFERENCE changes every tick
+  // 1. ``liveRuns`` is the array returned by the global stream-driven
+  //    ``useRunningRuns`` hook — its REFERENCE changes on every refresh
   //    even when the ids haven't, which would re-run any effect keyed
   //    on it. We collapse it to a stable comma-joined ``liveRunIds``
   //    string so downstream effects only fire on a real transition
-  //    (someone started / finished), not on every poll tick.
+  //    (someone started / finished), not on every refresh.
   // 2. One effect handles both initial fetch and transitions; the
   //    1.5s delayed retry covers the window where the DB hasn't yet
   //    flipped the status by the time the running pool drops the row.
@@ -411,35 +484,84 @@ export function ProjectLayoutBase({
     return () => window.clearTimeout(retry);
   }, [liveRunIds, refreshFinishedRuns]);
 
-  // Safety net for transitions both the change-detect missed (sub-2.5s
-  // turns that never appeared in the running pool). Paused while the
-  // tab is hidden so a backgrounded window doesn't keep hammering
-  // ``/v1/runs`` for nothing.
+  // Refresh the finished list the instant a run completes. The control-plane
+  // stream delivers a ``run.finished`` frame for EVERY run that ends —
+  // including the sub-2.5s turns that never appeared in the running pool, which
+  // the ``liveRunIds`` change-detect above misses. This replaces the old 60s
+  // ``/v1/runs?status=finished`` safety-net poll with precise, event-driven
+  // refreshes (no periodic polling). Debounced so a burst collapses to one.
   useEffect(() => {
-    let handle: number | undefined;
-    const start = () => {
-      handle = window.setInterval(refreshFinishedRuns, 60000);
-    };
-    const stop = () => {
-      if (handle !== undefined) {
-        window.clearInterval(handle);
-        handle = undefined;
-      }
-    };
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") {
-        if (handle === undefined) start();
-      } else {
-        stop();
-      }
-    };
-    if (document.visibilityState === "visible") start();
-    document.addEventListener("visibilitychange", onVisibility);
+    let debounce: number | null = null;
+    const unsub = subscribeUserStream((frame) => {
+      if (frame.eventType !== "run.finished") return;
+      if (debounce !== null) return;
+      debounce = window.setTimeout(() => {
+        debounce = null;
+        refreshFinishedRuns();
+      }, 250);
+    });
     return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      stop();
+      unsub();
+      if (debounce !== null) window.clearTimeout(debounce);
     };
   }, [refreshFinishedRuns]);
+
+  // Client-side session creations that never produce a ``run.finished``
+  // frame (today: fork — the new session is born idle WITH history) nudge
+  // the finished-runs window explicitly; without this the forked chat
+  // waits for the next unrelated turn to appear in the sidebar.
+  useEffect(() => {
+    const onRefresh = () => {
+      refreshFinishedRuns();
+      // The same nudge also covers "the set of projects a fan-out can see
+      // changed" (an agent share landing after boot): the endpoints catalog
+      // fires this event, and the extra-projects provider only reaches the
+      // sidebar through a fresh fetch.
+      void fetchProjects();
+    };
+    window.addEventListener("valuz-runs-refresh", onRefresh);
+    return () => window.removeEventListener("valuz-runs-refresh", onRefresh);
+  }, [refreshFinishedRuns, fetchProjects]);
+
+  // Per-project runs for the sidebar accordion. The global finished-runs
+  // window above is ONE recency list shared with quick chats, so an install
+  // with a few hundred of those pushes every project conversation past its
+  // tail — projects then render with nothing nested under them and no
+  // expand affordance at all. Each project asks the same endpoint for its own
+  // window (``project_id`` filters in SQL), which is bounded and independent
+  // of how noisy the global list is.
+  const [projectRuns, setProjectRuns] = useState<Map<string, RunSummary[]>>(
+    () => new Map(),
+  );
+  const projectIdsKey = useMemo(
+    () => [...projectIdSet].sort().join(","),
+    [projectIdSet],
+  );
+  useEffect(() => {
+    const ids = projectIdsKey ? projectIdsKey.split(",") : [];
+    if (ids.length === 0) {
+      setProjectRuns((prev) => (prev.size === 0 ? prev : new Map()));
+      return;
+    }
+    let cancelled = false;
+    void Promise.all(
+      ids.map((id) =>
+        runsApi
+          .list({
+            status: "finished",
+            projectId: id,
+            limit: PROJECT_RUNS_LIMIT,
+          })
+          .then((res) => [id, res.runs] as const)
+          .catch(() => [id, [] as RunSummary[]] as const),
+      ),
+    ).then((entries) => {
+      if (!cancelled) setProjectRuns(new Map(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectIdsKey, liveRunIds]);
 
   // Merge live + finished runs (dedupe by session), newest first, then split
   // into per-project buckets and a loose "Chats" list. Each project's chats +
@@ -449,6 +571,14 @@ export function ProjectLayoutBase({
     for (const r of liveRuns) byId.set(r.session_id, r);
     for (const r of finishedRuns) {
       if (!byId.has(r.session_id)) byId.set(r.session_id, r);
+    }
+    // Project-scoped rows fill in what the global window dropped. Added after
+    // the global pass so a run already known there keeps that row (identical
+    // payload either way — this is a de-dupe, not a precedence rule).
+    for (const runs of projectRuns.values()) {
+      for (const r of runs) {
+        if (!byId.has(r.session_id)) byId.set(r.session_id, r);
+      }
     }
     const liveSet = new Set(liveRuns.map((r) => r.session_id));
     const toItem = (r: RunSummary): DesktopSidebarRecentItem => ({
@@ -463,6 +593,13 @@ export function ProjectLayoutBase({
           : `/conversation/${encodeURIComponent(r.session_id)}`,
       kind: r.source_kind === "task" ? "task" : "chat",
       isRunning: liveSet.has(r.session_id),
+      // Whole-session fork availability (docs/design/session-fork.md D3):
+      // user chats on a fork-wired runtime, not currently running.
+      canFork:
+        r.source_kind !== "task" &&
+        r.origin === "user" &&
+        FORKABLE_RUNTIMES.has(r.runtime ?? "") &&
+        !liveSet.has(r.session_id),
       // Execution origin (multi-target editions; fan-out tags rows) — a
       // leading icon, not a pill, so the title keeps its width.
       leadingIcon: r.exec_origin ? (
@@ -489,7 +626,7 @@ export function ProjectLayoutBase({
       }
     }
     return { projectRunItems: byProject, chatItems: loose };
-  }, [liveRuns, finishedRuns, projectIdSet]);
+  }, [liveRuns, finishedRuns, projectRuns, projectIdSet]);
 
   const projectGroups: DesktopSidebarProjectGroup[] = useMemo(
     () =>
@@ -542,7 +679,7 @@ export function ProjectLayoutBase({
     // A remote execution target has no access to this machine's paths — the
     // backend allocates a managed cwd and the picked folder uploads after.
     const managed =
-      directoryFieldMode === "managed" || execLocation.isRemoteTarget;
+      effectiveDirectoryFieldMode === "managed" || execLocation.isRemoteTarget;
     if (!trimmedName || (!managed && !trimmedPath)) return;
     setCreateError("");
     try {
@@ -585,11 +722,25 @@ export function ProjectLayoutBase({
   };
 
   const handleSelectDirectory = async () => {
-    const path = await platform.selectDirectory();
-    if (path) {
-      setNewRootPath(path);
+    const picked = await execLocation.selectDirectory();
+    if (!picked) return;
+    if (picked.existingProjectId) {
+      // The chosen directory is already a project on that target — open it
+      // instead of asking the backend for a duplicate binding (409).
+      const target = execLocation.effectiveTarget;
+      if (target) recordEntityOrigin(picked.existingProjectId, target.id);
+      setNewName("");
+      setNewRootPath("");
       setCreateError("");
+      memberPicker.reset();
+      execLocation.reset();
+      setCreateOpen(false);
+      await fetchProjects();
+      navigate(`/projects/${picked.existingProjectId}`);
+      return;
     }
+    setNewRootPath(picked.path);
+    setCreateError("");
   };
 
   // Multi-target degraded mode: one side of the list fan-out failing means
@@ -601,9 +752,7 @@ export function ProjectLayoutBase({
     return degradedTargets
       .map((id) => {
         const target = registered.find((candidate) => candidate.id === id);
-        return target
-          ? t(target.labelKey as Parameters<typeof t>[0])
-          : id;
+        return target ? t(target.labelKey as Parameters<typeof t>[0]) : id;
       })
       .join(" / ");
   }, [degradedTargets, t]);
@@ -614,8 +763,11 @@ export function ProjectLayoutBase({
         route.path === location.pathname ||
         location.pathname.startsWith(`${route.path}/`),
     );
-    const raw = match?.label ?? branding.appName;
-    return t(raw as Parameters<typeof t>[0]);
+    // Route labels are i18n keys; the branding app name is a literal product
+    // string ("Valuz Team") and must not go through t() — it would log a
+    // "missing translation" warning on every unmatched route.
+    if (!match?.label) return branding.appName;
+    return t(match.label as Parameters<typeof t>[0]);
   }, [desktopRoutes, location.pathname, branding.appName, t]);
 
   const outletContext: ProjectOutletContext = {
@@ -625,6 +777,8 @@ export function ProjectLayoutBase({
     setHeaderClassName,
     setHideHeader,
     setAsideClassName,
+    setRightPanelDefaultSize,
+    setMasterDetailLayout,
     setMainClassName,
     setContentInnerClassName,
   };
@@ -638,66 +792,42 @@ export function ProjectLayoutBase({
       </span>
     ));
   const resolvedRightPanel = controlledRightPanel ?? rightPanel;
-  // Skills / Connectors / Agents use the right-panel slot for a master-detail layout
-  // (list + detail), not a collapsible side panel — so the collapse toggle
-  // is meaningless there and is hidden.
+  // Skills / Connectors / Agents use the right-panel slot for a master-detail
+  // layout (list + detail), not a collapsible side panel — so the collapse
+  // toggle is meaningless there and is hidden. Overlay editions route their
+  // own master-detail pages, which this path list cannot know about; those
+  // declare it through ``setMasterDetailLayout`` instead.
   const suppressRightPanelToggle =
+    masterDetailLayout ||
     location.pathname.startsWith("/skills") ||
     location.pathname.startsWith("/connectors") ||
     location.pathname.startsWith("/agents");
-  const rightPanelToggle =
+  const rightPanelControls =
     resolvedRightPanel && !suppressRightPanelToggle ? (
-      <TooltipProvider delayDuration={150}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label={
-                rightPanelCollapsed
-                  ? t("sidebar.expandPanel")
-                  : t("sidebar.collapsePanel")
-              }
-              onClick={() => togglePanel()}
-              className="flex h-[22px] w-[22px] items-center justify-center rounded-[5px] text-ink-body transition-colors hover:bg-surface-muted"
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                <line
-                  x1={rightPanelCollapsed ? 17 : 15}
-                  y1={rightPanelCollapsed ? 7 : 3}
-                  x2={rightPanelCollapsed ? 17 : 15}
-                  y2={rightPanelCollapsed ? 17 : 21}
-                />
-              </svg>
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {rightPanelCollapsed
-              ? t("sidebar.expandPanel")
-              : t("sidebar.collapsePanel")}
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <RightPanelControls
+        collapsed={rightPanelCollapsed}
+        maximized={rightPanelMaximized}
+        labels={{
+          collapse: t("sidebar.collapsePanel"),
+          expand: t("sidebar.expandPanel"),
+          maximize: t("sidebar.maximizePanel"),
+          restore: t("sidebar.restorePanel"),
+        }}
+        onToggleCollapsed={() => togglePanel()}
+        onToggleMaximized={() =>
+          setRightPanelMaximized((maximized) => !maximized)
+        }
+      />
     ) : null;
   // ADR-022: the decision-inbox badge always sits in the topbar control
   // group (it self-hides when there are no pendings), so the control is
   // present whenever the badge has something to show even if the page
-  // contributes no topbarActions / rightPanelToggle.
+  // contributes no topbarActions / rightPanelControls.
   const topbarRightControl = (
     <div className="flex items-center gap-1">
       <NotificationBadge />
       {topbarActions}
-      {rightPanelToggle}
+      {rightPanelControls}
     </div>
   );
 
@@ -876,6 +1006,11 @@ export function ProjectLayoutBase({
                 })
                 .catch(() => toast.error(t("sidebar.renameFailed")));
             }}
+            // Whole-session fork (docs/design/session-fork.md). Pending
+            // state + duplicate-click suppression live in the shared hook
+            // (#879); its runs-refresh event re-fetches the finished window.
+            onRecentFork={(sessionId) => void forkSession(sessionId)}
+            recentForkPendingId={forkingSessionId}
             onRecentDelete={(sessionId) => {
               // Optimistic local removal — the row disappears immediately
               // even though the backend round-trip is still in flight.
@@ -903,13 +1038,17 @@ export function ProjectLayoutBase({
             sidebarHeader={sidebarHeader}
             sidebarFooter={sidebarFooter}
             sidebarExtraItems={sidebarExtraItems}
-            mascotSrc={mascotSrc}
             LinkComponent={Link}
             primaryActionHref="/conversation/new"
             onPrimaryAction={refreshConnectorAlert}
             collapsed={sidebarCollapsed}
             onAddProject={() => setCreateOpen(true)}
             onImportProject={() => importInputRef.current?.click()}
+            projectAddMenuItems={
+              hasProjectAddMenuItems ? (
+                <SlotRenderer name="sidebar.projects.add.menu-items" />
+              ) : undefined
+            }
             onProjectOpenInFinder={(projectId) => {
               const ws = allProjects.find(
                 (project) => project.id === projectId,
@@ -931,8 +1070,12 @@ export function ProjectLayoutBase({
               if (!trimmed) return;
               projectsApi
                 .rename(projectId, trimmed)
-                .then(() => {
+                .then((updated) => {
                   toast.success(t("sidebar.renamed"));
+                  // Publish the new name before the list refetch lands: any
+                  // open project page reads it from this store, and waiting
+                  // for the round trip left the page showing the old name.
+                  useProjectStore.getState().upsertProject(updated);
                   void fetchProjects();
                 })
                 .catch(() => toast.error(t("sidebar.renameFailed")));
@@ -957,8 +1100,27 @@ export function ProjectLayoutBase({
         asideClassName={
           resolvedRightPanel ? (asideClassName ?? "w-[345px]") : undefined
         }
+        // Keep the main route under one stable panel owner while an async
+        // context panel loads, opens, or closes. The panel node itself is not
+        // the capability signal; changing this flag with the node remounts the
+        // conversation and repeats its bootstrap requests indefinitely.
+        rightPanelDefaultSize={rightPanelDefaultSize}
+        rightPanelResizable={!suppressRightPanelToggle}
+        rightPanelMaximized={rightPanelMaximized}
+        rightPanelResizeLabel={t("sidebar.resizePanel")}
         mainClassName={mainClassName}
         contentInnerClassName={contentInnerClassName}
+        // Degraded multi-target hint rides the shell's notice slot — pinned
+        // at the very top of the middle panel, above the header and outside
+        // the page's padded/scrolling content, so every page (headered,
+        // hidden-header, outer-scroll) shows it in the same place.
+        notice={
+          degradedLabels ? (
+            <div className="shrink-0 border-b border-warning-border bg-warning-light px-4 py-1.5 text-xs text-warning-text">
+              {t("system.execTargetUnreachable", { targets: degradedLabels })}
+            </div>
+          ) : null
+        }
         header={header}
         headerClassName={headerClassName}
         aside={
@@ -967,21 +1129,11 @@ export function ProjectLayoutBase({
             : null
         }
       >
-        <div className="flex h-full min-h-0 flex-col">
-          {degradedLabels ? (
-            <div className="shrink-0 border-b border-warning-border bg-warning-light px-4 py-1.5 text-xs text-warning-text">
-              {t("system.execTargetUnreachable", { targets: degradedLabels })}
-            </div>
-          ) : null}
-          <div
-            // Keyed so a page change replays the enter animation — except
-            // within the conversation family, which transitions in place
-            // (see ``outletTransitionKey``).
-            key={outletTransitionKey(location.pathname)}
-            className="min-h-0 flex-1 animate-page-enter"
-          >
-            <Outlet context={outletContext} />
-          </div>
+        <div className="relative h-full min-h-0">
+          <PreservedRouteOutlet
+            context={outletContext}
+            overlay={routeIsOverlay}
+          />
         </div>
       </AppShell>
       <AppToaster />
@@ -1022,7 +1174,7 @@ export function ProjectLayoutBase({
               createError ? (
                 <p className="text-xs text-destructive">{createError}</p>
               ) : null
-            ) : directoryFieldMode === "managed" ? (
+            ) : effectiveDirectoryFieldMode === "managed" ? (
               <div className="flex flex-col">
                 <label className="mb-[5px] text-xs font-medium text-foreground">
                   {t("project.projectDir")}
@@ -1042,7 +1194,7 @@ export function ProjectLayoutBase({
                   {t("project.projectDir")}
                 </label>
                 <div className="flex items-center gap-2">
-                  {directoryFieldMode === "picker" ? (
+                  {effectiveDirectoryFieldMode === "picker" ? (
                     <button
                       type="button"
                       className="flex h-8 flex-1 items-center rounded-lg border border-input bg-surface px-2.5 text-sm text-foreground transition-[border-color,box-shadow,color,background-color] hover:border-ring focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/20 focus-visible:outline-none"
@@ -1069,7 +1221,8 @@ export function ProjectLayoutBase({
                       className="flex-1"
                     />
                   )}
-                  {directoryFieldMode === "picker" || platform.isElectron ? (
+                  {effectiveDirectoryFieldMode === "picker" ||
+                  platform.isElectron ? (
                     <Button
                       type="button"
                       variant="outline"
@@ -1108,7 +1261,7 @@ export function ProjectLayoutBase({
               onClick={() => void handleCreateProject()}
               disabled={
                 !newName.trim() ||
-                (directoryFieldMode !== "managed" &&
+                (effectiveDirectoryFieldMode !== "managed" &&
                   !execLocation.isRemoteTarget &&
                   !newRootPath.trim())
               }

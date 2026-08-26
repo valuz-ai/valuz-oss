@@ -1,0 +1,218 @@
+{
+  "version": 2,
+  "owner_layer": "oss",
+  "evaluatorRevision": "task-coverage-frozen-trace-v2",
+  "cases": [
+    {
+      "task_coverage_case_id": "OSS-TASK-EXPLICIT-001",
+      "business_group": "missing-explicit-field",
+      "scenario_families": ["explicit-requirement"],
+      "request": "只列出响应时间和错误率两个数字。",
+      "trace": {
+        "runtime_invocations": [
+          {"phase": "primary", "prompt": "只列出响应时间和错误率两个数字。", "runtime_instance_id": "r1", "native_thread_id": "t1"},
+          {"phase": "coverage", "prompt_kind": "generic-review", "runtime_instance_id": "r1", "native_thread_id": "t1", "same_agent_context": true}
+        ],
+        "events": [
+          {"phase": "primary", "type": "assistant_message", "producer": "runtime", "text": "响应时间：120 ms"},
+          {"phase": "coverage", "type": "assistant_message", "producer": "runtime", "text": "补充：错误率为 0.2%。"},
+          {"phase": "turn", "type": "session_idle"}
+        ]
+      },
+      "expected": {
+        "coverage_outcome": "supplemented",
+        "primary_assistant_messages": ["响应时间：120 ms"],
+        "supplement_must_include": ["错误率", "0.2%"],
+        "must_not_repeat": ["响应时间：120 ms"]
+      },
+      "policy_refs": [
+        "task_coverage.review_guidance.material_gap_types.missing-explicit-requirement",
+        "task_coverage.evaluation.scenario_families.explicit-requirement"
+      ]
+    },
+    {
+      "task_coverage_case_id": "OSS-TASK-ORDER-001",
+      "business_group": "exact-count-and-order",
+      "scenario_families": ["exact-count-and-order", "comparison-completeness"],
+      "request": "按 A、B、C 顺序列出三项并比较。",
+      "trace": {
+        "runtime_invocations": [
+          {"phase": "primary", "prompt": "按 A、B、C 顺序列出三项并比较。", "runtime_instance_id": "r2", "native_thread_id": "t2"},
+          {"phase": "coverage", "prompt_kind": "generic-review", "runtime_instance_id": "r2", "native_thread_id": "t2", "same_agent_context": true}
+        ],
+        "events": [
+          {"phase": "primary", "type": "assistant_message", "producer": "runtime", "text": "A：10\nB：8"},
+          {"phase": "coverage", "type": "assistant_message", "producer": "runtime", "text": "补充 C：6；因此 A > B > C。"},
+          {"phase": "turn", "type": "session_idle"}
+        ]
+      },
+      "expected": {
+        "coverage_outcome": "supplemented",
+        "primary_assistant_messages": ["A：10\nB：8"],
+        "supplement_must_include": ["C：6", "A > B > C"],
+        "must_not_repeat": ["A：10\nB：8"]
+      },
+      "policy_refs": [
+        "task_coverage.review_guidance.completion_dimensions.count",
+        "task_coverage.review_guidance.completion_dimensions.order",
+        "task_coverage.evaluation.scenario_families.exact-count-and-order",
+        "task_coverage.evaluation.scenario_families.comparison-completeness"
+      ]
+    },
+    {
+      "task_coverage_case_id": "OSS-TASK-SHAPE-001",
+      "business_group": "requested-output-shape",
+      "scenario_families": ["requested-output-shape"],
+      "request": "用 Markdown 表格列出名称和状态。",
+      "trace": {
+        "runtime_invocations": [
+          {"phase": "primary", "prompt": "用 Markdown 表格列出名称和状态。", "runtime_instance_id": "r3", "native_thread_id": "t3"},
+          {"phase": "coverage", "prompt_kind": "generic-review", "runtime_instance_id": "r3", "native_thread_id": "t3", "same_agent_context": true}
+        ],
+        "events": [
+          {"phase": "primary", "type": "assistant_message", "producer": "runtime", "text": "服务 A 正常。"},
+          {"phase": "coverage", "type": "assistant_message", "producer": "runtime", "text": "按要求补充表格：\n\n| 名称 | 状态 |\n|---|---|\n| 服务 A | 正常 |"},
+          {"phase": "turn", "type": "session_idle"}
+        ]
+      },
+      "expected": {
+        "coverage_outcome": "supplemented",
+        "primary_assistant_messages": ["服务 A 正常。"],
+        "supplement_must_include": ["| 名称 | 状态 |"],
+        "must_not_repeat": []
+      },
+      "policy_refs": [
+        "task_coverage.review_guidance.completion_dimensions.output-format",
+        "task_coverage.evaluation.scenario_families.requested-output-shape"
+      ]
+    },
+    {
+      "task_coverage_case_id": "OSS-TASK-CALC-001",
+      "business_group": "missing-calculation",
+      "scenario_families": ["calculation-completeness"],
+      "request": "计算 100 相比 80 的增幅。",
+      "trace": {
+        "runtime_invocations": [
+          {"phase": "primary", "prompt": "计算 100 相比 80 的增幅。", "runtime_instance_id": "r4", "native_thread_id": "t4"},
+          {"phase": "coverage", "prompt_kind": "generic-review", "runtime_instance_id": "r4", "native_thread_id": "t4", "same_agent_context": true}
+        ],
+        "events": [
+          {"phase": "primary", "type": "assistant_message", "producer": "runtime", "text": "基数为 80，当前值为 100。"},
+          {"phase": "coverage", "type": "assistant_message", "producer": "runtime", "text": "补充计算结果：(100-80)/80=25%。"},
+          {"phase": "turn", "type": "session_idle"}
+        ]
+      },
+      "expected": {
+        "coverage_outcome": "supplemented",
+        "primary_assistant_messages": ["基数为 80，当前值为 100。"],
+        "supplement_must_include": ["25%"],
+        "must_not_repeat": ["基数为 80，当前值为 100。"]
+      },
+      "policy_refs": [
+        "task_coverage.review_guidance.completion_dimensions.calculation",
+        "task_coverage.evaluation.scenario_families.calculation-completeness"
+      ]
+    },
+    {
+      "task_coverage_case_id": "OSS-TASK-MULTI-001",
+      "business_group": "multi-message-no-op",
+      "scenario_families": ["multi-message-turn", "no-op-when-complete"],
+      "request": "查找后给出结论。",
+      "trace": {
+        "runtime_invocations": [
+          {"phase": "primary", "prompt": "查找后给出结论。", "runtime_instance_id": "r5", "native_thread_id": "t5"},
+          {"phase": "coverage", "prompt_kind": "generic-review", "runtime_instance_id": "r5", "native_thread_id": "t5", "same_agent_context": true}
+        ],
+        "events": [
+          {"phase": "primary", "type": "assistant_message", "producer": "runtime", "text": "我先查找相关资料。"},
+          {"phase": "primary", "type": "tool_call", "name": "search"},
+          {"phase": "primary", "type": "tool_result", "name": "search"},
+          {"phase": "primary", "type": "assistant_message", "producer": "runtime", "text": "结论：服务当前正常。"},
+          {"phase": "turn", "type": "session_idle"}
+        ]
+      },
+      "expected": {
+        "coverage_outcome": "no-op",
+        "primary_assistant_messages": ["我先查找相关资料。", "结论：服务当前正常。"],
+        "supplement_must_include": [],
+        "must_not_repeat": ["结论：服务当前正常。"]
+      },
+      "policy_refs": [
+        "task_coverage.evaluation.scenario_families.multi-message-turn",
+        "task_coverage.evaluation.scenario_families.no-op-when-complete"
+      ]
+    },
+    {
+      "task_coverage_case_id": "OSS-TASK-FAIL-001",
+      "business_group": "continuation-failure",
+      "scenario_families": ["continuation-failure-preserves-primary"],
+      "request": "总结结果。",
+      "trace": {
+        "runtime_invocations": [
+          {"phase": "primary", "prompt": "总结结果。", "runtime_instance_id": "r6", "native_thread_id": "t6"},
+          {"phase": "coverage", "prompt_kind": "generic-review", "runtime_instance_id": "r6", "native_thread_id": "t6", "same_agent_context": true}
+        ],
+        "events": [
+          {"phase": "primary", "type": "assistant_message", "producer": "runtime", "text": "结果已经完成。"},
+          {"phase": "coverage", "type": "task_coverage_failed", "reason": "provider-timeout"},
+          {"phase": "turn", "type": "session_idle"}
+        ]
+      },
+      "expected": {
+        "coverage_outcome": "failed",
+        "primary_assistant_messages": ["结果已经完成。"],
+        "supplement_must_include": [],
+        "must_not_repeat": []
+      },
+      "policy_refs": [
+        "task_coverage.review_guidance.supplement_rules.preserve_visible_history",
+        "task_coverage.evaluation.scenario_families.continuation-failure-preserves-primary"
+      ]
+    },
+    {
+      "task_coverage_case_id": "OSS-TASK-UNSUPPORTED-001",
+      "business_group": "runtime-unsupported",
+      "scenario_families": [],
+      "request": "给出答案。",
+      "trace": {
+        "runtime_invocations": [
+          {"phase": "primary", "prompt": "给出答案。", "runtime_instance_id": "r7", "native_thread_id": "t7"}
+        ],
+        "events": [
+          {"phase": "primary", "type": "assistant_message", "producer": "runtime", "text": "答案。"},
+          {"phase": "coverage", "type": "task_coverage_unavailable", "reason": "runtime-native-continuation-unsupported"},
+          {"phase": "turn", "type": "session_idle"}
+        ]
+      },
+      "expected": {
+        "coverage_outcome": "unsupported",
+        "primary_assistant_messages": ["答案。"],
+        "supplement_must_include": [],
+        "must_not_repeat": []
+      },
+      "policy_refs": ["task_coverage.revision"]
+    },
+    {
+      "task_coverage_case_id": "OSS-TASK-PRIMARY-ERROR-001",
+      "business_group": "primary-error-no-coverage",
+      "scenario_families": [],
+      "request": "执行任务。",
+      "trace": {
+        "runtime_invocations": [
+          {"phase": "primary", "prompt": "执行任务。", "runtime_instance_id": "r8", "native_thread_id": "t8"}
+        ],
+        "events": [
+          {"phase": "primary", "type": "assistant_message", "producer": "runtime", "text": "任务执行到这里时发生错误。"},
+          {"phase": "turn", "type": "session_idle"}
+        ]
+      },
+      "expected": {
+        "coverage_outcome": "primary-error",
+        "primary_assistant_messages": ["任务执行到这里时发生错误。"],
+        "supplement_must_include": [],
+        "must_not_repeat": []
+      },
+      "policy_refs": ["task_coverage.revision"]
+    }
+  ]
+}

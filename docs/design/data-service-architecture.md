@@ -80,22 +80,23 @@ data flow / read+write, red dashed = the sandbox HTTP+JWT boundary):
 
 ---
 
-## 4. Write path — dual-write + outbox consistency
+## 4. Write path — inline dual-write (best-effort mirror)
 
-A write does **two** things:
+A write does **two** things, in order (`RuntimeStore`):
 
-1. **Local sqlite** (the kernel's execution-local store — sandbox-local, or the
-   host's when in-process). Fast, always-available, survives DataService blips.
-2. **DataService** (→ host sqlite or remote PG). The durable / shared copy that
-   reads are served from.
+1. **Local sqlite** (the kernel's runtime store — sandbox-local, or the host's
+   when in-process). Authoritative: the returned seq, all kernel reads, and
+   the turn's forward progress come from here.
+2. **DataService mirror** (→ host `valuz.db` or remote PG), pushed inline
+   right after the local commit — so the mirror receives ops in local commit
+   order — and **best-effort**: a mirror failure is logged and never blocks
+   the runtime. Redelivery is idempotent (`event_uid` for events, UUID PKs for
+   sessions/messages), so retrying a mirror op is always safe.
 
-To guarantee the DataService copy is **maximally consistent** even across a
-transient DataService/PG unavailability, a DataService write that fails is
-recorded in a **`durable_outbox`** (in the local sqlite) and **re-pushed** by a
-background drainer until it lands. Replay is idempotent (`event_uid` for events,
-UUID PKs for sessions/messages), so at-least-once redelivery is safe. This is
-the role `durable_outbox` was built for: **eventual consistency of the
-dual-write into the DataService.**
+A mirror op lost to an outage is a known, logged gap: recovery/reconciliation
+of a lagging mirror is deliberately **not** built into the write path — it is
+the next, explicit step (host- or kernel-driven backfill keyed on
+`event_uid`), kept out of the hot path so the storage semantics stay readable.
 
 **Collapse optimization (now rarely applies).** When the execution-local sqlite
 and the DataService's backend resolve to the **same file**, the dual-write
@@ -107,9 +108,11 @@ only when an explicit shared `database_url` co-locates the kernel's own store an
 the DataService backend in one store.
 
 **Event seq.** Each physical store owns its own `events` autoincrement; the
-sequences are **independent** and bridged by `event_uid`. The seq a reader sees
-is the **DataService backend's** seq (reads come from there). Never force one
-store's seq onto another's PK (it collides with pre-existing ids and drops rows).
+sequences are **independent** and bridged by `event_uid`. A HISTORY reader
+(host, via the DataService) sees the backend's seq; a LIVE frame carries the
+execution kernel's local seq — the two spaces are never compared, and
+consumers dedup/merge across them by `event_uid`. Never force one store's seq
+onto another's PK (it collides with pre-existing ids and drops rows).
 
 ---
 
@@ -134,16 +137,32 @@ execution-local sqlite. Rationale: a sandbox (especially a cloud sandbox) is
 ## 6. Auth & isolation boundary
 
 The DataService derives the **owner** for every request from a **verified
-bearer token** (HS256 JWT today; the `TokenVerifier` port allows RS256/JWKS for
-SaaS), never from the request body. Consequences:
+opaque bearer credential**, never from the request body. OSS credentials are
+per-owner HS256 JWTs today. The host's async
+`SandboxCredentialVerifierPort` is shared with built-in MCP, so a managed
+deployment may verify a database/cache-backed workload credential without
+changing this HTTP contract. The kernel DataService also retains the legacy
+sync `TokenVerifier` adapter for standalone OSS callers. Consequences:
 
-- A **sandbox holds only a short-lived JWT** + the DataService URL. It never
+- A **sandbox holds only a short-lived credential** + the DataService URL. It never
   receives a DB DSN, driver, or PG credential — the credential lives only on the
   host (the DataService's backend config).
-- On a **remote PG** backend, **Row-Level Security** is the DB-side backstop:
-  the DataService stamps `app.current_user_id` per transaction (`SET LOCAL`) from
-  the verified token, and connects as a **non-owner role** so the RLS policy is
-  enforced even if an app-layer filter is ever missed.
+- Short-lived means it **expires while the kernel runs**, so it is rotatable in
+  place: `RemoteStore` resolves the bearer through a per-call `access_token`
+  hook, `dependencies.set_data_api_token` swaps the value behind it, and
+  `POST /internal/credentials/refresh` lets the host trigger that from outside
+  (the host writes the new value into the config-gate file first, so a later
+  restart still comes up current). Rotation must NOT be done by restarting the
+  kernel or replacing the sandbox: the kernel owns the in-flight turn and the
+  `run_in_background` processes hanging off it. The refresh applies an
+  allowlist — a blanket re-read would give the process a fresh `os.environ`
+  while every other component still holds what it captured at startup.
+- Owner isolation is **app-layer by construction**: every `StorePort` method
+  requires the owner, and the DataService routes inject it only from the
+  verified token. There is deliberately no DB-level RLS — the host data plane
+  performs legitimate cross-owner reads (recovery sweeps), and a policy that
+  only binds under a dedicated non-owner DB role is a backstop that silently
+  does nothing in the deployments we run.
 - The owner-from-token rule means a compromised sandbox cannot read or write
   another owner's data.
 
@@ -170,12 +189,11 @@ sandboxed kernel crosses the HTTP boundary.
 
 ```
 agent turn → kernel.append_event
-   ├─ write sandbox-local sqlite            (buffer; fast)
+   ├─ write sandbox-local sqlite            (runtime authority; fast)
    └─ POST /rpc/append_event  ─HTTP+JWT─▶  host DataService
                                               ├─ verify JWT → owner
-                                              ├─ SET LOCAL app.current_user_id
                                               └─ INSERT … RETURNING seq → PG
-        on HTTP/PG failure ▶ enqueue durable_outbox(local) ▶ drainer re-pushes
+        on HTTP/PG failure ▶ log + continue (best-effort mirror; recovery is a later, explicit step)
 ```
 
 ### 8.2 Read history (host, sandbox already destroyed)
@@ -221,12 +239,12 @@ consuming OSS as a SaaS submodule.)
 
 ## 10. SaaS extension
 
-SaaS is **form 4 with no new code paths**: a cloud sandbox driver (execution
+SaaS is **form 4 with no new data paths**: a cloud sandbox driver (execution
 knob) + a central PG backend (backend knob), both already abstracted. Because
-the DataService + JWT boundary are identical to the local forms, the cloud
+the DataService credential boundary is identical to the local forms, the cloud
 sandbox and the centralized PG are **config-and-go**: the SaaS overlay binds a
-cloud `SandboxDriver` and points the DataService backend at the managed PG;
-nothing in the kernel or the data layer changes.
+cloud `SandboxDriver`, binds `SandboxCredentialVerifierPort`, and points the
+DataService backend at the managed PG; nothing in the kernel or data path changes.
 
 ---
 
@@ -234,8 +252,7 @@ nothing in the kernel or the data layer changes.
 
 **Landed:** the `/rpc/{op}` DataService app + StorePort surface
 (`kernel/app/data_service.py`), the `store_wire` codec, JWT signer/verifier +
-`TokenVerifier` port, RLS migration, `event_uid` idempotency, the
-`durable_outbox` table + `DurableOutbox` drainer; **env-var config**
+`TokenVerifier` port, `event_uid` idempotency; **env-var config**
 (`KERNEL_STORE` + `VALUZ_DURABLE_DATABASE_URL` / `VALUZ_DATA_API_*`) replacing the
 former settings page; the host DataService mounted as a router at
 `/internal/data`; the **typed `DataReader` port** (`adapters/data_reader.py`)
@@ -261,10 +278,23 @@ refactor, decided as follows:
 2. **OSS default = sqlite DataService over `valuz.db`** (co-locate — decision "a").
    `kernel.db` remains the kernel's execution-local store (invariant); the
    DataService dual-writes to `valuz.db` and reads are served from it.
-3. **Authority = durable.** Reads come from the DataService backend
-   (`valuz.db` / PG); `kernel.db` is the execution-local buffer. Uniform across
-   tiers (matches `pg`≡`remote`). The `durable_outbox` local-authority path stays
-   dormant.
+3. **Kernel authority = LOCAL; host plane = durable.** (Supersedes the earlier
+   "authority = durable".) ONE kernel composition for every tier
+   (`RuntimeStore`): the kernel reads and seqs from its own `kernel.db` and
+   dual-writes every op inline (best-effort) to the DataService mirror —
+   `KERNEL_STORE` selects only the mirror backend (`local` → `valuz.db`,
+   `pg` → central PG, `remote` → HTTP DataService); the kernel has no remote
+   read path and its boot scans sweep only its own sqlite. The HOST side binds
+   the DataService backend store twice: the typed `data_reader` (SSE history)
+   and the `kernel_client` data plane (`bind_host_data_store`) serving
+   non-runtime facade reads, at-rest control writes, and the liveness-driven
+   stranded reset (`src/core/recovery`); session control writes route
+   live-kernel-first (the live runtime is the single writer — its mirror
+   propagates the change), falling back to the durable only for at-rest
+   sessions. Seqs are per-store; identity across stores is `event_uid`
+   (stamped on live frames and reads; uid-idempotent replay), so live frames
+   carry kernel-local seqs while history carries durable seqs and consumers
+   merge by uid.
 4. **Schema handling — no new alembic migration for the co-located tables.** The
    durable's kernel tables are built by `_ensure_durable_schema` (`create_all`,
    idempotent) — the same mechanism `pg` uses, now pointed at `valuz.db`. Kernel

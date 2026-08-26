@@ -300,3 +300,57 @@ def test_materialize_falls_back_to_basename_without_frontmatter(tmp_path: Path) 
     root = Path(sm.prepare_deepagents_skills(str(cwd), [src]))
 
     assert (root / "plain-skill" / "SKILL.md").exists()
+
+
+# -- Frontmatter names that can't be directories ----------------------------
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        "react:components",  # plugin-namespaced name; ':' = NTFS data stream
+        'quote"name',
+        "pipe|name",
+        "star*name",
+        "question?name",
+        "less<greater>",
+        "trailing-dot.",
+        "con",  # Windows device name
+        "COM1.md",
+        "",
+    ],
+)
+def test_unportable_frontmatter_name_falls_back_to_basename(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, declared: str
+) -> None:
+    """A frontmatter ``name:`` that can't be a directory component on Windows
+    must not become one. ``react:components`` crashed materialization with
+    ``WinError 267`` ("The directory name is invalid") because NTFS reads
+    ``dir:stream`` as an alternate data stream; the source basename — which
+    already exists on disk — is used instead, on every platform."""
+    src = tmp_path / "sources" / "react-components"
+    src.mkdir(parents=True)
+    (src / "SKILL.md").write_text(
+        f"---\nname: {declared}\ndescription: demo\n---\n# hi\n", encoding="utf-8"
+    )
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+
+    with caplog.at_level("WARNING", logger=sm.__name__):
+        root = Path(sm.prepare_deepagents_skills(str(cwd), [str(src)]))
+
+    assert (root / "react-components" / "SKILL.md").exists()
+    assert _manifest(cwd, sm.AGENTS_MANIFEST) == {
+        "managed": [{"name": "react-components", "kind": "symlink"}]
+    }
+    if declared:  # an empty name never reaches the frontmatter branch quietly
+        assert any(declared in r.getMessage() for r in caplog.records)
+
+
+def test_portable_frontmatter_names_are_still_honoured(tmp_path: Path) -> None:
+    """The guard rejects only what Windows forbids — spaces, dots, unicode and
+    embedded device names stay usable as directory names."""
+    for declared in ("weekly report", "v1.2.3-report", "周报", "console"):
+        assert sm._is_portable_segment(declared), declared
+    for declared in ("trailing-space ", "nul", "a/b", "a\\b", ".", ".."):
+        assert not sm._is_portable_segment(declared), declared

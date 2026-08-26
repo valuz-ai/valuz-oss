@@ -50,4 +50,11 @@ function ResizableHandle({
   )
 }
 
+// A Group remembers each panel's size by id across mount/unmount, so
+// `defaultSize` only applies the first time an id registers. A host that needs
+// a conditionally-rendered panel to reopen at a fixed ratio has to reach for
+// the imperative handle and call `setLayout` — hence this re-export.
+export { useGroupRef } from "react-resizable-panels"
+export type { GroupImperativeHandle, Layout } from "react-resizable-panels"
+
 export { ResizableHandle, ResizablePanel, ResizablePanelGroup }

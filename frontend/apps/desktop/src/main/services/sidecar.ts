@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { EgressBootstrap } from "@valuz/desktop-network-egress/contracts";
 
 // Vite bundles the Electron main process as ESM (vite.main.config.ts
 // formats:['es']), so the CommonJS ``__dirname`` global is undefined at
@@ -15,8 +16,16 @@ export interface SidecarOptions {
   appDataDir: string;
   name: string;
   port: number;
+  /** Source-run backend managed by Electron during development. */
+  development?: boolean;
   onLog?: (line: string) => void;
   onExit?: (code: number | null, signal: string | null) => void;
+  /** One-shot delivery over stdin; never copied into the child environment. */
+  egressBootstrap?: EgressBootstrap | null;
+  /** Non-secret fail-loud marker used only if enabled egress failed to start. */
+  egressRequired?: boolean;
+  /** Memory-only capability used for desktop-to-backend runtime reconfiguration. */
+  desktopControlToken?: string;
 }
 
 export interface DesktopSidecarResult {
@@ -29,8 +38,204 @@ export interface DesktopSidecarResult {
   stop: () => Promise<void>;
 }
 
+export const configureSidecarEgressEnvironment = (
+  env: Record<string, string>,
+  egressBootstrap: EgressBootstrap | null | undefined,
+  egressRequired: boolean | undefined,
+  desktopControlToken?: string,
+): void => {
+  // Never inherit a stale/user-supplied bootstrap channel into the managed
+  // backend. Only these explicit spawn options may select stdin delivery or
+  // the non-secret fail-loud marker. The bootstrap capability itself is not
+  // serialized into this mapping.
+  delete env.VALUZ_EGRESS_BOOTSTRAP_FILE;
+  delete env.VALUZ_EGRESS_BOOTSTRAP_STDIN;
+  delete env.VALUZ_EGRESS_REQUIRED;
+  delete env.VALUZ_DESKTOP_BOOTSTRAP_STDIN;
+  if (desktopControlToken) {
+    env.VALUZ_DESKTOP_BOOTSTRAP_STDIN = "1";
+  } else if (egressBootstrap) {
+    env.VALUZ_EGRESS_BOOTSTRAP_STDIN = "1";
+  } else if (egressRequired) {
+    env.VALUZ_EGRESS_REQUIRED = "1";
+  }
+};
+
+export const resolveSidecarDataDir = (
+  development: boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): string => {
+  if (!development) return path.join(homedir(), ".valuz-oss");
+  const configured = env.VALUZ_DATA_DIR?.trim();
+  return configured
+    ? path.resolve(configured)
+    : path.join(homedir(), ".valuz-oss-dev");
+};
+
 /** Grace period after SIGTERM before escalating to SIGKILL on POSIX. */
 const GRACEFUL_SHUTDOWN_MS = 5000;
+
+// ── Stale-sidecar reclaim ────────────────────────────────────────────────
+//
+// A crashed / force-quit / deleted-while-running shell leaves its backend
+// orphaned: the process keeps ``<data_dir>/.single-writer.lock`` and the
+// port, so every later launch boots a backend that dies on the lock
+// ("Application startup failed. Exiting.") while the UI ends up talking to
+// a stale server it cannot manage (seen twice in the wild on 0.0.8 — the
+// symptom is ``/v1/user/sync-context`` pending forever). Before spawning,
+// we identify such leftovers — via the pid hint the backend writes into the
+// lock file, plus whoever listens on our port — verify they really are a
+// ``valuz-server`` (never kill an innocent squatter), and take them down.
+// The backend-side ``VALUZ_PARENT_PID`` watchdog closes the hole going
+// forward; this reclaim heals installs that already have an orphan.
+
+/** Pid hint from ``<data_dir>/.single-writer.lock`` (backend writes its own
+ *  pid on acquire). ``null`` when absent/unreadable/non-numeric. */
+export const readStaleLockPid = (appDataDir: string): number | null => {
+  try {
+    const raw = fs
+      .readFileSync(path.join(appDataDir, ".single-writer.lock"), "utf8")
+      .trim();
+    const pid = Number.parseInt(raw, 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Command line of *pid*, or null when the process is gone / unreadable. */
+export const processCommand = (pid: number): string | null => {
+  if (process.platform === "win32") {
+    const result = spawnSync(
+      "tasklist",
+      ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
+      { windowsHide: true, encoding: "utf8" },
+    );
+    const line = (result.stdout ?? "").trim();
+    return line && !/no tasks/i.test(line) ? line : null;
+  }
+  const result = spawnSync("ps", ["-p", String(pid), "-o", "command="], {
+    encoding: "utf8",
+  });
+  const line = (result.stdout ?? "").trim();
+  return line || null;
+};
+
+/** Whether a command line looks like OUR backend. Deliberately narrow: only
+ *  the packaged binary name — an innocent squatter is never reclaimed. */
+export const isValuzServerCommand = (command: string | null): boolean =>
+  !!command && /valuz-server(\.exe)?(\s|"|$)/.test(command);
+
+/** Pids listening on *port* (POSIX via lsof; Windows via netstat). */
+export const listPortListeners = (port: number): number[] => {
+  if (process.platform === "win32") {
+    const result = spawnSync("netstat", ["-ano", "-p", "TCP"], {
+      windowsHide: true,
+      encoding: "utf8",
+    });
+    const pids = new Set<number>();
+    for (const line of (result.stdout ?? "").split("\n")) {
+      if (line.includes(`:${port} `) && /LISTENING/i.test(line)) {
+        const pid = Number.parseInt(line.trim().split(/\s+/).pop() ?? "", 10);
+        if (Number.isInteger(pid) && pid > 0) pids.add(pid);
+      }
+    }
+    return [...pids];
+  }
+  const result = spawnSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+    encoding: "utf8",
+  });
+  return (result.stdout ?? "")
+    .split("\n")
+    .map((line) => Number.parseInt(line.trim(), 10))
+    .filter((pid) => Number.isInteger(pid) && pid > 0);
+};
+
+const pidAlive = (pid: number): boolean => {
+  if (process.platform === "win32") {
+    return processCommand(pid) !== null;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+const killStale = async (pid: number, onLog?: (line: string) => void) => {
+  if (process.platform === "win32") {
+    killWindowsProcessTree(pid, onLog);
+  } else {
+    // The orphan was spawned detached (its own group) — signal the group,
+    // fall back to the bare pid for hand-started strays.
+    const signalStale = (sig: NodeJS.Signals) => {
+      try {
+        process.kill(-pid, sig);
+      } catch {
+        try {
+          process.kill(pid, sig);
+        } catch {
+          // already gone
+        }
+      }
+    };
+    signalStale("SIGTERM");
+    for (
+      let waited = 0;
+      waited < GRACEFUL_SHUTDOWN_MS && pidAlive(pid);
+      waited += 250
+    ) {
+      await sleep(250);
+    }
+    if (pidAlive(pid)) {
+      signalStale("SIGKILL");
+    }
+  }
+  for (let waited = 0; waited < 2000 && pidAlive(pid); waited += 250) {
+    await sleep(250);
+  }
+};
+
+/**
+ * Find and terminate leftover ``valuz-server`` processes that would block
+ * this launch (single-writer lock holder / port squatter). Anything on the
+ * port that is NOT a valuz-server is left alone and reported — the spawn
+ * then fails with the normal, diagnosable error instead of us shooting an
+ * unrelated process.
+ */
+export const reclaimStaleSidecar = async (
+  appDataDir: string,
+  port: number,
+  onLog?: (line: string) => void,
+): Promise<void> => {
+  const candidates = new Set<number>();
+  const lockPid = readStaleLockPid(appDataDir);
+  if (lockPid) candidates.add(lockPid);
+  for (const pid of listPortListeners(port)) candidates.add(pid);
+  candidates.delete(process.pid);
+
+  for (const pid of candidates) {
+    if (!pidAlive(pid)) continue;
+    const command = processCommand(pid);
+    if (!isValuzServerCommand(command)) {
+      onLog?.(
+        `[warn] pid ${pid} holds our lock/port but is not a valuz-server ` +
+          `(${command ?? "unknown"}) — leaving it alone`,
+      );
+      continue;
+    }
+    onLog?.(`Reclaiming stale sidecar (pid=${pid}) left by a previous run...`);
+    await killStale(pid, onLog);
+    onLog?.(
+      pidAlive(pid)
+        ? `[warn] stale sidecar pid ${pid} survived reclaim — startup may fail on the writer lock`
+        : `Stale sidecar pid ${pid} terminated`,
+    );
+  }
+};
 
 /**
  * Kill a process AND its whole descendant tree on Windows.
@@ -170,6 +375,34 @@ function resolveCdtEntry(): string | null {
 }
 
 /**
+ * Locate the bundled DeepSeek Harness runtime entry (vendored npm closure
+ * staged at libexec/dsh-runtime/node_modules/...). Same Electron-as-node
+ * contract as chrome-devtools-mcp: the backend runs ``node <entry>`` where
+ * "node" is this Electron binary under ELECTRON_RUN_AS_NODE=1.
+ *
+ * Returns null when not bundled (dev), so the backend falls back to the
+ * dev-checkout vendor tree / VALUZ_DSH_ROOT source mode.
+ */
+function resolveDshRuntimeEntry(): string | null {
+  const rel = path.join(
+    "dsh-runtime",
+    "node_modules",
+    "@deepseek-ai",
+    "dsh-sdk-jsonrpc-demo",
+    "lib",
+    "packaged-bin.js",
+  );
+
+  const bundled = path.join(process.resourcesPath, "libexec", rel);
+  if (fs.existsSync(bundled)) return bundled;
+
+  const devEntry = path.join(__dirname, "..", "..", "resources", "libexec", rel);
+  if (fs.existsSync(devEntry)) return devEntry;
+
+  return null;
+}
+
+/**
  * Build spawn arguments for dev-mode fallback (uv run python -m valuz_agent).
  */
 function buildDevSpawnArgs(port: number): {
@@ -179,7 +412,6 @@ function buildDevSpawnArgs(port: number): {
 } {
   const backendDir = path.resolve(
     __dirname,
-    "..",
     "..",
     "..",
     "..",
@@ -213,9 +445,20 @@ export const startSidecar = async (
 ): Promise<DesktopSidecarResult> => {
   // ``appDataDir`` is kept in SidecarOptions for callers, but the env
   // override below uses a literal path; destructure only what we read.
-  const { name, port, onLog, onExit } = options;
+  const {
+    name,
+    port,
+    development = false,
+    onLog,
+    onExit,
+    egressBootstrap,
+    egressRequired,
+    desktopControlToken,
+  } = options;
 
-  const serverBinary = resolveServerBinary();
+  // Managed development must run the current source tree even if a stale
+  // packaged binary happens to exist under resources/libexec.
+  const serverBinary = development ? null : resolveServerBinary();
 
   let cmd: string;
   let args: string[];
@@ -228,15 +471,26 @@ export const startSidecar = async (
   // _pyinstaller_entry" before the sidecar can even log a line.
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
-    VALUZ_DATA_DIR: path.join(homedir(), ".valuz-oss"),
+    VALUZ_DATA_DIR: resolveSidecarDataDir(development),
   };
-
   // The backend builds its public callback URLs (notably the connector OAuth
   // redirect_uri) from VALUZ_BACKEND_BASE_URL, which defaults to :8000. The
   // sidecar listens on ``port`` (19100 by default), so without this the OAuth
   // redirect points at a dead :8000 and the browser callback is refused. Pin
   // the base URL to the actual port the sidecar is bound to.
   env.VALUZ_BACKEND_BASE_URL = `http://127.0.0.1:${port}`;
+
+  // Arm the backend's parent-death watchdog: if this Electron process dies
+  // without running the cooperative teardown (crash, force-quit, app deleted
+  // while running), the backend notices and exits instead of living on as an
+  // orphan that holds the writer lock + port (boot/parent_watchdog.py).
+  env.VALUZ_PARENT_PID = String(process.pid);
+  configureSidecarEgressEnvironment(
+    env,
+    egressBootstrap,
+    egressRequired,
+    desktopControlToken,
+  );
 
   // Point the backend's docs_embedded._detect_rg() at the bundled binary.
   // It already honours VALUZ_RG_PATH ahead of bundled / PATH lookup.
@@ -259,6 +513,17 @@ export const startSidecar = async (
     env.VALUZ_CDT_ENTRY = cdtEntry;
   }
 
+  // Point the kernel's deepseek_harness runtime at the staged dsh closure,
+  // run under the same Electron-as-node contract as the browser engine.
+  // Entry absent (dev) → the backend falls back to the dev vendor tree /
+  // VALUZ_DSH_ROOT source mode.
+  const dshEntry = resolveDshRuntimeEntry();
+  if (dshEntry) {
+    env.VALUZ_NODE_PATH = process.execPath;
+    env.VALUZ_NODE_IS_ELECTRON = "1";
+    env.VALUZ_DSH_RUNTIME_ENTRY = dshEntry;
+  }
+
   if (serverBinary) {
     cmd = serverBinary;
     args = ["--host", "127.0.0.1", "--port", String(port)];
@@ -272,13 +537,28 @@ export const startSidecar = async (
   const child: ChildProcess = spawn(cmd, args, {
     cwd,
     env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [desktopControlToken || egressBootstrap ? "pipe" : "ignore", "pipe", "pipe"],
     // POSIX: give the child its own process group (setsid) so stop() can signal
     // the WHOLE tree via process.kill(-pid, …) — the analog of taskkill /T on
     // Windows. Not on Windows (no POSIX groups; the tree is killed via taskkill
     // /T /F there). stdio stays piped, so this does not detach the log streams.
     detached: process.platform !== "win32",
   });
+
+  if ((desktopControlToken || egressBootstrap) && child.stdin) {
+    child.stdin.once("error", () => {
+      onLog?.("[warn] Desktop bootstrap channel closed before delivery");
+    });
+    const payload = desktopControlToken
+      ? {
+          version: 1,
+          desktopControlToken,
+          egressBootstrap: egressBootstrap ?? null,
+          egressRequired: Boolean(egressRequired),
+        }
+      : egressBootstrap;
+    child.stdin.end(`${JSON.stringify(payload)}\n`);
+  }
 
   // Capture stdout/stderr for logs
   const captureStream = (

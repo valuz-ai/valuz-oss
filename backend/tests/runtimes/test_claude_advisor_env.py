@@ -52,6 +52,29 @@ def test_custom_base_url_disables_advisor() -> None:
     assert env[_ADVISOR] == "1"
 
 
+def test_loopback_base_url_merges_no_proxy_without_dropping_user_entries() -> None:
+    with patch.dict(
+        "os.environ",
+        {"no_proxy": "api.internal", "NO_PROXY": "10.0.0.0/8"},
+        clear=False,
+    ):
+        env = _env_for(base_url="http://127.0.0.1:43123/client/v1")
+    assert env is not None
+    expected = "api.internal,10.0.0.0/8,127.0.0.1,localhost,::1"
+    assert env["no_proxy"] == expected
+    assert env["NO_PROXY"] == expected
+
+
+def test_remote_base_url_does_not_rewrite_no_proxy() -> None:
+    with patch.dict(
+        "os.environ", {"no_proxy": "api.internal", "NO_PROXY": "10.0.0.0/8"}, clear=False
+    ):
+        env = _env_for(base_url="https://gw.example/v1")
+    assert env is not None
+    assert env["no_proxy"] == "api.internal"
+    assert env["NO_PROXY"] == "10.0.0.0/8"
+
+
 def test_non_claude_gateway_model_disables_advisor() -> None:
     """A non-Claude alias always runs through a gateway base_url, so the
     advisor is off there too — covered by the same base_url gate."""

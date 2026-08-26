@@ -94,6 +94,11 @@ class FakeRemoteStore(RemoteStore):
     ) -> list[StoredEvent]:
         return []
 
+    async def _get_events_after_for_user_once(
+        self, user_id, *, after_seq, types, limit
+    ) -> list[StoredEvent]:
+        return []
+
     async def _get_events_window_once(self, user_id, session_id, *, before_seq, turn_limit):
         return ([], False)
 

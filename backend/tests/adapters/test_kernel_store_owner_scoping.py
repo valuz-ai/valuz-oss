@@ -89,3 +89,63 @@ class TestKernelStoreOwnerScoping:
         await _seed_session_with_event(store, "user-B", tmp_path)
         owners = {s.user_id for s in await store.list_sessions(None)}
         assert owners == {"user-A", "user-B"}
+
+
+class TestGetEventsAfterForUser:
+    """Cross-session cursor read backing the user-level control-plane stream."""
+
+    async def _seed_run(self, store, owner: str, tmp_path) -> str:
+        """One session + a lifecycle-shaped run: user_message → session_idle."""
+        sess = _session(owner, tmp_path)
+        await store.save_session(sess)
+        msg = Message(
+            id=uuid.uuid4().hex,
+            session_id=sess.id,
+            user_message=UserMessage(text="hi"),
+            started_at=0,
+            status="running",
+        )
+        await store.save_message(owner, msg)
+        await store.append_event(owner, sess.id, msg.id, Event(type="user_message", data={}))
+        await store.append_event(owner, sess.id, msg.id, Event(type="text_delta", data={}))
+        await store.append_event(owner, sess.id, msg.id, Event(type="session_idle", data={}))
+        return sess.id
+
+    async def test_aggregates_across_sessions_ordered_by_seq(self, store, tmp_path) -> None:
+        sid1 = await self._seed_run(store, "user-A", tmp_path)
+        sid2 = await self._seed_run(store, "user-A", tmp_path)
+
+        rows = await store.get_events_after_for_user("user-A")
+        # Both sessions' events, one owner, ascending by the global cursor.
+        assert {r.session_id for r in rows} == {sid1, sid2}
+        seqs = [r.seq for r in rows]
+        assert seqs == sorted(seqs)
+
+    async def test_owner_scoped(self, store, tmp_path) -> None:
+        await self._seed_run(store, "user-A", tmp_path)
+        await self._seed_run(store, "user-B", tmp_path)
+
+        rows_a = await store.get_events_after_for_user("user-A")
+        assert rows_a  # A sees its own
+        assert all(r.session_id for r in rows_a)
+        # None of A's rows leak to B and vice versa: disjoint session sets.
+        a_sessions = {r.session_id for r in rows_a}
+        b_sessions = {r.session_id for r in await store.get_events_after_for_user("user-B")}
+        assert a_sessions.isdisjoint(b_sessions)
+
+    async def test_after_seq_cursor(self, store, tmp_path) -> None:
+        await self._seed_run(store, "user-A", tmp_path)
+        rows = await store.get_events_after_for_user("user-A")
+        assert len(rows) >= 3
+        cursor = rows[0].seq
+        after = await store.get_events_after_for_user("user-A", after_seq=cursor)
+        assert all(r.seq > cursor for r in after)
+        assert len(after) == len(rows) - 1
+
+    async def test_types_filter_excludes_deltas(self, store, tmp_path) -> None:
+        await self._seed_run(store, "user-A", tmp_path)
+        lifecycle = ("user_message", "session_idle", "session_error", "session_update")
+        rows = await store.get_events_after_for_user("user-A", types=lifecycle)
+        types = {r.type for r in rows}
+        assert "text_delta" not in types
+        assert types == {"user_message", "session_idle"}

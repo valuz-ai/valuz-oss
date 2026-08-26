@@ -1,0 +1,106 @@
+policy_id: oss-citation-baseline
+layer: oss
+version: citation-baseline-v3
+
+activation:
+  default_mode: required-on-evidence
+  document_research_mode: required-on-evidence
+
+source_tiers: []
+
+rules:
+  factual_claim:
+    citation_required: true
+  claim_audit:
+    selection_enabled: true
+    max_selected_claims: 12
+    max_selected_claims_per_group: 4
+    minimum_supported_ratio: 0.60
+    prioritize_explicit_user_request: true
+    prioritize_existing_bindings: true
+    critical_kinds:
+      - calculation
+      - financial-fact
+      - numeric-fact
+      - date-fact
+      - quotation
+
+semantics:
+  # Cross-edition physical units belong to the citation protocol rather than
+  # one industry overlay.  Canonical SI quantities let deterministic matching
+  # verify localized answers against source-language documents without using
+  # a model or guessing from the bare number alone.
+  unit_ontology:
+    revision: oss-si-units-v1
+    units:
+      watt:
+        canonical: watt
+        aliases: [W, watt, watts, 瓦]
+        scale: 1
+      kilowatt:
+        canonical: watt
+        aliases: [kW, kilowatt, kilowatts, 千瓦]
+        scale: 1000
+      megawatt:
+        canonical: watt
+        aliases: [MW, megawatt, megawatts, 兆瓦]
+        scale: 1000000
+      gigawatt:
+        canonical: watt
+        aliases: [GW, gigawatt, gigawatts, 吉瓦]
+        scale: 1000000000
+      terawatt:
+        canonical: watt
+        aliases: [TW, terawatt, terawatts, 太瓦]
+        scale: 1000000000000
+
+task_coverage:
+  revision: oss-task-coverage-v2
+  review_guidance:
+    material_gap_types:
+      - missing-explicit-requirement
+      - unfinished-requested-item
+      - material-correction
+    completion_dimensions:
+      - entity
+      - document
+      - field
+      - metric
+      - period
+      - as-of
+      - count
+      - order
+      - output-format
+      - comparison
+      - calculation
+    source_boundary_notes:
+      - Review the original request and every visible message in the current turn.
+      - Treat tool use as context, not as proof that the requested answer was completed.
+    supplement_rules:
+      append_only: true
+      do_not_repeat_completed_content: true
+      preserve_visible_history: true
+  evaluation:
+    scenario_families:
+      - explicit-requirement
+      - exact-count-and-order
+      - requested-output-shape
+      - comparison-completeness
+      - calculation-completeness
+      - multi-message-turn
+      - no-op-when-complete
+      - continuation-failure-preserves-primary
+
+failure:
+  publish_on_degraded: ready
+
+observability:
+  record:
+    - status
+    - issue_codes
+    - policy_revision
+  redact:
+    - answer
+    - quote
+    - snippet
+    - canonical_url

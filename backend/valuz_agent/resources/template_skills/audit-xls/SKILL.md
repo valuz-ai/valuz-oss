@@ -1,6 +1,6 @@
 ---
 name: audit-xls
-description: Audit financial models and Excel workbooks for global equity analysis. Covers US / HK / A-share and other markets, cross-checking model numbers against valuz-stock financial statements (income_statement / balance_sheet / cashflow_statement / stock_quote) and tracing source disclosures via valuz-search (earnings_search / filings_search + document_raw_content). Triggers on "模型审计", "财务模型核查", "audit model", "audit xlsx", "模型QC", or "check model [company]".
+description: Audit financial models and Excel workbooks for global equity analysis. Covers US / HK / A-share and other markets, cross-checking model numbers against valuz-data financial statements (get_financial_statements(statement_type=income|balance|cash_flow) / get_snapshots) and tracing source disclosures via valuz-search (search_documents(category="all")) and valuz-data (get_document/get_document_chunks). Triggers on "模型审计", "财务模型核查", "audit model", "audit xlsx", "模型QC", or "check model [company]".
 ---
 
 # audit-xls
@@ -11,17 +11,18 @@ Audit **financial models** — comprehensive quality checks for equity financial
 
 ## Data Sources
 
-**代码格式约定（首次取数务必区分）**：valuz-stock 用**裸代码**（US `AAPL`、HK `00700`、A 股 `600519`）；valuz-search 用 `market:ticker`（US `US:AAPL`、HK `HK:00700`、A 股 `SH:600519`）。
+**代码格式约定**：两个连接器都使用规范 `MARKET:LOCAL` 代码（`US:AAPL`、`HK:00700`、`SH:600519`）；非规范输入先调用 `resolve_symbols`。
 
-### valuz-stock — 取数核对用的财务/行情数值
+### valuz-data — 取数核对用的财务/行情数值
 
 把模型里的财务数核回源（period 取 `annual`/`quarterly`，`limit` 控制期数）：
 
 ```text
-income_statement(symbol, period, limit)     → 利润表 actuals，核对收入/成本/净利
-balance_sheet(symbol, period, limit)        → 资产负债表，核对资产/负债/权益
-cashflow_statement(symbol, period, limit)   → 现金流量表，核对经营/投资/筹资现金流
-stock_quote(symbol)                         → 价格/市值核对（share count × price = market cap）
+get_financial_statements(statement_type="income", symbol, period, limit)   → 利润表 actuals
+get_financial_statements(statement_type="balance", symbol, period, limit)  → 资产负债表
+get_financial_statements(statement_type="cash_flow", symbol, period, limit) → 现金流量表
+get_snapshots(symbol)                         → 当前价格核对
+get_valuations(kind="latest", symbol)        → 市值与估值核对
 ```
 
 ### valuz-search — 财报/公告原文溯源
@@ -29,10 +30,10 @@ stock_quote(symbol)                         → 价格/市值核对（share coun
 核对模型中历史数据的科目口径与附注时，先检索文档、再取原文：
 
 ```text
-earnings_search(query, symbols, num, start_datetime, end_datetime)  → 定位财报/业绩文档
-filings_search(query, symbols, num, start_datetime, end_datetime)   → 定位公告/招股书等披露文件
-document_raw_content(...)   → 取命中文档的原文（核对口径、附注）
-document_fetch(...)         → 取文档结构化内容
+search_documents(category="earnings_reports", query, symbols, ...) → 定位财报/业绩文档
+search_documents(category="filings", query, symbols, ...)          → 定位公告/招股书等披露文件
+get_document(kind="raw_content", document_id=...)   → 取命中文档的原文（核对口径、附注）
+get_document_chunks(kind="list", document_id=...)         → 取文档结构化内容
 ```
 
 ## Workflow
@@ -73,9 +74,9 @@ document_fetch(...)         → 取文档结构化内容
 
 ### Step 3: Historicals Cross-Check
 
-**Cross-check against source data:** 用 `income_statement`/`balance_sheet`/`cashflow_statement`(valuz-stock) 把表内历史数核回源；对存疑科目用 `earnings_search`/`filings_search` 定位文档、`document_raw_content`(valuz-search) 取原文核对口径。
+**Cross-check against source data:** 用 `get_financial_statements`(valuz-data) 把表内历史数核回源；对存疑科目用 `search_documents` 定位文档、`get_document(kind="raw_content")`(valuz-data) 取原文核对口径。
 
-| Line Item | Model | income_statement / balance_sheet / cashflow_statement (valuz-stock) | Difference | Explanation |
+| Line Item | Model | get_financial_statements(statement_type=income|balance|cash_flow) (valuz-data) | Difference | Explanation |
 |-----------|-------|----------------|------------|-------------|
 | 营业收入 / Revenue | | | | |
 | 营业成本 / COGS | | | | |
@@ -112,7 +113,7 @@ document_fetch(...)         → 取文档结构化内容
 | BS balances | Assets = L + E | ✓ |
 | Cash flow ties | Ending cash = Beginning + Net CF | ✓ |
 | Debt schedule | Short + Long = Total debt | ✓ |
-| Share count | Shares × Price = Market cap（对回 `stock_quote`,valuz-stock） | ✓ |
+| Share count | Shares × Price = Market cap（对回 `get_snapshots`,valuz-data） | ✓ |
 | Minority interest | Correct % applied | ✓ |
 
 ### Step 6: Forecast Logic Check

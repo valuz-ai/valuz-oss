@@ -37,10 +37,17 @@ export function useTaskEvents(
   const keepAlive = opts?.keepAlive ?? false;
   const [lastSeq, setLastSeq] = useState(0);
   const lastSeqRef = useRef(0);
-  lastSeqRef.current = lastSeq;
+  // ``sequence`` is per-task: a consumer that swaps task ids without
+  // remounting must NOT open the new stream at the old task's cursor (a task
+  // with fewer events than that cursor would receive nothing, ever). Track
+  // which task the cursor belongs to and read 0 until the new stream has
+  // reported its own seq — no setState-in-effect needed.
+  const seqOwnerRef = useRef<string | null>(null);
+  lastSeqRef.current = seqOwnerRef.current === taskId ? lastSeq : 0;
 
   useEffect(() => {
     if (!taskId) return;
+    seqOwnerRef.current = taskId;
     const close = fetchEventSource(
       // Re-read on each (re)connect so the latest seq cursor is threaded.
       () => tasksApi.eventsStreamUrl(taskId, lastSeqRef.current, keepAlive),

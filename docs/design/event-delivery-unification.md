@@ -426,7 +426,12 @@ conversation + list surfaces; all reconciliation server-side.**
   lifecycle sequence or REST-reseed.
 - **Live-only deltas (`seq: null`) never replay.** A reconnect can lose
   partial-token granularity but never a milestone (milestones are persisted).
-  Unchanged from today; acceptable.
+  Unchanged from today; acceptable. *(Still true. Since 2026-07-26 the kernel
+  additionally re-sends the accumulated STATE of an in-flight stream to a
+  client that joins mid-turn — see
+  [live-partial-snapshot.md](live-partial-snapshot.md). No delta is persisted
+  or replayed, and no cursor is added; only the accumulated text is recovered,
+  not the chunk boundaries.)*
 - **Two chat implementations converge into one.** This is a large diff on a
   5000-line file; it is also the point — the desktop fork is where most of the
   polling and divergence live.

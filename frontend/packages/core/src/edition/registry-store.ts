@@ -57,6 +57,16 @@ interface RegistryState {
   unregisterNavItem: (id: string) => void;
 
   registerSlot: (name: string, registration: SlotRegistration) => () => void;
+  /**
+   * Surfaces an overlay has temporarily suppressed, keyed by surface id.
+   *
+   * Some overlay modes take the page over — a selection mode, for instance —
+   * and leaving the composer live during one invites an action that makes no
+   * sense in that mode. A slot cannot express this: slots ADD nodes, and what
+   * is needed is the host declining to render its own.
+   */
+  suppressed: Record<string, boolean>;
+  setSuppressed: (surface: string, on: boolean) => void;
   unregisterSlot: (name: string, id: string) => void;
 }
 
@@ -203,6 +213,10 @@ export const useRegistryStore = create<RegistryState>((set) => ({
     set((state) => ({
       navItems: state.navItems.filter((n) => n.id !== id),
     })),
+
+  suppressed: {},
+  setSuppressed: (surface, on) =>
+    set((state) => ({ suppressed: { ...state.suppressed, [surface]: on } })),
 
   registerSlot: (name, registration) => {
     set((state) => ({

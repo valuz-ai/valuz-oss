@@ -76,7 +76,7 @@ const CollapsibleSection = ({
 }) => {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="overflow-hidden rounded-[10px] border border-surface-border bg-surface-soft">
+    <div className="overflow-hidden rounded-xl border border-surface-border bg-surface-soft">
       <button
         type="button"
         className="flex h-10 w-full items-center gap-2 px-3 transition-colors hover:bg-surface-muted/60"
@@ -129,7 +129,7 @@ export const ChatContextPanel = ({
       <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4">
         {/* Instructions */}
         {instructions ? (
-          <div className="rounded-[10px] border border-surface-border bg-surface-soft p-4">
+          <div className="rounded-xl border border-surface-border bg-surface-soft p-4">
             <SectionTitle
               title="Instructions"
               action={
@@ -152,7 +152,7 @@ export const ChatContextPanel = ({
 
         {/* Skills */}
         {(skillItems ?? FALLBACK_SKILLS).length > 0 ? (
-          <div className="rounded-[10px] border border-surface-border bg-surface-soft p-4">
+          <div className="rounded-xl border border-surface-border bg-surface-soft p-4">
             <SectionTitle
               title="Skills"
               action={
@@ -220,14 +220,14 @@ export const ChatContextPanel = ({
         >
           <div className="space-y-2">
             {uploadedDocs.length > 0 && (
-              <div className="text-[10px] uppercase tracking-[0.7px] text-ink-section">
+              <div className="text-micro uppercase tracking-[0.7px] text-ink-section">
                 {t("knowledge.uploaded")}
               </div>
             )}
             {uploadedDocs.map((doc) => (
               <div
                 key={doc.name}
-                className="group flex items-center gap-2 rounded-[8px] border border-surface-border bg-surface px-3 py-2.5"
+                className="group flex items-center gap-2 rounded-lg border border-surface-border bg-surface px-3 py-2.5"
               >
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm text-ink-heading">
@@ -255,7 +255,7 @@ export const ChatContextPanel = ({
                 {uploadedDocs.length > 0 && (
                   <div className="my-1 border-t border-surface-border" />
                 )}
-                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.7px] text-ink-section">
+                <div className="flex items-center gap-1.5 text-micro uppercase tracking-[0.7px] text-ink-section">
                   <Database className="h-3 w-3" />{" "}
                   {t("knowledge.knowledgeBase")}
                 </div>
@@ -264,7 +264,7 @@ export const ChatContextPanel = ({
             {kbDocs.map((doc) => (
               <div
                 key={doc.id ?? doc.name}
-                className="rounded-[8px] border border-surface-border bg-surface px-3 py-2.5"
+                className="rounded-lg border border-surface-border bg-surface px-3 py-2.5"
               >
                 <div className="truncate text-sm text-ink-heading">
                   {doc.name}
@@ -282,7 +282,7 @@ export const ChatContextPanel = ({
             {onAttachDocuments && (
               <button
                 type="button"
-                className="w-full rounded-[8px] border border-dashed border-surface-border-hover py-2 text-xs text-ink-body transition-colors hover:bg-surface"
+                className="w-full rounded-lg border border-dashed border-surface-border-hover py-2 text-xs text-ink-body transition-colors hover:bg-surface"
                 onClick={onAttachDocuments}
               >
                 {t("knowledge.refFromKb")}
@@ -295,7 +295,7 @@ export const ChatContextPanel = ({
         {onUploadFile && (
           <button
             type="button"
-            className="flex items-center gap-3 rounded-[10px] border border-surface-border bg-surface-soft px-4 py-3 text-left transition-colors hover:bg-surface-muted/60"
+            className="flex items-center gap-3 rounded-xl border border-surface-border bg-surface-soft px-4 py-3 text-left transition-colors hover:bg-surface-muted/60"
             onClick={onUploadFile}
           >
             <Upload className="h-4 w-4 text-ink-body" />

@@ -57,7 +57,7 @@ beforeEach(() => {
     project_name: "示例项目",
   });
   createAssistantMock.mockReset();
-  createAssistantMock.mockResolvedValue({ agent_slug: "valuz-helper" });
+  createAssistantMock.mockResolvedValue({ agent_slug: "valurion" });
 });
 
 describe("OnboardingFlow", () => {

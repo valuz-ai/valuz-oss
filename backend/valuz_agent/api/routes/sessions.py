@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
@@ -13,6 +13,8 @@ from valuz_agent.adapters.event_sse_adapter import iter_events_sse
 from valuz_agent.api.deps import get_current_user_id, get_session_service
 from valuz_agent.infra.db import get_async_session
 from valuz_agent.infra.fs_registry import fs_registry
+from valuz_agent.modules.artifacts.datastore import ArtifactDatastore
+from valuz_agent.modules.artifacts.models import ArtifactContentRow, ArtifactRevisionRow
 from valuz_agent.modules.files.uri import build_valuz_file_uri
 from valuz_agent.modules.sessions.datastore import SessionDatastore
 from valuz_agent.modules.sessions.dto import (
@@ -30,10 +32,20 @@ from valuz_agent.modules.sessions.schemas import (
     SessionWorktreeSpec,
 )
 from valuz_agent.modules.sessions.service import SessionService
+from valuz_agent.ports.message_context import HostRef
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
+
+# Attachments are NOT under ``/v1/sessions`` any more. A file uploads on its
+# own — the bytes go to the owner's data dir and the parse is a host task over
+# HTTP, neither of which needs a session — and the turn that ships it binds it.
+# While the session came first, attaching a file had to CREATE one, and under
+# scoped allocation that provisions a sandbox: about three and a half seconds
+# of waiting, measured on a cloud deployment, for a resource the upload never
+# touches.
+attachments_router = APIRouter(prefix="/v1/attachments", tags=["attachments"])
 
 
 def _data_file_path(user_id: str, ref: str) -> Path:
@@ -97,6 +109,19 @@ class SessionPermissionModeRequest(BaseModel):
     """
 
     permission_mode: str
+
+
+class SessionModeRequest(BaseModel):
+    """Body for ``PATCH /v1/sessions/{id}/mode``.
+
+    Session working mode (kernel ``Session.mode``,
+    docs/design/session-modes.md). Same-mode re-set is idempotent;
+    direct ``plan ↔ goal`` transitions are allowed (the kernel composes
+    exit + entry in one reconcile pass). deepagents / deepseek_harness
+    sessions reject non-default modes with 400 (no native primitive).
+    """
+
+    mode: Literal["default", "plan", "goal"]
 
 
 class SessionActionRequest(BaseModel):
@@ -175,6 +200,18 @@ class SessionActionResponse(BaseModel):
     rule_id: str | None = None
 
 
+class HostRefPayload(BaseModel):
+    """Client-declared host location of this message (see ports/message_context).
+
+    Pure context: the backend resolves and validates the reference under the
+    calling user before any provider acts on it; it never grants access.
+    """
+
+    host_type: str = Field(min_length=1, max_length=128)
+    host_id: str = Field(min_length=1, max_length=256)
+    slot: str = Field(default="main", min_length=1, max_length=64)
+
+
 class SessionMessageRequest(BaseModel):
     prompt: str
     # Hints carried over for backward compatibility with the existing chat UI.
@@ -182,6 +219,19 @@ class SessionMessageRequest(BaseModel):
     # frozen value the service ignores them rather than failing.
     provider_id: str | None = None
     model_id: str | None = None
+    # Optional per-turn host location (workbench page, company page, …). Fed
+    # to edition-registered message context providers; plain chats omit it.
+    host_ref: HostRefPayload | None = None
+    # Staged attachments this turn is claiming. Uploaded unbound (see
+    # ``/v1/attachments``), bound here — this is the moment a file stops being
+    # a draft and becomes part of a conversation.
+    #
+    # An explicit list, not "everything this owner has staged": a person may
+    # have a project chat and a quick chat open at once, and sending in one
+    # must not swallow the other's files. These are ids the SERVER minted and
+    # the client is handing back, which is why asking the client for them is
+    # not the same as asking it to invent an identifier.
+    attachment_ids: list[str] | None = None
 
 
 class SessionEventsResponse(BaseModel):
@@ -319,10 +369,12 @@ async def subscribe_events(
 async def send_message(
     session_id: str,
     body: SessionMessageRequest,
+    db: AsyncSession = Depends(get_async_session),
     svc: SessionService = Depends(get_session_service),
     user_id: str = Depends(get_current_user_id),
 ) -> SessionDetail:
     """Start agent execution in background. Returns immediately with running status."""
+    await _bind_staged_attachments(db, user_id, session_id, body.attachment_ids)
     try:
         return await svc.send_message(
             session_id,
@@ -330,6 +382,7 @@ async def send_message(
             provider_id=body.provider_id,
             model_id=body.model_id,
             user_id=user_id,
+            host_ref=_host_ref_of(body),
         )
     except BudgetExceeded as exc:
         # The session service runs a channel-aware wallet pre-check before the
@@ -351,11 +404,28 @@ async def send_message(
 async def send_message_sync(
     session_id: str,
     body: SessionMessageRequest,
+    db: AsyncSession = Depends(get_async_session),
     user_id: str = Depends(get_current_user_id),
     svc: SessionService = Depends(get_session_service),
 ) -> SessionRunResponse:
     """Synchronous variant — blocks until execution completes. For tests."""
-    return await svc.send_message_sync(session_id, body.prompt, user_id=user_id)
+    await _bind_staged_attachments(db, user_id, session_id, body.attachment_ids)
+    return await svc.send_message_sync(
+        session_id,
+        body.prompt,
+        user_id=user_id,
+        host_ref=_host_ref_of(body),
+    )
+
+
+def _host_ref_of(body: SessionMessageRequest) -> HostRef | None:
+    if body.host_ref is None:
+        return None
+    return HostRef(
+        host_type=body.host_ref.host_type,
+        host_id=body.host_ref.host_id,
+        slot=body.host_ref.slot,
+    )
 
 
 @router.post("/{session_id}/interrupt")
@@ -365,6 +435,46 @@ async def interrupt(
     svc: SessionService = Depends(get_session_service),
 ) -> SessionDetail:
     return await svc.interrupt(session_id, user_id=user_id)
+
+
+@router.post("/{session_id}/prepare", status_code=202)
+async def prepare_session_runtime(
+    session_id: str,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, bool]:
+    """Start the model client in advance without sending user content."""
+    from valuz_agent.adapters import kernel_client
+
+    await kernel_client.prepare_runtime(user_id, session_id)
+    return {"ready": True}
+
+
+class ForkSessionBody(BaseModel):
+    """Body for ``POST /v1/sessions/{id}/fork`` (openapi ``forkSession``)."""
+
+    message_id: str | None = None
+
+
+@router.post("/{session_id}/fork", status_code=201)
+async def fork_session(
+    session_id: str,
+    body: ForkSessionBody | None = None,
+    user_id: str = Depends(get_current_user_id),
+    svc: SessionService = Depends(get_session_service),
+) -> SessionDetail:
+    """Fork a session into a new independent one (docs/design/session-fork.md).
+
+    With ``message_id`` the fork cuts inclusively at that message; without
+    it the whole session forks at its current tail. Synchronous by design
+    (D5): the runtime-native fork runs inside this call, so errors surface
+    here — 409 invalid anchor / turn in flight, 422 runtime unsupported,
+    502 native fork failed (nothing created).
+    """
+    return await svc.fork_session(
+        session_id,
+        message_id=body.message_id if body is not None else None,
+        user_id=user_id,
+    )
 
 
 class QueuedInputCreate(BaseModel):
@@ -510,6 +620,37 @@ async def update_permission_mode(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.patch("/{session_id}/mode")
+async def update_session_mode(
+    session_id: str,
+    body: SessionModeRequest,
+    user_id: str = Depends(get_current_user_id),
+    svc: SessionService = Depends(get_session_service),
+) -> SessionDetail:
+    """Enter or leave a session working mode (``default``/``plan``/``goal``).
+
+    Thin façade over the kernel's ``POST /sessions/{id}/mode``
+    (docs/design/session-modes.md). ``plan`` makes the runtime plan
+    before touching anything — Claude applies the typed
+    ``set_permission_mode("plan")`` mutator immediately and exits
+    through the ``ExitPlanMode`` approval card; ``goal`` arms the goal
+    loop (the kernel wraps the next non-slash user message as
+    ``/goal <text>``); ``default`` exits the current mode. The runtime
+    can also exit on its own (approved plan / completed goal) —
+    surfaced live as ``session.mode_changed{by:"runtime"}``.
+
+    Only ``claude_agent`` and ``codex`` support non-default modes; the
+    kernel 400s deepagents / deepseek_harness and that error is
+    re-surfaced verbatim here.
+    """
+    from valuz_agent.adapters.kernel_client import KernelClientError
+
+    try:
+        return await svc.set_session_mode(session_id, body.mode, user_id=user_id)
+    except KernelClientError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+
+
 @router.patch("/{session_id}/effort")
 async def update_session_effort(
     session_id: str,
@@ -639,7 +780,9 @@ async def set_session_extra_skills(
 
 class AttachmentItem(BaseModel):
     id: str
-    session_id: str
+    # NULL while staged — the attachment exists before any session does, and
+    # the turn that ships it binds it.
+    session_id: str | None
     filename: str
     stored_path: str  # absolute path the agent can Read directly
     parsed_path: str | None = None  # parsed markdown for agent attachment
@@ -679,6 +822,85 @@ class AddKbAttachmentsRequest(BaseModel):
     doc_ids: list[str]
 
 
+#: How many unbound attachments one owner may stage at once.
+#:
+#: "Upload without a session" means a file can outlive the draft that produced
+#: it — the person attaches something, changes their mind, and never sends. A
+#: cap rather than an age: an age needs a number nobody can derive, and would
+#: only ever be enforced by whoever uploads next, so the person who abandons a
+#: draft and never comes back never triggers their own cleanup. A cap is
+#: bounded by construction. It is the same kind of rule as
+#: ``max_session_attachments``, one level up.
+_MAX_STAGED_ATTACHMENTS = 20
+
+
+async def _bind_staged_attachments(
+    db: AsyncSession,
+    user_id: str,
+    session_id: str,
+    attachment_ids: list[str] | None,
+) -> None:
+    """Claim ``attachment_ids`` for ``session_id``.
+
+    The one place a file stops being a draft. Before this it is the owner's
+    staging area; after it, it belongs to a conversation and shows up in that
+    session's attachment list.
+
+    Silent about ids it could not bind. They are the replay cases — a resent
+    turn, a stale composer — and the rows are already where they belong, so
+    refusing the message would fail a turn over bookkeeping the person cannot
+    see or fix. ``bind_attachments`` only touches unbound rows, so a replay
+    cannot move a file out of the conversation that already has it.
+    """
+    store = SessionDatastore(db)
+    if attachment_ids:
+        await store.bind_attachments(user_id, attachment_ids, session_id)
+        return
+
+    # No list. Almost always right — most turns are plain text — but it is also
+    # exactly what a client bug looks like from here, and we have had two: a
+    # staged attachment sitting on the server with its parse finished while the
+    # turn meant to carry it named nothing.
+    #
+    # Logged, not repaired. Binding the owner's staged set instead would let a
+    # plain-text turn in one composer swallow a file staged in another, and
+    # trading a visible bug for a silent one is not a trade. This line is what
+    # tells us which of the two happened, without guessing.
+    staged = await store.list_unbound_attachments(user_id)
+    if staged:
+        logger.warning(
+            "turn on session %s named no attachments while %d staged file(s) "
+            "wait unbound — a plain-text turn, or a client that failed to "
+            "claim them",
+            session_id,
+            len(staged),
+        )
+
+
+async def _enforce_staging_quota(db: AsyncSession, user_id: str) -> None:
+    """Hold this owner to ``_MAX_STAGED_ATTACHMENTS`` unbound attachments.
+
+    Evicts the oldest overflow rather than refusing the upload: the file in
+    front of the person is the one they care about, and a draft they abandoned
+    twenty files ago is not. Best-effort — being over quota must never fail the
+    upload that noticed it; the cap re-asserts on the next one.
+    """
+    try:
+        store = SessionDatastore(db)
+        staged = await store.list_unbound_attachments(user_id)
+        for row in staged[_MAX_STAGED_ATTACHMENTS:]:
+            for key in (row.stored_path, row.parsed_path):
+                if not key:
+                    continue
+                try:
+                    _data_file_path(user_id, key).unlink(missing_ok=True)
+                except (OSError, ValueError):
+                    logger.debug("staging quota: could not remove %s", key, exc_info=True)
+            await store.delete_attachment(user_id, row.id)
+    except Exception:  # noqa: BLE001 — over quota must never fail an upload
+        logger.warning("staging quota enforcement failed", exc_info=True)
+
+
 def _row_to_item(row: SessionAttachmentRow) -> AttachmentItem:
     return AttachmentItem(
         id=row.id,
@@ -711,92 +933,91 @@ async def list_attachments(
     client-side. The runtime path uses ``_load_pending_attachments``
     instead, which is pending-only.
     """
-    if await data_reader().get_session(user_id, session_id) is None:
-        raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
+    await _enforce_staging_quota(db, user_id)
     rows = await SessionDatastore(db).list_attachments(user_id, session_id, include_consumed=True)
     return AttachmentListResponse(items=[_row_to_item(r) for r in rows])
 
 
-@router.post("/{session_id}/attachments", status_code=201)
+@attachments_router.get("")
+async def list_staged_attachments(
+    db: AsyncSession = Depends(get_async_session),
+    user_id: str = Depends(get_current_user_id),
+) -> AttachmentListResponse:
+    """This owner's staged attachments — uploaded, not yet claimed by a turn.
+
+    What a composer restores its chips from after a reload, and what it polls
+    while a parse is running. Owner-wide rather than per composer: the server
+    does not know how many composers a person has open, and the client already
+    knows which ids it staged, so it filters. Erring the other way would need
+    the client to invent a grouping key, which is the coupling this endpoint
+    exists to remove.
+    """
+    rows = await SessionDatastore(db).list_unbound_attachments(user_id)
+    return AttachmentListResponse(items=[_row_to_item(r) for r in rows])
+
+
+@attachments_router.post("", status_code=201)
 async def upload_attachment(
-    session_id: str,
     file: UploadFile,
     db: AsyncSession = Depends(get_async_session),
     user_id: str = Depends(get_current_user_id),
 ) -> AttachmentItem:
-    """Stream-write *file* into the session's attachment dir and persist a row.
+    """Stream-write *file* into the owner's staging area and persist a row.
 
-    The returned ``stored_path`` is an absolute filesystem path that becomes the
-    kernel's ``UserMessage.attachments[].source_path`` (the original file the
-    agent operates on); the parsed markdown extract, when ready, rides along as
+    Unbound: ``session_id`` is NULL until a turn claims it. The upload needs
+    nothing from a session — the bytes land under ``data_dir(user_id)`` and the
+    parse is a host task that talks to a parser over HTTP — so it no longer
+    waits for one to exist.
+
+    The returned ``stored_path`` is the path that becomes the kernel's
+    ``UserMessage.attachments[].source_path`` (the original file the agent
+    operates on); the parsed markdown extract, when ready, rides along as
     ``parsed_path`` so the agent can ``Read`` text cheaply. The kernel never
     copies bytes — valuz holds the canonical store and the kernel only
     references it.
     """
-    if await data_reader().get_session(user_id, session_id) is None:
-        raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
-
-    # Session-wide attachment cap (local + KB-sourced counted together).
-    from valuz_agent.infra.config import settings as _settings
-
-    current_count = len(await SessionDatastore(db).list_attachments(user_id, session_id))
-    if current_count >= _settings.max_session_attachments:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Session attachment limit reached "
-                f"({_settings.max_session_attachments}); remove a file before "
-                f"uploading another."
-            ),
-        )
+    await _enforce_staging_quota(db, user_id)
 
     safe_name = (file.filename or "upload").replace("/", "_").replace("\\", "_")
-    # Disambiguate if the same filename is uploaded twice. Don't try to be
-    # clever about content hashing — the user can always rename later.
-    name = safe_name
-    key = f"attachments/{session_id}/{name}"
-    if _data_file_path(user_id, key).is_file():
-        stem = Path(safe_name).stem
-        suffix = Path(safe_name).suffix
-        i = 1
-        while _data_file_path(user_id, key).is_file():
-            name = f"{stem}-{i}{suffix}"
-            key = f"attachments/{session_id}/{name}"
-            i += 1
-
     data = await file.read()
-    size = len(data)
-    target = _data_file_path(user_id, key)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
 
-    # Persist the row as ``parsing`` and kick the heavy parse off the event
-    # loop in a background task. The parser (PyMuPDF / MarkItDown / RapidOCR)
-    # is CPU/IO-heavy and fully synchronous — running it inline froze the
-    # whole single-threaded server for the parse's duration (every other
-    # request / SSE stream stalled). The upload now returns at once; the
-    # frontend polls ``GET .../attachments`` until ``parse_status`` flips to
-    # ``ready`` / ``failed``. A turn sent before parsing finishes falls back
-    # to the raw ``stored_path`` (see ``_attachment_paths`` and the
-    # additional-context builder).
+    # Persist the row FIRST: its id is what the files are filed under, so the
+    # session never appears in a path and binding is a column write rather than
+    # a move. (While the path carried the session id, an attachment could not
+    # exist before one did — the constraint this whole change removes.)
     row = SessionAttachmentRow(
-        session_id=session_id,
-        filename=file.filename or name,
-        stored_path=key,
+        session_id=None,
+        filename=file.filename or safe_name,
+        stored_path="",
         parsed_path=None,
         parse_status="parsing",
-        size_bytes=size,
+        size_bytes=len(data),
         mime_type=file.content_type,
         source_kind="local",
     )
-    await SessionDatastore(db).create_attachment(user_id, row)
+    store = SessionDatastore(db)
+    await store.create_attachment(user_id, row)
     await db.refresh(row)
-    _spawn_attachment_parse(row.id, key, session_id, name, user_id)
+
+    key = f"attachments/{row.id}/{safe_name}"
+    target = _data_file_path(user_id, key)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    row.stored_path = key
+    await db.commit()
+    await db.refresh(row)
+
+    # The parse is heavy (PyMuPDF / anydoc / RapidOCR) and fully synchronous;
+    # running it inline froze the single-threaded server for its duration.
+    # The upload returns at once as ``parsing`` and the client polls. A turn
+    # sent before it settles ships the raw ``stored_path`` — degraded, never
+    # blocked.
+    _spawn_attachment_parse(row.id, key, safe_name, user_id)
     return _row_to_item(row)
 
 
 def _write_parse_result(
-    result: Any, session_id: str, base_name: str, user_id: str
+    result: Any, attachment_id: str, base_name: str, user_id: str
 ) -> tuple[str | None, str, str | None, str | None]:
     """Write a ``ParseResult``'s markdown into ``dest_dir`` as
     ``{base_name}.parsed.md`` and classify the outcome.
@@ -828,10 +1049,10 @@ def _write_parse_result(
     if not markdown or error:
         reason = str(error) if error else "parser produced no content"
         return None, "failed", engine, reason[:2000]
-    parsed_key = f"attachments/{session_id}/{base_name}.parsed.md"
+    parsed_key = f"attachments/{attachment_id}/{base_name}.parsed.md"
     i = 1
     while _data_file_path(user_id, parsed_key).is_file():
-        parsed_key = f"attachments/{session_id}/{base_name}-{i}.parsed.md"
+        parsed_key = f"attachments/{attachment_id}/{base_name}-{i}.parsed.md"
         i += 1
     target = _data_file_path(user_id, parsed_key)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -856,7 +1077,7 @@ async def _build_attachment_parser(db: Any, user_id: str) -> Any:
 _PARSE_TASKS: set[asyncio.Task[None]] = set()
 
 # Cap concurrent *local* (SYNC) parses. ``to_thread`` keeps a single parse off
-# the event loop, but a CPU-bound parser (pymupdf4llm / markitdown) holds the
+# the event loop, but a CPU-bound parser (pymupdf4llm) holds the
 # GIL in stretches, so N simultaneous parses (e.g. the user re-uploading the
 # same heavy PDF several times) would still starve the loop. Bounding the
 # worker threads to a small number keeps the loop getting fair time slices.
@@ -884,7 +1105,7 @@ def _is_runtime_native(path: str) -> bool:
 
 
 def _spawn_attachment_parse(
-    attachment_id: str, source: str, session_id: str, base_name: str, user_id: str
+    attachment_id: str, source: str, base_name: str, user_id: str
 ) -> None:
     """Parse ``source_path`` through the CONFIGURED parser and persist it.
 
@@ -912,6 +1133,7 @@ def _spawn_attachment_parse(
 
     async def _run() -> None:
         from valuz_agent.infra.db import async_unit_of_work
+        from valuz_agent.ports.parser_backend import ParseOptions
         from valuz_agent.ports.parser_plugin import ParserPluginMode
 
         parsed_path: str | None = None
@@ -928,14 +1150,17 @@ def _spawn_attachment_parse(
             src_path = _resolve_file_key_path(user_id, source)
             if src_path is None:
                 raise FileNotFoundError(f"attachment source not found: {source}")
+            # Ownership stamp for durable side-effects (polling rows,
+            # valuz-oss#841); local parsers ignore it.
+            parse_options = ParseOptions(user_id=user_id)
             if router.plugin_mode_for(src_path) == ParserPluginMode.ASYNC_POLL:
-                result = await router.parse(src_path)
+                result = await router.parse(src_path, parse_options)
             else:
                 # Bound concurrent CPU-bound local parses (see semaphore note).
                 async with _LOCAL_PARSE_SEMAPHORE:
-                    result = await asyncio.to_thread(router.parse_sync, src_path)
+                    result = await asyncio.to_thread(router.parse_sync, src_path, parse_options)
             parsed_path, parse_status, engine, error_message = _write_parse_result(
-                result, session_id, base_name, user_id
+                result, attachment_id, base_name, user_id
             )
         except Exception as exc:  # noqa: BLE001 — contain; never crash the loop
             logger.exception("Background parse failed for attachment %s", attachment_id)
@@ -965,9 +1190,8 @@ def _spawn_attachment_parse(
     task.add_done_callback(_PARSE_TASKS.discard)
 
 
-@router.post("/{session_id}/attachments/kb", status_code=201)
+@attachments_router.post("/kb", status_code=201)
 async def add_kb_attachments(
-    session_id: str,
     body: AddKbAttachmentsRequest,
     db: AsyncSession = Depends(get_async_session),
     user_id: str = Depends(get_current_user_id),
@@ -995,17 +1219,14 @@ async def add_kb_attachments(
     docs return 400 with the offending id so the picker can surface
     the conflict instead of silently dropping the selection.
     """
-    if await data_reader().get_session(user_id, session_id) is None:
-        raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
     if not body.doc_ids:
         # Empty list is a no-op (picker confirmed with nothing
         # selected) — return the current attachment list instead of
         # erroring so the frontend doesn't need to special-case.
-        rows = await SessionDatastore(db).list_attachments(user_id, session_id)
-        return AttachmentListResponse(items=[_row_to_item(r) for r in rows])
+        return AttachmentListResponse(items=[])
 
     ds = SessionDatastore(db)
-    existing = await ds.list_attachments(user_id, session_id)
+    existing = await ds.list_unbound_attachments(user_id)
     already_attached = {r.source_kb_doc_id for r in existing if r.source_kind == "kb_doc"}
 
     from valuz_agent.infra.config import settings as _settings
@@ -1027,6 +1248,7 @@ async def add_kb_attachments(
         )
 
     doc_ds = DocumentDatastore(db)
+    created: list[SessionAttachmentRow] = []
     for doc_id in body.doc_ids:
         if doc_id in already_attached:
             continue
@@ -1048,7 +1270,7 @@ async def add_kb_attachments(
         # blocks the whole event loop). The poller flips the row to
         # ``ready`` / ``failed`` once the background task finishes.
         row = SessionAttachmentRow(
-            session_id=session_id,
+            session_id=None,
             filename=doc.source_filename,
             stored_path=doc.source_path,
             parsed_path=None,
@@ -1061,23 +1283,29 @@ async def add_kb_attachments(
         )
         await ds.create_attachment(user_id, row)
         await db.refresh(row)
-        _spawn_attachment_parse(row.id, doc.source_path, session_id, safe_name, user_id)
+        created.append(row)
+        _spawn_attachment_parse(row.id, doc.source_path, safe_name, user_id)
 
-    rows = await ds.list_attachments(user_id, session_id)
-    return AttachmentListResponse(items=[_row_to_item(r) for r in rows])
+    # Only what this call created.
+    #
+    # Returning the owner's whole staging set instead would hand a composer
+    # files staged in another one — the server has no notion of which composer
+    # a staged file belongs to (deliberately: an attachment exists before any
+    # composer commits to a session), so the answer to "what did I just
+    # attach" has to be exactly that and nothing more.
+    return AttachmentListResponse(items=[_row_to_item(r) for r in created])
 
 
-@router.delete("/{session_id}/attachments/{attachment_id}", status_code=204)
+@attachments_router.delete("/{attachment_id}", status_code=204)
 async def delete_attachment(
-    session_id: str,
     attachment_id: str,
     db: AsyncSession = Depends(get_async_session),
     user_id: str = Depends(get_current_user_id),
 ) -> Response:
     """Remove a session attachment.
 
-    Only ever unlinks files the **session** owns under
-    ``attachment_dir(session_id)``:
+    Only ever unlinks files this attachment owns under
+    ``attachments/{attachment_id}/``:
 
     - ``source_kind="local"`` — both ``stored_path`` (the raw upload)
       and ``parsed_path`` (its ``.parsed.md`` sidecar) live in the
@@ -1092,11 +1320,11 @@ async def delete_attachment(
     """
     import os
 
-    if await data_reader().get_session(user_id, session_id) is None:
-        raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
     ds = SessionDatastore(db)
     row = await ds.get_attachment(user_id, attachment_id)
-    if row is None or row.session_id != session_id:
+    # Owner scoping is the whole check now — ``get_attachment`` is per owner,
+    # and an attachment no longer belongs to a session until a turn claims it.
+    if row is None:
         raise HTTPException(status_code=404, detail=f"Attachment {attachment_id!r} not found")
     # Local rows own both paths; KB rows own only the parsed
     # derivative — their ``stored_path`` is a KB-owned source file.
@@ -1133,9 +1361,17 @@ async def delete_attachment(
 
 
 class ArtifactItem(BaseModel):
-    id: str
+    """One delivered artifact, at the version this session produced.
+
+    Field names are unchanged from when a delivery was a single mutable row, so
+    existing clients keep working; ``file_path`` now points at the immutable
+    snapshot rather than the agent's working copy, which is the same absolute
+    path the model was handed and the same one ``ref`` wraps.
+    """
+
+    id: str  # revision id — a version, not a deliverable
     session_id: str
-    file_path: str  # absolute path the agent wrote (kept for back-compat)
+    file_path: str  # absolute path of THIS version's snapshot
     # Stable file identity — the client passes this to POST /v1/files/resolve to
     # get an access address (local path or signed URL). Derived from file_path;
     # not stored. See docs/design/file-address-resolution.md.
@@ -1144,10 +1380,37 @@ class ArtifactItem(BaseModel):
     file_size: int
     mime_type: str | None = None
     created_at: int
+    # Version coordinates. The panel shows "v3" and can offer the history.
+    artifact_id: str
+    version_no: int
+    is_current: bool
 
 
 class ArtifactListResponse(BaseModel):
     items: list[ArtifactItem]
+
+
+def _artifact_item(
+    revision: ArtifactRevisionRow,
+    content: ArtifactContentRow | None,
+    *,
+    session_id: str,
+    is_current: bool,
+) -> ArtifactItem:
+    path = revision.abs_path or ""
+    return ArtifactItem(
+        id=revision.id,
+        session_id=session_id,
+        file_path=path,
+        ref=build_valuz_file_uri(path) if path else "",
+        file_name=revision.file_name,
+        file_size=content.byte_size if content else 0,
+        mime_type=revision.mime_type,
+        created_at=revision.created_at,
+        artifact_id=revision.artifact_id,
+        version_no=revision.version_no,
+        is_current=is_current,
+    )
 
 
 @router.get("/{session_id}/artifacts")
@@ -1156,28 +1419,45 @@ async def list_artifacts(
     db: AsyncSession = Depends(get_async_session),
     user_id: str = Depends(get_current_user_id),
 ) -> ArtifactListResponse:
-    """Return the files the agent delivered for ``session_id``.
+    """Return the deliverables this session produced, one row each.
 
-    These are recorded by the built-in ``deliver_artifacts`` MCP tool (the
-    inverse of the upload pipeline) and rendered in the session panel's
-    "生成文件" section. Durable — no per-turn staging — so the full set is
-    returned every time.
+    Session-scoped on purpose: the panel answers "what did this conversation
+    produce", so a revision another session made to the same deliverable does
+    not appear here. ``is_current`` distinguishes a version that is still the
+    latest from one that has since been superseded — without it the panel would
+    present a stale version as the deliverable.
+
+    One row per *deliverable*, not per revision. A session that delivered the
+    same file three times produced one thing, three times — listing it three
+    times reads as three files, and now that the panel can expand a version
+    history, it would also show that history once per row. The row carries the
+    latest version THIS session produced.
     """
     if await data_reader().get_session(user_id, session_id) is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
-    rows = await SessionDatastore(db).list_artifacts(user_id, session_id)
+    ds = ArtifactDatastore(db)
+    revisions = await ds.list_session_revisions(user_id, session_id)
+    # Oldest first from the datastore, so the last write per artifact wins and
+    # each deliverable ends up on its newest version from this session.
+    latest = {rev.artifact_id: rev for rev in revisions}
+    ordered = sorted(latest.values(), key=lambda rev: rev.created_at)
+
+    # Two queries for the whole list rather than two per row — the panel reloads
+    # this on every turn end.
+    heads = await ds.get_heads(user_id, [rev.artifact_id for rev in ordered])
+    contents = await ds.get_contents(user_id, [rev.content_id for rev in ordered])
+
     return ArtifactListResponse(
         items=[
-            ArtifactItem(
-                id=r.id,
-                session_id=r.session_id,
-                file_path=r.file_path,
-                ref=build_valuz_file_uri(r.file_path),
-                file_name=r.file_name,
-                file_size=r.file_size,
-                mime_type=r.mime_type,
-                created_at=r.created_at,
+            _artifact_item(
+                revision,
+                contents.get(revision.content_id),
+                session_id=session_id,
+                is_current=(
+                    (head := heads.get(revision.artifact_id)) is not None
+                    and head.revision_id == revision.id
+                ),
             )
-            for r in rows
+            for revision in ordered
         ]
     )

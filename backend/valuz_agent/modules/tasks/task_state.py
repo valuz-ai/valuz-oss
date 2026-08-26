@@ -57,16 +57,6 @@ TaskStatus = Literal[
 
 TASK_STATUSES: tuple[str, ...] = get_args(TaskStatus)
 
-# Statuses that mean the task is "still in motion" — sweepers / recovery
-# scan these. Excludes terminals (completed/stopped/abandoned/blocked) and
-# draft (no lead session yet, nothing to sweep / recover).
-RECOVERABLE_STATUSES: frozenset[str] = frozenset({"active", "paused"})
-
-# Statuses where the task is "alive" from a UX perspective — the user can
-# still act on it (commit a draft, resume a pause, talk to a running task).
-# Terminals (completed/stopped/abandoned/blocked) are excluded.
-LIVE_STATUSES: frozenset[str] = frozenset({"draft", "active", "paused"})
-
 # Hard-terminal states — no transitions out.
 # ``stopped`` is intentionally NOT here even though it's a closed
 # user-driven end-state: keeping it revivable lets a chat "继续刚才那个
@@ -108,19 +98,6 @@ def is_valid_status(status: str) -> bool:
     return status in TASK_STATUSES
 
 
-def is_terminal(status: str) -> bool:
-    return status in TERMINAL_STATUSES
-
-
-def is_live(status: str) -> bool:
-    return status in LIVE_STATUSES
-
-
-def is_recoverable(status: str) -> bool:
-    """True when startup recovery / sweepers should consider this task."""
-    return status in RECOVERABLE_STATUSES
-
-
 def assert_transition(from_status: str | None, to_status: str) -> None:
     """Raise ``TaskStateError`` if ``from_status → to_status`` is illegal.
 
@@ -141,15 +118,36 @@ def assert_transition(from_status: str | None, to_status: str) -> None:
 
 __all__ = [
     "ALLOWED_TRANSITIONS",
-    "LIVE_STATUSES",
-    "RECOVERABLE_STATUSES",
     "TASK_STATUSES",
     "TERMINAL_STATUSES",
     "TaskStateError",
     "TaskStatus",
     "assert_transition",
-    "is_live",
-    "is_recoverable",
-    "is_terminal",
     "is_valid_status",
 ]
+
+
+# Member final statuses that are NOT reviewable as deliverables: the member
+# died (terminated/error) or was cancelled by the user/stop_member
+# (cancelled/interrupted). Consumers must NOT flip the plan node to
+# ``in_review`` for these — it is already parked in ``rework``, and presenting
+# a dead run as a pending deliverable confuses the lead.
+NON_REVIEWABLE_DONE: frozenset[str] = frozenset(
+    {"terminated", "error", "cancelled", "interrupted"}
+)
+
+
+# A ``valuz_task_session`` row's lifecycle. The one task vocabulary that was
+# still enforced only by a comment, while plan nodes, task status, member
+# dispositions and inbox kinds all had a Literal.
+#   active    — run in flight
+#   paused    — parked by a task pause/stop; resumable
+#   completed — finished normally, or approved by review_subtask
+#   rejected  — user-cancelled (stop_member / an interrupted member turn)
+#   archived  — the run errored terminally
+RunStatus = Literal["active", "paused", "completed", "rejected", "archived"]
+
+# What a member session is: the lead's own run, or one dispatched subtask.
+# Spelled three ways before (``kind`` on the row, ``role`` on the actor loop)
+# for one set of two values.
+RunKind = Literal["lead", "subtask"]

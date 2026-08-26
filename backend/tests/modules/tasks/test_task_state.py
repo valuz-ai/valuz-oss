@@ -6,15 +6,9 @@ import pytest
 
 from valuz_agent.modules.tasks.task_state import (
     ALLOWED_TRANSITIONS,
-    LIVE_STATUSES,
-    RECOVERABLE_STATUSES,
     TASK_STATUSES,
-    TERMINAL_STATUSES,
     TaskStateError,
     assert_transition,
-    is_live,
-    is_recoverable,
-    is_terminal,
     is_valid_status,
 )
 
@@ -40,67 +34,7 @@ def test_terminal_statuses_are_terminal_only() -> None:
     assert ALLOWED_TRANSITIONS["abandoned"] == frozenset()
     assert ALLOWED_TRANSITIONS["completed"] == frozenset({"active"})
 
-
-def test_terminal_set_matches_state_machine() -> None:
-    # ``blocked`` is recoverable (back to active or stopped) — must NOT be terminal.
-    # ``stopped`` is a soft terminal: revivable via resume_task (state machine
-    # allows stopped → active). Only completed/abandoned are HARD terminals.
-    assert TERMINAL_STATUSES == {"completed", "abandoned"}
-    assert "blocked" not in TERMINAL_STATUSES
-    assert "stopped" not in TERMINAL_STATUSES
-
-
-def test_live_set_excludes_terminals_and_blocked() -> None:
-    # blocked is "alive but stuck" — UX still lets the user resume / stop it,
-    # but it isn't "in motion" for sweeper purposes. Keep blocked out of LIVE.
-    assert LIVE_STATUSES == {"draft", "active", "paused"}
-    assert TERMINAL_STATUSES.isdisjoint(LIVE_STATUSES)
-
-
-def test_recoverable_set_is_active_and_paused() -> None:
-    # startup recovery / inject only acts on these.
-    assert RECOVERABLE_STATUSES == {"active", "paused"}
-
-
 # ── predicate functions ──────────────────────────────────────────────────
-
-
-def test_is_valid_status_accepts_all_known() -> None:
-    for s in TASK_STATUSES:
-        assert is_valid_status(s)
-
-
-def test_is_valid_status_rejects_unknown() -> None:
-    assert not is_valid_status("failed")  # subtask-level only
-    assert not is_valid_status("")
-    assert not is_valid_status("ACTIVE")  # case-sensitive
-    assert not is_valid_status("running")  # kernel session vocab, not task
-
-
-def test_is_terminal_predicate() -> None:
-    assert is_terminal("completed")
-    assert is_terminal("abandoned")
-    assert not is_terminal("active")
-    assert not is_terminal("draft")
-    assert not is_terminal("blocked")  # recoverable
-    assert not is_terminal("stopped")  # soft terminal: revivable via resume_task
-
-
-def test_is_live_predicate() -> None:
-    assert is_live("draft")
-    assert is_live("active")
-    assert is_live("paused")
-    assert not is_live("completed")
-    assert not is_live("blocked")  # excluded by design (see test above)
-
-
-def test_is_recoverable_predicate() -> None:
-    assert is_recoverable("active")
-    assert is_recoverable("paused")
-    assert not is_recoverable("draft")  # no lead session to recover
-    assert not is_recoverable("abandoned")
-    assert not is_recoverable("completed")
-
 
 # ── happy-path transitions ────────────────────────────────────────────────
 

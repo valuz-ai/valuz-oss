@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from valuz_agent.api.deps import get_current_user_id, get_document_service
 from valuz_agent.modules.docs.errors import KbNotFound
 from valuz_agent.modules.docs.service import (
+    PREVIEW_MAX_WINDOW_BYTES,
+    PREVIEW_WINDOW_BYTES,
+    SUPPORTED_EXTS,
     DocSearchHit,
     DocumentDetail,
     DocumentLibraryService,
@@ -13,6 +16,7 @@ from valuz_agent.modules.docs.service import (
     ImportTaskResult,
     KbDetail,
     KbTreeNode,
+    is_ingestible,
 )
 
 router = APIRouter(tags=["docs"])
@@ -145,10 +149,36 @@ async def upload_kb_files(
     """
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
+    # Read the batch and check it BEFORE writing anything, so a rejected file
+    # cannot leave half its siblings on disk. Previously every file was written
+    # and the rescan then skipped anything unrecognised (``_run_rescan`` phase
+    # 3), so the upload returned 201, the file landed in the KB folder, and no
+    # document row ever appeared — with nothing anywhere telling the user.
+    #
+    # ``is_ingestible`` is NOT an extension allow-list: an undeclared extension
+    # that decodes as UTF-8 (source files, config, logs) is accepted and read
+    # as text, exactly as the parser's own fallback would. Only genuinely
+    # binary payloads — .zip, .exe, media — are refused.
+    payloads: list[tuple[str, bytes]] = []
+    rejected: list[str] = []
+    for upload in files:
+        name = upload.filename or ""
+        data = await upload.read()
+        payloads.append((name, data))
+        if not is_ingestible(name, data):
+            rejected.append(name)
+    if rejected:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Cannot read as text or a supported document: {', '.join(rejected)}. "
+                f"Supported document types: {', '.join(sorted(SUPPORTED_EXTS))}; "
+                f"any UTF-8 text file is also accepted."
+            ),
+        )
     try:
-        for upload in files:
-            data = await upload.read()
-            await svc.write_file(user_id, kb_id, upload.filename or "", data)
+        for name, data in payloads:
+            await svc.write_file(user_id, kb_id, name, data)
     except KbNotFound as exc:
         raise HTTPException(status_code=404, detail=f"Unknown KB: {kb_id}") from exc
     except ValueError as exc:
@@ -236,11 +266,30 @@ async def get_doc(
 @router.get("/v1/docs/{doc_id}/preview")
 async def get_preview(
     doc_id: str,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(PREVIEW_WINDOW_BYTES, ge=1, le=PREVIEW_MAX_WINDOW_BYTES),
     user_id: str = Depends(get_current_user_id),
     svc: DocumentLibraryService = Depends(get_document_service),
-) -> dict[str, str]:
-    md = await svc.get_document_preview(user_id, doc_id)
-    return {"document_id": doc_id, "markdown": md}
+) -> dict[str, object]:
+    """One window of a document's parsed text.
+
+    Bounded by default rather than on request: this used to return the file
+    whole, and the caller that hung the browser on a 1.05 MB preview was
+    precisely the one that would not have known to pass a limit.
+
+    ``truncated`` is derived here rather than left to the caller — a client
+    comparing ``offset + returned_bytes`` against ``total_bytes`` itself is a
+    client that can get it wrong, and this is the flag a UI shows a user.
+    """
+    window = await svc.get_document_preview(user_id, doc_id, offset=offset, limit=limit)
+    return {
+        "document_id": doc_id,
+        "markdown": window.markdown,
+        "offset": window.offset,
+        "returned_bytes": window.returned_bytes,
+        "total_bytes": window.total_bytes,
+        "truncated": window.truncated,
+    }
 
 
 @router.delete("/v1/docs/{doc_id}")

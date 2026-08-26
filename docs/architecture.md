@@ -49,6 +49,69 @@ Two runtime forms ship from the same backend:
 A Go control CLI (`valuz`) is the runtime control plane — it starts, stops, and
 diagnoses these processes but owns none of their implementation.
 
+### Desktop model network egress
+
+The packaged desktop may enable an Electron-main-process **Egress Manager** for
+model traffic. It is a desktop platform service, not part of Host or Kernel:
+
+```text
+Codex / Claude ── model base_url ──> loopback model ingress ─┐
+                                                            ├─ Resolver
+DeepAgents / provider test ─ explicit transport ─> forward ─┤  + Connector
+                                                            └─ env / system PAC / DIRECT ─> LLM provider
+```
+
+Both loopback frontends share one immutable proxy-environment snapshot, the
+Chromium `resolveProxy()` result, and the same DIRECT / HTTP CONNECT / SOCKS5
+connector. Codex and Claude use a registered model `base_url`, so Valuz does not
+redirect their tool shells, MCP servers, plugin traffic, browser traffic, or
+the whole sidecar by adding process-wide proxy variables. DeepAgents and
+provider tests use explicitly owned HTTP clients with environment proxy lookup
+disabled for those clients only.
+
+Electron sends a one-shot desktop control envelope to the backend over the
+managed sidecar's inherited stdin. It contains a random, memory-only desktop
+control token and the current egress bootstrap. The backend uses the token only
+to authenticate its loopback network-control endpoint; the renderer, model
+runtimes, tools, and MCP processes never receive it. Runtime descriptors remain
+short-lived, are renewed while in use, and are revoked on cleanup. All
+listeners bind to random loopback ports; no local CA or HTTPS MITM is installed.
+Connection-owner changes are coordinated by Electron as a local transaction.
+It queries the backend's global running-runs view; if work is active, Settings
+requires explicit confirmation, Electron interrupts every affected session and
+waits for those calls to complete. It then switches the local frontends,
+replaces the backend's in-memory egress registry through the authenticated
+loopback endpoint, and rebuilds affected model runtimes. The normal
+same-version path does not restart the backend; restart is limited to an older
+or unhealthy backend that cannot accept live reconfiguration. Cancellation or
+an interrupt failure leaves the previous mode intact.
+Initialization failure keeps the UI/backend available but blocks admitted model
+traffic until the user selects model-client-managed connections, preventing an
+unnoticed direct-connect fallback.
+
+Existing idle sessions have an explicit runtime-preparation path. Opening one
+can initialize the Codex app-server and thread without sending user content or a
+model request; Send joins the same per-session creation lock and reuses the warm
+runtime. A connection-owner change evicts stale descriptors and may prepare at
+most the most-recent eligible Codex session. Claude and DeepAgents implement the
+same no-op-safe contract but do not proactively create remote sessions in this
+phase.
+
+The Settings monitor bridges local initialization and actual network traffic.
+It first shows allowlisted runtime/thread/dispatch phases, then replaces that
+placeholder with the real route, health, and staged timings when a model
+connection appears. Terminal phases remove the activity immediately, even if
+the runtime remains in the bounded warm cache, so one task is not displayed as
+two connections and completed work is not presented as active.
+
+The desktop capability is available without a launch flag, while new installs
+default to model-client-managed connections until the user opts into Valuz
+management in Settings. `VALUZ_EGRESS_FRONTENDS=0` is an emergency development
+disable. Standalone/headless servers receive no Electron capability and retain
+their existing explicit-proxy-environment/direct behavior. The canonical
+behavior, admission matrix, and rollout criteria live in
+[`docs/design/unified-network-egress.md`](design/unified-network-egress.md).
+
 ---
 
 ## 2. Backend: Host + Kernel
@@ -130,8 +193,10 @@ The `(runtime, provider, model)` triple is locked once a session is created; `mo
 
 Host and kernel keep **separate SQLite files** under `~/.valuz-oss/`: the host's
 `valuz.db` (the `valuz_*` business tables) and the kernel's `kernel.db`
-(`sessions` / `messages` / `events`, its langgraph checkpoint tables, and the
-kernel `alembic_version`). The split lets a sandboxed/remote kernel own its file
+(`sessions` / `messages` / `events` and the kernel `alembic_version`; the
+DeepAgents runtime's langgraph checkpoints live in a sibling
+`deepagents_checkpoints.db` — or a file-based checkpoint tree in the cloud
+sandbox — never in `kernel.db`). The split lets a sandboxed/remote kernel own its file
 exclusively and gives the in-process (`make dev`) and sandboxed (`make
 dev-sandbox`) kernels one shared session history. An explicit `database_url`
 (e.g. a shared Postgres) co-locates both layers in one store instead. Both run
@@ -154,7 +219,14 @@ safe.
 
 The kernel's three tables are accessed through a single **DataService** layer
 (host-mounted router; backend swappable between host SQLite and a remote
-Postgres; sandbox access is JWT-authenticated). See
+Postgres). An untrusted sandbox presents one opaque credential to the trusted
+host surfaces: `Authorization: Bearer` for DataService and `X-Valuz-Internal`
+for built-in MCP. Both await the same
+`SandboxCredentialVerifierPort`, derive the owner from its verified claims, and
+fail closed; request bodies and owner headers are never identity sources. OSS
+binds the existing per-owner HMAC verifier, while managed editions may replace
+the port with an async database/cache/identity-service implementation without
+changing either wire contract. See
 [design/data-service-architecture.md](design/data-service-architecture.md).
 
 ---
@@ -208,11 +280,14 @@ A **task** is a lead/member orchestration. A durable `valuz_task`
 header owns a structured **plan DAG**; `valuz_task_session` indexes the kernel
 sessions it owns — exactly one **lead** session plus N **member** sub-runs. The
 lead drives a `plan → dispatch(by key) → review(approve|rework) → finish` loop:
-it dispatches a ready plan node to a member (a sibling `asyncio` task in its own
-subrun directory), the member returns a manifest synchronously into the lead's
-tool call, and the lead reviews it (approve unlocks dependents; rework sends
-feedback). The task subsystem is layered (Transport / Services / Runtime /
-Domain) with a state-first `LiveMemberRegistry` as its keystone.
+dispatch is **non-blocking** — the member runs as a sibling `asyncio` actor in
+the task's shared cwd, reports back through an in-process mailbox
+(`member_done`), and the lead collects results with `await_members` before
+reviewing (approve unlocks dependents; rework sends feedback). The subsystem is
+layered (Transport / Services / Runtime / Domain): every actor is started
+through one launch primitive (`tasks/launcher.py`), every plan write goes
+through one authorized door (`tasks/plan_commands.py`, shared by the MCP tools
+and REST), and a state-first `LiveMemberRegistry` is the coordination keystone.
 
 ---
 
@@ -286,7 +361,7 @@ desktop implementations.
 
 The desktop client's auto-updater reads from Tencent COS + Tencent CDN
 (`files.valuz.cn`), not GitHub Releases. The packaged client's `app-update.yml`
-points at `https://files.valuz.cn/valuz-<edition>/`; the manifests
+points at `https://files.valuz.cn/<edition>/` (e.g. `oss/`); the manifests
 `latest-mac.yml` / `latest-linux-arm64.yml` / `latest.yml` live at that base.
 CI uploads every build to both Tencent COS (auto-update feed) and GitHub
 Releases (manual download + backup) — see

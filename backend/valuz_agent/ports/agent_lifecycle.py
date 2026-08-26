@@ -11,6 +11,8 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from valuz_agent.modules.agents.models import AgentRow
 
 AgentSaveOrigin = Literal["created", "updated"]
@@ -23,21 +25,23 @@ class AgentLifecycleHook(ABC):
     async def after_agent_saved(
         self,
         *,
+        db: AsyncSession,
         user_id: str,
         agent: AgentRow,
         origin: AgentSaveOrigin,
     ) -> None:
-        """Called after an agent has been created or updated."""
+        """Called after save with the still-uncommitted owning unit of work."""
         ...
 
     @abstractmethod
     async def before_agent_delete(
         self,
         *,
+        db: AsyncSession,
         user_id: str,
         agent: AgentRow,
     ) -> None:
-        """Called before an agent is deleted locally; raising aborts deletion."""
+        """Called before delete with the same unit of work; raising aborts deletion."""
         ...
 
 
@@ -45,6 +49,7 @@ class NoopAgentLifecycleHook(AgentLifecycleHook):
     async def after_agent_saved(
         self,
         *,
+        db: AsyncSession,
         user_id: str,
         agent: AgentRow,
         origin: AgentSaveOrigin,
@@ -54,6 +59,7 @@ class NoopAgentLifecycleHook(AgentLifecycleHook):
     async def before_agent_delete(
         self,
         *,
+        db: AsyncSession,
         user_id: str,
         agent: AgentRow,
     ) -> None:

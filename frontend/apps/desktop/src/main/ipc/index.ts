@@ -1,7 +1,7 @@
 import { t } from "@valuz/shared/i18n";
 import { app, dialog, ipcMain, shell } from "electron";
 import { spawn } from "node:child_process";
-import { readFile, copyFile, mkdir, unlink } from "node:fs/promises";
+import { copyFile, mkdir, open, unlink } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { getMainWindow } from "../windows";
 import { openExternalIfSafe } from "../security";
@@ -43,9 +43,12 @@ export const registerIpcHandlers = () => {
   });
 
   ipcMain.handle("open_in_finder", async (_event, args: { path: string }) => {
-    if (args?.path) {
-      await shell.openPath(args.path);
-    }
+    // ``shell.openPath`` reports failure by RESOLVING with a message, not by
+    // rejecting — so awaiting and discarding it turns every failure (no app
+    // for the extension, quarantine, a path that no longer exists) into a
+    // click that does nothing at all. Hand it back.
+    if (!args?.path) return "";
+    return await shell.openPath(args.path);
   });
 
   ipcMain.handle(
@@ -61,19 +64,23 @@ export const registerIpcHandlers = () => {
   ipcMain.handle(
     "read_file_content",
     async (_event, args: { path: string }) => {
-      if (!args?.path) return { content: null };
+      if (!args?.path) return { content: null, truncated: false };
+      const maxBytes = 5 * 1024 * 1024;
+      let handle: Awaited<ReturnType<typeof open>> | null = null;
       try {
-        const buf = await readFile(args.path);
-        if (buf.length > 100 * 1024) {
-          return {
-            content:
-              buf.subarray(0, 100 * 1024).toString("utf-8") +
-              "\n… (file too large, truncated)",
-          };
-        }
-        return { content: buf.toString("utf-8") };
+        handle = await open(args.path, "r");
+        const stat = await handle.stat();
+        const previewBytes = Math.min(stat.size, maxBytes);
+        const buf = Buffer.allocUnsafe(previewBytes);
+        const { bytesRead } = await handle.read(buf, 0, previewBytes, 0);
+        return {
+          content: buf.subarray(0, bytesRead).toString("utf-8"),
+          truncated: stat.size > maxBytes,
+        };
       } catch {
-        return { content: null };
+        return { content: null, truncated: false };
+      } finally {
+        await handle?.close();
       }
     },
   );
@@ -133,6 +140,17 @@ export const registerIpcHandlers = () => {
   // get torn down before the Electron process exits. Renderer cannot
   // call ``app.quit()`` directly from sandbox.
   ipcMain.handle("app_quit", async () => {
+    app.quit();
+  });
+
+  // Full client restart — used by Settings → Backup after staging a restore
+  // (the staged restore applies at next backend boot, so quit alone would
+  // leave the user to reopen the app by hand). ``app.relaunch()`` schedules a
+  // fresh instance for after exit; ``app.quit()`` then runs the normal
+  // ``before-quit`` teardown (sidecars incl. the agent server stop cleanly),
+  // and the relaunched instance boots the backend, which applies the restore.
+  ipcMain.handle("app_relaunch", async () => {
+    app.relaunch();
     app.quit();
   });
 

@@ -50,6 +50,16 @@ class AgentNotFound(NotFoundError):
     message = "Agent not found in the library"
 
 
+class AutomationPlaybookNotFound(NotFoundError):
+    error_code = 404_716
+    message = "Automation Playbook definition not found"
+
+
+class AutomationPlaybookVersionNotFound(NotFoundError):
+    error_code = 404_717
+    message = "Automation Playbook version not found"
+
+
 # ── 422 ────────────────────────────────────────────────────────────────
 
 
@@ -100,6 +110,18 @@ class AutomationTaskOnlyOnProject(UnprocessableEntityError):
 
     error_code = 422_717
     message = "Task mode is only available for projects"
+
+
+class AutomationPlaybookTaskUnsupported(UnprocessableEntityError):
+    """Pinned PlaybookRuns currently finalize with synchronous chat turns.
+
+    Task-mode Automation only records kickoff success while the task keeps
+    running elsewhere, so it cannot truthfully close the PlaybookRun yet.
+    Reject the combination until task lifecycle reconciliation is connected.
+    """
+
+    error_code = 422_718
+    message = "Pinned Playbooks currently require chat automation mode"
 
 
 # ── 409 ────────────────────────────────────────────────────────────────

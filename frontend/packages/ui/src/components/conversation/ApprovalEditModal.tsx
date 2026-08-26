@@ -100,12 +100,12 @@ export const ApprovalEditModal = memo(function ApprovalEditModal({
             }}
             disabled={submitting}
             className={cn(
-              "min-h-[220px] font-mono text-[12px] leading-snug",
+              "min-h-[220px] font-mono text-xs leading-snug",
               error && "border-rose-400 focus-visible:ring-rose-400/30",
             )}
             spellCheck={false}
           />
-          {error ? <p className="text-[12px] text-rose-600">{error}</p> : null}
+          {error ? <p className="text-xs text-rose-600">{error}</p> : null}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onCancel} disabled={submitting}>

@@ -9,6 +9,207 @@ servers:
     description: Local development
 
 paths:
+  /v1/channels/wecom-aibot/bindings/{agent_slug}:
+    get:
+      summary: Get an agent's local WeCom AIBot binding
+      operationId: getWeComAIBotBinding
+      tags: [channels]
+      parameters:
+        - name: agent_slug
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Current local agent binding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WeComAIBotBinding"
+    put:
+      summary: Update an agent's local WeCom AIBot binding
+      operationId: updateWeComAIBotBinding
+      tags: [channels]
+      parameters:
+        - name: agent_slug
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WeComAIBotBindingUpdate"
+      responses:
+        "200":
+          description: Updated local agent binding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WeComAIBotBinding"
+
+  /v1/channels/feishu/bindings/{agent_slug}:
+    get:
+      summary: Get an agent's Feishu bot binding
+      operationId: getFeishuBinding
+      tags: [channels]
+      parameters:
+        - name: agent_slug
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Current Feishu agent binding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FeishuBinding"
+    put:
+      summary: Update an agent's Feishu bot binding
+      operationId: updateFeishuBinding
+      tags: [channels]
+      parameters:
+        - name: agent_slug
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FeishuBindingUpdate"
+      responses:
+        "200":
+          description: Updated Feishu agent binding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FeishuBinding"
+
+  /v1/channels/feishu/bindings/{agent_slug}/test:
+    post:
+      summary: Probe a Feishu binding — validate credentials and report connection status
+      operationId: testFeishuBinding
+      tags: [channels]
+      parameters:
+        - name: agent_slug
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Credential check outcome plus live long-connection status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FeishuBindingTestResult"
+
+  /v1/channels/feishu/{channel_instance_id}/callback:
+    post:
+      summary: Feishu bot event callback
+      operationId: feishuChannelCallback
+      tags: [channels]
+      parameters:
+        - name: channel_instance_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        "200":
+          description: Feishu URL verification challenge or success acknowledgement
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [challenge]
+                    properties:
+                      challenge: {type: string}
+                  - type: object
+                    required: [code]
+                    properties:
+                      code: {type: integer, enum: [0]}
+        "401":
+          description: Signature or token rejected
+
+  /v1/channels/wecom/{channel_instance_id}/callback:
+    get:
+      summary: WeCom channel URL verification
+      operationId: verifyWeComChannelCallback
+      tags: [channels]
+      parameters:
+        - name: channel_instance_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: msg_signature
+          in: query
+          required: true
+          schema: {type: string}
+        - name: timestamp
+          in: query
+          required: true
+          schema: {type: string}
+        - name: nonce
+          in: query
+          required: true
+          schema: {type: string}
+        - name: echostr
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Decrypted echostr
+          content:
+            text/plain:
+              schema: {type: string}
+        "401":
+          description: Signature rejected
+    post:
+      summary: WeCom channel message callback
+      operationId: weComChannelCallback
+      tags: [channels]
+      parameters:
+        - name: channel_instance_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: msg_signature
+          in: query
+          required: true
+          schema: {type: string}
+        - name: timestamp
+          in: query
+          required: true
+          schema: {type: string}
+        - name: nonce
+          in: query
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/xml:
+            schema: {type: string}
+          text/xml:
+            schema: {type: string}
+      responses:
+        "200":
+          description: WeCom success acknowledgement
+          content:
+            text/plain:
+              schema: {type: string, enum: [success]}
+        "401":
+          description: Signature rejected
   /v1/runs:
     get:
       summary: List runs for the activity overview (running sessions / tasks)
@@ -23,6 +224,19 @@ paths:
             enum: [running, finished]
             default: running
           description: running = in-flight; finished = recently completed/failed runs
+        - name: project_id
+          in: query
+          required: false
+          schema: {type: string}
+          description: >-
+            Scope the recency window to one project. The unscoped window is
+            global, so a project whose conversations are older than its tail
+            cannot surface under its own sidebar row without this.
+        - name: limit
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, maximum: 200}
+          description: Max runs per group (defaults to the server-side budget)
       responses:
         "200":
           description: Runs
@@ -73,6 +287,7 @@ paths:
       operationId: listAgents
       tags: [agents]
       parameters:
+        - $ref: "#/components/parameters/AcceptLanguage"
         - name: source
           in: query
           required: false
@@ -96,6 +311,8 @@ paths:
       summary: Create a user-defined Agent
       operationId: createAgent
       tags: [agents]
+      parameters:
+        - $ref: "#/components/parameters/AcceptLanguage"
       requestBody:
         required: true
         content:
@@ -117,6 +334,7 @@ paths:
       operationId: getAgent
       tags: [agents]
       parameters:
+        - $ref: "#/components/parameters/AcceptLanguage"
         - name: slug
           in: path
           required: true
@@ -136,6 +354,7 @@ paths:
       operationId: updateAgent
       tags: [agents]
       parameters:
+        - $ref: "#/components/parameters/AcceptLanguage"
         - name: slug
           in: path
           required: true
@@ -183,6 +402,33 @@ paths:
           description: Agent not found
         "409":
           description: Agent still deployed to one or more projects (解除派驻 first; pass cascade=true to force)
+  /v1/agents/{slug}/copy:
+    post:
+      summary: Copy portable Agent configuration
+      operationId: copyAgent
+      tags: [agents]
+      parameters:
+        - $ref: "#/components/parameters/AcceptLanguage"
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CopyAgentRequest"
+      responses:
+        "201":
+          description: Copied standard Agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "404":
+          description: Agent not found
   /v1/agents/{slug}/deployments:
     get:
       summary: List the projects an agent is deployed (派驻) into
@@ -216,12 +462,35 @@ paths:
                           description: Project-local member handle.
         "404":
           description: Agent not found
+  /v1/agents/{slug}/effective-resources:
+    get:
+      summary: Resolve an all-available Agent's current resources
+      operationId: getAgentEffectiveResources
+      tags: [agents]
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Secret-free current resource manifest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EffectiveResourceManifest"
+        "404":
+          description: Agent not found
+        "409":
+          description: Agent uses explicit resources
   /v1/projects/{project_id}/agents:
     get:
       summary: List project member agents
       operationId: listProjectAgents
       tags: [agents]
       parameters:
+        - $ref: "#/components/parameters/AcceptLanguage"
         - name: project_id
           in: path
           required: true
@@ -245,6 +514,7 @@ paths:
       operationId: createBlankAgent
       tags: [agents]
       parameters:
+        - $ref: "#/components/parameters/AcceptLanguage"
         - name: project_id
           in: path
           required: true
@@ -271,6 +541,7 @@ paths:
       operationId: deployAgent
       tags: [agents]
       parameters:
+        - $ref: "#/components/parameters/AcceptLanguage"
         - name: project_id
           in: path
           required: true
@@ -395,6 +666,36 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Task"
+  /v1/projects/{project_id}/tasks:draft:
+    post:
+      summary: Open a draft task (chat plan-then-execute)
+      description: >-
+        Creates the task header in status=draft with plan_version=0. No lead
+        session is started — the originating chat session is recorded as the
+        draft-phase plan writer. Commit with tasks:commit; discard with
+        tasks:abandon.
+      operationId: draftTask
+      tags: [tasks]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DraftTaskRequest"
+      responses:
+        "201":
+          description: Draft created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DraftTask"
+        "400":
+          description: Project or lead agent not found
   /v1/projects/{project_id}/worktrees:
     get:
       summary: List the project's git worktrees (git is the source of truth)
@@ -448,83 +749,153 @@ paths:
           description: Project or worktree not found
         "409":
           description: Worktree holds unmerged work and ``force`` was not set
-  /v1/projects/{project_id}/files/{file_path}:
-    get:
-      summary: Read a project file as an artifact preview
-      operationId: readProjectFileArtifact
-      tags: [projects]
-      parameters:
-        - name: project_id
-          in: path
-          required: true
-          schema: {type: string}
-        - name: file_path
-          in: path
-          required: true
-          schema: {type: string}
-          description: Relative project file path. May include slashes when URL-encoded by the client.
-        - name: worktree
-          in: query
-          required: false
-          schema: {type: string}
-          description: >
-            Optional worktree name. When set, the path is resolved inside that
-            worktree's checkout (a worktree session's cwd, design D7) instead of
-            the shared project cwd. 404 if the named worktree is gone.
+  /v1/files/resolve:
+    post:
+      summary: Resolve file identities to client-accessible addresses
+      description: |
+        Exchanges `valuz-file://` absolute-path identities for local paths or
+        remote presigned URLs. The API returns metadata and capabilities only;
+        file bytes are fetched directly by the client.
+      operationId: resolveFiles
+      tags: [files]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveFilesRequest"
       responses:
         "200":
-          description: Artifact descriptor and preview content
+          description: Resolved address descriptors in request order
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ArtifactFileResponse"
-        "403":
-          description: File is blocked by preview policy
-        "404":
-          description: Project or file not found
+                $ref: "#/components/schemas/ResolveFilesResponse"
         "422":
-          description: Invalid file path
-  /v1/projects/{project_id}/raw-files/{file_path}:
-    get:
-      summary: Stream a project file for renderer use
-      operationId: readProjectRawFile
-      tags: [projects]
-      parameters:
-        - name: project_id
-          in: path
-          required: true
-          schema: {type: string}
-        - name: file_path
-          in: path
-          required: true
-          schema: {type: string}
-          description: Relative project file path. May include slashes when URL-encoded by the client.
-        - name: worktree
-          in: query
-          required: false
-          schema: {type: string}
-          description: >
-            Optional worktree name. When set, the path is resolved inside that
-            worktree's checkout instead of the shared project cwd. 404 if the
-            named worktree is gone.
+          description: Invalid request or more than 256 refs
+  /v1/citations/resolve:
+    post:
+      summary: Resolve a canonical message citation for in-app reading
+      description: |
+        Reloads the citation from the owner-scoped canonical message, checks
+        that it belongs to the requested session, reauthorizes the current
+        document identity, and only then returns a temporary reading address.
+        Source metadata, locators, file paths, and URLs supplied by the client
+        are never trusted.
+      operationId: resolveCitation
+      tags: [citations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveCitationRequest"
       responses:
         "200":
-          description: Raw file bytes
+          description: Current document and best available locator
           content:
-            application/octet-stream:
+            application/json:
               schema:
-                type: string
-                format: binary
-            application/pdf:
-              schema:
-                type: string
-                format: binary
+                $ref: "#/components/schemas/ResolveCitationResponse"
         "403":
-          description: File is blocked by preview policy
+          description: The current owner no longer has document access
         "404":
-          description: Project or file not found
-        "422":
-          description: Invalid file path
+          description: Message, citation, or document unavailable
+  /v1/document-research/sessions:
+    post:
+      summary: Create or restore a locked single-document research session
+      operationId: createDocumentResearchSession
+      tags: [document-research]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DocumentResearchSessionRequest"
+      responses:
+        "201":
+          description: Owner-scoped child session with a server-enforced source scope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentResearchSession"
+        "404":
+          description: Document or origin session unavailable
+  /v1/document-research/documents/{document_id}/summary:
+    get:
+      summary: Get a cached citation-bearing document summary
+      operationId: getDocumentSummary
+      tags: [document-research]
+      parameters:
+        - name: document_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: profile
+          in: query
+          required: false
+          schema: {type: string, enum: [brief, detailed], default: brief}
+      responses:
+        "200":
+          description: Cached artifact, or null when none has been generated
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/DocumentSummaryArtifactV1"
+                  - type: "null"
+        "404":
+          description: Document unavailable to the current owner
+    post:
+      summary: Generate or refresh a citation-bearing document summary
+      operationId: generateDocumentSummary
+      tags: [document-research]
+      parameters:
+        - name: document_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateDocumentSummaryRequest"
+      responses:
+        "200":
+          description: Current summary artifact
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentSummaryArtifactV1"
+        "404":
+          description: Document unavailable to the current owner
+  /v1/document-research/share:
+    post:
+      summary: Copy one stored canonical research answer into its origin chat
+      description: |
+        The client submits identities only. The server reloads the completed
+        source message and copies its canonical citation bundle within the same
+        owner scope; client-authored prose or citations are never accepted.
+      operationId: shareDocumentResearchMessage
+      tags: [document-research]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShareDocumentResearchMessageRequest"
+      responses:
+        "200":
+          description: Imported message identity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SharedResearchMessage"
+        "404":
+          description: Research session, origin, or source message unavailable
+        "409":
+          description: Source message cannot be safely copied
   /v1/tasks:
     get:
       summary: List tasks across every project
@@ -569,6 +940,46 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TaskDetail"
+        "404":
+          description: Task not found
+    delete:
+      summary: Delete a task and its runs and timeline
+      description: >-
+        Removes the task header, its run index and its event log. The kernel
+        sessions are left alone — they are ordinary sessions and are deleted
+        through the sessions API. A running task is refused (409): stop it
+        first, so its actors are not writing to rows that are being removed.
+      operationId: deleteTask
+      tags: [tasks]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Task not found
+        "409":
+          description: Task is still active — stop it first
+  /v1/tasks/{task_id}/usage:
+    get:
+      summary: Aggregated Token usage for every run in a task
+      operationId: getTaskUsage
+      tags: [tasks]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Task-level totals and per-run breakdown
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskTokenUsage"
         "404":
           description: Task not found
   /v1/tasks/{task_id}/events:
@@ -622,6 +1033,212 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Task"
+        "404":
+          description: Task not found
+  /v1/tasks/{task_id}:commit:
+    post:
+      summary: Promote a draft task to active (spawns its lead session)
+      description: >-
+        The draft→active flip is a compare-and-swap on status=draft — of two
+        concurrent commits exactly one wins; the loser gets 400.
+      operationId: commitTask
+      tags: [tasks]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommitTaskRequest"
+      responses:
+        "200":
+          description: Committed — task is active, lead session spawned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id: {type: string}
+                  lead_session_id: {type: string}
+                  status: {type: string}
+                  committed_at: {type: integer, format: int64}
+        "400":
+          description: Not a draft, no plan, or committed concurrently
+        "404":
+          description: Task not found
+  /v1/tasks/{task_id}:abandon:
+    post:
+      summary: Discard a draft task (terminal)
+      operationId: abandonTask
+      tags: [tasks]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AbandonTaskRequest"
+      responses:
+        "200":
+          description: Abandoned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id: {type: string}
+                  status: {type: string}
+        "400":
+          description: Not a draft / changed concurrently
+        "404":
+          description: Task not found
+  /v1/tasks/{task_id}:inject:
+    post:
+      summary: Push a user instruction into the running lead's mailbox
+      description: >-
+        delivered=false with a reason when the lead is offline. Injecting into
+        a HALTED (paused/stopped/blocked) task is treated as resume intent —
+        the task is revived and the text rides the lead's recovery brief
+        (reason=TASK_RESUMED / RESUME_FAILED).
+      operationId: injectIntoTask
+      tags: [tasks]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InjectTaskRequest"
+      responses:
+        "200":
+          description: Delivery outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InjectTaskResult"
+        "404":
+          description: Task not found
+        "422":
+          description: text is required
+  /v1/tasks/{task_id}/plan:
+    get:
+      summary: Read the plan snapshot (+ ready keys, counts, current_version)
+      operationId: getTaskPlan
+      tags: [tasks]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Plan snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskPlan"
+        "404":
+          description: Task not found
+    post:
+      summary: Lay down the initial plan
+      description: >-
+        Errors if a plan with progress already exists (use PATCH). Authorized
+        by task ownership — the request body carries no caller identity.
+      operationId: planTask
+      tags: [tasks]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlanWriteRequest"
+      responses:
+        "200":
+          description: Plan written
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskPlan"
+        "400":
+          description: Invalid plan / plan with progress exists / task not writable
+        "404":
+          description: Task not found
+        "422":
+          description: subtasks is required and must be non-empty
+    patch:
+      summary: Modify the plan (add nodes / patch nodes by key)
+      description: >-
+        Optimistic-lock via expected_version — REQUIRED when the task is
+        active (the CAS token is what protects against a concurrent lead
+        write); 409 carries current_version for refresh-and-retry.
+      operationId: modifyTaskPlan
+      tags: [tasks]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlanWriteRequest"
+      responses:
+        "200":
+          description: Plan updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskPlan"
+        "400":
+          description: Invalid change / task not writable
+        "404":
+          description: Task not found
+        "409":
+          description: PLAN_VERSION_CONFLICT — body carries current_version
+  /v1/tasks/{task_id}/events/stream:
+    get:
+      summary: Live task event stream (SSE)
+      description: >-
+        Server-Sent Events; frames mirror the TaskEvent shape. Closes after
+        the terminal event unless keep_alive=1 (post-terminal notes/audit
+        still stream). after_seq resumes from a known sequence.
+      operationId: streamTaskEvents
+      tags: [tasks]
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: after_seq
+          in: query
+          required: false
+          schema: {type: integer, default: 0}
+        - name: keep_alive
+          in: query
+          required: false
+          schema: {type: integer, enum: [0, 1], default: 0}
+      responses:
+        "200":
+          description: text/event-stream of TaskEvent frames
         "404":
           description: Task not found
   /v1/runs/{session_id}:stop:
@@ -717,6 +1334,43 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/RuntimeListItem"
+
+  # ── Personalization preferences ─────────────────────────────────────
+
+  /v1/settings/preferences:
+    get:
+      summary: Get user personalization preferences
+      operationId: getPreferences
+      tags: [settings]
+      responses:
+        "200":
+          description: Current personalization preferences
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreferencesResponse"
+    patch:
+      summary: Update user personalization preferences
+      operationId: patchPreferences
+      tags: [settings]
+      description: |
+        Only supplied fields are updated. Conversation citations default on;
+        citation verification defaults off because it can add latency and model
+        usage. Verification requires citations. Disabling citations also
+        disables verification.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreferencesPatch"
+      responses:
+        "200":
+          description: Updated personalization preferences
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreferencesResponse"
 
   # ── Memory (inspect / prune / toggle the agent memory system) ────────
 
@@ -828,6 +1482,96 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SystemStatusResponse"
+
+  /v1/system/network-egress:
+    post:
+      summary: Reconfigure desktop-managed model networking
+      operationId: reconfigureNetworkEgress
+      tags: [system]
+      description: |
+        Loopback desktop-control endpoint. Replaces the in-memory egress
+        capability, closes idle model runtimes, and prewarms the most recently
+        used runtime without restarting the backend process.
+      parameters:
+        - name: X-Valuz-Desktop-Token
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NetworkEgressReconfigureRequest"
+      responses:
+        "200":
+          description: Model networking reconfigured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkEgressReconfigureResponse"
+        "401":
+          description: Desktop control capability missing or invalid
+        "409":
+          description: A model runtime is still active
+
+  /v1/system/network-egress/activity:
+    get:
+      summary: Inspect active model runs for a desktop ownership change
+      operationId: getDesktopNetworkEgressActivity
+      tags: [system]
+      description: |
+        Loopback desktop-control endpoint. Reads only the process-local runtime
+        registry; it never queries owner-scoped user data and is authorized by
+        the memory-only desktop capability delivered over sidecar stdin.
+      parameters:
+        - name: X-Valuz-Desktop-Token
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Active model session ids in this backend process
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DesktopNetworkEgressActivityResponse"
+        "401":
+          description: Desktop control capability missing or invalid
+
+  /v1/system/network-egress/interrupt:
+    post:
+      summary: Interrupt confirmed active model runs before changing ownership
+      operationId: interruptDesktopNetworkEgressActivity
+      tags: [system]
+      description: |
+        Loopback desktop-control endpoint. Interrupts only session ids that are
+        currently active in this backend process. The caller must first obtain
+        explicit user confirmation; this endpoint performs no implicit broad
+        cancellation.
+      parameters:
+        - name: X-Valuz-Desktop-Token
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DesktopNetworkEgressInterruptRequest"
+      responses:
+        "200":
+          description: Per-session interruption outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DesktopNetworkEgressInterruptResponse"
+        "401":
+          description: Desktop control capability missing or invalid
 
   # ── Browser (managed chrome-devtools daemon; Settings panel) ──────────
 
@@ -1476,9 +2220,10 @@ paths:
         `context.kind` and stamps `creation_context` onto session metadata so
         the downstream `submit_skill` tool applies the right side-effects on
         confirmation. The session binds `agent_slug` when given; otherwise the
-        backend picks the default assistant (seeded `default-assistant`, then
-        the onboarding-created `valuz-helper`), falling back to an agentless
-        session when neither exists yet.
+        backend picks the built-in `valurion` agent. Historical Helpers remain
+        ordinary Agents rather than aliases. The launcher next tries the legacy
+        default assistant, then falls back to an agentless session when neither
+        system default exists yet.
       operationId: startSkillCreate
       tags: [skills]
       requestBody:
@@ -2181,6 +2926,77 @@ paths:
               schema:
                 $ref: "#/components/schemas/SessionDetail"
 
+  /v1/sessions/{session_id}/prepare:
+    post:
+      summary: Prepare a session model runtime
+      operationId: prepareSessionRuntime
+      tags: [sessions]
+      description: |
+        Initializes persistent model-client resources without dispatching user
+        content. Safe to call repeatedly; a later Send reuses the warm runtime.
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Runtime is ready
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ready]
+                properties:
+                  ready:
+                    type: boolean
+        "404":
+          description: Session not found
+
+  /v1/sessions/{session_id}/fork:
+    post:
+      summary: Fork a session into a new independent session
+      operationId: forkSession
+      tags: [sessions]
+      description: |
+        Duplicates the session — configuration, kernel history, and the
+        runtime-native thread — into a new session and returns it. With
+        ``message_id`` the fork cuts inclusively at that message
+        (message-granularity fork); without it the whole session is forked
+        at its current tail. Non-destructive: the source session is never
+        modified. See docs/design/session-fork.md.
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForkSessionRequest"
+      responses:
+        "201":
+          description: The forked session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDetail"
+        "404":
+          description: Session or anchor message not found
+        "409":
+          description: |
+            Invalid anchor (recorded before anchor persistence, still
+            running, or belongs to another session), or a whole-session
+            fork was requested while a turn is in flight
+        "422":
+          description: Fork is not supported for this session's runtime yet
+        "502":
+          description: The runtime-native fork failed; nothing was created
+
   /v1/sessions/{session_id}/queue:
     get:
       summary: List queued follow-up inputs for a session
@@ -2425,6 +3241,49 @@ paths:
                 $ref: "#/components/schemas/SessionDetail"
         "400":
           description: Invalid mode for this runtime (e.g. auto_review on deepagents)
+        "404":
+          description: Session not found
+
+  /v1/sessions/{session_id}/mode:
+    patch:
+      summary: Update session working mode
+      description: |
+        Enter or leave a session working mode (kernel ``Session.mode``,
+        docs/design/session-modes.md). ``plan`` makes the runtime plan
+        before touching anything: Claude applies the SDK's typed
+        ``set_permission_mode("plan")`` mutator immediately (its
+        ``/plan`` slash is interactive-CLI-only) and exits through the
+        ``ExitPlanMode`` approval card; Codex enters plan per-turn.
+        ``goal`` arms the goal loop — the next non-slash user message
+        is wrapped ``/goal <text>`` by the kernel. ``default`` exits
+        the current mode (plan restores the session's
+        ``permission_mode``; goal dispatches ``/goal clear``). The
+        runtime can also exit on its own (approved plan, completed
+        goal) — surfaced as ``session.mode_changed{by: "runtime"}``.
+        Only ``claude_agent`` and ``codex`` support non-default modes.
+      operationId: updateSessionMode
+      tags: [sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionModeRequest"
+      responses:
+        "200":
+          description: Mode updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDetail"
+        "400":
+          description: Mode not supported for this runtime (deepagents / deepseek_harness)
         "404":
           description: Session not found
 
@@ -2911,7 +3770,7 @@ paths:
         - in: query
           name: kind
           required: true
-          schema: {type: string, enum: [skill, agent, connector]}
+          schema: {type: string, enum: [skill, agent, connector, plugin]}
       responses:
         "200":
           description: Categories listed
@@ -2937,7 +3796,7 @@ paths:
         - in: query
           name: type
           required: true
-          schema: {type: string, enum: [skill, agent_template, agent_team_template, connector]}
+          schema: {type: string, enum: [skill, agent_template, agent_team_template, connector, plugin]}
         - in: query
           name: category
           required: false
@@ -2949,7 +3808,13 @@ paths:
         - in: query
           name: source
           required: false
-          schema: {type: string, enum: [skillhub, valuz_official, modelscope]}
+          description: "Open string — the index decides which sources exist (known today: skillhub, valuz_official, modelscope, redskill, plugin). Unknown values match nothing."
+          schema: {type: string, maxLength: 64}
+        - in: query
+          name: composition
+          required: false
+          description: "`type=plugin` only — `skills_only` (skill suites) or `with_connectors`."
+          schema: {type: string, enum: [skills_only, with_connectors]}
         - in: query
           name: q
           required: false
@@ -3048,6 +3913,302 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiError"
 
+  # ------------------------------------------------------------------
+  # Plugins — the Agent Plugins (1.0.0) install unit: skills + MCP servers.
+  # Members are ordinary library skills / connectors; membership is
+  # many-to-many and uninstall is reference-counted.
+  # ------------------------------------------------------------------
+
+  /v1/plugins:
+    get:
+      summary: List installed plugins
+      operationId: listPlugins
+      tags: [plugins]
+      responses:
+        "200":
+          description: Installed plugins with their members
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginList"
+
+  /v1/plugins/memberships:
+    get:
+      summary: Which plugins each library skill / connector belongs to
+      operationId: getPluginMemberships
+      tags: [plugins]
+      description: |
+        Library card badges. Every requested slug is present in the result,
+        with an empty list when the resource belongs to no plugin.
+      parameters:
+        - in: query
+          name: kind
+          required: true
+          schema: {type: string, enum: [skill, connector]}
+        - in: query
+          name: slugs
+          required: false
+          description: Comma-separated library slugs.
+          schema: {type: string}
+      responses:
+        "200":
+          description: Slug → plugins map
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: array
+                  items: {$ref: "#/components/schemas/PluginMembershipRef"}
+
+  /v1/plugins/preview:
+    post:
+      summary: Dry-run a plugin install
+      operationId: previewPlugin
+      tags: [plugins]
+      description: |
+        Loads the source (same inputs as install) and reports the manifest,
+        the detected layout, the members and which of them conflict with the
+        library — no side effects. Used to show the conflict prompt before
+        installing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PluginInstallRequest"
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: {type: string, format: binary, description: "The plugin zip."}
+                on_conflict: {type: string, enum: [skip, overwrite]}
+      responses:
+        "200":
+          description: Preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginPreview"
+        "400":
+          description: Bad archive / unusable source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "422":
+          description: Not a plugin / fatally invalid manifest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /v1/plugins/install:
+    post:
+      summary: Install a plugin
+      operationId: installPlugin
+      tags: [plugins]
+      description: |
+        Install from an uploaded zip (multipart `file`), a local directory or
+        zip `path`, an http(s) `url`, or a marketplace item id
+        (`market:plugin:<slug>`). Accepts the Agent Plugins layout AND the
+        `.claude-plugin/` / `.codebuddy-plugin/` layouts (auto-detected;
+        `source` becomes `claude_plugin` / `codebuddy_plugin`). Re-installing a
+        same-name plugin from the same source is an update; a same-name plugin
+        from another source is a 409. Per member: absent → install; present &
+        same content → link only; present & different → `on_conflict` `skip`
+        (default; link + `content_differs`) or `overwrite`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PluginInstallRequest"
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: {type: string, format: binary, description: "The plugin zip."}
+                on_conflict: {type: string, enum: [skip, overwrite]}
+      responses:
+        "200":
+          description: Installed / updated / already installed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginInstallResult"
+        "400":
+          description: Bad archive / unusable source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "409":
+          description: Same-name plugin installed from another source
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "422":
+          description: Not a plugin / fatally invalid manifest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "502":
+          description: Download failed (url / market source)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /v1/plugins/{plugin_id}:
+    get:
+      summary: Get one installed plugin
+      operationId: getPlugin
+      tags: [plugins]
+      parameters:
+        - in: path
+          name: plugin_id
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Plugin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginView"
+        "404":
+          description: Unknown plugin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      summary: Uninstall a plugin (reference-counted members)
+      operationId: uninstallPlugin
+      tags: [plugins]
+      description: |
+        Removes the plugin and its package. Each member skill / connector is
+        removed only when this plugin installed it and no other plugin still
+        references it; members referenced elsewhere or that existed before any
+        plugin linked them (`standalone`) are kept.
+      parameters:
+        - in: path
+          name: plugin_id
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Removed / kept member summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginUninstallResult"
+        "404":
+          description: Unknown plugin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /v1/plugins/{plugin_id}/enable:
+    post:
+      summary: Enable a plugin and the members it disabled
+      operationId: enablePlugin
+      tags: [plugins]
+      description: Re-enables only the members this plugin's disable turned off; members the user disabled individually stay disabled.
+      parameters:
+        - in: path
+          name: plugin_id
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Plugin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginView"
+
+  /v1/plugins/{plugin_id}/disable:
+    post:
+      summary: Disable a plugin and all its members
+      operationId: disablePlugin
+      tags: [plugins]
+      parameters:
+        - in: path
+          name: plugin_id
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Plugin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginView"
+
+  /v1/plugins/{plugin_id}/update:
+    post:
+      summary: Update a plugin from its source
+      operationId: updatePlugin
+      tags: [plugins]
+      description: |
+        Re-installs from `source_ref` (market item / URL / local directory)
+        with a member diff: unchanged members are left alone, the plugin's own
+        unmodified members are refreshed, user-modified or foreign members
+        follow `on_conflict`, members the new version no longer declares are
+        released (reference-counted). A one-off zip upload has no source to
+        re-fetch (400).
+      parameters:
+        - in: path
+          name: plugin_id
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PluginUpdateRequest"
+      responses:
+        "200":
+          description: Updated / already up to date
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PluginInstallResult"
+        "400":
+          description: Source cannot be re-fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+
+  /v1/plugins/{plugin_id}/export:
+    get:
+      summary: Export a plugin as an Agent Plugins layout zip
+      operationId: exportPlugin
+      tags: [plugins]
+      description: |
+        Root `plugin.json` + `skills/<slug>/` (current library content) +
+        `mcp.json` (when the plugin declares servers); Valuz-specific data
+        (legacy component directories of a `.claude-plugin` /
+        `.codebuddy-plugin` import) rides under `io.valuz.agent/`.
+      parameters:
+        - in: path
+          name: plugin_id
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Zip archive
+          content:
+            application/zip:
+              schema: {type: string, format: binary}
+
   /v1/notifications:
     get:
       summary: Open notifications + unread count (the unified attention ledger)
@@ -3064,6 +4225,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/NotificationListResponse"
+  /v1/notifications/history:
+    get:
+      summary: Resolved (dismissed / handled) notifications, newest first
+      description: |
+        The read-only history behind the drawer's History tab. Returns resolved
+        rows only — the open set stays on GET /v1/notifications. Paginated by a
+        created_at cursor: pass the last entry's created_at as `before` to load
+        the next page.
+      operationId: listNotificationHistory
+      tags: [notifications]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+        - name: before
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            description: "Only entries with created_at strictly below this (ms cursor)."
+      responses:
+        "200":
+          description: Resolved notifications page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationHistoryResponse"
   /v1/notifications/stream:
     get:
       summary: SSE stream of notification changes (snapshot/added/updated/resolved)
@@ -3072,6 +4262,18 @@ paths:
       responses:
         "200":
           description: SSE stream
+  /v1/notifications:dismiss-all:
+    post:
+      summary: Dismiss (resolve) every open notification of the caller
+      description: |
+        The drawer's "clear all" — resolves every open entry (marking unread ones
+        read) so they move to history. Pending questions stay answerable in
+        their session; only the notification entry is cleared.
+      operationId: dismissAllNotifications
+      tags: [notifications]
+      responses:
+        "200":
+          description: OK
   /v1/notifications:read-all:
     post:
       summary: Mark all of the caller's notifications read
@@ -3107,76 +4309,860 @@ paths:
         "200":
           description: OK
 
+  # ── Local backup (docs/design/client-local-backup.md) ──────────────
+  /v1/backup/config:
+    get:
+      summary: Backup configuration + runtime status (last/next run, usage)
+      operationId: getBackupConfig
+      tags: [backup]
+      responses:
+        "200":
+          description: Backup config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupConfig"
+    put:
+      summary: Update backup configuration (only sent keys change)
+      operationId: putBackupConfig
+      tags: [backup]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupConfigPatch"
+      responses:
+        "200":
+          description: Updated config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupConfig"
+        "400":
+          description: Invalid destination
+  /v1/backup/runs:
+    post:
+      summary: Run a backup now
+      operationId: runBackupNow
+      tags: [backup]
+      responses:
+        "202":
+          description: Backup started
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [started, run]
+                properties:
+                  started: {type: boolean}
+                  run:
+                    $ref: "#/components/schemas/BackupRunProgress"
+        "409":
+          description: A backup is already running
+        "422":
+          description: Backup unsupported for this deployment
+  /v1/backup/runs/current:
+    get:
+      summary: Progress of the in-flight backup, if any
+      operationId: getCurrentBackupRun
+      tags: [backup]
+      responses:
+        "200":
+          description: Run progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupRunProgress"
+  /v1/backup/versions:
+    get:
+      summary: List backup versions (newest first)
+      operationId: listBackupVersions
+      tags: [backup]
+      responses:
+        "200":
+          description: Versions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [versions]
+                properties:
+                  versions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BackupVersionInfo"
+  /v1/backup/versions/{version_id}:
+    get:
+      summary: One backup version's detail (manifest meta + business summary)
+      operationId: getBackupVersion
+      tags: [backup]
+      parameters:
+        - name: version_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Version detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupVersionDetail"
+        "404":
+          description: Version not found
+    delete:
+      summary: Delete one backup version
+      operationId: deleteBackupVersion
+      tags: [backup]
+      parameters:
+        - name: version_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Version not found
+  /v1/backup/versions/{version_id}/files:
+    get:
+      summary: Browse the file tree inside a backup version (one level)
+      operationId: listBackupFiles
+      tags: [backup]
+      parameters:
+        - name: version_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: path
+          in: query
+          required: false
+          schema: {type: string, default: ""}
+      responses:
+        "200":
+          description: Directory listing
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [path, entries]
+                properties:
+                  path: {type: string}
+                  entries:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BackupFileEntry"
+        "404":
+          description: Version not found
+  /v1/backup/versions/{version_id}/files/download:
+    get:
+      summary: Download one file out of a backup version
+      operationId: downloadBackupFile
+      tags: [backup]
+      parameters:
+        - name: version_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: path
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: File content
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        "404":
+          description: Version or file not found
+  /v1/backup/versions/{version_id}/restore:
+    post:
+      summary: Stage a full restore of this version (applies on next app start)
+      operationId: restoreBackupVersion
+      tags: [backup]
+      parameters:
+        - name: version_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dry_run: {type: boolean, default: false}
+      responses:
+        "200":
+          description: Restore staged (or dry-run plan)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupRestoreResult"
+        "404":
+          description: Version not found
+        "409":
+          description: Version schema newer than app / backup running
+
+  /v1/playbooks:
+    get:
+      summary: List owner-scoped Playbook definitions
+      operationId: listPlaybooks
+      tags: [playbooks]
+      parameters:
+        - name: project_id
+          in: query
+          required: false
+          schema: {type: string, nullable: true}
+      responses:
+        "200":
+          description: Playbook definitions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/PlaybookDefinition"}
+    post:
+      summary: Create a Playbook and immutable version 1
+      operationId: createPlaybook
+      tags: [playbooks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PlaybookCreate"}
+      responses:
+        "201":
+          description: Created Definition and Version
+
+  /v1/playbooks/{definition_id}:
+    get:
+      summary: Get a Playbook and its current version
+      operationId: getPlaybook
+      tags: [playbooks]
+      parameters:
+        - name: definition_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: Playbook detail}
+        "404": {description: Playbook not found}
+    patch:
+      summary: Update Playbook identity, status, or optional Project association
+      operationId: updatePlaybook
+      tags: [playbooks]
+      parameters:
+        - name: definition_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PlaybookDefinitionUpdate"}
+      responses:
+        "200":
+          description: Updated Definition
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PlaybookDefinition"}
+        "409": {description: Revision conflict}
+    delete:
+      summary: Delete a Playbook, its immutable versions, and run history
+      operationId: deletePlaybook
+      tags: [playbooks]
+      parameters:
+        - name: definition_id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: expected_revision
+          in: query
+          required: true
+          schema: {type: integer, minimum: 1}
+      responses:
+        "204": {description: Playbook deleted}
+        "404": {description: Playbook not found}
+        "409": {description: Revision conflict, active run, or Automation binding}
+
+  /v1/playbooks/{definition_id}/versions:
+    get:
+      summary: List immutable Playbook versions
+      operationId: listPlaybookVersions
+      tags: [playbooks]
+      parameters:
+        - name: definition_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Versions newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/PlaybookVersion"}
+    post:
+      summary: Append an immutable Playbook version
+      operationId: createPlaybookVersion
+      tags: [playbooks]
+      parameters:
+        - name: definition_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PlaybookVersionCreate"}
+      responses:
+        "201": {description: Appended Definition version}
+        "409": {description: Base version conflict}
+
+  /v1/playbooks/runs:
+    post:
+      summary: Create a PlaybookRun pinned to an immutable version
+      operationId: createPlaybookRun
+      tags: [playbooks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PlaybookRunCreate"}
+      responses:
+        "201":
+          description: Created Run
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PlaybookRun"}
+
+  /v1/playbooks/runs/list:
+    get:
+      summary: List owner-scoped PlaybookRuns
+      operationId: listPlaybookRuns
+      tags: [playbooks]
+      parameters:
+        - name: project_id
+          in: query
+          required: false
+          schema: {type: string, nullable: true}
+        - name: definition_id
+          in: query
+          required: false
+          schema: {type: string, nullable: true}
+      responses:
+        "200":
+          description: Runs newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/PlaybookRun"}
+
+  /v1/playbooks/runs/{run_id}:
+    get:
+      summary: Get one owner-scoped PlaybookRun
+      operationId: getPlaybookRun
+      tags: [playbooks]
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: PlaybookRun
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PlaybookRun"}
+        "404": {description: Run not found}
+    patch:
+      summary: Advance a PlaybookRun and append execution results
+      operationId: updatePlaybookRun
+      tags: [playbooks]
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PlaybookRunUpdate"}
+      responses:
+        "200":
+          description: Updated PlaybookRun
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PlaybookRun"}
+        "409": {description: Invalid state transition}
+
+  /v1/operations/{operation_id}:
+    get:
+      summary: Get a durable product operation
+      operationId: getOperation
+      tags: [operations]
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Operation state and canonical result
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "404": {description: Operation not found}
+
+  /v1/operations/{operation_id}/confirm:
+    post:
+      summary: Confirm and execute a proposed product operation
+      operationId: confirmOperation
+      tags: [operations]
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OperationDecision"}
+      responses:
+        "200":
+          description: Canonical terminal or retryable operation state
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "409": {description: Hash, state, or revision conflict}
+
+  /v1/operations/{operation_id}/cancel:
+    post:
+      summary: Reject a proposed product operation
+      operationId: cancelOperation
+      tags: [operations]
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OperationDecision"}
+      responses:
+        "200":
+          description: Cancelled operation
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Operation"}
+        "409": {description: Hash or state conflict}
+
+  /v1/operations/status/batch:
+    post:
+      summary: Restore multiple operation cards after session re-entry
+      operationId: getOperationStatuses
+      tags: [operations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation_ids]
+              properties:
+                operation_ids:
+                  type: array
+                  maxItems: 100
+                  items: {type: string}
+      responses:
+        "200":
+          description: Owner-scoped operation map
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [operations]
+                properties:
+                  operations:
+                    type: object
+                    additionalProperties: {$ref: "#/components/schemas/Operation"}
+
 components:
+  parameters:
+    AcceptLanguage:
+      name: Accept-Language
+      in: header
+      required: false
+      description: >-
+        Preferred interface language. For the system Agent `valurion`, `zh`
+        or `zh-CN` returns the display name “小万” and its Chinese
+        description; `en` or `en-US` returns “Valurion” and its English
+        description. This changes presentation only; persisted Agent identity
+        and slug remain canonical.
+      schema:
+        type: string
+        examples: [zh-CN, en-US]
   schemas:
-    ArtifactCapabilities:
+    PlaybookDefinition:
       type: object
-      required: [canPreview, canEdit, canOpenExternal, canCopyContent, canDownload]
-      properties:
-        canPreview: {type: boolean}
-        canEdit: {type: boolean}
-        canOpenExternal: {type: boolean}
-        canCopyContent: {type: boolean}
-        canDownload: {type: boolean}
-    ArtifactDescriptor:
-      type: object
-      required: [id, kind, projectId, path, name, previewKind, capabilities]
+      required: [id, name, status, origin, current_version, revision, created_at, updated_at]
       properties:
         id: {type: string}
-        kind:
+        project_id: {type: string, nullable: true}
+        name: {type: string}
+        status: {type: string, enum: [draft, active, retired]}
+        origin: {type: string, enum: [user, system_example_copy, fork]}
+        source_definition_id: {type: string, nullable: true}
+        current_version: {type: integer, minimum: 1}
+        revision: {type: integer, minimum: 1}
+        created_at: {type: integer}
+        updated_at: {type: integer}
+
+    PlaybookContent:
+      type: object
+      required: [content]
+      properties:
+        content:
           type: string
-          enum: [project_file, session_output, document_artifact, slides_artifact, webpage_artifact]
-        projectId: {type: string}
-        path: {type: string}
+          minLength: 1
+          description: Sole authoritative executable Prompt body
+        reference_metadata:
+          type: array
+          default: []
+          items: {type: object, additionalProperties: true}
+        default_executor:
+          type: object
+          default: {}
+          additionalProperties: true
+
+    PlaybookCreate:
+      allOf:
+        - {$ref: "#/components/schemas/PlaybookContent"}
+        - type: object
+          required: [name]
+          properties:
+            name: {type: string, minLength: 1, maxLength: 200}
+            status: {type: string, enum: [draft, active, retired], default: draft}
+            project_id: {type: string, nullable: true}
+            current_project_id: {type: string, nullable: true}
+            origin: {type: string, enum: [user, system_example_copy, fork], default: user}
+            source_definition_id: {type: string, nullable: true}
+
+    PlaybookVersion:
+      allOf:
+        - {$ref: "#/components/schemas/PlaybookContent"}
+        - type: object
+          required: [id, definition_id, version, created_at]
+          properties:
+            id: {type: string}
+            definition_id: {type: string}
+            version: {type: integer, minimum: 1}
+            created_by: {type: string, nullable: true}
+            produced_by_run: {type: string, nullable: true}
+            base_version: {type: integer, nullable: true}
+            created_at: {type: integer}
+
+    PlaybookVersionCreate:
+      allOf:
+        - {$ref: "#/components/schemas/PlaybookContent"}
+        - type: object
+          required: [base_version]
+          properties:
+            base_version: {type: integer, minimum: 1}
+            status: {type: string, nullable: true, enum: [draft, active, retired]}
+
+    PlaybookDefinitionUpdate:
+      type: object
+      required: [expected_revision]
+      properties:
+        expected_revision: {type: integer, minimum: 1}
+        name: {type: string, nullable: true}
+        status: {type: string, nullable: true, enum: [draft, active, retired]}
+        project_id: {type: string, nullable: true}
+
+    PlaybookRunCreate:
+      type: object
+      required: [definition_id]
+      properties:
+        definition_id: {type: string}
+        definition_version: {type: integer, nullable: true, minimum: 1}
+        project_id: {type: string, nullable: true}
+        current_project_id: {type: string, nullable: true}
+        trigger_kind: {type: string, enum: [user, agent, automation, playbook, api], default: user}
+        trigger_ref: {type: string, nullable: true}
+        extra_instruction: {type: string, nullable: true}
+        session_id: {type: string, nullable: true}
+        task_id: {type: string, nullable: true}
+
+    PlaybookRun:
+      type: object
+      required: [id, definition_id, definition_version, status, trigger_kind, content_snapshot, created_at, updated_at]
+      properties:
+        id: {type: string}
+        definition_id: {type: string}
+        definition_version: {type: integer}
+        project_id: {type: string, nullable: true}
+        status: {type: string, enum: [queued, planning, running, waiting_approval, completed, failed, stopped]}
+        trigger_kind: {type: string, enum: [user, agent, automation, playbook, api]}
+        trigger_ref: {type: string, nullable: true}
+        content_snapshot: {type: string}
+        extra_instruction: {type: string, nullable: true}
+        session_id: {type: string, nullable: true}
+        task_id: {type: string, nullable: true}
+        created_at: {type: integer}
+        updated_at: {type: integer}
+
+    PlaybookRunUpdate:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [planning, running, waiting_approval, completed, failed, stopped]}
+        plan: {type: array, nullable: true, items: {type: object, additionalProperties: true}}
+        tasks: {type: array, nullable: true, items: {type: object, additionalProperties: true}}
+        tool_calls: {type: array, nullable: true, items: {type: object, additionalProperties: true}}
+        approvals: {type: array, nullable: true, items: {type: object, additionalProperties: true}}
+        artifact_refs: {type: array, nullable: true, items: {type: string}}
+        change_set_refs: {type: array, nullable: true, items: {type: string}}
+        output_refs: {type: array, nullable: true, items: {type: object, additionalProperties: true}}
+        checkpoint: {type: object, nullable: true, additionalProperties: true}
+        error_code: {type: string, nullable: true}
+        error_message: {type: string, nullable: true}
+
+    OperationDecision:
+      type: object
+      required: [proposal_hash]
+      properties:
+        proposal_hash: {type: string, minLength: 64, maxLength: 64}
+        comment: {type: string, nullable: true}
+
+    Operation:
+      type: object
+      required:
+        - id
+        - operation_type
+        - operation_version
+        - actor_kind
+        - target_refs
+        - input_payload
+        - preview
+        - expected_revisions
+        - risk_level
+        - confirmation_policy
+        - state
+        - proposal_hash
+        - canonical_result_refs
+        - result_payload
+        - created_at
+        - updated_at
+      properties:
+        id: {type: string}
+        project_id: {type: string, nullable: true}
+        operation_type: {type: string}
+        operation_version: {type: integer, minimum: 1}
+        actor_kind: {type: string, enum: [user, agent, playbook, automation, system]}
+        actor_id: {type: string, nullable: true}
+        origin_session_id: {type: string, nullable: true}
+        origin_tool_call_id: {type: string, nullable: true}
+        origin_playbook_run_id: {type: string, nullable: true}
+        origin_automation_run_id: {type: string, nullable: true}
+        target_refs: {type: array, items: {type: object, additionalProperties: true}}
+        input_payload: {type: object, additionalProperties: true}
+        preview: {type: object, additionalProperties: true}
+        expected_revisions: {type: object, additionalProperties: true}
+        risk_level: {type: string, enum: [low, material, destructive, external]}
+        confirmation_policy: {type: string, enum: [direct, explicit_submit, confirm, approval, preauthorized]}
+        state: {type: string, enum: [proposed, awaiting_confirmation, executing, succeeded, failed, cancelled, expired, stale, superseded]}
+        proposal_hash: {type: string}
+        canonical_result_refs: {type: array, items: {type: object, additionalProperties: true}}
+        result_payload: {type: object, additionalProperties: true}
+        error_code: {type: string, nullable: true}
+        error_message: {type: string, nullable: true}
+        created_at: {type: integer}
+        updated_at: {type: integer}
+
+    WeComAIBotBinding:
+      type: object
+      required:
+        - enabled
+        - channel_instance_id
+        - owner_user_id
+        - agent_slug
+        - bot_id
+        - has_secret
+        - connected
+        - connection_status
+      properties:
+        enabled:
+          type: boolean
+        channel_instance_id:
+          type: string
+        owner_user_id:
+          type: string
+        agent_slug:
+          type: string
+        bot_id:
+          type: string
+        has_secret:
+          type: boolean
+        connected:
+          type: boolean
+        connection_status:
+          type: string
+        connection_error:
+          type: string
+          nullable: true
+    WeComAIBotBindingUpdate:
+      type: object
+      required:
+        - enabled
+        - agent_slug
+        - bot_id
+      properties:
+        enabled:
+          type: boolean
+        channel_instance_id:
+          type: string
+        agent_slug:
+          type: string
+        bot_id:
+          type: string
+        secret:
+          type: string
+    FeishuBinding:
+      type: object
+      required:
+        - enabled
+        - channel_instance_id
+        - owner_user_id
+        - agent_slug
+        - app_id
+        - has_app_secret
+        - has_verification_token
+        - has_encrypt_key
+        - connected
+        - connection_status
+      properties:
+        enabled:
+          type: boolean
+        channel_instance_id:
+          type: string
+        owner_user_id:
+          type: string
+        agent_slug:
+          type: string
+        app_id:
+          type: string
+        has_app_secret:
+          type: boolean
+        has_verification_token:
+          type: boolean
+        has_encrypt_key:
+          type: boolean
+        connected:
+          type: boolean
+        connection_status:
+          type: string
+        connection_error:
+          type: string
+          nullable: true
+    FeishuBindingUpdate:
+      type: object
+      required:
+        - enabled
+        - agent_slug
+        - app_id
+      properties:
+        enabled:
+          type: boolean
+        channel_instance_id:
+          type: string
+        agent_slug:
+          type: string
+        app_id:
+          type: string
+        app_secret:
+          type: string
+        verification_token:
+          type: string
+        encrypt_key:
+          type: string
+    FeishuBindingTestResult:
+      type: object
+      required:
+        - credential_ok
+        - connected
+        - connection_status
+      properties:
+        credential_ok:
+          type: boolean
+        error:
+          type: string
+          nullable: true
+        connected:
+          type: boolean
+        connection_status:
+          type: string
+        connection_error:
+          type: string
+          nullable: true
+    FileCapabilities:
+      type: object
+      required: [canPreview, canDownload, canOpenExternal, canCopyContent]
+      properties:
+        canPreview: {type: boolean}
+        canDownload: {type: boolean}
+        canOpenExternal: {type: boolean}
+        canCopyContent: {type: boolean}
+    ResolveFilesRequest:
+      type: object
+      required: [refs]
+      properties:
+        refs:
+          type: array
+          maxItems: 256
+          items: {type: string}
+    ResolvedFileDescriptor:
+      type: object
+      required: [ref, kind, name, exists, previewKind, capabilities]
+      properties:
+        ref: {type: string}
+        kind: {type: string, enum: [local, remote, ""]}
+        absPath: {type: string, nullable: true}
+        url: {type: string, nullable: true}
+        expiresAt: {type: integer, nullable: true}
         name: {type: string}
         mimeType: {type: string, nullable: true}
-        extension: {type: string, nullable: true}
         size: {type: integer, nullable: true}
-        modifiedAt: {type: string, nullable: true}
+        exists: {type: boolean}
         previewKind:
           type: string
           enum: [markdown, code, image, pdf, html, docx, media, spreadsheet, plain, unsupported]
         capabilities:
-          $ref: "#/components/schemas/ArtifactCapabilities"
-    TextArtifactContent:
+          $ref: "#/components/schemas/FileCapabilities"
+        error:
+          type: string
+          enum: [invalid_ref, forbidden, not_found]
+          nullable: true
+    ResolveFilesResponse:
       type: object
-      required: [kind, encoding, content, truncated]
+      required: [results]
       properties:
-        kind: {type: string, enum: [text]}
-        encoding: {type: string, enum: [utf-8]}
-        content: {type: string}
-        truncated: {type: boolean}
-        etag: {type: string, nullable: true}
-        modifiedAt: {type: string, nullable: true}
-    BinaryArtifactContent:
-      type: object
-      required: [kind, openUrl, mimeType]
-      properties:
-        kind: {type: string, enum: [binary]}
-        openUrl: {type: string}
-        mimeType: {type: string}
-        size: {type: integer, nullable: true}
-        reason: {type: string, nullable: true}
-    ExternalArtifactContent:
-      type: object
-      required: [kind, reason]
-      properties:
-        kind: {type: string, enum: [external]}
-        reason: {type: string}
-        openUrl: {type: string, nullable: true}
-    ArtifactContent:
-      oneOf:
-        - $ref: "#/components/schemas/TextArtifactContent"
-        - $ref: "#/components/schemas/BinaryArtifactContent"
-        - $ref: "#/components/schemas/ExternalArtifactContent"
-    ArtifactFileResponse:
-      type: object
-      required: [artifact, content]
-      properties:
-        artifact:
-          $ref: "#/components/schemas/ArtifactDescriptor"
-        content:
-          $ref: "#/components/schemas/ArtifactContent"
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResolvedFileDescriptor"
     BrowserStatus:
       type: object
       required: [daemon_running, mode, node_ok, cli_prefix, hints]
@@ -3204,6 +5190,54 @@ components:
     MemoryTarget:
       type: string
       enum: [user, global, project]
+    PreferencesResponse:
+      type: object
+      required:
+        - default_timezone
+        - default_locale
+        - detected_timezone
+        - theme
+        - font_size
+        - conversation_citations_enabled
+        - conversation_verification_enabled
+        - conversation_task_coverage_enabled
+        - ptc_enabled
+      properties:
+        default_timezone: {type: string}
+        default_locale: {type: string}
+        detected_timezone: {type: string}
+        theme: {type: string}
+        font_size: {type: string}
+        conversation_citations_enabled:
+          type: boolean
+          default: true
+          description: Render canonical citation indices when source evidence is available.
+        conversation_verification_enabled:
+          type: boolean
+          default: false
+          description: Run claim and citation quality verification before publishing a reply.
+        conversation_task_coverage_enabled:
+          type: boolean
+          default: true
+          description: Check explicit task completeness and repair bounded omissions before publishing a reply.
+        ptc_enabled:
+          type: boolean
+          default: false
+          description: >-
+            Programmatic Tool Calling — let agents batch data-tool calls by
+            writing Python via execute_code; only printed summaries enter the
+            model context.
+    PreferencesPatch:
+      type: object
+      properties:
+        default_timezone: {type: string, nullable: true}
+        default_locale: {type: string, nullable: true}
+        theme: {type: string, nullable: true}
+        font_size: {type: string, nullable: true}
+        conversation_citations_enabled: {type: boolean}
+        conversation_verification_enabled: {type: boolean}
+        conversation_task_coverage_enabled: {type: boolean}
+        ptc_enabled: {type: boolean}
     MemoryView:
       type: object
       required: [enabled, auto_extract, custom_instructions, entries]
@@ -3413,6 +5447,17 @@ components:
         role: {type: string, description: "One-line responsibility."}
         lead: {type: boolean}
         skill_count: {type: integer, nullable: true}
+    MarketplacePluginMember:
+      type: object
+      description: "One member of a plugin item — a skill or an MCP server / connector it declares."
+      required: [kind, slug, name]
+      properties:
+        kind: {type: string, enum: [skill, connector]}
+        slug: {type: string}
+        name: {type: string}
+        description: {type: string, nullable: true}
+        meta_version: {type: string, nullable: true, description: "Skill `metadata.version` (display only)."}
+        path: {type: string, nullable: true, description: "Location inside the package (`skills/<slug>` / `mcp.json#<name>`)."}
     MarketplaceConnectorRequirement:
       type: object
       required: [name, requirement]
@@ -3520,11 +5565,11 @@ components:
         id: {type: string}
         type:
           type: string
-          enum: [skill, agent_template, agent_team_template, connector]
+          enum: [skill, agent_template, agent_team_template, connector, plugin]
         source:
           type: string
-          enum: [skillhub, valuz_official, modelscope]
-        source_ref: {type: string, description: "SkillHub slug / template id / pack id."}
+          description: "Open string, NOT an enum: where the item comes from is data the index grows over time (known today: skillhub, valuz_official, modelscope, redskill, plugin — `plugin` marks members extracted from a plugin package). Clients MUST render unknown sources with a generic label; a closed enum here once broke every old client the moment a new source shipped."
+        source_ref: {type: string, description: "SkillHub slug / template id / pack id / plugin name."}
         title: {type: string}
         subtitle: {type: string, nullable: true, description: "Agent role line; null for skills."}
         description: {type: string}
@@ -3536,20 +5581,32 @@ components:
           items: {type: string}
         badges:
           type: array
+          description: "Clients drop badge values they do not know; the index may add badges without a client release."
           items: {$ref: "#/components/schemas/MarketplaceBadge"}
         stats:
           $ref: "#/components/schemas/MarketplaceStats"
         version: {type: string, nullable: true}
         runtime: {type: string, nullable: true, description: "Agent templates only."}
         skill_count: {type: integer, nullable: true}
+        connector_count: {type: integer, nullable: true, description: "Plugins only — declared MCP servers."}
+        composition:
+          type: string
+          nullable: true
+          enum: [skills_only, with_connectors]
+          description: "Plugins only — derived from the package contents, never authored."
         members:
           type: array
           nullable: true
-          description: "Team templates only — brief roster for card avatars."
-          items: {$ref: "#/components/schemas/MarketplaceTeamMember"}
+          description: |
+            Team templates — brief roster for card avatars (MarketplaceTeamMember).
+            Plugin DETAILS — the skill / connector member list (MarketplacePluginMember).
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/MarketplaceTeamMember"
+              - $ref: "#/components/schemas/MarketplacePluginMember"
         install_target:
           type: string
-          enum: [skill_library, agent_library, agent_library_project, connector_library]
+          enum: [skill_library, agent_library, agent_library_project, connector_library, plugin_library]
         installed: {type: boolean}
         locked: {type: boolean, default: false, description: "Present but not installable (e.g. official skill requires Reportify)."}
     MarketplaceItemDetail:
@@ -3601,6 +5658,10 @@ components:
               nullable: true
               allOf:
                 - $ref: "#/components/schemas/MarketplaceConnectorConfig"
+            plugin_manifest:
+              type: object
+              nullable: true
+              description: "Plugins — the package's `plugin.json` object (Agent Plugins 1.0.0 manifest)."
             install_manifest:
               type: object
               nullable: true
@@ -3609,8 +5670,9 @@ components:
                 index: skill -> {download_url, sha256?, size_bytes?};
                 agent_template -> an AgentTemplateDef-shaped object;
                 agent_team_template -> a pack manifest object (skill deps
-                rewritten to {slug, source: "url", download_url}). Only the
-                market index sets this field.
+                rewritten to {slug, source: "url", download_url});
+                plugin -> {download_url, sha256?, size_bytes?} of the Agent
+                Plugins layout zip. Only the market index sets this field.
     MarketplaceItemList:
       type: object
       required: [items, total, page, page_size, degraded]
@@ -3653,9 +5715,175 @@ components:
         status:
           type: string
           enum: [installed, already_installed]
-        installed_ref: {type: string, nullable: true, description: "Resulting library slug (skill or agent) or pack id."}
+        installed_ref: {type: string, nullable: true, description: "Resulting library slug (skill or agent), pack id or plugin name."}
         created: {type: integer, nullable: true, description: "Team installs — roles newly created."}
         skipped: {type: integer, nullable: true, description: "Team installs — roles already present."}
+    PluginAuthor:
+      type: object
+      properties:
+        name: {type: string, nullable: true}
+        email: {type: string, nullable: true}
+        url: {type: string, nullable: true}
+    PluginMember:
+      type: object
+      description: "One member (skill / connector) of an installed plugin."
+      required: [kind, slug, name, content_hash, installed, content_differs]
+      properties:
+        kind: {type: string, enum: [skill, connector]}
+        slug: {type: string, description: "Library slug (skill directory name / connector slug)."}
+        name: {type: string}
+        description: {type: string, nullable: true}
+        meta_version: {type: string, nullable: true, description: "Skill `metadata.version` (display only)."}
+        content_hash: {type: string, description: "Content hash the plugin declares for this member."}
+        installed: {type: boolean, description: "The resource currently exists in the library."}
+        content_differs: {type: boolean, description: "The library copy differs from what the plugin declares."}
+    PluginView:
+      type: object
+      required: [id, name, keywords, source, composition, enabled, members, skill_count, connector_count, root_path, installed_at, updated_at]
+      properties:
+        id: {type: string}
+        name: {type: string, description: "`plugin.json.name` — unique per user."}
+        version: {type: string, nullable: true}
+        description: {type: string, nullable: true}
+        author:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/PluginAuthor"
+        homepage: {type: string, nullable: true}
+        repository: {type: string, nullable: true}
+        license: {type: string, nullable: true}
+        keywords:
+          type: array
+          items: {type: string}
+        source:
+          type: string
+          enum: [market, local_dir, zip, url, claude_plugin, codebuddy_plugin]
+        source_ref: {type: string, nullable: true, description: "Market item id / directory path / URL."}
+        composition:
+          type: string
+          enum: [skills_only, with_connectors]
+        enabled: {type: boolean}
+        members:
+          type: array
+          items: {$ref: "#/components/schemas/PluginMember"}
+        skill_count: {type: integer}
+        connector_count: {type: integer}
+        root_path: {type: string, description: "PLUGIN_ROOT on disk."}
+        installed_at: {type: string, description: "ISO-8601 UTC."}
+        updated_at: {type: string, description: "ISO-8601 UTC."}
+        update_available: {type: boolean, nullable: true}
+    PluginSkippedMember:
+      type: object
+      required: [kind, slug, reason]
+      properties:
+        kind: {type: string, enum: [skill, connector, skills, mcp]}
+        slug: {type: string}
+        reason: {type: string}
+    PluginConflictMember:
+      type: object
+      required: [kind, slug]
+      properties:
+        kind: {type: string, enum: [skill, connector]}
+        slug: {type: string}
+    PluginInstallResult:
+      type: object
+      required: [plugin, status, skipped, conflicts, warnings]
+      properties:
+        plugin: {$ref: "#/components/schemas/PluginView"}
+        status:
+          type: string
+          enum: [installed, updated, already_installed]
+        skipped:
+          type: array
+          description: "Components the loader rejected (with the reason) — spec §11.3 failure isolation."
+          items: {$ref: "#/components/schemas/PluginSkippedMember"}
+        conflicts:
+          type: array
+          description: "Members whose library copy differs and were linked without overwriting."
+          items: {$ref: "#/components/schemas/PluginConflictMember"}
+        warnings:
+          type: array
+          items: {type: string}
+    PluginPreview:
+      type: object
+      required: [manifest, format, composition, members, conflicts, skipped, warnings]
+      properties:
+        manifest: {type: object, description: "The normalized `plugin.json` object."}
+        format:
+          type: string
+          enum: [agent_plugins, claude_plugin, codebuddy_plugin]
+        composition:
+          type: string
+          enum: [skills_only, with_connectors]
+        members:
+          type: array
+          items: {$ref: "#/components/schemas/PluginMember"}
+        conflicts:
+          type: array
+          items: {$ref: "#/components/schemas/PluginConflictMember"}
+        skipped:
+          type: array
+          items: {$ref: "#/components/schemas/PluginSkippedMember"}
+        warnings:
+          type: array
+          items: {type: string}
+        existing:
+          type: string
+          nullable: true
+          enum: [same_source, other_source]
+          description: "A same-name plugin is already installed (install = update / would 409)."
+    PluginInstallRequest:
+      type: object
+      description: "Exactly one of `path` / `url` / `market_item_id` (or a multipart `file`)."
+      properties:
+        path: {type: string, nullable: true, description: "Local plugin directory (or zip file)."}
+        url: {type: string, nullable: true, description: "http(s) URL of a plugin zip."}
+        market_item_id: {type: string, nullable: true, description: "`market:plugin:<slug>`."}
+        on_conflict:
+          type: string
+          enum: [skip, overwrite]
+          default: skip
+    PluginUpdateRequest:
+      type: object
+      properties:
+        on_conflict:
+          type: string
+          enum: [skip, overwrite]
+          default: skip
+    PluginUninstallResult:
+      type: object
+      required: [removed_members, kept_members]
+      properties:
+        removed_members:
+          type: array
+          items:
+            type: object
+            required: [kind, slug]
+            properties:
+              kind: {type: string, enum: [skill, connector]}
+              slug: {type: string}
+        kept_members:
+          type: array
+          items:
+            type: object
+            required: [kind, slug, reason]
+            properties:
+              kind: {type: string, enum: [skill, connector]}
+              slug: {type: string}
+              reason: {type: string, enum: [referenced_by_other_plugin, standalone]}
+    PluginList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/PluginView"}
+    PluginMembershipRef:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
     ExportCollection:
       type: object
       description: "Optional display header to brand the exported group."
@@ -3860,7 +6088,7 @@ components:
           items: {$ref: "#/components/schemas/ConnectorToConfigure"}
     Agent:
       type: object
-      required: [id, slug, name, description, instructions, runtime, model, skills, connector_types, source]
+      required: [id, slug, name, description, instructions, runtime, model, skills, connector_types, knowledge_scope, kind, resource_policy, inherit_global_instructions, permission_mode, source]
       properties:
         id: {type: string}
         slug: {type: string}
@@ -3873,6 +6101,9 @@ components:
           type: array
           items: {type: string}
         connector_types:
+          type: array
+          items: {type: string}
+        knowledge_scope:
           type: array
           items: {type: string}
         provider_id:
@@ -3889,6 +6120,18 @@ components:
             Default reasoning-effort budget prefilled into instances. null =
             no override (runtime SDK default). Project conversations read the
             budget from the bound agent.
+        kind:
+          type: string
+          enum: [system, standard]
+          description: System identity. Only Valurion is system.
+        resource_policy:
+          type: string
+          enum: [explicit, all_available]
+        inherit_global_instructions:
+          type: boolean
+          default: true
+          description: Whether standard Agents inherit Valurion's current product instructions.
+        permission_mode: {type: string, default: full_access}
         source: {type: string}
         readonly: {type: boolean, default: false, description: "If true, the agent cannot be edited."}
         deletable: {type: boolean, default: true, description: "If false, the agent cannot be deleted."}
@@ -3908,7 +6151,7 @@ components:
         name: {type: string}
         description: {type: string, default: ""}
         instructions: {type: string, default: ""}
-        runtime: {type: string, default: claude_agent}
+        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents, deepseek_harness]}
         model: {type: string, default: claude-sonnet-4-6}
         skills:
           type: array
@@ -3916,6 +6159,11 @@ components:
         connector_types:
           type: array
           items: {type: string}
+        knowledge_scope:
+          type: array
+          items: {type: string}
+        inherit_global_instructions: {type: boolean, default: true}
+        permission_mode: {type: string, default: full_access}
         provider_id: {type: string, nullable: true}
         effort: {type: string, nullable: true, enum: [low, medium, high, xhigh, max]}
         avatar: {type: string, nullable: true}
@@ -3925,7 +6173,7 @@ components:
         name: {type: string, nullable: true}
         description: {type: string, nullable: true}
         instructions: {type: string, nullable: true}
-        runtime: {type: string, nullable: true}
+        runtime: {type: string, nullable: true, enum: [claude_agent, codex, deepagents, deepseek_harness]}
         model: {type: string, nullable: true}
         skills:
           type: array
@@ -3935,9 +6183,61 @@ components:
           type: array
           nullable: true
           items: {type: string}
+        knowledge_scope:
+          type: array
+          nullable: true
+          items: {type: string}
+        inherit_global_instructions: {type: boolean, nullable: true}
+        permission_mode: {type: string, nullable: true}
         provider_id: {type: string, nullable: true}
         effort: {type: string, nullable: true, enum: [low, medium, high, xhigh, max]}
         avatar: {type: string, nullable: true}
+    CopyAgentRequest:
+      type: object
+      properties:
+        name: {type: string, nullable: true}
+    EffectiveResource:
+      type: object
+      required: [id, slug, name, source, status]
+      properties:
+        id: {type: string}
+        slug: {type: string}
+        name: {type: string}
+        source: {type: string}
+        status: {type: string}
+    EffectiveResourceWarning:
+      type: object
+      required: [resource_type, resource_id, code, message]
+      properties:
+        resource_type: {type: string}
+        resource_id: {type: string}
+        code: {type: string}
+        message: {type: string}
+    EffectiveResourceManifest:
+      type: object
+      required: [policy, resolved_at, counts, skills, connectors, knowledge_bases, warnings]
+      properties:
+        policy: {type: string, enum: [all_available]}
+        resolved_at: {type: integer, format: int64}
+        counts:
+          type: object
+          required: [skills, connectors, knowledge_bases]
+          properties:
+            skills: {type: integer}
+            connectors: {type: integer}
+            knowledge_bases: {type: integer}
+        skills:
+          type: array
+          items: {$ref: "#/components/schemas/EffectiveResource"}
+        connectors:
+          type: array
+          items: {$ref: "#/components/schemas/EffectiveResource"}
+        knowledge_bases:
+          type: array
+          items: {$ref: "#/components/schemas/EffectiveResource"}
+        warnings:
+          type: array
+          items: {$ref: "#/components/schemas/EffectiveResourceWarning"}
     ConnectorBindingInput:
       type: object
       required: [type]
@@ -3953,7 +6253,7 @@ components:
         agent_slug: {type: string, nullable: true}
         name: {type: string}
         instructions: {type: string, default: ""}
-        runtime: {type: string, default: claude_agent}
+        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents, deepseek_harness]}
         model: {type: string, default: claude-sonnet-4-6}
         provider_id: {type: string, nullable: true}
         effort: {type: string, nullable: true, enum: [low, medium, high, xhigh, max]}
@@ -4023,7 +6323,7 @@ components:
         name: {type: string}
         instructions: {type: string}
         description: {type: string, default: ""}
-        runtime: {type: string, default: claude_agent}
+        runtime: {type: string, default: claude_agent, enum: [claude_agent, codex, deepagents, deepseek_harness]}
         model: {type: string, default: claude-sonnet-4-6}
         effort: {type: string, nullable: true, enum: [low, medium, high, xhigh, max]}
         skills:
@@ -4056,19 +6356,6 @@ components:
           nullable: true
           items: {type: string}
         title: {type: string, nullable: true}
-        created_by: {type: string, default: user}
-        dispatch_mode:
-          type: string
-          enum: [sync, async]
-          default: async
-          description: >-
-            Dispatch architecture (M10). Both share one lead toolset
-            (non-blocking dispatch + await_members + plan/review/finish) and
-            goal mode; they differ only in the session driver. "async"
-            (default) runs the lead as a persistent actor re-woken by
-            member_done/send until finish_task (robust for multi-turn / long
-            members); "sync" (legacy) drives the lead in a single turn then
-            finalizes, with no re-drive.
         worktree:
           type: boolean
           default: false
@@ -4157,6 +6444,33 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/TaskEvent"
+    TaskRunTokenUsage:
+      type: object
+      required: [session_id, agent_slug, kind, sequence, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens]
+      properties:
+        session_id: {type: string}
+        agent_slug: {type: string}
+        kind: {type: string, description: "lead | subtask"}
+        sequence: {type: integer}
+        label: {type: string, nullable: true}
+        input_tokens: {type: integer, minimum: 0, description: Uncached input tokens.}
+        output_tokens: {type: integer, minimum: 0, description: Output tokens including provider-reported reasoning output.}
+        cache_read_tokens: {type: integer, minimum: 0}
+        cache_write_tokens: {type: integer, minimum: 0}
+        total_tokens: {type: integer, minimum: 0}
+    TaskTokenUsage:
+      type: object
+      required: [input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens, runs]
+      properties:
+        input_tokens: {type: integer, minimum: 0, description: Uncached input tokens across all task runs.}
+        output_tokens: {type: integer, minimum: 0, description: Output tokens across all task runs, including reasoning output.}
+        cache_read_tokens: {type: integer, minimum: 0}
+        cache_write_tokens: {type: integer, minimum: 0}
+        total_tokens: {type: integer, minimum: 0}
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/TaskRunTokenUsage"
     NotificationEntry:
       type: object
       required: [id, kind, title, body, action, urgency, payload, created_at]
@@ -4185,6 +6499,121 @@ components:
           items:
             $ref: "#/components/schemas/NotificationEntry"
         unread: {type: integer}
+    NotificationHistoryResponse:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationEntry"
+        has_more:
+          type: boolean
+          description: "True when another page exists below the returned entries."
+    DraftTaskRequest:
+      type: object
+      required: [goal, lead_agent_slug, originating_session_id]
+      properties:
+        goal: {type: string}
+        lead_agent_slug: {type: string}
+        originating_session_id: {type: string, description: "The chat session opening the draft — recorded as the draft-phase plan writer."}
+        refs:
+          type: array
+          nullable: true
+          items: {type: string}
+        title: {type: string, nullable: true}
+    DraftTask:
+      type: object
+      required: [task_id, status, plan_version, title, lead_agent_slug]
+      properties:
+        task_id: {type: string}
+        status: {type: string}
+        plan_version: {type: integer}
+        title: {type: string}
+        lead_agent_slug: {type: string}
+    CommitTaskRequest:
+      type: object
+      required: [caller_session_id]
+      properties:
+        caller_session_id: {type: string}
+        lead_agent_slug: {type: string, nullable: true, description: "Override the draft's lead agent at commit time."}
+    AbandonTaskRequest:
+      type: object
+      required: [caller_session_id]
+      properties:
+        caller_session_id: {type: string}
+        reason: {type: string, nullable: true}
+    InjectTaskRequest:
+      type: object
+      required: [text, from_session_id]
+      properties:
+        text: {type: string}
+        from_session_id: {type: string}
+    InjectTaskResult:
+      type: object
+      required: [delivered]
+      properties:
+        delivered: {type: boolean}
+        lead_session_id: {type: string, nullable: true}
+        reason: {type: string, nullable: true, description: "e.g. TASK_RESUMED / RESUME_FAILED / lead offline reasons."}
+    PlanWriteRequest:
+      type: object
+      description: >-
+        POST uses subtasks (initial plan); PATCH uses add/update (+
+        expected_version). Carries NO caller identity on purpose — REST
+        callers are authorized by owning the task.
+      properties:
+        subtasks:
+          type: array
+          nullable: true
+          items: {type: object, additionalProperties: true}
+        add:
+          type: array
+          nullable: true
+          items: {type: object, additionalProperties: true}
+        update:
+          type: array
+          nullable: true
+          items: {type: object, additionalProperties: true}
+        expected_version: {type: integer, nullable: true, description: "Optimistic-lock token; REQUIRED for PATCH on an active task."}
+    TaskPlanUpdateEvent:
+      type: object
+      description: >-
+        Payload of a ``task_plan_update`` task event — a SELF-CONTAINED
+        snapshot (SSE gives no guarantee the previous one was seen).
+      required: [subtasks, plan_version, structural, task_status, title]
+      properties:
+        subtasks:
+          type: array
+          items: {type: object, additionalProperties: true}
+        plan_version:
+          type: integer
+          description: "Monotonic CAS token; bumped by EVERY plan write. The consumer's dedup/ordering key."
+        structural:
+          type: boolean
+          description: >-
+            True when the plan DOCUMENT changed (plan_task / modify_plan),
+            false for execution progress (a node moving dispatched →
+            in_review → done). Consumers that render plan history spawn a new
+            card per structural revision and update in place otherwise.
+        task_status: {type: string}
+        title: {type: string}
+    TaskPlan:
+      type: object
+      required: [subtasks, ready, current_version]
+      properties:
+        subtasks:
+          type: array
+          items: {type: object, additionalProperties: true}
+        ready:
+          type: array
+          items: {type: string}
+        counts:
+          type: object
+          nullable: true
+          additionalProperties: {type: integer}
+        all_done: {type: boolean, nullable: true}
+        current_version: {type: integer}
     InterveneRequest:
       type: object
       required: [action]
@@ -5037,7 +7466,7 @@ components:
           description: Unix epoch milliseconds (UTC). Format via new Date(ms).
         runtime_provider:
           type: string
-          enum: [claude_agent, codex, deepagents]
+          enum: [claude_agent, codex, deepagents, deepseek_harness]
           default: deepagents
           description: |
             Kernel runtime stamped at session creation. Surfaced so the
@@ -5068,6 +7497,23 @@ components:
             Codex ``max`` clamps to ``xhigh``; DeepAgents openai-
             completion ``max`` → ``xhigh``, anthropic pass-through,
             gemini ``xhigh|max`` → ``high``.
+        mode:
+          type: string
+          enum: [default, plan, goal]
+          default: default
+          description: |
+            Session working mode (kernel ``Session.mode``,
+            docs/design/session-modes.md). ``plan`` = the runtime
+            plans before touching anything (Claude lowers to SDK
+            ``permissionMode="plan"`` + the ``ExitPlanMode`` approval
+            card); ``goal`` = the runtime loops until a goal condition
+            is met (used by task lead/member sessions). Only
+            ``claude_agent`` and ``codex`` sessions support non-default
+            modes — deepagents / deepseek_harness reject with 400.
+            Mutable via ``PATCH /v1/sessions/{id}/mode``. The runtime
+            can also exit a mode on its own (e.g. an approved plan) —
+            surfaced live as a ``session.mode_changed`` SSE frame
+            (``{mode, by: user|runtime}``).
         task_id:
           type: string
           nullable: true
@@ -5089,6 +7535,31 @@ components:
             creation time, not liveness — the worktree may have been
             removed since; ``GET /v1/projects/{id}/worktrees`` is the
             source of truth for what still exists.
+        forked_from_session_id:
+          type: string
+          nullable: true
+          description: |
+            Fork provenance (docs/design/session-fork.md): the source
+            session this one was forked from. null for sessions that
+            are not forks. The source may since have been deleted —
+            treat as a navigation hint, not a guarantee.
+        background:
+          type: boolean
+          default: false
+          description: |
+            True when the session carries a live background task
+            (``run_in_background`` shell command). Same fact and same
+            source as ``RunSummary.background`` — both read
+            ``bg_busy_session_ids()`` — so the conversation header, the
+            sidebar pulse and the Activity page can never disagree about
+            one session.
+
+            Deliberately a SEPARATE field rather than folding into
+            ``status``: the launching turn genuinely ends, and ``status``
+            drives the Stop button and queue routing, so reporting
+            ``running`` here would offer a Stop that stops nothing and
+            route new messages into the queue (409 "Session is already
+            running").
 
     WorktreeRef:
       type: object
@@ -5212,6 +7683,7 @@ components:
             total_tokens:
               type: integer
               default: 0
+              description: Sum of normalized input, output, cache-read, and cache-write tokens across all persisted turns in the session.
             total_cost_usd:
               type: number
               default: 0
@@ -5261,7 +7733,7 @@ components:
       properties:
         id:
           type: string
-          enum: [claude_agent, codex, deepagents]
+          enum: [claude_agent, codex, deepagents, deepseek_harness]
           description: |
             Internal runtime enum — matches kernel
             ``Session.runtime_provider``. Stable wire identifier even
@@ -5282,6 +7754,7 @@ components:
               * claude_agent → [anthropic]
               * codex → [openai-response]
               * deepagents → [anthropic, openai-completion, gemini]
+              * deepseek_harness → [openai-completion]
         requires_binary:
           type: string
           nullable: true
@@ -5301,6 +7774,76 @@ components:
             Short, user-actionable explanation when ``available`` is
             ``false`` (e.g. ``"'codex' binary not found on PATH; install
             it first"``). ``null`` when available.
+
+    NetworkEgressReconfigureRequest:
+      type: object
+      properties:
+        bootstrap:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: Memory-only Electron egress bootstrap, or null for client-managed mode.
+        required_unavailable:
+          type: boolean
+          default: false
+        prewarm_limit:
+          type: integer
+          minimum: 0
+          maximum: 1
+          default: 1
+
+    NetworkEgressReconfigureResponse:
+      type: object
+      required: [configured, prewarmed_session_ids, prewarm_failed_session_ids]
+      properties:
+        configured:
+          type: boolean
+        prewarmed_session_ids:
+          type: array
+          items:
+            type: string
+        prewarm_failed_session_ids:
+          type: array
+          items:
+            type: string
+
+    DesktopNetworkEgressActivityResponse:
+      type: object
+      required: [active_session_ids]
+      properties:
+        active_session_ids:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+
+    DesktopNetworkEgressInterruptRequest:
+      type: object
+      required: [session_ids]
+      properties:
+        session_ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+
+    DesktopNetworkEgressInterruptResponse:
+      type: object
+      required: [interrupted_session_ids, inactive_session_ids]
+      properties:
+        interrupted_session_ids:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+        inactive_session_ids:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
 
     SystemStatusResponse:
       type: object
@@ -5375,7 +7918,7 @@ components:
           type: array
           items:
             type: string
-            enum: [claude_agent, codex, deepagents]
+            enum: [claude_agent, codex, deepagents, deepseek_harness]
           description: Runtime ids the host can currently dispatch to.
         warnings:
           type: array
@@ -5412,7 +7955,7 @@ components:
         runtime_id:
           type: string
           nullable: true
-          enum: [claude_agent, codex, deepagents, null]
+          enum: [claude_agent, codex, deepagents, deepseek_harness, null]
           description: |
             Optional explicit Runtime Agent for this session. Allowed
             values match the kernel's ``Session.runtime_provider`` enum.
@@ -5499,6 +8042,20 @@ components:
             ``turn_kwargs``; DeepAgents drops its cached graph for a
             cold rebuild. A turn already in flight keeps the mode it
             started with.
+
+    SessionModeRequest:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [default, plan, goal]
+          description: |
+            New working mode for the session. Idempotent on same-mode
+            re-set; direct ``plan ↔ goal`` transitions are allowed (the
+            kernel composes the exit and entry in one reconcile pass).
+            400 when the session's runtime has no native mode support
+            (deepagents / deepseek_harness).
 
     SessionEffortRequest:
       type: object
@@ -5626,6 +8183,45 @@ components:
             Idempotent retries surface the *original* ``rule_id`` so
             a WS/SSE reconnect doesn't think it created a new rule.
 
+    HostRef:
+      type: object
+      required: [host_type, host_id]
+      description: |
+        Client-declared host location of a message — which product surface
+        (e.g. an edition workbench page) the conversation panel is attached
+        to for this turn. Pure context for edition-registered per-turn
+        context providers: the backend resolves and validates the reference
+        under the calling user before acting on it; it never grants access.
+      properties:
+        host_type:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Host surface type, e.g. ``finance.research-desk``.
+        host_id:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Host instance id within the surface type.
+        slot:
+          type: string
+          minLength: 1
+          maxLength: 64
+          default: main
+          description: Render seat within the host. First iteration uses ``main``.
+
+    ForkSessionRequest:
+      type: object
+      properties:
+        message_id:
+          type: string
+          nullable: true
+          description: |
+            Anchor message to fork through (inclusive). The message must
+            carry a runtime-native fork anchor
+            (``metadata.runtime_native``). Omitted — the whole session is
+            forked at its current tail.
+
     SessionMessageRequest:
       type: object
       required: [prompt]
@@ -5647,6 +8243,661 @@ components:
             Optional model override. Same back-compat semantics as
             ``provider_id`` — ignored when it does not match the
             session's frozen model.
+        host_ref:
+          allOf:
+            - $ref: '#/components/schemas/HostRef'
+          nullable: true
+          description: |
+            Optional per-turn host location. Omitted for plain
+            conversations; edition conversation panels attach it so
+            per-turn context providers can inject page context.
+
+    CitationBundleV1:
+      type: object
+      required: [version, citations]
+      properties:
+        version:
+          type: integer
+          enum: [1]
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/CitationRefV1"
+        projection:
+          $ref: "#/components/schemas/CitationProjectionV1"
+        integrity:
+          $ref: "#/components/schemas/CitationIntegrityV1"
+        quality:
+          $ref: "#/components/schemas/CitationQualityResultV1"
+
+    CitationProjectionV1:
+      type: object
+      required: [evidenceHandleToCitationId]
+      properties:
+        evidenceHandleToCitationId:
+          type: object
+          additionalProperties: {type: string}
+        anchors:
+          type: array
+          items:
+            $ref: "#/components/schemas/CitationAnchorV1"
+        provenanceRegions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProvenanceRegionV1"
+
+    CitationAnchorV1:
+      type: object
+      required: [citationId, claimId, location, sourceOffset, origin]
+      properties:
+        citationId: {type: string}
+        claimId: {type: string}
+        location:
+          $ref: "#/components/schemas/ClaimLocationV1"
+        sourceOffset:
+          type: integer
+          minimum: 0
+          description: Unicode code-point offset in raw Markdown, used only by the renderer.
+        origin:
+          type: string
+          enum: [explicit, auto-bound, equivalent-claim]
+
+    ProvenanceRegionV1:
+      type: object
+      required:
+        [regionId, blockIndex, rowStart, rowEnd, columnStart, columnEnd,
+         citationIds, anchor, sourceOffset]
+      properties:
+        regionId: {type: string}
+        claimGroupId:
+          type: string
+          description: Stable Evidence-lineage group shared by disconnected render regions.
+        blockIndex: {type: integer, minimum: 0}
+        rowStart: {type: integer, minimum: 0}
+        rowEnd: {type: integer, minimum: 0}
+        columnStart: {type: integer, minimum: 0}
+        columnEnd: {type: integer, minimum: 0}
+        citationIds:
+          type: array
+          minItems: 1
+          items: {type: string}
+        anchor:
+          $ref: "#/components/schemas/ClaimLocationV1"
+        sourceOffset:
+          type: integer
+          minimum: 0
+          description: Unicode code-point offset of the terminal table cell in raw Markdown.
+
+    DocumentResearchSessionRequest:
+      type: object
+      required: [document_id]
+      properties:
+        document_id: {type: string, minLength: 1}
+        origin_session_id: {type: string, nullable: true}
+        origin_message_id: {type: string, nullable: true}
+
+    GenerateDocumentSummaryRequest:
+      type: object
+      properties:
+        profile:
+          type: string
+          enum: [brief, detailed]
+          default: brief
+        origin_session_id: {type: string, nullable: true}
+        origin_message_id: {type: string, nullable: true}
+        force: {type: boolean, default: false}
+
+    ShareDocumentResearchMessageRequest:
+      type: object
+      required: [research_session_id]
+      properties:
+        research_session_id: {type: string, minLength: 1}
+        source_message_id: {type: string, nullable: true}
+
+    DocumentResearchSession:
+      type: object
+      required:
+        [session_id, purpose, document_ids, document_versions,
+         source_scope, reused]
+      properties:
+        session_id: {type: string}
+        purpose: {type: string, enum: [document-research]}
+        document_ids:
+          type: array
+          minItems: 1
+          items: {type: string}
+        document_versions:
+          type: array
+          minItems: 1
+          items: {type: string}
+        source_scope: {type: string, enum: [locked]}
+        origin_session_id: {type: string, nullable: true}
+        origin_message_id: {type: string, nullable: true}
+        reused: {type: boolean}
+
+    DocumentSummaryArtifactV1:
+      type: object
+      required:
+        [version, summary_id, document_id, document_version, status,
+         profile, content, citation_bundle, generated_at, model_id,
+         prompt_revision, policy_revision, research_session_id,
+         message_id, error_message]
+      properties:
+        version: {type: integer, enum: [1]}
+        summary_id: {type: string}
+        document_id: {type: string}
+        document_version: {type: string}
+        status:
+          type: string
+          enum: [pending, ready, degraded, failed, stale]
+        profile: {type: string}
+        content: {type: string}
+        citation_bundle:
+          $ref: "#/components/schemas/CitationBundleV1"
+        generated_at: {type: string, format: date-time, nullable: true}
+        model_id: {type: string, nullable: true}
+        prompt_revision: {type: string}
+        policy_revision: {type: string}
+        research_session_id: {type: string, nullable: true}
+        message_id: {type: string, nullable: true}
+        error_message: {type: string, nullable: true}
+
+    SharedResearchMessage:
+      type: object
+      required:
+        [target_session_id, message_id, source_session_id, source_message_id]
+      properties:
+        target_session_id: {type: string}
+        message_id: {type: string}
+        source_session_id: {type: string}
+        source_message_id: {type: string}
+
+    ResolveCitationRequest:
+      type: object
+      required: [session_id, message_id, citation_id]
+      properties:
+        session_id: {type: string, minLength: 1}
+        message_id: {type: string, minLength: 1}
+        citation_id: {type: string, minLength: 1}
+
+    CitationDocumentAddress:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [local, remote]
+        absPath:
+          type: string
+          nullable: true
+          description: Present only for a local desktop resolver.
+        url:
+          type: string
+          nullable: true
+          description: Short-lived address; never persisted in CitationBundle.
+        expiresAt:
+          type: integer
+          format: int64
+          nullable: true
+
+    ResolvedCitationDocumentSource:
+      type: object
+      required: [id, title, render]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        source:
+          type: object
+          properties:
+            name: {type: string}
+            logoUrl: {type: string}
+        render:
+          oneOf:
+            - type: object
+              required: [kind, mimeType, address]
+              properties:
+                kind: {type: string, enum: [file]}
+                mimeType: {type: string}
+                address: {$ref: "#/components/schemas/CitationDocumentAddress"}
+            - type: object
+              required: [kind, html]
+              properties:
+                kind: {type: string, enum: [html]}
+                html:
+                  type: string
+                  description: Trusted backend-fetched HTML; sanitized by the app host.
+            - type: object
+              required: [kind, chunks]
+              properties:
+                kind: {type: string, enum: [chunks]}
+                chunks:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: true
+            - type: object
+              required: [kind, url]
+              properties:
+                kind: {type: string, enum: [external]}
+                url: {type: string, format: uri}
+        chunks:
+          type: array
+          description: Optional locator index independent of the primary render.
+          items:
+            type: object
+            additionalProperties: true
+        documentVersion:
+          type: string
+          nullable: true
+        originalUrl:
+          type: string
+          nullable: true
+
+    ResolveCitationResponse:
+      type: object
+      required: [document, status]
+      properties:
+        document:
+          allOf:
+            - $ref: "#/components/schemas/ResolvedCitationDocumentSource"
+          nullable: true
+        effective_locator:
+          nullable: true
+          oneOf:
+            - $ref: "#/components/schemas/ChunkLocatorV1"
+            - $ref: "#/components/schemas/HtmlLocatorV1"
+            - $ref: "#/components/schemas/PdfLocatorV1"
+            - $ref: "#/components/schemas/ExternalLocatorV1"
+        status:
+          type: string
+          enum: [ready, stale, missing, forbidden, degraded]
+        fallback_reason:
+          type: string
+          nullable: true
+        canonical_url:
+          type: string
+          nullable: true
+
+    CitationRefV1:
+      type: object
+      required: [citationId, source, evidence]
+      properties:
+        citationId:
+          type: string
+          minLength: 1
+        source:
+          $ref: "#/components/schemas/CitationSourceV1"
+        evidence:
+          oneOf:
+            - $ref: "#/components/schemas/TextCitationEvidenceV1"
+            - $ref: "#/components/schemas/StructuredDataEvidenceV1"
+            - $ref: "#/components/schemas/CalculationEvidenceV1"
+        locator:
+          oneOf:
+            - $ref: "#/components/schemas/ChunkLocatorV1"
+            - $ref: "#/components/schemas/HtmlLocatorV1"
+            - $ref: "#/components/schemas/PdfLocatorV1"
+            - $ref: "#/components/schemas/ExternalLocatorV1"
+        resolutionStatus:
+          type: string
+          enum: [ready, stale, missing, forbidden, degraded]
+        annotations:
+          type: object
+          additionalProperties: true
+
+    CitationSourceV1:
+      type: object
+      required:
+        [sourceId, providerId, sourceType, title, retrievedAt]
+      properties:
+        sourceId: {type: string, minLength: 1}
+        providerId: {type: string, minLength: 1}
+        documentId: {type: string}
+        documentVersion: {type: string}
+        sourceType:
+          type: string
+          enum: [document, web, dataset, tool-result, conversation]
+        sourceCategory: {type: string}
+        mimeType: {type: string}
+        title: {type: string, minLength: 1}
+        organization: {type: string}
+        author: {type: string}
+        publishedAt: {type: string, format: date-time}
+        retrievedAt: {type: string, format: date-time}
+        canonicalUrl:
+          type: string
+          format: uri
+          description: Stable public URL only. Signed or secret-bearing URLs are forbidden.
+
+    TextCitationEvidenceV1:
+      type: object
+      required: [kind, quote, snippet, capturedAt]
+      properties:
+        kind: {type: string, enum: [text]}
+        quote: {type: string}
+        snippet: {type: string}
+        prefix: {type: string}
+        suffix: {type: string}
+        language: {type: string}
+        capturedAt: {type: string, format: date-time}
+        contentHash: {type: string}
+
+    StructuredDataEvidenceV1:
+      type: object
+      required: [kind, datasetId, toolName, field, value, capturedAt]
+      properties:
+        kind: {type: string, enum: [structured-data]}
+        datasetId: {type: string}
+        toolName: {type: string}
+        recordKey: {type: string}
+        entityId: {type: string}
+        entityName: {type: string}
+        field: {type: string}
+        metric: {type: string}
+        value:
+          nullable: true
+          oneOf:
+            - {type: string}
+            - {type: number}
+            - {type: boolean}
+        unit: {type: string}
+        currency: {type: string}
+        scale:
+          oneOf:
+            - {type: string}
+            - {type: number}
+        period: {type: string}
+        asOf: {type: string}
+        scope: {type: string}
+        basis: {type: string}
+        capturedAt: {type: string, format: date-time}
+        toolTraceRef: {type: string}
+        coverage:
+          type: object
+          properties:
+            start: {type: string}
+            end: {type: string}
+
+    CalculationEvidenceV1:
+      type: object
+      required: [kind, expression, inputs, result, calculatedAt]
+      properties:
+        kind: {type: string, enum: [calculation]}
+        expression: {type: string}
+        inputs:
+          type: array
+          items:
+            type: object
+            required: [name, citationId, value]
+            properties:
+              name: {type: string}
+              citationId: {type: string}
+              value:
+                oneOf:
+                  - {type: string}
+                  - {type: number}
+              unit: {type: string}
+        result:
+          oneOf:
+            - {type: string}
+            - {type: number}
+        unit: {type: string}
+        rounding: {type: string}
+        calculatedAt: {type: string, format: date-time}
+        entityId: {type: string}
+        entityName: {type: string}
+        metric: {type: string}
+        period: {type: string}
+        scope: {type: string}
+        basis: {type: string}
+
+    TextQuoteSelectorV1:
+      type: object
+      required: [exact]
+      properties:
+        exact: {type: string}
+        prefix: {type: string}
+        suffix: {type: string}
+
+    NormalizedRectV1:
+      type: object
+      required: [x, y, width, height]
+      properties:
+        x: {type: number, minimum: 0, maximum: 1}
+        y: {type: number, minimum: 0, maximum: 1}
+        width: {type: number, minimum: 0, maximum: 1}
+        height: {type: number, minimum: 0, maximum: 1}
+
+    ChunkLocatorV1:
+      type: object
+      required: [kind, chunkId]
+      properties:
+        kind: {type: string, enum: [chunk]}
+        chunkId: {type: string}
+        segmentId: {type: string}
+        quote: {$ref: "#/components/schemas/TextQuoteSelectorV1"}
+
+    HtmlLocatorV1:
+      type: object
+      required: [kind, quote]
+      properties:
+        kind: {type: string, enum: [html]}
+        chunkId: {type: string}
+        elementId: {type: string}
+        cssSelector: {type: string}
+        quote: {$ref: "#/components/schemas/TextQuoteSelectorV1"}
+
+    PdfLocatorV1:
+      type: object
+      required: [kind, page]
+      properties:
+        kind: {type: string, enum: [pdf]}
+        page: {type: integer, minimum: 1}
+        chunkId: {type: string}
+        rects:
+          type: array
+          items: {$ref: "#/components/schemas/NormalizedRectV1"}
+        quote: {$ref: "#/components/schemas/TextQuoteSelectorV1"}
+        coordinateSpace:
+          type: string
+          enum: [viewport-normalized-v1]
+        pageRotation:
+          type: integer
+          enum: [0, 90, 180, 270]
+
+    ExternalLocatorV1:
+      type: object
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [external]}
+        fragment: {type: string}
+
+    CitationIntegrityV1:
+      type: object
+      required:
+        [status, unknownCitationIds, unusedCitationIds,
+         missingLocatorCitationIds, repairAttempts, policyRevision]
+      properties:
+        status:
+          type: string
+          enum: [passed, repaired, degraded, not-required]
+        unknownCitationIds:
+          type: array
+          items: {type: string}
+        unusedCitationIds:
+          type: array
+          items: {type: string}
+        missingLocatorCitationIds:
+          type: array
+          items: {type: string}
+        repairAttempts: {type: integer, minimum: 0, maximum: 1}
+        policyRevision: {type: string}
+        evidenceRegisteredCount: {type: integer, minimum: 0}
+        evidenceRejectedCount: {type: integer, minimum: 0}
+        evidenceOverflowReasons:
+          type: array
+          items: {type: string}
+        publicationBlocked: {type: boolean}
+
+    CitationQualityIssueV1:
+      type: object
+      required: [code, layer, severity]
+      properties:
+        code: {type: string}
+        layer: {type: string}
+        severity: {type: string, enum: [degraded, unverified]}
+        citationIds:
+          type: array
+          items: {type: string}
+        claimId: {type: string}
+        claim:
+          $ref: "#/components/schemas/TextQuoteSelectorV1"
+        location:
+          $ref: "#/components/schemas/ClaimLocationV1"
+
+    ClaimLocationV1:
+      oneOf:
+        - type: object
+          required: [kind, blockIndex, start, end]
+          properties:
+            kind: {type: string, enum: [text]}
+            blockIndex: {type: integer, minimum: 0}
+            start: {type: integer, minimum: 0}
+            end: {type: integer, minimum: 0}
+            sourceStart: {type: integer, minimum: 0}
+            sourceEnd: {type: integer, minimum: 0}
+        - type: object
+          required: [kind, blockIndex, itemIndex, start, end]
+          properties:
+            kind: {type: string, enum: [list-item]}
+            blockIndex: {type: integer, minimum: 0}
+            itemIndex: {type: integer, minimum: 0}
+            start: {type: integer, minimum: 0}
+            end: {type: integer, minimum: 0}
+            sourceStart: {type: integer, minimum: 0}
+            sourceEnd: {type: integer, minimum: 0}
+        - type: object
+          required: [kind, blockIndex, rowIndex, columnIndex]
+          properties:
+            kind: {type: string, enum: [table-cell]}
+            blockIndex: {type: integer, minimum: 0}
+            rowIndex: {type: integer, minimum: 0}
+            columnIndex: {type: integer, minimum: 0}
+            sourceStart: {type: integer, minimum: 0}
+            sourceEnd: {type: integer, minimum: 0}
+        - type: object
+          required: [kind]
+          properties:
+            kind: {type: string, enum: [legacy]}
+
+    ClaimEvidenceBindingV1:
+      type: object
+      required: [citationId, role, supportStatus]
+      properties:
+        citationId: {type: string}
+        role:
+          type: string
+          enum:
+            [primary, corroborating, component, calculation-input, conflicting]
+        supportStatus:
+          type: string
+          enum: [supported, partially-supported, contradicted, not-found]
+
+    CitationClaimAuditV1:
+      type: object
+      required:
+        [claimId, exact, segmentIndex, citationRequired, citationIds,
+         status, issueCodes]
+      properties:
+        claimId: {type: string}
+        exact: {type: string}
+        segmentIndex: {type: integer, minimum: 0}
+        citationRequired: {type: boolean}
+        auditPriority:
+          type: string
+          enum: [critical, supporting, optional]
+        auditSelected: {type: boolean}
+        selectionReasons:
+          type: array
+          items: {type: string}
+        claimGroupId: {type: string}
+        citationIds:
+          type: array
+          items: {type: string}
+        bindings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClaimEvidenceBindingV1"
+        status:
+          type: string
+          enum: [passed, auto-bound, repaired, degraded, unverified, unsupported, not-selected]
+        issueCodes:
+          type: array
+          items: {type: string}
+        location:
+          $ref: "#/components/schemas/ClaimLocationV1"
+
+    CitationQualityResultV1:
+      type: object
+      required:
+        [policyId, policyRevision, mode, status, publishStatus,
+         layers, issues, metrics]
+      properties:
+        policyId: {type: string}
+        policyRevision: {type: string}
+        mode:
+          type: string
+          enum: [required-on-evidence, strict-domain]
+        status:
+          type: string
+          enum: [passed, unverified, degraded]
+        auditOutcome:
+          type: string
+          enum: [passed, partial, needs-review]
+        publishStatus:
+          type: string
+          enum: [ready, draft-only, blocked]
+        layers:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [passed, degraded]
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/CitationQualityIssueV1"
+        claims:
+          type: array
+          items:
+            $ref: "#/components/schemas/CitationClaimAuditV1"
+        extractorRevision: {type: string}
+        selectorRevision: {type: string}
+        verifierRevision: {type: string}
+        metrics:
+          type: object
+          required:
+            [citationCount, unsourcedClaimCount,
+             unverifiedClaimCount, tierCounts]
+          properties:
+            citationCount: {type: integer, minimum: 0}
+            claimDetectedCount: {type: integer, minimum: 0}
+            claimCitationRequiredCount: {type: integer, minimum: 0}
+            claimBoundCount: {type: integer, minimum: 0}
+            claimAutoBoundCount: {type: integer, minimum: 0}
+            claimUnsupportedCount: {type: integer, minimum: 0}
+            claimSemanticMismatchCount: {type: integer, minimum: 0}
+            claimAmbiguousCount: {type: integer, minimum: 0}
+            claimAuditTruncated: {type: boolean}
+            criticalClaimSelectedCount: {type: integer, minimum: 0}
+            criticalClaimSupportedCount: {type: integer, minimum: 0}
+            criticalClaimUnresolvedCount: {type: integer, minimum: 0}
+            criticalConfirmedConflictCount: {type: integer, minimum: 0}
+            optionalClaimObservedCount: {type: integer, minimum: 0}
+            unsourcedClaimCount: {type: integer, minimum: 0}
+            unverifiedClaimCount: {type: integer, minimum: 0}
+            tierCounts:
+              type: object
+              additionalProperties: {type: integer, minimum: 0}
 
     SessionEvent:
       type: object
@@ -5656,6 +8907,9 @@ components:
           type: string
         payload:
           type: object
+          description: >-
+            Flat string map. Final message.assistant.delta frames may carry a
+            JSON-encoded CitationBundleV1 under citation_bundle.
           additionalProperties:
             type: string
 
@@ -5674,6 +8928,14 @@ components:
           description: >-
             Unix epoch milliseconds (UTC) the kernel persisted the event with.
             Format via new Date(ms).
+        event_uid:
+          type: string
+          nullable: true
+          description: >-
+            Store-independent event identity (the append request_id) — the same
+            uid SSE frames carry. Clients dedup/merge REST history rows against
+            live frames by uid, never by seq (seqs are per-store). Null for
+            legacy rows persisted before uid minting.
 
     SessionEventsResponse:
       type: object
@@ -5707,7 +8969,9 @@ components:
           type: string
         status:
           type: string
-          description: "queued | blocked (dispatched/cancelled are not listed)"
+          description: >-
+            queued | blocked in ``items``; ``dispatched`` appears only as the
+            list's ``dispatching`` item (cancelled is never listed).
         position:
           type: integer
           description: FIFO order within the session (ascending).
@@ -5757,6 +9021,16 @@ components:
             item is not present in ``items`` (only queued/blocked are listed), so
             clients that re-subscribe per drained turn use this to keep following
             until the last item finishes.
+        dispatching:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/QueuedInput"
+          description: >-
+            The item the drain chain is executing right now (status
+            ``dispatched``). Already out of ``items``, but its turn may not
+            have landed a durable user message yet — clients keep its bubble
+            visible until it shows up in the transcript instead of dropping
+            it one refetch too early.
 
     QueuedInputCreate:
       type: object
@@ -6141,3 +9415,168 @@ components:
         latency_ms:
           type: integer
           nullable: true
+
+    # ── Local backup (docs/design/client-local-backup.md) ────────────
+    BackupScope:
+      type: object
+      properties:
+        managed_projects: {type: boolean, default: true}
+        external_projects: {type: boolean, default: false}
+        user_skills: {type: boolean, default: true}
+
+    BackupRetention:
+      type: object
+      properties:
+        keep_recent: {type: integer, default: 7, minimum: 1, maximum: 100}
+        keep_daily_days: {type: integer, default: 56, minimum: 0}
+        max_total_gb: {type: integer, default: 20, minimum: 0}
+
+    BackupLastRun:
+      type: object
+      properties:
+        at: {type: integer, nullable: true, description: epoch ms}
+        status:
+          type: string
+          nullable: true
+          enum: [ok, failed, skipped_no_change]
+        error: {type: string, nullable: true}
+        version_id: {type: string, nullable: true}
+
+    BackupRunProgress:
+      type: object
+      required: [running, processed_bytes]
+      properties:
+        running: {type: boolean}
+        phase:
+          type: string
+          nullable: true
+          enum: [preflight, db, files, summary, finalize]
+        started_at: {type: integer, nullable: true, description: epoch ms}
+        processed_bytes: {type: integer}
+        trigger:
+          type: string
+          nullable: true
+          enum: [manual, scheduled]
+
+    BackupConfig:
+      type: object
+      required:
+        [supported, enabled, frequency, destination, scope, retention,
+         last_run, run, versions_count, total_bytes]
+      properties:
+        supported: {type: boolean}
+        unsupported_reason:
+          type: string
+          nullable: true
+          enum: [external_database, remote_kernel, external_kernel_database]
+        enabled: {type: boolean}
+        frequency:
+          type: string
+          enum: [manual, every_6h, daily, weekly]
+        destination: {type: string}
+        scope:
+          $ref: "#/components/schemas/BackupScope"
+        retention:
+          $ref: "#/components/schemas/BackupRetention"
+        last_run:
+          $ref: "#/components/schemas/BackupLastRun"
+        next_run_at: {type: integer, nullable: true, description: epoch ms}
+        run:
+          $ref: "#/components/schemas/BackupRunProgress"
+        versions_count: {type: integer}
+        total_bytes: {type: integer}
+        restore_result:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: Boot-time restore report, if a restore ran
+
+    BackupConfigPatch:
+      type: object
+      properties:
+        enabled: {type: boolean, nullable: true}
+        frequency:
+          type: string
+          nullable: true
+          enum: [manual, every_6h, daily, weekly]
+        destination: {type: string, nullable: true}
+        scope:
+          $ref: "#/components/schemas/BackupScope"
+        retention:
+          $ref: "#/components/schemas/BackupRetention"
+
+    BackupSummaryCounts:
+      type: object
+      properties:
+        sessions: {type: integer, default: 0}
+        messages: {type: integer, default: 0}
+        projects: {type: integer, default: 0}
+        agents: {type: integer, default: 0}
+        skills: {type: integer, default: 0}
+        knowledge_bases: {type: integer, default: 0}
+        documents: {type: integer, default: 0}
+        automations: {type: integer, default: 0}
+
+    BackupVersionInfo:
+      type: object
+      required: [id, created_at, kind, total_bytes, new_bytes, file_count, duration_ms, counts]
+      properties:
+        id: {type: string}
+        created_at: {type: integer, description: epoch ms}
+        kind:
+          type: string
+          enum: [scheduled, manual, pre_restore]
+        total_bytes: {type: integer}
+        new_bytes:
+          type: integer
+          description: Bytes actually copied (not hardlink-deduped)
+        file_count: {type: integer}
+        duration_ms: {type: integer}
+        app_version: {type: string, nullable: true}
+        counts:
+          $ref: "#/components/schemas/BackupSummaryCounts"
+
+    BackupVersionDetail:
+      allOf:
+        - $ref: "#/components/schemas/BackupVersionInfo"
+        - type: object
+          required: [scope, dedup]
+          properties:
+            host_alembic: {type: string, nullable: true}
+            kernel_alembic: {type: string, nullable: true}
+            scope:
+              $ref: "#/components/schemas/BackupScope"
+            dedup:
+              type: string
+              enum: [hardlink, none]
+            kb_source_count: {type: integer, default: 0}
+            kb_source_missing: {type: integer, default: 0}
+
+    BackupFileEntry:
+      type: object
+      required: [name, path, kind]
+      properties:
+        name: {type: string}
+        path: {type: string, description: "version-relative, /-separated"}
+        kind:
+          type: string
+          enum: [dir, file, link]
+        size: {type: integer, default: 0}
+
+    BackupRestoreResult:
+      type: object
+      required: [staged, requires_restart]
+      properties:
+        staged: {type: boolean}
+        requires_restart: {type: boolean}
+        plan:
+          type: array
+          items:
+            type: object
+            required: [target, action, bytes]
+            properties:
+              target: {type: string}
+              action:
+                type: string
+                enum: [replace, create]
+              bytes: {type: integer}

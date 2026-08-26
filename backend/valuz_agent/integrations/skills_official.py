@@ -29,6 +29,31 @@ class OfficialSkillSource:
     def __init__(self, official_dir: Path | None = None) -> None:
         self._dir = official_dir
 
+    def _roots(self, user_id: str) -> list[tuple[Path, bool]]:
+        """``(root, ships_with_the_install)`` in INCREASING precedence.
+
+        The per-user root holds official content that belongs to one user: a
+        template skill materialized by an agent-pack import, an externally
+        installed official skill, and — on an install that predates system
+        roots — legacy copies of the shipped packages.
+
+        Shipped roots come last, so a shipped package wins a slug collision.
+        That is the point of the ordering: a legacy copy must never shadow the
+        version this release actually carries. It also matches
+        ``capability_resolver.official_skill_dir``, which resolves the same way
+        for the always-on baseline.
+
+        An explicit ``official_dir`` keeps the single-root behaviour the
+        callers that pass one already rely on.
+        """
+        from valuz_agent.infra.fs_registry import fs_registry
+
+        if self._dir is not None:
+            return [(self._dir, False)]
+        roots: list[tuple[Path, bool]] = [(_default_official_skill_root(user_id), False)]
+        roots.extend((root, True) for root in fs_registry.system_skill_roots())
+        return roots
+
     def list_skills(
         self, ctx: RuntimeContext, *, compute_content_hash: bool = True
     ) -> list[SkillManifest]:
@@ -41,10 +66,20 @@ class OfficialSkillSource:
         """
         if ctx.user_id is None:
             raise ValueError("user_id is required to list official skills")
-        official_dir = self._dir or _default_official_skill_root(ctx.user_id)
-        if not official_dir.exists():
-            return []
 
+        by_slug: dict[str, SkillManifest] = {}
+        for root, shipped in self._roots(ctx.user_id):
+            if not root.exists():
+                continue
+            for manifest in self._list_root(
+                root, shipped=shipped, compute_content_hash=compute_content_hash
+            ):
+                by_slug[manifest.slug] = manifest  # later root wins
+        return [by_slug[slug] for slug in sorted(by_slug)]
+
+    def _list_root(
+        self, official_dir: Path, *, shipped: bool, compute_content_hash: bool
+    ) -> list[SkillManifest]:
         manifests: list[SkillManifest] = []
         for skill_dir in sorted(p for p in official_dir.iterdir() if p.is_dir()):
             manifest_path = _detect_manifest(skill_dir)
@@ -58,7 +93,12 @@ class OfficialSkillSource:
             version = _coerce_version(metadata.get("version"))
             content_hash = _compute_dir_hash(skill_dir) if compute_content_hash else None
 
-            bundled = is_bundled_skill(skill_dir)
+            # Anything under a system root ships with the install and is
+            # bundled by definition — the ``.bundled-version`` marker only ever
+            # described a COPY, and there is no copy any more. Under the
+            # per-user root the marker still tells a materialized bundle apart
+            # from an externally installed official skill.
+            bundled = True if shipped else is_bundled_skill(skill_dir)
             manifests.append(
                 SkillManifest(
                     id=f"official:{skill_dir.name}",

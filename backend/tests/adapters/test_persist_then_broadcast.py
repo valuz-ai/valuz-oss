@@ -28,7 +28,7 @@ class _FakeStore:
         self._next_seq = 100
 
     async def append_event(
-        self, user_id: str, session_id: str, message_id: str, event: Event
+        self, user_id: str, session_id: str, message_id: str, event: Event, **kw: object
     ) -> int:
         if self.fail:
             raise RuntimeError("db down")
@@ -59,9 +59,13 @@ def test_persisted_event_broadcasts_with_seq_stamped() -> None:
     store, live, sink = _sink_pair()
     asyncio.run(sink.emit(Event(type="tool_use", data={"name": "echo"}, timestamp=7)))
 
-    # Persisted WITHOUT the stamp; broadcast WITH it.
+    # Persisted WITHOUT the stamp; broadcast WITH seq + the store-independent
+    # event_uid (the cross-store dedup key under per-store seqs).
     assert store.appended[0].data == {"name": "echo"}
-    assert live.events[0].data == {"name": "echo", "seq": 101}
+    assert live.events[0].data["name"] == "echo"
+    assert live.events[0].data["seq"] == 101
+    uid = live.events[0].data["event_uid"]
+    assert isinstance(uid, str) and len(uid) == 32
     assert live.events[0].timestamp == 7
 
 

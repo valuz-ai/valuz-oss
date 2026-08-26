@@ -77,6 +77,7 @@ export const categorizeTool = (
     case "Read":
     case "read_file":
     case "view_file":
+    case "view_image":
       return {
         category: "read",
         key: "read",

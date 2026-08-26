@@ -675,9 +675,9 @@ class DecisionAggregator:
         if isinstance(qs, list) and qs and isinstance(qs[0], dict):
             question = str(qs[0].get("question") or "")
         try:
-            from valuz_agent.modules.tasks import messaging as task_messaging
+            from valuz_agent.modules.tasks import events as task_events
 
-            await task_messaging.record_awaiting_user(
+            await task_events.record_awaiting_user(
                 task_id=entry.task_id,
                 project_id=entry.project_id or "",
                 session_id=entry.session_id,
@@ -705,9 +705,9 @@ class DecisionAggregator:
             return
         self._awaiting_task_events.discard(pending_id)
         try:
-            from valuz_agent.modules.tasks import messaging as task_messaging
+            from valuz_agent.modules.tasks import events as task_events
 
-            await task_messaging.record_user_answered(
+            await task_events.record_user_answered(
                 task_id=entry.task_id,
                 project_id=entry.project_id or "",
                 pending_id=pending_id,
@@ -885,4 +885,41 @@ def _resolved_payload(pending_id: str) -> Any:
     return _DecisionStreamResolvedPayload(pending_id=pending_id)
 
 
-__all__ = ["DecisionAggregator"]
+# ---------------------------------------------------------------------------
+# Process-scoped singleton (ADR-022), set at startup by ``boot/steps.py``.
+#
+# It lives HERE, with the class that owns it, not in ``api/deps.py``. The API
+# layer is one consumer among several — ``modules/tasks`` also needs to ask
+# "is this member parked on a user question?" while a lead waits — and having
+# the holder in ``api/deps`` forced that module to import the API layer, an
+# inverted dependency (modules → api). ``api/deps`` re-exports
+# :func:`get_decision_aggregator` for its ``Depends(...)`` use.
+# ---------------------------------------------------------------------------
+
+_decision_aggregator: DecisionAggregator | None = None
+
+
+def set_decision_aggregator(agg: DecisionAggregator) -> None:
+    """Register the process-scoped aggregator. Called by app startup."""
+    global _decision_aggregator
+    _decision_aggregator = agg
+
+
+def get_decision_aggregator() -> DecisionAggregator:
+    """Return the singleton wired up at startup.
+
+    Raises ``RuntimeError`` if called before startup — defensive: it means a
+    consumer is live but the lifecycle hook didn't fire. Callers that must
+    tolerate an unwired aggregator (early boot, tests) should catch it; see
+    ``tasks/coordination._pending_asks_by_session``.
+    """
+    if _decision_aggregator is None:
+        raise RuntimeError("decision aggregator not initialized — startup hook didn't run")
+    return _decision_aggregator
+
+
+__all__ = [
+    "DecisionAggregator",
+    "get_decision_aggregator",
+    "set_decision_aggregator",
+]

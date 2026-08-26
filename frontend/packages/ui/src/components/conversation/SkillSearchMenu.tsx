@@ -120,7 +120,7 @@ export const SkillSearchMenu = ({
     >
       <div className="flex items-center gap-2 border-b border-surface-border px-2 py-1.5">
         <Search className="h-3.5 w-3.5 text-ink-meta" />
-        <span className="text-[14px] text-ink-meta">
+        <span className="text-base text-ink-meta">
           {t("conversation.searchSkill")}
         </span>
       </div>
@@ -138,7 +138,7 @@ export const SkillSearchMenu = ({
           >
             <Zap className="h-3.5 w-3.5 shrink-0 text-ink-heading" />
             <div className="min-w-0">
-              <div className="truncate text-[14px] text-ink-heading">
+              <div className="truncate text-base text-ink-heading">
                 {skill.name}
               </div>
               {skill.description && (

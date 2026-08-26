@@ -7,7 +7,14 @@ from src.core.prompt_builder import build_user_prompt
 from src.core.runtime_port import RuntimePort
 from src.core.skills import Skill, SkillLoader
 from src.core.store_port import StorePort
-from src.core.token_verifier import NullTokenVerifier, OwnerClaims, TokenVerifier
+from src.core.token_verifier import (
+    AsyncTokenVerifier,
+    CompatibleAsyncTokenVerifier,
+    NullTokenVerifier,
+    OwnerClaims,
+    TokenVerifier,
+    TokenVerifierLike,
+)
 from src.core.tool_registry import (
     build_toolkit_for_config,
     clear_registered_tools,
@@ -37,11 +44,13 @@ from src.core.types import (
 
 __all__ = [
     "AgentConfig",
+    "AsyncTokenVerifier",
     "Attachment",
     "BudgetExhausted",
     "build_toolkit_for_config",
     "build_user_prompt",
     "clear_registered_tools",
+    "CompatibleAsyncTokenVerifier",
     "EndTurn",
     "Error",
     "Event",
@@ -71,6 +80,7 @@ __all__ = [
     "StorePort",
     "SubAgentDef",
     "TokenVerifier",
+    "TokenVerifierLike",
     "ToolDef",
     "ToolKit",
     "ToolResult",

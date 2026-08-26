@@ -67,6 +67,7 @@ from valuz_agent.integrations._mcp_asgi import (
     build_internal_mcp_asgi,
     get_current_mcp_session_id,
     get_current_mcp_user_id,
+    internal_mcp_transport_security,
 )
 from valuz_agent.modules.automations.schemas import (
     AutomationToolPayload,
@@ -247,6 +248,9 @@ async def _handle_create(
         AgentNotInProject,
         AutomationAgentRequired,
         AutomationNameEmpty,
+        AutomationPlaybookNotFound,
+        AutomationPlaybookTaskUnsupported,
+        AutomationPlaybookVersionNotFound,
         AutomationProjectNotFound,
         AutomationPromptEmpty,
         AutomationTaskOnlyOnProject,
@@ -302,6 +306,8 @@ async def _handle_create(
             project_id=project_id,
             session_agent_slug=session_agent_slug,
             worktree=bool(payload.worktree),
+            playbook_definition_id=payload.playbook_definition_id,
+            playbook_version=payload.playbook_version,
         )
     except AutomationNameEmpty:
         return _err("create", "name is required for create.", code="MISSING_NAME")
@@ -337,6 +343,9 @@ async def _handle_create(
         AgentNotInProject,
         AgentNotFound,
         AutomationTaskOnlyOnProject,
+        AutomationPlaybookNotFound,
+        AutomationPlaybookVersionNotFound,
+        AutomationPlaybookTaskUnsupported,
     ) as exc:
         return _err("create", str(exc.message), code=exc.__class__.__name__)
 
@@ -360,9 +369,7 @@ async def _handle_list(
     else:
         # Chat sessions narrowed to ``this`` use the singleton chat-default
         # sentinel; project sessions pass their project_id directly.
-        items = await svc.list_automations_in_project(
-            project_id or "chat-default", user_id=user_id
-        )
+        items = await svc.list_automations_in_project(project_id or "chat-default", user_id=user_id)
     if not items:
         return AutomationToolResult(
             action="list",
@@ -423,6 +430,9 @@ async def _handle_update(
         AutomationAgentRequired,
         AutomationNameEmpty,
         AutomationNotFound,
+        AutomationPlaybookNotFound,
+        AutomationPlaybookTaskUnsupported,
+        AutomationPlaybookVersionNotFound,
         AutomationPromptEmpty,
         IntervalTooShort,
         InvalidCronExpression,
@@ -447,6 +457,10 @@ async def _handle_update(
         prompt_template=payload.prompt_template,
         trigger=_trigger_from_payload(payload.trigger),
         agent_slug=payload.agent_slug,
+        action_kind=payload.action_kind,  # type: ignore[arg-type]
+        worktree=payload.worktree,
+        playbook_definition_id=payload.playbook_definition_id,
+        playbook_version=payload.playbook_version,
     )
     try:
         detail = await svc.update(payload.automation_id, update_payload, user_id=user_id)
@@ -458,6 +472,9 @@ async def _handle_update(
         AutomationAgentRequired,
         AutomationNotFound,
         AgentNotInProject,
+        AutomationPlaybookNotFound,
+        AutomationPlaybookVersionNotFound,
+        AutomationPlaybookTaskUnsupported,
     ) as exc:
         return _err("update", str(exc.message), code=exc.__class__.__name__)
     fresh = await svc._row_to_item(  # noqa: SLF001
@@ -490,6 +507,7 @@ async def _handle_status_change(
         AutomationNotFound,
         AutomationPaused,
     )
+
     if not payload.automation_id:
         return _err(
             action, f"automation_id is required for {action}.", code="MISSING_AUTOMATION_ID"
@@ -585,9 +603,7 @@ async def _dispatch(payload: AutomationToolPayload) -> AutomationToolResult:
     async with async_unit_of_work() as db:
         svc = await _build_automation_service(db, user_id)
         if payload.action == "list":
-            return await _handle_list(
-                svc=svc, project_id=project_id, scope=scope, user_id=user_id
-            )
+            return await _handle_list(svc=svc, project_id=project_id, scope=scope, user_id=user_id)
         if payload.action == "create":
             return await _handle_create(
                 svc=svc,
@@ -628,7 +644,14 @@ async def _dispatch(payload: AutomationToolPayload) -> AutomationToolResult:
 # ---------------------------------------------------------------------------
 
 
-_mcp = FastMCP("valuz-automations")
+_mcp = FastMCP(
+    "valuz-automations",
+    transport_security=internal_mcp_transport_security(),
+    # Stateless like the toolkit server: session state in process memory 404s
+    # any follow-up request that lands on another replica/worker behind a
+    # load balancer (client surfaces it as "McpError: Session terminated").
+    stateless_http=True,
+)
 
 
 _AUTOMATION_DESCRIPTION = """Manage the user's automations (recurring or
@@ -667,6 +690,11 @@ Actions
     with no changes is removed automatically when the run / task finishes. Only
     meaningful when the project is a git repository (silently ignored for
     chat-only projects). Default false (the fire works in the project directory).
+  playbook_definition_id / playbook_version — OPTIONAL immutable Playbook pin.
+    When a Definition is provided without a version, create resolves its current
+    version once and stores that exact version. Pinned Playbooks currently use
+    action_kind="chat"; task mode is rejected until task lifecycle completion can
+    close the corresponding PlaybookRun truthfully.
   trigger — discriminated object. Use interval for "every N minutes/seconds"
     schedules, cron for clock-time schedules:
     {"kind": "cron", "cron_expr": "0 9 * * *", "timezone": "Asia/Shanghai"}
@@ -720,6 +748,8 @@ async def automation(
     trigger: dict[str, Any] | None = None,
     action_kind: str | None = None,
     worktree: bool | None = None,
+    playbook_definition_id: str | None = None,
+    playbook_version: int | None = None,
     scope: str | None = None,
     input: str | None = None,  # noqa: A002 — MCP wire arg name; intentional
 ) -> str:
@@ -753,6 +783,8 @@ async def automation(
             trigger=coerced_trigger,
             action_kind=action_kind,
             worktree=worktree,
+            playbook_definition_id=playbook_definition_id,
+            playbook_version=playbook_version,
             scope=scope,
             input=input,
         )

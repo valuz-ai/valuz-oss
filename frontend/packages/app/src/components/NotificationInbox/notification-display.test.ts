@@ -61,4 +61,39 @@ describe("notificationDisplay", () => {
     const d = notificationDisplay({ ...base, route: null, task_id: null });
     expect(d.route).toBe("/conversation/s1");
   });
+
+  it("backup_failed: localized title despite empty backend title, single tag", () => {
+    const d = notificationDisplay({
+      ...base,
+      kind: "backup_failed",
+      title: "",
+      body: "not enough free space",
+      route: "/settings?tab=backup",
+      task_id: null,
+      session_id: null,
+      pending_id: null,
+    });
+    expect(d.title).not.toBe(""); // localized label composed frontend-side
+    expect(d.body).toBe("not enough free space");
+    expect(d.route).toBe("/settings?tab=backup");
+    expect(d.tag).toBe("backup_failed");
+  });
+});
+
+describe("notificationDisplay body clamp", () => {
+  it("caps a multi-KB provider error dump at 300 chars for alert surfaces", () => {
+    const d = notificationDisplay({
+      ...base,
+      kind: "run_failed",
+      title: "analyst",
+      body: "x".repeat(5000),
+    });
+    expect(d.body.length).toBe(300);
+    expect(d.body.endsWith("…")).toBe(true);
+  });
+
+  it("leaves short bodies untouched", () => {
+    const d = notificationDisplay({ ...base, kind: "run_failed", body: "rate limited" });
+    expect(d.body).toBe("rate limited");
+  });
 });

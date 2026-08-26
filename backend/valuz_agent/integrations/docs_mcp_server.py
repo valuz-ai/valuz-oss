@@ -28,9 +28,18 @@ The tool handlers:
   ``folder_ids`` / ``document_ids`` further narrow scope; both are
   intersected with the project's bindings, so a runaway agent cannot
   reach docs from a different project even if it guesses an id.
+- ``doc_read(document_id, offset?)`` — one document's parsed text and
+  where it lives, paged. The other half of search: a snippet answers
+  "which document", and this answers "what does it say". Without it an
+  agent that finds the right document has no way to open it, and
+  reaches for whatever unrelated document tool it can see.
 - ``list_doc_scope(folder_id?)`` — returns the document tree the
   project is bound to. With no argument: every bound KB / folder /
   doc. With ``folder_id``: only that subtree.
+
+``doc_search`` and ``doc_read`` resolve scope through one service call
+(``authorized_doc_scope``) so the two cannot disagree about what this
+session may reach — an id the search returns is an id the read opens.
 
 Security note
 -------------
@@ -44,7 +53,10 @@ itself to the right project.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
+from datetime import UTC, datetime
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -53,12 +65,15 @@ from valuz_agent.integrations._mcp_asgi import (
     build_internal_mcp_asgi,
     get_current_mcp_session_id,
     get_current_mcp_user_id,
+    internal_mcp_transport_security,
 )
 
 logger = logging.getLogger(__name__)
+_PAGE_NUMBER_RE = re.compile(r"(?:^|\b)(?:page|p\.?)?\s*(\d{1,6})(?:\b|$)", re.IGNORECASE)
 
 # Bound for the duration of one HTTP request by the ASGI wrapper in
 # ``mount_docs_mcp``. Tools read it to scope their datastore access.
+
 
 def _current_session_id() -> str:
     sid = get_current_mcp_session_id()
@@ -83,6 +98,52 @@ async def _resolve_project_id(user_id: str, session_id: str) -> str | None:
     return str(project_id) if project_id else None
 
 
+async def _resolve_session_knowledge_bases(
+    user_id: str,
+    session_id: str,
+) -> list[str] | None:
+    """Return the session's all-available KB snapshot, or project mode.
+
+    ``None`` means use the existing project bindings. An explicit list
+    (including ``[]``) means the session was created under all-available policy.
+    DocumentService re-authorizes every id at tool-call time.
+    """
+    from valuz_agent.adapters.data_reader import data_reader
+
+    session = await data_reader().get_session(user_id, session_id)
+    if session is None:
+        return []
+    metadata = getattr(session, "metadata", None) or {}
+    valuz = metadata.get("valuz", {}) if isinstance(metadata, dict) else {}
+    manifest = valuz.get("capability_manifest", {}) if isinstance(valuz, dict) else {}
+    if not isinstance(manifest, dict) or manifest.get("policy") != "all_available":
+        return None
+    ids = manifest.get("knowledge_bases", [])
+    return [str(item) for item in ids] if isinstance(ids, list) else []
+
+
+async def _resolve_locked_document_scope(
+    user_id: str,
+    session_id: str,
+) -> list[str] | None:
+    """Return the exact document-research scope, or ``None`` for normal sessions."""
+
+    from valuz_agent.adapters.data_reader import data_reader
+
+    session = await data_reader().get_session(user_id, session_id)
+    if session is None:
+        return []
+    metadata = getattr(session, "metadata", None) or {}
+    valuz = metadata.get("valuz", {}) if isinstance(metadata, dict) else {}
+    context = valuz.get("document_research") if isinstance(valuz, dict) else None
+    if not isinstance(context, dict):
+        return None
+    if context.get("purpose") != "document-research" or context.get("source_scope") != "locked":
+        return None
+    ids = context.get("document_ids")
+    return [str(item) for item in ids] if isinstance(ids, list) else []
+
+
 def _build_doc_service(db: Any, user_id: str) -> Any:  # type: ignore[no-untyped-def]
     """Build a one-shot DocumentLibraryService against ``db`` (an open
     ``AsyncSession``).
@@ -94,16 +155,18 @@ def _build_doc_service(db: Any, user_id: str) -> Any:  # type: ignore[no-untyped
     """
     from valuz_agent.infra.eventbus import event_bus
     from valuz_agent.infra.fs_registry import fs_registry
-    from valuz_agent.integrations.docs_embedded import EmbeddedDocsRuntime
     from valuz_agent.integrations.parser_light_local import LightLocalParser
     from valuz_agent.modules.docs.datastore import DocumentDatastore
     from valuz_agent.modules.docs.service import DocumentLibraryService
+    from valuz_agent.ports.docs_runtime import get_docs_runtime
 
-    preview_dir = fs_registry.docs_preview_dir(user_id)
     return DocumentLibraryService(
         datastore=DocumentDatastore(db),
         parser=LightLocalParser(),
-        docs_runtime=EmbeddedDocsRuntime(preview_dir=preview_dir),
+        # The agent's ``doc_search`` must reach the same index the HTTP surface
+        # does — binding the runtime in only one of the two would make the tool
+        # and the UI disagree about what the library contains.
+        docs_runtime=get_docs_runtime(user_id),
         event_bus=event_bus,
         scan_state_dir=fs_registry.docs_scan_state_dir(user_id),
     )
@@ -113,7 +176,14 @@ def _build_doc_service(db: Any, user_id: str) -> Any:  # type: ignore[no-untyped
 # FastMCP app — single module-level instance shared across sessions.
 # ---------------------------------------------------------------------------
 
-_mcp = FastMCP("valuz-project-docs")
+_mcp = FastMCP(
+    "valuz-project-docs",
+    transport_security=internal_mcp_transport_security(),
+    # Stateless like the toolkit server: session state in process memory 404s
+    # any follow-up request that lands on another replica/worker behind a
+    # load balancer (client surfaces it as "McpError: Session terminated").
+    stateless_http=True,
+)
 
 
 @_mcp.tool()
@@ -137,30 +207,224 @@ async def doc_search(
 
     session_id = _current_session_id()
     user_id = _current_user_id()
+    locked_document_ids = await _resolve_locked_document_scope(user_id, session_id)
     project_id = await _resolve_project_id(user_id, session_id)
-    if project_id is None:
+    if project_id is None and locked_document_ids is None:
         return []
+    knowledge_base_ids = await _resolve_session_knowledge_bases(user_id, session_id)
+    effective_document_ids = document_ids
+    if locked_document_ids is not None:
+        locked_set = set(locked_document_ids)
+        effective_document_ids = (
+            [item for item in document_ids if item in locked_set]
+            if document_ids
+            else list(locked_document_ids)
+        )
     async with async_unit_of_work(commit=False) as db:
         svc = _build_doc_service(db, user_id)
         hits = await svc.search_docs(
             user_id,
-            project_id=project_id,
+            project_id=project_id or "",
             query=query,
             folder_ids=folder_ids or None,
-            document_ids=document_ids or None,
+            document_ids=effective_document_ids or None,
             top_k=top_k or 5,
+            knowledge_base_ids=knowledge_base_ids,
+            authorized_document_ids=locked_document_ids,
         )
+        details: dict[str, Any] = {}
+        for hit in hits:
+            try:
+                details[hit.document_id] = await svc.get_document(user_id, hit.document_id)
+            except Exception:  # noqa: BLE001 — a stale hit stays usable without citation metadata
+                logger.warning(
+                    "doc_search: document detail unavailable for evidence envelope %s",
+                    hit.document_id,
+                    exc_info=True,
+                )
+    captured_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     return [
-        {
-            "document_id": h.document_id,
-            "filename": h.filename,
-            "score": h.score,
-            "snippet": h.snippet,
-            "page_ref": h.page_ref,
-            "chunk_ref": h.chunk_ref,
-        }
-        for h in hits
+        _search_hit_to_result(
+            hit,
+            detail=details.get(hit.document_id),
+            session_id=session_id,
+            captured_at=captured_at,
+        )
+        for hit in hits
     ]
+
+
+def _search_hit_to_result(
+    hit: Any,
+    *,
+    detail: Any | None,
+    session_id: str,
+    captured_at: str,
+) -> dict[str, Any]:
+    """Attach a standard evidence envelope while retaining the legacy hit shape."""
+
+    result = {
+        "document_id": hit.document_id,
+        "filename": hit.filename,
+        "score": hit.score,
+        "snippet": hit.snippet,
+        "page_ref": hit.page_ref,
+        "chunk_ref": hit.chunk_ref,
+    }
+    if detail is None:
+        return result
+
+    content_hash = (
+        f"sha256:{detail.content_hash.removeprefix('sha256:')}"
+        if isinstance(detail.content_hash, str) and detail.content_hash
+        else None
+    )
+    identity = "\0".join(
+        [
+            session_id,
+            str(hit.document_id),
+            content_hash or "",
+            str(hit.page_ref or ""),
+            str(hit.chunk_ref or ""),
+            str(hit.snippet),
+        ]
+    )
+    handle = f"ev_{hashlib.sha256(identity.encode()).hexdigest()[:24]}"
+    title = detail.title or hit.filename or detail.filename
+    source: dict[str, Any] = {
+        "sourceId": str(hit.document_id),
+        "providerId": "valuz-project-docs",
+        "documentId": str(hit.document_id),
+        "sourceType": "document",
+        "title": title,
+        "retrievedAt": captured_at,
+    }
+    if content_hash:
+        source["documentVersion"] = content_hash
+    if detail.mime_type:
+        source["mimeType"] = detail.mime_type
+
+    evidence: dict[str, Any] = {
+        "kind": "text",
+        "quote": str(hit.snippet),
+        "snippet": str(hit.snippet),
+        "capturedAt": captured_at,
+    }
+    if content_hash:
+        evidence["contentHash"] = content_hash
+
+    locator = _locator_for_search_hit(hit, mime_type=detail.mime_type)
+    envelope: dict[str, Any] = {
+        "evidenceHandle": handle,
+        "source": source,
+        "evidence": evidence,
+    }
+    if locator is not None:
+        envelope["locator"] = locator
+    result["_valuz_evidence"] = envelope
+    return result
+
+
+def _locator_for_search_hit(hit: Any, *, mime_type: str | None) -> dict[str, Any] | None:
+    quote = {"exact": str(hit.snippet)}
+    page_ref = str(hit.page_ref or "").strip()
+    if page_ref:
+        match = _PAGE_NUMBER_RE.search(page_ref)
+        if match:
+            page = int(match.group(1))
+            if page > 0:
+                return {"kind": "pdf", "page": page, "quote": quote}
+    if hit.chunk_ref:
+        return {
+            "kind": "chunk",
+            "chunkId": str(hit.chunk_ref),
+            "quote": quote,
+        }
+    if mime_type == "text/html":
+        return {"kind": "html", "quote": quote}
+    return None
+
+
+#: How much parsed text one ``doc_read`` call may return. A knowledge base
+#: holds 200-page reports; handing one back whole is both a wasted context
+#: window and, past the model's limit, a failed turn. The agent pages with
+#: ``offset`` instead — and is told so in the response, because a truncation it
+#: cannot see is a truncation it will answer from.
+_READ_CHAR_LIMIT = 40_000
+
+
+@_mcp.tool()
+async def doc_read(document_id: str, offset: int = 0) -> dict[str, Any]:
+    """Read one bound document: where it lives, and its parsed text.
+
+    ``document_id`` is the id ``doc_search`` returns. Use this when a search
+    snippet is not enough — the surrounding section, a number the snippet cut
+    off, or the document read end-to-end.
+
+    Returns ``{document_id, filename, title, relative_path, source_path,
+    parsed_path, mime_type, file_size_bytes, status, parser_mode, markdown,
+    offset, next_offset, total_chars, truncated}``.
+
+    ``markdown`` is the PARSED text — what the index was built from, so what a
+    citation was taken from — not the original bytes. ``source_path`` is the
+    original file and ``parsed_path`` that same markdown on disk; both are
+    readable with your ordinary file tools, so for a long document prefer
+    grepping ``parsed_path`` over paging the whole thing through here. They are
+    absent for a document another user shared with you.
+
+    Long documents come back in pieces: when ``truncated`` is true, call again
+    with ``offset=next_offset``.
+
+    Errors with "document not found" for any id outside this session's bound
+    scope, which is the same scope ``doc_search`` searches.
+    """
+    from valuz_agent.infra.db import async_unit_of_work
+
+    session_id = _current_session_id()
+    user_id = _current_user_id()
+    locked_document_ids = await _resolve_locked_document_scope(user_id, session_id)
+    project_id = await _resolve_project_id(user_id, session_id)
+    if project_id is None and locked_document_ids is None:
+        raise ValueError(f"document not found: {document_id}")
+    knowledge_base_ids = await _resolve_session_knowledge_bases(user_id, session_id)
+    async with async_unit_of_work(commit=False) as db:
+        svc = _build_doc_service(db, user_id)
+        doc = await svc.read_document_in_scope(
+            user_id,
+            project_id=project_id or "",
+            document_id=document_id,
+            knowledge_base_ids=knowledge_base_ids,
+            authorized_document_ids=locked_document_ids,
+        )
+    if doc is None:
+        # Deliberately one message for "no such document" and "not yours": a
+        # model that can tell them apart can enumerate a library it was never
+        # given.
+        raise ValueError(f"document not found: {document_id}")
+
+    total = len(doc.markdown)
+    start = max(0, min(offset, total))
+    window = doc.markdown[start : start + _READ_CHAR_LIMIT]
+    end = start + len(window)
+    return {
+        "document_id": doc.document_id,
+        "filename": doc.filename,
+        "title": doc.title,
+        "relative_path": doc.relative_path,
+        "source_path": doc.source_path,
+        "parsed_path": doc.parsed_path,
+        "mime_type": doc.mime_type,
+        "file_size_bytes": doc.file_size_bytes,
+        "status": doc.status,
+        "parser_mode": doc.parser_mode,
+        "markdown": window,
+        "offset": start,
+        "total_chars": total,
+        "truncated": end < total,
+        # Absent when there is no more to read, so "call again" is a decision
+        # the response makes rather than one the model has to infer.
+        "next_offset": end if end < total else None,
+    }
 
 
 @_mcp.tool()
@@ -181,12 +445,49 @@ async def list_doc_scope(folder_id: str | None = None) -> dict[str, Any]:
     del folder_id  # full-tree view is enough today; folder drilldown is a TODO.
     session_id = _current_session_id()
     user_id = _current_user_id()
+    locked_document_ids = await _resolve_locked_document_scope(user_id, session_id)
+    if locked_document_ids is not None:
+        async with async_unit_of_work(commit=False) as db:
+            svc = _build_doc_service(db, user_id)
+            nodes = []
+            for document_id in locked_document_ids:
+                try:
+                    detail = await svc.get_document(user_id, document_id)
+                except Exception:  # noqa: BLE001 — stale/deleted scope item is omitted
+                    continue
+                nodes.append(
+                    {
+                        "kind": "document",
+                        "id": detail.id,
+                        "name": detail.title or detail.filename,
+                        "bound_directly": True,
+                        "children": [],
+                    }
+                )
+        return {
+            "knowledge_bases": [
+                {
+                    "kind": "kb",
+                    "id": "document-research-locked",
+                    "name": "Current document",
+                    "bound_directly": True,
+                    "children": nodes,
+                }
+            ],
+            "total_documents": len(nodes),
+            "source_scope": "locked",
+        }
     project_id = await _resolve_project_id(user_id, session_id)
     if project_id is None:
         return {"knowledge_bases": [], "total_documents": 0}
+    knowledge_base_ids = await _resolve_session_knowledge_bases(user_id, session_id)
     async with async_unit_of_work(commit=False) as db:
         svc = _build_doc_service(db, user_id)
-        tree = await svc.build_doc_scope_tree(user_id, project_id)
+        tree = await svc.build_doc_scope_tree(
+            user_id,
+            project_id,
+            knowledge_base_ids=knowledge_base_ids,
+        )
     return _scope_tree_to_dict(tree)
 
 

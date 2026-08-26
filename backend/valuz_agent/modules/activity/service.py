@@ -1,8 +1,9 @@
 """Unified activity feed — the single source for every history list.
 
-Merges two host-side sources into one time-sorted, cursor-paginated stream:
+Merges host-side sources into one time-sorted, cursor-paginated stream:
   * user **chat** sessions (``project_index``, ordered by ``created_at``)
   * **task** entities (``TaskDatastore``, ordered by ``updated_at``)
+  * **playbook** runs (``PlaybookRunRow``, ordered by ``updated_at``)
 
 The merge, filter (tab), and keyset pagination all run on host tables — the
 kernel is touched only to enrich the page's winning chat rows with title/status.
@@ -21,13 +22,14 @@ from dataclasses import dataclass
 
 from valuz_agent.adapters import kernel_client
 from valuz_agent.modules.activity.schemas import ActivityItem, ActivityPage
+from valuz_agent.modules.playbooks.service import list_activity_playbook_runs_page
 from valuz_agent.modules.projects.service import project_name_map
 from valuz_agent.modules.sessions import project_index
-from valuz_agent.modules.tasks.queries import list_activity_tasks_page
+from valuz_agent.modules.tasks.service import list_activity_tasks_page
 
 # Sentinel ``project_id`` the chat launchers stamp on non-project quick chats.
 _CHAT_DEFAULT = "chat-default"
-_TABS = {"all", "chat", "task", "automation"}
+_TABS = {"all", "chat", "task", "automation", "playbook"}
 
 
 def _want_sessions(tab: str) -> bool:
@@ -36,6 +38,10 @@ def _want_sessions(tab: str) -> bool:
 
 def _want_tasks(tab: str) -> bool:
     return tab in ("all", "task", "automation")
+
+
+def _want_playbooks(tab: str) -> bool:
+    return tab in ("all", "playbook")
 
 
 def _automation_filter(tab: str) -> bool | None:
@@ -56,6 +62,7 @@ class _Cand:
     is_auto: bool
     title: str | None = None
     status: str | None = None
+    linked_session_id: str | None = None
 
 
 def _order_key(c: _Cand) -> tuple[int, str, str]:
@@ -89,11 +96,13 @@ async def list_activity(
         tab = "all"
     limit = max(1, min(limit, 100))
     cur = _decode(cursor) if cursor else None
+    if _want_sessions(tab):
+        await project_index.ensure_legacy_session_index(user_id)
     # Inclusive ``<= cursor.sort_at`` via the strict-``<`` datastores (ms ints).
     before_ts = (cur[0] + 1) if cur is not None else None
 
     cands: list[_Cand] = []
-    n_sess = n_task = 0
+    n_sess = n_task = n_playbook = 0
 
     if _want_sessions(tab):
         rows = await project_index.list_chat_index_rows(
@@ -140,6 +149,28 @@ async def list_activity(
                 )
             )
 
+    if _want_playbooks(tab):
+        prows = await list_activity_playbook_runs_page(
+            user_id,
+            project_id=project_id,
+            before_ts=before_ts,
+            limit=limit,
+        )
+        n_playbook = len(prows)
+        for run in prows:
+            cands.append(
+                _Cand(
+                    kind="playbook",
+                    id=run.id,
+                    sort_at=run.updated_at,
+                    project_id=run.project_id,
+                    is_auto=(run.trigger_kind == "automation"),
+                    title=run.title,
+                    status=run.status,
+                    linked_session_id=run.session_id,
+                )
+            )
+
     # Merge, drop everything already returned (compound keyset), take the page.
     cands.sort(key=_order_key)
     if cur is not None:
@@ -154,9 +185,7 @@ async def list_activity(
     chat_ids = [c.id for c in page if c.kind == "chat"]
     ghost_ids: set[str] = set()
     if chat_ids:
-        sessions = await kernel_client.list_sessions(
-            user_id, ids=chat_ids, limit=len(chat_ids)
-        )
+        sessions = await kernel_client.list_sessions(user_id, ids=chat_ids, limit=len(chat_ids))
         smap = {s.id: s for s in sessions}
         for c in page:
             if c.kind != "chat":
@@ -166,9 +195,7 @@ async def list_activity(
                 ghost_ids.add(c.id)
                 continue
             meta = (getattr(s, "metadata", None) or {}).get("valuz") or {}
-            c.title = (
-                meta.get("name") or meta.get("last_user_message_text") or "New chat"
-            )
+            c.title = meta.get("name") or meta.get("last_user_message_text") or "New chat"
             c.status = getattr(s, "status", "unknown")
     # Anchor the cursor to the original page tail BEFORE dropping ghosts, so
     # pagination advances past them instead of re-requesting the same ghosts.
@@ -186,14 +213,13 @@ async def list_activity(
             status=c.status or "",
             is_automation=c.is_auto,
             project_id=c.project_id,
-            project_name=(
-                None if c.project_id == _CHAT_DEFAULT else pname.get(c.project_id)
-            ),
+            project_name=(None if c.project_id == _CHAT_DEFAULT else pname.get(c.project_id)),
+            linked_session_id=c.linked_session_id,
             sort_at=c.sort_at,
         )
         for c in page
     ]
     # A full source page means there may be more beyond the buffer.
-    more = n_sess >= limit or n_task >= limit
+    more = n_sess >= limit or n_task >= limit or n_playbook >= limit
     next_cursor = _encode(last_cand) if (last_cand is not None and more) else None
     return ActivityPage(items=items, next_cursor=next_cursor)

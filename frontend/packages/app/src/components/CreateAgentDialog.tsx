@@ -23,6 +23,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
   Textarea,
 } from "@valuz/ui";
 import {
@@ -41,6 +42,7 @@ import {
 import { AgentModelPicker, type AgentModelSelection } from "./AgentModelPicker";
 import { CatalogPickerDialog } from "./CatalogPickerDialog";
 import { AVATAR_PRESETS, AgentIconGlyph, getAvatarIcon } from "./agent-icons";
+import { getAgentCopyDefaults } from "./agent-copy-defaults";
 
 const DEFAULT_MODEL: AgentModelSelection = {
   runtime: "claude_agent",
@@ -95,6 +97,9 @@ export const CreateAgentDialog = ({
   const [instructions, setInstructions] = useState("");
   const [skills, setSkills] = useState<string[]>([]);
   const [connectors, setConnectors] = useState<string[]>([]);
+  const [knowledgeScope, setKnowledgeScope] = useState<string[]>([]);
+  const [inheritValurionInstructions, setInheritValurionInstructions] =
+    useState(true);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -123,6 +128,8 @@ export const CreateAgentDialog = ({
     setInstructions("");
     setSkills([]);
     setConnectors([]);
+    setKnowledgeScope([]);
+    setInheritValurionInstructions(true);
     setAdvancedOpen(false);
     setCreatedSlug(null);
     setCreatedName("");
@@ -132,24 +139,22 @@ export const CreateAgentDialog = ({
   // Seed the form from a copy source each time the dialog opens with a seed.
   // Props → form-state sync on open is a deliberate effect; re-seeding on every
   // ``seed`` identity change would clobber the user's in-progress edits.
-  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!open) return;
     if (seed) {
-      setName(`${seed.name} (copy)`);
-      setTagline(seed.description);
-      setAvatar(seed.avatar);
-      setModel({
-        runtime: seed.runtime,
-        providerId: seed.provider_id,
-        model: seed.model,
-      });
-      setEffort(seed.effort ?? DEFAULT_EFFORT);
-      setInstructions(seed.instructions);
-      setSkills(seed.skills);
-      setConnectors(seed.connector_types);
+      const copy = getAgentCopyDefaults(seed);
+      setName(copy.name);
+      setTagline(copy.tagline);
+      setAvatar(copy.avatar);
+      setModel(copy.model);
+      setEffort(copy.effort);
+      setInstructions(copy.instructions);
+      setSkills(copy.skills);
+      setConnectors(copy.connectors);
+      setKnowledgeScope(copy.knowledgeScope);
+      setInheritValurionInstructions(copy.inheritValurionInstructions);
       setAdvancedOpen(
-        seed.skills.length > 0 || seed.connector_types.length > 0,
+        copy.skills.length > 0 || copy.connectors.length > 0,
       );
     } else if (defaults) {
       // Blank create defaults to the user's global model / effort settings —
@@ -163,7 +168,6 @@ export const CreateAgentDialog = ({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, defaults]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Load skill + connector catalogs once the dialog opens.
   useEffect(() => {
@@ -207,8 +211,9 @@ export const CreateAgentDialog = ({
     const trimmed = name.trim();
     if (!trimmed) return;
     setBusy(true);
+    let rollbackSlug: string | null = null;
     try {
-      const created = await agentsApi.createAgent({
+      const payload = {
         name: trimmed,
         description: tagline.trim(),
         instructions: instructions.trim(),
@@ -217,9 +222,20 @@ export const CreateAgentDialog = ({
         provider_id: model.providerId,
         skills,
         connector_types: connectors,
+        knowledge_scope: knowledgeScope,
+        inherit_global_instructions: inheritValurionInstructions,
         effort,
         avatar,
-      });
+      };
+      let created: Agent;
+      if (seed) {
+        const copied = await agentsApi.copyAgent(seed.slug, trimmed);
+        rollbackSlug = copied.slug;
+        created = await agentsApi.updateAgent(copied.slug, payload);
+        rollbackSlug = null;
+      } else {
+        created = await agentsApi.createAgent(payload);
+      }
       setCreatedSlug(created.slug);
       setCreatedName(created.name);
       // Load deploy targets for the next-step card.
@@ -231,6 +247,11 @@ export const CreateAgentDialog = ({
       setTargetProject(projs[0]?.id ?? "");
       setStep("next");
     } catch {
+      if (rollbackSlug) {
+        await agentsApi
+          .deleteAgent(rollbackSlug, { cascade: true })
+          .catch(() => undefined);
+      }
       toast.error(t("agent.saveFailed" as Parameters<typeof t>[0]));
     } finally {
       setBusy(false);
@@ -365,7 +386,35 @@ export const CreateAgentDialog = ({
               </DialogField>
             </div>
 
-            {/* ② 指令 */}
+            <div className="flex items-start justify-between gap-4 rounded-lg border border-surface-border px-3 py-3">
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-ink-heading">
+                  {t(
+                    "agent.inheritValurionInstructions" as Parameters<
+                      typeof t
+                    >[0],
+                  )}
+                </div>
+                <p className="mt-1 text-xs leading-5 text-ink-meta">
+                  {t(
+                    "agent.inheritValurionInstructionsHint" as Parameters<
+                      typeof t
+                    >[0],
+                  )}
+                </p>
+              </div>
+              <Switch
+                checked={inheritValurionInstructions}
+                onCheckedChange={setInheritValurionInstructions}
+                aria-label={t(
+                  "agent.inheritValurionInstructions" as Parameters<
+                    typeof t
+                  >[0],
+                )}
+              />
+            </div>
+
+            {/* ② Agent 自定义指令 */}
             <DialogField label={t("agent.tabInstructions")}>
               <Textarea
                 value={instructions}

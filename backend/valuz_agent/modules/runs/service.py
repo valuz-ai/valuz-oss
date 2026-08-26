@@ -36,7 +36,7 @@ from valuz_agent.modules.tasks.datastore import (
     TaskEventDatastore,
     TaskSessionDatastore,
 )
-from valuz_agent.modules.tasks.models import TaskRow, TaskSessionRow
+from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,11 @@ _FINISHED_LIMIT = 50
 # range as automation runs accrue; the per-group _FINISHED_LIMIT bounds output.
 _INDEX_POOL = 500
 _OUTPUT_CHARS = 200
+# Per-session enrichment reads the shared kernel SQLite store.  Keep the
+# request comfortably below its 5 + 10 overflow connection budget so the
+# conversation, catalog, and stream endpoints retain headroom while a large
+# finished-runs overview is being assembled.
+_ENRICH_CONCURRENCY = 4
 
 
 def _truncate_output(text: str | None) -> str | None:
@@ -159,13 +164,26 @@ class RunsService:
         self._task_events = task_events
         self._automations = automations
 
-    async def list_runs(self, user_id: str, status: str = "running") -> list[RunSummary]:
+    async def list_runs(
+        self,
+        user_id: str,
+        status: str = "running",
+        project_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[RunSummary]:
         # Recent sessions come from the host project↔session index; the
         # kernel rows are bulk-fetched by id (the kernel itself is
         # project-agnostic). The pool is generous (automation runs accrue
         # fast); the per-group ``_FINISHED_LIMIT`` budget below is what bounds
         # the response, not this fetch.
-        index_rows = await project_index.list_recent(limit=_INDEX_POOL, user_id=user_id)
+        #
+        # ``project_id`` scopes both the index window and the output budget to
+        # one project — the sidebar accordion's path. Without it a project whose
+        # conversations are older than the global window's tail can never appear
+        # under its own row, however few sessions it has.
+        index_rows = await project_index.list_recent(
+            limit=_INDEX_POOL, user_id=user_id, project_id=project_id
+        )
         proj_by_session = {r.session_id: r.project_id for r in index_rows}
         # Last-activity per session (index ``updated_at``, bumped each turn) — the
         # sort key that floats a chat with a new message to the top.
@@ -176,11 +194,18 @@ class RunsService:
         ws_map: dict[str, ProjectRow] = {
             str(r.id): r for r in await self._projects.list_projects(user_id)
         }
+        # Bounded to the index pool: the overview is polled, and unbounded
+        # full-table maps here grow with install age (automations mint tasks
+        # continuously) — thousands of ORM rows per tick for a ≤500-row need.
         ts_map: dict[str, TaskSessionRow] = {
-            r.session_id: r for r in await self._task_sessions.list_all(user_id)
+            r.session_id: r
+            for r in await self._task_sessions.list_by_session_ids(user_id, list(proj_by_session))
         }
         task_map: dict[str, TaskRow] = {
-            str(r.id): r for r in await self._tasks.list_all(user_id, limit=None)
+            str(r.id): r
+            for r in await self._tasks.list_by_ids(
+                user_id, sorted({r.task_id for r in ts_map.values() if r.task_id})
+            )
         }
         # Session ids spawned by a scheduled automation run. A task created by
         # an automation has a lead session whose own origin stays "user" and
@@ -220,35 +245,55 @@ class RunsService:
                 continue
             candidates.append((sess, task_session, effective, background))
 
-        # Per-run enrichment (`_build` fetches the latest message/event) is
+        # Task rows are described by their latest timeline event. Resolve them
+        # for the whole batch HERE, before the fan-out: reading them inside
+        # ``_build_one`` issued concurrent statements on the one request-scoped
+        # AsyncSession (unsupported), and the per-row ``except`` below turned
+        # the resulting InvalidRequestError into "skipping session …" — runs
+        # silently vanishing from the overview.
+        latest_task_events = await self._task_events.latest_events_by_task(
+            user_id,
+            sorted(
+                {
+                    ts.task_id
+                    for _s, ts, _e, _b in candidates
+                    if ts is not None and ts.kind == "lead" and ts.task_id
+                }
+            ),
+        )
+
+        # Per-run enrichment (`_build` fetches the latest message) is
         # independent per session — run it concurrently instead of one awaited
         # round-trip per run (the finished view can carry ~100 runs, which
         # made this loop the dominant cost of the polled overview).
         async def _build_one(
             sess: Any, task_session: Any, effective: str, background: bool
         ) -> RunSummary | None:
-            # Isolate per-session enrichment: a single malformed session must
-            # not blank the entire overview. Skip the offender, keep the rest.
-            try:
-                return await self._build(
-                    user_id,
-                    sess,
-                    task_session,
-                    ws_map,
-                    task_map,
-                    effective,
-                    project_id=proj_by_session.get(sess.id, ""),
-                    last_activity=activity_by_session.get(sess.id, sess.created_at),
-                    automation_session_ids=automation_session_ids,
-                    background=background,
-                )
-            except Exception:
-                logger.exception(
-                    "runs overview: skipping session %s — failed to build summary",
-                    sess.id,
-                )
-                return None
+            async with enrich_slots:
+                # Isolate per-session enrichment: a single malformed session
+                # must not blank the entire overview. Skip it, keep the rest.
+                try:
+                    return await self._build(
+                        user_id,
+                        sess,
+                        task_session,
+                        ws_map,
+                        task_map,
+                        effective,
+                        project_id=proj_by_session.get(sess.id, ""),
+                        last_activity=activity_by_session.get(sess.id, sess.created_at),
+                        automation_session_ids=automation_session_ids,
+                        latest_task_events=latest_task_events,
+                        background=background,
+                    )
+                except Exception:
+                    logger.exception(
+                        "runs overview: skipping session %s — failed to build summary",
+                        sess.id,
+                    )
+                    return None
 
+        enrich_slots = asyncio.Semaphore(_ENRICH_CONCURRENCY)
         built = await asyncio.gather(
             *(
                 _build_one(sess, task_session, effective, background)
@@ -258,15 +303,16 @@ class RunsService:
         out: list[RunSummary] = [summary for summary in built if summary is not None]
 
         out.sort(key=lambda r: r.updated_at, reverse=True)
+        budget = limit if limit is not None else _FINISHED_LIMIT
         if status == "running":
-            return out
+            return out[:limit] if limit is not None else out
         # Separate budgets so a flood of automation runs can't crowd user
         # chats/tasks out of the recency-sorted window (and vice-versa). Each
-        # group keeps its own ``_FINISHED_LIMIT`` of most-recent runs; the
-        # client splits them across the 全部/对话/任务/自动化 tabs.
+        # group keeps its own budget of most-recent runs; the client splits them
+        # across the 全部/对话/任务/自动化 tabs.
         user_runs = [r for r in out if r.origin != "automation"]
         automation_runs = [r for r in out if r.origin == "automation"]
-        return user_runs[:_FINISHED_LIMIT] + automation_runs[:_FINISHED_LIMIT]
+        return user_runs[:budget] + automation_runs[:budget]
 
     @staticmethod
     def _effective_status(
@@ -294,6 +340,7 @@ class RunsService:
         project_id: str,
         last_activity: int,
         automation_session_ids: set[str],
+        latest_task_events: dict[str, TaskEventRow],
         background: bool = False,
     ) -> RunSummary:
         meta: dict[str, Any] = (sess.metadata or {}).get("valuz") or {}
@@ -311,7 +358,10 @@ class RunsService:
                 title = task.title
             # Tasks are described by their latest timeline event — the frontend
             # renders it the same way the task-detail timeline does.
-            last_event = await self._latest_task_event(user_id, task_id)
+            row = latest_task_events.get(task_id or "")
+            last_event = (
+                {"type": row.type, "payload": row.payload or {}} if row is not None else None
+            )
         else:
             source = (
                 "project_chat" if project is not None and project.kind == "project" else "assistant"
@@ -364,11 +414,3 @@ class RunsService:
             if message.assistant_message:
                 return str(message.assistant_message)
         return None
-
-    async def _latest_task_event(self, user_id: str, task_id: str | None) -> dict[str, Any] | None:
-        if not task_id:
-            return None
-        row = await self._task_events.latest_event(user_id, task_id)
-        if row is None:
-            return None
-        return {"type": row.type, "payload": row.payload or {}}

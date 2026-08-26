@@ -15,7 +15,7 @@ import { StepFooter } from "./StepFooter";
  * user there.
  *
  * The fourth block is a deliberate skip path: clicking it just creates the
- * Valuz Helper and drops the user into a quick chat. We don't surface the
+ * Valurion and drops the user into a quick chat. We don't surface the
  * helper concept here — the choice reads as "I don't need a team yet".
  */
 export const TeamStep = ({
@@ -25,7 +25,7 @@ export const TeamStep = ({
   onBackToConnect,
 }: {
   onEnter: (teamId: OnboardingTeamId) => Promise<void>;
-  /** No-team path: create just the Valuz Helper and enter a quick chat with it. */
+  /** No-team path: ensure Valurion and enter a quick chat with it. */
   onAssistant: () => Promise<void>;
   onSkip: () => void;
   /** Return to ConnectStep so the user can configure a model channel before
@@ -136,7 +136,7 @@ const TeamBlock = ({
           {team.members.map((m) => (
             <span
               key={m.nameKey}
-              className="flex h-5 w-5 items-center justify-center rounded-full border border-surface bg-surface-soft text-[11px]"
+              className="flex h-5 w-5 items-center justify-center rounded-full border border-surface bg-surface-soft text-2xs"
             >
               {m.avatar}
             </span>
@@ -152,7 +152,7 @@ const TeamBlock = ({
   );
 };
 
-/** No-team path — clicking creates just the Valuz Helper and enters a quick
+/** No-team path — clicking ensures Valurion and enters a quick
  *  chat with it. Replaces the old "coming soon" custom block. We don't surface
  *  the helper concept here; the choice reads as "I don't need a team yet" and
  *  the user meets the helper in the chat it drops them into. */
@@ -294,7 +294,7 @@ const MemberCard = ({ member }: { member: TeamMember }) => {
             {t(member.nameKey as Parameters<typeof t>[0])}
           </span>
           {member.tag && (
-            <span className="inline-flex h-4 items-center rounded-[4px] bg-brand-light px-1 text-[10px] leading-none font-normal uppercase text-brand-700">
+            <span className="inline-flex h-4 items-center rounded-sm bg-brand-light px-1 text-micro leading-none font-normal uppercase text-brand-700">
               {member.tag}
             </span>
           )}

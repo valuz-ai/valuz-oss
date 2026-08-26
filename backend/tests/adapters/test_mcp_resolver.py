@@ -60,6 +60,23 @@ async def test_should_treat_authorization_case_insensitively() -> None:
     assert headers == {"authorization": "Bearer sk-123"}
 
 
+async def test_reportify_connectors_should_use_shared_600_second_timeout() -> None:
+    for module in ("search", "stock", "following"):
+        row = _FakeRow(url=f"https://mcp.reportify.cn/{module}/mcp")
+
+        cfgs = await _build_http_config(row, None)  # type: ignore[arg-type]
+
+        assert cfgs is not None and len(cfgs) == 1
+        assert cfgs[0].tool_timeout_sec == 600.0
+
+
+async def test_non_reportify_connector_should_keep_runtime_default_timeout() -> None:
+    cfgs = await _build_http_config(_FakeRow(), None)  # type: ignore[arg-type]
+
+    assert cfgs is not None and len(cfgs) == 1
+    assert cfgs[0].tool_timeout_sec is None
+
+
 async def test_oauth_token_refresh_goes_through_extension_port() -> None:
     calls: list[dict[str, object]] = []
 
@@ -89,3 +106,52 @@ async def test_oauth_token_refresh_goes_through_extension_port() -> None:
             "token_json": '{"access_token":"old-token"}',
         }
     ]
+
+
+# --- stdio command pre-flight -----------------------------------------------
+#
+# The stdio child is spawned kernel-side; with the default in-process kernel
+# that is this very process, so a which() miss at resolve time is definitive
+# and the connector is dropped with an attributable log line (previously every
+# runtime hit a bare ``[Errno 2] No such file or directory`` at turn time).
+# A split kernel (VALUZ_KERNEL_MODE=http) spawns in ITS own environment, so
+# the resolver keeps the server and leaves availability to the runtime.
+
+
+@dataclass
+class _FakeStdioRow:
+    slug: str = "local-tool"
+    command: str = ""
+    args: str | None = None
+    env_json: str | None = None
+
+
+def test_should_drop_stdio_connector_when_command_is_missing() -> None:
+    from valuz_agent.adapters.mcp_resolver import _build_stdio_config
+
+    row = _FakeStdioRow(command="valuz-test-definitely-missing-cmd")
+    assert _build_stdio_config(row) is None
+
+
+def test_should_keep_stdio_connector_when_command_exists() -> None:
+    import sys
+
+    from valuz_agent.adapters.mcp_resolver import _build_stdio_config
+
+    row = _FakeStdioRow(command=sys.executable, args='["-V"]')
+    cfgs = _build_stdio_config(row)
+
+    assert cfgs is not None and len(cfgs) == 1
+    assert cfgs[0].command == sys.executable
+    assert list(cfgs[0].args) == ["-V"]
+
+
+def test_should_keep_missing_command_when_kernel_is_remote(monkeypatch) -> None:
+    from valuz_agent.adapters.mcp_resolver import _build_stdio_config
+    from valuz_agent.infra.config import settings
+
+    monkeypatch.setattr(settings, "kernel_mode", "http")
+    row = _FakeStdioRow(command="valuz-test-definitely-missing-cmd")
+    cfgs = _build_stdio_config(row)
+
+    assert cfgs is not None and cfgs[0].command == "valuz-test-definitely-missing-cmd"

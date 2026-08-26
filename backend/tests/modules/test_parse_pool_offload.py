@@ -1,6 +1,6 @@
 """Regression: the document parser offloads GIL-bound work to a *process*.
 
-``pymupdf4llm`` / ``markitdown`` do their work in pure Python and hold the GIL,
+``pymupdf4llm`` does its work in pure Python and holds the GIL,
 so ``asyncio.to_thread`` (the superseded approach) leaves the single-threaded
 server starving while a parse runs — barely noticeable on fast arm64 cores,
 but a multi-second freeze on slower x86 Macs (the reported "service hangs

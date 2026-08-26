@@ -24,7 +24,7 @@ from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
-ResourceKind = Literal["agent", "skill", "connector", "kb", "project", "automation"]
+ResourceKind = Literal["agent", "skill", "connector", "kb", "project", "automation", "playbook"]
 
 
 @dataclass
@@ -33,7 +33,7 @@ class ResourceRef:
 
     kind: ResourceKind
     # portable identity: slug for agent/skill/connector, name for kb,
-    # id for project/automation
+    # id for project/automation/playbook
     key: str
     name: str
 
@@ -144,6 +144,18 @@ class ResourceLibrary:
                 for item in items
             ]
 
+        if kind == "playbook":
+            # Definitions are the resource; versions and runs are not. A
+            # definition may or may not sit in a Project — ``list_definitions``
+            # with no ``project_id`` returns every definition the user owns.
+            from valuz_agent.facade.projects import ProjectLibrary
+            from valuz_agent.infra.db import async_unit_of_work
+            from valuz_agent.modules.playbooks.service import PlaybookService
+
+            async with async_unit_of_work(commit=False) as db:
+                definitions = await PlaybookService(db, ProjectLibrary()).list_definitions(user_id)
+            return [ResourceRef(kind="playbook", key=row.id, name=row.name) for row in definitions]
+
         raise NotImplementedError(f"list({kind}) not implemented")
 
     # ── get ───────────────────────────────────────────────────────────
@@ -172,8 +184,13 @@ class ResourceLibrary:
                     "model": row.model,
                     "skills": row.skills,
                     "connector_types": row.connector_types,
+                    "knowledge_scope": row.knowledge_scope,
                     "provider_id": row.provider_id,
                     "effort": row.effort,
+                    "kind": row.kind,
+                    "resource_policy": row.resource_policy,
+                    "inherit_global_instructions": row.inherit_global_instructions,
+                    "permission_mode": row.permission_mode,
                     "avatar": row.avatar,
                 },
             )
@@ -336,6 +353,63 @@ class ResourceLibrary:
                 },
             )
 
+        if kind == "playbook":
+            from valuz_agent.facade.projects import ProjectLibrary
+            from valuz_agent.infra.db import async_unit_of_work
+            from valuz_agent.modules.playbooks.service import PlaybookService
+
+            projects = ProjectLibrary()
+            async with async_unit_of_work(commit=False) as db:
+                svc = PlaybookService(db, projects)
+                try:
+                    definition = await svc.get_definition(user_id, key)
+                    # Only the current version travels: the immutable version
+                    # chain is local history, not part of the portable copy.
+                    version = await svc.get_version(user_id, key, definition.current_version)
+                except LookupError:
+                    return None
+
+            # Resolved outside the unit of work — ``ProjectLibrary`` opens its
+            # own session, and a missing/foreign project must not fail the export.
+            project_name: str | None = None
+            if definition.project_id:
+                project = await projects.get(user_id, definition.project_id)
+                project_name = project.name if project else None
+
+            return ResourceSnapshot(
+                kind="playbook",
+                key=definition.id,
+                name=definition.name,
+                data={
+                    "name": definition.name,
+                    "status": definition.status,
+                    "origin": definition.origin,
+                    # A Project id is meaningful only on the machine that
+                    # owns it — carried as a reference for display, never as
+                    # a binding the importer has to satisfy.
+                    "project_id_ref": definition.project_id,
+                    "project_name_ref": project_name,
+                    # ``content`` is the sole authoritative executable body;
+                    # the deprecated ``goal`` mirror stays local (see
+                    # ``PlaybookVersionRow``) so the migration envelope is not
+                    # frozen into the portable copy.
+                    "content": version.content,
+                    "reference_metadata": version.reference_metadata,
+                    "default_executor": version.default_executor,
+                    "applicability": version.applicability,
+                    "inputs": version.inputs,
+                    "stages": version.stages,
+                    "context_reads": version.context_reads,
+                    "context_writes": version.context_writes,
+                    "required_skills": version.required_skills,
+                    "allowed_skills": version.allowed_skills,
+                    "conditions": version.conditions,
+                    "approvals": version.approvals,
+                    "outputs": version.outputs,
+                    "failure_policy": version.failure_policy,
+                },
+            )
+
         raise NotImplementedError(f"get({kind}) not implemented")
 
     # ── save ──────────────────────────────────────────────────────────
@@ -429,11 +503,16 @@ class ResourceLibrary:
                 if existing is None:
                     view = await conn_svc.create_connector(
                         user_id,
+                        slug=snapshot.key,
                         display_name=data["display_name"],
                         transport=data.get("transport", "http"),
                         description=data.get("description"),
                         url=data.get("url"),
-                        connector_type=data.get("connector_type", "custom"),
+                        # A cloud-library download is a user-owned local copy,
+                        # even when its source was originally system-managed.
+                        # Keeping it custom makes disconnect/delete remove only
+                        # this projection while the cloud source stays intact.
+                        connector_type="custom",
                         command=data.get("command"),
                         args=data.get("args"),
                         working_dir=data.get("working_dir"),

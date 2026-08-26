@@ -1,56 +1,52 @@
-"""InjectionAssembler — frozen memory snapshot for a session (memory-system-design §8).
+"""Frozen memory block for a new session's instructions (memory-system-design §8).
 
-Captures the in-scope memory (USER + global MEMORY + this project's MEMORY) ONCE
-per session and reuses the same bytes for the session's life, so the block is
-byte-stable (prefix-cache friendly) and never reflects mid-session writes —
-those land on disk and surface in the next session. Rides the per-turn
-additional-context (host side, ``context_builder``), so it never pollutes the
-user-visible ``instructions_md``. Load-time sanitization happens inside
+The in-scope memory (USER + global MEMORY + this project's MEMORY) is rendered
+ONCE at session create and frozen into ``Session.instructions`` as a
+``<memory>`` section — the session field is already captured at create time
+and immutable for the session's life (ADR-008), so the block is byte-stable
+(prefix-cache friendly), appears exactly once per session (not once per user
+message), and never reflects mid-session writes — those land on disk and
+surface in the next session. Load-time sanitization happens inside
 ``MemoryStore.render_for_injection``.
+
+The former ``InjectionAssembler`` (per-session in-process LRU feeding the
+per-turn additional-context) is retired: freezing into the durable session row
+survives host restarts, where the LRU silently re-captured mid-session.
 """
 
 from __future__ import annotations
 
-from collections import OrderedDict
+import logging
 
+from valuz_agent.infra.db import async_unit_of_work
 from valuz_agent.modules.memory.service import MemoryStore, memory_store
+from valuz_agent.modules.settings.preferences import get_memory_enabled
 
-# Cap the per-session snapshot cache so a long-running headless host never
-# accumulates one entry per session for its whole lifetime. Sized far above any
-# realistic concurrent-session count, so an active session's frozen block is
-# never evicted in practice (eviction would just re-capture on the next turn —
-# best-effort, and stale only if the disk changed mid-session).
-_MAX_SNAPSHOTS = 512
+logger = logging.getLogger(__name__)
 
 
-class InjectionAssembler:
-    def __init__(self, store: MemoryStore | None = None) -> None:
-        self._store = store or memory_store
-        self._snapshots: OrderedDict[str, str] = OrderedDict()
+async def memory_instructions_block(
+    *,
+    user_id: str | None,
+    project_id: str | None = None,
+    store: MemoryStore | None = None,
+) -> str:
+    """Render the memory section body for a session being created.
 
-    def snapshot_for_session(
-        self, *, user_id: str, session_id: str, project_id: str | None = None
-    ) -> str:
-        """Frozen memory block for a session — built once, then reused verbatim."""
-        cache_key = f"{user_id}:{session_id}"
-        cached = self._snapshots.get(cache_key)
-        if cached is not None:
-            self._snapshots.move_to_end(cache_key)  # LRU touch
-            return cached
-        block = self._store.render_for_injection(user_id, project_id=project_id)
-        self._snapshots[cache_key] = block
-        while len(self._snapshots) > _MAX_SNAPSHOTS:
-            self._snapshots.popitem(last=False)  # evict the least-recently-used
-        return block
-
-    def invalidate(self, session_id: str, user_id: str | None = None) -> None:
-        """Drop a session's cached snapshot (e.g. on session end)."""
-        if user_id is not None:
-            self._snapshots.pop(f"{user_id}:{session_id}", None)
-            return
-        for key in tuple(self._snapshots):
-            if key.endswith(f":{session_id}"):
-                self._snapshots.pop(key, None)
-
-
-injection_assembler = InjectionAssembler()
+    Called once per session by the three create paths (chat/project agent
+    path, task lead/member path, raw quick-chat path); the caller wraps the
+    result in a ``<memory>`` section via ``assemble_session_instructions``.
+    Returns ``""`` when memory is disabled, empty, the lookup fails, or the
+    caller has no user identity (memory is per-user) — never blocks session
+    creation.
+    """
+    if not user_id:
+        return ""
+    try:
+        async with async_unit_of_work() as db:
+            if not await get_memory_enabled(db, user_id=user_id):
+                return ""
+        return (store or memory_store).render_for_injection(user_id, project_id=project_id)
+    except Exception:  # noqa: BLE001 — memory must never block a session create
+        logger.debug("memory instructions block skipped", exc_info=True)
+        return ""

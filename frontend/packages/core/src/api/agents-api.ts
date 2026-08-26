@@ -1,6 +1,11 @@
 import type { EffortLevel } from "@valuz/shared";
 import { createFetchJson } from "./fetch-json";
 import { resolveApiBase } from "./base-resolver";
+import {
+  DEVICE_TARGET_ID_PREFIX,
+  getDefaultExecutionTarget,
+} from "../edition/execution-targets";
+import { fanOutTargets, getListFanOutTargets } from "../edition/list-fanout";
 import { invalidateRequestCache } from "./request";
 
 let _apiBase =
@@ -22,15 +27,41 @@ export interface Agent {
   model: string;
   skills: string[];
   connector_types: string[];
+  knowledge_scope: string[];
   /** Default model provider for instances; null = unpinned (set per-instance). */
   provider_id: string | null;
   /** Default reasoning-effort budget for instances; null = no override. */
   effort: EffortLevel | null;
+  /** System agents are installed and managed by the runtime. */
+  kind: "system" | "standard";
+  /** Explicit bindings for normal agents; live owner-scoped resources for Valurion. */
+  resource_policy: "explicit" | "all_available";
+  /** Dynamically prepend the current distribution's Valurion instructions. */
+  inherit_global_instructions: boolean;
+  permission_mode: string;
   source: string;
   readonly: boolean;
   deletable: boolean;
   /** Preset icon key or uploaded asset URL (08-agents-module v2); null = unset. */
   avatar: string | null;
+  /**
+   * Execution target this agent runs on, when it is not "wherever you are".
+   * An edition can list an agent that only exists on another backend (a
+   * colleague's desktop reached through a relay, say); picking it in the
+   * composer moves the conversation there instead of failing with "agent not
+   * found" against the local backend. Absent = runs on the active target.
+   */
+  exec_target_id?: string;
+  /**
+   * Short tag for the composer row (e.g. 分享), set by whoever produced the
+   * row. Deriving it from ``exec_target_id`` alone means silently rendering
+   * nothing whenever that target has not been registered yet — a race the
+   * reader experiences as "the tag is missing".
+   */
+  badge_label?: string;
+  /** Palette for {@link badge_label} — "shared" / "remote" match the library's
+   *  own tags, so the same agent reads the same in both places. */
+  badge_tone?: "shared" | "remote";
 }
 
 /** One派驻 of an agent — the project (project) it's deployed into. */
@@ -106,6 +137,9 @@ export interface CreateAgentPayload {
   model?: string;
   skills?: string[];
   connector_types?: string[];
+  knowledge_scope?: string[];
+  inherit_global_instructions?: boolean;
+  permission_mode?: string;
   provider_id?: string | null;
   effort?: EffortLevel | null;
   avatar?: string | null;
@@ -119,9 +153,48 @@ export interface UpdateAgentPayload {
   model?: string | null;
   skills?: string[] | null;
   connector_types?: string[] | null;
+  knowledge_scope?: string[] | null;
+  inherit_global_instructions?: boolean | null;
+  permission_mode?: string | null;
   provider_id?: string | null;
   effort?: EffortLevel | null;
   avatar?: string | null;
+}
+
+export interface ListAgentsOptions {
+  /** Route this request to a specific execution target. */
+  baseUrl?: string;
+  /** Bypass the shared list cache when the active target or roster changes. */
+  fresh?: boolean;
+}
+
+export interface EffectiveAgentResource {
+  id: string;
+  slug: string;
+  name: string;
+  source: string;
+  status: string;
+}
+
+export interface EffectiveAgentResourceWarning {
+  resource_type: string;
+  resource_id: string;
+  code: string;
+  message: string;
+}
+
+export interface EffectiveAgentResources {
+  policy: "all_available";
+  resolved_at: number;
+  counts: {
+    skills: number;
+    connectors: number;
+    knowledge_bases: number;
+  };
+  skills: EffectiveAgentResource[];
+  connectors: EffectiveAgentResource[];
+  knowledge_bases: EffectiveAgentResource[];
+  warnings: EffectiveAgentResourceWarning[];
 }
 
 /** Spec of an agent the user is confirming after the assistant proposed it
@@ -171,9 +244,66 @@ function invalidateAgents(projectId?: string | null): void {
 }
 
 export const agentsApi = {
-  listAgents(source?: string): Promise<{ agents: Agent[] }> {
+  /**
+   * The agent library.
+   *
+   * Multi-target editions fan out over MACHINES: another desktop has its own
+   * library, and "what can I run" is the union. Rows answered by a non-default
+   * target carry ``exec_target_id``, which is what makes picking one in the
+   * composer move the conversation to that machine instead of failing with
+   * "agent not found" locally.
+   *
+   * Unlike projects and sessions, a sibling runtime of the SAME account (an
+   * edition's cloud execution plane) is skipped: it materializes the account's
+   * own library, so fanning out to it lists every agent a second time under a
+   * different target rather than finding new ones. Only ``device:*`` targets
+   * hold a library this one has never seen.
+   *
+   * Slugs are NOT deduplicated across targets: two machines may both have an
+   * "sde", and they are different agents with different instructions. The
+   * caller distinguishes them by ``exec_target_id``.
+   *
+   * ``options.baseUrl`` addresses one specific target, so it opts out of the
+   * fan-out (that is how the fan-out asks each target, and how the composer
+   * reads a single machine's library).
+   */
+  async listAgents(
+    source?: string,
+    options?: ListAgentsOptions,
+  ): Promise<{ agents: Agent[] }> {
     const params = source ? `?source=${encodeURIComponent(source)}` : "";
-    return fetchJson(`/v1/agents${params}`, { cache: AGENTS_LIST_CACHE });
+    const cache = options?.fresh ? undefined : AGENTS_LIST_CACHE;
+    const machines = options?.baseUrl
+      ? []
+      : getListFanOutTargets().filter(
+          (target) =>
+            target.isDefault || target.id.startsWith(DEVICE_TARGET_ID_PREFIX),
+        );
+    const targets = machines.length >= 2 ? machines : [];
+    if (targets.length === 0) {
+      return fetchJson(`/v1/agents${params}`, {
+        baseUrl: options?.baseUrl,
+        cache,
+      });
+    }
+    const defaultTargetId = getDefaultExecutionTarget()?.id;
+    const outcome = await fanOutTargets(
+      (target, signal) =>
+        fetchJson<{ agents: Agent[] }>(`/v1/agents${params}`, {
+          baseUrl: target.baseUrl,
+          cache,
+          signal,
+        }),
+      targets,
+    );
+    const merged: Agent[] = [];
+    for (const { target, value } of outcome.values) {
+      const elsewhere = target.id !== defaultTargetId;
+      for (const agent of value.agents) {
+        merged.push(elsewhere ? { ...agent, exec_target_id: target.id } : agent);
+      }
+    }
+    return { agents: merged };
   },
 
   getAgent(slug: string): Promise<Agent> {
@@ -209,6 +339,25 @@ export const agentsApi = {
     );
     invalidateAgents();
     return result;
+  },
+
+  async copyAgent(slug: string, name?: string): Promise<Agent> {
+    const result = await fetchJson<Agent>(
+      `/v1/agents/${encodeURIComponent(slug)}/copy`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(name ? { name } : {}),
+      },
+    );
+    invalidateAgents();
+    return result;
+  },
+
+  getEffectiveResources(slug: string): Promise<EffectiveAgentResources> {
+    return fetchJson(
+      `/v1/agents/${encodeURIComponent(slug)}/effective-resources`,
+    );
   },
 
   /** Delete an agent. ``cascade`` first 解除 every 派驻 the agent has, then

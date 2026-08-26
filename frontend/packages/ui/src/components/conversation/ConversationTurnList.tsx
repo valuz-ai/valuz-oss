@@ -10,11 +10,14 @@ import {
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  AlertTriangle,
   Check,
   ChevronRight,
   Copy,
   FileText,
+  Gauge,
   Globe,
+  LoaderCircle,
   Minimize2,
   RotateCw,
   Sparkles,
@@ -24,24 +27,40 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { MarkdownContent } from "./MarkdownContent";
+import {
+  CitationSourceCards,
+  citationDisplayOrder,
+  projectCitationSidecarAnchors,
+  projectEvidenceMarkdownLinks,
+} from "./CitationInline";
 import { ToolCallCard } from "../ToolCallCard";
 import { ErrorMessageCard } from "./ErrorMessageCard";
 import { FileUploadMessage } from "./FileUploadMessage";
 import { TurnDiffSummaryCard } from "./TurnDiffSummaryCard";
+import { formatTurnTime } from "./turn-time";
 import {
   aggregateTurnFileChanges,
   type TurnDiffSummary,
 } from "./diff-aggregator";
 import { SuggestionList } from "../common/SuggestionList";
 import { LogoShimmer } from "../common/PageLoader";
-import type { ConversationTurn, PrototypeToolCall } from "@valuz/shared";
+import type {
+  CitationBundleV1,
+  ConversationTokenUsage,
+  ConversationTurn,
+  OpenCitationInput,
+  PrototypeToolCall,
+} from "@valuz/shared";
 import {
+  assetUrl,
+  modelLabel,
   summarizeSegmentPhrase,
   type ProcessingItem,
   type ToolCategory,
 } from "@valuz/shared";
 import { useI18n } from "../../hooks/use-i18n";
 import { t as _t } from "@valuz/shared/i18n";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -52,9 +71,21 @@ function formatFileSize(bytes: number): string {
 const MessageActions = ({
   text,
   onRetry,
+  tokenUsage,
+  extraActions,
 }: {
   text: string;
   onRetry?: () => void;
+  tokenUsage?: ConversationTokenUsage;
+  /**
+   * Host-supplied controls appended to this row (share, export, …).
+   *
+   * A ReactNode prop rather than a registry lookup on purpose: ``@valuz/ui``
+   * deliberately does not depend on ``@valuz/core``, so the package that owns
+   * the registry passes the rendered node down — same shape as
+   * ``TopBar.rightControl``.
+   */
+  extraActions?: ReactNode;
 }) => {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
@@ -69,6 +100,15 @@ const MessageActions = ({
       /* clipboard denied — silent */
     }
   };
+
+  const formatTokens = (value: number) =>
+    new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(
+      value,
+    );
+  const compactTokens = new Intl.NumberFormat(undefined, {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(tokenUsage?.totalTokens ?? 0);
 
   return (
     <div className="mt-1 flex items-center gap-1">
@@ -93,6 +133,123 @@ const MessageActions = ({
         >
           <RotateCw className="h-3.5 w-3.5" />
         </button>
+      ) : null}
+      {/* Host actions (share, …) sit with the other icon buttons; the token
+          readout is a number, not an action, so it trails the row. */}
+      {extraActions}
+      {tokenUsage && tokenUsage.totalTokens > 0 ? (
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label={t(
+                "conversation.tokenUsage.showDetails" as Parameters<
+                  typeof t
+                >[0],
+                { count: formatTokens(tokenUsage.totalTokens) },
+              )}
+              className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs tabular-nums text-ink-body transition-colors hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+            >
+              <Gauge className="h-3.5 w-3.5" aria-hidden />
+              <span>{compactTokens}</span>
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" side="bottom" className="w-72 p-3">
+            <div className="space-y-2 text-xs">
+              <div className="flex items-center justify-between gap-4 font-medium text-ink-heading">
+                <span>
+                  {t(
+                    "conversation.tokenUsage.turnTotal" as Parameters<
+                      typeof t
+                    >[0],
+                  )}
+                </span>
+                <span className="tabular-nums">
+                  {formatTokens(tokenUsage.totalTokens)}
+                </span>
+              </div>
+              <div className="space-y-1 text-ink-body">
+                {[
+                  [
+                    t(
+                      "conversation.tokenUsage.inputUncached" as Parameters<
+                        typeof t
+                      >[0],
+                    ),
+                    tokenUsage.inputTokens,
+                  ],
+                  [
+                    t(
+                      "conversation.tokenUsage.outputWithReasoning" as Parameters<
+                        typeof t
+                      >[0],
+                    ),
+                    tokenUsage.outputTokens,
+                  ],
+                  [
+                    t(
+                      "conversation.tokenUsage.cacheRead" as Parameters<
+                        typeof t
+                      >[0],
+                    ),
+                    tokenUsage.cacheReadTokens,
+                  ],
+                  [
+                    t(
+                      "conversation.tokenUsage.cacheWrite" as Parameters<
+                        typeof t
+                      >[0],
+                    ),
+                    tokenUsage.cacheWriteTokens,
+                  ],
+                ].map(([label, value]) => (
+                  <div
+                    key={String(label)}
+                    className="flex items-center justify-between gap-4"
+                  >
+                    <span>{label}</span>
+                    <span className="tabular-nums">
+                      {formatTokens(value as number)}
+                    </span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between gap-4">
+                  <span>
+                    {t(
+                      "conversation.tokenUsage.cacheHitRate" as Parameters<
+                        typeof t
+                      >[0],
+                    )}
+                  </span>
+                  <span className="tabular-nums">
+                    {tokenUsage.cacheHitRate == null
+                      ? "—"
+                      : `${(tokenUsage.cacheHitRate * 100).toFixed(1)}%`}
+                  </span>
+                </div>
+              </div>
+              {tokenUsage.models.length > 0 ? (
+                <div className="border-t border-surface-border pt-2 text-ink-muted">
+                  <span>
+                    {t(
+                      "conversation.tokenUsage.models" as Parameters<
+                        typeof t
+                      >[0],
+                    )}
+                    {": "}
+                  </span>
+                  {/* Runtime usage reports raw model ids (gateway aliases,
+                      dated vendor ids). Show the same public name every other
+                      surface shows — ``modelLabel`` falls back to the id when
+                      the backend never labelled it. */}
+                  <span className="break-all">
+                    {tokenUsage.models.map((m) => modelLabel(m)).join(", ")}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          </PopoverContent>
+        </Popover>
       ) : null}
     </div>
   );
@@ -143,6 +300,66 @@ const formatTurnElapsed = (elapsedMs: number | undefined): string => {
         s: String(s),
       });
 };
+
+/** Bare duration, no leading verb — the ``{elapsed}`` slot of the
+ * runtime-startup labels. Same M/S rounding as {@link formatTurnElapsed} so
+ * the number doesn't change shape when the header flips phase. */
+const formatDuration = (elapsedMs: number | undefined): string => {
+  const totalSec = Math.max(0, Math.round((elapsedMs ?? 0) / 1000));
+  if (totalSec < 60)
+    return _t("conversation.durationSeconds" as Parameters<typeof _t>[0], {
+      count: String(totalSec),
+    });
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return s === 0
+    ? _t("conversation.durationMinutes" as Parameters<typeof _t>[0], {
+        m: String(m),
+      })
+    : _t("conversation.durationMinutesSeconds" as Parameters<typeof _t>[0], {
+        m: String(m),
+        s: String(s),
+      });
+};
+
+/** Where the agent runtime for this turn is coming up — the renderer only
+ * picks a string; the host page decides.
+ *
+ * ``"cloud"`` is unreachable in a plain OSS build: it is derived from the
+ * session's execution origin, and origin comes from the ``entity-origin``
+ * edition seam, which OSS leaves unregistered (see
+ * ``core/src/edition/entity-origin.ts``). With no observation to read, the host
+ * falls back to the build's declared default location
+ * (``core/src/edition/execution-targets.ts``), which OSS leaves at ``"local"``
+ * — its one backend is a sidecar on this machine. A multi-target edition
+ * registers the adapter and this turns two-valued; a browser-only edition
+ * whose single backend is the cloud declares that instead. The value name
+ * matches the target id it comes from (``"cloud"``), so there is one word for
+ * the concept end to end. */
+export type RuntimeStartLocation = "local" | "cloud";
+
+/** Header text for the pre-run phase: the message is sent but the runtime is
+ * still coming up, so "已处理" would be a lie. The counter itself keeps
+ * running — only the verb changes when the runtime reports in. */
+const formatRuntimeStarting = (
+  location: RuntimeStartLocation,
+  elapsedMs: number | undefined,
+): string =>
+  _t(
+    (location === "cloud"
+      ? "conversation.startingCloudRuntime"
+      : "conversation.startingLocalRuntime") as Parameters<typeof _t>[0],
+    { elapsed: formatDuration(elapsedMs) },
+  );
+
+/** How long a turn must stay in flight before its header appears at all.
+ *
+ * A local OSS runtime usually has the session created and the turn started
+ * well inside this window, so without the delay the startup label renders for
+ * a few frames and vanishes — worse than never showing it. Anything the user
+ * can actually read takes longer than this; below it the composer's own
+ * loading state is the feedback. */
+const HEADER_REVEAL_DELAY_MS = 500;
 
 const ICON_BY_CATEGORY: Record<ToolCategory, LucideIcon> = {
   search: Globe,
@@ -201,6 +418,8 @@ type DisplayBlock =
        * answer (header text only, no further work). */
       items: ProcessingItem[];
       elapsedMs?: number;
+      messageId?: string;
+      citationBundle?: CitationBundleV1;
       /** ``true`` when this segment is the LAST assistant in the turn AND
        * has no trailing items — i.e. the actual final answer. The renderer
        * shows the header expanded as full Markdown without any fold UI. */
@@ -266,7 +485,7 @@ const SegmentDetails = ({
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
-        className="inline-flex items-center gap-1.5 py-1 text-left text-xs font-normal text-ink-body transition-colors hover:text-ink-heading"
+        className="inline-flex max-w-full items-center gap-1.5 py-1 text-left text-xs font-normal text-ink-body transition-colors hover:text-ink-heading"
         aria-expanded={open}
       >
         <Icon
@@ -275,10 +494,16 @@ const SegmentDetails = ({
           }`}
           aria-hidden="true"
         />
+        {/* Single line, always: this row is a fold affordance, not content.
+            At panel width the phrase used to wrap, leaving both icons
+            vertically centered against a two-line block (and CJK/latin
+            mixing breaks words mid-hyphen). The full phrase survives in
+            the hover title and the expanded body. */}
         <span
-          className={
-            inProgress ? "animate-[shimmer-text_2s_linear_infinite]" : undefined
-          }
+          title={phrase}
+          className={`min-w-0 truncate ${
+            inProgress ? "animate-[shimmer-text_2s_linear_infinite]" : ""
+          }`}
           // Stagger the text shimmer behind the icon by 300ms so the
           // highlight reads as "icon flashes → sweep enters text", not
           // a simultaneous peak. The icon's keyframe peaks at 0–25% of
@@ -379,6 +604,8 @@ const buildDisplayBlocks = (
     header: string | null;
     items: ProcessingItem[];
     elapsedMs: number | undefined;
+    messageId?: string;
+    citationBundle?: CitationBundleV1;
     /** Index into ``blocks`` where this segment's assistant header sits;
      * -1 when the segment opened with thinking/tool before any assistant. */
     headerIdx: number;
@@ -397,6 +624,8 @@ const buildDisplayBlocks = (
       header: cur.header,
       items: cur.items,
       elapsedMs: cur.elapsedMs,
+      messageId: cur.messageId,
+      citationBundle: cur.citationBundle,
       final: false, // patched after the loop, only for the very last segment
     });
     lastFlushedHeaderIdx = cur.headerIdx;
@@ -426,6 +655,8 @@ const buildDisplayBlocks = (
         items: [],
         elapsedMs: undefined,
         headerIdx: i,
+        messageId: block.messageId,
+        citationBundle: block.citationBundle,
       };
       continue;
     }
@@ -494,22 +725,65 @@ const buildDisplayBlocks = (
   return result;
 };
 
-const formatTurnTime = (ms: number | undefined): string => {
-  if (!ms) return "";
-  const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return "";
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mi = String(d.getMinutes()).padStart(2, "0");
-  const now = new Date();
-  const sameDay =
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate();
-  if (sameDay) return `${hh}:${mi}`;
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${mm}-${dd} ${hh}:${mi}`;
-};
+function buildTrailingCitationContext(
+  blocks: DisplayBlock[],
+  startIndex: number,
+): {
+  content: string;
+  bundle?: CitationBundleV1;
+  displayOrder: ReadonlyMap<string, number>;
+  messageIdByCitationId: ReadonlyMap<string, string | undefined>;
+} {
+  const content: string[] = [];
+  const citations = new Map<string, CitationBundleV1["citations"][number]>();
+  const displayOrder = new Map<string, number>();
+  const messageIdByCitationId = new Map<string, string | undefined>();
+
+  for (let index = startIndex; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    if (block?.kind !== "segment" || block.header === null) continue;
+    const projectedHeader = projectEvidenceMarkdownLinks(
+      projectCitationSidecarAnchors(block.header, block.citationBundle),
+      block.citationBundle,
+    );
+    content.push(projectedHeader);
+
+    const localCitations = new Map(
+      block.citationBundle?.citations.map((citation) => [
+        citation.citationId,
+        citation,
+      ]) ?? [],
+    );
+    for (const citation of block.citationBundle?.citations ?? []) {
+      if (!citations.has(citation.citationId)) {
+        citations.set(citation.citationId, citation);
+        messageIdByCitationId.set(citation.citationId, block.messageId);
+      }
+    }
+    for (const citationId of citationDisplayOrder(
+      projectedHeader,
+      block.citationBundle,
+    ).keys()) {
+      if (!displayOrder.has(citationId)) {
+        displayOrder.set(citationId, displayOrder.size + 1);
+      }
+      const citation = localCitations.get(citationId);
+      if (citation && !citations.has(citationId)) {
+        citations.set(citationId, citation);
+        messageIdByCitationId.set(citationId, block.messageId);
+      }
+    }
+  }
+
+  return {
+    content: content.join("\n\n"),
+    bundle: citations.size
+      ? { version: 1, citations: Array.from(citations.values()) }
+      : undefined,
+    displayOrder,
+    messageIdByCitationId,
+  };
+}
 
 const UserMessageActions = ({
   text,
@@ -537,7 +811,7 @@ const UserMessageActions = ({
   return (
     <div className="mt-0.5 flex items-center gap-1">
       {formatted ? (
-        <span className="px-1 text-[11px] text-ink-muted opacity-0 transition-opacity group-hover:opacity-100">
+        <span className="px-1 text-2xs text-ink-muted opacity-0 transition-opacity group-hover:opacity-100">
           {formatted}
         </span>
       ) : null}
@@ -593,7 +867,7 @@ const UserMessageBody = ({
     parts.push(
       <span
         key={`s-${key++}`}
-        className="mr-0.5 inline-flex h-5 items-center gap-1 rounded-[4px] border border-brand/20 bg-brand-100 px-2 py-0 text-2xs text-brand-700 align-middle select-none"
+        className="mr-0.5 inline-flex h-5 items-center gap-1 rounded-sm border border-brand/20 bg-brand-100 px-2 py-0 text-2xs text-brand-700 align-middle select-none"
       >
         <Zap className="h-3 w-3" />
         {entry?.name ?? slug}
@@ -609,15 +883,39 @@ interface TurnRowProps {
   turn: ConversationTurn;
   isLatest: boolean;
   sending: boolean;
+  postRunVerificationActive: boolean;
   skillsBySlug?: Record<string, { name: string }>;
   onRetry?: (turnId: string) => void;
-  onSwitchModel?: (turnId: string) => void;
   retryCount: number;
   /** Optional override for rendering a tool block. Returning ``null``
    * (or omitting the prop) falls back to the generic ToolCallCard.
    * Used by the conversation page to render the SkillSubmissionCard
    * for ``submit_skill`` tool_use events. */
   renderToolCall?: (tool: PrototypeToolCall) => ReactNode | null;
+  /**
+   * Host-supplied controls appended to a turn's action row (share, export…).
+   * Returning null adds nothing, so OSS renders exactly as before.
+   */
+  renderTurnActions?: (turn: ConversationTurn) => ReactNode | null;
+  /**
+   * External state ``renderTurnActions`` depends on, folded into the memo
+   * comparator. Non-latest rows only re-render when their ``turn`` object
+   * changes, so action-row state living OUTSIDE the turn (e.g. an in-flight
+   * fork's pending spinner — #879) is invisible to them unless the host
+   * changes this value. Any change re-renders every row.
+   */
+  turnActionsKey?: string | null;
+  /**
+   * Host control rendered at the START of a turn, before its messages.
+   *
+   * Separate from ``renderTurnActions`` (which appends to the copy/retry row)
+   * because the two positions mean different things: an action acts on a turn,
+   * a leading control marks it.
+   */
+  renderTurnLeading?: (
+    turn: ConversationTurn,
+    role: "user" | "assistant",
+  ) => ReactNode | null;
   /** Predicate marking an overridden tool card as *foldable* — it collapses
    * away with the process trail when the turn ends (visible while running or
    * when the turn is expanded), instead of staying pinned at its position.
@@ -632,6 +930,9 @@ interface TurnRowProps {
   /** Predicate + handler for local-path markdown links emitted by an agent. */
   isLocalFileHref?: (href: string) => boolean;
   onLocalFileLinkClick?: (href: string) => void;
+  onCitationClick?: (input: OpenCitationInput) => void;
+  /** See ``ConversationTurnListProps.startingRuntime``. */
+  startingRuntime?: RuntimeStartLocation | null;
 }
 
 const TurnRow = memo(
@@ -639,15 +940,19 @@ const TurnRow = memo(
     turn,
     isLatest,
     sending,
+    postRunVerificationActive,
     skillsBySlug,
     onRetry,
-    onSwitchModel,
     retryCount,
     renderToolCall,
+    renderTurnActions,
+    renderTurnLeading,
     isToolCardFoldable,
     onRevealFile,
     isLocalFileHref,
     onLocalFileLinkClick,
+    onCitationClick,
+    startingRuntime,
   }: TurnRowProps) {
     const { t } = useI18n();
     const inFlight = sending && isLatest;
@@ -667,6 +972,19 @@ const TurnRow = memo(
       : turn.interrupted
         ? t("conversation.runtimeInterrupted")
         : null;
+    // A budget stop is neither a cancel nor an error, and the kernel records
+    // the turn as COMPLETED — so it gets its own notice instead of the quiet
+    // grey line. It must stay legible even when it is the ONLY thing in the
+    // turn: a ``max_cost`` stop is rejected by the CLI before any model call,
+    // leaving zero blocks, which used to render as an unexplained blank reply.
+    const budgetLabel =
+      turn.budgetHalt === "max_cost"
+        ? t("conversation.budgetHaltCost" as Parameters<typeof t>[0])
+        : turn.budgetHalt === "max_turns"
+          ? t("conversation.budgetHaltTurns" as Parameters<typeof t>[0])
+          : turn.budgetHalt === "unknown"
+            ? t("conversation.budgetHaltUnknown" as Parameters<typeof t>[0])
+            : null;
     const actionText = assistantText || interruptLabel || "";
 
     // Turn-level meta: total elapsed (max of any block's elapsedMs) and
@@ -738,6 +1056,10 @@ const TurnRow = memo(
       }
       return 0;
     }, [displayBlocks]);
+    const trailingCitationContext = useMemo(
+      () => buildTrailingCitationContext(displayBlocks, trailingContentStart),
+      [displayBlocks, trailingContentStart],
+    );
 
     // Auto-fold the process trail when the turn finishes streaming. The
     // header is informational during streaming (no chevron, no fold);
@@ -761,13 +1083,10 @@ const TurnRow = memo(
     }, [inFlight]);
     const headerFoldable = !inFlight && hasProcess;
 
-    // While streaming, tick a 1Hz wall-clock interval so "已处理 X 秒"
-    // advances every second even between SSE event arrivals (otherwise
-    // the displayed elapsed only updates when a new tool/thinking block
-    // lands, which feels stuck during e.g. a long Bash run). Computes
-    // ``Date.now() - turn.userTimestamp`` so the displayed value tracks
-    // real time, not the latest block's stamp. Once the turn settles we
-    // freeze on ``totalElapsedMs`` (the canonical max from blocks).
+    // While streaming, tick a 1Hz wall-clock interval so the header advances
+    // every second even between SSE event arrivals (otherwise the displayed
+    // elapsed only updates when a new tool/thinking block lands, which feels
+    // stuck during e.g. a long Bash run).
     const [tick, setTick] = useState(0);
     useEffect(() => {
       if (!inFlight) return;
@@ -776,52 +1095,109 @@ const TurnRow = memo(
       }, 1000);
       return () => window.clearInterval(interval);
     }, [inFlight]);
-    const displayedElapsedMs = useMemo(() => {
-      // ``tick`` only matters when streaming — referenced so React
-      // re-evaluates this memo each second while inFlight.
+
+    // TWO counters, deliberately not one.
+    //
+    // The startup phase is measured on the CLIENT clock (Send → now) and the
+    // processing phase on the SERVER one (the kernel's ``message.user`` stamp
+    // → now). Splitting them is what keeps a live turn and a reloaded one
+    // agreeing: ``clientSentAtMs`` is React state, so it is gone after a
+    // refresh, and a single counter spanning both phases would therefore show
+    // the startup window before a refresh and hide it after — a gap of tens of
+    // seconds on a cold sandbox. Restarting at zero when the runtime reports
+    // in also makes "已处理" mean what it says, and it removes the only place
+    // the two clocks were ever subtracted from each other.
+    const startupElapsedMs = useMemo(() => {
       void tick;
-      if (!inFlight) return totalElapsedMs;
-      if (!turn.userTimestamp) return totalElapsedMs;
+      if (turn.clientSentAtMs === undefined) return 0;
+      return Math.max(0, Date.now() - turn.clientSentAtMs);
+    }, [tick, turn.clientSentAtMs]);
+    const processedElapsedMs = useMemo(() => {
+      void tick;
+      if (!inFlight || !turn.userTimestamp) return totalElapsedMs;
       const startMs = new Date(turn.userTimestamp).getTime();
       if (Number.isNaN(startMs)) return totalElapsedMs;
-      const live = Date.now() - startMs;
-      // Guard against clock skew: never go backwards from the
-      // canonical block-derived elapsed. If for some reason ``Date.now``
-      // < block stamp (rare wall-clock skew), keep the higher number.
-      return Math.max(live, totalElapsedMs);
+      // Never go backwards from the canonical block-derived elapsed: on rare
+      // wall-clock skew ``Date.now()`` can sit below the latest block stamp.
+      return Math.max(Date.now() - startMs, totalElapsedMs);
     }, [tick, inFlight, turn.userTimestamp, totalElapsedMs]);
+
+    // Hold the header back for the first {@link HEADER_REVEAL_DELAY_MS} of a
+    // turn so a fast local runtime doesn't flash "正在启动本地运行环境" for a
+    // few frames on its way to "已处理". The composer's own loading state
+    // covers the gap. Only in-flight turns the host page stamped are held —
+    // history has no Send time and renders immediately.
+    const [headerRevealed, setHeaderRevealed] = useState(
+      () => turn.clientSentAtMs === undefined,
+    );
+    useEffect(() => {
+      if (!inFlight || turn.clientSentAtMs === undefined) {
+        setHeaderRevealed(true);
+        return;
+      }
+      const remaining =
+        HEADER_REVEAL_DELAY_MS - (Date.now() - turn.clientSentAtMs);
+      if (remaining <= 0) {
+        setHeaderRevealed(true);
+        return;
+      }
+      const handle = window.setTimeout(
+        () => setHeaderRevealed(true),
+        remaining,
+      );
+      return () => window.clearTimeout(handle);
+    }, [inFlight, turn.clientSentAtMs]);
+
+    // Phase copy. Before the runtime reports in there is nothing being
+    // "processed" yet, so the header names what IS happening (a local or cloud
+    // runtime coming up) on its own counter. ``startingRuntime`` is
+    // null/undefined once the host page sees the kernel's ``message.user``
+    // echo — and for every settled turn.
+    const isStartingUp = inFlight && startingRuntime != null;
+    const headerLabel = !headerRevealed
+      ? null
+      : isStartingUp
+        ? formatRuntimeStarting(startingRuntime, startupElapsedMs)
+        : formatTurnElapsed(processedElapsedMs);
     return (
       <div data-conversation-turn className="space-y-[26px]">
+        {/* Host control rendered BEFORE the messages — a selection checkbox
+            belongs beside the message it selects, not down in the action row
+            where it reads as another action. */}
         {turn.userText || (turn.attachments && turn.attachments.length > 0) ? (
-          <div className="group flex flex-col items-end gap-1">
-            {turn.userText ? (
-              <div className="max-w-[78%]">
-                <div className="whitespace-pre-wrap rounded-xl bg-surface-soft px-3.5 py-3 text-base leading-[1.6] text-ink-heading">
-                  <UserMessageBody
-                    text={turn.userText}
-                    skillsBySlug={skillsBySlug}
-                  />
+          <div className="flex items-start gap-2">
+            {renderTurnLeading?.(turn, "user")}
+            <div className="group flex min-w-0 flex-1 flex-col items-end gap-1">
+              {turn.userText ? (
+                <div className="max-w-[78%]">
+                  <div className="whitespace-pre-wrap rounded-xl bg-surface-soft px-3.5 py-3 text-base leading-[1.6] text-ink-heading">
+                    <UserMessageBody
+                      text={turn.userText}
+                      skillsBySlug={skillsBySlug}
+                    />
+                  </div>
                 </div>
-              </div>
-            ) : null}
-            {turn.attachments?.map((att, i) => (
-              <FileUploadMessage
-                key={`att-${turn.id}-${i}`}
-                fileName={att.name}
-                fileSize={att.size > 0 ? formatFileSize(att.size) : undefined}
-                status="ready"
-              />
-            ))}
-            {turn.userText ? (
-              <UserMessageActions
-                text={turn.userText}
-                timestamp={turn.userTimestamp}
-              />
-            ) : null}
+              ) : null}
+              {turn.attachments?.map((att, i) => (
+                <FileUploadMessage
+                  key={`att-${turn.id}-${i}`}
+                  fileName={att.name}
+                  fileSize={att.size > 0 ? formatFileSize(att.size) : undefined}
+                  status="ready"
+                />
+              ))}
+              {turn.userText ? (
+                <UserMessageActions
+                  text={turn.userText}
+                  timestamp={turn.userTimestamp}
+                />
+              ) : null}
+            </div>
           </div>
         ) : null}
 
         <div className="flex items-start gap-3">
+          {renderTurnLeading?.(turn, "assistant")}
           <div className="min-w-0 flex-1 space-y-3">
             {/* Turn-level "Worked for Xm Ys" header — always visible when the
                 turn has any thinking/tool work. While streaming it's a
@@ -830,28 +1206,34 @@ const TurnRow = memo(
                 Divider line removed: it visually competed with the ``<hr>``
                 markdown the agent often emits at the top of the final
                 answer. The grey chevron strip alone is enough boundary. */}
-            <div className="font-sans text-[13px] leading-[1.6] text-[#6e7481]">
-              {headerFoldable ? (
-                <button
-                  type="button"
-                  onClick={() => setTurnFolded((value) => !value)}
-                  className="inline-flex items-center py-1 text-left text-[13px] font-normal text-[#6e7481] transition-colors hover:text-[#525860]"
-                  aria-expanded={!turnFolded}
-                >
-                  <span>{formatTurnElapsed(displayedElapsedMs)}</span>
-                  <ChevronRight
-                    className={`ml-1 h-3.5 w-3.5 shrink-0 transition-transform ${
-                      !turnFolded ? "rotate-90" : ""
-                    }`}
-                    aria-hidden="true"
-                  />
-                </button>
-              ) : (
-                <div className="inline-flex items-center py-1 text-[13px] font-normal text-[#6e7481]">
-                  <span>{formatTurnElapsed(displayedElapsedMs)}</span>
-                </div>
-              )}
-            </div>
+            {/* Omitted entirely (not rendered empty) for the first
+                ``HEADER_REVEAL_DELAY_MS`` of a turn: an empty wrapper would
+                still take a ``space-y-3`` gap and the row would visibly shift
+                when the label appeared. */}
+            {headerLabel === null ? null : (
+              <div className="font-sans text-sm leading-[1.6] text-[#6e7481]">
+                {headerFoldable ? (
+                  <button
+                    type="button"
+                    onClick={() => setTurnFolded((value) => !value)}
+                    className="inline-flex items-center py-1 text-left text-sm font-normal text-[#6e7481] transition-colors hover:text-[#525860]"
+                    aria-expanded={!turnFolded}
+                  >
+                    <span>{headerLabel}</span>
+                    <ChevronRight
+                      className={`ml-1 h-3.5 w-3.5 shrink-0 transition-transform ${
+                        !turnFolded ? "rotate-90" : ""
+                      }`}
+                      aria-hidden="true"
+                    />
+                  </button>
+                ) : (
+                  <div className="inline-flex items-center py-1 text-sm font-normal text-[#6e7481]">
+                    <span>{headerLabel}</span>
+                  </div>
+                )}
+              </div>
+            )}
 
             {displayBlocks.map((block, blockIndex) => {
               const isLastBlock = blockIndex === displayBlocks.length - 1;
@@ -909,10 +1291,16 @@ const TurnRow = memo(
                 showStreamingCaret &&
                 block.items.length === 0 &&
                 block.header !== null;
+              const isTrailingAnswer = blockIndex >= trailingContentStart;
               return (
                 <div
                   key={`segment-${turn.id}-${blockIndex}`}
                   className="space-y-3"
+                  // Selection anchor for host text-selection actions
+                  // (``conversation.selection-actions`` slot): a selection
+                  // inside this segment resolves to the assistant message it
+                  // belongs to — the same identity the citation system uses.
+                  data-assistant-message-id={block.messageId ?? undefined}
                 >
                   {block.header !== null ? (
                     <MarkdownContent
@@ -920,6 +1308,25 @@ const TurnRow = memo(
                       isAnimating={animateHeader}
                       isLocalFileHref={isLocalFileHref}
                       onLocalFileLinkClick={onLocalFileLinkClick}
+                      citationBundle={block.citationBundle}
+                      messageId={block.messageId}
+                      onCitationClick={onCitationClick}
+                      citationDisplayOrderOverride={
+                        isTrailingAnswer
+                          ? trailingCitationContext.displayOrder
+                          : undefined
+                      }
+                      citationLookupBundleOverride={
+                        isTrailingAnswer
+                          ? trailingCitationContext.bundle
+                          : undefined
+                      }
+                      citationMessageIdByCitationIdOverride={
+                        isTrailingAnswer
+                          ? trailingCitationContext.messageIdByCitationId
+                          : undefined
+                      }
+                      showCitationSources={!isTrailingAnswer}
                     />
                   ) : null}
                   {block.items.length > 0 ? (
@@ -936,6 +1343,34 @@ const TurnRow = memo(
               );
             })}
 
+            <CitationSourceCards
+              content={trailingCitationContext.content}
+              citationBundle={trailingCitationContext.bundle}
+              displayOrder={trailingCitationContext.displayOrder}
+              messageIdByCitationId={
+                trailingCitationContext.messageIdByCitationId
+              }
+              onCitationClick={onCitationClick}
+            />
+
+            {postRunVerificationActive ? (
+              <div
+                className="flex items-center pt-0.5"
+                role="status"
+                aria-live="polite"
+              >
+                <div className="inline-flex items-center gap-1.5 rounded-full border border-surface-border bg-surface-soft/80 px-2.5 py-1 text-xs leading-5 text-ink-muted">
+                  <LoaderCircle
+                    className="h-3.5 w-3.5 shrink-0 animate-spin"
+                    aria-hidden="true"
+                  />
+                  <span>
+                    {t("conversation.verifyingAndGeneratingCitations")}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+
             {showLoadingDots ? (
               <div className="flex items-center py-2.5">
                 <LogoShimmer />
@@ -943,17 +1378,29 @@ const TurnRow = memo(
             ) : null}
 
             {interruptLabel ? (
-              <div className="py-1.5 text-[13px] italic text-ink-muted">
+              <div className="py-1.5 text-sm italic text-ink-muted">
                 {interruptLabel}
+              </div>
+            ) : null}
+
+            {budgetLabel ? (
+              <div className="my-1.5 flex items-start gap-2 rounded-lg border border-warning-border bg-warning-light px-3 py-2 text-sm text-warning-text">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{budgetLabel}</span>
               </div>
             ) : null}
 
             {!inFlight &&
             !turn.failedMessage &&
-            (assistantText || turn.cancelled || turn.interrupted) ? (
+            (assistantText ||
+              turn.cancelled ||
+              turn.interrupted ||
+              turn.budgetHalt) ? (
               <MessageActions
                 text={actionText}
                 onRetry={onRetry ? () => onRetry(turn.id) : undefined}
+                tokenUsage={turn.tokenUsage}
+                extraActions={renderTurnActions?.(turn)}
               />
             ) : null}
 
@@ -962,9 +1409,6 @@ const TurnRow = memo(
                 message={turn.failedMessage}
                 retryCount={retryCount}
                 onRetry={onRetry ? () => onRetry(turn.id) : undefined}
-                onSwitchModel={
-                  onSwitchModel ? () => onSwitchModel(turn.id) : undefined
-                }
               />
             ) : null}
           </div>
@@ -974,7 +1418,11 @@ const TurnRow = memo(
   },
   (prev, next) => {
     if (!prev.isLatest && !next.isLatest) {
-      return prev.turn === next.turn && prev.retryCount === next.retryCount;
+      return (
+        prev.turn === next.turn &&
+        prev.retryCount === next.retryCount &&
+        prev.turnActionsKey === next.turnActionsKey
+      );
     }
     return false;
   },
@@ -984,10 +1432,12 @@ interface ConversationTurnListProps {
   turns: ConversationTurn[];
   scrollContainerRef: RefObject<HTMLDivElement | null>;
   sending: boolean;
+  /** True only while the host is running post-answer Citation, Audit, or
+   *  Task Coverage work for the latest turn. */
+  postRunVerificationActive?: boolean;
   loading: boolean;
   error: string | null;
   onRetry?: (turnId: string) => void;
-  onSwitchModel?: (turnId: string) => void;
   retryCounts?: Record<string, number>;
   lastTurnMinHeight?: number;
   skillsBySlug?: Record<string, { name: string }>;
@@ -996,6 +1446,27 @@ interface ConversationTurnListProps {
   ) => void;
   /** See ``TurnRowProps.renderToolCall``. */
   renderToolCall?: (tool: PrototypeToolCall) => ReactNode | null;
+  /** See ``TurnRowProps.renderTurnActions``. */
+  renderTurnActions?: (turn: ConversationTurn) => ReactNode | null;
+  /**
+   * External state ``renderTurnActions`` depends on, folded into the memo
+   * comparator. Non-latest rows only re-render when their ``turn`` object
+   * changes, so action-row state living OUTSIDE the turn (e.g. an in-flight
+   * fork's pending spinner — #879) is invisible to them unless the host
+   * changes this value. Any change re-renders every row.
+   */
+  turnActionsKey?: string | null;
+  /**
+   * Host control rendered at the START of a turn, before its messages.
+   *
+   * Separate from ``renderTurnActions`` (which appends to the copy/retry row)
+   * because the two positions mean different things: an action acts on a turn,
+   * a leading control marks it.
+   */
+  renderTurnLeading?: (
+    turn: ConversationTurn,
+    role: "user" | "assistant",
+  ) => ReactNode | null;
   /** See ``TurnRowProps.isToolCardFoldable``. */
   isToolCardFoldable?: (tool: PrototypeToolCall) => boolean;
   /** See ``TurnRowProps.onRevealFile``. */
@@ -1004,38 +1475,58 @@ interface ConversationTurnListProps {
   isLocalFileHref?: (href: string) => boolean;
   /** See ``TurnRowProps.onLocalFileLinkClick``. */
   onLocalFileLinkClick?: (href: string) => void;
+  /** Opens a structured citation in the host document preview. */
+  onCitationClick?: (input: OpenCitationInput) => void;
   emptyTitle?: string;
   emptySuggestions?: string[];
   onEmptySuggestionClick?: (text: string) => void;
+  /** Hide the mascot illustration in the welcome state. Embedding hosts
+   *  (e.g. an edition workbench panel) keep the title + suggestions but drop
+   *  the illustration, which reads as filler at panel widths. */
+  hideEmptyMascot?: boolean;
   /** Show the new-chat welcome (mascot + title + suggestions) when there are no
    *  turns. Only true for a genuinely fresh conversation — an existing
    *  conversation whose transcript is still loading has no turns yet either, and
    *  must NOT flash the welcome before its history lands. The error card renders
    *  regardless. */
   showWelcome?: boolean;
+  /** Non-null while the message has been sent but the agent runtime has not
+   * reported in yet — the window in which the host is creating the session,
+   * warming the local kernel or booting a remote sandbox. The latest turn's
+   * header then names that instead of claiming to be processing, while the
+   * elapsed counter runs on unbroken. The host page clears it when the
+   * kernel's ``message.user`` echo lands; the value says WHERE the runtime is
+   * coming up (OSS is single-target and always ``"local"``). */
+  startingRuntime?: RuntimeStartLocation | null;
 }
 
 export function ConversationTurnList({
   turns,
   scrollContainerRef,
   sending,
+  postRunVerificationActive = false,
   loading,
   error,
   onRetry,
-  onSwitchModel,
   retryCounts,
   lastTurnMinHeight,
   skillsBySlug,
   onVirtualApiReady,
   renderToolCall,
+  renderTurnActions,
+  turnActionsKey,
+  renderTurnLeading,
   isToolCardFoldable,
   onRevealFile,
   isLocalFileHref,
   onLocalFileLinkClick,
+  onCitationClick,
   emptyTitle,
   emptySuggestions,
   onEmptySuggestionClick,
+  hideEmptyMascot,
   showWelcome,
+  startingRuntime,
 }: ConversationTurnListProps) {
   const { t } = useI18n();
   const rowVirtualizer = useVirtualizer({
@@ -1162,7 +1653,19 @@ export function ConversationTurnList({
                 key={turn.id}
                 ref={rowVirtualizer.measureElement}
                 data-index={virtualRow.index}
-                className="absolute left-0 top-0 w-full"
+                // Opaque row background (matches the scroll container's
+                // ``bg-surface``, so invisible in the steady state). Rows are
+                // absolutely positioned from CACHED heights: when an earlier
+                // turn grows via late layout (markdown table / image load /
+                // code highlight / live streaming), the rows below keep their
+                // stale ``translateY`` for the frame(s) before the
+                // ResizeObserver re-measures — so they briefly land INSIDE the
+                // grown turn. In DOM order a later row paints on top, so the
+                // opaque background makes it cleanly cover the overflow instead
+                // of rendering text-on-text; the re-measure then separates them
+                // with no content lost. Does NOT touch the measurement path
+                // (calling ``measure()`` mid-stream regressed to "展示即消失").
+                className="absolute left-0 top-0 w-full bg-surface"
                 style={{
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
@@ -1172,15 +1675,23 @@ export function ConversationTurnList({
                     turn={turn}
                     isLatest={virtualRow.index === turns.length - 1}
                     sending={sending}
+                    postRunVerificationActive={
+                      virtualRow.index === turns.length - 1 &&
+                      postRunVerificationActive
+                    }
                     skillsBySlug={skillsBySlug}
                     onRetry={onRetry}
-                    onSwitchModel={onSwitchModel}
                     retryCount={retryCounts?.[turn.id] ?? 0}
                     renderToolCall={renderToolCall}
+                    renderTurnActions={renderTurnActions}
+                    turnActionsKey={turnActionsKey}
+                    renderTurnLeading={renderTurnLeading}
                     isToolCardFoldable={isToolCardFoldable}
                     onRevealFile={onRevealFile}
                     isLocalFileHref={isLocalFileHref}
                     onLocalFileLinkClick={onLocalFileLinkClick}
+                    onCitationClick={onCitationClick}
+                    startingRuntime={startingRuntime}
                   />
                 </div>
               </div>
@@ -1226,12 +1737,14 @@ export function ConversationTurnList({
                   empty new-chat page feels less bare. Gated on ``showWelcome``
                   so an existing conversation still fetching its transcript (no
                   turns yet) doesn't flash this new-chat state mid-load. */}
-              <img
-                src="./mascot.png"
-                alt=""
-                aria-hidden="true"
-                className="pointer-events-none mx-auto mb-6 h-[160px] w-auto select-none opacity-80"
-              />
+              {hideEmptyMascot ? null : (
+                <img
+                  src={assetUrl("mascot.png")}
+                  alt=""
+                  aria-hidden="true"
+                  className="pointer-events-none mx-auto mb-6 h-[160px] w-auto select-none opacity-80"
+                />
+              )}
               <div className="text-center text-2xl font-medium leading-tight text-ink-heading">
                 {emptyTitle ?? t("conversation.startHere")}
               </div>

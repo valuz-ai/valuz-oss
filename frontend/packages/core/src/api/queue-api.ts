@@ -18,7 +18,10 @@ export const setQueueApiBase = (url: string): void => {
 
 export interface QueuedInput {
   id: string;
-  /** ``queued`` (waiting) | ``blocked`` (could not run, see error_message). */
+  /**
+   * ``queued`` (waiting) | ``blocked`` (could not run, see error_message) in
+   * ``items``; ``dispatched`` appears only as the list's ``dispatching`` item.
+   */
   status: string;
   position: number;
   text: string;
@@ -41,6 +44,13 @@ export interface QueuedInputList {
    * re-subscribers keep following until the last item finishes.
    */
   draining?: boolean;
+  /**
+   * The item the drain is executing right now (status ``dispatched``): already
+   * out of ``items``, but its turn may not have landed a durable user message
+   * yet. Clients keep its bubble visible until it shows up in the transcript
+   * instead of dropping it one refetch too early.
+   */
+  dispatching?: QueuedInput | null;
 }
 
 const fetchJson = createFetchJson(() => _apiBase);

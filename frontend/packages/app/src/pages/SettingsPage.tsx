@@ -11,11 +11,14 @@ import {
   Brain,
   Cpu,
   FileText,
+  FlaskConical,
   Globe,
+  HardDrive,
   Info,
   Palette,
   Radio,
   Settings,
+  Wifi,
 } from "lucide-react";
 import { SettingsNav, cn } from "@valuz/ui";
 import { useTranslation } from "@valuz/core";
@@ -28,10 +31,19 @@ import { GeneralSection } from "./settings/GeneralSection";
 import { MemorySection } from "./settings/MemorySection";
 import { BrowserSection } from "./settings/BrowserSection";
 import { ParsingSection } from "./settings/ParsingSection";
+import { BackupSection } from "./settings/BackupSection";
 import { SystemLogsSettingsSection } from "./settings/SystemLogsSection";
 import { AboutSection } from "./settings/AboutSection";
+import { NetworkSection } from "./settings/NetworkSection";
 
 const SETTINGS_TAB_STORAGE_KEY = "valuz-settings-tab";
+
+const SETTINGS_TAB_ALIASES: Record<string, string> = {
+  appearance: "general",
+  shortcuts: "general",
+  memory: "personalization",
+  personalize: "personalization",
+};
 
 const TAB_ICON_MAP: Record<string, ReactNode> = {
   general: <Palette className="h-4 w-4" />,
@@ -46,20 +58,22 @@ const TAB_ICON_MAP: Record<string, ReactNode> = {
   activity: <Activity className="h-4 w-4" />,
   info: <Info className="h-4 w-4" />,
   radio: <Radio className="h-4 w-4" />,
+  "hard-drive": <HardDrive className="h-4 w-4" />,
+  backup: <HardDrive className="h-4 w-4" />,
   brain: <Brain className="h-4 w-4" />,
   globe: <Globe className="h-4 w-4" />,
   browser: <Globe className="h-4 w-4" />,
+  network: <Wifi className="h-4 w-4" />,
+  flask: <FlaskConical className="h-4 w-4" />,
 };
 
 const readStoredTab = (): string => {
   try {
     const raw = localStorage.getItem(SETTINGS_TAB_STORAGE_KEY);
-    if (raw === "personalize" || raw === "appearance" || raw === "shortcuts") {
-      return "general";
-    }
     if (raw) {
       const ids = useRegistryStore.getState().settingsSections.map((s) => s.id);
-      if (ids.includes(raw)) return raw;
+      const resolved = SETTINGS_TAB_ALIASES[raw] ?? raw;
+      if (ids.includes(resolved)) return resolved;
     }
   } catch {
     // ignore
@@ -72,9 +86,12 @@ const SECTION_MAP: Record<string, React.ComponentType> = {
   connectors: ConnectorsSection,
   general: GeneralSection,
   memory: MemorySection,
+  personalization: MemorySection,
   browser: BrowserSection,
   parsing: ParsingSection,
+  backup: BackupSection,
   "system-logs": SystemLogsSettingsSection,
+  network: NetworkSection,
   about: AboutSection,
 };
 
@@ -94,6 +111,12 @@ export const SettingsPage = () => {
           ),
         label: t(section.label as Parameters<typeof t>[0]),
         desc: t(section.description as Parameters<typeof t>[0]),
+        group: section.group
+          ? {
+              id: section.group.id,
+              label: t(section.group.label as Parameters<typeof t>[0]),
+            }
+          : undefined,
       })),
     [settingsSections, t],
   );
@@ -106,8 +129,9 @@ export const SettingsPage = () => {
   const [tab, setTabState] = useState<string>(() => {
     const fromUrl = searchParams.get("tab");
     if (fromUrl) {
+      const resolved = SETTINGS_TAB_ALIASES[fromUrl] ?? fromUrl;
       const ids = useRegistryStore.getState().settingsSections.map((s) => s.id);
-      if (ids.includes(fromUrl)) return fromUrl;
+      if (ids.includes(resolved)) return resolved;
     }
     return readStoredTab();
   });

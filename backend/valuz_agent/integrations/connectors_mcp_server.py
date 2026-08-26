@@ -24,12 +24,20 @@ from mcp.server.fastmcp import FastMCP
 from valuz_agent.integrations._mcp_asgi import (
     build_internal_mcp_asgi,
     get_current_mcp_user_id,
+    internal_mcp_transport_security,
 )
 from valuz_agent.modules.connectors.models import AuthType, TransportType
 
 logger = logging.getLogger(__name__)
 
-_mcp = FastMCP("valuz-connectors")
+_mcp = FastMCP(
+    "valuz-connectors",
+    transport_security=internal_mcp_transport_security(),
+    # Stateless like the toolkit server: session state in process memory 404s
+    # any follow-up request that lands on another replica/worker behind a
+    # load balancer (client surfaces it as "McpError: Session terminated").
+    stateless_http=True,
+)
 
 
 def _current_user_id() -> str:

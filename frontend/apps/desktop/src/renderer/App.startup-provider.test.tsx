@@ -55,7 +55,7 @@ describe("startup screen under the platform provider", () => {
     startupState.checking = true;
     const { container } = render(<App />);
 
-    expect(container.querySelector('img[src="./logo.png"]')).not.toBeNull();
+    expect(container.querySelector('img[src="/logo.png"]')).not.toBeNull();
   });
 
   it("degrades to the error fallback when the routed shell throws", async () => {
@@ -67,9 +67,7 @@ describe("startup screen under the platform provider", () => {
     try {
       render(<App />);
       expect(await screen.findByText("Something went wrong.")).toBeTruthy();
-      expect(
-        await screen.findByRole("button", { name: "Retry" }),
-      ).toBeTruthy();
+      expect(await screen.findByRole("button", { name: "Retry" })).toBeTruthy();
     } finally {
       errSpy.mockRestore();
     }

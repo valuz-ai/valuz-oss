@@ -16,6 +16,12 @@ class ProjectRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
     # ``instructions_md`` (formerly the 1:1 ``valuz_workspace_context`` table,
     # folded into the main row) is the user-authored prompt source.
     instructions_md: Mapped[str | None] = mapped_column(Text)
+    # Project-local member slug that leads a task when the caller names no lead.
+    # Lives on the project (not as a flag on ``valuz_project_member``) so "at
+    # most one default lead" holds by construction. May dangle if the member is
+    # removed — readers verify membership and fall through
+    # (docs/design/channel-project-binding-and-default-lead.md §3.1).
+    default_lead_agent_slug: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # DEPRECATED / inert: the early single-blob project memory. Superseded by the
     # file-based project memory at ``~/.valuz-oss/memories/projects/<id>/`` (see
     # modules/memory). Nothing reads or writes these anymore; they remain only so

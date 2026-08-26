@@ -182,7 +182,7 @@ export const SkillCreateChat = ({
               {t("skill.livePreview")}
             </span>
             {skillName && (
-              <span className="inline-flex h-5 items-center rounded-[4px] bg-surface-soft px-2 py-0 text-2xs text-ink-meta">
+              <span className="inline-flex h-5 items-center rounded-sm bg-surface-soft px-2 py-0 text-2xs text-ink-meta">
                 {skillName}
               </span>
             )}
@@ -210,7 +210,7 @@ export const SkillCreateChat = ({
                       : "text-ink-body hover:bg-card/50",
                   )}
                 >
-                  <span className="shrink-0 text-[10px]">
+                  <span className="shrink-0 text-micro">
                     {file.name.endsWith(".md")
                       ? "📝"
                       : file.name.endsWith(".json")

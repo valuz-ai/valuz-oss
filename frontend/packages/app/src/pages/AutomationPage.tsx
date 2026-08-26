@@ -20,11 +20,15 @@ import {
   EmptyState,
   PageHeader,
   PageLoader,
-  ScheduledTaskTable,
 } from "@valuz/ui";
 import {
   agentsApi,
   automationsApi,
+  getEntityOrigin,
+  getDefaultExecutionTarget,
+  getExecutionTargets,
+  recordEntityOrigin,
+  resolveApiBase,
   useTranslation,
   type Agent,
   type AutomationGroup,
@@ -36,79 +40,13 @@ import {
 } from "@valuz/core";
 import { useProjectOutlet } from "@valuz/app/layout";
 import {
+  AutomationDefinitionTable,
   CreateAutomationDialog,
   type AutomationAgentChoice,
 } from "@valuz/app/components";
 
 type I18nKey = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
 const k = (key: string) => key as I18nKey;
-
-// "just now" / "5m ago" / "3h ago" / "2d ago".
-function relativeTime(ms: number | null): string {
-  if (ms == null) return "—";
-  const diff = Date.now() - ms;
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
-
-// Trigger column — original ScheduledTaskTable shows the cron expression
-// Trigger column — cron rows show the raw cron expression (locale-neutral
-// standard, reads fine in monospace); interval / manual rows show the
-// backend's localized human-readable cadence (``每 30 分钟`` / ``Every 30
-// minutes`` / ``手动``) rather than a raw ``1800s``.
-function triggerColumn(item: AutomationItem): string {
-  if (item.trigger.kind === "cron") return item.trigger.cron_expr;
-  return item.trigger_human_readable;
-}
-
-// Map AutomationItem → the generic shape `ScheduledTaskTable` expects.
-// Field-by-field equivalence with the legacy `mapTasksForTable`:
-//
-//   name              → name
-//   prompt (subtitle) → trigger_human_readable     (was: cron_human_readable)
-//   trigger (mono)    → cron_expr / "every Ns"     (was: cron_expr)
-//   triggerTimezone   → trigger.timezone (cron only)
-//   last              → relativeTime(last_run_at)  (was: relativeTime)
-//   status            → enabled→on / *→off
-function automationToTableRow(item: AutomationItem) {
-  return {
-    id: item.automation_id,
-    name: item.name,
-    // Subtitle = the bound agent (the schedule now lives in the 触发规则
-    // column, so repeating ``trigger_human_readable`` here would duplicate it).
-    prompt: item.agent_name ?? "",
-    trigger: triggerColumn(item),
-    triggerTimezone:
-      item.trigger.kind === "cron"
-        ? (item.trigger.timezone ?? undefined)
-        : undefined,
-    last: relativeTime(item.last_run_at),
-    status: (item.status === "enabled" ? "on" : "off") as "on" | "off",
-  };
-}
-
-// "Last run 5m ago" badge on the right of the group header. Returns
-// undefined when the whole group has never fired, in which case the
-// table omits the badge entirely (same contract as the legacy page).
-// Takes ``t`` so it can localize the ``cron.lastRunColumn`` prefix —
-// the legacy page used that exact key, and reusing it keeps the badge
-// reading identically across the rename.
-function latestGroupRunLabel(
-  items: AutomationItem[],
-  t: ReturnType<typeof useTranslation>["t"],
-): string | undefined {
-  const latest = items
-    .map((item) => item.last_run_at)
-    .filter((value): value is number => value !== null)
-    .sort((a, b) => b - a)[0];
-  if (!latest) return undefined;
-  return `${t("cron.lastRunColumn" as Parameters<typeof t>[0])} ${relativeTime(latest)}`;
-}
 
 export const AutomationPage = () => {
   const { t } = useTranslation();
@@ -123,6 +61,15 @@ export const AutomationPage = () => {
   const [projectMembers, setProjectMembers] = useState<
     Record<string, MemberWithAgent[]>
   >({});
+  // Chat-standalone location choice (multi-target editions) — drives which
+  // backend the library-agent list is sourced from.
+  const [selectedExecLocation, setSelectedExecLocation] = useState<
+    string | null
+  >(null);
+  // Library agents for the Chat-standalone target's chosen location. The
+  // default location reuses ``libraryAgents``; a cloud location is fetched so
+  // a cloud backend is never handed an agent slug that only exists locally.
+  const [chatAgents, setChatAgents] = useState<Agent[]>([]);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
@@ -201,6 +148,7 @@ export const AutomationPage = () => {
 
   const openCreate = useCallback(() => {
     setSelectedTargetId(targets[0]?.id ?? null);
+    setSelectedExecLocation(null);
     setCreateOpen(true);
   }, [targets]);
 
@@ -210,7 +158,6 @@ export const AutomationPage = () => {
     () => (
       <PageHeader
         title={t(k("automation.title"))}
-        description={t(k("automation.subtitle"))}
         action={
           <div className="flex shrink-0 items-center gap-2">
             <div className="hidden h-8 items-center gap-2 rounded-lg border border-surface-border bg-surface-soft px-3 text-xs md:flex">
@@ -249,7 +196,7 @@ export const AutomationPage = () => {
 
   useEffect(() => {
     setHeader(pageHeader);
-    setHeaderClassName("h-auto px-5 py-5");
+    setHeaderClassName("h-15 px-5");
     setContentInnerClassName("p-0");
     return () => {
       setHeader(null);
@@ -313,9 +260,38 @@ export const AutomationPage = () => {
     (target) => target.id === selectedTargetId,
   );
 
+  // Re-source the Chat-standalone agent list whenever the chosen location
+  // changes. A cloud backend can't instantiate an agent that only exists in
+  // the local library, so cloud must list the cloud library. Project-bound
+  // targets are unaffected — their members come from ``listMembers`` which is
+  // already routed per-project.
+  useEffect(() => {
+    if (!selectedTarget || selectedTarget.kind !== "chat") return;
+    const loc = selectedExecLocation;
+    const defaultLoc = getDefaultExecutionTarget()?.id;
+    if (!loc || loc === defaultLoc) {
+      // Module-default (local) — already loaded by ``loadAll``.
+      setChatAgents(libraryAgents);
+      return;
+    }
+    const target = getExecutionTargets().find((t) => t.id === loc);
+    let cancelled = false;
+    agentsApi
+      .listAgents(undefined, target ? { baseUrl: target.baseUrl } : undefined)
+      .then((res) => {
+        if (!cancelled) setChatAgents(res.agents);
+      })
+      .catch(() => {
+        if (!cancelled) setChatAgents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTarget, selectedExecLocation, libraryAgents]);
+
   const agentChoices: AutomationAgentChoice[] = useMemo(() => {
     if (!selectedTarget || selectedTarget.kind === "chat") {
-      return libraryAgents.map((agent) => ({
+      return chatAgents.map((agent) => ({
         slug: agent.slug,
         name: agent.name,
       }));
@@ -325,7 +301,7 @@ export const AutomationPage = () => {
       slug: entry.member.agent_slug,
       name: entry.agent?.name ?? entry.member.agent_slug,
     }));
-  }, [selectedTarget, libraryAgents, projectMembers]);
+  }, [selectedTarget, chatAgents, projectMembers]);
 
   const handleDialogSubmit = async (data: {
     name: string;
@@ -334,24 +310,55 @@ export const AutomationPage = () => {
     trigger: Trigger;
     action_kind: ActionKind;
     worktree: boolean;
+    playbook_definition_id: string | null;
+    playbook_version: number | null;
+    /** Chat-standalone target only: chosen execution-location target id. */
+    exec_location?: string;
   }) => {
     if (!selectedTarget) {
       toast.error(t(k("automation.pickProjectFirst")));
       return;
     }
+    // Route the create call to the backend that should own the row:
+    //  - project-bound → the project's backend (origin inherited);
+    //  - Chat-standalone → the picker's chosen backend (the lazy-created
+    //    chat project lands there).
+    const isChatTarget = selectedTarget.kind === "chat";
+    const baseUrl = isChatTarget
+      ? data.exec_location
+        ? getExecutionTargets().find((tt) => tt.id === data.exec_location)
+            ?.baseUrl
+        : undefined
+      : resolveApiBase({ projectId: selectedTarget.project_id ?? "" }, "") ||
+        undefined;
     try {
-      await automationsApi.create({
-        name: data.name,
-        project_kind: selectedTarget.kind,
-        project_id: selectedTarget.project_id,
-        agent_kind:
-          selectedTarget.kind === "chat" ? "library_agent" : "project_member",
-        agent_slug: data.agent_slug,
-        prompt_template: data.prompt_template,
-        trigger: data.trigger,
-        action_kind: data.action_kind,
-        worktree: data.worktree,
-      });
+      const created = await automationsApi.create(
+        {
+          name: data.name,
+          project_kind: selectedTarget.kind,
+          project_id: selectedTarget.project_id,
+          agent_kind:
+            selectedTarget.kind === "chat" ? "library_agent" : "project_member",
+          agent_slug: data.agent_slug,
+          prompt_template: data.prompt_template,
+          trigger: data.trigger,
+          action_kind: data.action_kind,
+          worktree: data.worktree,
+          playbook_definition_id: data.playbook_definition_id,
+          playbook_version: data.playbook_version,
+        },
+        baseUrl ? { baseUrl } : undefined,
+      );
+      // Record the automation's (and, for chat-standalone, the lazy-created
+      // chat project's) origin BEFORE loadAll so detail / edit / run-now
+      // route to the owning backend on multi-target editions.
+      const origin = isChatTarget
+        ? data.exec_location
+        : getEntityOrigin(selectedTarget.project_id ?? "");
+      if (origin) {
+        recordEntityOrigin(created.automation_id, origin);
+        if (created.project_id) recordEntityOrigin(created.project_id, origin);
+      }
       toast.success(t(k("automation.createSuccess"), { name: data.name }));
       await loadAll();
     } catch (error) {
@@ -375,11 +382,7 @@ export const AutomationPage = () => {
               description={t(k("automation.emptyDesc"))}
               icon={<Clock3 className="h-5 w-5" />}
               action={
-                <Button
-                  variant="default"
-                  size="sm"
-                  onClick={openCreate}
-                >
+                <Button variant="default" size="sm" onClick={openCreate}>
                   <Plus className="h-3 w-3" />
                   {t(k("automation.emptyAction"))}
                 </Button>
@@ -393,18 +396,10 @@ export const AutomationPage = () => {
                 .filter((group) => group.automations.length > 0)
                 .map((group) => (
                   <section key={group.project_id}>
-                    <ScheduledTaskTable
-                      // Enabled automations sort ahead of paused ones (stable
-                      // within each group); the row map preserves this order.
-                      tasks={[...group.automations]
-                        .sort(
-                          (a, b) =>
-                            Number(b.status === "enabled") -
-                            Number(a.status === "enabled"),
-                        )
-                        .map(automationToTableRow)}
+                    <AutomationDefinitionTable
+                      automations={group.automations}
                       title={group.project_name}
-                      taskCountLabel={t(
+                      countLabel={t(
                         k(
                           group.automations.length === 1
                             ? "automation.groupCount"
@@ -412,12 +407,11 @@ export const AutomationPage = () => {
                         ),
                         { count: group.automations.length },
                       )}
-                      lastRunLabel={latestGroupRunLabel(group.automations, t)}
                       collapsed={collapsedGroupIds.has(group.project_id)}
                       onToggleCollapse={() =>
                         toggleGroupCollapsed(group.project_id)
                       }
-                      onRowClick={(id) => navigate(`/automations/${id}`)}
+                      onOpen={(id) => navigate(`/automations/${id}`)}
                       onToggle={(id) => toggleAutomation(id)}
                       onRunNow={(id) => runNow(id)}
                       onDelete={(id) => {
@@ -442,6 +436,8 @@ export const AutomationPage = () => {
         targets={targets}
         selectedTargetId={selectedTargetId}
         onSelectTarget={setSelectedTargetId}
+        selectedExecLocation={selectedExecLocation}
+        onSelectExecLocation={setSelectedExecLocation}
         title={t(k("automation.dialogTitleNew"))}
       />
 

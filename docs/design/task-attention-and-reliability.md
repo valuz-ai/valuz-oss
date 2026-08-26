@@ -189,7 +189,9 @@ the run invisibly) — so the failure is *observable*.
      toast already covers *questions* globally, failures don't have a global
      stream yet).
 3. **P2 — MOSTLY SHIPPED:** `TaskHealthMonitor` watchdog
-   (`tasks/health_monitor.py`, wired in `boot/steps.py`; liveness =
+   (implemented; lives in `tasks/recovery.py` since 2026-07-28 — the
+   watchdog is the same notice-dead-lead concern as boot recovery — wired in
+   `boot/steps.py`; liveness =
    `mailbox_registry.is_registered(lead)`, 2-sweep confirm → `task_blocked
    (reason="lead_dead")`, env `VALUZ_TASK_HEALTH_MONITOR_INTERVAL`).
    **Electron notification bridge + dock badge SHIPPED:** main

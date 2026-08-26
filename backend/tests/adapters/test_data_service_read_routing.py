@@ -97,6 +97,47 @@ async def test_client_maps_get_events_window():
     assert len(window.items) == 1 and window.items[0].seq == 1
 
 
+async def test_client_reads_message_token_buckets_for_session_rollup():
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "m1",
+                        "input_tokens": 12,
+                        "output_tokens": 3,
+                        "cache_read_tokens": 40,
+                        "cache_write_tokens": 2,
+                    }
+                ]
+            },
+        )
+
+    client = DataServiceReadClient(
+        base_url="http://ds", token="t", http_client=_mock_client(handler)
+    )
+    try:
+        messages = await client.list_messages("u", "s1", limit=200, offset=400)
+    finally:
+        await client.aclose()
+
+    assert seen["path"] == "/rpc/list_messages_for_session"
+    assert seen["body"] == {"session_id": "s1", "limit": 200, "offset": 400}
+    assert messages == [
+        {
+            "input_tokens": 12,
+            "output_tokens": 3,
+            "cache_read_tokens": 40,
+            "cache_write_tokens": 2,
+        }
+    ]
+
+
 # ── reader routing: reads are unified through the in-process DataService ──
 # (sandbox-agnostic — no "is the sandbox alive?" branch). The host reads its
 # bound DataService store directly; in local mode it falls back to the kernel.

@@ -15,10 +15,12 @@ from typing import Any
 _token_refresh_locks: dict[str, asyncio.Lock] = {}
 
 
-def _token_refresh_lock(connector_id: str) -> asyncio.Lock:
-    lock = _token_refresh_locks.get(connector_id)
+def _token_refresh_lock(key: str) -> asyncio.Lock:
+    """A refresh lock per ``key`` — see ``oauth_sharing.refresh_lock_key`` for why
+    the key is the credential *group*, not the connector row."""
+    lock = _token_refresh_locks.get(key)
     if lock is None:
-        lock = _token_refresh_locks[connector_id] = asyncio.Lock()
+        lock = _token_refresh_locks[key] = asyncio.Lock()
     return lock
 
 
@@ -60,11 +62,14 @@ class LocalConnectorOAuthRefreshProvider(ConnectorOAuthRefreshPort):
     ) -> str:
         from valuz_agent.infra.time_utils import now_ms
         from valuz_agent.integrations.connector_oauth import oauth_token_is_expired
+        from valuz_agent.modules.connectors.oauth_sharing import refresh_lock_key
 
         if not oauth_token_is_expired(row, now_ms()):
             return token_json
 
-        async with _token_refresh_lock(row.id):
+        # Group-scoped: siblings sharing this refresh token must not race it. The
+        # re-read below then sees the winner's propagated token and returns it.
+        async with _token_refresh_lock(refresh_lock_key(row)):
             fresh = await connectors.get_by_id(row.user_id, row.id)
             target = fresh if fresh is not None else row
             if not oauth_token_is_expired(target, now_ms()):
@@ -86,6 +91,7 @@ class LocalConnectorOAuthRefreshProvider(ConnectorOAuthRefreshPort):
         from valuz_agent.infra.config import settings
         from valuz_agent.infra.time_utils import now_ms
         from valuz_agent.integrations.connector_oauth import try_refresh_connector_token
+        from valuz_agent.modules.connectors.oauth_sharing import propagate_oauth_credentials
 
         _ = token_json
         new_access = await try_refresh_connector_token(
@@ -96,6 +102,9 @@ class LocalConnectorOAuthRefreshProvider(ConnectorOAuthRefreshPort):
         if new_access is None:
             return None
         await connectors.update(row)
+        # Hand the rotated token to the siblings sharing this credential, so the
+        # next one to resolve finds it fresh instead of refreshing a dead token.
+        await propagate_oauth_credentials(row.user_id, row, connectors)
         return row.oauth_token_json
 
 

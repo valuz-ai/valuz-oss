@@ -180,6 +180,14 @@ def main(argv: list[str] | None = None) -> int:
     # and it must run before any pool is created.
     multiprocessing.freeze_support()
 
+    # Before ANY data-dir touch (the fs_registry calls below mkdir the root and
+    # resolve_local_user_id can write installation.json): a source-run backend
+    # must not operate on the packaged app's store. The lifespan re-checks, but
+    # failing here keeps even the pre-uvicorn writes off the packaged root.
+    from valuz_agent.boot.steps import guard_source_run_data_dir
+
+    guard_source_run_data_dir()
+
     from valuz_agent.modules.system.service import (
         record_boot_started,
         record_listen_port,

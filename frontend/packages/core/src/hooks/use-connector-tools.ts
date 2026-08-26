@@ -10,7 +10,7 @@
  * back — never reconnects again. {@link invalidateConnectorTools} drops one
  * entry after a connect / reauthorize so its tools refresh.
  *
- * Mirrors the module-level poller pattern of {@link useRunningRuns} /
+ * Mirrors the module-level singleton pattern of {@link useRunningRuns} /
  * useConnectorAlert (shared state + subscriber set).
  */
 

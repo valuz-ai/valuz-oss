@@ -6,6 +6,7 @@ import type {
   SessionDetail,
   SessionEventDTO,
   SessionListItem,
+  SessionMode,
   SessionPermissionMode,
   SessionRulePreview,
   TodoItem,
@@ -22,6 +23,7 @@ export type {
   SessionDetail,
   SessionEventDTO,
   SessionListItem,
+  SessionMode,
   SessionPermissionMode,
   SessionRulePreview,
   TodoItem,
@@ -249,7 +251,7 @@ import { resolveApiBase } from "./base-resolver";
 import { fanOutTargets, getListFanOutTargets } from "../edition/list-fanout";
 import { recordEntityOrigins } from "../edition/entity-origin";
 import { createFetchJson, ApiError } from "./fetch-json";
-import { requestRaw } from "./request";
+import { invalidateRequestCache, requestRaw } from "./request";
 
 let _apiBase =
   (import.meta as unknown as Record<string, Record<string, string> | undefined>)
@@ -341,10 +343,25 @@ export interface SessionCreateRequest {
   worktree?: { name?: string | null } | null;
 }
 
+/**
+ * Client-declared host location of a message — which product surface the
+ * conversation panel is attached to for this turn (e.g. an edition
+ * workbench page). Pure context: the backend re-validates the reference
+ * under the calling user; it never grants access.
+ */
+export interface SessionMessageHostRef {
+  host_type: string;
+  host_id: string;
+  slot?: string;
+}
+
 export interface SessionMessageRequest {
   prompt: string;
+  /** Staged attachments this turn claims. See ``sendMessage``. */
+  attachment_ids?: string[];
   provider_id?: string | null;
   model_id?: string | null;
+  host_ref?: SessionMessageHostRef | null;
 }
 
 /**
@@ -397,7 +414,8 @@ export interface SessionActionResponse {
 
 export interface SessionAttachmentItem {
   id: string;
-  session_id: string;
+  /** ``null`` while staged — bound by the turn that ships it. */
+  session_id: string | null;
   filename: string;
   stored_path: string;
   parsed_path?: string | null;
@@ -427,10 +445,15 @@ export interface SessionAttachmentItem {
 }
 
 /**
- * A file the **agent** delivered as a finished output via the built-in
+ * One version of a deliverable the **agent** produced via the built-in
  * ``deliver_artifacts`` MCP tool — the inverse of {@link SessionAttachmentItem}
- * (user uploads). Durable (no per-turn staging); rendered as the read-only
- * "生成文件" panel list. ``file_path`` is an absolute path the client opens.
+ * (user uploads). Rendered as the read-only "生成文件" panel list.
+ *
+ * This is a *version*, not a deliverable: ``id`` is a revision id and
+ * ``file_path`` is that version's immutable snapshot, so it keeps working after
+ * the agent edits its working copy. Re-delivering the same file appends a
+ * version instead of replacing one, which is why the same ``artifact_id`` can
+ * appear more than once in a session's list.
  */
 export interface SessionArtifactItem {
   id: string;
@@ -446,6 +469,16 @@ export interface SessionArtifactItem {
   file_size: number;
   mime_type: string | null;
   created_at: number;
+  /** Stable identity of the deliverable this is a version of. */
+  artifact_id: string;
+  /** 1-based version number within that deliverable. */
+  version_no: number;
+  /**
+   * Whether this is still the latest version. False once another session (or a
+   * later turn) delivered a newer one — the panel marks those so a superseded
+   * version is not mistaken for the deliverable.
+   */
+  is_current: boolean;
 }
 
 const fetchJson = createFetchJson(() => _apiBase);
@@ -456,6 +489,19 @@ const sessionBase = (sessionId: string): string =>
   resolveApiBase({ sessionId }, _apiBase);
 
 export type SessionStreamCallback = (event: SessionEventDTO) => void;
+
+// Global-list (Recents) cache: the sidebar refetches on every navigation, and
+// on multi-target editions each refetch also round-trips the CLOUD backend.
+// A short TTL absorbs rapid navigations without changing what the list shows;
+// list-shape mutations (create / rename / cancel / delete) invalidate so a
+// new or removed conversation appears immediately. Project-scoped lists keep
+// their uncached path (project pages own their refresh cadence).
+const SESSIONS_LIST_TAG = "sessions-list";
+const SESSIONS_LIST_CACHE = { ttlMs: 10_000, tags: [SESSIONS_LIST_TAG] };
+
+function invalidateSessionsList(): void {
+  invalidateRequestCache({ tags: [SESSIONS_LIST_TAG] });
+}
 
 export const sessionsApi = {
   async list(
@@ -477,12 +523,17 @@ export const sessionsApi = {
     // feed the origin index. Zero targets (OSS) keeps the single-backend
     // path unchanged. ``init`` (e.g. an ``AbortSignal``) is forwarded.
     if (getListFanOutTargets().length === 0) {
-      return fetchJson(`/v1/sessions${suffix}`, init);
+      return fetchJson(`/v1/sessions${suffix}`, {
+        ...init,
+        cache: SESSIONS_LIST_CACHE,
+      });
     }
-    const outcome = await fanOutTargets((target) =>
+    const outcome = await fanOutTargets((target, signal) =>
       fetchJson<{ sessions: SessionListItem[] }>(`/v1/sessions${suffix}`, {
         ...init,
+        cache: SESSIONS_LIST_CACHE,
         baseUrl: target.baseUrl,
+        signal,
       }),
     );
     const seen = new Set<string>();
@@ -504,18 +555,60 @@ export const sessionsApi = {
     });
   },
 
-  create(
+  prepare(sessionId: string): Promise<{ ready: boolean }> {
+    return fetchJson(`/v1/sessions/${encodeURIComponent(sessionId)}/prepare`, {
+      method: "POST",
+      baseUrl: sessionBase(sessionId),
+      timeoutMs: 120_000,
+    });
+  },
+
+  async create(
     payload: SessionCreateRequest,
     opts?: { baseUrl?: string },
   ): Promise<SessionDetail> {
-    return fetchJson("/v1/sessions", {
+    const created = await fetchJson<SessionDetail>("/v1/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
       baseUrl: opts?.baseUrl,
     });
+    invalidateSessionsList();
+    return created;
   },
 
+  /**
+   * Fork a session into a new independent one (openapi ``forkSession``).
+   * With ``messageId`` the cut is inclusive at that message; without it
+   * the whole session forks at its tail. The source session is never
+   * modified. Synchronous by design — the runtime-native fork runs inside
+   * this call (~1–2s): 409 invalid anchor / turn in flight, 422 runtime
+   * unsupported, 502 native fork failed (nothing created).
+   */
+  async fork(
+    sessionId: string,
+    messageId?: string | null,
+  ): Promise<SessionDetail> {
+    const forked = await fetchJson<SessionDetail>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/fork`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(messageId ? { message_id: messageId } : {}),
+        baseUrl: sessionBase(sessionId),
+        timeoutMs: 120_000,
+      },
+    );
+    invalidateSessionsList();
+    return forked;
+  },
+
+  /**
+   * HISTORY read — ``afterSeq`` and every returned item's ``seq`` are in
+   * the DURABLE store's seq space (never the kernel's local/live space).
+   * Items carry ``event_uid`` for cross-segment dedup against live frames;
+   * the raw JSON flows through unchanged.
+   */
   listEvents(
     sessionId: string,
     afterSeq?: number,
@@ -561,10 +654,17 @@ export const sessionsApi = {
     prompt: string,
     providerId?: string | null,
     modelId?: string | null,
+    hostRef?: SessionMessageHostRef | null,
+    attachmentIds?: string[] | null,
   ): Promise<SessionDetail> {
     const body: SessionMessageRequest = { prompt };
     if (providerId) body.provider_id = providerId;
     if (modelId) body.model_id = modelId;
+    if (hostRef) body.host_ref = hostRef;
+    // The staged files this turn claims. Server-minted ids handed back, not
+    // an identifier the client invented — and named explicitly so sending in
+    // one composer cannot swallow another's staged files.
+    if (attachmentIds?.length) body.attachment_ids = attachmentIds;
     return fetchJson(`/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -573,11 +673,26 @@ export const sessionsApi = {
     });
   },
 
+  /**
+   * Open the session SSE stream. ``afterSeq`` is a HISTORY-space cursor
+   * (durable-store seq): the server backfills persisted events strictly
+   * after it, then streams live frames. Live frames carry the kernel's
+   * LOCAL seq — a different space — so callers must not feed live frame
+   * seqs back into ``afterSeq``; dedup across the two spaces keys on
+   * ``event_uid``.
+   *
+   * ``onHistoryCursor`` (optional) reports the server's HISTORY cursor as
+   * carried by heartbeat frames (``{"seq": N}`` with no ``event_type``).
+   * Backfill and live frames are NOT distinguishable on the wire, so
+   * heartbeats are the only frames whose ``seq`` is safe to persist as a
+   * reconnect cursor.
+   */
   subscribeEvents(
     sessionId: string,
     onEvent: SessionStreamCallback,
     afterSeq?: number,
     signal?: AbortSignal,
+    onHistoryCursor?: (seq: number) => void,
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const qs = new URLSearchParams();
@@ -625,11 +740,18 @@ export const sessionsApi = {
                       event_type?: string;
                       payload?: Record<string, string>;
                       timestamp?: string;
+                      event_uid?: string | null;
                     };
-                    // Heartbeat frames ({"seq": N}) carry no event_type;
-                    // skip them — they only exist to keep the connection
-                    // alive over idle periods.
-                    if (!parsed.event_type) continue;
+                    // Heartbeat frames ({"seq": N}) carry no event_type.
+                    // Their ``seq`` is the server's HISTORY cursor — the
+                    // one frame kind whose seq is guaranteed history-space
+                    // — so surface it to the caller, then skip rendering.
+                    if (!parsed.event_type) {
+                      if (typeof parsed.seq === "number") {
+                        onHistoryCursor?.(parsed.seq);
+                      }
+                      continue;
+                    }
                     onEvent({
                       seq: typeof parsed.seq === "number" ? parsed.seq : 0,
                       event: {
@@ -640,6 +762,10 @@ export const sessionsApi = {
                         typeof parsed.timestamp === "number"
                           ? parsed.timestamp
                           : undefined,
+                      event_uid:
+                        typeof parsed.event_uid === "string"
+                          ? parsed.event_uid
+                          : null,
                     });
                   } catch {
                     // Skip malformed SSE data lines
@@ -672,11 +798,16 @@ export const sessionsApi = {
     );
   },
 
-  cancel(sessionId: string): Promise<SessionDetail> {
-    return fetchJson(`/v1/sessions/${encodeURIComponent(sessionId)}/cancel`, {
-      method: "POST",
-      baseUrl: sessionBase(sessionId),
-    });
+  async cancel(sessionId: string): Promise<SessionDetail> {
+    const detail = await fetchJson<SessionDetail>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/cancel`,
+      {
+        method: "POST",
+        baseUrl: sessionBase(sessionId),
+      },
+    );
+    invalidateSessionsList();
+    return detail;
   },
 
   regenerate(sessionId: string): Promise<SessionDetail> {
@@ -689,12 +820,17 @@ export const sessionsApi = {
     );
   },
 
-  rename(sessionId: string, name: string): Promise<SessionDetail> {
+  async rename(sessionId: string, name: string): Promise<SessionDetail> {
     const qs = new URLSearchParams({ name });
-    return fetchJson(`/v1/sessions/${encodeURIComponent(sessionId)}?${qs}`, {
-      method: "PATCH",
-      baseUrl: sessionBase(sessionId),
-    });
+    const detail = await fetchJson<SessionDetail>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}?${qs}`,
+      {
+        method: "PATCH",
+        baseUrl: sessionBase(sessionId),
+      },
+    );
+    invalidateSessionsList();
+    return detail;
   },
 
   async delete(sessionId: string): Promise<void> {
@@ -709,9 +845,13 @@ export const sessionsApi = {
       // double-click, or an empty draft the user is trying to clear — the
       // backend returns 404 "session not found". Swallow it so the caller still
       // drops the row instead of surfacing "no session" and leaving it stuck.
-      if (err instanceof ApiError && err.status === 404) return;
+      if (err instanceof ApiError && err.status === 404) {
+        invalidateSessionsList();
+        return;
+      }
       throw err;
     }
+    invalidateSessionsList();
   },
 
   // Per-session attached skill list. skill-creator is always active and is
@@ -734,22 +874,39 @@ export const sessionsApi = {
     });
   },
 
+  /**
+   * Upload a file with no session attached to it.
+   *
+   * Uploading needed nothing from a session — the bytes land in the owner's
+   * store and the parse is a server-side job — but requiring one meant
+   * attaching a file had to CREATE one, and in cloud mode creating a session
+   * provisions a sandbox: about three and a half seconds of nothing happening.
+   * The turn that ships the file binds it (``sendMessage({attachmentIds})``).
+   *
+   * ``baseUrl`` is explicit because there is no session to route on; pass the
+   * project's / target's base, the same one the eventual create will use.
+   */
   uploadAttachment(
-    sessionId: string,
     file: File,
+    opts?: { baseUrl?: string },
   ): Promise<SessionAttachmentItem> {
     const form = new FormData();
     form.append("file", file);
-    return fetchJson(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/attachments`,
-      {
-        method: "POST",
-        body: form,
-        baseUrl: sessionBase(sessionId),
-      },
-    );
+    return fetchJson("/v1/attachments", {
+      method: "POST",
+      body: form,
+      baseUrl: opts?.baseUrl,
+    });
   },
 
+  /** This owner's staged (not yet sent) attachments. */
+  listStagedAttachments(opts?: {
+    baseUrl?: string;
+  }): Promise<{ items: SessionAttachmentItem[] }> {
+    return fetchJson("/v1/attachments", { baseUrl: opts?.baseUrl });
+  },
+
+  /** Everything ever attached to ``sessionId`` — the conversation's history. */
   listAttachments(
     sessionId: string,
   ): Promise<{ items: SessionAttachmentItem[] }> {
@@ -760,9 +917,12 @@ export const sessionsApi = {
   },
 
   /**
-   * List the files the agent delivered for ``sessionId`` (the "生成文件"
+   * List the versions the agent delivered in ``sessionId`` (the "生成文件"
    * panel list), recorded by the built-in ``deliver_artifacts`` MCP tool.
-   * Durable — the full set is returned every call.
+   *
+   * Session-scoped: it answers "what did this conversation produce", so a
+   * revision another session made to the same deliverable is not included.
+   * Use ``artifactsApi`` for the workspace-wide view and for history.
    */
   listArtifacts(sessionId: string): Promise<{ items: SessionArtifactItem[] }> {
     return fetchJson(
@@ -778,18 +938,15 @@ export const sessionsApi = {
    * silently dropped server-side; missing doc ids return 400.
    */
   addKbAttachments(
-    sessionId: string,
     docIds: string[],
+    opts?: { baseUrl?: string },
   ): Promise<{ items: SessionAttachmentItem[] }> {
-    return fetchJson(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/attachments/kb`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ doc_ids: docIds }),
-        baseUrl: sessionBase(sessionId),
-      },
-    );
+    return fetchJson("/v1/attachments/kb", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ doc_ids: docIds }),
+      baseUrl: opts?.baseUrl,
+    });
   },
 
   /**
@@ -798,11 +955,14 @@ export const sessionsApi = {
    * ``source_kind="kb_doc"`` only the row is deleted (the KB
    * document survives for other sessions).
    */
-  deleteAttachment(sessionId: string, attachmentId: string): Promise<void> {
-    return fetchJson(
-      `/v1/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}`,
-      { method: "DELETE", baseUrl: sessionBase(sessionId) },
-    );
+  deleteAttachment(
+    attachmentId: string,
+    opts?: { baseUrl?: string },
+  ): Promise<void> {
+    return fetchJson(`/v1/attachments/${encodeURIComponent(attachmentId)}`, {
+      method: "DELETE",
+      baseUrl: opts?.baseUrl,
+    });
   },
 
   /**
@@ -847,6 +1007,25 @@ export const sessionsApi = {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ effort }),
+      baseUrl: sessionBase(sessionId),
+    });
+  },
+
+  /**
+   * Enter or leave a session working mode (kernel ``Session.mode``,
+   * docs/design/session-modes.md). ``plan`` makes the runtime plan
+   * before touching anything — Claude applies the SDK's typed
+   * ``set_permission_mode("plan")`` mutator immediately and exits via
+   * the ``ExitPlanMode`` approval card; ``default`` exits the current
+   * mode. Same-mode re-set is idempotent. Only ``claude_agent`` /
+   * ``codex`` sessions accept non-default modes — the server 400s
+   * deepagents / deepseek_harness.
+   */
+  updateMode(sessionId: string, mode: SessionMode): Promise<SessionDetail> {
+    return fetchJson(`/v1/sessions/${encodeURIComponent(sessionId)}/mode`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
       baseUrl: sessionBase(sessionId),
     });
   },

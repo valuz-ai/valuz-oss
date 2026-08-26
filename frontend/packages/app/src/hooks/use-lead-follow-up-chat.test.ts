@@ -9,7 +9,10 @@ const { listEvents, subscribeEvents, sendMessage } = vi.hoisted(() => ({
 
 vi.mock("@valuz/core", async (orig) => {
   const actual = await orig<typeof import("@valuz/core")>();
-  return { ...actual, sessionsApi: { listEvents, subscribeEvents, sendMessage } };
+  return {
+    ...actual,
+    sessionsApi: { listEvents, subscribeEvents, sendMessage },
+  };
 });
 
 import { useLeadFollowUpChat } from "./use-lead-follow-up-chat";
@@ -41,7 +44,10 @@ describe("useLeadFollowUpChat", () => {
   it("only keeps events after sinceTs", async () => {
     listEvents.mockResolvedValue({
       session_id: "s1",
-      items: [evt(1, 50, "orchestration noise"), evt(2, 150, "follow-up question")],
+      items: [
+        evt(1, 50, "orchestration noise"),
+        evt(2, 150, "follow-up question"),
+      ],
     });
     subscribeEvents.mockResolvedValue(undefined);
     const { result } = renderHook(() =>
@@ -106,22 +112,32 @@ describe("useLeadFollowUpChat", () => {
     expect(result.current.turns).toEqual([]);
   });
 
-  it("send() forwards to sessionsApi.sendMessage and toggles sending", async () => {
+  it("send() forwards to sessionsApi.sendMessage and holds the in-flight flag", async () => {
+    // ``sending`` deliberately does NOT drop when the HTTP call resolves: the
+    // backend schedules the run and replies immediately, so releasing the flag
+    // there blanked the in-flight indicator for the entire runtime-startup
+    // window. It now stays up until the run reaches a terminal event.
     listEvents.mockResolvedValue({ session_id: "s1", items: [] });
     subscribeEvents.mockResolvedValue(undefined);
     let resolveSend: () => void = () => {};
     sendMessage.mockImplementation(
-      () => new Promise<void>((r) => { resolveSend = () => r(); }),
+      () =>
+        new Promise<void>((r) => {
+          resolveSend = () => r();
+        }),
     );
     const { result } = renderHook(() =>
       useLeadFollowUpChat({ leadSessionId: "s1", sinceTs: 0 }),
     );
     await waitFor(() => expect(listEvents).toHaveBeenCalled());
-    act(() => { void result.current.send("hello"); });
+    act(() => {
+      void result.current.send("hello");
+    });
     await waitFor(() => expect(result.current.sending).toBe(true));
     expect(sendMessage).toHaveBeenCalledWith("s1", "hello");
     act(() => resolveSend());
-    await waitFor(() => expect(result.current.sending).toBe(false));
+    await waitFor(() => expect(result.current.awaitingRuntime).toBe(true));
+    expect(result.current.sending).toBe(true);
   });
 
   it("send() ignores whitespace-only input", async () => {
@@ -131,12 +147,109 @@ describe("useLeadFollowUpChat", () => {
       useLeadFollowUpChat({ leadSessionId: "s1", sinceTs: 0 }),
     );
     await waitFor(() => expect(listEvents).toHaveBeenCalled());
-    await act(async () => { await result.current.send("   "); });
+    await act(async () => {
+      await result.current.send("   ");
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("no-ops when leadSessionId is null", () => {
     renderHook(() => useLeadFollowUpChat({ leadSessionId: null, sinceTs: 0 }));
     expect(listEvents).not.toHaveBeenCalled();
+  });
+
+  // ── Runtime-startup window ────────────────────────────────────────────
+  //
+  // POST /messages returns as soon as the run is scheduled, well before the
+  // kernel writes ``message.user``. Without an optimistic turn the user's own
+  // message is invisible for that whole window — milliseconds locally, tens of
+  // seconds while a sandbox boots.
+
+  /** Open a stream whose ``onEvent`` callback the test drives by hand. */
+  const openLiveStream = () => {
+    let emit: (e: unknown) => void = () => {};
+    subscribeEvents.mockImplementation(
+      (_id: string, cb: (e: unknown) => void) => {
+        emit = cb;
+        return new Promise<void>(() => {}); // a live stream never resolves
+      },
+    );
+    return (e: unknown) => act(() => emit(e));
+  };
+
+  it("shows the sent message while the runtime is still starting", async () => {
+    listEvents.mockResolvedValue({ session_id: "s1", items: [] });
+    openLiveStream();
+    sendMessage.mockResolvedValue(undefined);
+    const { result } = renderHook(() =>
+      useLeadFollowUpChat({ leadSessionId: "s1", sinceTs: 0 }),
+    );
+    await waitFor(() => expect(listEvents).toHaveBeenCalled());
+
+    await act(async () => {
+      await result.current.send("please tweak the headline");
+    });
+
+    // HTTP has already resolved, but no echo has arrived yet.
+    expect(result.current.awaitingRuntime).toBe(true);
+    expect(result.current.turns.map((t) => t.userText)).toEqual([
+      "please tweak the headline",
+    ]);
+    // ``sending`` must stay true across the gap or the turn loses its
+    // in-flight indicator between the HTTP reply and the echo.
+    expect(result.current.sending).toBe(true);
+  });
+
+  it("hands the startup window's stamp to the echoed turn", async () => {
+    listEvents.mockResolvedValue({ session_id: "s1", items: [] });
+    const emit = openLiveStream();
+    sendMessage.mockResolvedValue(undefined);
+    const { result } = renderHook(() =>
+      useLeadFollowUpChat({ leadSessionId: "s1", sinceTs: 0 }),
+    );
+    await waitFor(() => expect(listEvents).toHaveBeenCalled());
+
+    const before = Date.now();
+    await act(async () => {
+      await result.current.send("please tweak the headline");
+    });
+    const after = Date.now();
+
+    // The kernel finally stamps the turn — far later than the send.
+    emit(evt(1, after + 20_000, "please tweak the headline"));
+
+    await waitFor(() => expect(result.current.awaitingRuntime).toBe(false));
+    // Exactly one turn: the optimistic one gave way rather than doubling up.
+    expect(result.current.turns.length).toBe(1);
+    const sentAt = result.current.turns[0].clientSentAtMs;
+    expect(sentAt).toBeGreaterThanOrEqual(before);
+    expect(sentAt).toBeLessThanOrEqual(after);
+
+    // …and the in-flight flag still releases at the end of the run, so
+    // holding it through startup can't leave the composer stuck disabled.
+    emit({
+      seq: 2,
+      timestamp: after + 25_000,
+      event: { event_type: "session.idle", payload: {} },
+    });
+    await waitFor(() => expect(result.current.sending).toBe(false));
+  });
+
+  it("drops the optimistic turn when the send fails", async () => {
+    listEvents.mockResolvedValue({ session_id: "s1", items: [] });
+    openLiveStream();
+    sendMessage.mockRejectedValue(new Error("boom"));
+    const { result } = renderHook(() =>
+      useLeadFollowUpChat({ leadSessionId: "s1", sinceTs: 0 }),
+    );
+    await waitFor(() => expect(listEvents).toHaveBeenCalled());
+
+    // No echo is coming, so a lingering turn would sit on "正在启动…" forever.
+    await act(async () => {
+      await expect(result.current.send("please tweak")).rejects.toThrow("boom");
+    });
+
+    expect(result.current.turns).toEqual([]);
+    expect(result.current.awaitingRuntime).toBe(false);
   });
 });

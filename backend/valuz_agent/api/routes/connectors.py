@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from pathlib import Path
+from typing import Any
 from urllib.parse import urlencode
 
 import httpx
@@ -15,8 +15,10 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.api.deps import get_current_user_id
+from valuz_agent.i18n import get_locale, get_request_locale, parse_accept_language
 from valuz_agent.infra.db import async_unit_of_work, get_async_session
 from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.modules.connectors.catalog import load_catalog
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.connectors.models import AuthType, ConnectorRow, TransportType
 from valuz_agent.modules.connectors.service import (
@@ -321,6 +323,116 @@ async def list_connectors(
     return {"connectors": items}
 
 
+async def _probe_oauth_tool_count(row: ConnectorRow) -> int | None:
+    """Count an OAuth connector's tools using the token on ``row``; None if unreachable.
+
+    Tries the row's declared transport first, then the other one — a catalog
+    entry's ``transport`` is a hint, and a server speaking the other dialect
+    should still land ``connected`` with a real count. Never raises: a failed
+    probe costs only the count, and must not fail an authorization that already
+    succeeded.
+    """
+    url = row.url or ""
+    if not url:
+        return None
+    try:
+        access_token = json.loads(row.oauth_token_json or "{}").get("access_token", "")
+    except (json.JSONDecodeError, AttributeError):
+        return None
+    if not access_token:
+        return None
+
+    from mcp.client.session import ClientSession
+
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    async def _try(transport: str) -> int:
+        if transport == "sse":
+            from mcp.client.sse import sse_client
+
+            async with sse_client(url, headers=headers, timeout=15, sse_read_timeout=15) as (r, w):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    return len((await s.list_tools()).tools)
+        from mcp.client.streamable_http import streamable_http_client
+
+        async with httpx.AsyncClient(headers=headers, timeout=15.0) as hc:
+            async with streamable_http_client(url, http_client=hc) as (r, w, _):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    return len((await s.list_tools()).tools)
+
+    primary = row.transport if row.transport in ("http", "sse") else "http"
+    fallback = "sse" if primary == "http" else "http"
+    try:
+        return await _try(primary)
+    except BaseException:
+        try:
+            return await _try(fallback)
+        except BaseException as exc:
+            logger.warning("Tool probe failed for connector %s: %s", row.slug, exc)
+            return None
+
+
+async def _install_from_authorized_sibling(
+    svc: ConnectorService,
+    user_id: str,
+    slug: str,
+    body: CreateConnectorRequest,
+    entry: dict[str, Any] | None,
+) -> CreateConnectorResponse | None:
+    """Install an OAuth connector by adopting an authorized sibling's credentials.
+
+    Members of a catalog credential group front one upstream service behind one
+    authorization server (see ``modules.connectors.oauth_sharing``), so a token
+    already held by one member is valid here. Returns the finished response when
+    the install completed without consent, or None to fall through to the normal
+    OAuth flow — when this connector shares credentials with nobody, when no
+    sibling is authorized yet, or when it is already connected (an explicit
+    re-authorization must reach the real consent screen).
+    """
+    from valuz_agent.modules.connectors.oauth_sharing import (
+        inherit_oauth_credentials,
+        sibling_slugs,
+    )
+
+    if not sibling_slugs(slug):
+        return None
+
+    existing = await svc._ds.get_by_slug(user_id, slug)
+    if existing is not None and existing.status == "connected":
+        return None
+
+    target = existing or ConnectorRow(
+        slug=slug,
+        display_name=body.display_name,
+        description=body.description,
+        connector_type=body.connector_type,
+        transport=body.transport if body.transport in ("http", "sse") else "http",
+        url=(entry.get("url") if entry else None) or body.url or "",
+        auth_type="oauth",
+        enabled=False,
+        status="pending_auth",
+    )
+
+    source_slug = await inherit_oauth_credentials(
+        user_id, target, svc._ds, probe=_probe_oauth_tool_count
+    )
+    if source_slug is None:
+        return None
+
+    target.updated_at = now_ms()
+    saved = (
+        await svc._ds.update(target)
+        if existing is not None
+        else await svc._ds.create(user_id, target)
+    )
+    logger.info(
+        "Connector %s installed from %s's credentials — no consent round-trip", slug, source_slug
+    )
+    return CreateConnectorResponse(id=saved.id, slug=saved.slug, needs_auth=False)
+
+
 @router.post("")
 async def create_connector(
     body: CreateConnectorRequest,
@@ -396,6 +508,14 @@ async def create_connector(
     if body.auth_type == "oauth":
         slug = body.slug or body.display_name
         entry = next((e for e in CONNECTOR_DIRECTORY if e["slug"] == slug), None)
+
+        # A member of an already-authorized credential group needs no consent of
+        # its own. Checked before discovery/registration, which would otherwise
+        # be wasted round-trips to a server we already hold a valid token for.
+        inherited = await _install_from_authorized_sibling(svc, user_id, slug, body, entry)
+        if inherited is not None:
+            return inherited
+
         from valuz_agent.infra.config import settings as _settings
         from valuz_agent.integrations.connector_oauth import McpOauthHelper, OAuthDiscoverHelper
 
@@ -682,27 +802,20 @@ class OAuthCallbackResult(BaseModel):
     error: str | None = None
 
 
-_SUPPORTED_LOCALES = ("zh-CN", "en-US")
 
 
 def _parse_accept_language(header: str | None) -> str:
-    """Pick the best supported locale from an ``Accept-Language`` header.
+    """Locale for this catalog read.
 
-    Returns one of ``_SUPPORTED_LOCALES``; defaults to ``zh-CN``. Ignores
-    q-values — the desktop client sends a single token, so first-match wins.
+    Thin wrapper over :func:`valuz_agent.i18n.parse_accept_language` (this
+    module owned the only copy of that logic until the locale became
+    request-scoped). Falls back to the request locale bound by
+    ``LocaleMiddleware`` — same answer for an HTTP caller, and a sane one for
+    the in-process MCP server, which has no header at all.
     """
-    if not header:
-        return "zh-CN"
-    for raw in header.split(","):
-        tag = raw.split(";")[0].strip()
-        if tag in _SUPPORTED_LOCALES:
-            return tag
-        # Match language part only ("en" → "en-US")
-        prefix = tag.split("-")[0].lower()
-        for supported in _SUPPORTED_LOCALES:
-            if supported.split("-")[0].lower() == prefix:
-                return supported
-    return "zh-CN"
+    if header:
+        return parse_accept_language(header)
+    return get_request_locale() or get_locale()
 
 
 def _localize(value: object, locale: str) -> str | None:
@@ -897,57 +1010,35 @@ async def oauth_callback(
 
         # Persist the token onto the row (with its absolute expiry); the final
         # ds.update below commits it with the connected status.
+        from valuz_agent.modules.connectors.service import (
+            _before_managed_connector_mutation,
+            _managed_definition_etag,
+        )
+
+        authority = await _before_managed_connector_mutation(
+            user_id,
+            {
+                "operation": "oauth_authorized",
+                "resource_id": connector_id,
+                "slug": row.slug,
+                "enabled": True,
+                "status": "connected",
+            },
+            {
+                "oauth_patch": {
+                    "operation": "replace",
+                    "token": token.model_dump_json(),
+                    "expires_at": now_ms() + (token.expires_in * 1000 if token.expires_in else 0),
+                }
+            },
+            expected_definition_etag=_managed_definition_etag(row),
+        )
         persist_oauth_token(row, token, now_ms())
         await ext.cache.delete(_pkce_cache_key(state))
 
         # Probe tools BEFORE writing status=connected so that tool_count and
         # status land in the DB together — no race with the frontend poller.
-        connector_url = row.url or ""
-        connector_transport = row.transport
-        access_token = token.access_token
-
-        tool_count: int | None = None
-        if connector_url:
-            from mcp.client.session import ClientSession
-
-            headers = {"Authorization": f"Bearer {access_token}"}
-
-            async def _try(transport: str) -> list[str]:
-                if transport == "sse":
-                    from mcp.client.sse import sse_client
-
-                    async with sse_client(
-                        connector_url, headers=headers, timeout=15, sse_read_timeout=15
-                    ) as (r, w):
-                        async with ClientSession(r, w) as s:
-                            await s.initialize()
-                            res = await s.list_tools()
-                            return [t.name for t in res.tools]
-                else:
-                    from mcp.client.streamable_http import streamable_http_client
-
-                    async with httpx.AsyncClient(headers=headers, timeout=15.0) as hc:
-                        async with streamable_http_client(connector_url, http_client=hc) as (
-                            r,
-                            w,
-                            _,
-                        ):
-                            async with ClientSession(r, w) as s:
-                                await s.initialize()
-                                res = await s.list_tools()
-                                return [t.name for t in res.tools]
-
-            primary = connector_transport if connector_transport in ("http", "sse") else "http"
-            fallback = "sse" if primary == "http" else "http"
-            try:
-                tools = await _try(primary)
-                tool_count = len(tools)
-            except BaseException:
-                try:
-                    tools = await _try(fallback)
-                    tool_count = len(tools)
-                except BaseException as exc:
-                    logger.warning("Post-OAuth tool probe failed for %s: %s", connector_id, exc)
+        tool_count = await _probe_oauth_tool_count(row)
 
         row.status = "connected"
         row.enabled = True
@@ -956,9 +1047,19 @@ async def oauth_callback(
         row.last_tested_at = now_ms()
         row.updated_at = now_ms()
         updated = await ds.update(row)
+        from valuz_agent.modules.connectors.oauth_sharing import propagate_oauth_credentials
         from valuz_agent.modules.connectors.service import after_connector_oauth_authorized_hook
 
-        await after_connector_oauth_authorized_hook(user_id, updated)
+        # One consent authorizes the whole credential group — hand the token to
+        # every sibling fronting the same upstream service, installing the ones
+        # with no row yet, and probe each so it lands live (connected + counted)
+        # exactly like the row we just authorized, with no Test click needed.
+        await propagate_oauth_credentials(
+            user_id, updated, ds, probe=_probe_oauth_tool_count, install_missing=True
+        )
+        await after_connector_oauth_authorized_hook(
+            db, user_id, updated, cloud_committed=authority.cloud_committed
+        )
 
         logger.info(
             "Connector %s (%s) OAuth connected, tool_count=%s",
@@ -1559,8 +1660,7 @@ async def _probe_connector(
 # Directory endpoints (catalog v2 — groups + standalone connectors)
 # ---------------------------------------------------------------------------
 
-_CATALOG_FILE = Path(__file__).parent.parent.parent / "resources" / "connector_catalog.json"
-_CATALOG: list[dict] = json.loads(_CATALOG_FILE.read_text(encoding="utf-8"))
+_CATALOG: list[dict] = load_catalog()
 
 # CONNECTOR_DIRECTORY: flat list of all connectors for OAuth slug lookup.
 # CATALOG_ITEMS: raw catalog entries preserving order (groups + standalone connectors).

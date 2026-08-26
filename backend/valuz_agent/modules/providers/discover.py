@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import httpx
+from src.runtimes.network_egress import EgressRegistrationError, provider_test_egress
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,20 @@ class ModelDiscoveryError(RuntimeError):
 class DiscoveredModel:
     id: str
     label: str | None = None
+
+
+def _owned_http_client(
+    *,
+    timeout: float,
+    proxy_url: str | None = None,
+) -> httpx.AsyncClient:
+    if proxy_url is None:
+        return httpx.AsyncClient(timeout=timeout)
+    return httpx.AsyncClient(
+        proxy=proxy_url,
+        timeout=timeout,
+        trust_env=False,
+    )
 
 
 async def discover_models(
@@ -113,8 +128,17 @@ async def discover_model_entries(
     headers = _headers_for(protocol, api_key)
 
     if client is None:
-        async with httpx.AsyncClient(timeout=DISCOVERY_TIMEOUT_SECONDS) as owned_client:
-            return await _try_candidates(owned_client, candidates, headers, protocol)
+        try:
+            async with provider_test_egress() as egress:
+                async with _owned_http_client(
+                    timeout=DISCOVERY_TIMEOUT_SECONDS,
+                    proxy_url=egress.proxy_url if egress is not None else None,
+                ) as owned_client:
+                    return await _try_candidates(owned_client, candidates, headers, protocol)
+        except EgressRegistrationError as exc:
+            raise ModelDiscoveryError(
+                "模型网络出口不可用，请检查网络设置或暂时启用兼容模式"
+            ) from exc
     return await _try_candidates(client, candidates, headers, protocol)
 
 
@@ -245,23 +269,51 @@ async def ping_credentials(
     if not model:
         raise ModelDiscoveryError("至少需要 1 个模型 id 才能完成连接测试")
 
-    if protocol == "anthropic":
-        await _ping_anthropic(base_url=base_url, api_key=api_key, model=model)
-    else:
-        await _ping_openai(base_url=base_url, api_key=api_key, model=model)
+    try:
+        async with provider_test_egress() as egress:
+            proxy_url = egress.proxy_url if egress is not None else None
+            if protocol == "anthropic":
+                await _ping_anthropic(
+                    base_url=base_url,
+                    api_key=api_key,
+                    model=model,
+                    proxy_url=proxy_url,
+                )
+            else:
+                await _ping_openai(
+                    base_url=base_url,
+                    api_key=api_key,
+                    model=model,
+                    proxy_url=proxy_url,
+                )
+    except EgressRegistrationError as exc:
+        raise ModelDiscoveryError(
+            "模型网络出口不可用，请检查网络设置或暂时启用兼容模式"
+        ) from exc
 
 
-async def _ping_anthropic(*, base_url: str, api_key: str, model: str) -> None:
+async def _ping_anthropic(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    proxy_url: str | None = None,
+) -> None:
     # Lazy import — keeps the discover module light when only OpenAI-
     # path code is used (e.g. discover_models). Both SDKs are pulled in
     # transitively by claude-agent-sdk / langchain-openai.
     import anthropic
 
+    http_client = _owned_http_client(
+        timeout=PING_TIMEOUT_SECONDS,
+        proxy_url=proxy_url,
+    )
     client = anthropic.AsyncAnthropic(
         base_url=base_url,
         api_key=api_key,
         timeout=PING_TIMEOUT_SECONDS,
         max_retries=0,
+        http_client=http_client,
     )
     try:
         response = await client.messages.create(
@@ -301,16 +353,31 @@ async def _ping_anthropic(*, base_url: str, api_key: str, model: str) -> None:
             raise ModelDiscoveryError(f"服务方异常（HTTP {exc.status_code}），请稍后重试") from exc
         reason = _extract_anthropic_error(exc) or f"HTTP {exc.status_code}"
         raise ModelDiscoveryError(f"服务方拒绝请求：{reason}") from exc
+    finally:
+        await client.close()
+        if not http_client.is_closed:
+            await http_client.aclose()
 
 
-async def _ping_openai(*, base_url: str, api_key: str, model: str) -> None:
+async def _ping_openai(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    proxy_url: str | None = None,
+) -> None:
     import openai
 
+    http_client = _owned_http_client(
+        timeout=PING_TIMEOUT_SECONDS,
+        proxy_url=proxy_url,
+    )
     client = openai.AsyncOpenAI(
         base_url=base_url,
         api_key=api_key,
         timeout=PING_TIMEOUT_SECONDS,
         max_retries=0,
+        http_client=http_client,
     )
     try:
         response = await client.chat.completions.create(
@@ -342,6 +409,10 @@ async def _ping_openai(*, base_url: str, api_key: str, model: str) -> None:
             raise ModelDiscoveryError(f"服务方异常（HTTP {exc.status_code}），请稍后重试") from exc
         reason = _extract_openai_error(exc) or f"HTTP {exc.status_code}"
         raise ModelDiscoveryError(f"服务方拒绝请求：{reason}") from exc
+    finally:
+        await client.close()
+        if not http_client.is_closed:
+            await http_client.aclose()
 
 
 def _assert_model_matches(*, requested: str, returned: str) -> None:

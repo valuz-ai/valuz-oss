@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "owner_layer": "oss",
+  "selectorRevision": "claim-audit-selector-v1",
+  "cases": [
+    {
+      "selection_case_id": "OSS-SELECT-EXPLICIT-001",
+      "business_group": "explicit-user-request",
+      "user_prompt": "What was revenue?",
+      "answer": "Revenue was 120 USDm. The company was founded in 1999. Alice is the CEO.",
+      "policy_overrides": {
+        "max_selected_claims": 1,
+        "max_selected_claims_per_group": 1
+      },
+      "expected": {
+        "selected_count": 1,
+        "selected_contains": ["Revenue was 120 USDm"],
+        "not_selected_contains": ["founded in 1999", "Alice is the CEO"]
+      },
+      "policy_refs": [
+        "rules.claim_audit.prioritize_explicit_user_request",
+        "rules.claim_audit.max_selected_claims"
+      ]
+    },
+    {
+      "selection_case_id": "OSS-SELECT-BOUNDED-001",
+      "business_group": "bounded-risk-selection",
+      "user_prompt": "Summarize the important facts.",
+      "answer": "Metric A was 10%. Metric B was 20%. Metric C was 30%. Metric D was 40%.",
+      "policy_overrides": {
+        "max_selected_claims": 2,
+        "max_selected_claims_per_group": 2
+      },
+      "expected": {
+        "selected_count": 2,
+        "selected_contains": ["Metric A was 10%", "Metric B was 20%"],
+        "not_selected_contains": ["Metric C was 30%", "Metric D was 40%"]
+      },
+      "policy_refs": [
+        "rules.claim_audit.critical_kinds",
+        "rules.claim_audit.max_selected_claims_per_group"
+      ]
+    },
+    {
+      "selection_case_id": "OSS-SELECT-NONFACT-001",
+      "business_group": "non-evidentiary-knowledge",
+      "user_prompt": "What does ROE mean?",
+      "answer": "ROE means return on equity and measures profitability relative to equity.",
+      "expected": {
+        "selected_count": 0,
+        "selected_contains": [],
+        "not_selected_contains": []
+      },
+      "policy_refs": [
+        "rules.factual_claim.citation_required"
+      ]
+    }
+  ]
+}

@@ -175,6 +175,15 @@ class RemoteStoreHttp(RemoteStore):
         )
         return [sw.row_to_stored_event(r) for r in (data or [])]
 
+    async def _get_events_after_for_user_once(
+        self, user_id: str, *, after_seq: int, types: tuple[str, ...] | None, limit: int
+    ) -> list[StoredEvent]:
+        body: dict[str, Any] = {"after_seq": after_seq, "limit": limit}
+        if types is not None:
+            body["types"] = list(types)
+        data = await self._post("get_events_after_for_user", body)
+        return [sw.row_to_stored_event(r) for r in (data or [])]
+
     async def _get_events_window_once(
         self, user_id: str, session_id: str, *, before_seq: int | None, turn_limit: int
     ) -> tuple[list[StoredEvent], bool]:

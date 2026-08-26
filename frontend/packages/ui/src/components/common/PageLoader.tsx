@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Loader2 } from "lucide-react";
+import { assetUrl } from "@valuz/shared";
 import { cn } from "../../lib/cn";
 
 export interface PageLoaderProps {
@@ -12,10 +13,11 @@ export interface PageLoaderProps {
 
 export const LogoShimmer = ({ size = "sm" }: { size?: "sm" | "md" }) => {
   const dim = size === "sm" ? "h-6 w-6" : "h-8 w-8";
+  const logoUrl = assetUrl("logo.png");
   return (
     <div className={cn("relative select-none", dim)}>
       <img
-        src="./logo.png"
+        src={logoUrl}
         alt=""
         aria-hidden="true"
         className="h-full w-full"
@@ -24,11 +26,11 @@ export const LogoShimmer = ({ size = "sm" }: { size?: "sm" | "md" }) => {
       <div
         className="pointer-events-none absolute inset-0 overflow-hidden"
         style={{
-          maskImage: "url(./logo.png)",
+          maskImage: `url(${logoUrl})`,
           maskSize: "contain",
           maskRepeat: "no-repeat",
           maskPosition: "center",
-          WebkitMaskImage: "url(./logo.png)",
+          WebkitMaskImage: `url(${logoUrl})`,
           WebkitMaskSize: "contain",
           WebkitMaskRepeat: "no-repeat",
           WebkitMaskPosition: "center",

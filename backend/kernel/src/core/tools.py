@@ -14,10 +14,14 @@ class ExecContext:
     Carries the identity of the session that invoked the tool so a
     handler can correlate the call to its session (and through the
     session's metadata, to whatever grouping the host maintains).
+    ``user_id`` is the session owner — kernel-side handlers that read
+    the owner-scoped store (e.g. PTC's ``execute_code``) need it;
+    runtimes populate it from ``session.user_id``.
     """
 
     workspace: str = ""
     session_id: str = ""
+    user_id: str = ""
 
 
 @dataclass
@@ -52,6 +56,16 @@ class ToolKit:
 
     def get(self, name: str) -> ToolDef | None:
         return self._tools.get(name)
+
+    def unregister(self, name: str) -> ToolDef | None:
+        """Remove and return one tool definition, if present.
+
+        Runtime-private, turn-scoped tools use this to restore the exact
+        public toolkit after a native continuation.  The operation is kept
+        deliberately small instead of exposing the backing mapping.
+        """
+
+        return self._tools.pop(name, None)
 
     def list_tools(self) -> list[ToolDef]:
         return list(self._tools.values())

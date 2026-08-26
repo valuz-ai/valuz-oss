@@ -27,3 +27,14 @@ export function SlotRenderer({ name, context }: SlotRendererProps) {
     </>
   );
 }
+
+/**
+ * True when an overlay has suppressed this surface.
+ *
+ * Hosts call it where they render a surface an overlay may need to take over
+ * (``conversation.composer`` during a share selection, for example) and skip
+ * their own render when it returns true.
+ */
+export function useSurfaceSuppressed(surface: string): boolean {
+  return useRegistryStore((s) => s.suppressed[surface] ?? false);
+}

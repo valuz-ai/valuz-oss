@@ -62,6 +62,24 @@ class SessionListItem:
     # Surfaced on the list so the composer can render the EffortSelector's
     # current value without a second fetch.
     effort: str | None = None
+    # Session working mode (kernel ``Session.mode``,
+    # docs/design/session-modes.md): ``default`` | ``plan`` | ``goal``.
+    # Surfaced on the list so the composer's Plan chip reflects the
+    # session's current mode without a second fetch. Mutable via
+    # ``PATCH /v1/sessions/{id}/mode``; the runtime can also exit a mode
+    # on its own (``session.mode_changed{by:"runtime"}``).
+    mode: str = "default"
+    # A ``run_in_background`` task is still executing in this session. Same
+    # fact and same source as ``RunSummary.background`` (both read
+    # ``kernel_client.bg_busy_session_ids()``), so the conversation header,
+    # the sidebar pulse and the Activity page can never disagree about one
+    # session.
+    #
+    # Deliberately NOT folded into ``status``: the launching turn genuinely
+    # ends, and ``status`` drives the Stop button and queue routing — a
+    # ``running`` lie there offers a Stop that stops nothing and routes new
+    # messages into the queue (409 "Session is already running").
+    background: bool = False
     # Owning task id if this session belongs to a task (lead session or a
     # dispatched sub-Run). Read from ``session.metadata["valuz"]["task_id"]``.
     # ``None`` = a user-initiated standalone conversation. Surfaces here so
@@ -72,6 +90,12 @@ class SessionListItem:
     # Worktree the session runs in (creation-time snapshot). Surfaced on the
     # list so the sidebar can render a worktree badge without a second fetch.
     worktree: WorktreeRef | None = None
+    # Fork provenance (docs/design/session-fork.md): the source session this
+    # one was forked from — kernel-stamped ``metadata["forked_from"]``, the
+    # only reliable lineage source (runtime-native lineage is not queryable).
+    # ``None`` for sessions that are not forks. The source may since have
+    # been deleted; the id is a navigation hint, not a guarantee.
+    forked_from_session_id: str | None = None
 
 
 @dataclass
@@ -122,6 +146,11 @@ class SessionEventEnvelope:
     # listEvents path now mirrors it so history replay can render
     # per-message clocks too. Frontend formats via ``new Date(ms)``.
     timestamp: int | None = None
+    # Store-independent identity (the append ``request_id``) — the SAME uid the
+    # SSE frames carry, so the frontend can dedup/merge REST history rows
+    # against live/backfill frames across the two seq spaces. ``None`` for
+    # legacy rows persisted before uid minting and synthetic envelopes.
+    event_uid: str | None = None
 
 
 @dataclass
@@ -158,3 +187,8 @@ class QueuedInputList:
     # following until the LAST item finishes — not just while ``items`` is
     # non-empty. See docs/design/session-input-queue.md §14.5.
     draining: bool = False
+    # The item the drain is executing RIGHT NOW (status ``dispatched``): out of
+    # ``items`` but possibly not yet visible in the transcript. Clients keep
+    # its bubble rendered until the user message lands instead of dropping it
+    # one refetch too early.
+    dispatching: QueuedInput | None = None

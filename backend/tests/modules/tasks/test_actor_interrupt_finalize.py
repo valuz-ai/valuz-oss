@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from valuz_agent.infra.local_identity import resolve_local_user_id
+from valuz_agent.modules.sessions import turn_driver
 from valuz_agent.modules.tasks import actor_runner
 
 LOCAL_USER_ID = resolve_local_user_id()
@@ -38,9 +39,13 @@ class _Bus:
 def _run_to_idle_with_stop_reason(
     monkeypatch: pytest.MonkeyPatch, stop_reason: dict[str, Any] | None
 ) -> tuple[str, list[Any]]:
-    """Drive one run_session_to_idle turn whose post-run session carries
-    ``stop_reason``; return (returned final_status, finalize call args)."""
-    monkeypatch.setattr(actor_runner, "_restamp_always_on_mcp", _as_async(lambda *a, **k: None))
+    """Drive one run_session_to_idle turn whose AUTHORITATIVE run_turn
+    ``message`` carries ``stop_reason``; return (returned final_status, finalize
+    call args). The turn outcome is classified off the message, not a re-read of
+    the durable session (which is now only a secondary meter/error signal)."""
+    # The turn's capability hook is irrelevant here — inert it (the fake
+    # ``run_turn`` below never invokes it anyway).
+    monkeypatch.setattr(turn_driver, "always_on_mcp_hook", lambda *a, **k: _as_async(lambda: None))
 
     after_run = SimpleNamespace(status="idle", stop_reason=stop_reason, metadata={})
 
@@ -48,11 +53,11 @@ def _run_to_idle_with_stop_reason(
         async def get_session(self, *a: Any, **k: Any) -> Any:
             return after_run
 
-    monkeypatch.setattr(actor_runner, "data_reader", lambda: _Reader())
+    monkeypatch.setattr(turn_driver, "data_reader", lambda: _Reader())
     monkeypatch.setattr(
         actor_runner.kernel_client,
         "run_turn",
-        _as_async(lambda *a, **k: SimpleNamespace(id="m1", status="ok")),
+        _as_async(lambda *a, **k: SimpleNamespace(id="m1", status="ok", stop_reason=stop_reason)),
     )
 
     finalize_calls: list[Any] = []
@@ -64,7 +69,7 @@ def _run_to_idle_with_stop_reason(
     monkeypatch.setattr(run_orch, "_finalize_session", _fake_finalize)
 
     returned = asyncio.run(
-        actor_runner.run_session_to_idle("sess-1", "hi", _Bus(), user_id=LOCAL_USER_ID)
+        turn_driver.run_session_to_idle("sess-1", "hi", _Bus(), user_id=LOCAL_USER_ID)
     )
     return returned, finalize_calls
 

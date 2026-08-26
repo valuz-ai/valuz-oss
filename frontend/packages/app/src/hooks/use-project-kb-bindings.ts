@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   bindingApi,
+  getEntityOrigin,
   kbApi,
   type BindingItem,
   type KbListItem,
@@ -144,8 +145,19 @@ export function useProjectKbBindings(
         .catch(() => ({ bindings: [] as BindingItem[] })),
     ]);
     setBindings(bindingsRes.bindings);
+    // A cloud project can only retrieve cloud KBs (and vice-versa) — the
+    // two backends don't cross-query. ``kbApi.list()`` fans out and tags
+    // each row's ``exec_origin``; filter to the project's own origin so the
+    // picker never offers a KB the project's backend can't reach. Unknown
+    // origin (single-backend / cold deep-link) keeps all rows.
+    const projectOrigin = getEntityOrigin(projectId);
+    const visibleKbs = projectOrigin
+      ? kbListRes.knowledge_bases.filter(
+          (kb) => kb.exec_origin === projectOrigin,
+        )
+      : kbListRes.knowledge_bases;
     const kbNodes = await Promise.all(
-      kbListRes.knowledge_bases.map(async (kb) => {
+      visibleKbs.map(async (kb) => {
         const tree = await kbApi
           .tree(kb.id)
           .catch(() => ({ nodes: [] as KbTreeNode[] }));

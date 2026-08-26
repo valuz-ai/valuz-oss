@@ -33,6 +33,7 @@ import tempfile
 import zipfile
 from pathlib import Path, PureWindowsPath
 
+from valuz_agent.infra.path_names import sanitize_segment
 from valuz_agent.modules.packs_common.manifest import (
     PackManifest,
     from_legacy_agent_pack,
@@ -65,11 +66,16 @@ def sanitize_skill_slug(slug: str) -> str:
     (``/home/x/price-audit``), or is already a clean slug. Degenerate inputs (a
     bare drive, ``..``, empty) fall back to a character-scrubbed form so the
     result is always a single, non-empty, separator-free segment.
+
+    The trailing component is then run through :func:`sanitize_segment`, because
+    the importer creates ``~/.agents/skills/<slug>/`` from it: a namespaced slug
+    (``react:components``) keeps its colon through ``PureWindowsPath`` — it is
+    not a drive letter — and is uncreatable on Windows.
     """
     name = PureWindowsPath(str(slug)).name
     if not name or name in (".", ".."):
         name = _SLUG_FALLBACK_RE.sub("-", str(slug)).strip("-._")
-    return name or "skill"
+    return sanitize_segment(name or "skill")
 
 
 # ----------------------------------------------------------------------------

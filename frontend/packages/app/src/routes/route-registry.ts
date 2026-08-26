@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import { lazy, type ComponentType } from "react";
 import { activeProfile, type DesktopRouteModule } from "@valuz/core";
 import {
   ActivityPage,
@@ -6,7 +6,9 @@ import {
   AgentsPage,
   ApiKeyConfigPage,
   AutomationPage,
+  PlaybookPage,
   AutomationDetailPage,
+  PlaybookDetailPage,
   ConversationPage,
   ConnectorsPage,
   ConversationsHomePage,
@@ -16,6 +18,7 @@ import {
   MarketplacePage,
   OnboardingPage,
   OverlaysPage,
+  PluginsPage,
   ProjectDetailPage,
   ProjectsPage,
   SettingsPage,
@@ -24,6 +27,12 @@ import {
   TaskDetailPage,
   ToolCallsPage,
 } from "../pages";
+
+const A2UIGalleryPage = lazy(() =>
+  import("../pages/A2UIGalleryPage").then(({ A2UIGalleryPage }) => ({
+    default: A2UIGalleryPage,
+  })),
+);
 
 const COMPONENT_MAP: Record<string, ComponentType> = {
   "conversations-home": ConversationsHomePage,
@@ -39,11 +48,15 @@ const COMPONENT_MAP: Record<string, ComponentType> = {
   overlays: OverlaysPage,
   activity: ActivityPage,
   automation: AutomationPage,
+  playbooks: PlaybookPage,
   "automation-detail": AutomationDetailPage,
+  "playbook-detail": PlaybookDetailPage,
   skills: SkillsPage,
   "skill-detail": SkillDetailPage,
   marketplace: MarketplacePage,
+  plugins: PluginsPage,
   settings: SettingsPage,
+  "component-gallery": A2UIGalleryPage,
   onboarding: OnboardingPage,
   // /welcome — the first-run entry. The full-screen editorial flow
   // (OnboardingFlow) owns welcome → connect (paste API key / CLI login) →

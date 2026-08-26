@@ -27,6 +27,39 @@ export type SessionPermissionMode = "default" | "auto_review" | "full_access";
  */
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
+/**
+ * Session working mode (kernel ``Session.mode``,
+ * docs/design/session-modes.md). ``plan`` = the runtime plans before
+ * touching anything (Claude lowers to SDK ``permissionMode="plan"`` +
+ * the ``ExitPlanMode`` approval card); ``goal`` = the runtime loops
+ * until a goal condition is met (task lead/member sessions). Only
+ * ``claude_agent`` / ``codex`` sessions accept non-default modes.
+ *
+ * Mutable mid-session via ``PATCH /v1/sessions/{id}/mode``. The runtime
+ * can also exit a mode on its own (approved plan / completed goal) —
+ * surfaced live as a ``session.mode_changed`` SSE frame
+ * (``{mode, by: "user" | "runtime"}``).
+ */
+export type SessionMode = "default" | "plan" | "goal";
+
+/**
+ * Runtimes whose plan-mode lowering is wired end-to-end today.
+ * ``claude_agent`` lowers natively (typed SDK
+ * ``set_permission_mode("plan")`` + the ``ExitPlanMode`` approval
+ * card). ``codex`` joins once its native ``collaborationMode`` wiring
+ * lands; deepagents / deepseek_harness have no native primitive and
+ * the server 400s them. UI affordances gate on this list so users
+ * never see a toggle the backend would reject.
+ */
+export const PLAN_MODE_RUNTIMES: readonly string[] = ["claude_agent"];
+
+/** Whether the composer should offer the plan-mode toggle for a runtime. */
+export function supportsPlanMode(
+  runtimeProvider: string | null | undefined,
+): boolean {
+  return runtimeProvider != null && PLAN_MODE_RUNTIMES.includes(runtimeProvider);
+}
+
 export interface SessionListItem {
   id: string;
   project_id: string;
@@ -62,6 +95,13 @@ export interface SessionListItem {
    */
   effort: EffortLevel | null;
   /**
+   * Session working mode. Surfaced on the list shape so the composer's
+   * Plan chip reflects the session's current mode without a second
+   * fetch. Optional because older backends omit it — treat a missing
+   * value as ``"default"``.
+   */
+  mode?: SessionMode;
+  /**
    * Owning task id if this session belongs to a task run (lead session
    * or dispatched sub-Run). ``null`` = a user-initiated standalone
    * conversation. Read from ``session.metadata.valuz.task_id``. The
@@ -75,8 +115,32 @@ export interface SessionListItem {
    * backend also populates `worktree.exists` (liveness, computed on read).
    */
   worktree?: WorktreeRef | null;
+  /**
+   * Fork provenance (docs/design/session-fork.md): the source session this
+   * one was forked from. `null` for sessions that are not forks. The source
+   * may since have been deleted — a navigation hint, not a guarantee.
+   */
+  forked_from_session_id?: string | null;
   /** Unix epoch milliseconds (UTC). Format via `new Date(ms)`. */
   updated_at: number;
+  /**
+   * Aggregated token usage when the row originated from a session-detail
+   * response. List endpoints may omit it to avoid an extra message scan.
+   */
+  total_tokens?: number;
+  /**
+   * A `run_in_background` task is still executing in this session. Same fact
+   * and same source as `RunSummary.background` — both read the orchestrator's
+   * live registry via `bg_busy_session_ids()` — so the conversation header,
+   * the sidebar pulse and the Activity page can never disagree about one
+   * session.
+   *
+   * Deliberately separate from `status`: the launching turn genuinely ends,
+   * and `status` drives the Stop button and queue routing, so a `running`
+   * value here would offer a Stop that stops nothing and route new messages
+   * into the queue (409 "Session is already running").
+   */
+  background?: boolean;
 }
 
 /**
@@ -141,6 +205,14 @@ export interface SessionDetail extends SessionListItem {
 // ---------------------------------------------------------------------------
 
 export interface SessionEventDTO {
+  /**
+   * PER-STORE row id. The backend has TWO independent seq spaces: history
+   * reads (REST list/window, SSE backfill frames, heartbeats) carry the
+   * DURABLE store's seq, while live-stream frames carry the kernel's LOCAL
+   * seq. Seqs from the two spaces must NEVER be compared against each other
+   * or fed into one cursor — cross-store identity is ``event_uid``.
+   * ``0`` marks a live unpersisted frame (streaming deltas).
+   */
   seq: number;
   event: {
     event_type: string;
@@ -153,6 +225,15 @@ export interface SessionEventDTO {
    * for synthetic envelopes that don't have one. Format via `new Date(ms)`.
    */
   timestamp?: number;
+  /**
+   * Store-independent identity of a persisted event (32-hex string), present
+   * on both history and live frames. This is the ONLY key valid for
+   * cross-segment (history ↔ live) dedup/merge — ``seq`` is per-store.
+   * ``null``/``undefined`` on live-only delta frames (never persisted) and
+   * on legacy rows persisted before uid minting; those keep the historical
+   * seq-based behavior.
+   */
+  event_uid?: string | null;
 }
 
 /**

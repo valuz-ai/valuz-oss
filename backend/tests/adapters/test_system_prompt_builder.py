@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 from valuz_agent.adapters.system_prompt_builder import (
+    AUTHORIZATION_BOUNDARY_INSTRUCTIONS,
     OUTPUT_FORMAT_INSTRUCTIONS,
     assemble_session_instructions,
 )
+
+
+def test_global_authorization_boundary_is_static_and_request_agnostic() -> None:
+    assert "unless the user explicitly requested" in AUTHORIZATION_BOUNDARY_INSTRUCTIONS
+    assert "files" in AUTHORIZATION_BOUNDARY_INSTRUCTIONS
+    assert "automations" in AUTHORIZATION_BOUNDARY_INSTRUCTIONS
+    assert "external messages" in AUTHORIZATION_BOUNDARY_INSTRUCTIONS
+    for prohibited in ("required items", "retrieval plan", "candidate source", "attempt budget"):
+        assert prohibited not in AUTHORIZATION_BOUNDARY_INSTRUCTIONS.lower()
 
 
 def test_output_format_instructions_reference_valuz_file_scheme() -> None:
@@ -14,6 +24,30 @@ def test_output_format_instructions_reference_valuz_file_scheme() -> None:
     assert "valuz-file://" in OUTPUT_FORMAT_INSTRUCTIONS
     out = assemble_session_instructions([("output-format", OUTPUT_FORMAT_INSTRUCTIONS)])
     assert out == f"<output-format>\n{OUTPUT_FORMAT_INSTRUCTIONS}\n</output-format>"
+
+
+def test_the_link_guidance_cannot_be_substituted_into_four_slashes() -> None:
+    """Canonical is three slashes — two for the scheme, one for the root.
+
+    The guidance used to carry a substitutable template,
+    ``valuz-file:///<absolute-path>``, in a sentence that also said the
+    placeholder "begins with /". Filled in literally that is FOUR, and a qa
+    lead filled it in literally: its finished report came back
+    ``valuz-file:////data/…``, parsed to ``//data/…``, and — because consumers
+    decide what a path IS by comparing it against a root — the UI declared the
+    file outside a project whose root was a literal prefix of its path.
+
+    A worked example cannot be substituted into wrongly. A placeholder sitting
+    directly behind the third slash can, so its absence is the invariant.
+    """
+    assert "valuz-file:///Users/you/proj/report.md" in OUTPUT_FORMAT_INSTRUCTIONS, (
+        "teach the canonical three-slash form with a concrete example"
+    )
+    assert "valuz-file:////" not in OUTPUT_FORMAT_INSTRUCTIONS
+    assert "valuz-file:///<" not in OUTPUT_FORMAT_INSTRUCTIONS, (
+        "a placeholder right after the third slash is the trap: the absolute "
+        "path it stands for brings its own leading slash"
+    )
 
 
 def test_wraps_each_nonempty_block_in_its_tag() -> None:

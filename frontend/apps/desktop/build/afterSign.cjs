@@ -1,6 +1,7 @@
 const { execFileSync, spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { notarize } = require('@electron/notarize');
 
 const MACHO_MAGICS = new Set([
@@ -158,17 +159,96 @@ exports.default = async function afterSign(context) {
   console.log(`[afterSign] identity=${identity}`);
   console.log(`[afterSign] signing ${machoFiles.length} Mach-O files under ${sidecarRoot}`);
 
+  // Each binary's existing entitlements are extracted and passed back
+  // explicitly via --entitlements. --preserve-metadata=entitlements (PR #681)
+  // is NOT enough: PyInstaller's automatic binary-vs-data reclassification
+  // (build_main.py, "Performing binary vs. data reclassification") turns the
+  // DATA-collected claude CLI into a BINARY and ad-hoc re-signs it, stripping
+  // its entitlements long before this hook runs — preserve then has nothing
+  // left to preserve. The SDK-bundled Claude Code CLI (Bun/JSC) needs
+  // allow-jit + allow-unsigned-executable-memory; losing them under hardened
+  // runtime kills JIT and the CLI dies on use with
+  // "ReferenceError: SharedArrayBuffer is not defined".
+  const entDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aftersign-ent-'));
+  const entitlementsFor = (file, index) => {
+    // stdout capture, not `--entitlements <path>`: file-writing is exactly the
+    // kind of codesign surface that drifted between macOS 15 and 26.
+    const r = spawnSync('codesign', ['-d', '--entitlements', '-', '--xml', file], { encoding: 'utf8' });
+    if (r.status !== 0) return null;
+    const xml = (r.stdout || '').trim();
+    if (!xml.includes('<key>')) return null;
+    const out = path.join(entDir, `ent-${index}.plist`);
+    fs.writeFileSync(out, xml);
+    return out;
+  };
+  // Known JIT sidecars get their entitlements re-applied from a checked-in
+  // copy: PyInstaller hands them over already stripped (see above), so
+  // extracting from the binary itself has nothing to recover.
+  const staticEntitlements = [
+    {
+      suffix: path.join('claude_agent_sdk', '_bundled', 'claude'),
+      plist: path.join(__dirname, 'entitlements.claude-cli.plist'),
+    },
+  ];
+  const staticEntitlementsFor = (file) => {
+    const hit = staticEntitlements.find((s) => file.endsWith(s.suffix));
+    return hit ? hit.plist : null;
+  };
+  // Record the claude sidecar's state BEFORE we touch it — distinguishes
+  // "arrived stripped" from "our re-sign stripped it" in the CI log.
+  const claudeSidecar = path.join(sidecarRoot, '_internal', 'claude_agent_sdk', '_bundled', 'claude');
+  if (fs.existsSync(claudeSidecar)) {
+    const pre = spawnSync('codesign', ['-dvv', claudeSidecar], { encoding: 'utf8' });
+    const preState = ((pre.stderr || '') + (pre.stdout || ''))
+      .split('\n')
+      .filter((l) => /^(Authority=|Signature|Identifier=|CodeDirectory)/.test(l))
+      .join(' | ');
+    console.log(`[afterSign] claude pre-sign state: ${preState}`);
+    console.log(
+      `[afterSign] claude pre-sign entitlements: ${entitlementsFor(claudeSidecar, 'pre') ? 'present' : 'ABSENT'}`,
+    );
+  }
+
   let failed = 0;
-  for (const f of machoFiles) {
+  let withEntitlements = 0;
+  machoFiles.forEach((f, i) => {
     try {
-      codesign(['--force', '--sign', identity, '--timestamp', '--options', 'runtime', f]);
+      const entFile = entitlementsFor(f, i) || staticEntitlementsFor(f);
+      const args = ['--force', '--sign', identity, '--timestamp', '--options', 'runtime'];
+      if (entFile) {
+        withEntitlements += 1;
+        args.push('--entitlements', entFile);
+      }
+      codesign([...args, f]);
+      // Entitlements surviving the re-sign is the whole point — verify the
+      // output instead of trusting codesign.
+      if (entFile && entitlementsFor(f, machoFiles.length + i) === null) {
+        throw new Error('entitlements missing after re-sign');
+      }
     } catch (e) {
       failed += 1;
       console.error(`[afterSign] FAILED: ${f}\n${e.stderr || e.message}`);
     }
-  }
+  });
+  console.log(`[afterSign] ${withEntitlements} of ${machoFiles.length} sidecar binaries carry entitlements`);
   if (failed > 0) {
     throw new Error(`[afterSign] ${failed} sidecar Mach-O signatures failed (see above).`);
+  }
+  fs.rmSync(entDir, { recursive: true, force: true });
+
+  // Sentinel: the Claude CLI is the binary users actually crash on when
+  // entitlements get stripped — refuse to ship without allow-jit.
+  if (fs.existsSync(claudeSidecar)) {
+    const shown = spawnSync('codesign', ['-d', '--entitlements', '-', '--xml', claudeSidecar], { encoding: 'utf8' });
+    if (!(shown.stdout || '').includes('com.apple.security.cs.allow-jit')) {
+      throw new Error(
+        '[afterSign] claude sidecar lost com.apple.security.cs.allow-jit after re-sign — ' +
+          'this build would die with "ReferenceError: SharedArrayBuffer is not defined". Refusing to ship.',
+      );
+    }
+    console.log('[afterSign] claude sidecar entitlements verified (allow-jit present)');
+  } else {
+    console.warn(`[afterSign] claude sidecar not found at ${claudeSidecar} — entitlement sentinel skipped`);
   }
 
   console.log(`[afterSign] re-sealing outer app: ${appPath}`);

@@ -392,7 +392,8 @@ import { DeleteConfirmDialog } from "@valuz/ui"
 | `BackLink` | Back navigation. ArrowLeft + configurable label |
 | `PageLoader` | Page loading state. Logo shimmer |
 | `SearchInput` | Search input. Built-in Search icon |
-| `ResourceActionSlot` | Plugin extension point. OSS renders nothing; commercial injects action buttons |
+| `ResourceActionSlot` | Plugin extension point for resource list rows. OSS renders nothing; commercial injects action buttons |
+| `ResourceDetailActionSlot` | Plugin extension point for labelled resource detail-header actions |
 
 ### Form Conventions
 
@@ -428,6 +429,7 @@ SettingsNav(items, value, onValueChange)     ← left nav + mobile pills
 **Detail pages** (AgentDetailPage / SkillDetailPage):
 ```
 BackLink                                     ← back navigation
+ResourceDetailActionSlot                     ← plugin detail-header action
 Tabs(variant="line")                         ← tab switching
   └─ per-tab content
 ```

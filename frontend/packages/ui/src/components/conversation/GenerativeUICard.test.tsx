@@ -1,89 +1,38 @@
-import type { ReactNode } from "react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
 
-vi.mock("@openuidev/react-lang", () => ({
-  Renderer: (props: { response: string; isStreaming?: boolean }) => (
-    <div data-testid="renderer" data-streaming={props.isStreaming ? "true" : "false"}>
-      {props.response}
-    </div>
-  ),
-}));
-vi.mock("@openuidev/react-ui", () => ({
-  // ThemeProvider just renders its children in the test — we don't need the
-  // real style-injection/context machinery here.
-  ThemeProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
-}));
-vi.mock("@openuidev/react-ui/genui-lib", () => ({
-  openuiLibrary: {},
+vi.mock("./A2UIBody", () => ({
+  default: (props: { body: string }) => <div data-testid="renderer">{props.body}</div>,
 }));
 vi.mock("../../hooks/use-i18n", () => ({
-  useI18n: () => ({ t: (k: string) => k }),
+  useI18n: () => ({ t: (key: string) => key }),
 }));
 
-import { GenerativeUICard, extractContentText } from "./GenerativeUICard";
+import { GenerativeUICard } from "./GenerativeUICard";
+
+const STREAM = [
+  JSON.stringify({ version: "v0.9.1", createSurface: { surfaceId: "s", catalogId: "https://valuz.io/a2ui/catalogs/base/v1" } }),
+  JSON.stringify({ version: "v0.9.1", updateComponents: { surfaceId: "s", components: [{ id: "root", component: "TextContent", text: "Chart" }] } }),
+].join("\n");
 
 describe("GenerativeUICard", () => {
-  it("renders the OpenUI Renderer with the openui payload", () => {
-    render(<GenerativeUICard openui={"Chart\n  data: 1"} />);
-    expect(screen.getByTestId("renderer").textContent).toBe("Chart\n  data: 1");
+  it("renders an A2UI payload and marks the new scope", async () => {
+    const { container } = render(<GenerativeUICard a2ui={STREAM} />);
+    expect((await screen.findByTestId("renderer")).textContent).toBe(STREAM);
+    expect(container.querySelector('[data-a2ui-scope="generative-ui"]')).toBeTruthy();
   });
 
-  it("unwraps a JSON content-block envelope before rendering", () => {
-    // The kernel JSON-stringifies MCP TextContent at the SSE boundary — the
-    // tool output arrives as [{"type":"text","text":"<OpenUI Lang>"}], not raw.
-    const openuiLang = 'root = Stack([header], "column", "l")';
-    const envelope = JSON.stringify([{ type: "text", text: openuiLang }]);
-    render(<GenerativeUICard openui={envelope} />);
-    expect(screen.getByTestId("renderer").textContent).toBe(openuiLang);
+  it("opens a fullscreen preview", () => {
+    render(<GenerativeUICard a2ui={STREAM} />);
+    fireEvent.click(screen.getByRole("button", { name: "genui.fullscreen" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getAllByTestId("renderer")).toHaveLength(2);
   });
 
-  it("shows an empty state when there is no output yet", () => {
-    render(<GenerativeUICard openui={undefined} status="running" />);
-    expect(screen.getByTestId("genui-empty")).toBeTruthy();
-  });
-
-  it("renders in streaming mode while running", () => {
-    render(<GenerativeUICard openui={"Chart\n  data: 1"} status="running" />);
-    const r = screen.getByTestId("renderer");
-    expect(r.getAttribute("data-streaming")).toBe("true");
-    expect(r.textContent).toBe("Chart\n  data: 1");
-  });
-
-  it("renders non-streaming on success", () => {
-    render(<GenerativeUICard openui={"Chart"} status="success" />);
-    expect(screen.getByTestId("renderer").getAttribute("data-streaming")).toBe("false");
-  });
-});
-
-describe("extractContentText", () => {
-  it("unwraps a JSON content-block envelope (preserving quotes/newlines)", () => {
-    const lang = 'root = Stack([header], "column", "l")\nheader = Card([t], "sunk")';
-    expect(extractContentText(JSON.stringify([{ type: "text", text: lang }]))).toBe(lang);
-  });
-
-  it("concatenates multiple text blocks", () => {
-    const wrapped = JSON.stringify([{ type: "text", text: "a=" }, { type: "text", text: "1" }]);
-    expect(extractContentText(wrapped)).toBe("a=1");
-  });
-
-  it("unwraps a single content object", () => {
-    expect(extractContentText(JSON.stringify({ type: "text", text: "hello" }))).toBe("hello");
-  });
-
-  it("returns raw OpenUI Lang unchanged when there is no envelope", () => {
-    const lang = 'root = Stack([header], "column", "l")';
-    expect(extractContentText(lang)).toBe(lang);
-  });
-
-  it("unwraps a Python-repr envelope from other runtimes", () => {
-    expect(extractContentText("[{'type': 'text', 'text': 'root = Stack()'}]")).toBe(
-      "root = Stack()",
-    );
-  });
-
-  it("returns empty for empty/blank input", () => {
-    expect(extractContentText(undefined)).toBe("");
-    expect(extractContentText("   ")).toBe("");
+  it("shows reasoning while running and removes it after completion", () => {
+    const { rerender } = render(<GenerativeUICard status="running" thinking="planning" />);
+    expect(screen.getByTestId("genui-thinking").textContent).toBe("planning");
+    rerender(<GenerativeUICard a2ui={STREAM} status="success" thinking="planning" />);
+    expect(screen.queryByTestId("genui-thinking")).toBeNull();
   });
 });

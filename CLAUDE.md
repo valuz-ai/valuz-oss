@@ -24,7 +24,7 @@ power-user operations beyond starting/stopping.
    - `./scripts/dev.sh backend` / `./scripts/dev.sh frontend`
    - `VALUZ_BACKEND_PORT=18080 ./scripts/dev.sh` + `VALUZ_RELOAD=1` env knobs
    - Dev data isolation: dev.sh defaults `VALUZ_DATA_DIR` to `~/.valuz-oss-dev`
-     (+ `VALUZ_LOG_DIR` under it). `~/.valuz-oss` belongs to the packaged app —
+     (+ `VALUZ_LOG_FILE_PATH` under it). `~/.valuz-oss` belongs to the packaged app —
      never point a dev/source backend at it: newer dev migrations stamp the
      store ahead of the release, which then refuses to boot.
 2. **`valuz` CLI** (`cli/build/valuz` after `cd cli && go build -o build/valuz .`):
@@ -57,7 +57,7 @@ version — CI strips the `v`, sets `VALUZ_VERSION`, and `build-desktop.sh` over
 
 - **Tencent COS + CDN** (`files.valuz.cn`) — the **auto-updater feed**. CI uploads
   every artifact here, and the packaged client's `app-update.yml` points at
-  `https://files.valuz.cn/valuz-<edition>/`. `electron-updater` reads
+  `https://files.valuz.cn/<edition>/` (e.g. `oss/`). `electron-updater` reads
   `latest-*.yml` from there.
 - **GitHub Releases** — the **manual-download + backup** surface. CI mirrors every
   artifact here too (`gh release upload`). If COS ever has an issue, the GitHub
@@ -69,7 +69,11 @@ Required GitHub secrets: `TENCENT_SECRET_ID`, `TENCENT_SECRET_KEY`,
 Cutting `vX.Y.Z`:
 
 1. **Pick the version** (SemVer, pre-1.0): bug-fix / small batch → patch (`0.1.x`);
-   feature batch → minor (`0.2.0`).
+   feature batch → minor (`0.2.0`). **Propose the number (with rationale) and get
+   the maintainer's confirmation BEFORE touching the CHANGELOG or creating the
+   tag** — the patch/minor rule informs the proposal; the maintainer makes the
+   call. A tag in flight (CI publishing to COS + GitHub) makes renumbering
+   expensive, so this confirmation is not skippable.
 2. **Update `CHANGELOG.md`** (Keep a Changelog: Added / Changed / Fixed / Docs & Chore).
    Credit every entry `(#PR @author)`; use the short SHA for commits pushed straight to
    main. **Write all CHANGELOG entries and release notes in English only** — no Chinese
@@ -121,14 +125,32 @@ Operational recipes:
   manifest already point at `vX.Y.Z/...` which is immutable, so this just
   promotes the old manifest back to live):
   ```bash
-  for m in latest-mac.yml latest-linux-arm64.yml latest.yml; do
-    tccli cos CopyObject \
-      --bucket "$TENCENT_COS_BUCKET" \
-      --cos-path "oss/$m" \
-      --source-oss-path "oss/vX.Y.Z/$m"
+  # coscli, not tccli: COS has its own API surface and `tccli cos` exposes
+  # neither `CopyObject` nor these flags. coscli is installed by
+  # scripts/install-coscli.sh and reads ~/.cos.yaml (bucket alias "valuz").
+  for m in latest-linux-arm64.yml latest.yml; do
+    coscli cp "cos://valuz/oss/vX.Y.Z/$m" "cos://valuz/oss/$m" \
+      --meta "Cache-Control:max-age=60"
   done
+  # Then purge, or clients keep the current manifest until the edge TTL:
+  gh workflow run purge-cdn.yml --ref main \
+    -f paths="oss/latest-linux-arm64.yml oss/latest.yml"
   ```
-  CDN picks up the change within the manifest TTL (60–300s).
+  **`latest-mac.yml` is excluded on purpose.** Each mac job writes its own
+  arch-specific manifest to `oss/vX.Y.Z/`, and only the LIVE copy is later
+  replaced by `merge-mac-manifest`, so every versioned mac manifest up to and
+  including v0.4.2 is single-arch — promoting one back would hand every Apple
+  Silicon client the x86_64 build. Releases after that fix carry a merged
+  versioned copy and can be rolled back like the others; for older ones,
+  rebuild the merged manifest from the two per-arch artifacts instead.
+
+  **Do not count on the CDN expiring it for you.** Overwriting the origin does
+  not touch what the edge is already serving. This runbook used to claim
+  60–300s; in the v0.4.2 incident the edge held a stale manifest for over 25
+  minutes and only an explicit purge cleared it. The release pipeline now
+  purges every live manifest it overwrites (`scripts/purge-cdn.sh`, wired into
+  `upload-to-cos.sh` and `merge-mac-manifest`); `purge-cdn.yml` is the manual
+  door for when the origin is already right and only the edge is stale.
 - **Fix release notes after the fact** (GitHub release is mutable):
   `gh release edit vX.Y.Z --notes-file <notes> --title "Valuz X.Y.Z"`.
 
@@ -178,6 +200,9 @@ Stop and ask the human when:
 - Never skip tests or use `--no-verify`
 - Database migrations must be reversible
 - Secrets go in `.env`, never in code
+- Frontend: keep a single source file under ~1000 lines — when a page/component
+  grows past that, split it (extract hooks, subcomponents, and pure helpers into
+  sibling modules)
 
 ## Compact Instructions
 

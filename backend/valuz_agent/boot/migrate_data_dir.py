@@ -59,7 +59,8 @@ logger = logging.getLogger(__name__)
 # kernel ``events`` + ``messages``); v2 sweeps every text column generically.
 _MIGRATION_VERSION = 2
 
-# Name of the active log directory (mirrors ``settings.log_dir``). It holds the
+# Name of the active log directory (mirrors
+# ``settings.log_file_path.parent``). It holds the
 # RUNNING boot process's own open ``backend.log`` — structured logging is
 # configured before this migration runs — and on Windows an open file can be
 # neither deleted nor overwritten ([WinError 32] sharing violation; POSIX allows
@@ -480,7 +481,13 @@ def _write_user_scope_marker(marker: Path, root: Path) -> None:
 
 def _write_marker(marker: Path, old_app: Path) -> None:
     try:
-        marker.write_text(f"migrated from {old_app}\nversion={_MIGRATION_VERSION}\n")
+        # Explicit encoding: the marker embeds an install path, which contains
+        # the OS username — non-ASCII on e.g. zh-CN Windows, where the locale
+        # default is GBK and a later UTF-8 read would fail.
+        marker.write_text(
+            f"migrated from {old_app}\nversion={_MIGRATION_VERSION}\n",
+            encoding="utf-8",
+        )
     except OSError:
         logger.warning("data-dir migration: could not write marker file", exc_info=True)
 
@@ -488,7 +495,7 @@ def _write_marker(marker: Path, old_app: Path) -> None:
 def _marker_version(marker: Path) -> int:
     """Parse ``version=N`` from the marker; a versionless marker is v1."""
     try:
-        for line in marker.read_text().splitlines():
+        for line in marker.read_text(encoding="utf-8").splitlines():
             if line.startswith("version="):
                 return int(line.split("=", 1)[1].strip())
     except (OSError, ValueError):

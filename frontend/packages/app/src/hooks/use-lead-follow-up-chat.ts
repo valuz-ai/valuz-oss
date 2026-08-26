@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildTurns,
   useStableTurns,
@@ -14,6 +14,10 @@ export interface LeadFollowUpChat {
   /** Raw lead-session events (list + live SSE) — drives tool-card renderers
    *  such as ``useAskUserQuestionCards`` that need the event stream. */
   events: SessionEventDTO[];
+  /** True from Send until the kernel echoes ``message.user`` — the window in
+   *  which the runtime is still coming up. The caller maps it to the turn
+   *  header's startup label (and to WHERE the runtime lives). */
+  awaitingRuntime: boolean;
 }
 
 /**
@@ -38,9 +42,34 @@ export function useLeadFollowUpChat(params: {
   const { leadSessionId, sinceTs } = params;
   const [events, setEvents] = useState<SessionEventDTO[]>([]);
   const [sending, setSending] = useState(false);
+  // The latest send, held until its own ``message.user`` echo shows up in
+  // ``events``. POST /messages returns as soon as the run is scheduled
+  // (``asyncio.create_task``), so without an optimistic turn the user's
+  // message is invisible for the whole runtime-startup window — seconds
+  // locally, tens of seconds on a cold sandbox. ``fromIndex`` is the event
+  // count at Send: the echo is the first matching ``message.user`` at or
+  // after it. Indexing rather than comparing timestamps on purpose — history
+  // and live frames carry independent seq spaces, and ``sentAt`` is a CLIENT
+  // stamp that clock skew could hold above every server stamp forever,
+  // stranding the optimistic turn on screen.
+  const [pendingSend, setPendingSend] = useState<{
+    text: string;
+    sentAt: number; // Unix epoch ms (UTC), client clock
+    fromIndex: number;
+  } | null>(null);
+  // ``send`` needs the event count at Send time but must not re-create itself
+  // on every arriving frame (the caller memoises on ``send``'s identity), so
+  // it reads the list through a ref rather than closing over it.
+  const eventsRef = useRef(events);
+  useEffect(() => {
+    eventsRef.current = events;
+  }, [events]);
 
   useEffect(() => {
     setEvents([]);
+    // ``fromIndex`` indexes into the list we just emptied, and the pending
+    // belongs to the previous lead session anyway.
+    setPendingSend(null);
     if (!leadSessionId) return;
     const ac = new AbortController();
     let cancelled = false;
@@ -82,7 +111,54 @@ export function useLeadFollowUpChat(params: {
     return firstUserIdx === -1 ? [] : events.slice(firstUserIdx);
   }, [events, sinceTs]);
   const rawTurns = useMemo(() => buildTurns(followUpEvents), [followUpEvents]);
-  const turns = useStableTurns(rawTurns);
+  const stableTurns = useStableTurns(rawTurns);
+
+  // Index of the pending send's own echo, or -1 while the runtime is still
+  // coming up. Derived rather than cleared from the SSE callback: the pending
+  // is replaced by the next send, so there is no state to race.
+  const echoIndex = useMemo(() => {
+    if (!pendingSend) return -1;
+    for (let i = pendingSend.fromIndex; i < events.length; i++) {
+      const envelope = events[i];
+      if (
+        envelope.event.event_type === "message.user" &&
+        (envelope.event.payload.text ?? "") === pendingSend.text
+      ) {
+        return i;
+      }
+    }
+    return -1;
+  }, [events, pendingSend]);
+  const awaitingRuntime = pendingSend !== null && echoIndex === -1;
+
+  const turns = useMemo(() => {
+    if (!pendingSend) return stableTurns;
+    if (echoIndex === -1) {
+      // Runtime still starting: show the user's message now, anchored on the
+      // Send stamp so its header counts the startup window.
+      return [
+        ...stableTurns,
+        {
+          id: "pending-follow-up-turn",
+          userMessageSeq: 0,
+          userText: pendingSend.text,
+          blocks: [],
+          failedMessage: null,
+          userTimestamp: pendingSend.sentAt,
+          clientSentAtMs: pendingSend.sentAt,
+        },
+      ];
+    }
+    // The echo landed and is by construction the newest user message, so it
+    // built the last turn. Carry the Send stamp onto it or the header would
+    // restart from the kernel's — the same reset the main chat view had.
+    const lastTurn = stableTurns[stableTurns.length - 1];
+    if (!lastTurn || lastTurn.userText !== pendingSend.text) return stableTurns;
+    return [
+      ...stableTurns.slice(0, -1),
+      { ...lastTurn, clientSentAtMs: pendingSend.sentAt },
+    ];
+  }, [stableTurns, pendingSend, echoIndex]);
 
   // A run is in flight from a user send until the next ``session.idle`` /
   // ``run.failed`` — mirrors the chat view's ``isStreaming``. Derived from the
@@ -110,8 +186,18 @@ export function useLeadFollowUpChat(params: {
       // before the ``message.user`` event echoes back over SSE — otherwise the
       // indicator flickers off between send and echo.
       setSending(true);
+      setPendingSend({
+        text,
+        sentAt: Date.now(),
+        fromIndex: eventsRef.current.length,
+      });
       try {
         await sessionsApi.sendMessage(leadSessionId, text);
+      } catch (err) {
+        // The turn never started, so no echo is coming — drop the optimistic
+        // turn instead of leaving it stuck on "正在启动…" forever.
+        setPendingSend(null);
+        throw err;
       } finally {
         setSending(false);
       }
@@ -119,5 +205,14 @@ export function useLeadFollowUpChat(params: {
     [leadSessionId],
   );
 
-  return { turns, sending: sending || streaming, send, events };
+  return {
+    turns,
+    // ``streaming`` can only turn true once the echo lands, and the HTTP call
+    // returns long before that (the backend schedules the run and replies), so
+    // ``awaitingRuntime`` is what covers the startup window in between.
+    sending: sending || streaming || awaitingRuntime,
+    send,
+    events,
+    awaitingRuntime,
+  };
 }

@@ -17,7 +17,7 @@ export const StreamingThinkingPreview = ({
         <span className="size-1.5 animate-pulse rounded-full bg-violet-500" />
         Thinking
       </div>
-      <p className="whitespace-pre-wrap font-mono text-[11px] leading-5 opacity-90">
+      <p className="whitespace-pre-wrap font-mono text-2xs leading-5 opacity-90">
         {content}
       </p>
     </div>

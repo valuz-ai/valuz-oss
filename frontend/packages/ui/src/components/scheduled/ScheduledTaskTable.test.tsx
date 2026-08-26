@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { ScheduledTaskTable } from "./ScheduledTaskTable";
@@ -60,7 +61,7 @@ describe("ScheduledTaskTable", () => {
     expect(onToggleCollapse).toHaveBeenCalledTimes(1);
   });
 
-  it("should show task actions in an overflow menu", () => {
+  it("should show task actions in an overflow menu", async () => {
     render(
       <ScheduledTaskTable
         tasks={tasks}
@@ -70,7 +71,9 @@ describe("ScheduledTaskTable", () => {
       />,
     );
 
-    fireEvent.pointerDown(screen.getAllByRole("button", { name: "操作" })[0]);
+    // Radix opens on a real pointer sequence; a bare synthetic `pointerDown`
+    // carries no pointerType/isPrimary and its trigger ignores it.
+    await userEvent.click(screen.getAllByRole("button", { name: "操作" })[0]);
 
     expect(screen.getByText("立即运行")).not.toBeNull();
     expect(screen.getByRole("menuitem", { name: "启用" })).not.toBeNull();

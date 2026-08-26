@@ -35,7 +35,7 @@ describe("fetchEventSource reconnect backoff", () => {
   it("should jump straight to the max delay on 401", async () => {
     raw.mockResolvedValue(statusResponse(401));
     close = fetchEventSource(
-      () => "/v1/decisions/stream",
+      () => "/v1/notifications/stream",
       () => {},
       {
         reconnectDelayMs: 1000,

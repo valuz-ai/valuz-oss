@@ -19,14 +19,17 @@ from valuz_agent.ports.extensions import ext
 class RecordingAgentHook(AgentLifecycleHook):
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.sessions: list[Any] = []
 
     async def after_agent_saved(
         self,
         *,
+        db,
         user_id: str,
         agent,
         origin: str,
     ) -> None:
+        self.sessions.append(db)
         self.calls.append(
             (
                 "saved",
@@ -41,7 +44,8 @@ class RecordingAgentHook(AgentLifecycleHook):
             )
         )
 
-    async def before_agent_delete(self, *, user_id: str, agent) -> None:
+    async def before_agent_delete(self, *, db, user_id: str, agent) -> None:
+        self.sessions.append(db)
         self.calls.append(("delete", {"user_id": user_id, "slug": agent.slug}))
 
 
@@ -81,6 +85,7 @@ async def test_agent_lifecycle_hook_runs_on_create_update_delete(svc_and_hook):
     await svc.delete_agent("owner-1", created.slug)
 
     assert [name for name, _ in hook.calls] == ["saved", "saved", "delete"]
+    assert hook.sessions == [svc._db, svc._db, svc._db]
     assert hook.calls[0][1] == {
         "user_id": "owner-1",
         "slug": "Researcher",

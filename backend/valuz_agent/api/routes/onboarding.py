@@ -4,11 +4,11 @@ POST /v1/onboarding/example-project
   Body: { "team_id": "content" | "investment" | "development-engineering" }
   Creates the example project directory, binds it as a project, imports the
   chosen recommended pack's agents into the user's library, and deploys them
-  into that project. Also ensures the Valuz Helper exists in the library so the
+  into that project. Also ensures Valurion exists in the library so the
   user always has an agent ready for the no-project quick chat.
 
 POST /v1/onboarding/assistant
-  Creates (or reuses) only the Valuz Helper — backs TeamStep's "no team
+  Creates (or reuses) only Valurion — backs TeamStep's "no team
   for now" choice. No project is created.
 
 Team roles are created on demand here — NOT seeded globally — so a user who
@@ -18,7 +18,7 @@ skips onboarding has an empty library. All operations are idempotent.
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -30,7 +30,7 @@ from valuz_agent.infra.eventbus import event_bus
 from valuz_agent.infra.fs_registry import fs_registry
 from valuz_agent.modules.agent_packs.loader import load_builtin_pack
 from valuz_agent.modules.agent_packs.service import AgentPackService
-from valuz_agent.modules.agents.seed import VALUZ_HELPER_SLUG
+from valuz_agent.modules.agents.builtin import VALURION_SLUG
 from valuz_agent.modules.agents.service import AgentService, MemberAlreadyExistsError
 from valuz_agent.modules.connectors.service import ConnectorService
 from valuz_agent.modules.projects.datastore import ProjectDatastore
@@ -146,132 +146,22 @@ async def _resolve_deploy_target(
 
 
 # ---------------------------------------------------------------------------
-# Valuz Helper — the general assistant that backs the no-project quick chat
-#
-# Slug / skill / avatar are stable technical identifiers; name / description /
-# instructions are localized via i18n at create time. Like the team rosters,
-# the agent is baked in the user's current UI language and won't retranslate
-# on locale switch.
+# Valurion — the owner-scoped system Agent
 # ---------------------------------------------------------------------------
 
-_VALUZ_HELPER_SLUG = VALUZ_HELPER_SLUG
-_VALUZ_HELPER_SKILL = "valuz-handbook"
-_VALUZ_HELPER_AVATAR = "bot"
-# Connectors the default assistant ships bound to (slugs from the connector
-# catalog): the two Valuz research connectors plus Firecrawl for web scraping.
-# A bound slug only resolves to a live MCP server once that connector is
-# installed + enabled, so {@link _ensure_default_connectors} installs these from
-# the catalog alongside the helper — they show up under「已添加」, not just bound
-# on the agent.
-_VALUZ_HELPER_CONNECTORS = ["valuz-search", "valuz-stock", "firecrawl"]
 
+async def _ensure_valurion(user_id: str, db) -> str:  # type: ignore[no-untyped-def]
+    """Idempotently create/repair the owner-scoped system Agent.
 
-async def _ensure_default_connectors(user_id: str, db) -> None:  # type: ignore[no-untyped-def]
-    """Install the default assistant's connectors so they land under「已添加」.
-
-    Idempotent: skips any slug that already has a connector row. Installs via the
-    same path the connectors UI / MCP tool use (``create_connector``), so each
-    one gets a real probe — a no-auth connector like Firecrawl connects right
-    away, and an OAuth connector (Valuz) lands as ``pending_auth`` until the user
-    logs in. One bad connector never sinks onboarding (per-slug try/except).
+    Team choice and onboarding resources are intentionally irrelevant:
+    Valurion is installed by the owner runtime and resolves resources at
+    session creation instead of carrying copied bindings.
     """
-    from valuz_agent.api.routes.connectors import (  # local: avoid route import cycle
-        CONNECTOR_DIRECTORY,
-        CreateConnectorRequest,
-        create_connector,
-    )
-
-    def _text(v: object) -> str:
-        # Catalog display_name / description may be a plain string or an
-        # ``{"zh-CN": ..., "en-US": ...}`` i18n object.
-        if isinstance(v, dict):
-            return str(v.get("zh-CN") or v.get("en-US") or next(iter(v.values()), ""))
-        return str(v or "")
-
-    svc = ConnectorService.with_defaults(db)
-    installed = {v.slug for v in await svc.list_connectors(user_id)}
-    by_slug = {c["slug"]: c for c in CONNECTOR_DIRECTORY}
-
-    for slug in _VALUZ_HELPER_CONNECTORS:
-        if slug in installed:
-            continue
-        cat = by_slug.get(slug)
-        if cat is None:
-            logger.warning("onboarding: default connector %r missing from catalog", slug)
-            continue
-        try:
-            await create_connector(
-                body=CreateConnectorRequest(
-                    slug=slug,
-                    display_name=_text(cat.get("display_name")) or slug,
-                    description=_text(cat.get("description")) or None,
-                    transport=cat.get("transport", "http"),
-                    url=cat.get("url") or None,
-                    auth_type=cat.get("auth_type", "oauth"),
-                    connector_type="recommended",
-                    command=cat.get("command"),
-                    args=cat.get("args", []),
-                    working_dir=cat.get("working_dir"),
-                ),
-                svc=svc,
-                user_id=user_id,
-            )
-            logger.info("onboarding: installed default connector %r", slug)
-        except Exception:  # noqa: BLE001 — one bad connector shouldn't sink onboarding
-            logger.exception("onboarding: failed to install default connector %r", slug)
-
-
-async def _ensure_valuz_helper(user_id: str, db) -> str:  # type: ignore[no-untyped-def]
-    """Idempotently create the Valuz Helper in the user's agent library.
-
-    Returns its slug. Reuses the existing one on re-run (no model resolution
-    needed then). On first creation, runtime / model / provider / effort follow
-    the user's global defaults — the same resolver the team deploy uses, so a
-    user with no model configured hits the same 422 guard.
-    """
-    # Install the helper's default connectors first so they exist under「已添加」
-    # and the binding below resolves. Idempotent + best-effort.
-    await _ensure_default_connectors(user_id, db)
-
     connector_svc = ConnectorService.with_defaults(db)
     agent_svc = AgentService(db=db, connector_service=connector_svc)
-
-    for existing in await agent_svc.list_agents(user_id):
-        if existing.slug == _VALUZ_HELPER_SLUG:
-            return _VALUZ_HELPER_SLUG
-
-    # The Helper should always exist after onboarding — including the skip
-    # path, where the user may not have configured a model channel yet. Unlike
-    # the multi-agent team deploy (which hard-requires a channel up front), fall
-    # back to creating it *unpinned* when none is configured: no provider/model
-    # is snapshotted, so the model resolver fills in the user's default (or the
-    # global default) at session time and the user can set the model later.
-    try:
-            runtime, provider_id, model = await _resolve_deploy_target(db, user_id)
-    except HTTPException:
-        runtime, provider_id, model = "claude_agent", None, None
-    effort = await get_default_effort(db, user_id=user_id)
-    payload: dict[str, Any] = {
-        "slug": _VALUZ_HELPER_SLUG,
-        "name": t("onboarding.valuzHelper.name"),
-        "description": t("onboarding.valuzHelper.description"),
-        "instructions": t("onboarding.valuzHelper.instructions"),
-        "runtime": runtime,
-        "provider_id": provider_id,
-        "effort": effort,
-        "skills": [_VALUZ_HELPER_SKILL],
-        "connector_types": _VALUZ_HELPER_CONNECTORS,
-        "avatar": _VALUZ_HELPER_AVATAR,
-    }
-    # Omit ``model`` when unpinned so ``create_agent`` keeps its default and the
-    # row isn't locked to a channel the user hasn't chosen yet.
-    if model is not None:
-        payload["model"] = model
-    await agent_svc.create_agent(user_id, payload)
-    logger.info(
-        "onboarding: created Valuz Helper (%s, model=%s)", _VALUZ_HELPER_SLUG, model
-    )
-    return _VALUZ_HELPER_SLUG
+    await agent_svc.ensure_builtin_agent(user_id)
+    logger.info("onboarding: ensured Valurion (%s)", VALURION_SLUG)
+    return VALURION_SLUG
 
 
 # ---------------------------------------------------------------------------
@@ -421,10 +311,10 @@ async def create_example_project(
             created_new,
         )
 
-        # Always ensure the Valuz Helper exists in the library so the
+        # Always ensure Valurion exists in the library so the
         # no-project quick chat has a ready default, even when the user
         # picked a project team.
-        await _ensure_valuz_helper(user_id, db)
+        await _ensure_valurion(user_id, db)
 
     return ExampleProjectResponse(
         project_id=project_id,
@@ -436,11 +326,11 @@ async def create_example_project(
 async def create_assistant(
     user_id: str = Depends(get_current_user_id),
 ) -> AssistantResponse:
-    """Create (or reuse) only the Valuz Helper in the user's library.
+    """Create (or reuse) only Valurion in the user's library.
 
     Backs TeamStep's "no team for now" choice — no project, just a ready-to-chat
     general assistant for the quick-chat surface. Idempotent.
     """
     async with async_unit_of_work() as db:
-        slug = await _ensure_valuz_helper(user_id, db)
+        slug = await _ensure_valurion(user_id, db)
     return AssistantResponse(agent_slug=slug)

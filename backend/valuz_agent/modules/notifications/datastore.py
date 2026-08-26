@@ -12,6 +12,11 @@ from valuz_agent.infra.db import async_commit_with_retry
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.notifications.models import NotificationRow
 
+# Kinds that report something FINISHED rather than asking for an action. They
+# are ingested already-resolved; this set also drives the one-time backlog
+# cleanup for rows written before that was true.
+_INFORMATIONAL_KINDS = ("task_completed",)
+
 
 class NotificationDatastore:
     def __init__(self, db: AsyncSession) -> None:
@@ -54,11 +59,17 @@ class NotificationDatastore:
         pending_id: str | None = None,
         source_event_id: str | None = None,
         payload: dict[str, Any] | None = None,
+        resolved: bool = False,
     ) -> tuple[NotificationRow, bool]:
         """Idempotent create by ``(user_id, dedup_key)``. Returns
         ``(row, created)`` — ``created=False`` when the row already existed
         (a projector re-fire); the caller then knows not to re-broadcast an
-        ``added`` frame."""
+        ``added`` frame.
+
+        ``resolved``: stamp ``resolved_at`` at creation. The open list is
+        ``resolved_at IS NULL``, so a purely INFORMATIONAL notification lands
+        in history and fires its OS toast without taking a slot in the
+        action inbox — nothing for the user to dismiss."""
         existing = await self.get_by_dedup(user_id, dedup_key)
         if existing is not None:
             return existing, False
@@ -77,6 +88,7 @@ class NotificationDatastore:
             pending_id=pending_id,
             source_event_id=source_event_id,
             payload=payload or {},
+            resolved_at=now_ms() if resolved else None,
         )
         self._db.add(row)
         await async_commit_with_retry(self._db, where="NotificationDatastore.upsert")
@@ -101,6 +113,21 @@ class NotificationDatastore:
             .scalars()
             .all()
         )
+
+    async def list_history(
+        self, user_id: str, *, limit: int = 50, before: int | None = None
+    ) -> list[NotificationRow]:
+        """Resolved (dismissed / handled) notifications, newest first.
+        ``before`` is a ``created_at`` cursor — only rows strictly older are
+        returned, so the caller pages by passing the last entry's stamp."""
+        stmt = select(NotificationRow).where(
+            NotificationRow.user_id == user_id,
+            NotificationRow.resolved_at.is_not(None),
+        )
+        if before is not None:
+            stmt = stmt.where(NotificationRow.created_at < before)
+        stmt = stmt.order_by(NotificationRow.created_at.desc()).limit(limit)
+        return list((await self._db.execute(stmt)).scalars().all())
 
     async def count_unread(self, user_id: str) -> int:
         return int(
@@ -148,6 +175,37 @@ class NotificationDatastore:
             row.read_at = ts
         await async_commit_with_retry(self._db, where="NotificationDatastore.resolve_by_dedup")
         return row
+
+    async def resolve_informational_backlog(self) -> int:
+        """Resolve every OPEN notification of a purely informational kind.
+
+        A one-time cleanup for rows created before completions were ingested
+        already-resolved: they are sitting in the action inbox with a Resume
+        button and no action to take, and nothing else would ever clear them.
+        Cross-owner by design — it runs at boot, before any request scopes an
+        owner. Returns how many rows were closed.
+        """
+        rows = list(
+            (
+                await self._db.execute(
+                    select(NotificationRow).where(
+                        NotificationRow.kind.in_(_INFORMATIONAL_KINDS),
+                        NotificationRow.resolved_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return 0
+        ts = now_ms()
+        for row in rows:
+            row.resolved_at = ts
+        await async_commit_with_retry(
+            self._db, where="NotificationDatastore.resolve_informational_backlog"
+        )
+        return len(rows)
 
     async def resolve_by_pending_id(self, pending_id: str) -> NotificationRow | None:
         """Resolve the open question notification for ``pending_id`` regardless
@@ -233,6 +291,31 @@ class NotificationDatastore:
         await async_commit_with_retry(
             self._db, where="NotificationDatastore.resolve_open_by_session"
         )
+        return [r.id for r in rows]
+
+    async def resolve_all_open(self, user_id: str) -> list[str]:
+        """Resolve every open notification — the drawer's "clear all". Marks
+        unread ones read too. Returns resolved ids."""
+        rows = list(
+            (
+                await self._db.execute(
+                    select(NotificationRow).where(
+                        NotificationRow.user_id == user_id,
+                        NotificationRow.resolved_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return []
+        ts = now_ms()
+        for row in rows:
+            row.resolved_at = ts
+            if row.read_at is None:
+                row.read_at = ts
+        await async_commit_with_retry(self._db, where="NotificationDatastore.resolve_all_open")
         return [r.id for r in rows]
 
     async def resolve_by_id(self, user_id: str, notification_id: str) -> NotificationRow | None:

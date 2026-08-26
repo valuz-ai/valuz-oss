@@ -5,6 +5,8 @@ The index is the host's own mapping of kernel sessions to projects
 modules build on (sidebar list filter, delete-project cascade, runs feed).
 """
 
+from types import SimpleNamespace
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -28,6 +30,12 @@ def _index_db(tmp_path, monkeypatch):
         "AsyncSessionLocal",
         async_sessionmaker(bind=async_engine, expire_on_commit=False),
     )
+    reconciled = getattr(project_index, "_reconciled_owners", None)
+    if reconciled is not None:
+        reconciled.clear()
+    reconcile_locks = getattr(project_index, "_reconcile_locks", None)
+    if reconcile_locks is not None:
+        reconcile_locks.clear()
 
 
 async def test_record_and_list_filters_by_project_and_kind() -> None:
@@ -96,3 +104,67 @@ async def test_list_recent_feeds_runs_overview() -> None:
     by_id = {r.session_id: r for r in rows}
     assert by_id["sess-r2"].kind == "task_lead"
     assert by_id["sess-r1"].project_id == "proj-r"
+
+
+async def test_reconcile_legacy_sessions_restores_missing_index_rows(monkeypatch) -> None:
+    owner = "local-test-owner"
+    await project_index.record("proj-existing", "sess-existing", user_id=owner)
+
+    sessions = [
+        SimpleNamespace(
+            id="sess-existing",
+            created_at=100,
+            metadata={"valuz": {"project_id": "proj-existing", "origin": "user"}},
+        ),
+        SimpleNamespace(
+            id="sess-chat",
+            created_at=200,
+            metadata={"valuz": {"project_id": "proj-chat", "origin": "automation"}},
+        ),
+        SimpleNamespace(
+            id="sess-lead",
+            created_at=300,
+            metadata={
+                "valuz": {
+                    "project_id": "proj-task",
+                    "task_id": "task-1",
+                    "run_kind": "lead",
+                }
+            },
+        ),
+        SimpleNamespace(
+            id="sess-unscoped",
+            created_at=400,
+            metadata={"valuz": {}},
+        ),
+    ]
+    calls = 0
+
+    async def _list_sessions(user_id, *, limit, offset):  # noqa: ANN001, ANN202
+        nonlocal calls
+        calls += 1
+        assert user_id == owner
+        assert limit == 500
+        assert offset == 0
+        return sessions
+
+    from valuz_agent.adapters import kernel_client
+
+    monkeypatch.setattr(kernel_client, "list_sessions", _list_sessions)
+
+    assert await project_index.ensure_legacy_session_index(owner) == 2
+    rows = await project_index.list_recent(limit=10, user_id=owner)
+    by_id = {row.session_id: row for row in rows}
+
+    assert set(by_id) == {"sess-existing", "sess-chat", "sess-lead"}
+    assert by_id["sess-chat"].kind == "chat"
+    assert by_id["sess-chat"].origin == "automation"
+    assert by_id["sess-chat"].created_at == 200
+    assert by_id["sess-chat"].updated_at == 200
+    assert by_id["sess-lead"].kind == "task_lead"
+    assert by_id["sess-lead"].origin == "task"
+
+    # The owner is reconciled at most once per process; activity polling must
+    # not rescan the durable session store every few seconds.
+    assert await project_index.ensure_legacy_session_index(owner) == 0
+    assert calls == 1

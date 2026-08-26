@@ -24,6 +24,7 @@ ALL_AVAILABLE = {
     "claude_agent": {"available": True, "unavailable_reason": None},
     "deepagents": {"available": True, "unavailable_reason": None},
     "codex": {"available": True, "unavailable_reason": None},
+    "deepseek_harness": {"available": True, "unavailable_reason": None},
 }
 
 
@@ -42,12 +43,12 @@ def _mock_availability(mapping: dict) -> object:
     )
 
 
-def test_should_return_three_runtimes(client: TestClient) -> None:
+def test_should_return_four_runtimes(client: TestClient) -> None:
     with _mock_availability(ALL_AVAILABLE):
         resp = client.get("/v1/runtimes")
     assert resp.status_code == 200
     ids = [r["id"] for r in resp.json()["runtimes"]]
-    assert set(ids) == {"claude_agent", "codex", "deepagents"}
+    assert set(ids) == {"claude_agent", "codex", "deepagents", "deepseek_harness"}
 
 
 def test_should_carry_display_name_and_supported_protocols(client: TestClient) -> None:
@@ -109,7 +110,9 @@ def test_availability_override_wins_over_kernel(client: TestClient) -> None:
     # Override declares all available → kernel is not consulted.
     with (
         patch.object(
-            ext, "runtime_availability", _Override({"claude_agent", "codex", "deepagents"})
+            ext,
+            "runtime_availability",
+            _Override({"claude_agent", "codex", "deepagents", "deepseek_harness"})
         ),
         patch(
             "valuz_agent.adapters.kernel_client.runtime_availability",

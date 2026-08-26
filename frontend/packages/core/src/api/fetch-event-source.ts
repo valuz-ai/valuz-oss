@@ -69,7 +69,7 @@ export function fetchEventSource(
   let controller: AbortController | null = null;
   // Exponential backoff between failed connects. A flat 1s retry hammered
   // the backend when the failure is persistent — most visibly a 401 before
-  // login (auth-carrying streams like /v1/decisions/stream retried every
+  // login (auth-carrying streams like /v1/notifications/stream retried every
   // second, forever). Reset to the base delay after a successful connect.
   let delayMs = reconnectDelayMs;
 

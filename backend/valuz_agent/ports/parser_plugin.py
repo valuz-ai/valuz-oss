@@ -76,8 +76,9 @@ class PluginCapability:
 
     - ``"pdf"``      — .pdf
     - ``"image"``    — .png .jpg .jpeg .bmp .webp .gif .tiff .jp2
-    - ``"office"``   — .doc .docx .ppt .pptx
-    - ``"spreadsheet"`` — .xls .xlsx
+    - ``"office"``   — .doc .docx .docm .ppt .pps .pot .pptx .pptm .ppsx
+      .ppsm .odt .odp .rtf .epub
+    - ``"spreadsheet"`` — .xls .xlsx .xlsm .xlsb .ods
     - ``"web"``      — .html .htm
     - ``"text"``     — .md .txt .csv .json .xml
     """

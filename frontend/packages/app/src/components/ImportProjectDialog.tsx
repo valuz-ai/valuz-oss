@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -17,6 +17,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  Input,
 } from "@valuz/ui";
 import {
   projectsApi,
@@ -25,6 +26,10 @@ import {
   type ImportProjectPreview,
   type ProjectListItem,
 } from "@valuz/core";
+// Module-level ``t`` for one-shot messages inside effects: it reads the
+// current locale per call and takes no part in React identity, so the effect
+// below needs no ``t`` dependency (see .claude/rules/frontend.md).
+import { t as _t } from "@valuz/shared/i18n";
 import { usePlatform } from "../platform";
 
 type Tx = ReturnType<typeof useTranslation>["t"];
@@ -61,6 +66,20 @@ export function ImportProjectDialog({
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState<ImportProjectConfirmResult | null>(null);
   const [rootPath, setRootPath] = useState("");
+  // Editable on the way in: the pack's own name is only a default, and
+  // renaming is how the importer gets past a clash with a project they
+  // already own.
+  const [name, setName] = useState("");
+
+  // The parent passes a fresh inline ``onOpenChange`` on every render, so
+  // depending on it re-ran the preview effect continuously: each pass reset
+  // ``rootPath`` and re-uploaded the archive, and a folder the user had just
+  // picked vanished a moment later. Hold it in a ref — the effect needs to
+  // *call* it, never to react to it.
+  const onOpenChangeRef = useRef(onOpenChange);
+  useEffect(() => {
+    onOpenChangeRef.current = onOpenChange;
+  }, [onOpenChange]);
 
   const handlePickFolder = async () => {
     const path = await platform.selectDirectory();
@@ -77,16 +96,20 @@ export function ImportProjectDialog({
       setPreview(null);
       setResult(null);
       setRootPath("");
+      setName("");
       setLoading(true);
       try {
         const p = await projectsApi.importProjectPreview(file);
-        if (!cancelled) setPreview(p);
+        if (!cancelled) {
+          setPreview(p);
+          setName(p.project?.name ?? "");
+        }
       } catch (err) {
         if (cancelled) return;
         toast.error(
-          err instanceof Error ? err.message : t(k("project.importFailed")),
+          err instanceof Error ? err.message : _t(k("project.importFailed")),
         );
-        onOpenChange(false);
+        onOpenChangeRef.current(false);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -94,7 +117,9 @@ export function ImportProjectDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, file, onOpenChange, t]);
+    // Only the file being previewed may restart this: ``t`` and the callback
+    // are read through stable references above.
+  }, [open, file]);
 
   const handleConfirm = async () => {
     if (!preview) return;
@@ -103,6 +128,7 @@ export function ImportProjectDialog({
       const res = await projectsApi.importProjectConfirm(
         preview.preview_id,
         rootPath,
+        name,
       );
       setResult(res);
       if (res.status === "created") {
@@ -136,12 +162,10 @@ export function ImportProjectDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Package className="h-4 w-4 text-brand" />
-            {preview?.project?.name || t(k("project.importTitle"))}
+            {name || preview?.project?.name || t(k("project.importTitle"))}
           </DialogTitle>
           {preview ? (
-            <DialogDescription>
-              {t(k("project.importSub"))}
-            </DialogDescription>
+            <DialogDescription>{t(k("project.importSub"))}</DialogDescription>
           ) : null}
         </DialogHeader>
 
@@ -154,6 +178,8 @@ export function ImportProjectDialog({
         ) : preview ? (
           <ImportPreviewView
             preview={preview}
+            name={name}
+            onNameChange={setName}
             rootPath={rootPath}
             onPickFolder={() => void handlePickFolder()}
           />
@@ -163,7 +189,13 @@ export function ImportProjectDialog({
           <div className="mt-2 flex justify-end">
             <Button
               onClick={() => void handleConfirm()}
-              disabled={importing || preview.name_conflict}
+              // A clash blocks only while the name is unchanged — editing it
+              // is the way out, so the button unlocks as soon as it differs.
+              disabled={
+                importing ||
+                !name.trim() ||
+                (preview.name_conflict && name.trim() === preview.project?.name)
+              }
               loading={importing}
             >
               {importing ? t(k("project.importing")) : t(k("project.confirm"))}
@@ -201,10 +233,14 @@ function Section({
 
 function ImportPreviewView({
   preview,
+  name,
+  onNameChange,
   rootPath,
   onPickFolder,
 }: {
   preview: ImportProjectPreview;
+  name: string;
+  onNameChange: (name: string) => void;
   rootPath: string;
   onPickFolder: () => void;
 }) {
@@ -215,13 +251,22 @@ function ImportPreviewView({
         <div className="flex items-start gap-2 rounded-md border border-warning-light bg-warning-light/30 px-3 py-2 text-sm text-warning-text">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <div className="space-y-0.5">
-            <div className="font-medium">
-              {t(k("project.nameConflict"))}
-            </div>
+            <div className="font-medium">{t(k("project.nameConflict"))}</div>
             <div className="text-xs">{t(k("project.nameConflictHint"))}</div>
           </div>
         </div>
       ) : null}
+
+      <Section title={t(k("project.nameSection"))}>
+        <Input
+          value={name}
+          onChange={(e) => onNameChange(e.target.value)}
+          placeholder={preview.project?.name ?? ""}
+          aria-invalid={
+            preview.name_conflict && name.trim() === preview.project?.name
+          }
+        />
+      </Section>
 
       <Section title={t(k("project.folderSection"))}>
         <div className="flex items-center gap-2 rounded-md bg-surface-soft px-2.5 py-1.5 text-sm">
@@ -248,7 +293,9 @@ function ImportPreviewView({
 
       <Section title={t(k("project.membersSection"))}>
         {preview.members.length === 0 ? (
-          <div className="text-xs text-ink-meta">{t(k("project.noMembers"))}</div>
+          <div className="text-xs text-ink-meta">
+            {t(k("project.noMembers"))}
+          </div>
         ) : (
           preview.members.map((m) => (
             <div
@@ -334,11 +381,7 @@ function ImportPreviewView({
   );
 }
 
-function ImportResultView({
-  result,
-}: {
-  result: ImportProjectConfirmResult;
-}) {
+function ImportResultView({ result }: { result: ImportProjectConfirmResult }) {
   const { t } = useTranslation();
   if (result.status === "skipped_name_conflict") {
     return (

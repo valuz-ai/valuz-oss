@@ -82,11 +82,34 @@ def _worktree_ref(meta: dict[str, object]) -> WorktreeRef | None:
     )
 
 
+def _task_id(meta: dict[str, object]) -> str | None:
+    """The task this session belongs to, or None for a standalone one.
+
+    Shared by BOTH mappers on purpose. It used to be inlined in the list
+    mapper only, so ``GET /v1/sessions/{id}`` answered ``task_id: null`` for
+    every session including a task's own lead and members — ``SessionDetail``
+    inherits the field from ``SessionListItem`` (contract and DTO both), and
+    the default filled the gap silently. Anything reading the detail (the
+    conversation page holds exactly one session, hydrated from it) therefore
+    could not tell a task session apart from a normal one.
+    """
+    raw = meta.get("task_id")
+    return str(raw) if raw else None
+
+
+def _forked_from_session_id(session: KernelSession) -> str | None:
+    """Kernel-stamped fork provenance — metadata TOP level (not ``valuz``:
+    the kernel owns the stamp, callers cannot spoof it)."""
+    forked_from = (getattr(session, "metadata", None) or {}).get("forked_from")
+    if isinstance(forked_from, dict) and forked_from.get("session_id"):
+        return str(forked_from["session_id"])
+    return None
+
+
 def _session_to_list_item(session: KernelSession) -> SessionListItem:
     meta = _valuz_meta(session)
     settings = getattr(session, "model_settings", None)
     effort = settings.effort if settings is not None else None
-    raw_task_id = meta.get("task_id")
     return SessionListItem(
         id=session.id,
         project_id=str(meta.get("project_id") or ""),
@@ -100,8 +123,10 @@ def _session_to_list_item(session: KernelSession) -> SessionListItem:
         runtime_provider=getattr(session, "runtime_provider", "deepagents") or "deepagents",
         permission_mode=getattr(session, "permission_mode", "full_access") or "full_access",
         effort=effort,
-        task_id=str(raw_task_id) if raw_task_id else None,
+        mode=getattr(session, "mode", "default") or "default",
+        task_id=_task_id(meta),
         worktree=_worktree_ref(meta),
+        forked_from_session_id=_forked_from_session_id(session),
     )
 
 
@@ -116,15 +141,32 @@ def _session_to_detail(session: KernelSession) -> SessionDetail:
     # across messages is a UI concern; surface 0 here and let callers that
     # care fetch the messages list directly.
     raw_todos = getattr(session, "todos", None)
-    todos = (
-        [
-            TodoItem(**{k: v for k, v in t.items() if k in ("content", "status", "activeForm")})
-            for t in raw_todos
-            if isinstance(t, dict) and "content" in t and "status" in t
-        ]
-        if isinstance(raw_todos, list)
-        else None
-    )
+    todos: list[TodoItem] | None
+    if isinstance(raw_todos, list):
+        # The kernel-client seam is wire-schema typed: ``session.todos`` items
+        # arrive as kernel ``TodoItem`` pydantic models, not the domain dicts
+        # this mapper was written against. The old ``isinstance(t, dict)``
+        # filter silently dropped every model item, so the detail endpoint
+        # returned ``todos: []`` for sessions whose DB row had todos — the
+        # panel's "detail hydrate" then wiped a good window/live snapshot with
+        # an empty list on warm re-opens. Accept both shapes.
+        todos = []
+        for t in raw_todos:
+            item = (
+                t if isinstance(t, dict) else (t.model_dump() if hasattr(t, "model_dump") else None)
+            )
+            if isinstance(item, dict) and "content" in item and "status" in item:
+                todos.append(
+                    TodoItem(
+                        **{
+                            k: v
+                            for k, v in item.items()
+                            if k in ("content", "status", "activeForm")
+                        }
+                    )
+                )
+    else:
+        todos = None
     settings = getattr(session, "model_settings", None)
     effort = settings.effort if settings is not None else None
     return SessionDetail(
@@ -140,6 +182,8 @@ def _session_to_detail(session: KernelSession) -> SessionDetail:
         runtime_provider=getattr(session, "runtime_provider", "deepagents") or "deepagents",
         permission_mode=getattr(session, "permission_mode", "full_access") or "full_access",
         effort=effort,
+        mode=getattr(session, "mode", "default") or "default",
+        task_id=_task_id(meta),
         total_tokens=0,
         total_cost_usd=0.0,
         created_at=session.created_at,
@@ -148,6 +192,7 @@ def _session_to_detail(session: KernelSession) -> SessionDetail:
         instructions=session.instructions or None,
         agent_slug=meta.get("agent_slug") or None,  # type: ignore[arg-type]
         worktree=_worktree_ref(meta),
+        forked_from_session_id=_forked_from_session_id(session),
     )
 
 

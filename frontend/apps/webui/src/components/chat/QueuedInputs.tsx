@@ -45,7 +45,7 @@ export const QueuedInputs = () => {
   return (
     <div className="mb-2 space-y-1.5">
       <div className="flex items-center justify-between px-1">
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-2xs text-muted-foreground">
           Queued · runs after the current turn ({queue.length})
         </span>
         {paused && (
@@ -100,12 +100,12 @@ export const QueuedInputs = () => {
               <div className="min-w-0 flex-1">
                 <p className="line-clamp-2 text-sm">{item.text}</p>
                 {item.status === "blocked" && (
-                  <p className="mt-0.5 text-[11px] text-destructive">
+                  <p className="mt-0.5 text-2xs text-destructive">
                     {item.error_message || "Could not run"}
                   </p>
                 )}
                 {item.attachment_count > 0 && (
-                  <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <p className="mt-0.5 flex items-center gap-1 text-2xs text-muted-foreground">
                     <Paperclip className="size-3" />
                     {item.attachment_count}
                   </p>

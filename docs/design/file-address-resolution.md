@@ -1,6 +1,10 @@
 # File Address Resolution — Local/Remote-agnostic File Access
 
-> Status: Design (proposed). Amends [`artifact-file-viewer.md`](artifact-file-viewer.md).
+> Status: **Shipped** (2026-07). Amends [`artifact-file-viewer.md`](artifact-file-viewer.md).
+>
+> §9 below is annotated with what actually landed: three of its frontend bullets
+> describe behaviour the shipped code does not have. Corrected in place rather
+> than deleted, so the gap between plan and code stays visible.
 >
 > One-line direction: **the frontend never opens a file by assuming its path is on
 > the local machine.** A file's identity is a `valuz-file://<absolute-path>` URI.
@@ -256,16 +260,31 @@ their trees adopt the resolver.
 
 ## 9. Frontend
 
-- **`useFileResolver()`**: batches `valuz-file://` refs to `POST /v1/files/resolve`
-  with in-memory cache/dedupe.
-- **`FileLink`**: the single clickable file element; behavior driven by the
-  descriptor. Replaces every scattered `revealInFinder(abs_path)` (diff card,
-  artifact panel, tree).
+- ~~**`useFileResolver()`**: batches `valuz-file://` refs to `POST /v1/files/resolve`
+  with in-memory cache/dedupe.~~
+  **Not shipped.** The hook existed but had zero callers, and had neither cache,
+  dedupe, nor batch-merge (its own docstring said deliberately un-cached, since a
+  presigned URL expires). Deleted. The real call path is `useArtifactFile` →
+  `filesApi.resolveOne` — **one request per opened file**, and `filesApi.resolve`
+  (the batch form) is only ever called with a single ref.
+- ~~**`FileLink`**: the single clickable file element…~~
+  **Not shipped under that name.** The equivalent is split across
+  `MarkdownContent.tsx`'s `<a>` handling, `useConversationLocalFileLinks`, and
+  `useArtifactFile` + `resolvedToArtifactFile`. Consequently the round-up of bare
+  `revealInFinder(abs_path)` never happened: the diff card, "open in system" and
+  the project page still call it with no `canOpenExternal` gate (~8 sites).
 - **Markdown linkify** (`MarkdownContent.tsx`, Streamdown): the custom `<a>`
-  recognizes `valuz-file://` → `FileLink`; a remark step deterministically
-  linkifies path-like text in prose/inline-code that falls under the session
-  `cwd` prefix (paths outside cwd are not linkified). This is the reliable path;
-  model output format (§8) is a bonus, not a dependency.
+  recognizes `valuz-file://` (**shipped**); a remark step deterministically
+  linkifies path-like text in prose/inline-code under the session `cwd` prefix
+  (**not shipped** — only links already written as `[label](href)` are rewritten;
+  a bare path in prose stays plain text).
+  The plan called linkify the reliable path and model output (§8) a bonus.
+  **In the shipped code that is reversed**: the §8 output-format instruction is
+  currently the only thing that makes a delivered file clickable.
+- **Expired addresses**: a `kind=remote` address is short-lived, so a failed load
+  can only recover by **re-resolving** — retrying the same URL is guaranteed to
+  fail again. Renderers take an `onReload` for this (the PDF retry used to just
+  remount the iframe; image/media had no retry at all).
 - **`ArtifactViewer` content source swap**: renderers keep the existing registry;
   only the content source changes — instead of a backend content endpoint, fetch
   from the descriptor address (`valuz-local://` read on desktop, `fetch(url)` in
@@ -273,9 +292,14 @@ their trees adopt the resolver.
   Electron → `valuz-local://<abs_path>`.
 - **Electron `valuz-local://` custom protocol**: register in the desktop main
   process (`protocol.handle`) to serve local absolute paths to its own renderer
-  (client-side, no network, honors principle 1). Handler must validate the path is
-  within known workspace roots. Lets `<img>/<iframe>/fetch` use a URL for local
-  files too — uniform with cloud.
+  (client-side, no network, honors principle 1). Lets `<img>/<iframe>/fetch` use a
+  URL for local files too — uniform with cloud.
+  On the workspace-root check the plan asked for: the shipped handler
+  **does not do it**. It trusts the producer instead — `buildLocalFileUrl` is only
+  ever called from `resolve-artifact.ts` with an already-resolved (hence
+  `assert_owned`-validated) descriptor, never from model or markdown text. No
+  exploitable path today, but the defense-in-depth layer this bullet promised
+  does not exist; add the check or keep this as a recorded trade-off.
 
 ---
 

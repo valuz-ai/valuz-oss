@@ -4,7 +4,6 @@ import {
   Composer,
   type ComposerAgentItem,
   DeleteConfirmDialog,
-  ArtifactViewerShell,
   ProjectDetailContextPanel,
   type FileTreeNode,
   type ProjectMemberItem,
@@ -17,45 +16,42 @@ import {
   TabsTrigger,
 } from "@valuz/ui";
 import {
+  BindChatDialog,
   CreateAutomationDialog,
+  CreatePlaybookDialog,
   DeployAgentsDialog,
   ActivityFeedList,
   type ActivityFeedListProps,
 } from "@valuz/app/components";
 import { toast } from "sonner";
+
 import {
+  artifactsApi,
+  channelsApi,
   projectsApi,
-  filesApi,
-  buildFileRef,
   ApiError,
   getEntityOrigin,
   recordEntityOrigin,
   resolveApiBase,
   sessionsApi,
-  providersApi,
   automationsApi,
   connectorsApi,
   tasksApi,
   agentsApi,
   worktreesApi,
-  useComposerProviders,
-  useModelDefaults,
   usePanelStore,
   useProjectLastUsed,
   useRuntimes,
-  useSessionAttachments,
+  useStagedAttachments,
+  type SessionAttachmentItem,
   useSessionStore,
   useActivityFeed,
   type ActivityTab,
   type ActionKind,
   type AutomationItem,
-  type RuntimeId,
   type Trigger,
   type ProjectDetail,
   type ProjectFileNode,
-  type ArtifactDescriptor,
-  type ArtifactContent,
-  type LLMChannelDetail,
   type ConnectorItem,
   type Agent,
   type MemberWithAgent,
@@ -74,8 +70,25 @@ import {
   type AgentSkillItem,
 } from "../lib/agent-skill-items";
 import { toFileTree } from "../lib/file-tree";
-import { resolvedToArtifactFile } from "../lib/resolve-artifact";
-import { AttachmentParsingDialog } from "../components/AttachmentParsingDialog";
+import { ArtifactSplitPane } from "../components/ArtifactSplitPane";
+import { useArtifactFile } from "../hooks/use-artifact-file";
+import { useForkSession } from "../hooks/use-fork-session";
+import { useProjectPlaybooks } from "../hooks/use-project-playbooks";
+import { toAbsoluteProjectPath } from "../lib/project-paths";
+
+/** Bytes as the rail shows them. Local because the two other copies of this in
+ *  the app are equally local; unifying them is not this change's business. */
+function formatArtifactSize(bytes: number): string {
+  if (!bytes) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value < 10 && unit > 0 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
 
 /** One tab body: owns its own cursor-paginated feed. Radix unmounts inactive
  *  ``TabsContent``, so only the active tab's feed polls / paginates. */
@@ -84,8 +97,11 @@ const ActivityTabPanel = ({
   tab,
   onOpenSession,
   onOpenTask,
+  onOpenPlaybookRun,
   onRenameConfirm,
   onDeleteSession,
+  onForkSession,
+  forkPendingSessionId,
   hideScopeTag,
   emptyLabel,
 }: {
@@ -98,8 +114,11 @@ const ActivityTabPanel = ({
       feed={feed}
       onOpenSession={onOpenSession}
       onOpenTask={onOpenTask}
+      onOpenPlaybookRun={onOpenPlaybookRun}
       onRenameConfirm={onRenameConfirm}
       onDeleteSession={onDeleteSession}
+      onForkSession={onForkSession}
+      forkPendingSessionId={forkPendingSessionId}
       hideScopeTag={hideScopeTag}
       emptyLabel={emptyLabel}
     />
@@ -242,6 +261,13 @@ export const ProjectDetailPage = () => {
   const handleDeleteSession = useCallback((sid: string, label: string) => {
     setPendingDelete({ kind: "session", id: sid, name: label });
   }, []);
+  // Whole-session fork (docs/design/session-fork.md). Pending state +
+  // duplicate-click suppression live in the shared hook (#879).
+  const { fork: forkSession, forkingSessionId } = useForkSession();
+  const handleForkSession = useCallback(
+    (sid: string) => void forkSession(sid),
+    [forkSession],
+  );
   // Project conversations bind to one of the project's configured agents
   // (instead of a raw model). The composer remembers the agent PER MODE —
   // Chat keeps the last chat agent, Task keeps the last Lead — because the
@@ -255,6 +281,11 @@ export const ProjectDetailPage = () => {
   // "Agents" [+] opens the same dialog the project tasks page uses.
   const [libraryAgents, setLibraryAgents] = useState<Agent[]>([]);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
+  const [bindChatOpen, setBindChatOpen] = useState(false);
+  const [chatDeleteTarget, setChatDeleteTarget] = useState<string | null>(null);
+  const [chatBindings, setChatBindings] = useState<
+    { id: string; name: string }[]
+  >([]);
 
   const loadMembers = useCallback(async () => {
     if (!id) return;
@@ -355,10 +386,83 @@ export const ProjectDetailPage = () => {
     void loadMembers();
   }, [loadMembers]);
 
+  // Deliverables the project holds, at their current version — the workspace
+  // view, as opposed to the per-session list a conversation shows. Reloaded
+  // when the project changes; a delivery lands during a conversation, not here.
+  const [projectArtifacts, setProjectArtifacts] = useState<
+    {
+      id: string;
+      name: string;
+      size: string;
+      path: string;
+      versionNo: number;
+      isCurrent: boolean;
+      artifactId: string;
+    }[]
+  >([]);
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    artifactsApi
+      .list(id, { baseUrl: { projectId: id } })
+      .then((res) => {
+        if (cancelled) return;
+        setProjectArtifacts(
+          res.items.map((a) => ({
+            id: a.id,
+            name: a.display_name,
+            size: formatArtifactSize(a.current.file_size),
+            path: a.current.file_path,
+            versionNo: a.version_no,
+            // The workspace view lists each deliverable at its head, so every
+            // row here is current by construction — the flag exists for the
+            // per-session list, where a row can have been superseded.
+            isCurrent: true,
+            artifactId: a.id,
+          })),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setProjectArtifacts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  const loadArtifactVersions = useCallback(
+    async (artifactId: string) => {
+      const res = await artifactsApi.listRevisions(artifactId, {
+        baseUrl: id ? { projectId: id } : undefined,
+      });
+      return res.items.map((r) => ({
+        id: r.id,
+        versionNo: r.version_no,
+        path: r.file_path,
+        size: formatArtifactSize(r.file_size),
+        when: new Date(r.created_at).toLocaleString(undefined, {
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+        // A version whose bytes are gone still belongs in the history; the
+        // backend says so by withholding the ref.
+        openable: Boolean(r.ref),
+      }));
+    },
+    [id],
+  );
+
   useEffect(() => {
     let cancelled = false;
+    // Source library agents from the project's owning backend so a cloud
+    // project only offers cloud-deployable agents (a cloud backend can't
+    // instantiate a slug that only exists in the local library).
+    const baseUrl = resolveApiBase({ projectId: id }, "") || undefined;
     agentsApi
-      .listAgents()
+      .listAgents(undefined, baseUrl ? { baseUrl } : undefined)
       .then((res) => {
         if (!cancelled) setLibraryAgents(res.agents);
       })
@@ -368,7 +472,7 @@ export const ProjectDetailPage = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [id]);
 
   const [fileTree, setFileTree] = useState<FileTreeNode[]>([]);
   const [instructions, setInstructions] = useState("");
@@ -394,12 +498,17 @@ export const ProjectDetailPage = () => {
   const [chatSessionId, setChatSessionId] = useState<string | null>(null);
   const {
     attachments: stagedAttachments,
-    hasParsing,
     attachLocalFiles,
     remove: removeAttachment,
-    markPendingConsumed,
-  } = useSessionAttachments(chatSessionId);
-  const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
+    claim: claimStagedAttachments,
+    restage: restageAttachments,
+  } = useStagedAttachments(
+    // No session to route on — the composer names the backend its turn will
+    // run on. Omitting it sent cloud-project uploads to the local default,
+    // where the turn could never find them.
+    resolveApiBase({ projectId: id }, "") || undefined,
+  );
+
   // PRD-PAAT §3.2 unified composer mode. ``chat`` creates a normal
   // session; ``task`` kicks off a background Task via tasksApi.kickoff
   // and routes to the task detail page.
@@ -421,22 +530,14 @@ export const ProjectDetailPage = () => {
   const [sending, setSending] = useState(false);
   const [connectors, setConnectors] = useState<ConnectorItem[]>([]);
   const [selectedMcpSlugs, setSelectedMcpSlugs] = useState<string[]>([]);
-  const [providers, setProviders] = useState<LLMChannelDetail[]>([]);
-  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
-    null,
-  );
-  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
-  // Runtime / provider / model start as ``null`` and are seeded by the
-  // Settings → Default tuple via ``useModelDefaults`` (effect below).
-  // Falling back to the first available runtime is handled by the
-  // existing repair effect when the user's default isn't available.
-  const [selectedRuntimeId, setSelectedRuntimeId] = useState<RuntimeId | null>(
-    null,
-  );
-  // ``true`` once the user touches any composer picker (runtime / model
-  // / provider). Locks out reseeds so explicit choices survive
-  // re-renders.
-  const [composerTouched, setComposerTouched] = useState(false);
+  // NB: no runtime / provider / model state here. This composer picks an
+  // AGENT, and the agent owns the brain — the session inherits
+  // runtime/model/provider/effort from it at creation time. A page-local
+  // (provider, model) pair used to be seeded here from the project's
+  // last-used session and handed to ``/conversation/new``, where it became an
+  // ADR-006 override and beat the agent's own brain. Nothing reads such a pair
+  // now; do not reintroduce one without a picker in this composer to justify
+  // it.
   // Worktree isolation for the new chat session created from this page.
   // The toggle only shows when the project cwd is a usable git repo
   // (``worktreeAvailable`` — computed by the backend, fetched once per
@@ -517,49 +618,10 @@ export const ProjectDetailPage = () => {
   const [selectedPermissionMode, setSelectedPermissionMode] = useState<
     "default" | "auto_review" | "full_access"
   >("full_access");
-  // Reasoning-effort budget for the new session created from this page
-  // (kernel V5+bba3014 ``ModelSettings.effort``). ``null`` lets the
-  // runtime fall through to its SDK default. Seeded from
-  // ``modelDefaults.default_effort`` alongside the model picker below.
-  const { defaults: modelDefaults, loading: defaultsLoading } =
-    useModelDefaults();
-  // Per-project memory: the picker seeds from the project's most
-  // recent session before falling back to Settings → Default. So if
-  // the user mostly drives this project with Deep Agents but their
-  // global default is Claude Code, the project still opens in Deep
-  // Agents next time.
+  // Per-project memory. Only the AGENT half is consumed here (the seed effect
+  // below): this page has no model picker, so the pick's runtime / provider /
+  // model are none of its business.
   const { pick: lastPick, loading: lastPickLoading } = useProjectLastUsed(id);
-  // Seed sequence (highest wins on first pass; once any source lands
-  // we don't override until the user manually picks something else):
-  //   1. Project last-used (per-project memory)
-  //   2. Global Settings → Default
-  // Either source is enough — we wait until both fetches are done
-  // before deciding so we don't briefly flash the global default and
-  // then snap to the per-project value.
-  useEffect(() => {
-    if (composerTouched) return;
-    if (lastPickLoading || defaultsLoading) return;
-    const runtime =
-      lastPick?.runtime_provider ?? modelDefaults?.default_runtime ?? null;
-    const providerId =
-      lastPick?.provider_id ?? modelDefaults?.default_provider_id ?? null;
-    const modelId = lastPick?.model_id ?? modelDefaults?.default_model ?? null;
-    if (runtime) {
-      setSelectedRuntimeId(runtime as RuntimeId);
-    }
-    if (providerId) {
-      setSelectedProviderId(providerId);
-    }
-    if (modelId) {
-      setSelectedModelId(modelId);
-    }
-  }, [
-    lastPick,
-    lastPickLoading,
-    modelDefaults,
-    defaultsLoading,
-    composerTouched,
-  ]);
   // Seed each mode's agent ONCE from the project's last-used picks: Chat from
   // the last conversation's agent, Task from the last Lead. Ref-gated so it
   // never clobbers a pick the user made afterwards or a later member reload.
@@ -588,21 +650,9 @@ export const ProjectDetailPage = () => {
       task: taskSeed ?? prev.task,
     }));
   }, [members, lastPick, lastPickLoading]);
+  // Runtime list is read for display only — the Agent selector labels each
+  // member with its runtime's display name (``composerAgents`` below).
   const { runtimes: runtimeList } = useRuntimes();
-  useEffect(() => {
-    // Wait for both the Settings-default fetch and the project last-pick
-    // fetch — otherwise this effect races in first (runtimes are
-    // module-cached) and locks the picker to ``firstAvailable`` before
-    // the user's configured defaults land.
-    if (defaultsLoading || lastPickLoading) return;
-    if (runtimeList.length === 0) return;
-    const current = runtimeList.find((rt) => rt.id === selectedRuntimeId);
-    if (current && current.available) return;
-    const firstAvailable = runtimeList.find((rt) => rt.available);
-    if (firstAvailable) {
-      setSelectedRuntimeId(firstAvailable.id as RuntimeId);
-    }
-  }, [runtimeList, selectedRuntimeId, defaultsLoading, lastPickLoading]);
   const [kbPickerOpen, setKbPickerOpen] = useState(false);
   // Global KB document tree for the attachment picker — loads lazily
   // when the picker opens. Distinct from ``useProjectKbBindings``:
@@ -615,14 +665,18 @@ export const ProjectDetailPage = () => {
     expandFolder: pickerExpandFolder,
   } = useKbDocTree(kbPickerOpen);
   const [scheduledTasks, setScheduledTasks] = useState<AutomationItem[]>([]);
-  const [selectedArtifactPath, setSelectedArtifactPath] = useState<
-    string | null
-  >(null);
-  const [artifact, setArtifact] = useState<ArtifactDescriptor | null>(null);
-  const [artifactContent, setArtifactContent] =
-    useState<ArtifactContent | null>(null);
-  const [artifactLoading, setArtifactLoading] = useState(false);
-  const [artifactError, setArtifactError] = useState<string | null>(null);
+  const {
+    definitions: projectPlaybookDefinitions,
+    editing: editingPlaybook,
+    dialogOpen: playbookDialogOpen,
+    runningId: runningPlaybookId,
+    openCreate: openCreatePlaybook,
+    openEdit: openEditPlaybook,
+    setOpen: setPlaybookDialogOpen,
+    submit: submitPlaybook,
+    remove: removePlaybook,
+    run: runPlaybook,
+  } = useProjectPlaybooks(id);
   const selectedFileParam = searchParams.get("file");
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   // When set, the automation dialog opens in edit mode (PATCH the row) instead
@@ -631,11 +685,6 @@ export const ProjectDetailPage = () => {
   const [editTask, setEditTask] = useState<Awaited<
     ReturnType<typeof automationsApi.get>
   > | null>(null);
-  const composerProviders = useComposerProviders(
-    providers,
-    selectedRuntimeId ?? undefined,
-  );
-
   // Project-agent options for the composer's Agent selector. The session
   // inherits runtime/model/provider/effort/skills/connectors from the
   // chosen agent, so this page no longer exposes a raw model picker.
@@ -653,31 +702,10 @@ export const ProjectDetailPage = () => {
     [members, runtimeList],
   );
 
-  // Auto-pick first usable (provider, model) so Send never falls
-  // through to backend default and 422s. Waits for the Settings-default
-  // fetch so the picker doesn't briefly flash to ``isDefault`` provider
-  // before the configured global default lands.
-  useEffect(() => {
-    if (defaultsLoading) return;
-    if (composerProviders.length === 0) return;
-    const stillValid =
-      selectedProviderId &&
-      selectedModelId &&
-      composerProviders.some(
-        (m) =>
-          m.providerId === selectedProviderId && m.modelId === selectedModelId,
-      );
-    if (stillValid) return;
-    const preferred =
-      composerProviders.find((m) => m.isDefault) ?? composerProviders[0];
-    setSelectedProviderId(preferred.providerId);
-    setSelectedModelId(preferred.modelId);
-  }, [composerProviders, selectedProviderId, selectedModelId, defaultsLoading]);
-
   // Standalone file tree refresh — mirrors the conversation page's
   // ``refreshFileTree`` so the panel's manual ``FileRefreshButton``
-  // can re-list files without re-fetching skills / KB / providers
-  // (which ``fetchData`` does). Same depth-3 listing as initial load.
+  // can re-list files without re-running everything else ``fetchData``
+  // pulls. Same depth-3 listing as initial load.
   const refreshFileTree = useCallback(() => {
     if (!id) return;
     projectsApi
@@ -752,39 +780,14 @@ export const ProjectDetailPage = () => {
         setConnectors(connRes.connectors.filter((c) => c.enabled));
       }
       setSelectedMcpSlugs(mcpRes.slugs);
-      // NB: provider model details (``/v1/providers`` + one ``/v1/providers/{id}``
-      // per channel) are NOT fetched here. This page selects by AGENT (no raw
-      // model picker) and the default (provider, model) comes from
-      // last-session-pick / model-defaults, so Send works without them. They only
-      // validate the composer's model against the live channel list, so we defer
-      // them to ``ensureProviderDetails`` (first compose) instead of firing 5
-      // requests on every project-home load.
+      // NB: the channel list (``/v1/providers``) is not fetched here, or
+      // anywhere else on this page. It only ever fed a model picker this
+      // composer does not have — the session's channel comes from the chosen
+      // agent, resolved backend-side at creation.
     } catch {
       /* secondary data is non-fatal — the shell already rendered */
     }
   }, [id]);
-
-  // Lazy provider-details load (see ``fetchData``): one-shot, triggered the
-  // first time the user actually composes. ``autoFocus`` rules out an onFocus
-  // trigger (it would fire on mount), so we hang it off the first keystroke.
-  const providersLoadedRef = useRef(false);
-  const ensureProviderDetails = useCallback(() => {
-    if (providersLoadedRef.current) return;
-    providersLoadedRef.current = true;
-    void (async () => {
-      try {
-        const list = await providersApi.list();
-        const details = await Promise.all(
-          list.providers
-            .filter((c) => c.enabled)
-            .map((c) => providersApi.get(c.id).catch(() => null)),
-        );
-        setProviders(details.filter((d): d is LLMChannelDetail => d !== null));
-      } catch {
-        providersLoadedRef.current = false; // let the next keystroke retry
-      }
-    })();
-  }, []);
 
   useEffect(() => {
     void fetchData();
@@ -830,7 +833,8 @@ export const ProjectDetailPage = () => {
         );
         const projectOrigin = id ? getEntityOrigin(id, "project") : undefined;
         if (projectOrigin) recordEntityOrigin(session.id, projectOrigin);
-        await sessionsApi.addKbAttachments(session.id, ids);
+        // Staged, not bound: the conversation page's first send claims them.
+        await sessionsApi.addKbAttachments(ids);
         navigate(`/conversation/${session.id}`);
       } catch {
         toast.error(t("common.failed" as Parameters<typeof t>[0]));
@@ -854,6 +858,8 @@ export const ProjectDetailPage = () => {
     trigger: Trigger;
     action_kind: ActionKind;
     worktree: boolean;
+    playbook_definition_id: string | null;
+    playbook_version: number | null;
   }) => {
     // Edit mode: PATCH the existing row. The dialog is stateless and calls the
     // same submit handler for create + edit; ``editTask`` decides which.
@@ -865,6 +871,8 @@ export const ProjectDetailPage = () => {
         trigger: data.trigger,
         action_kind: data.action_kind,
         worktree: data.worktree,
+        playbook_definition_id: data.playbook_definition_id,
+        playbook_version: data.playbook_version,
       });
       toast.success(t("common.saved" as Parameters<typeof t>[0]));
       await reloadScheduledTasks();
@@ -884,6 +892,8 @@ export const ProjectDetailPage = () => {
       trigger: data.trigger,
       action_kind: data.action_kind,
       worktree: data.worktree,
+      playbook_definition_id: data.playbook_definition_id,
+      playbook_version: data.playbook_version,
     });
     toast.success(t("project.taskCreated" as Parameters<typeof t>[0]));
     const schedRes = await automationsApi.listGroups(id);
@@ -952,6 +962,35 @@ export const ProjectDetailPage = () => {
     }
   };
 
+  const locateArtifactFile = useCallback(
+    (relPath: string) => ({
+      absolutePath: toAbsoluteProjectPath(relPath, project?.root_path ?? ""),
+      relativePath: relPath,
+    }),
+    [project?.root_path],
+  );
+  const artifactFile = useArtifactFile({
+    projectId: id || null,
+    platform,
+    locate: locateArtifactFile,
+    missingErrorMessage: t(
+      "task.artifactOpenInFinder" as Parameters<typeof t>[0],
+    ),
+    // The preview pane carries a tab strip, so opening a second document adds
+    // to the set instead of replacing what's on screen.
+    multiTab: true,
+  });
+  // The split pane consumes the loaded document itself; the page keeps only
+  // what it needs for URL sync and the copy / reveal actions.
+  const {
+    activePath: activeArtifactPath,
+    selectedPath: selectedArtifactPath,
+    content: artifactContent,
+    open: openArtifact,
+    reload: reloadArtifact,
+    close: closeArtifact,
+  } = artifactFile;
+
   const openArtifactFile = useCallback(
     async (relPath: string, options?: { syncUrl?: boolean }) => {
       if (!id) return;
@@ -965,87 +1004,88 @@ export const ProjectDetailPage = () => {
           { replace: false },
         );
       }
-      setSelectedArtifactPath(relPath);
-      setArtifactLoading(true);
-      setArtifactError(null);
-      try {
-        // Build the file's absolute identity (project root + project-relative
-        // path), resolve it to an access address, and fetch bytes from that
-        // address — the backend never proxies file streams. See
-        // docs/design/file-address-resolution.md.
-        const root = project?.root_path ?? "";
-        const isAbs = /^(\/|[a-zA-Z]:[\\/])/.test(relPath);
-        const absPath = isAbs
-          ? relPath
-          : root
-            ? `${root.replace(/\/+$/, "")}/${relPath}`
-            : relPath;
-        const descriptor = await filesApi.resolveOne(buildFileRef(absPath));
-        if (!descriptor || descriptor.error || !descriptor.exists) {
-          setArtifact(null);
-          setArtifactContent(null);
-          setArtifactError(
-            t("task.artifactOpenInFinder" as Parameters<typeof t>[0]),
-          );
-          return;
-        }
-        const result = await resolvedToArtifactFile(descriptor, {
-          projectId: id,
-          relPath,
-          platform,
-        });
-        setArtifact(result.artifact);
-        setArtifactContent(result.content);
-      } catch (error) {
-        setArtifact(null);
-        setArtifactContent(null);
-        setArtifactError(
-          error instanceof Error ? error.message : String(error),
-        );
-      } finally {
-        setArtifactLoading(false);
-      }
+      await openArtifact(relPath);
     },
-    [id, project?.root_path, searchParams, setSearchParams, platform, t],
+    [id, openArtifact, searchParams, setSearchParams],
   );
+
+  // ?file is an output of the focused tab, and only an input when it changed
+  // from outside this page. Without that distinction the two effects below
+  // ping-pong: each reads the other's not-yet-settled value and "corrects" it.
+  // ?file names the focused document. It is an *output* while anything is
+  // open — the tab strip is the source of truth — and only an input when the
+  // preview is closed, i.e. on load or after a deep link. Treating a stale
+  // param as an instruction is what made these two effects ping-pong: each
+  // read the other's not-yet-settled value and "corrected" it.
+  const authoredFileParamRef = useRef<string | null>(null);
+  const hadArtifactRef = useRef(false);
+
+  useEffect(() => {
+    if (activeArtifactPath) {
+      hadArtifactRef.current = true;
+      if (activeArtifactPath === selectedFileParam) return;
+      authoredFileParamRef.current = activeArtifactPath;
+      setSearchParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          next.set("file", activeArtifactPath);
+          return next;
+        },
+        { replace: true },
+      );
+      return;
+    }
+    // Nothing open. Clear the param only if something *was* open — on mount it
+    // just means the deep link hasn't been consumed yet.
+    if (!hadArtifactRef.current || !selectedFileParam) return;
+    hadArtifactRef.current = false;
+    // Claim the value being removed, not null: effects run in declaration
+    // order, so the reader below sees this stale param before the clear lands
+    // and would otherwise reopen what was just closed.
+    authoredFileParamRef.current = selectedFileParam;
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.delete("file");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [activeArtifactPath, selectedFileParam, setSearchParams]);
 
   useEffect(() => {
     if (!selectedFileParam) {
-      if (selectedArtifactPath) {
-        const timer = window.setTimeout(() => {
-          setSelectedArtifactPath(null);
-          setArtifact(null);
-          setArtifactContent(null);
-          setArtifactError(null);
-        }, 0);
-        return () => window.clearTimeout(timer);
-      }
+      // The clear has landed; drop the claim so a later deep link to the same
+      // document is honoured rather than mistaken for our own echo.
+      authoredFileParamRef.current = null;
       return;
     }
-    if (
-      selectedFileParam === selectedArtifactPath &&
-      (artifact || artifactLoading || artifactError)
-    ) {
-      return;
-    }
+    // Something is already focused, so the param is this effect's own trailing
+    // output rather than a request.
+    if (activeArtifactPath) return;
+    // Nothing is focused but the param still names what we last wrote — the
+    // reader just closed it and the clear hasn't landed. Reopening it here is
+    // how "close the last tab" used to bounce straight back.
+    if (selectedFileParam === authoredFileParamRef.current) return;
+    // The project root arrives with the detail fetch, and the path the deep
+    // link names is relative to it. Resolving before it lands builds a bogus
+    // absolute path and lands the tab in an error state it never retries out
+    // of — wait for the root, then open.
+    if (!project?.root_path) return;
     const timer = window.setTimeout(() => {
       void openArtifactFile(selectedFileParam, { syncUrl: false });
     }, 0);
     return () => window.clearTimeout(timer);
   }, [
-    artifact,
-    artifactError,
-    artifactLoading,
+    project?.root_path,
+    activeArtifactPath,
     openArtifactFile,
-    selectedArtifactPath,
     selectedFileParam,
   ]);
 
   const handleArtifactReload = useCallback(() => {
-    if (selectedArtifactPath) {
-      void openArtifactFile(selectedArtifactPath);
-    }
-  }, [openArtifactFile, selectedArtifactPath]);
+    void reloadArtifact();
+  }, [reloadArtifact]);
 
   const handleArtifactClose = useCallback(() => {
     setSearchParams(
@@ -1056,11 +1096,8 @@ export const ProjectDetailPage = () => {
       },
       { replace: true },
     );
-    setSelectedArtifactPath(null);
-    setArtifact(null);
-    setArtifactContent(null);
-    setArtifactError(null);
-  }, [setSearchParams]);
+    closeArtifact();
+  }, [closeArtifact, setSearchParams]);
 
   const handleArtifactCopy = useCallback(() => {
     if (artifactContent?.kind !== "text") return;
@@ -1071,9 +1108,96 @@ export const ProjectDetailPage = () => {
   }, [artifactContent, t]);
 
   const handleArtifactOpenExternal = useCallback(() => {
-    if (!project?.root_path || !selectedArtifactPath) return;
-    void revealInFinder(`${project.root_path}/${selectedArtifactPath}`);
-  }, [project, selectedArtifactPath, revealInFinder]);
+    if (!selectedArtifactPath) return;
+    void revealInFinder(locateArtifactFile(selectedArtifactPath).absolutePath);
+  }, [locateArtifactFile, selectedArtifactPath, revealInFinder]);
+
+  const loadChatBindings = useCallback(async () => {
+    try {
+      const rows = await channelsApi.listChatBindings(id);
+      setChatBindings(
+        rows.map((row) => ({
+          id: row.external_chat_id,
+          name: row.external_chat_name || row.external_chat_id,
+          // Module-level ``t``: putting the hook's ``t`` in this callback's
+          // deps is the pattern that once turned a panel render into a
+          // refetch storm (see .claude/rules/frontend.md).
+          platformLabel:
+            row.platform === "wecom_aibot"
+              ? _t("project.platformWecom" as Parameters<typeof _t>[0])
+              : _t("project.platformFeishu" as Parameters<typeof _t>[0]),
+          createdByValuz: row.created_by_valuz ?? false,
+          needsJoin: row.needs_join ?? false,
+        })),
+      );
+    } catch {
+      // A channel-less install simply has no bindings, and a failed refresh
+      // should leave what is on screen alone — blanking the list made a
+      // transient error look like every binding had vanished.
+      setChatBindings((current) => current);
+    }
+  }, [id]);
+
+  // Keyed on the dialog being shut rather than on a callback from inside it:
+  // every close path (Cancel, the X, Escape, clicking away) lands here, and
+  // unlinking or dissolving a group in there changes the panel too.
+  useEffect(() => {
+    if (!bindChatOpen) void loadChatBindings();
+  }, [bindChatOpen, loadChatBindings]);
+
+  const handleJoinChat = async (externalChatId: string) => {
+    try {
+      const link = await channelsApi.feishuChatLink(externalChatId, id);
+      if (link) {
+        window.open(link, "_blank", "noreferrer");
+        return;
+      }
+      toast.error(
+        t("project.createChatLinkMissing" as Parameters<typeof t>[0]),
+      );
+    } catch {
+      toast.error(t("project.createChatJoin" as Parameters<typeof t>[0]));
+    }
+  };
+
+  const handleDeleteChat = async (externalChatId: string) => {
+    try {
+      await channelsApi.deleteFeishuChat(externalChatId, id);
+      toast.success(t("project.deleteChatDone" as Parameters<typeof t>[0]));
+      // Gone the moment the server says so — the reload below reconciles.
+      setChatBindings((prev) => prev.filter((c) => c.id !== externalChatId));
+      await loadChatBindings();
+    } catch {
+      toast.error(t("project.deleteChat" as Parameters<typeof t>[0]));
+    }
+  };
+
+  const handleUnbindChat = async (externalChatId: string) => {
+    try {
+      await channelsApi.unbindChat(externalChatId, "feishu-main", id);
+      toast.success(t("project.chatBindingRemoved" as Parameters<typeof t>[0]));
+      setChatBindings((prev) => prev.filter((c) => c.id !== externalChatId));
+      await loadChatBindings();
+    } catch {
+      toast.error(t("project.saveFailed" as Parameters<typeof t>[0]));
+    }
+  };
+
+  const handleSetDefaultLead = async (slug: string | null) => {
+    const previous = project;
+    // Optimistic: the crown should move the moment it is clicked; a failed
+    // write puts it back rather than leaving the UI ahead of the server.
+    setProject((current) =>
+      current ? { ...current, default_lead_agent_slug: slug } : current,
+    );
+    try {
+      const updated = await projectsApi.setDefaultLead(id, slug);
+      setProject(updated);
+    } catch {
+      setProject(previous);
+      toast.error(t("project.saveFailed" as Parameters<typeof t>[0]));
+    }
+  };
 
   const handleInstructionsChange = async (md: string) => {
     setInstructions(md);
@@ -1084,10 +1208,11 @@ export const ProjectDetailPage = () => {
     }
   };
 
-  // Mint (once) the project chat session attachments upload into and the send
-  // reuses. Project sessions bind to an agent, so one must be picked first
-  // (ADR-006: the agent is frozen at creation — the composer locks it once
-  // ``chatSessionId`` is set).
+  // Create the session, at Send. Attachments no longer need one to exist, so
+  // this is also where ADR-006 freezes agent / model / runtime — later than
+  // before and more truthfully: whatever is selected when the turn goes out is
+  // what the session gets, instead of whatever happened to be selected when a
+  // file was dropped on the composer.
   const ensureChatSession = async (): Promise<{ id: string }> => {
     if (chatSessionId) return { id: chatSessionId };
     if (!selectedAgentSlug) throw new Error("no-agent-selected");
@@ -1123,7 +1248,7 @@ export const ProjectDetailPage = () => {
       );
       return;
     }
-    void attachLocalFiles(files, ensureChatSession);
+    void attachLocalFiles(files);
   };
 
   // The actual chat send. Attachments are already uploaded (on attach), so
@@ -1131,16 +1256,119 @@ export const ProjectDetailPage = () => {
   const performChatSend = async () => {
     const text = composerValue.trim();
     if (!text || sending) return;
+    // Draft-first: with no session minted yet there is nothing to wait for.
+    // Hand the draft to /conversation/new and let that page paint the
+    // optimistic turn and mint the session behind it, exactly as 新对话 does.
+    // Awaiting ``ensureChatSession`` here is what still froze this composer
+    // for a whole cloud round trip after the send itself was moved off it.
+    //
+    // Worktree rides along because ``ensureSession`` on that page has no other
+    // way to know about it; agent and project go in the URL, which is the
+    // shape /conversation/new already accepts.
+    if (!chatSessionId) {
+      setComposerValue("");
+      // Hand the files over explicitly. A composer holds what IT attached, so
+      // the page this navigates to cannot see these by looking — and must not
+      // be able to, or every composer would see every other one's. Claiming
+      // here and restaging there is the transfer said out loud.
+      const handedOver = claimStagedAttachments();
+      const params = new URLSearchParams({ project: id });
+      if (selectedAgentSlug) params.set("agent", selectedAgentSlug);
+      navigate(`/conversation/new?${params.toString()}`, {
+        state: {
+          projectSend: {
+            text,
+            sentAt: Date.now(),
+            attachments: handedOver,
+            // Every choice this composer holds. The conversation page has its
+            // own state under most of these names, so anything omitted here is
+            // not an error — it silently mints the session with that page's
+            // defaults instead of what the user picked.
+            //
+            // provider/model are deliberately NOT among them: this composer
+            // picks an AGENT, not a model (there is no model picker here), so
+            // ``selectedProviderId`` / ``selectedModelId`` only ever hold the
+            // project's last-used channel or the global default. Handing them
+            // over made the create override the agent's own brain, which
+            // dragged every agent in the project onto whatever channel its
+            // last chat happened to use. The conversation page derives the
+            // brain from ``agent`` in the URL instead.
+            permissionMode: selectedPermissionMode,
+            // Execution location (本地 / 云端服务): carried as an origin
+            // observation because that is what routes the create.
+            projectId: id,
+            execOrigin: project?.exec_origin ?? "local",
+            ...(worktreeEnabled
+              ? { worktree: worktreeName ? { name: worktreeName } : {} }
+              : {}),
+          },
+        },
+      });
+      return;
+    }
+    // A session already exists — attachments were uploaded, which mints it
+    // early. Send into it from here and hand the conversation page only the
+    // optimistic turn.
     setSending(true);
+    // Hoisted so the failure path can hand them back.
+    let claimed: SessionAttachmentItem[] = [];
     try {
       const session = await ensureChatSession();
-      markPendingConsumed();
-      // ``text`` already contains any ``/slug`` tokens because Composer
-      // serializes inline skill chips into its controlled value.
-      await sessionsApi.sendMessage(session.id, text);
+      // Take the staged files out and carry them to the turn. The conversation
+      // page cannot work this set out for itself — it is gone from staging the
+      // moment this claim returns — so the handoff carries the names too.
+      claimed = claimStagedAttachments();
       setComposerValue("");
-      navigate(`/conversation/${session.id}`);
+      // Navigate the MOMENT there is an id to navigate to — before the send
+      // round-trip, not after it.
+      //
+      // Minting the session has to happen here: this page owns the worktree /
+      // permission / agent picks that ``ensureChatSession`` freezes into it.
+      // Everything after that belongs to the conversation page, which can show
+      // the message and the runtime-startup progress while it happens.
+      // Awaiting the send first left the user on a composer that looked frozen
+      // for the whole cloud round-trip and then dropped them into a blank
+      // conversation, because the kernel had not echoed ``message.user`` yet.
+      //
+      // ``handoff`` seeds that page's optimistic turn. It deliberately does
+      // NOT ask it to send: the conversation page's own send path runs through
+      // its ``ensureSession``, which mints a SECOND session whenever the
+      // freshly-navigated page has not fetched this one yet.
+      navigate(`/conversation/${session.id}`, {
+        state: {
+          handoff: {
+            text,
+            sentAt: Date.now(),
+            attachments: claimed.map((a) => ({
+              name: a.filename,
+              size: a.size_bytes,
+            })),
+            // The rows themselves, for the arriving page's file panel. It
+            // cannot read them back: the POST below is still in flight when
+            // that page does its one attachment read, and nothing re-reads
+            // afterwards — so without these the file was missing from the
+            // panel until the person switched away and back.
+            attachmentRows: claimed,
+          },
+        },
+      });
+      // ``text`` already contains any ``/slug`` tokens because Composer
+      // serializes inline skill chips into its controlled value. This page is
+      // unmounting behind the navigation; the failure toast below is global,
+      // and the conversation page simply never gets its turn.
+      // Bind the staged files to this turn — this is where a file stops
+      // being a draft and becomes part of the conversation.
+      await sessionsApi.sendMessage(
+        session.id,
+        text,
+        null,
+        null,
+        null,
+        claimed.map((a) => a.id),
+      );
     } catch (cause) {
+      // The turn did not go out, so the files are still the composer's.
+      restageAttachments(claimed);
       // A billing rejection (402) carries an i18n key the client renders;
       // otherwise fall back to the generic save-failed copy.
       toast.error(
@@ -1162,12 +1390,10 @@ export const ProjectDetailPage = () => {
 
     // PRD-PAAT §3.2 Task mode: treat the composer text as a task goal,
     // kick off via tasksApi.kickoff(), and route the user to the task
-    // detail page. The composer's selected agent becomes the lead.
-    // ``dispatch_mode: "async"`` (the default): the lead runs as a persistent
-    // actor that can be re-woken across turns until finish_task — robust for
-    // multi-turn orchestration / long-running members, and it gets the
-    // host-side completion fallback. Title auto-derives from the first 60
-    // chars of the goal so the task list stays readable.
+    // detail page. The composer's selected agent becomes the lead — it runs
+    // as a persistent actor re-woken across turns until finish_task, with
+    // the host-side completion fallback. Title auto-derives from the first
+    // 60 chars of the goal so the task list stays readable.
     if (composerMode === "task") {
       if (!selectedAgentSlug) {
         toast.error(t("task.noLeadAgents" as Parameters<typeof t>[0]));
@@ -1179,7 +1405,6 @@ export const ProjectDetailPage = () => {
           goal: text,
           lead_agent_slug: selectedAgentSlug,
           title: text.length > 60 ? text.slice(0, 60) : null,
-          dispatch_mode: "async",
           // Task-level worktree (design §5): lead + every member share ONE
           // worktree; clean ones auto-remove at finish.
           worktree: worktreeEnabled,
@@ -1206,11 +1431,19 @@ export const ProjectDetailPage = () => {
       return;
     }
 
-    // Chat mode — block on unfinished parsing, then send.
-    if (hasParsing) {
-      setParsingConfirmOpen(true);
-      return;
-    }
+    // Chat mode. An unfinished parse no longer stops the person.
+    //
+    // The confirm this replaces bought one thing: the agent seeing the markdown
+    // extract rather than the raw file. It does not buy it any more — the turn
+    // binds the attachment either way, and a turn that goes out mid-parse
+    // ships ``source_path``, which the runtime can read. What the dialog
+    // reliably did was stop someone in front of a composer where nothing was
+    // happening, to ask a question whose only answer is "yes".
+    //
+    // The remaining cost is real and accepted: a scanned PDF sent within the
+    // parse window reaches the agent as a PDF instead of text. If that needs
+    // protecting, it belongs on the server — holding a turn there costs no
+    // rendering — not in front of the person.
     void performChatSend();
   };
 
@@ -1257,7 +1490,26 @@ export const ProjectDetailPage = () => {
         initialOpenSection={null}
         instructions={instructions}
         onInstructionsChange={handleInstructionsChange}
+        playbooks={projectPlaybookDefinitions.map((definition) => ({
+          id: definition.id,
+          name: definition.name,
+          version: definition.current_version,
+          status: definition.status,
+          running: runningPlaybookId === definition.id,
+        }))}
+        onAddPlaybook={openCreatePlaybook}
+        onOpenPlaybook={(definitionId) => void openEditPlaybook(definitionId)}
+        onRunPlaybook={(definitionId) => void runPlaybook(definitionId)}
         members={members}
+        defaultLeadSlug={project?.default_lead_agent_slug ?? null}
+        projectArtifacts={projectArtifacts}
+        onLoadArtifactVersions={loadArtifactVersions}
+        chatBindings={chatBindings}
+        onBindChat={() => setBindChatOpen(true)}
+        onUnbindChat={(chatId) => void handleUnbindChat(chatId)}
+        onJoinChat={(chatId) => void handleJoinChat(chatId)}
+        onDeleteChat={(chatId) => setChatDeleteTarget(chatId)}
+        onSetDefaultLead={(slug) => void handleSetDefaultLead(slug)}
         onAddMember={() => setAddAgentOpen(true)}
         onOpenMember={openMember}
         onRemoveMember={(slug) => setMemberDeleteTarget(slug)}
@@ -1382,7 +1634,13 @@ export const ProjectDetailPage = () => {
     panelCollapsed,
     panelSetCollapsed,
     instructions,
+    projectPlaybookDefinitions,
+    runningPlaybookId,
+    openCreatePlaybook,
+    openEditPlaybook,
+    runPlaybook,
     members,
+    chatBindings,
     addedKbTree,
     bindings,
     fileTree,
@@ -1425,21 +1683,14 @@ export const ProjectDetailPage = () => {
   }
 
   return (
-    <div className="flex h-full flex-col">
-      {selectedArtifactPath || artifactLoading || artifactError ? (
-        <div className="min-h-0 flex-1 p-3">
-          <ArtifactViewerShell
-            artifact={artifact}
-            content={artifactContent}
-            loading={artifactLoading}
-            error={artifactError}
-            onReload={handleArtifactReload}
-            onClose={handleArtifactClose}
-            onCopyContent={handleArtifactCopy}
-            onOpenExternal={handleArtifactOpenExternal}
-          />
-        </div>
-      ) : (
+    <ArtifactSplitPane
+      file={artifactFile}
+      onReload={handleArtifactReload}
+      onClose={handleArtifactClose}
+      onCopyContent={handleArtifactCopy}
+      onOpenExternal={handleArtifactOpenExternal}
+    >
+      <div className="flex h-full flex-col">
         <>
           {/* Anchor the content stack at a stable top offset so the project title
           keeps a predictable visual position across desktop window sizes. */}
@@ -1485,10 +1736,7 @@ export const ProjectDetailPage = () => {
                     />
                   }
                   value={composerValue}
-                  onChange={(v) => {
-                    setComposerValue(v);
-                    ensureProviderDetails(); // lazy-load provider details on first compose
-                  }}
+                  onChange={setComposerValue}
                   mode={composerMode}
                   onModeChange={setComposerMode}
                   onSend={() => {
@@ -1501,18 +1749,14 @@ export const ProjectDetailPage = () => {
                   showSkillSlash={selectedAgentSlug != null}
                   skills={selectedAgentSkillItems}
                   uploadOnAttach
-                  existingAttachmentCount={
-                    stagedAttachments.filter((a) => !a.consumed_at).length
-                  }
-                  pinnedAttachments={stagedAttachments
-                    .filter((a) => !a.consumed_at)
-                    .map((a) => ({
-                      id: a.id,
-                      name: a.filename,
-                      parseStatus: a.parse_status as
-                        "parsing" | "ready" | "failed" | "native" | undefined,
-                      sourceKind: a.source_kind,
-                    }))}
+                  existingAttachmentCount={stagedAttachments.length}
+                  pinnedAttachments={stagedAttachments.map((a) => ({
+                    id: a.id,
+                    name: a.filename,
+                    parseStatus: a.parse_status as
+                      "parsing" | "ready" | "failed" | "native" | undefined,
+                    sourceKind: a.source_kind,
+                  }))}
                   onRemovePinnedAttachment={(attId) =>
                     void removeAttachment(attId)
                   }
@@ -1530,19 +1774,15 @@ export const ProjectDetailPage = () => {
                   // mode is frozen by a minted chat session; Task mode keeps its
                   // own pick (kickoff navigates away, so it never mints one here).
                   agentLocked={composerMode === "chat" && chatSessionId != null}
-                  onAgentChange={(slug) => {
-                    setAgentByMode((m) => ({ ...m, [composerMode]: slug }));
-                    setComposerTouched(true);
-                  }}
+                  onAgentChange={(slug) =>
+                    setAgentByMode((m) => ({ ...m, [composerMode]: slug }))
+                  }
                   onAddAgent={() => setAddAgentOpen(true)}
                   sendDisabled={
                     composerAgents.length === 0 || !selectedAgentSlug
                   }
                   permissionMode={selectedPermissionMode}
-                  onPermissionModeChange={(mode) => {
-                    setSelectedPermissionMode(mode);
-                    setComposerTouched(true);
-                  }}
+                  onPermissionModeChange={setSelectedPermissionMode}
                   worktree={
                     // Chat mode: hidden once a chat session exists (frozen at
                     // creation). Task mode: every kickoff is fresh, so the
@@ -1556,14 +1796,6 @@ export const ProjectDetailPage = () => {
                       : undefined
                   }
                   onWorktreeToggle={setWorktreeEnabled}
-                />
-                <AttachmentParsingDialog
-                  open={parsingConfirmOpen}
-                  onConfirm={() => {
-                    setParsingConfirmOpen(false);
-                    void performChatSend();
-                  }}
-                  onCancel={() => setParsingConfirmOpen(false)}
                 />
               </div>
 
@@ -1591,6 +1823,9 @@ export const ProjectDetailPage = () => {
                       <TabsTrigger value="automation">
                         {t("activity.automationTag" as Parameters<typeof t>[0])}
                       </TabsTrigger>
+                      <TabsTrigger value="playbook">
+                        {t("playbook.title" as Parameters<typeof t>[0])}
+                      </TabsTrigger>
                     </TabsList>
                   </div>
                   <TabsContent value="all" className="mt-5">
@@ -1599,8 +1834,17 @@ export const ProjectDetailPage = () => {
                       tab="all"
                       onOpenSession={(sid) => navigate(`/conversation/${sid}`)}
                       onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
+                      onOpenPlaybookRun={(runId, sessionId) =>
+                        navigate(
+                          sessionId
+                            ? `/conversation/${sessionId}`
+                            : `/playbooks?run=${encodeURIComponent(runId)}`,
+                        )
+                      }
                       onRenameConfirm={handleRenameConfirm}
                       onDeleteSession={handleDeleteSession}
+                      onForkSession={handleForkSession}
+                      forkPendingSessionId={forkingSessionId}
                       emptyLabel={t(
                         "project.noSessions" as Parameters<typeof t>[0],
                       )}
@@ -1614,6 +1858,8 @@ export const ProjectDetailPage = () => {
                       onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
                       onRenameConfirm={handleRenameConfirm}
                       onDeleteSession={handleDeleteSession}
+                      onForkSession={handleForkSession}
+                      forkPendingSessionId={forkingSessionId}
                       emptyLabel={t(
                         "project.noSessions" as Parameters<typeof t>[0],
                       )}
@@ -1627,6 +1873,8 @@ export const ProjectDetailPage = () => {
                       onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
                       onRenameConfirm={handleRenameConfirm}
                       onDeleteSession={handleDeleteSession}
+                      onForkSession={handleForkSession}
+                      forkPendingSessionId={forkingSessionId}
                       emptyLabel={t(
                         "project.noSessions" as Parameters<typeof t>[0],
                       )}
@@ -1640,9 +1888,34 @@ export const ProjectDetailPage = () => {
                       onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
                       onRenameConfirm={handleRenameConfirm}
                       onDeleteSession={handleDeleteSession}
+                      onForkSession={handleForkSession}
+                      forkPendingSessionId={forkingSessionId}
                       hideScopeTag
                       emptyLabel={t(
                         "project.noSessions" as Parameters<typeof t>[0],
+                      )}
+                    />
+                  </TabsContent>
+                  <TabsContent value="playbook" className="mt-5">
+                    <ActivityTabPanel
+                      projectId={id}
+                      tab="playbook"
+                      onOpenSession={(sid) => navigate(`/conversation/${sid}`)}
+                      onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
+                      onOpenPlaybookRun={(runId, sessionId) =>
+                        navigate(
+                          sessionId
+                            ? `/conversation/${sessionId}`
+                            : `/playbooks?run=${encodeURIComponent(runId)}`,
+                        )
+                      }
+                      onRenameConfirm={handleRenameConfirm}
+                      onDeleteSession={handleDeleteSession}
+                      onForkSession={handleForkSession}
+                      forkPendingSessionId={forkingSessionId}
+                      hideScopeTag
+                      emptyLabel={t(
+                        "playbook.emptyTitle" as Parameters<typeof t>[0],
                       )}
                     />
                   </TabsContent>
@@ -1651,164 +1924,209 @@ export const ProjectDetailPage = () => {
             </div>
           </div>
         </>
-      )}
 
-      {/* Project automation create — uses the same agent-driven dialog
+        {/* Project automation create — uses the same agent-driven dialog
           as the global Automation page, with task mode enabled (this is
           a project project) and candidates resolved from the project's
           members. ``description`` keeps the existing project-specific
           hint copy ("Tasks created here are linked to this project"). */}
-      <CreateAutomationDialog
-        open={newTaskOpen}
-        onOpenChange={(open) => {
-          // Reset edit context on close so the next "+ New" starts fresh in
-          // create mode.
-          if (!open) setEditTask(null);
-          setNewTaskOpen(open);
-        }}
-        description={t("project.instruction" as Parameters<typeof t>[0])}
-        onSubmit={handleSubmitTask}
-        agents={rawMembers.map((entry) => ({
-          slug: entry.member.agent_slug,
-          name: entry.agent?.name ?? entry.member.agent_slug,
-        }))}
-        allowTaskMode
-        fixedTargetName={displayName}
-        initial={
-          editTask
-            ? {
-                name: editTask.name,
-                prompt_template: editTask.prompt_template,
-                agent_slug: editTask.agent_slug,
-                trigger: editTask.trigger,
-                action_kind: (editTask.action_kind as ActionKind) ?? "chat",
-                worktree: editTask.worktree ?? false,
-              }
-            : undefined
-        }
-      />
+        <CreateAutomationDialog
+          open={newTaskOpen}
+          onOpenChange={(open) => {
+            // Reset edit context on close so the next "+ New" starts fresh in
+            // create mode.
+            if (!open) setEditTask(null);
+            setNewTaskOpen(open);
+          }}
+          description={t("project.instruction" as Parameters<typeof t>[0])}
+          onSubmit={handleSubmitTask}
+          agents={rawMembers.map((entry) => ({
+            slug: entry.member.agent_slug,
+            name: entry.agent?.name ?? entry.member.agent_slug,
+          }))}
+          allowTaskMode
+          fixedTargetName={displayName}
+          fixedProjectId={id}
+          initial={
+            editTask
+              ? {
+                  name: editTask.name,
+                  prompt_template: editTask.prompt_template,
+                  agent_slug: editTask.agent_slug,
+                  trigger: editTask.trigger,
+                  action_kind: (editTask.action_kind as ActionKind) ?? "chat",
+                  worktree: editTask.worktree ?? false,
+                  playbook_definition_id: editTask.playbook_definition_id,
+                  playbook_version: editTask.playbook_version,
+                }
+              : undefined
+          }
+        />
 
-      <DeployAgentsDialog
-        open={addAgentOpen}
-        onOpenChange={setAddAgentOpen}
-        projectId={id}
-        agents={libraryAgents}
-        members={rawMembers}
-        onChanged={loadMembers}
-        onCreateNew={() => navigate("/agents")}
-      />
+        {/* The project rail is a scoped projection of the same Playbook
+          library. Creation/editing stays on the shared dialog and persists
+          ``project_id=id``; no project-only Playbook model is introduced. */}
+        <CreatePlaybookDialog
+          open={playbookDialogOpen}
+          onOpenChange={setPlaybookDialogOpen}
+          onSubmit={submitPlaybook}
+          onDelete={removePlaybook}
+          initial={editingPlaybook}
+          targets={[]}
+          agents={rawMembers.map((entry) => ({
+            slug: entry.member.agent_slug,
+            name: entry.agent?.name ?? entry.member.agent_slug,
+          }))}
+          fixedProjectId={id}
+          fixedProjectName={displayName}
+        />
 
-      {/* Knowledge Base file picker overlay — tree view: documents
+        <DeleteConfirmDialog
+          open={chatDeleteTarget !== null}
+          onOpenChange={(next) => {
+            if (!next) setChatDeleteTarget(null);
+          }}
+          itemName={
+            chatBindings.find((c) => c.id === chatDeleteTarget)?.name ??
+            undefined
+          }
+          description={t("project.deleteChatDesc" as Parameters<typeof t>[0])}
+          onConfirm={() => {
+            const target = chatDeleteTarget;
+            setChatDeleteTarget(null);
+            if (target) void handleDeleteChat(target);
+          }}
+        />
+
+        <BindChatDialog
+          open={bindChatOpen}
+          onOpenChange={setBindChatOpen}
+          projectId={id}
+          onBound={loadChatBindings}
+        />
+
+        <DeployAgentsDialog
+          open={addAgentOpen}
+          onOpenChange={setAddAgentOpen}
+          projectId={id}
+          agents={libraryAgents}
+          members={rawMembers}
+          onChanged={loadMembers}
+          onCreateNew={() => navigate("/agents")}
+        />
+
+        {/* Knowledge Base file picker overlay — tree view: documents
           organised under their KB and folders; folders expandable for
           navigation, only files selectable. */}
-      {kbPickerOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="flex h-[600px] max-h-[85vh] w-[720px] max-w-[92vw] flex-col rounded-xl border border-surface-border bg-card p-4 shadow-xl">
-            <KnowledgeFileTreePicker
-              kbTree={pickerKbTree}
-              loading={pickerKbLoading}
-              onExpandFolder={pickerExpandFolder}
-              selected={[]}
-              onCancel={() => setKbPickerOpen(false)}
-              onConfirm={(ids) => {
-                void handleKbPickerConfirm(ids);
-              }}
-            />
+        {kbPickerOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="flex h-[600px] max-h-[85vh] w-[720px] max-w-[92vw] flex-col rounded-xl border border-surface-border bg-card p-4 shadow-xl">
+              <KnowledgeFileTreePicker
+                kbTree={pickerKbTree}
+                loading={pickerKbLoading}
+                onExpandFolder={pickerExpandFolder}
+                selected={[]}
+                onCancel={() => setKbPickerOpen(false)}
+                onConfirm={(ids) => {
+                  void handleKbPickerConfirm(ids);
+                }}
+              />
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* KB add/remove dialog — lists all KBs with checkboxes; added KBs
+        {/* KB add/remove dialog — lists all KBs with checkboxes; added KBs
           pre-checked. Confirm atomically updates project bindings. */}
-      <KnowledgeBaseAddDialog
-        open={kbAddDialogOpen}
-        onOpenChange={setKbAddDialogOpen}
-        kbs={kbTree.map((kb) => ({
-          id: kb.id,
-          name: kb.name,
-          documentCount: kb.documentCount,
-        }))}
-        selectedIds={addedKbIds}
-        onConfirm={(ids) => {
-          void handleSetAddedKbs(ids);
-        }}
-      />
+        <KnowledgeBaseAddDialog
+          open={kbAddDialogOpen}
+          onOpenChange={setKbAddDialogOpen}
+          kbs={kbTree.map((kb) => ({
+            id: kb.id,
+            name: kb.name,
+            documentCount: kb.documentCount,
+          }))}
+          selectedIds={addedKbIds}
+          onConfirm={(ids) => {
+            void handleSetAddedKbs(ids);
+          }}
+        />
 
-      <DeleteConfirmDialog
-        open={worktreeDiscardTarget !== null}
-        onOpenChange={(v) => !v && setWorktreeDiscardTarget(null)}
-        itemName={worktreeDiscardTarget?.name}
-        title={t("project.worktreeDiscardTitle" as Parameters<typeof t>[0])}
-        description={
-          worktreeDiscardTarget
-            ? worktreeDiscardTarget.dirtyFiles !== null &&
-              worktreeDiscardTarget.aheadCommits !== null
-              ? t("project.worktreeDiscardDesc" as Parameters<typeof t>[0], {
-                  dirty: worktreeDiscardTarget.dirtyFiles,
-                  ahead: worktreeDiscardTarget.aheadCommits,
-                })
-              : t(
-                  "project.worktreeDiscardUnknownDesc" as Parameters<
-                    typeof t
-                  >[0],
-                )
-            : undefined
-        }
-        loading={worktreeDiscarding}
-        onConfirm={() => void handleDiscardWorktree()}
-      />
-      <DeleteConfirmDialog
-        open={memberDeleteTarget !== null}
-        onOpenChange={(v) => !v && setMemberDeleteTarget(null)}
-        title={t("agent.confirmDeleteMember")}
-        description={
-          memberDeleteTarget
-            ? t("agent.confirmDeleteMemberDesc", { slug: memberDeleteTarget })
-            : undefined
-        }
-        confirmLabel={t("common.remove")}
-        loading={memberDeleteBusy}
-        onConfirm={confirmMemberDelete}
-      />
-      <DeleteConfirmDialog
-        open={pendingDelete !== null}
-        onOpenChange={(v) => !v && setPendingDelete(null)}
-        itemName={pendingDelete?.name || undefined}
-        description={
-          pendingDelete?.kind === "task"
-            ? t("cron.confirmDeleteTaskDesc" as Parameters<typeof t>[0], {
-                name: pendingDelete.name,
-              })
-            : undefined
-        }
-        loading={pendingDeleteBusy}
-        onConfirm={async () => {
-          if (!pendingDelete) return;
-          const pd = pendingDelete;
-          setPendingDeleteBusy(true);
-          try {
-            if (pd.kind === "task") {
-              await automationsApi.delete(pd.id);
-              toast.success(t("common.deleted" as Parameters<typeof t>[0]));
-              await reloadScheduledTasks();
-            } else {
-              await deleteSession(pd.id);
-              toast.success(t("sidebar.deleted" as Parameters<typeof t>[0]));
-            }
-            setPendingDelete(null);
-          } catch {
-            toast.error(
-              t(
-                (pd.kind === "task"
-                  ? "common.deleteFailed"
-                  : "sidebar.deleteFailed") as Parameters<typeof t>[0],
-              ),
-            );
-          } finally {
-            setPendingDeleteBusy(false);
+        <DeleteConfirmDialog
+          open={worktreeDiscardTarget !== null}
+          onOpenChange={(v) => !v && setWorktreeDiscardTarget(null)}
+          itemName={worktreeDiscardTarget?.name}
+          title={t("project.worktreeDiscardTitle" as Parameters<typeof t>[0])}
+          description={
+            worktreeDiscardTarget
+              ? worktreeDiscardTarget.dirtyFiles !== null &&
+                worktreeDiscardTarget.aheadCommits !== null
+                ? t("project.worktreeDiscardDesc" as Parameters<typeof t>[0], {
+                    dirty: worktreeDiscardTarget.dirtyFiles,
+                    ahead: worktreeDiscardTarget.aheadCommits,
+                  })
+                : t(
+                    "project.worktreeDiscardUnknownDesc" as Parameters<
+                      typeof t
+                    >[0],
+                  )
+              : undefined
           }
-        }}
-      />
-    </div>
+          loading={worktreeDiscarding}
+          onConfirm={() => void handleDiscardWorktree()}
+        />
+        <DeleteConfirmDialog
+          open={memberDeleteTarget !== null}
+          onOpenChange={(v) => !v && setMemberDeleteTarget(null)}
+          title={t("agent.confirmDeleteMember")}
+          description={
+            memberDeleteTarget
+              ? t("agent.confirmDeleteMemberDesc", { slug: memberDeleteTarget })
+              : undefined
+          }
+          confirmLabel={t("common.remove")}
+          loading={memberDeleteBusy}
+          onConfirm={confirmMemberDelete}
+        />
+        <DeleteConfirmDialog
+          open={pendingDelete !== null}
+          onOpenChange={(v) => !v && setPendingDelete(null)}
+          itemName={pendingDelete?.name || undefined}
+          description={
+            pendingDelete?.kind === "task"
+              ? t("cron.confirmDeleteTaskDesc" as Parameters<typeof t>[0], {
+                  name: pendingDelete.name,
+                })
+              : undefined
+          }
+          loading={pendingDeleteBusy}
+          onConfirm={async () => {
+            if (!pendingDelete) return;
+            const pd = pendingDelete;
+            setPendingDeleteBusy(true);
+            try {
+              if (pd.kind === "task") {
+                await automationsApi.delete(pd.id);
+                toast.success(t("common.deleted" as Parameters<typeof t>[0]));
+                await reloadScheduledTasks();
+              } else {
+                await deleteSession(pd.id);
+                toast.success(t("sidebar.deleted" as Parameters<typeof t>[0]));
+              }
+              setPendingDelete(null);
+            } catch {
+              toast.error(
+                t(
+                  (pd.kind === "task"
+                    ? "common.deleteFailed"
+                    : "sidebar.deleteFailed") as Parameters<typeof t>[0],
+                ),
+              );
+            } finally {
+              setPendingDeleteBusy(false);
+            }
+          }}
+        />
+      </div>
+    </ArtifactSplitPane>
   );
 };

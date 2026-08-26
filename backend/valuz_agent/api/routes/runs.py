@@ -16,13 +16,17 @@ router = APIRouter(prefix="/v1/runs", tags=["runs"])
 @router.get("")
 async def list_runs(
     status: str = Query("running", pattern="^(running|finished)$"),
+    project_id: str | None = Query(None),
+    limit: int | None = Query(None, ge=1, le=200),
     user_id: str = Depends(get_current_user_id),
     svc: RunsService = Depends(get_runs_service),
 ) -> dict[str, list[dict[str, Any]]]:
     """List runs for the activity overview.
 
     ``status=running`` (default) returns in-flight runs; ``finished`` returns
-    recently completed/failed runs.
+    recently completed/failed runs. ``project_id`` scopes the recency window to
+    one project (the sidebar's per-project accordion); ``limit`` caps how many
+    runs come back per group.
     """
-    runs = await svc.list_runs(user_id, status=status)
+    runs = await svc.list_runs(user_id, status=status, project_id=project_id, limit=limit)
     return {"runs": [asdict(r) for r in runs]}

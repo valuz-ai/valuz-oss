@@ -298,6 +298,12 @@ running / draining 分支**只**打断,**不**自己 `schedule_drain`——让�
 
 这样单条/多条、快/慢 turn 都直播;最后一条结束后 `draining=false`、队列空 → 跟随器自然安静。
 
+两处补强(2026-07-20):
+
+3. **`QueuedInputList.dispatching`**:洞②的"draining 兜住跟随器"没有兜住**气泡本身**——队头被标 `dispatched` 后立即从 `items` 消失,但它的 `message.user` 要到 turn 真正起来才落 kernel;边界 refetch 落在这个空窗里,该消息就在队列条和 transcript **两边都不可见**(刷新才回来)。修正:排空引擎在标 `dispatched` 前先登记 `_dispatching_heads[session_id] = head_id`,turn 返回后清除;`list_queue` 把这条以 `dispatching` 字段(完整 `QueuedInput`,status=`dispatched`)返回。前端可据此让气泡一直渲染到 transcript 出现该消息为止,而不是提前一次 refetch 就丢。
+4. **`schedule_drain` 同步占位**:原实现在 spawn 的 task 内部、且在一次 awaited owner 查询之后才 `_active_drains.add`,导致 idle-kick 的 `enqueue` 自己的响应就可能返回 `items=[], draining=false`(排空已把该项 dispatch 走)——跟随器从一开始就不武装,turn 在服务器上默默跑完。修正:`schedule_drain` 在**返回前**同步占位(spawn 的 task 负责释放,owner 查询失败等早退路径同样释放),保证 enqueue 响应必然 `draining=true`。
+5. **忙检门(busy gate)**:排空原本把"上一条处理完"等同于"内核 turn 进入 idle"。但派生了 `run_in_background` 后台任务的 turn 在回复流完的瞬间就 idle 了,后台任务(和用户看到的"后台任务运行中"chip)还在继续——此刻立即派发下一条,观感就是"队列消息打断了上一条正在处理的消息"。修正:派发前 `_session_busy` 检查(`status=="running"` **或** `bg_busy_session_ids` 含该会话即为忙),忙则 2s 轮询等待而非退出——占位保持(前端 `draining=true` 维持连续性),每轮重查 shutdown/暂停/队列变更,Stop(软暂停)和 steer(打断)是等待期的逃生口。bg 探测失败按不忙处理:偶发提前派发好过永不派发。
+
 ---
 
 ## 12. 改动清单

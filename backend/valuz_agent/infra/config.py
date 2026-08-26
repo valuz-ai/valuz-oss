@@ -1,9 +1,25 @@
 import hashlib
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode
+
+# The packaged desktop/headless app's data root. A source-run (non-frozen)
+# backend is refused this root at boot (``boot.steps.guard_source_run_data_dir``):
+# a dev/test process running host migrations here pushes the schema stamp ahead
+# of the released build, which then fail-louds at its next boot.
+PACKAGED_DATA_DIR: Path = Path.home() / ".valuz-oss"
+
+
+def shared_root_of(root: Path | str) -> Path:
+    """The ``{user_id}``-stripped, user-expanded form of a data root — the
+    process-shared directory a per-user templated root hangs off."""
+    raw = str(root)
+    if "{user_id}" in raw:
+        raw = raw.replace("{user_id}", "")
+    return Path(raw).expanduser()
 
 
 class Settings(BaseSettings):
@@ -19,7 +35,14 @@ class Settings(BaseSettings):
     # in ``boot.migrate_data_dir`` (the one-time root relocation).
     # May contain {user_id} when the deployment mounts per-user config roots.
     # OSS defaults to the root itself, without a user-id subdirectory.
-    data_dir: Path = Path.home() / ".valuz-oss"
+    data_dir: Path = PACKAGED_DATA_DIR
+    # Read-only roots for the skill packages that ship with this install
+    # (``os.pathsep``-separated). A container image sets this after composing
+    # its trees into one directory so the host and its sandboxes name the
+    # packages by the SAME absolute path. Empty on a source checkout or a
+    # desktop install, where ``fs_registry.system_skill_roots`` falls back to
+    # the package's own ``resources`` trees.
+    system_skills_dir: str = ""
     db_filename: str = "valuz.db"
     # The kernel's own SQLite file — sessions / messages / events, its
     # langgraph checkpoint tables, and the kernel ``alembic_version``. Kept
@@ -33,6 +56,13 @@ class Settings(BaseSettings):
     # Explicit DATABASE_URL — when set, overrides the default SQLite path.
     # Accepts postgresql://... for multi-user deployments.
     database_url: str | None = None
+
+    # IM channel long connections (Feishu / WeCom AIBot). ``None`` = auto:
+    # active only on a single-tenant local install (no shared ``database_url``)
+    # — a multi-user server would otherwise open every user's bot connection
+    # from every replica. Set explicitly to force either way
+    # (``VALUZ_AGENT_CHANNELS_ENABLED``).
+    agent_channels_enabled: bool | None = None
 
     # Explicit override for the kernel database URL (e.g. a Postgres DSN, or
     # a custom SQLite path). When unset, the kernel still gets its OWN file —
@@ -110,7 +140,12 @@ class Settings(BaseSettings):
     def _normalize_api_prefix(cls, v: object) -> list[str]:
         if v is None or v == "":
             return []
-        items = v.split(",") if isinstance(v, str) else list(v)  # type: ignore[arg-type]
+        if isinstance(v, str):
+            items: Iterable[object] = v.split(",")
+        elif isinstance(v, Iterable):
+            items = v
+        else:
+            items = (v,)
         out: list[str] = []
         for item in items:
             seg = str(item).strip().rstrip("/")
@@ -184,19 +219,19 @@ class Settings(BaseSettings):
 
     # ── Logging paths ────────────────────────────────────────────────
     # ``infra.logging.configure_logging`` writes structured JSON lines
-    # to ``log_file`` via a RotatingFileHandler so the desktop ``服务``
+    # to ``log_file_path`` via a RotatingFileHandler so the desktop ``服务``
     # panel can display + offer "open in editor" without depending on
-    # whichever shell launched the process. Logs are process-wide, not
-    # user-owned data, so this deliberately does not derive from data_dir.
-    # Override with VALUZ_LOG_DIR for cloud deployments that template
-    # VALUZ_DATA_DIR by user. ``log_dir`` is created on first write — we don't
-    # ``mkdir`` here so the field stays pure.
-    log_dir: Path = Path.home() / ".valuz-oss" / "logs"
-    log_filename: str = "backend.log"
-
-    @property
-    def log_file(self) -> Path:
-        return self.log_dir / self.log_filename
+    # whichever shell launched the process. Defaults to ``logs/`` under the
+    # SHARED data root (``{user_id}``-stripped — logs are process-wide, not
+    # user-owned), so pointing VALUZ_DATA_DIR elsewhere moves the logs with
+    # it and a dev/test backend can't write into the packaged app's logs by
+    # omission. Override the complete path with VALUZ_LOG_FILE_PATH; the former
+    # VALUZ_LOG_DIR / VALUZ_LOG_FILENAME split is not supported.
+    # The parent directory is created on first write — we don't ``mkdir`` here
+    # so the field stays pure.
+    log_file_path: Path = Field(
+        default_factory=lambda data: shared_root_of(data["data_dir"]) / "logs" / "backend.log",
+    )
 
     # Optional legacy skill-creator staging directory. May contain
     # ``{user_id}``; when unset it lives under ``data_dir(user_id)``.
@@ -224,7 +259,7 @@ class Settings(BaseSettings):
         survives process restarts. Sessions bake this token into their stored
         ``mcp_servers`` headers, and the recovery/resume path replays those
         stored sessions — a per-boot random token would 403 every pre-restart
-        session's internal-MCP calls (harness / docs / automations /
+        session's internal-MCP calls (harness / docs / automations / playbooks /
         connectors), breaking task recovery. ``internal_mcp_token_override``
         (env ``VALUZ_INTERNAL_MCP_TOKEN_OVERRIDE``) still takes precedence for
         tests and explicit configuration.
@@ -243,6 +278,14 @@ class Settings(BaseSettings):
     # Defaults to ~/Valuz; override with VALUZ_USER_PROJECT_ROOT.
     # May contain {user_id} when the deployment mounts per-user workspaces.
     user_project_root: Path = Path.home() / "Valuz"
+
+    # ── Local backup ────────────────────────────────────────────────
+    # Default root for versioned local backups (docs/design/client-local-backup.md).
+    # MUST live outside ``data_dir`` so a backup never recursively contains
+    # itself and survives a data-dir wipe. May contain {user_id}. The user can
+    # point it elsewhere (e.g. an external drive) via Settings; this is only
+    # the initial default. Override with VALUZ_BACKUP_ROOT.
+    backup_root: Path = Path.home() / ".valuz-oss-backups"
 
     # ── Browser feature (chrome-devtools-mcp) ──────────────────────
     # A dedicated, persistent Chrome profile the managed browser uses —
@@ -297,6 +340,19 @@ class Settings(BaseSettings):
     # index's channel controls set this False at their startup path (env
     # ``VALUZ_MARKETPLACE_DIRECT_FALLBACK=0``).
     marketplace_direct_fallback: bool = True
+
+    # ── Factory model defaults ────────────────────────────────────────
+    # The out-of-the-box runtime / model / effort used when the user has never
+    # explicitly chosen (new-agent pre-selection, quick chat, model_resolver's
+    # last fallback). Consumed through ``ext.model_defaults``
+    # (ports/model_defaults.py) — never read these fields directly at call
+    # sites. A distribution build overrides via env (``VALUZ_DEFAULT_RUNTIME``
+    # etc.) or its startup path; the commercial overlay may additionally layer
+    # cloud-delivered per-distribution values by rebinding the port.
+    default_runtime: str = "claude_agent"
+    default_model: str = "claude-sonnet-4-6"
+    default_provider_id: str | None = None
+    default_effort: str = "high"
 
     model_config = {"env_prefix": "VALUZ_"}
 

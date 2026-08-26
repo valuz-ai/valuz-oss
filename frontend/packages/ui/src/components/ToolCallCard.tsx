@@ -128,7 +128,7 @@ export const ToolCallCard = memo(
           ) : null}
           <span
             className={cn(
-              "shrink-0 inline-flex h-[17px] items-center rounded-sm px-2 text-[11px]",
+              "shrink-0 inline-flex h-[17px] items-center rounded-sm px-2 text-2xs",
               STATUS_CLASSES[tc.status],
             )}
           >

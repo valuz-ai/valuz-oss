@@ -50,9 +50,15 @@ _STATUS_ARGS: dict[str, list[str]] = {
 
 # A hung CLI must never stall a provider-list request.
 _PROBE_TIMEOUT_S = 8.0
-# Short enough that a fresh login surfaces quickly, long enough to collapse a
-# settings-page / composer burst into one probe.
-_CACHE_TTL_S = 10.0
+# Login state changes only through explicit login/logout flows, and the
+# app-internal login path invalidates this cache directly
+# (``_invalidate_login_cache``), so the TTL is just a backstop for changes
+# made OUTSIDE the app (e.g. ``claude logout`` in a terminal). Keep it long:
+# each expiry makes the next gated provider fetch pay a CLI subprocess spawn
+# (seconds — Node CLI cold start), which used to stall every composer open
+# when this was 10s. A stale "logged in" during the window is acceptable —
+# picking such a model fails loudly at session creation.
+_CACHE_TTL_S = 600.0
 
 _cache: dict[str, tuple[float, bool]] = {}
 _locks: dict[str, asyncio.Lock] = {}

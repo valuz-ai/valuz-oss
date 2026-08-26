@@ -27,6 +27,11 @@ class ConnectorDatastore:
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
 
+    @property
+    def session(self) -> AsyncSession:
+        """The unit-of-work session shared with transaction-aware ports."""
+        return self._db
+
     async def list_all(self, user_id: str) -> list[ConnectorRow]:
         rows = list(
             (

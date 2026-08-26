@@ -110,11 +110,31 @@ class ModelSettings:
     * ``CodexRuntime`` -> ``model_reasoning_effort`` config override
     * ``DeepAgentsRuntime`` -> langchain backend kwarg
       (``reasoning_effort`` / ``effort`` / ``thinking_level``)
+
+    ``max_input_tokens`` is the model's maximum INPUT context size —
+    langchain model-profile semantics, NOT the vendor "context window"
+    (for split-budget models like GPT-5 the input cap 272k differs from
+    the 400k total; for Anthropic models the two coincide). Set only
+    when the host resolved a channel-declared value for a model the
+    SDKs can't know (gateway aliases like ``valuz-pro-anthropic``);
+    ``None`` means "not declared" and every runtime keeps its SDK /
+    CLI tuned default. Each runtime derives its auto-compaction
+    trigger from it:
+
+    * ``ClaudeAgentRuntime`` -> ``autoCompactWindow`` settings key
+    * ``CodexRuntime`` -> ``model_context_window`` +
+      ``model_auto_compact_token_limit`` config overrides
+    * ``DeepAgentsRuntime`` -> langchain ``profile`` (deepagents'
+      SummarizationMiddleware reads ``profile["max_input_tokens"]``)
+
+    Unlike ``effort`` it is not live-reconcilable: the model is locked
+    at session creation, so the snapshot never drifts.
     """
 
     temperature: float | None = None
     max_tokens: int | None = None
     effort: EffortLevel | None = None
+    max_input_tokens: int | None = None
 
 
 # -- MCP server config (tagged union) --
@@ -134,6 +154,13 @@ class McpHttpServerConfig:
     url: str
     transport: Literal["http", "sse"] = "http"
     headers: dict[str, str] = field(default_factory=dict)
+    # Per-server tool-call timeout (seconds). Lets the owner declare that a
+    # server hosts a legitimately long-blocking tool (e.g. the harness toolkit's
+    # ``await_members``, which parks up to its own ``timeout_s``). Runtimes whose
+    # MCP client imposes a shorter default — codex caps tool calls at 120s —
+    # honor this to avoid aborting a healthy long call. ``None`` = use the
+    # runtime/client default.
+    tool_timeout_sec: float | None = None
 
 
 @dataclass(frozen=True)
@@ -204,7 +231,7 @@ StopReason = EndTurn | BudgetExhausted | Error | UserInterrupt
 # -- Session --
 
 
-RuntimeProvider = Literal["claude_agent", "codex", "deepagents"]
+RuntimeProvider = Literal["claude_agent", "codex", "deepagents", "deepseek_harness"]
 
 
 @dataclass
@@ -262,6 +289,26 @@ class Session:
     # "activeForm"?: str}`. None when the agent has never updated todos in
     # this session.
     todos: list[dict[str, Any]] | None = None
+
+
+# Host-stamped ``Session.metadata`` marker for one-shot "bare completion"
+# sessions — ephemeral helper sessions (generative-UI, memory review) that
+# need exactly one LLM round-trip and none of the agentic scaffolding. Each
+# runtime that sees it strips to the minimum its SDK allows: no built-in
+# tools, no preset/base system prompt where the SDK permits, no settings or
+# skills discovery. Rationale: these sessions are created fresh per call, so
+# every kilobyte of scaffolding is an uncached prefill paid on every
+# invocation (a claude_agent ephemeral turn measured ~38s to first token vs
+# ~2.4s for a stripped in-process call on the same model).
+BARE_COMPLETION_METADATA_KEY = "bare_completion"
+
+
+def is_bare_completion(session: Session) -> bool:
+    """True when the host marked *session* as a bare one-shot completion."""
+    try:
+        return bool(session.metadata.get(BARE_COMPLETION_METADATA_KEY))
+    except Exception:  # noqa: BLE001 — malformed metadata never breaks dispatch
+        return False
 
 
 # -- Message --

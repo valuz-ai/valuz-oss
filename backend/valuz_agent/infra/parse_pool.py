@@ -2,7 +2,7 @@
 
 Why a *process* and not a thread
 --------------------------------
-``pymupdf4llm`` / ``markitdown`` do the bulk of their work in **pure Python**
+``pymupdf4llm`` does the bulk of its work in **pure Python**
 (text-span analysis, table/image detection, Markdown assembly). Pure-Python
 code holds the GIL, so ``asyncio.to_thread`` moves that work off the
 event-loop *thread* but NOT off the GIL — the worker thread still starves the

@@ -20,8 +20,10 @@ import {
   SettingsSection,
   cn,
   IconBox,
+  ModelSelectionHint,
 } from "@valuz/ui";
 import { useCapabilities, useTranslation } from "@valuz/core";
+import { assetUrl } from "@valuz/shared";
 import {
   useCliLoginFlow,
   type CliTool,
@@ -128,10 +130,10 @@ export const ModelSection = () => {
   const [modelOptionsLoaded, setModelOptionsLoaded] = useState(false);
   const [providers, setProviders] = useState<ProviderDescriptor[]>([]);
   const [addOpen, setAddOpen] = useState(false);
-  const [editProvider, setEditProvider] = useState<LLMChannelDetail | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<LLMChannel | null>(
+  const [editProvider, setEditProvider] = useState<LLMChannelDetail | null>(
     null,
   );
+  const [deleteTarget, setDeleteTarget] = useState<LLMChannel | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   const loadProvidersList = useCallback(async () => {
@@ -442,7 +444,7 @@ export const ModelSection = () => {
     base_url?: string;
     default_model?: string;
     protocol?: string;
-    runtime_provider?: "claude_agent" | "codex" | "deepagents";
+    runtime_provider?: "claude_agent" | "codex" | "deepagents" | "deepseek_harness";
     models?: string[];
   }) => {
     await providersApi.create(payload);
@@ -556,6 +558,9 @@ export const ModelSection = () => {
               providerName: string;
               modelId: string;
               itemLabel: string;
+              // Picker-only hint (e.g. points multiplier); rendered as a
+              // right-aligned cell on the option rows, never on the trigger.
+              selectionHint: string | null | undefined;
             };
             const runtime = modelDefaults.default_runtime;
             const allOptions: ModelOpt[] = [];
@@ -585,6 +590,7 @@ export const ModelSection = () => {
                   // to the static brand catalog, same as the Composer picker.
                   itemLabel:
                     m.label !== m.model_id ? m.label : modelLabel(m.model_id),
+                  selectionHint: m.selection_hint,
                 }));
                 allOptions.push(...groupOptions);
                 groups.push({
@@ -701,7 +707,10 @@ export const ModelSection = () => {
                             </SelectLabel>
                             {g.options.map((o) => (
                               <SelectItem key={o.key} value={o.key}>
-                                {o.itemLabel}
+                                <span className="min-w-0 flex-1 truncate">
+                                  {o.itemLabel}
+                                </span>
+                                <ModelSelectionHint hint={o.selectionHint} />
                               </SelectItem>
                             ))}
                           </SelectGroup>
@@ -826,7 +835,7 @@ export const ModelSection = () => {
                         {/* Icon */}
                         {isManaged ? (
                           <img
-                            src="./logo.png"
+                            src={assetUrl("logo.png")}
                             alt="Valuz"
                             className="h-9 w-9 shrink-0 object-contain"
                           />

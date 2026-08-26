@@ -76,7 +76,7 @@ class SessionModel(Base):
             name="ck_sessions_status",
         ),
         CheckConstraint(
-            "runtime_provider IN ('claude_agent', 'codex', 'deepagents')",
+            "runtime_provider IN ('claude_agent', 'codex', 'deepagents', 'deepseek_harness')",
             name="ck_sessions_runtime_provider",
         ),
         Index("ix_sessions_status", "status"),
@@ -137,29 +137,7 @@ class EventModel(Base):
         Index("ix_events_session_type", "session_id", "type"),
         Index("ix_events_message_id", "message_id"),
         Index("uq_events_owner_uid", "user_id", "event_uid", unique=True),
+        # Cursor scan for the user-level control-plane stream:
+        # ``WHERE user_id = ? AND id > ? ORDER BY id`` (get_events_after_for_user).
+        Index("ix_events_owner_id", "user_id", "id"),
     )
-
-
-class DurableOutboxModel(Base):
-    """Transactional outbox for best-effort write-through (``kernel_store=pg``).
-
-    Lives in the LOCAL kernel DB. When a durable mirror write fails (e.g. the
-    OSS user's Postgres is briefly down), the op is recorded here so the local
-    write still succeeds (local-first availability) and a background drainer
-    re-pushes it to the durable store once it recovers. The ``body`` is the
-    ``store_wire`` payload for ``op`` — replaying it is idempotent (UUID PKs /
-    ``event_uid``), so at-least-once redelivery is safe. Unused in strict
-    (``remote``/sandbox) mode, where a durable failure is fail-loud instead.
-    """
-
-    __tablename__ = "durable_outbox"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    op: Mapped[str] = mapped_column(String(40), nullable=False)
-    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    body: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms)
-
-    __table_args__ = (Index("ix_durable_outbox_id", "id"),)

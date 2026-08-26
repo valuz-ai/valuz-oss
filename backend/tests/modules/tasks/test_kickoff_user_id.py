@@ -23,7 +23,7 @@ async def test_kickoff_forwards_user_id_to_lifecycle(monkeypatch) -> None:
 
     monkeypatch.setattr(task_orchestrator._lifecycle, "kickoff", _capture)
 
-    await task_orchestrator.kickoff(
+    await task_orchestrator.lifecycle.kickoff(
         project_id="proj-1",
         goal="do the thing",
         lead_agent_slug="researcher",

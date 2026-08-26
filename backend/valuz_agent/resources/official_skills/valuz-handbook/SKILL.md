@@ -1,4 +1,12 @@
 ---
+name: "valuz-handbook"
+description: "---"
+tags: ["official", "reference"]
+---
+
+# valuz-handbook
+
+---
 name: valuz-handbook
 description: Valuz 产品使用手册——核心概念、常见操作、最佳实践、官方资源（官网 / GitHub）。当用户问 Valuz 怎么用、如何创建任务/项目/Agent、如何配置模型/技能/连接器，或问官网 / GitHub / 源码地址时使用。
 version: 6

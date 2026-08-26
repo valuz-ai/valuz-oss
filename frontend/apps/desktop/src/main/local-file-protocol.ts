@@ -1,6 +1,9 @@
-import { readFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { Readable } from "node:stream";
 import { protocol } from "electron";
 import { parseLocalFileUrl } from "@valuz/shared";
+import { parseByteRange } from "./byte-range";
 
 /**
  * The ``valuz-local://`` scheme serves a local file to the app's OWN renderer so
@@ -61,10 +64,31 @@ export function registerLocalFileProtocolHandler(): void {
       return new Response("bad request", { status: 400 });
     }
     try {
-      const data = await readFile(abs);
-      return new Response(new Uint8Array(data), {
-        headers: { "content-type": mimeFor(abs) },
+      const fileStat = await stat(abs);
+      const range = parseByteRange(request.headers.get("range"), fileStat.size);
+      if (range === "invalid") {
+        return new Response("range not satisfiable", {
+          status: 416,
+          headers: { "content-range": `bytes */${fileStat.size}` },
+        });
+      }
+
+      const start = range?.start ?? 0;
+      const end = range?.end ?? Math.max(fileStat.size - 1, 0);
+      const headers = new Headers({
+        "accept-ranges": "bytes",
+        "cache-control": "no-store",
+        "content-length": String(range ? end - start + 1 : fileStat.size),
+        "content-type": mimeFor(abs),
       });
+      if (range) headers.set("content-range", `bytes ${start}-${end}/${fileStat.size}`);
+      if (request.method === "HEAD") {
+        return new Response(null, { status: range ? 206 : 200, headers });
+      }
+
+      const nodeStream = createReadStream(abs, range ? { start, end } : undefined);
+      const body = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
+      return new Response(body, { status: range ? 206 : 200, headers });
     } catch (err) {
       // Surface why — a 404 here means the resolved path was wrong or the file
       // moved/was deleted after resolve.

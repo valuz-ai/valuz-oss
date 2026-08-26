@@ -12,14 +12,233 @@ former ``kernel_sync`` thread bridge (now fully async).
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from app.schemas import UpdateSessionRequest
 
 import valuz_agent.boot.kernel  # noqa: F401 — sys.path side-effect for app.schemas
 from valuz_agent.adapters import kernel_client
 from valuz_agent.infra.db import async_unit_of_work
+from valuz_agent.ports.message_context import HostRef
 
 logger = logging.getLogger(__name__)
+
+
+async def refresh_citation_policy_for_session(
+    session_id: str,
+    user_id: str,
+    *,
+    citation_enabled_override: bool | None = None,
+    verification_enabled_override: bool | None = None,
+    task_coverage_enabled_override: bool | None = None,
+    host_ref: HostRef | None = None,
+) -> bool:
+    """Apply citation, verification and task-coverage preferences to a session.
+
+    Existing conversations converge lazily before every turn. Internal
+    document-summary runs may override citation/verification values so summaries
+    keep inspectable citation indices without paying for claim-quality verification.
+
+    ``host_ref`` lets edition host-capability policies tune the session: a
+    hosted turn asks ``ext.host_capability_policies`` for a task-coverage
+    override, and a non-``None`` answer is stamped on the session so later
+    host_ref-less turns (queue drains, resumes) keep the hosted decision
+    instead of snapping back to the user's global preference. Precedence:
+    explicit override argument > host policy / stamp > global preference.
+    """
+
+    from valuz_agent.adapters.capability_resolver import citation_skill_dir
+    from valuz_agent.adapters.system_prompt_builder import (
+        CITATION_POLICY_REVISION,
+        ensure_citation_system_policy,
+        remove_citation_system_policy,
+    )
+    from valuz_agent.modules.settings.preferences import (
+        get_conversation_citations_enabled,
+        get_conversation_task_coverage_enabled,
+        get_conversation_verification_enabled,
+    )
+
+    session = await kernel_client.get_session(user_id, session_id)
+    if session is None or session.status in ("terminated",):
+        return False
+
+    skill_dir = citation_skill_dir(session.user_id)
+    skill_path = str(skill_dir.resolve(strict=False))
+    current_skills = list(session.skills or ())
+
+    # Host-scoped task-coverage layer: a hosted turn asks the edition policies
+    # (first non-None wins); a host_ref-less turn falls back to the stamp a
+    # previous hosted turn left on the session.
+    session_valuz = dict((session.metadata or {}).get("valuz") or {})
+    stored_host_override = session_valuz.get("task_coverage_host_override")
+    host_override: bool | None = (
+        stored_host_override if isinstance(stored_host_override, bool) else None
+    )
+    if host_ref is not None:
+        from valuz_agent.ports.extensions import ext
+
+        for policy in list(ext.host_capability_policies):
+            try:
+                answer = policy.task_coverage_override(host_ref)
+            except Exception:  # noqa: BLE001 — a broken policy must never block a turn
+                logger.debug("host capability policy failed", exc_info=True)
+                continue
+            if answer is not None:
+                host_override = answer
+                break
+
+    if (
+        citation_enabled_override is None
+        or verification_enabled_override is None
+        or task_coverage_enabled_override is None
+    ):
+        async with async_unit_of_work(commit=False) as db:
+            citation_enabled = (
+                await get_conversation_citations_enabled(db, user_id=user_id)
+                if citation_enabled_override is None
+                else citation_enabled_override
+            )
+            verification_enabled = (
+                await get_conversation_verification_enabled(db, user_id=user_id)
+                if verification_enabled_override is None
+                else verification_enabled_override
+            )
+            if task_coverage_enabled_override is not None:
+                task_coverage_enabled = task_coverage_enabled_override
+            elif host_override is not None:
+                task_coverage_enabled = host_override
+            else:
+                task_coverage_enabled = await get_conversation_task_coverage_enabled(
+                    db, user_id=user_id
+                )
+    else:
+        citation_enabled = citation_enabled_override
+        verification_enabled = verification_enabled_override
+        task_coverage_enabled = task_coverage_enabled_override
+    verification_enabled = bool(verification_enabled)
+    evidence_binding_enabled = bool(citation_enabled or verification_enabled)
+
+    if evidence_binding_enabled:
+        new_skills = (
+            current_skills if skill_path in current_skills else [*current_skills, skill_path]
+        )
+        new_instructions = ensure_citation_system_policy(session.instructions or "")
+    else:
+        new_skills = [path for path in current_skills if Path(path).name != "citation"]
+        new_instructions = remove_citation_system_policy(session.instructions or "")
+    metadata = dict(session.metadata or {})
+    valuz = dict(metadata.get("valuz") or {})
+    old_revision = valuz.get("citation_policy_revision")
+    old_citation_enabled = valuz.get("citation_enabled")
+    old_verification_enabled = valuz.get("citation_verification_enabled")
+    old_task_coverage_enabled = valuz.get("task_coverage_enabled")
+    old_task_coverage_host_override = valuz.get("task_coverage_host_override")
+    if host_override is not None:
+        # Sticky: only ever written, never dropped by a host_ref-less turn —
+        # the stamp IS what keeps queue drains on the hosted decision.
+        valuz["task_coverage_host_override"] = host_override
+    if evidence_binding_enabled:
+        valuz["citation_policy_revision"] = CITATION_POLICY_REVISION
+    else:
+        valuz.pop("citation_policy_revision", None)
+    valuz["citation_enabled"] = bool(citation_enabled)
+    valuz["citation_verification_enabled"] = verification_enabled
+    valuz["task_coverage_enabled"] = bool(task_coverage_enabled)
+    old_quality_policy = valuz.get("citation_quality_policy")
+    old_task_coverage_policy = valuz.get("task_coverage_policy")
+    from valuz_agent.ports.extensions import ext
+
+    # Resolve the layered pack once, but expose separate snapshots to the two
+    # independent post-run consumers. Enabling Task Coverage must not enable
+    # Citation Audit or install its Evidence binding protocol.
+    policy_metadata = {**metadata, "valuz": valuz}
+    quality_snapshot = None
+    if verification_enabled or task_coverage_enabled:
+        try:
+            quality_snapshot = await ext.citation_quality_policies.resolve(
+                user_id,
+                session_metadata=policy_metadata,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "citation quality policy resolution failed for session %s",
+                session_id,
+            )
+
+    if verification_enabled:
+        if quality_snapshot is None:
+            if isinstance(old_quality_policy, dict):
+                quality_policy = {
+                    **old_quality_policy,
+                    "config": {"unavailable": True},
+                }
+            else:
+                quality_policy = None
+        else:
+            quality_policy = quality_snapshot.session_metadata()
+    else:
+        quality_policy = None
+
+    task_coverage_policy = None
+    if task_coverage_enabled and quality_snapshot is not None:
+        candidate = quality_snapshot.config.get("task_coverage")
+        if isinstance(candidate, dict):
+            task_coverage_policy = dict(candidate)
+            if quality_snapshot.layers:
+                task_coverage_policy["layers"] = [dict(item) for item in quality_snapshot.layers]
+    if quality_policy is None:
+        valuz.pop("citation_quality_policy", None)
+    else:
+        valuz["citation_quality_policy"] = quality_policy
+    if task_coverage_policy is None:
+        valuz.pop("task_coverage_policy", None)
+    else:
+        valuz["task_coverage_policy"] = task_coverage_policy
+    metadata["valuz"] = valuz
+
+    if (
+        new_skills == current_skills
+        and new_instructions == (session.instructions or "")
+        and old_revision == (CITATION_POLICY_REVISION if evidence_binding_enabled else None)
+        and old_quality_policy == quality_policy
+        and old_task_coverage_policy == task_coverage_policy
+        and old_citation_enabled == bool(citation_enabled)
+        and old_verification_enabled == verification_enabled
+        and old_task_coverage_enabled == bool(task_coverage_enabled)
+        and old_task_coverage_host_override == valuz.get("task_coverage_host_override")
+    ):
+        return False
+
+    if evidence_binding_enabled and not skill_dir.is_dir():
+        # Keep the machine policy even when a damaged/partial installation is
+        # missing the skill.  The kernel guard sees the missing skill and marks
+        # source-dependent answers degraded (fail closed).
+        logger.error("citation built-in skill is missing: %s", skill_dir)
+        new_skills = current_skills
+
+    await kernel_client.update_session(
+        user_id,
+        session_id,
+        UpdateSessionRequest(
+            skills=list(new_skills),
+            instructions=new_instructions,
+            metadata=metadata,
+        ),
+    )
+    logger.info(
+        "Refreshed citation policy on session %s "
+        "(enabled=%s verification=%s task_coverage=%s skill=%s revision=%s quality=%s coverage=%s)",
+        session_id,
+        citation_enabled,
+        verification_enabled,
+        task_coverage_enabled,
+        evidence_binding_enabled and skill_path not in current_skills and skill_dir.is_dir(),
+        CITATION_POLICY_REVISION if evidence_binding_enabled else "disabled",
+        quality_policy.get("revision") if quality_policy else "none",
+        task_coverage_policy.get("revision") if task_coverage_policy else "none",
+    )
+    return True
 
 
 async def refresh_docs_capabilities_for_session(session_id: str, user_id: str) -> bool:
@@ -124,6 +343,103 @@ async def refresh_docs_capabilities_for_session(session_id: str, user_id: str) -
     return True
 
 
+# One directory listing per owner, reused across turns. The scan behind it is
+# not free where it matters: on a managed deployment the official-skills root
+# is a network mount, and walking 20 packages measured **600 ms** on
+# valuz-prod 2026-08-07 (175 ms to list, 21 ms per marker stat). Paid once per
+# turn, on the event loop, that stalls every other request the worker is
+# serving.
+#
+# Keyed on the root's mtime, which moves when a package directory is added or
+# removed — the only change this refresher reacts to. The TTL is the backstop
+# for a filesystem that does not propagate parent mtime reliably: worst case a
+# package that landed mid-session is attached one minute later instead of on
+# the next turn, and the session that CREATED it after the landing had it from
+# the start anyway.
+_BUNDLED_PATHS_TTL_S = 60.0
+_bundled_paths_cache: dict[str, tuple[float, float, tuple[str, ...]]] = {}
+
+
+def _bundled_package_paths(user_id: str) -> tuple[str, ...]:
+    """Absolute dirs of every bundled package landed for ``user_id``."""
+    import time
+
+    from valuz_agent.infra.fs_registry import fs_registry
+    from valuz_agent.integrations.skills_official_bootstrap import is_bundled_skill
+
+    official_root = fs_registry.official_skill_root(user_id=user_id)
+    try:
+        mtime = official_root.stat().st_mtime
+    except OSError:
+        return ()
+
+    now = time.monotonic()
+    cached = _bundled_paths_cache.get(user_id)
+    if cached is not None and cached[0] == mtime and now < cached[1]:
+        return cached[2]
+
+    paths = tuple(
+        str(skill_dir.resolve(strict=False))
+        for skill_dir in sorted(path for path in official_root.iterdir() if path.is_dir())
+        if is_bundled_skill(skill_dir)
+    )
+    _bundled_paths_cache[user_id] = (mtime, now + _BUNDLED_PATHS_TTL_S, paths)
+    return paths
+
+
+def reset_bundled_paths_cache() -> None:
+    """Test hook — the cache is process-global."""
+    _bundled_paths_cache.clear()
+
+
+async def refresh_bundled_skills_for_session(session_id: str, user_id: str) -> bool:
+    """Attach bundled official packages that landed after the session was created.
+
+    Why this exists
+    ---------------
+    Bundled official skills (``origin_label == "Built-in"``) are injected into
+    every session unconditionally — ``resolve_session_capabilities`` §1c. But
+    that resolver only runs at create time, while the packages themselves are
+    materialised into ``official_skill_root`` by a separate, asynchronous
+    writer: a release that adds a package, or a managed deployment landing an
+    owner's tree for the first time. A session created in that window gets a
+    snapshot taken before the package existed and never sees it, even though
+    every later session does.
+
+    Same shape and the same rule as the docs refresher above: additive only.
+    A package the user detached from this session stays detached, and nothing
+    here removes an entry the session already carries — the session's own
+    composition is not this function's business, only the packages that could
+    not have been in it.
+
+    Cheap enough for the per-turn path: one directory listing plus a marker
+    stat per package, no manifest parsing. Returns ``True`` when the session
+    row was changed. Safe to call repeatedly.
+    """
+    session = await kernel_client.get_session(user_id, session_id)
+    if session is None or session.status in ("terminated",):
+        return False
+
+    current_skills = list(session.skills or ())
+    known = set(current_skills)
+    missing = [path for path in _bundled_package_paths(user_id) if path not in known]
+    if not missing:
+        return False
+
+    await kernel_client.update_session(
+        user_id,
+        session_id,
+        UpdateSessionRequest(skills=[*current_skills, *missing]),
+    )
+    logger.info(
+        "Attached %d bundled skill(s) that landed after session %s was created: %s",
+        len(missing),
+        session_id,
+        ", ".join(Path(path).name for path in missing),
+    )
+    return True
+
+
 async def _refresh_external_connector_entries(user_id: str, entries: list) -> list:
     """Re-resolve user-attached connector entries with CURRENT credentials.
 
@@ -158,7 +474,7 @@ async def _refresh_external_connector_entries(user_id: str, entries: list) -> li
 
 
 async def refresh_always_on_mcp_for_session(session_id: str, user_id: str) -> bool:
-    """Re-stamp the always-on in-process MCP servers (docs / automations /
+    """Re-stamp the always-on in-process MCP servers (docs / automations / playbooks /
     connectors) on an existing session row with the CURRENT process values.
 
     Why this exists
@@ -195,16 +511,32 @@ async def refresh_always_on_mcp_for_session(session_id: str, user_id: str) -> bo
         return False
 
     run_kind = ((session.metadata or {}).get("valuz", {}) or {}).get("run_kind")
-    fresh = always_on_http_mcp_servers(
+    research_context = ((session.metadata or {}).get("valuz", {}) or {}).get("document_research")
+    locked_document_research = (
+        isinstance(research_context, dict)
+        and research_context.get("purpose") == "document-research"
+        and research_context.get("source_scope") == "locked"
+    )
+    fresh = await always_on_http_mcp_servers(
         session_id, owner_user_id=user_id, toolkit=harness_toolkit_for_run_kind(run_kind)
     )
+    if locked_document_research:
+        # The document-research contract is server-enforced: this child
+        # session can only call the owner-scoped docs MCP. Do not reintroduce
+        # connectors, automations, harness tools or external MCPs while
+        # restamping credentials.
+        fresh = [item for item in fresh if item.name == "valuz_docs"]
     fresh_names = {m.name for m in fresh}
     current = list(session.mcp_servers or ())
     # Drop any existing always-on entry (stale token/url), keep everything
     # else (external catalog connectors the user attached), then re-append the
     # freshly-stamped trio. Order mirrors capability_resolver (external first,
     # always-on last) so an unchanged token yields an identical tuple → no save.
-    preserved = [m for m in current if getattr(m, "name", None) not in fresh_names]
+    preserved = (
+        []
+        if locked_document_research
+        else [m for m in current if getattr(m, "name", None) not in fresh_names]
+    )
     # External catalog connectors carry credentials baked at resolve time —
     # an OAuth bearer header with ~1h expiry for Reportify-backed connectors.
     # Re-resolve them here too, or an EXISTING conversation keeps the stale

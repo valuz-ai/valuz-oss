@@ -196,21 +196,22 @@ async def _default_assistant_slug_if_present(user_id: str) -> str | None:
     left the composer with no agent selected and — since a live session
     locks its binding — no way to pick one: a dead conversation.
 
-    Candidates, in order: the seeded ``default-assistant`` (when a vertical
-    edition ships agent seeds) and the onboarding-created Valuz 小助手
-    (``valuz-helper`` — the de-facto default on OSS installs, whose
-    seed.json is empty). Returns ``None`` when neither exists yet (fresh
-    install before onboarding) so the launcher can fall back to the legacy
-    agentless path instead of failing the launch outright.
+    Candidates, in order: canonical Valurion, then the legacy default
+    assistant. A historical ``valuz-helper`` is an ordinary user Agent and is
+    not treated as the system default.
     """
     from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.agents.builtin import VALURION_SLUG
     from valuz_agent.modules.agents.datastore import AgentDatastore
-    from valuz_agent.modules.agents.seed import DEFAULT_ASSISTANT_SLUG, VALUZ_HELPER_SLUG
+    from valuz_agent.modules.agents.seed import DEFAULT_ASSISTANT_SLUG
 
     try:
         async with async_unit_of_work(commit=False) as db:
             ds = AgentDatastore(db)
-            for slug in (DEFAULT_ASSISTANT_SLUG, VALUZ_HELPER_SLUG):
+            for slug in (
+                VALURION_SLUG,
+                DEFAULT_ASSISTANT_SLUG,
+            ):
                 if await ds.get_agent(user_id, slug) is not None:
                     return slug
     except Exception:  # noqa: BLE001 — launcher must not die on a lookup hiccup

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import mimetypes
 from pathlib import Path
 from typing import Any
 
@@ -8,76 +7,148 @@ from valuz_agent.i18n import t
 from valuz_agent.ports.parser_backend import ParseOptions, ParseResult
 
 _PDF_EXTS = {".pdf"}
-# NOTE: .html intentionally NOT in plain-text; MarkItDown's HTML path uses
-# ASCII internally and crashes on non-ASCII content (CLAUDE.md pitfall).
-# HTML is handled via ``html-to-markdown`` (Goldziher fork) in ``_parse_html``.
+# NOTE: .html intentionally NOT in plain-text — it is converted, not kept
+# verbatim. ``html-to-markdown`` (Goldziher fork) does it in ``_parse_html``.
 _PLAIN_TEXT_EXTS = {".md", ".txt", ".csv", ".json", ".xml"}
 _HTML_EXTS = {".html", ".htm"}
-_OFFICE_EXTS = {".docx", ".xlsx", ".pptx"}
+# Everything ``anydoc`` converts. Far wider than the MarkItDown set it
+# replaced: the legacy OLE formats (.doc/.ppt/.xls), OpenDocument, RTF and
+# EPUB previously fell through to "unsupported" — or, for .rtf, were indexed
+# as their own control words, since RTF source is ASCII and slipped past the
+# unknown-extension UTF-8 guard below.
+_OFFICE_EXTS = {
+    # Word
+    ".doc",
+    ".docx",
+    ".docm",
+    # PowerPoint
+    ".ppt",
+    ".pps",
+    ".pot",
+    ".pptx",
+    ".pptm",
+    ".ppsx",
+    ".ppsm",
+    # Excel
+    ".xls",
+    ".xlsx",
+    ".xlsm",
+    ".xlsb",
+    # OpenDocument
+    ".odt",
+    ".ods",
+    ".odp",
+    # Other document containers
+    ".rtf",
+    ".epub",
+}
+
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"}
 _ALL_EXTS = _PDF_EXTS | _PLAIN_TEXT_EXTS | _HTML_EXTS | _OFFICE_EXTS | _IMAGE_EXTS
 
 
-def _guess_mime(path: Path) -> str:
-    mime, _ = mimetypes.guess_type(str(path))
-    return mime or "application/octet-stream"
-
-
 def _build_rapidocr(rapidocr_cls: Any) -> Any:
-    """Construct ``RapidOCR`` preferring the user-authorized PP-OCRv6
-    bundle in ``~/.valuz-oss/models/light_local/rapidocr/`` when the
-    READY marker is present. Falls back to the library's default
-    behaviour (auto-download from ModelScope) when the marker is
-    absent — that case only fires when the router's capability gate is
-    bypassed (e.g. a direct test or a stale setup job).
+    """Construct ``RapidOCR`` on the user-authorized PP-OCRv6 bundle in
+    ``~/.valuz-oss/models/light_local/rapidocr/``.
+
+    Three outcomes, and the middle one is the point:
+
+    * **marker + all files** — build on the bundle.
+    * **marker but a file missing** — raise. The bundle is broken and must be
+      re-downloaded; quietly substituting rapidocr's auto-download defaults
+      would OCR with a different model generation than the user approved while
+      the READY marker kept reporting the install as healthy.
+    * **no marker** — no bundle was ever authorized. Only reachable when the
+      capability gate is bypassed (a direct test), so keep rapidocr's
+      auto-download behaviour.
 
     rapidocr 3.x switched from individual ``*_model_path`` kwargs to a
     flat OmegaConf ``params`` dict (``"Det.model_path"`` etc.); the
     legacy kwarg shape would raise ``TypeError`` here.
     """
+    from valuz_agent.modules.parser.setup_jobs.rapidocr import (
+        MODEL_FILENAMES,
+        REQUIRED_MODEL_FILENAMES,
+    )
+
     try:
         from valuz_agent.infra.fs_registry import fs_registry
 
         target = fs_registry.parser_model_dir("light_local", "rapidocr")
-        marker = target / "READY"
-        if marker.exists():
-            det = target / "PP-OCRv6_medium_det.onnx"
-            cls = target / "PP-LCNet_x1_0_textline_ori.onnx"
-            rec = target / "PP-OCRv6_medium_rec.onnx"
-            keys = target / "ppocrv6_dict.txt"
-            # ``cls`` is REQUIRED even though we disable it at inference:
-            # rapidocr 3.x builds the Cls component (and loads its model) at
-            # CONSTRUCTION time regardless of ``use_cls`` — a missing
-            # ``Cls.model_path`` raises ``... does not exists`` at init. So all
-            # four bundled files must be present, else fall through to the
-            # default ctor (auto-download).
-            if det.exists() and cls.exists() and rec.exists() and keys.exists():
-                return rapidocr_cls(
-                    params={
-                        "Det.model_path": str(det),
-                        "Rec.model_path": str(rec),
-                        "Rec.rec_keys_path": str(keys),
-                        # Disable the text-line orientation classifier at
-                        # INFERENCE. The bundled PaddlePaddle
-                        # ``PP-LCNet_x1_0_textline_ori.onnx`` has a FIXED input
-                        # shape (80×160) that rapidocr 3.x's Cls preprocessing
-                        # (48×192) doesn't match, so RUNNING it raises
-                        # ``onnxruntime InvalidArgument: invalid dimensions for
-                        # input x``. ``Cls.model_path`` still points at the
-                        # bundled file because rapidocr LOADS it at init (offline,
-                        # no ModelScope download); ``use_cls=False`` means it's
-                        # loaded-but-never-invoked — det+rec carry OCR, and
-                        # orientation correction (rare for KB doc images) is
-                        # skipped rather than crashing the whole parse.
-                        "Cls.model_path": str(cls),
-                        "Global.use_cls": False,
-                    }
-                )
-    except Exception:  # noqa: BLE001
-        # Any error in path resolution — fall through to default ctor.
-        # We deliberately don't raise so that auto-download installs
-        # keep working.
-        pass
+    except Exception:  # noqa: BLE001 — path resolution failed; no bundle to use
+        target = None
+
+    if target is not None and (target / "READY").exists():
+        # A marker means the user authorized and completed a download, so the
+        # bundle is the ONLY acceptable source here. If a file is missing the
+        # bundle is broken — say so. Falling through to rapidocr's auto-download
+        # would "work" while silently OCR'ing with a different model generation
+        # than the one the user approved, and the READY marker would keep
+        # reporting the install as healthy. ``_parse_image`` gates on
+        # ``RapidOcrSetupJob.is_complete()`` (same file check) and returns a
+        # needs-setup result before reaching here; this is the backstop for
+        # callers that bypass that gate.
+        missing = [name for name in REQUIRED_MODEL_FILENAMES if not (target / name).exists()]
+        if missing:
+            raise FileNotFoundError(
+                f"rapidocr model bundle at {target} is incomplete (missing: "
+                f"{', '.join(missing)}) — re-run the rapidocr_models setup"
+            )
+        det = target / MODEL_FILENAMES["det"]
+        cls = target / MODEL_FILENAMES["cls"]
+        rec = target / MODEL_FILENAMES["rec"]
+        keys = target / MODEL_FILENAMES["dict"]
+        # ``cls`` is REQUIRED even though we disable it at inference: rapidocr
+        # 3.x builds the Cls component (and loads its model) at CONSTRUCTION
+        # time regardless of ``use_cls`` — a missing ``Cls.model_path`` raises
+        # ``... does not exists`` at init.
+        return rapidocr_cls(
+            params={
+                "Det.model_path": str(det),
+                "Rec.model_path": str(rec),
+                "Rec.rec_keys_path": str(keys),
+                # Disable the text-line orientation classifier at
+                # INFERENCE. The bundled PaddlePaddle
+                # ``PP-LCNet_x1_0_textline_ori.onnx`` has a FIXED input
+                # shape (80×160) that rapidocr 3.x's Cls preprocessing
+                # (48×192) doesn't match, so RUNNING it raises
+                # ``onnxruntime InvalidArgument: invalid dimensions for
+                # input x``. ``Cls.model_path`` still points at the
+                # bundled file because rapidocr LOADS it at init (offline,
+                # no ModelScope download); ``use_cls=False`` means it's
+                # loaded-but-never-invoked — det+rec carry OCR, and
+                # orientation correction (rare for KB doc images) is
+                # skipped rather than crashing the whole parse.
+                "Cls.model_path": str(cls),
+                "Global.use_cls": False,
+                # Pin the model ROOT at our download dir. rapidocr
+                # otherwise defaults it to ``<its own package>/models``
+                # (``RapidOCR._load_config``), and every engine session
+                # asserts that directory EXISTS before it even looks at
+                # ``model_path``:
+                #     model_root_dir = Path(cfg.get("model_root_dir"))
+                #     if not model_root_dir.exists():
+                #         raise FileNotFoundError(...)
+                # (``inference_engine/onnxruntime/main.py``). In the
+                # PyInstaller build that package dir does not exist —
+                # rapidocr's ``.py`` live in the PYZ archive and we
+                # deliberately don't ship its ~16 MB of bundled weights —
+                # so OCR would die on the root-dir assert even though all
+                # three explicit ``model_path`` values are valid. Source
+                # runs happened to pass only because site-packages has
+                # the directory.
+                "Global.model_root_dir": str(target),
+            }
+        )
+
+    # No bundle at all (no marker) — the user never authorized a download, so
+    # this is only reachable when the capability gate is bypassed (a direct
+    # test). Fall back to rapidocr's auto-download, pinning the root: left at
+    # its default it would resolve to rapidocr's own package dir, which the
+    # packaged build doesn't have — and if it ever did, rapidocr would write
+    # downloaded weights INTO the signed app bundle.
+    if target is not None:
+        return rapidocr_cls(params={"Global.model_root_dir": str(target)})
     return rapidocr_cls()
 
 
@@ -92,10 +163,10 @@ def _light_local_parse_worker(file_path: str, options: ParseOptions | None = Non
 
 
 class LightLocalParser:
-    """Personal baseline: in-process parser using PyMuPDF4LLM + MarkItDown + RapidOCR.
+    """Personal baseline: in-process parser using PyMuPDF4LLM + anydoc + RapidOCR.
 
-    The heavy backends (pymupdf4llm / markitdown) do their work in pure Python
-    and hold the GIL, so both entry points offload to a **separate process**
+    ``pymupdf4llm`` does its work in pure Python and holds the GIL, so both
+    entry points offload to a **separate process**
     via :mod:`valuz_agent.infra.parse_pool` — otherwise a ``to_thread`` worker
     (conversation-attachment parse) or the docs-reindex daemon thread would
     starve the single-threaded event loop through GIL contention. See the
@@ -138,12 +209,21 @@ class LightLocalParser:
         try:
             md = p.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
-            return ParseResult(
-                markdown=f"*Unsupported file type: {ext}*",
-                page_count=0,
-                metadata={"engine": "none", "error": f"unsupported extension {ext}"},
-            )
+            return self._unsupported(ext)
         return ParseResult(markdown=md, page_count=1, metadata={"engine": "plain_text"})
+
+    @staticmethod
+    def _unsupported(ext: str) -> ParseResult:
+        """The one shape for "this parser cannot read this file".
+
+        ``metadata["error"]`` is load-bearing downstream: the attachment
+        pipeline surfaces it verbatim as the user-visible ``error_message``.
+        """
+        return ParseResult(
+            markdown=f"*Unsupported file type: {ext}*",
+            page_count=0,
+            metadata={"engine": "none", "error": f"unsupported extension {ext}"},
+        )
 
     async def parse(self, file_path: str, options: ParseOptions | None = None) -> ParseResult:
         # Await the parse in a worker PROCESS so the GIL-bound work can't block
@@ -204,30 +284,41 @@ class LightLocalParser:
             )
 
     def _parse_office(self, path: Path) -> ParseResult:
+        """Convert any ``_OFFICE_EXTS`` document through anydoc (Rust, MIT).
+
+        Sole backend for these formats. It replaced MarkItDown, which handled
+        only docx/xlsx/pptx and routed sheets through pandas — an 863e8 revenue
+        cell rendered as ``8.630000e+10`` and every empty cell as ``NaN``, both
+        reaching the model verbatim.
+        """
         try:
-            from markitdown import MarkItDown
+            import anydoc
         except ImportError:
             return ParseResult(
-                markdown="*markitdown not installed*",
-                metadata={"engine": "markitdown", "error": "not_installed"},
+                markdown="*anydoc not installed*",
+                metadata={"engine": "anydoc", "error": "not_installed"},
             )
         try:
-            converter = MarkItDown()
-            result = converter.convert(str(path))
-            md = result.text_content if result.text_content else ""
-            return ParseResult(markdown=md, page_count=1, metadata={"engine": "markitdown"})
+            md = anydoc.to_markdown(str(path))
+            return ParseResult(markdown=md, page_count=1, metadata={"engine": "anydoc"})
         except Exception as exc:
+            # anydoc raises a typed ConvertError per failure mode (Encrypted,
+            # Unsupported, Malformed, ResourceLimit, MissingPart) plus OSError
+            # for unreadable files. Surface the reason rather than mapping it —
+            # every one of them means "no markdown came out of this file".
             return ParseResult(
                 markdown=f"*Office parse error: {exc}*",
-                metadata={"engine": "markitdown", "error": str(exc)},
+                metadata={"engine": "anydoc", "error": str(exc)},
             )
 
     def _parse_html(self, path: Path) -> ParseResult:
         """Convert HTML to Markdown via ``html-to-markdown`` (Goldziher fork).
 
-        We deliberately do NOT route HTML through MarkItDown: its HTML
-        backend operates on ASCII and corrupts non-ASCII content (the
-        Chinese-doc failure documented in backend/CLAUDE.md).
+        HTML has its own backend rather than riding with the office formats:
+        anydoc does not read HTML at all. (The predecessor here, MarkItDown,
+        did — but its HTML path operated on ASCII and corrupted Chinese
+        content, which is why HTML moved off it first, well before the office
+        formats followed.)
 
         ``html-to-markdown`` is a typed, modernized fork of markdownify
         (same MIT license) with better HTML5 + table (rowspan/colspan)
@@ -264,21 +355,25 @@ class LightLocalParser:
 
     def _parse_image(self, path: Path) -> ParseResult:
         # ── Authorization gate (plan §"反静默契约") ──
-        # Even if ``rapidocr`` ships with auto-download fallback, we
-        # refuse to OCR until the user has explicitly authorized the
-        # model download via the SetupJob flow. The marker file at
-        # parser_model_dir("light_local","rapidocr")/READY is written
-        # only after a successful authorized download. The v4→v5 cutover
-        # invalidated the previous READY content; the setup-job's
-        # ``is_complete()`` parses ``model_version=`` so users on a
-        # stale v4 install are re-prompted before this gate clears.
+        # Even if ``rapidocr`` ships with auto-download fallback, we refuse to
+        # OCR until the user has explicitly authorized the model download via
+        # the SetupJob flow.
+        #
+        # Delegate to the setup job's ``is_complete()`` rather than re-deriving
+        # the condition here: it owns the definition of a usable bundle (READY
+        # marker + written by a v6 run + every model file still present), and
+        # the setup UI gates on the same call — so "the UI says installed" and
+        # "the parser will use it" can never disagree. This gate used to test
+        # only ``READY.exists()``, which let a bundle with deleted/partial model
+        # files through; the parser then fell through to rapidocr's own
+        # auto-download and silently OCR'd with a different model generation.
         try:
-            from valuz_agent.infra.fs_registry import fs_registry
+            from valuz_agent.modules.parser.setup_jobs.rapidocr import RapidOcrSetupJob
 
-            marker = fs_registry.parser_model_dir("light_local", "rapidocr") / "READY"
+            bundle_ready = RapidOcrSetupJob().is_complete()
         except Exception:
-            marker = None
-        if marker is None or not marker.exists():
+            bundle_ready = False
+        if not bundle_ready:
             return ParseResult(
                 markdown=t("backend.parser.ocrNotAuthorized"),
                 metadata={

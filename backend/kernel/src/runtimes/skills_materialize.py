@@ -114,6 +114,41 @@ def prepare_codex_skills(cwd: str, skills: list[str] | tuple[str, ...]) -> str:
     return _materialize(_agents_plan(cwd), list(skills))
 
 
+# Characters that cannot appear in a path component on Windows. ``:`` is the
+# one seen in the wild — plugin-style skills carry a namespaced frontmatter
+# name (``react:components``) and NTFS reads ``dir:stream`` as an alternate
+# data stream, so creating the directory fails with ``WinError 267`` ("The
+# directory name is invalid"). Rejected on every platform so a project tree
+# materializes identically on macOS, Linux and Windows.
+_UNSAFE_NAME_CHARS = frozenset('<>:"/\\|?*') | frozenset(chr(c) for c in range(32))
+
+# Windows reserves these device names, with or without an extension and
+# regardless of case.
+_RESERVED_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{i}" for i in range(1, 10)}
+    | {f"lpt{i}" for i in range(1, 10)}
+)
+
+
+def _is_portable_segment(name: str) -> bool:
+    """True if ``name`` is usable as a single directory component everywhere.
+
+    The bar is the strictest platform (Windows): no reserved characters, no
+    reserved device name, and no trailing dot/space (Windows silently strips
+    those, so the created directory wouldn't match the name we record).
+    """
+    if not name or name in {".", ".."}:
+        return False
+    if os.sep in name or (os.altsep and os.altsep in name):
+        return False
+    if _UNSAFE_NAME_CHARS & frozenset(name):
+        return False
+    if name != name.rstrip(". "):
+        return False
+    return name.split(".", 1)[0].lower() not in _RESERVED_NAMES
+
+
 def _spec_entry_name(src: str) -> str | None:
     """The Agent Skills spec name for a source dir, from SKILL.md frontmatter.
 
@@ -124,7 +159,8 @@ def _spec_entry_name(src: str) -> str | None:
     deepagents middleware warns on every mismatch at each session assembly —
     so the materialized entry uses the manifest name when one is present.
     Returns ``None`` when SKILL.md is missing/unreadable or the name is not a
-    safe single path segment.
+    portable single path segment (the caller then falls back to the source
+    directory's basename, which by definition already exists on disk).
     """
     manifest = os.path.join(src, "SKILL.md")
     try:
@@ -143,9 +179,15 @@ def _spec_entry_name(src: str) -> str | None:
         if not stripped.startswith("name:"):
             continue
         name = stripped[len("name:"):].strip().strip("\"'")
-        if not name or name in {".", ".."}:
-            return None
-        if "/" in name or "\\" in name or os.sep in name:
+        if not _is_portable_segment(name):
+            logger.warning(
+                "Skill %s declares a frontmatter name %r that is not usable as a "
+                "directory name on every platform (reserved character, device "
+                "name, or empty); materializing under the source directory name "
+                "instead.",
+                src,
+                name,
+            )
             return None
         return name
     return None

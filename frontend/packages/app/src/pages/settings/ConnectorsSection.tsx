@@ -898,7 +898,7 @@ export const ConnectorsSection = () => {
                                         ? "success"
                                         : "outline"
                                     }
-                                    className="text-[10px]"
+                                    className="text-micro"
                                   >
                                     {installedConnector.status === "connected"
                                       ? t("settings.connectors.connected")
@@ -1016,7 +1016,7 @@ export const ConnectorsSection = () => {
                             <span className="text-sm font-medium text-ink-heading">
                               {connector.display_name}
                             </span>
-                            <Badge variant="outline" className="text-[10px]">
+                            <Badge variant="outline" className="text-micro">
                               {connector.transport === "http"
                                 ? "HTTP"
                                 : connector.transport === "sse"
@@ -1024,9 +1024,18 @@ export const ConnectorsSection = () => {
                                   : "Stdio"}
                             </Badge>
                             {connector.connector_type === "recommended" && (
-                              <Badge variant="outline" className="text-[10px]">
+                              <Badge variant="outline" className="text-micro">
                                 {t(
                                   "settings.connectors.recommended" as Parameters<
+                                    typeof t
+                                  >[0],
+                                )}
+                              </Badge>
+                            )}
+                            {connector.connector_type === "builtin" && (
+                              <Badge variant="outline" className="text-[10px]">
+                                {t(
+                                  "settings.connectors.builtIn" as Parameters<
                                     typeof t
                                   >[0],
                                 )}
@@ -1106,16 +1115,18 @@ export const ConnectorsSection = () => {
                             <FilePenLine className="h-3 w-3" />
                           </Button>
                         )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 w-7 p-0 text-error-text hover:bg-error-light hover:text-error-text"
-                          onClick={() =>
-                            void handleDeleteConnector(connector.id)
-                          }
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
+                        {connector.connector_type !== "builtin" && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0 text-error-text hover:bg-error-light hover:text-error-text"
+                            onClick={() =>
+                              void handleDeleteConnector(connector.id)
+                            }
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        )}
                       </div>
                     </div>
                   );

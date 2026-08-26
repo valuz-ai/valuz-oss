@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.sessions.models import (
     QueuedInputRow,
-    SessionArtifactRow,
     SessionAttachmentRow,
 )
 
@@ -51,6 +50,74 @@ class SessionDatastore:
             stmt = stmt.filter(SessionAttachmentRow.consumed_at.is_(None))
         stmt = stmt.order_by(SessionAttachmentRow.created_at)
         return list((await self._db.execute(stmt)).scalars().all())
+
+    async def list_unbound_attachments(
+        self, user_id: str, *, limit: int = 200
+    ) -> list[SessionAttachmentRow]:
+        """This owner's attachments that no turn has claimed, NEWEST first.
+
+        The staging set: uploaded, possibly still parsing, not yet bound to a
+        session. A composer restores its chips from this after a reload, and
+        the quota that bounds abandoned drafts is counted over it.
+
+        Newest first so a caller enforcing a cap can walk until satisfied and
+        stop.
+        """
+        stmt = (
+            select(SessionAttachmentRow)
+            .where(
+                SessionAttachmentRow.user_id == user_id,
+                SessionAttachmentRow.session_id.is_(None),
+            )
+            .order_by(SessionAttachmentRow.created_at.desc())
+            .limit(limit)
+        )
+        return list((await self._db.execute(stmt)).scalars().all())
+
+    async def get_attachments(
+        self, user_id: str, attachment_ids: list[str]
+    ) -> list[SessionAttachmentRow]:
+        """Fetch specific attachments of this owner, in upload order.
+
+        Owner-scoped on purpose: the ids arrive from a client, and this is
+        where a caller's list stops being their own claim about what they may
+        bind.
+        """
+        if not attachment_ids:
+            return []
+        stmt = (
+            select(SessionAttachmentRow)
+            .where(
+                SessionAttachmentRow.user_id == user_id,
+                SessionAttachmentRow.id.in_(attachment_ids),
+            )
+            .order_by(SessionAttachmentRow.created_at)
+        )
+        return list((await self._db.execute(stmt)).scalars().all())
+
+    async def bind_attachments(
+        self, user_id: str, attachment_ids: list[str], session_id: str
+    ) -> list[SessionAttachmentRow]:
+        """Claim unbound attachments for ``session_id``. Returns what it bound.
+
+        Only rows that are still unbound: binding one that already belongs to a
+        turn would move a file out of a conversation that has already shown it.
+        A row missing from the result was not this caller's to bind — a replayed
+        send, or an id from somewhere else — and the caller decides whether that
+        is worth failing over.
+        """
+        if not attachment_ids:
+            return []
+        rows = [
+            r
+            for r in await self.get_attachments(user_id, attachment_ids)
+            if r.session_id is None
+        ]
+        for row in rows:
+            row.session_id = session_id
+        if rows:
+            await self._db.commit()
+        return rows
 
     async def create_attachment(
         self, user_id: str, row: SessionAttachmentRow
@@ -142,70 +209,6 @@ class SessionDatastore:
             )
         )
         await self._db.commit()
-
-    # ---- Artifact operations (agent-delivered "生成文件") ----
-
-    async def list_artifacts(self, user_id: str, session_id: str) -> list[SessionArtifactRow]:
-        """List a session's agent-delivered artifacts, oldest first."""
-        stmt = (
-            select(SessionArtifactRow)
-            .where(
-                SessionArtifactRow.session_id == session_id,
-                SessionArtifactRow.user_id == user_id,
-            )
-            .order_by(SessionArtifactRow.created_at)
-        )
-        return list((await self._db.execute(stmt)).scalars().all())
-
-    async def upsert_artifact(
-        self,
-        user_id: str,
-        session_id: str,
-        *,
-        file_path: str,
-        file_name: str,
-        file_size: int,
-        mime_type: str | None,
-    ) -> SessionArtifactRow:
-        """Insert (or refresh) the artifact for ``(session_id, file_path)``.
-
-        Re-delivering the same path is idempotent: the existing row's
-        ``file_name`` / ``file_size`` / ``mime_type`` are refreshed (the file
-        may have grown / been renamed since the last delivery) instead of
-        appending a duplicate. ``updated_at`` is bumped so a poller can tell the
-        row changed.
-        """
-        existing = (
-            (
-                await self._db.execute(
-                    select(SessionArtifactRow).where(
-                        SessionArtifactRow.session_id == session_id,
-                        SessionArtifactRow.user_id == user_id,
-                        SessionArtifactRow.file_path == file_path,
-                    )
-                )
-            )
-            .scalars()
-            .first()
-        )
-        if existing is not None:
-            existing.file_name = file_name
-            existing.file_size = file_size
-            existing.mime_type = mime_type
-            existing.updated_at = now_ms()
-            await self._db.commit()
-            return existing
-        row = SessionArtifactRow(
-            user_id=user_id,
-            session_id=session_id,
-            file_path=file_path,
-            file_name=file_name,
-            file_size=file_size,
-            mime_type=mime_type,
-        )
-        self._db.add(row)
-        await self._db.commit()
-        return row
 
     # ---- Queued input operations (session input queue) ----
 

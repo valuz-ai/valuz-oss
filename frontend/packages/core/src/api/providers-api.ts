@@ -108,10 +108,23 @@ export const providersApi = {
     return fetchJson("/v1/providers/config", { cache: PROVIDERS_LIST_CACHE });
   },
 
-  async list(): Promise<{ providers: LLMChannel[] }> {
+  /** ``gated: true`` asks the server to apply the subscription-login gate to
+   * the whole list (models stripped from logged-out Claude/Codex channels) —
+   * the composer surfaces' single-request feed, replacing the old per-channel
+   * detail fan-out (1+N requests, each subscription detail paying a CLI login
+   * probe). Leave it off for surfaces that must keep logged-out subscription
+   * models visible (onboarding login card / model-options). */
+  async list(opts?: {
+    gated?: boolean;
+    baseUrl?: string;
+    fresh?: boolean;
+  }): Promise<{ providers: LLMChannel[] }> {
     const res = await fetchJson<{ providers: LLMChannel[] }>(
-      "/v1/providers",
-      { cache: PROVIDERS_LIST_CACHE },
+      opts?.gated ? "/v1/providers?gated=1" : "/v1/providers",
+      {
+        cache: opts?.fresh ? undefined : PROVIDERS_LIST_CACHE,
+        baseUrl: opts?.baseUrl,
+      },
     );
     _hydrateModelLabels(res.providers);
     return res;

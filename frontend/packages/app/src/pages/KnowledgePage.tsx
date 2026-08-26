@@ -49,8 +49,16 @@ import {
   PageLoader,
   SearchInput,
   cn,
+  type DocumentPreviewSlice,
 } from "@valuz/ui";
-import { docsApi, kbApi, usePanelStore } from "@valuz/core";
+import {
+  docsApi,
+  getExecutionTargets,
+  kbApi,
+  recordEntityOrigin,
+  usePanelStore,
+  filesApi,
+} from "@valuz/core";
 import { ResourceActionSlot } from "../components/ResourceActionSlot";
 import type {
   DocDetail,
@@ -62,15 +70,14 @@ import type {
 import { useProjectOutlet } from "@valuz/app/layout";
 import type { DirectoryFieldMode } from "@valuz/app/layout";
 import { usePlatform } from "@valuz/app/platform";
-import { useTranslation } from "@valuz/core";
+import { useTranslation, useResourceCategories } from "@valuz/core";
+import type { ResourceCategory } from "@valuz/shared";
 import { CreateKbDialog } from "../components";
+import { useCardGridColumns } from "../hooks/use-card-grid-columns";
+import { useKbTreePolling } from "../hooks/use-kb-tree-polling";
+import { OriginIcon } from "../components/ExecutionLocationPicker";
 
 type UiStatus = "ready" | "indexing" | "failed" | "queued" | "missing";
-
-const KB_CARD_MIN_WIDTH = 240;
-const KB_CARD_PREFERRED_MIN_WIDTH = 280;
-const KB_CARD_MAX_WIDTH = 360;
-const KB_CARD_GAP = 12;
 
 const KB_ICON_RULES: Array<{ keywords: string[]; icon: LucideIcon }> = [
   {
@@ -175,6 +182,49 @@ function getKbIconCandidates(name: string): LucideIcon[] {
   return [...matched, ...KB_ICON_FALLBACKS];
 }
 
+/**
+ * Built-in KB list categories. A single catch-all bucket by default (the
+ * grid renders headerless when it is the only one, so the OSS view is
+ * unchanged); overlays inject additional categories at runtime via
+ * ``useResourceCategories`` — same seam as skills/agents/connectors.
+ */
+function buildKbCategories(
+  t: ReturnType<typeof useTranslation>["t"],
+): ResourceCategory<KbListItem>[] {
+  return [
+    {
+      id: "personal",
+      label: t("knowledge.groupPersonal" as Parameters<typeof t>[0]),
+      order: 0,
+      filter: () => true,
+    },
+  ];
+}
+
+/**
+ * Mirror of ``CategorizedList``'s bucketing: categories claim items in
+ * order; non-multiAssign categories consume what they match.
+ */
+function bucketizeKbs(
+  kbs: KbListItem[],
+  categories: ResourceCategory<KbListItem>[],
+): { category: ResourceCategory<KbListItem>; items: KbListItem[] }[] {
+  const assigned = new Set<string>();
+  const buckets: {
+    category: ResourceCategory<KbListItem>;
+    items: KbListItem[];
+  }[] = [];
+  for (const cat of categories) {
+    const items = kbs.filter((kb) => !assigned.has(kb.id) && cat.filter(kb));
+    if (cat.sort) items.sort(cat.sort);
+    if (items.length > 0) {
+      buckets.push({ category: cat, items });
+      if (!cat.multiAssign) for (const kb of items) assigned.add(kb.id);
+    }
+  }
+  return buckets;
+}
+
 function getUniqueKbIcons(kbs: KbListItem[]): Record<string, LucideIcon> {
   const used = new Set<LucideIcon>();
   const icons: Record<string, LucideIcon> = {};
@@ -226,17 +276,44 @@ function kbStatusLabel(
   }
 }
 
+/** Prefer the server's own reason over a generic "import failed".
+ *  ``fetchJson`` already lifts FastAPI's ``{detail}`` into ``Error.message``,
+ *  so the upload endpoint's explanation of WHICH file it could not read reaches
+ *  the toast. Falls back to the generic string for network errors and anything
+ *  else without a message. Module-level and pure, so it adds no hook
+ *  dependencies at the call sites. */
+const uploadErrorMessage = (error: unknown, fallback: string): string => {
+  const detail = error instanceof Error ? error.message.trim() : "";
+  return detail || fallback;
+};
+
 export const KnowledgePage = ({
   directoryFieldMode = "picker",
+  managedRootAutoDiscovers = true,
 }: {
   directoryFieldMode?: DirectoryFieldMode;
+  /** See ``CreateKbDialog`` — whether a managed root is one the owning
+   * backend rescans on a timer. */
+  managedRootAutoDiscovers?: boolean;
 } = {}) => {
   const { t } = useTranslation();
-  const { copyFiles } = usePlatform();
+  const platform = usePlatform();
+  const { copyFiles } = platform;
   const [kbs, setKbs] = useState<KbListItem[]>([]);
   const [health, setHealth] = useState<DocsHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const kbIcons = useMemo(() => getUniqueKbIcons(kbs), [kbs]);
+  const { ref: kbGridRef, columns: kbGridColumns } = useCardGridColumns(
+    kbs.length,
+  );
+  const kbCategories = useResourceCategories<KbListItem>(
+    "kb",
+    useMemo(() => buildKbCategories(t), [t]),
+  );
+  const kbBuckets = useMemo(
+    () => bucketizeKbs(kbs, kbCategories),
+    [kbs, kbCategories],
+  );
 
   const [activeKb, setActiveKb] = useState<KbDetail | null>(null);
   const [rootNodes, setRootNodes] = useState<KbTreeNode[]>([]);
@@ -249,7 +326,7 @@ export const KnowledgePage = ({
 
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<DocDetail | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
+  const [preview, setPreview] = useState<DocumentPreviewSlice | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -258,54 +335,22 @@ export const KnowledgePage = ({
   const [deleteDocOpen, setDeleteDocOpen] = useState(false);
 
   const [dragOver, setDragOver] = useState(false);
-  const [dropping, setDropping] = useState(false);
+  // Covers BOTH upload entry points — the header button and the drop zone.
+  // ``dropping`` used to exist for the drop path alone, and even there it was
+  // unreachable: ``handleDrop`` clears ``dragOver`` before setting it, and the
+  // only thing that read it lived inside the ``dragOver &&`` overlay.
+  const [uploading, setUploading] = useState(false);
   const dragCounterRef = useRef(0);
-  const kbGridRef = useRef<HTMLDivElement | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
-  const [kbGridWidth, setKbGridWidth] = useState(0);
 
   const {
     setRightPanel,
     setHeader,
     setHeaderClassName,
     setContentInnerClassName,
+    setRightPanelDefaultSize,
   } = useProjectOutlet();
   const panelSetCollapsed = usePanelStore((s) => s.setCollapsed);
-
-  useEffect(() => {
-    const el = kbGridRef.current;
-    if (!el) return;
-
-    const updateWidth = () => setKbGridWidth(el.clientWidth);
-    updateWidth();
-
-    const ro = new ResizeObserver(updateWidth);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [loading, kbs.length, activeKb]);
-
-  const kbGridColumns = useMemo(() => {
-    if (kbGridWidth <= 0) {
-      return `repeat(auto-fill, ${KB_CARD_MAX_WIDTH}px)`;
-    }
-
-    const maxColumns = Math.max(
-      1,
-      Math.floor(
-        (kbGridWidth + KB_CARD_GAP) /
-          (KB_CARD_PREFERRED_MIN_WIDTH + KB_CARD_GAP),
-      ),
-    );
-    const columns = Math.min(kbs.length || 1, maxColumns);
-    const widthAtMaxColumns =
-      (kbGridWidth - KB_CARD_GAP * (columns - 1)) / columns;
-    const cardWidth = Math.max(
-      KB_CARD_MIN_WIDTH,
-      Math.min(KB_CARD_MAX_WIDTH, Math.floor(widthAtMaxColumns)),
-    );
-
-    return `repeat(${columns}, minmax(${KB_CARD_MIN_WIDTH}px, ${cardWidth}px))`;
-  }, [kbGridWidth, kbs.length]);
 
   // ── Load KB list ──────────────────────────────────────────────────
 
@@ -349,6 +394,49 @@ export const KnowledgePage = ({
     }
   }, []);
 
+  // Re-read the tree in place: same KB, same expansion, same selection.
+  //
+  // Deliberately not ``enterKb`` — that one resets ``expanded`` /
+  // ``selectedDoc`` / ``searchQuery``, which is right when the user opens a
+  // library and wrong when this fires underneath them every few seconds.
+  //
+  // Expanded folders are re-read too. Refreshing only the root would leave a
+  // document *inside* a folder frozen at "等待中" — the same bug one level
+  // down, and the harder one to notice.
+  const refreshTree = useCallback(async () => {
+    if (!activeKb) return;
+    const folderIds = [...expanded];
+    const [root, ...children] = await Promise.all([
+      kbApi.tree(activeKb.id),
+      ...folderIds.map((id) => kbApi.tree(activeKb.id, id)),
+    ]);
+    setRootNodes(root.nodes);
+    if (folderIds.length > 0) {
+      setChildrenMap((prev) => {
+        const next = { ...prev };
+        folderIds.forEach((id, i) => {
+          next[id] = children[i].nodes;
+        });
+        return next;
+      });
+    }
+  }, [activeKb, expanded]);
+
+  // Poll only while something is actually parsing; a settled library costs
+  // nothing. ``missing`` is terminal too — it means the source file is gone,
+  // which no amount of waiting fixes.
+  const treeIsSettling = useMemo(() => {
+    const inFlight = (n: KbTreeNode) =>
+      n.kind === "document" &&
+      (n.status === "queued" || n.status === "processing");
+    return (
+      rootNodes.some(inFlight) ||
+      Object.values(childrenMap).some((nodes) => nodes.some(inFlight))
+    );
+  }, [rootNodes, childrenMap]);
+
+  useKbTreePolling({ active: treeIsSettling, refresh: refreshTree });
+
   const exitKb = useCallback(() => {
     setActiveKb(null);
     setRootNodes([]);
@@ -388,29 +476,54 @@ export const KnowledgePage = ({
     [expanded, childrenMap, activeKb],
   );
 
-  const selectDoc = useCallback(async (docId: string) => {
-    setSelectedDocId(docId);
-    try {
-      const [doc, prev] = await Promise.all([
-        docsApi.get(docId),
-        docsApi
-          .preview(docId)
-          .catch(() => ({ document_id: docId, markdown: "" })),
-      ]);
-      setSelectedDoc(doc);
-      setPreview(prev.markdown || null);
-    } catch {
-      toast.error(t("knowledge.cannotLoadDetail" as Parameters<typeof t>[0]));
-    }
-  }, []);
+  const selectDoc = useCallback(
+    async (docId: string) => {
+      setSelectedDocId(docId);
+      try {
+        const [doc, prev] = await Promise.all([
+          docsApi.get(docId, activeKb?.id),
+          docsApi
+            .preview(docId, activeKb?.id)
+            .catch(() => ({
+              document_id: docId,
+              markdown: "",
+              offset: 0,
+              returned_bytes: 0,
+              total_bytes: 0,
+              truncated: false,
+            })),
+        ]);
+        setSelectedDoc(doc);
+        // The whole response, not just the text: ``truncated`` is what lets the
+        // panel say a large document is only partly shown instead of silently
+        // presenting a window as the document.
+        setPreview(prev.markdown ? prev : null);
+      } catch {
+        toast.error(t("knowledge.cannotLoadDetail" as Parameters<typeof t>[0]));
+      }
+    },
+    [activeKb],
+  );
 
   // ── Right panel ───────────────────────────────────────────────────
 
   useEffect(() => {
     if (!selectedDoc) {
       setRightPanel(null);
+      setRightPanelDefaultSize(undefined);
       return;
     }
+    // The detail is the thing being read once a document is selected — the
+    // parsed markdown, error text — while the list is just where the click
+    // came from. 3:7 in the detail's favor; back to the shell default the
+    // moment no document is open, so no other page inherits this width.
+    //
+    // Asked for as a panel size, not a width class. The shell moved to
+    // resizable panels, where the aside is laid out by the panel group and
+    // carries ``w-full`` — a ``w-[70%]`` class still reaches the element and
+    // is still overridden there, so the page silently got the 345px default
+    // while looking like it had asked for 70%.
+    setRightPanelDefaultSize("70%");
     setRightPanel(
       <DocumentDetailPanel
         doc={{
@@ -446,8 +559,11 @@ export const KnowledgePage = ({
           // on submit, not on parse completion. The auto-poll below
           // then surfaces live ``processing`` → ``ready`` status.
           const docId = selectedDoc.id;
+          // Routed like every other per-document call. Unrouted, a cloud
+          // library's retry posted to the local backend and failed every time.
+          const docKbId = selectedDoc.kb_id ?? activeKb?.id;
           docsApi
-            .reindex([docId])
+            .reindex([docId], docKbId)
             .then(() => {
               toast.success(
                 t("knowledge.reindexStarted" as Parameters<typeof t>[0]),
@@ -462,16 +578,33 @@ export const KnowledgePage = ({
                   ? { ...prev, status: "processing" }
                   : prev,
               );
-              if (activeKb) enterKb(activeKb.id);
+              // Refresh the tree IN PLACE. ``enterKb`` here threw the whole
+              // page away — selection, expansion, the panel — to update one
+              // badge, which read as "重建索引 kicked me back to the list".
+              void refreshTree();
             })
             .catch(() => {
               toast.error(t("common.failed" as Parameters<typeof t>[0]));
             });
         }}
         onDelete={() => setDeleteDocOpen(true)}
+        onViewSource={
+          selectedDoc.source_path
+            ? () => void openSourceFile(selectedDoc.source_path as string)
+            : undefined
+        }
       />,
     );
-  }, [selectedDoc, preview, setRightPanel, activeKb, enterKb]);
+    // The panel and the widened aside live in the LAYOUT, not in this page —
+    // so without this they outlive the page. Settings is not an overlay
+    // route: navigating there unmounts this page, and the document detail
+    // stayed on screen next to the settings content.
+    return () => {
+      setRightPanel(null);
+      setRightPanelDefaultSize(undefined);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshTree/openSourceFile change identity per render; the panel only needs the ones current when it was handed over
+  }, [selectedDoc, preview, setRightPanel, setRightPanelDefaultSize, activeKb]);
 
   // Auto-poll the doc detail while the parse is in flight so the
   // panel reflects live state without a manual refresh. Polls every
@@ -487,9 +620,15 @@ export const KnowledgePage = ({
       selectedDoc.status === "queued" || selectedDoc.status === "processing";
     if (!inFlight) return;
     const docId = selectedDoc.id;
+    // The library this document lives in — the poll has to be routed exactly
+    // like the read that opened the panel. It was not, so on a CLOUD library
+    // every tick asked the LOCAL backend for a document it has never heard of,
+    // the 404 fell into the catch below, and the panel sat frozen while the
+    // list beside it — routed correctly — updated every three seconds.
+    const docKbId = selectedDoc.kb_id ?? undefined;
     const handle = window.setInterval(async () => {
       try {
-        const fresh = await docsApi.get(docId);
+        const fresh = await docsApi.get(docId, docKbId);
         // Race guard: the user may have switched docs between the
         // ``setInterval`` fire and the await resolving. Drop the
         // stale fetch so we don't briefly clobber the new doc's
@@ -505,9 +644,9 @@ export const KnowledgePage = ({
           fresh.status !== "queued" && fresh.status !== "processing";
         if (settled) {
           try {
-            const freshPreview = await docsApi.preview(docId);
+            const freshPreview = await docsApi.preview(docId, docKbId);
             if (selectedDocId === docId) {
-              setPreview(freshPreview.markdown || null);
+              setPreview(freshPreview.markdown ? freshPreview : null);
             }
           } catch {
             // Preview re-fetch failed — keep the old content; non-fatal.
@@ -553,6 +692,57 @@ export const KnowledgePage = ({
     }
   }, [activeKb, enterKb]);
 
+  // Open the document's ORIGINAL file — the uploaded pdf/xlsx, not the parsed
+  // markdown the panel previews. Resolution reuses the file surface every
+  // artifact click already goes through: local + desktop reveals in the
+  // Finder, remote opens the presigned URL (the browser renders pdf/images
+  // natively), and a plain browser on a local file can only say so.
+  const openSourceFile = useCallback(
+    async (sourcePath: string) => {
+      try {
+        // Routed to the library's own backend — the same per-call routing the
+        // detail poll and the retry needed: a cloud-owned path sent to the
+        // local default fails its owner-root allowlist as ``forbidden``.
+        const d = await filesApi.resolveOne(`valuz-file://${sourcePath}`, {
+          baseRef: activeKb ? { kbId: activeKb.id } : {},
+        });
+        // Say which failure it is BEFORE trying to act on the descriptor. A
+        // resolve can succeed as a call and still describe a file that is not
+        // there — ``kind`` and ``absPath`` are filled in either way, so acting
+        // on those alone hands a dead path to the OS and gets back silence.
+        // A knowledge base whose folder was cleaned out (a library under
+        // ``/tmp``, a moved directory) is exactly that shape, and "the button
+        // does nothing" is the worst way to learn it.
+        if (d?.error === "not_found" || d?.exists === false) {
+          toast.error(
+            t("knowledge.statusSourceMissing" as Parameters<typeof t>[0]),
+          );
+          return;
+        }
+        if (d?.error) {
+          toast.error(t("common.failed" as Parameters<typeof t>[0]));
+          return;
+        }
+        if (d?.kind === "local" && d.absPath && platform.isElectron) {
+          // ``revealInFinder`` hands back whatever the OS complained about —
+          // no association for the extension, quarantine, a path that vanished
+          // between the stat above and this call. Empty means it opened.
+          const failure = await platform.revealInFinder(d.absPath);
+          if (failure) toast.error(failure);
+          return;
+        }
+        if (d?.url) {
+          window.open(d.url, "_blank", "noopener,noreferrer");
+          return;
+        }
+        toast.error(t("common.failed" as Parameters<typeof t>[0]));
+      } catch {
+        toast.error(t("common.failed" as Parameters<typeof t>[0]));
+      }
+    },
+    [platform, activeKb],
+  );
+
   // Multipart upload into the KB root — used by both the explicit
   // header button and the drag-drop fallback (when Electron's
   // ``File.path`` is unavailable, i.e. browser or cloud-managed KB).
@@ -560,6 +750,10 @@ export const KnowledgePage = ({
   const uploadKbFiles = useCallback(
     async (files: File[]): Promise<void> => {
       if (!activeKb || files.length === 0) return;
+      // The header button's path had no progress state at all: a 3 MB PDF
+      // simply did nothing visible until the toast landed, which reads as a
+      // click that missed.
+      setUploading(true);
       try {
         await kbApi.uploadFiles(activeKb.id, files);
         toast.success(
@@ -568,8 +762,19 @@ export const KnowledgePage = ({
           }),
         );
         await enterKb(activeKb.id);
-      } catch {
-        toast.error(t("knowledge.importFailed" as Parameters<typeof t>[0]));
+      } catch (error) {
+        // Surface the server's reason, not just "import failed". The upload
+        // endpoint rejects unsupported extensions with a 400 naming them; a
+        // bare `catch {}` swallowed that and left the user guessing — which
+        // was the whole point of making the rejection explicit.
+        toast.error(
+          uploadErrorMessage(
+            error,
+            t("knowledge.importFailed" as Parameters<typeof t>[0]),
+          ),
+        );
+      } finally {
+        setUploading(false);
       }
     },
     [activeKb, enterKb],
@@ -594,7 +799,7 @@ export const KnowledgePage = ({
   const handleDeleteDoc = async () => {
     if (!selectedDoc) return;
     try {
-      await docsApi.delete(selectedDoc.id);
+      await docsApi.delete(selectedDoc.id, selectedDoc.kb_id ?? undefined);
       toast.success(t("knowledge.docDeleted" as Parameters<typeof t>[0]));
       setDeleteDocOpen(false);
       setSelectedDocId(null);
@@ -647,7 +852,7 @@ export const KnowledgePage = ({
       const files = Array.from(e.dataTransfer.files);
       if (files.length === 0) return;
 
-      setDropping(true);
+      setUploading(true);
       try {
         // Electron exposes ``File.path``; when present, copy the local
         // file straight into the KB root (fast — no upload). When absent
@@ -679,10 +884,15 @@ export const KnowledgePage = ({
         } else {
           await uploadKbFiles(files);
         }
-      } catch {
-        toast.error(t("knowledge.importFailed" as Parameters<typeof t>[0]));
+      } catch (error) {
+        toast.error(
+          uploadErrorMessage(
+            error,
+            t("knowledge.importFailed" as Parameters<typeof t>[0]),
+          ),
+        );
       } finally {
-        setDropping(false);
+        setUploading(false);
       }
     },
     [activeKb, enterKb, uploadKbFiles],
@@ -718,7 +928,7 @@ export const KnowledgePage = ({
               paddingRight: "12px",
             }}
             className={cn(
-              "mx-5 flex w-[calc(100%-40px)] items-center gap-2 rounded-[8px] border-b border-[#f7f8fa] py-2.5 text-left transition-colors",
+              "mx-5 flex w-[calc(100%-40px)] items-center gap-2 rounded-lg border-b border-[#f7f8fa] py-2.5 text-left transition-colors",
               node.status === "missing"
                 ? "opacity-60"
                 : "hover:bg-surface-soft",
@@ -755,7 +965,7 @@ export const KnowledgePage = ({
               paddingRight: "12px",
             }}
             className={cn(
-              "mx-5 flex w-[calc(100%-40px)] items-center gap-2 rounded-[8px] border-b border-[#f7f8fa] py-2.5 text-left transition-colors",
+              "mx-5 flex w-[calc(100%-40px)] items-center gap-2 rounded-lg border-b border-[#f7f8fa] py-2.5 text-left transition-colors",
               selectedDocId === node.id
                 ? "bg-brand-light/35"
                 : "hover:bg-surface-soft",
@@ -812,67 +1022,95 @@ export const KnowledgePage = ({
             </div>
           ) : (
             <>
-              <div
-                ref={kbGridRef}
-                className="grid gap-3"
-                style={{
-                  gridTemplateColumns: kbGridColumns,
-                }}
-              >
-                {kbs.map((kb) => {
-                  const st = kbStatusLabel(kb.status, t);
-                  const isProcessing = kb.status === "has_processing";
-                  const KbIcon = kbIcons[kb.id] ?? BookOpen;
-                  return (
-                    <button
-                      key={kb.id}
-                      type="button"
-                      // Always enterable — even while 解析中, so the user can
-                      // open the KB and watch per-doc parse status. The
-                      // "解析中" badge below keeps the in-flight state visible.
-                      onClick={() => enterKb(kb.id)}
-                      className={cn(
-                        "group",
-                        "flex min-h-[148px] w-full flex-col rounded-[12px] border border-surface-border",
-                        "bg-[#ffffff] p-4 text-left shadow-xs transition-all",
-                        "hover:-translate-y-1 hover:bg-[#ffffff] hover:shadow-md",
-                        isProcessing && "bg-brand-light/25",
-                      )}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-[#f3f2ff] text-brand">
-                          <KbIcon className="h-4 w-4" />
-                        </div>
-                        {isProcessing ? (
-                          <Badge variant={st.variant} className="border-0">
-                            {st.text}
-                          </Badge>
-                        ) : null}
-                      </div>
-                      <div className="mt-4 min-w-0">
-                        <div className="truncate text-sm font-medium text-ink-heading">
-                          {kb.name}
-                        </div>
-                        <div className="mt-1 line-clamp-2 break-all text-xs leading-5 text-ink-meta">
-                          {kb.root_path}
-                        </div>
-                      </div>
-                      <div className="mt-auto flex items-center justify-between pt-4">
-                        <span className="text-xs text-ink-meta">
-                          {kb.document_count}{" "}
-                          {t("knowledge.docColumn" as Parameters<typeof t>[0])}
+              <div ref={kbGridRef} className="flex flex-col gap-6">
+                {kbBuckets.map(({ category, items }) => (
+                  <div key={category.id}>
+                    {/* Headerless when a single bucket — the OSS default view
+                        stays exactly as before; headers appear only once an
+                        overlay injects additional categories. */}
+                    {kbBuckets.length > 1 && (
+                      <div className="label-mono mb-3 flex items-center gap-1.5">
+                        <span>{category.label}</span>
+                        <span className="ml-1 text-ink-meta">
+                          {items.length}
                         </span>
-                        <div className="flex items-center gap-1">
-                          <ResourceActionSlot
-                            resourceType="kb"
-                            resource={kb as unknown as Record<string, unknown>}
-                          />
-                          <ChevronRight className="h-4 w-4 shrink-0 text-ink-muted opacity-0 transition-opacity group-hover:opacity-100" />
-                        </div>
                       </div>
-                    </button>
-                  );
-                })}
+                    )}
+                    <div
+                      className="grid gap-3"
+                      style={{
+                        gridTemplateColumns: kbGridColumns,
+                      }}
+                    >
+                      {items.map((kb) => {
+                        const st = kbStatusLabel(kb.status, t);
+                        const isProcessing = kb.status === "has_processing";
+                        const KbIcon = kbIcons[kb.id] ?? BookOpen;
+                        return (
+                          <button
+                            key={kb.id}
+                            type="button"
+                            // Always enterable — even while 解析中, so the user can
+                            // open the KB and watch per-doc parse status. The
+                            // "解析中" badge below keeps the in-flight state visible.
+                            onClick={() => enterKb(kb.id)}
+                            className={cn(
+                              "group",
+                              "flex min-h-[148px] w-full flex-col rounded-2xl border border-surface-border",
+                              "bg-[#ffffff] p-4 text-left shadow-xs transition-all",
+                              "hover:-translate-y-1 hover:bg-[#ffffff] hover:shadow-md",
+                              isProcessing && "bg-brand-light/25",
+                            )}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand">
+                                <KbIcon className="h-4 w-4" />
+                              </div>
+                              {isProcessing ? (
+                                <Badge
+                                  variant={st.variant}
+                                  className="border-0"
+                                >
+                                  {st.text}
+                                </Badge>
+                              ) : null}
+                            </div>
+                            <div className="mt-4 min-w-0">
+                              <div className="flex items-center gap-1">
+                                <span className="truncate text-sm font-medium text-ink-heading">
+                                  {kb.name}
+                                </span>
+                                <OriginIcon origin={kb.exec_origin} />
+                              </div>
+                              <div className="mt-1 line-clamp-2 break-all text-xs leading-5 text-ink-meta">
+                                {kb.root_path}
+                              </div>
+                            </div>
+                            <div className="mt-auto flex items-center justify-between pt-4">
+                              <span className="text-xs text-ink-meta">
+                                {kb.document_count}{" "}
+                                {t(
+                                  "knowledge.docColumn" as Parameters<
+                                    typeof t
+                                  >[0],
+                                )}
+                              </span>
+                              <div className="flex items-center gap-1">
+                                <ResourceActionSlot
+                                  resourceType="kb"
+                                  resource={
+                                    kb as unknown as Record<string, unknown>
+                                  }
+                                />
+                                <ChevronRight className="h-4 w-4 shrink-0 text-ink-muted opacity-0 transition-opacity group-hover:opacity-100" />
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             </>
           )}
@@ -955,9 +1193,6 @@ export const KnowledgePage = ({
             <span className="text-base font-semibold leading-5 text-ink-heading">
               {t("knowledge.knowledgeBase" as Parameters<typeof t>[0])}
             </span>
-            <span className="truncate text-xs leading-4 text-ink-body">
-              {t("knowledge.linkLocalDir" as Parameters<typeof t>[0])}
-            </span>
           </div>
         )}
         {activeKb ? (
@@ -966,6 +1201,7 @@ export const KnowledgePage = ({
               variant="outline"
               size="sm"
               onClick={() => uploadInputRef.current?.click()}
+              loading={uploading}
               aria-label={t("knowledge.uploadFiles" as Parameters<typeof t>[0])}
               className="h-8 w-8 p-0 text-ink-meta hover:text-ink-heading"
             >
@@ -1024,11 +1260,24 @@ export const KnowledgePage = ({
         )}
       </div>
     );
-  }, [activeKb, exitKb, handleRescan, health, loading, rescanning, t]);
+    // ``uploading`` is load-bearing here: the header is memoised into the
+    // layout slot, so leaving it out would freeze the upload button's spinner
+    // on its first value — the header would keep rendering "idle" for the
+    // whole upload, which is the exact symptom this change exists to fix.
+  }, [
+    activeKb,
+    exitKb,
+    handleRescan,
+    health,
+    loading,
+    rescanning,
+    uploading,
+    t,
+  ]);
 
   useEffect(() => {
     setHeader(pageHeader);
-    setHeaderClassName(activeKb ? "h-auto px-5 py-5" : "h-auto px-5 py-5");
+    setHeaderClassName(activeKb ? "h-15 px-5" : "h-15 px-5");
     setContentInnerClassName("p-0");
     return () => {
       setHeader(null);
@@ -1051,17 +1300,14 @@ export const KnowledgePage = ({
       onDragOver={activeKb ? handleDragOver : undefined}
       onDrop={activeKb ? handleDrop : undefined}
     >
-      {dragOver && (
+      {(dragOver || uploading) && (
         <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-brand/5 backdrop-blur-sm">
           <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-brand/40 bg-card/90 px-12 py-10 shadow-lg">
             <Upload className="h-8 w-8 text-brand" />
             <span className="text-sm font-medium text-ink-heading">
-              {dropping
+              {uploading
                 ? t("common.processing" as Parameters<typeof t>[0])
                 : t("knowledge.importFiles" as Parameters<typeof t>[0])}
-            </span>
-            <span className="text-xs text-ink-meta">
-              {t("knowledge.importFiles" as Parameters<typeof t>[0])}
             </span>
           </div>
         </div>
@@ -1086,10 +1332,25 @@ export const KnowledgePage = ({
 
       <CreateKbDialog
         directoryFieldMode={directoryFieldMode}
+        managedRootAutoDiscovers={managedRootAutoDiscovers}
         open={createOpen}
         onOpenChange={setCreateOpen}
         onSubmit={async (data) => {
-          const kb = await kbApi.create(data);
+          const baseUrl = data.target_id
+            ? getExecutionTargets().find((tt) => tt.id === data.target_id)
+                ?.baseUrl
+            : undefined;
+          const kb = await kbApi.create(
+            {
+              name: data.name,
+              root_path: data.root_path,
+              auto_discover: data.auto_discover,
+            },
+            baseUrl ? { baseUrl } : undefined,
+          );
+          // Record BEFORE loadKbs / enterKb so KB-scoped calls for this KB
+          // route to the owning backend on multi-target editions.
+          if (data.target_id) recordEntityOrigin(kb.id, data.target_id);
           toast.success(
             t("knowledge.created" as Parameters<typeof t>[0], {
               name: kb.name,

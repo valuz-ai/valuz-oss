@@ -65,7 +65,10 @@ export function eventDetail(evt: TaskEventLike, t: Translator): string {
       break;
     }
   }
-  for (const key of ["text", "summary", "goal", "error"]) {
+  // ``reason`` carries the human line for paused(kickoff_cancelled),
+  // user_inject_dropped(LEAD_OFFLINE) and abandoned — without it those rows
+  // render with no detail at all.
+  for (const key of ["text", "summary", "goal", "error", "reason"]) {
     const v = p[key];
     if (typeof v === "string" && v.trim()) return v;
   }

@@ -17,6 +17,7 @@ from typing import Any, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from valuz_agent.modules.agents.builtin import VALURION_SLUG
 from valuz_agent.modules.agents.datastore import AgentDatastore
 from valuz_agent.modules.agents.models import AgentRow
 
@@ -31,12 +32,6 @@ _SEED_PATH = Path(__file__).resolve().parent.parent.parent / "resources" / "agen
 # The always-present base agent backing the「新对话」default (09-assistant).
 # Editable, not deletable; its brain mirrors the Settings global model default.
 DEFAULT_ASSISTANT_SLUG = "default-assistant"
-
-# The onboarding-created general assistant (Valuz 小助手). OSS ships an empty
-# seed.json, so on real installs THIS is the de-facto default assistant; the
-# slug lives here (next to DEFAULT_ASSISTANT_SLUG) so every consumer that
-# needs "the default agent" resolves the same well-known candidates.
-VALUZ_HELPER_SLUG = "valuz-helper"
 
 
 def _load_agent_definitions() -> list[dict[str, Any]]:
@@ -90,3 +85,16 @@ async def seed_official_agents(db: AsyncSession, owner: str) -> None:
         created += 1
 
     logger.info("seed_official_agents: inserted %d new official agent(s)", created)
+
+    # Valurion is not an optional edition seed. Every owner gets one canonical
+    # system Agent, even when the bundled official seed list is empty.
+    from valuz_agent.modules.agents.service import AgentService
+
+    await AgentService(db).ensure_builtin_agent(owner)  # type: ignore[arg-type]
+
+
+__all__ = [
+    "DEFAULT_ASSISTANT_SLUG",
+    "VALURION_SLUG",
+    "seed_official_agents",
+]

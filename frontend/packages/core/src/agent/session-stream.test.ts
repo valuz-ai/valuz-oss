@@ -57,19 +57,23 @@ describe("createSessionStreamController", () => {
     ctrl.stop();
   });
 
-  it("should retry with backoff on transient failure and resume from lastSeq", async () => {
+  it("should retry with backoff and resume from the heartbeat-carried history cursor", async () => {
     vi.useFakeTimers();
     const seenSeqs: (number | undefined)[] = [];
     let attempt = 0;
 
     vi.spyOn(sessionsApi, "subscribeEvents").mockImplementation(
-      (_id, onEvent, afterSeq) => {
+      (_id, onEvent, afterSeq, _signal, onHistoryCursor) => {
         seenSeqs.push(afterSeq);
         if (attempt === 0) {
           attempt += 1;
-          // Deliver one frame so lastSeq advances, then fail to trigger retry.
+          // A heartbeat carries the server's HISTORY cursor — the one
+          // frame kind allowed to advance the reconnect cursor.
+          onHistoryCursor?.(7);
+          // A live frame's seq (kernel-local space) must NOT rewind or
+          // otherwise touch it.
           onEvent({
-            seq: 7,
+            seq: 3,
             event: {
               event_type: "session.update",
               payload: { status: "running" },
@@ -99,8 +103,57 @@ describe("createSessionStreamController", () => {
     await vi.advanceTimersByTimeAsync(50);
     await flushMicrotasks();
 
-    // Second call should have happened with afterSeq=7
+    // Second call should have happened with afterSeq=7 (the heartbeat
+    // cursor, unaffected by the live frame's kernel-local seq 3).
     expect(seenSeqs[1]).toBe(7);
+
+    ctrl.stop();
+  });
+
+  it("should NOT advance the reconnect cursor from event frames (live seqs are kernel-local)", async () => {
+    vi.useFakeTimers();
+    const seenSeqs: (number | undefined)[] = [];
+    let attempt = 0;
+
+    vi.spyOn(sessionsApi, "subscribeEvents").mockImplementation(
+      (_id, onEvent, afterSeq) => {
+        seenSeqs.push(afterSeq);
+        if (attempt === 0) {
+          attempt += 1;
+          // Live frame with a numerically LARGE kernel-local seq. Feeding
+          // it into the history cursor would make the reconnect skip
+          // durable history the client never saw.
+          onEvent({
+            seq: 9999,
+            event: {
+              event_type: "session.update",
+              payload: { status: "running" },
+            },
+          });
+          return Promise.reject(new Error("network blip"));
+        }
+        return new Promise<void>(() => {
+          /* never resolve */
+        });
+      },
+    );
+
+    const ctrl = createSessionStreamController({
+      sessionId: "s1",
+      onEvent: () => {},
+      startSeq: 5,
+      backoffSchedule: [50],
+    });
+    ctrl.start();
+
+    await flushMicrotasks();
+    expect(ctrl.snapshot().lastSeq).toBe(5);
+
+    await vi.advanceTimersByTimeAsync(50);
+    await flushMicrotasks();
+
+    // Reconnect resumed from the untouched history cursor, not 9999.
+    expect(seenSeqs[1]).toBe(5);
 
     ctrl.stop();
   });

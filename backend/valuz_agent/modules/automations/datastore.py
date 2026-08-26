@@ -14,7 +14,7 @@ callers thread the owner from each returned row's ``user_id``.
 
 from __future__ import annotations
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from valuz_agent.infra.db import async_commit_with_retry
@@ -46,6 +46,25 @@ class AutomationDatastore:
                     select(AutomationRow).where(
                         AutomationRow.id == automation_id, AutomationRow.user_id == user_id
                     )
+                )
+            )
+            .scalars()
+            .first()
+        )
+
+    async def get_automation_for_update(
+        self, user_id: str, automation_id: str
+    ) -> AutomationRow | None:
+        """Lock one automation for run creation/single-flight decisions."""
+        return (
+            (
+                await self._db.execute(
+                    select(AutomationRow)
+                    .where(
+                        AutomationRow.id == automation_id,
+                        AutomationRow.user_id == user_id,
+                    )
+                    .with_for_update()
                 )
             )
             .scalars()
@@ -170,6 +189,23 @@ class AutomationDatastore:
             .all()
         )
 
+    async def find_due_automations_for_update(
+        self, now: int, *, limit: int
+    ) -> list[AutomationRow]:
+        """Lock a bounded due batch, skipping rows another dispatcher owns."""
+        stmt = (
+            select(AutomationRow)
+            .filter(
+                AutomationRow.status == "enabled",
+                AutomationRow.next_run_at.isnot(None),
+                AutomationRow.next_run_at <= now,
+            )
+            .order_by(AutomationRow.next_run_at, AutomationRow.created_at)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        return list((await self._db.execute(stmt)).scalars().all())
+
     # ── Run rows ──────────────────────────────────────────────────────
 
     async def list_runs(
@@ -201,6 +237,63 @@ class AutomationDatastore:
         self._db.add(row)
         await async_commit_with_retry(self._db, where="AutomationDatastore.create_run")
         return row
+
+    async def get_run(
+        self, user_id: str, automation_id: str, run_id: str
+    ) -> AutomationRunRow | None:
+        return (
+            (
+                await self._db.execute(
+                    select(AutomationRunRow).where(
+                        AutomationRunRow.id == run_id,
+                        AutomationRunRow.automation_id == automation_id,
+                        AutomationRunRow.user_id == user_id,
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+
+    async def active_run(
+        self, user_id: str, automation_id: str
+    ) -> AutomationRunRow | None:
+        return (
+            (
+                await self._db.execute(
+                    select(AutomationRunRow)
+                    .where(
+                        AutomationRunRow.automation_id == automation_id,
+                        AutomationRunRow.user_id == user_id,
+                        AutomationRunRow.status.in_(("queued", "running")),
+                    )
+                    .order_by(AutomationRunRow.triggered_at.desc())
+                )
+            )
+            .scalars()
+            .first()
+        )
+
+    async def mark_run_running(
+        self,
+        user_id: str,
+        automation_id: str,
+        run_id: str,
+        *,
+        started_at: int,
+    ) -> bool:
+        result = await self._db.execute(
+            update(AutomationRunRow)
+            .where(
+                AutomationRunRow.id == run_id,
+                AutomationRunRow.automation_id == automation_id,
+                AutomationRunRow.user_id == user_id,
+                AutomationRunRow.status == "queued",
+            )
+            .values(status="running", started_at=started_at)
+        )
+        await async_commit_with_retry(self._db, where="AutomationDatastore.mark_run_running")
+        return bool(getattr(result, "rowcount", 0))
 
     async def replace_run(self, row: AutomationRunRow) -> AutomationRunRow:
         await self._db.merge(row)

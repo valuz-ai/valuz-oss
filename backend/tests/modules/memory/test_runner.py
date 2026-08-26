@@ -123,6 +123,44 @@ def test_end_to_end_writes_memory(patched):
     assert calls["create"] == 1 and calls["delete"] == 1
 
 
+def test_reuse_source_sandbox_short_circuits_own_sandbox(patched):
+    """When the reviewed session's sandbox is still live, the review runs inside
+    it (``run_ephemeral_review_in_scope`` returns text) and the own-sandbox
+    fallback — create/run/delete + release — is skipped entirely."""
+    monkeypatch, calls = patched
+    payload = json.dumps(
+        {"ops": [{"action": "add", "target": "global", "content": "reused-sandbox fact"}]}
+    )
+    long_text = (
+        "I'm an investor focused on semiconductors; reply in Chinese, keep answers "
+        "concise, and always cite primary sources rather than secondary research. "
+    ) * 2
+    _wire_session(
+        monkeypatch,
+        valuz={"locked_provider_id": "p1", "project_id": None},
+        messages=[
+            SimpleNamespace(
+                user_message=SimpleNamespace(text=long_text), assistant_message="Understood."
+            )
+        ],
+        assistant="FALLBACK-MUST-NOT-RUN",
+    )
+    seen = {"n": 0, "scope": None}
+
+    async def _reuse(_uid, _req, _prompt, *, reuse_scope):  # noqa: ANN001, ANN202
+        seen["n"] += 1
+        seen["scope"] = reuse_scope
+        return payload  # live source sandbox → the review ran there
+
+    monkeypatch.setattr(r.kernel_client, "run_ephemeral_review_in_scope", _reuse)
+
+    asyncio.run(run_extraction_for_session("s1", "u1"))
+    assert seen["n"] == 1
+    assert seen["scope"] == r.SandboxScope(kind="session", id="s1")
+    assert calls["create"] == 0 and calls["delete"] == 0  # fallback skipped
+    assert "reused-sandbox fact" in memory_store.read_entries("u1", "global")
+
+
 def test_review_sessions_share_one_fixed_cwd(patched):
     """Runtimes key per-project artifacts on the session cwd (claude-agent-sdk
     keeps transcripts under ~/.claude/projects/<encoded-cwd>/). A per-call uuid
@@ -385,7 +423,7 @@ def _wire_task(monkeypatch, *, task, runs):  # noqa: ANN001, ANN202
         return task, runs
 
     monkeypatch.setattr(
-        "valuz_agent.modules.tasks.queries.get_task_with_runs",
+        "valuz_agent.modules.tasks.service.get_task_with_runs",
         _get_task_with_runs,
     )
 

@@ -1,24 +1,11 @@
-"""Task stop/resume reconciliation core (VALUZ-RESUME, S1).
+"""RecoveryService — startup recovery + user-initiated stop / resume.
 
-The durable source of truth for a subtask's liveness/completion is the kernel
-session state (status + stop_reason) + the host run/plan rows — NOT the
-in-memory mailbox (which dies on app restart). These pure functions map a
-member's real kernel-session state to a host-side disposition; the
-:class:`RecoveryService` (S2/S4) applies the side effects (DB writes, respawn
-actor loop, mailbox).
-
-The :class:`RecoveryService` (ADR-023 Step 3d) was peeled verbatim out of
-``TaskOrchestrator``: startup Layer-1 sweep (``recover_active_tasks`` /
-``_recover_one_task``) plus the user-initiated Layer-2 stop/resume surface
-(``stop_task`` / ``resume_task`` / ``stop_member`` + ``_interrupt_kernel_session``).
-It re-populates the shared :class:`LiveMemberRegistry` (no dispatch epoch on the
-recovery branch — the Step-1 invariant) before respawning each resumable
-member's actor loop, mirroring ``dispatch_async``'s add-member-before-spawn
-ordering. The pure ``reconcile`` / ``classify_member`` functions below stay
-module-level domain code, imported by both the service and
-``CoordinationService._heartbeat_pending``.
-
-See docs/exec-plans/completed/task-stop-resume.md.
+The durable truth for a member's liveness is its kernel session state + the
+host run/plan rows, never the in-memory mailbox (which dies with the process).
+The pure state→disposition rules live in ``member_state``; this service
+applies their side effects: Layer-1 startup sweep (``recover_active_tasks``),
+Layer-2 ``stop_task`` / ``resume_task`` / ``stop_member``, and the shared
+``_recover_one_task`` reconcile-and-respawn machine.
 """
 
 # ruff: noqa: I001
@@ -26,142 +13,44 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from valuz_agent.adapters import kernel_client
 from valuz_agent.adapters.agent_resolver import spill_goal_brief_if_too_long
+from valuz_agent.i18n import t
 from valuz_agent.infra.db import async_unit_of_work
+from valuz_agent.infra.lifecycle import is_draining
 from valuz_agent.modules.tasks import planning
-from valuz_agent.modules.tasks.actor_runner import ActorRunner, collect_manifest
+from valuz_agent.modules.tasks.actor_runner import ActorRunner
+from valuz_agent.modules.tasks.manifest import MemberManifest, collect_manifest_safe
 from valuz_agent.modules.tasks.coordination import CoordinationService
+from valuz_agent.adapters.agent_resolver import resolve_agent_display_name
+from valuz_agent.modules.tasks import launcher
+from valuz_agent.modules.tasks.events import block_task, finalize_task, record_subtask_stopped  # noqa: I001
 from valuz_agent.modules.tasks.datastore import (
     TaskDatastore,
     TaskEventDatastore,
     TaskSessionDatastore,
+    pick_lead_run,
 )
-from valuz_agent.modules.tasks.live_member_registry import LiveMemberRegistry
-from valuz_agent.modules.tasks.plan import TaskPlan
+from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.modules.tasks.lease import (
+    ActorLease,
+    acquire_actor_lease,
+    load_actor_lease_states,
+)
+from valuz_agent.modules.tasks import mailbox_store
+from valuz_agent.modules.tasks.member_state import (
+    reconcile,
+)
+from valuz_agent.modules.tasks.plan import PlanError, TaskPlan
 
 logger = logging.getLogger(__name__)
-
-# resume     — re-run the member (kernel run_turn on the persisted session);
-#              covers "created but never ran" and "interrupted by host_restart".
-# completed  — member reached a normal terminal turn (end_turn); collect + review.
-# failed     — member errored terminally (non-restart), or resume retry exhausted.
-# in_flight  — member is genuinely still running; leave it to the heartbeat/mailbox.
-Disposition = Literal["resume", "completed", "failed", "in_flight"]
-
-# Resume retry cap (VALUZ-RESUME §5.0): a member node may be resumed at most this
-# many times before we give up and hand it back to the lead as rework.
-RESUME_RETRY_CAP = 3
-
-
-def _require_user_id(user_id: str | None) -> str:
-    if user_id is None:
-        raise ValueError("user_id is required")
-    return user_id
-
-
-def _stop_reason_dict(stop_reason: Any) -> dict[str, Any]:
-    """Normalise a kernel ``stop_reason`` (dict or Error-like object) to a dict."""
-    if not stop_reason:
-        return {}
-    if isinstance(stop_reason, dict):
-        return stop_reason
-    return {
-        "type": getattr(stop_reason, "type", None),
-        "category": getattr(stop_reason, "category", None),
-        "message": getattr(stop_reason, "message", None),
-    }
-
-
-def classify_member(status: str | None, stop_reason: Any) -> Disposition:
-    """Classify a member subtask from its kernel session state.
-
-    ``status``/``stop_reason`` are the kernel ``Session`` fields (status is None
-    when the session row is missing entirely).
-    """
-    if status is None or status == "created":
-        return "resume"  # built but never ran (app stopped before the first turn)
-    if status == "running":
-        return "in_flight"  # genuinely active — don't touch
-    sr = _stop_reason_dict(stop_reason)
-    typ = sr.get("type")
-    if typ == "end_turn":
-        return "completed"  # normal terminal turn
-    if typ == "error":
-        # Interrupted mid-flight → resumable. Three ways a turn loses its
-        # process without it being a task failure:
-        #   * host_restart — a hard kill left the row ``running``;
-        #     ``scan_orphan_runs`` flipped it at boot.
-        #   * interrupted — a graceful host stop tore down the runtime
-        #     subprocess and the runtime stamped it resumable itself.
-        #   * user_interrupt — the user cancelled the in-flight turn (every
-        #     runtime stamps this category on an explicit interrupt). A user
-        #     pressing stop is intent, not a failure.
-        # Any other error = a real execution failure.
-        return (
-            "resume"
-            if sr.get("category") in ("host_restart", "interrupted", "user_interrupt")
-            else "failed"
-        )
-    # idle with no / unknown stop_reason → conservatively resumable.
-    return "resume"
-
-
-@dataclass(frozen=True)
-class MemberReconcile:
-    """The host-side plan for one member run, derived purely from its state.
-
-    The orchestrator applies it: write ``run_status`` to the
-    ``valuz_task_session`` row and ``node_status`` to the plan node; if
-    ``resume`` respawn the member actor loop (kernel run_turn); if
-    ``deliver_member_done`` put a member_done into the lead's mailbox.
-    """
-
-    disposition: Disposition
-    run_status: str | None  # new valuz_task_session.status (None = leave as-is)
-    node_status: str | None  # new plan-node status (None = leave as-is)
-    resume: bool  # caller should respawn the member actor loop
-    deliver_member_done: bool  # caller should notify the lead via mailbox
-    reason: str = ""
-
-
-def reconcile(
-    status: str | None,
-    stop_reason: Any,
-    *,
-    node_attempts: int,
-    retry_cap: int = RESUME_RETRY_CAP,
-) -> MemberReconcile:
-    """Map a member's kernel state + retry count to a concrete disposition.
-
-    Pure — no I/O. ``node_attempts`` is the plan node's ``attempts`` (resume
-    count); once it reaches ``retry_cap`` a would-be resume becomes a failure
-    so a broken member can't be respawned forever.
-    """
-    disp = classify_member(status, stop_reason)
-    if disp == "in_flight":
-        return MemberReconcile("in_flight", None, None, False, False)
-    if disp == "completed":
-        return MemberReconcile("completed", "completed", "in_review", False, True)
-    if disp == "failed":
-        msg = _stop_reason_dict(stop_reason).get("message") or "member session errored"
-        return MemberReconcile("failed", "archived", "rework", False, False, reason=str(msg))
-    # disp == "resume"
-    if node_attempts >= retry_cap:
-        return MemberReconcile(
-            "failed",
-            "archived",
-            "rework",
-            False,
-            False,
-            reason=f"resume retry cap ({retry_cap}) exhausted",
-        )
-    return MemberReconcile("resume", "active", "in_progress", True, False)
-
 
 # ---------------------------------------------------------------------------
 # RecoveryService (ADR-023 Step 3d)
@@ -169,38 +58,18 @@ def reconcile(
 
 
 class RecoveryService:
-    """Startup recovery + user-initiated stop/resume — peeled verbatim out of
-    ``TaskOrchestrator``.
+    """Startup sweep + user stop/resume.
 
-    Owns:
-
-      * :meth:`recover_active_tasks` — Layer-1 startup sweep over
-        ``TaskDatastore.list_active``.
-      * :meth:`_recover_one_task` — reconcile one task's members + re-drive its
-        lead (shared by Layer-1 startup and Layer-2 ``resume_task``). The
-        registry re-population keystone: each resumable member is seeded via
-        ``registry.add_member`` (NO dispatch epoch — recovery branch) BEFORE
-        its actor loop respawns, mirroring ``dispatch_async``'s invariant.
-      * :meth:`stop_task` — Layer-2 cascade interrupt + shutdown broadcast →
-        ``paused``.
-      * :meth:`resume_task` — Layer-2 flip back to ``active`` then
-        ``_recover_one_task``.
-      * :meth:`stop_member` — Layer-2 single-member stop.
-      * :meth:`_interrupt_kernel_session` — best-effort kernel turn interrupt.
-
-    Constructed once at the composition root with the shared registry +
-    runtime ActorRunner + CoordinationService; the orchestrator's recovery
-    surface delegates straight onto it.
+    A resumed member needs no re-seeding: its run row is still ``active``,
+    which is what every process reads to know the member is live.
     """
 
     def __init__(
         self,
         *,
-        registry: LiveMemberRegistry,
         actor_runner: ActorRunner,
         coordination: CoordinationService,
     ) -> None:
-        self._members = registry
         self._actor = actor_runner
         self._coordination = coordination
 
@@ -226,6 +95,18 @@ class RecoveryService:
         recovered = 0
         for task_id, project_id, user_id in active:
             try:
+                # This sweep is cross-owner and unconditional, so with several
+                # host processes every one of them used to re-drive every active
+                # task — N lead loops, N× model spend, competing plan CAS
+                # writes. ``_recover_one_task`` takes the lead session's lease
+                # before respawning anything, so a task someone else is running
+                # is left alone there.
+                #
+                # There used to be an advisory pre-check here as well, keyed by
+                # task id. The lease is keyed by session now, and resolving the
+                # lead session is exactly the first thing the authoritative
+                # path does — so the pre-check bought one skipped query at the
+                # cost of a second answer to the same question.
                 if await self._recover_one_task(task_id, project_id, user_id=user_id):
                     recovered += 1
             except Exception:  # noqa: BLE001
@@ -236,11 +117,21 @@ class RecoveryService:
             )
         return recovered
 
+    async def adopt_orphaned_task(self, task_id: str, project_id: str, user_id: str) -> bool:
+        """Take over one task whose driver died. True when this process has it.
+
+        Same machine as the boot sweep, exposed for the health monitor: boot
+        recovery only ever runs once, so a task orphaned AFTER it (or during the
+        window where the dead driver's lease had not yet expired) has no other
+        way back. The lease acquisition inside decides who wins.
+        """
+        return await self._recover_one_task(task_id, project_id, user_id=user_id)
+
     async def _recover_one_task(
         self,
         task_id: str,
         project_id: str,
-        user_id: str | None = None,
+        user_id: str,
         *,
         lead_instruction: str | None = None,
     ) -> bool:
@@ -255,10 +146,8 @@ class RecoveryService:
         "回复并恢复" is one atomic step instead of resume-then-hope-the-mailbox
         -delivery-races-the-respawn.
         """
-        from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
-        from valuz_agent.modules.tasks.recovery import reconcile
 
-        member_done: list[tuple[str, dict[str, Any]]] = []
+        member_done: list[tuple[str, MemberManifest]] = []
         # (session_id, brief, run_dir, agent_slug, subtask_key) — run_dir + slug
         # + key let us spill an over-cap resume brief to a doc before re-injecting
         # it into the member's goal-mode session.
@@ -274,13 +163,15 @@ class RecoveryService:
             if task is None or task.status not in ("active", "paused"):
                 return False
             runs = await run_ds.list_runs(user_id, task_id)
-            lead_run = next((r for r in runs if r.kind == "lead"), None)
+            lead_run = pick_lead_run(runs)
             if lead_run is None:
                 return False
             lead_session_id = lead_run.session_id
 
             plan = TaskPlan.from_dict(task.plan)
-            plan_dirty = False
+            # (key, fields, bump_attempts) — applied inside persist_plan's CAS
+            # closure; ``plan`` above only feeds the reconcile classification.
+            mutations: list[tuple[str, dict[str, Any], bool]] = []
             for run in runs:
                 if run.kind != "subtask" or run.status not in ("active", "paused"):
                     continue
@@ -291,34 +182,35 @@ class RecoveryService:
                     getattr(ks, "stop_reason", None) if ks is not None else None,
                     node_attempts=(node.attempts if node else 0),
                 )
-                manifest: dict[str, Any] | None = None
+                manifest: MemberManifest | None = None
                 if rec.disposition == "completed":
-                    try:
-                        manifest = await collect_manifest(
-                            run.session_id,
-                            Path(run.run_dir) if run.run_dir else Path(),
-                            "idle",
-                            user_id=user_id,
-                        )
-                    except Exception:  # noqa: BLE001
-                        manifest = {
-                            "session_id": run.session_id,
-                            "status": "completed",
-                            "summary": "",
-                        }
-                    manifest["agent"] = run.agent_slug
+                    manifest = await collect_manifest_safe(
+                        run.session_id,
+                        Path(run.run_dir) if run.run_dir else Path(),
+                        "idle",
+                        agent_slug=run.agent_slug or "",
+                        # The member's own run row bounds what may be attributed
+                        # to it. Under a shared project cwd ``run_dir`` IS the
+                        # whole project, so omitting this (as this call did)
+                        # means "every file here is yours". Observed on qa: this
+                        # path, reached because the watchdog adopted an orphaned
+                        # task, wrote two members a 56-file manifest apiece —
+                        # the same list for both, including reports written
+                        # three and five days earlier.
+                        since_epoch=(run.created_at or 0) / 1000.0,
+                        user_id=user_id,
+                    )
                 if rec.run_status:
                     await run_ds.update_run_by_session(
                         session_id=run.session_id, status=rec.run_status, result_manifest=manifest
                     )
                 if node is not None and rec.node_status:
                     fields: dict[str, Any] = {"status": rec.node_status}
-                    if rec.resume:
-                        fields["attempts"] = node.attempts + 1
                     if rec.reason and rec.node_status == "rework":
                         fields["review_feedback"] = rec.reason
-                    plan.update_node(run.subtask_key, **fields)
-                    plan_dirty = True
+                    # ``node`` was looked up BY ``run.subtask_key``, so a
+                    # non-None node means the key is a real str.
+                    mutations.append((node.key, fields, rec.resume))
                 if rec.deliver_member_done and manifest is not None:
                     member_done.append((run.session_id, manifest))
                 if rec.resume:
@@ -333,49 +225,125 @@ class RecoveryService:
                     )
                 summary.append(f"- {run.subtask_key}({run.agent_slug}): {rec.disposition}")
 
-            if plan_dirty:
-                task.plan = plan.to_dict()
-                await task_ds.update_task(task)
-                await planning.emit_plan_update(
+            if mutations:
+
+                def _apply(p: TaskPlan) -> bool:
+                    changed = False
+                    for key, fields, bump_attempts in mutations:
+                        n = p.get(key)
+                        if n is None:
+                            continue
+                        if bump_attempts:
+                            fields = {**fields, "attempts": n.attempts + 1}
+                        try:
+                            p.update_node(key, **fields)
+                        except PlanError:
+                            logger.warning(
+                                "reconcile: skipping illegal node write %s %s", key, fields
+                            )
+                            continue
+                        changed = True
+                    return changed
+
+                await planning.persist_plan_best_effort(
+                    task_ds,
                     event_ds,
-                    project_id=project_id,
-                    task_id=task_id,
-                    plan=plan,
+                    task,
+                    mutate=_apply,
                     actor="system",
                     session_id=lead_session_id,
                     user_id=user_id,
+                    diverges="reconcile could not write the node statuses it "
+                    f"derived from the run rows ({', '.join(k for k, _, _ in mutations)})",
                 )
 
-        # Evict any stale kernel runtime BEFORE respawning so each resumed turn
-        # builds a FRESH one. Load-bearing for pause→resume: the pause
-        # ``interrupt`` cancels the in-flight turn and leaves the runtime's SDK
-        # client in a broken/cancelled state cached in the kernel orchestrator's
-        # ``_runtimes``; ``_ensure_runtime`` would reuse it and the resumed turn
-        # immediately cancels (9s, null output) → the lead loop ends with an
-        # errored ``stop_reason`` → ``_auto_finalize`` blocks the task. Doing it
-        # HERE — right before respawn, not in the old loop's async
-        # ``_finalize_actor`` — is race-free: the old loop has already exited and
-        # the new one hasn't built its runtime yet. On Layer-1 startup recovery
-        # the cache is empty so it's a harmless no-op.
+        # Evict any stale kernel runtime BEFORE respawning. Load-bearing for
+        # pause→resume: the pause interrupt leaves a cancelled SDK client in
+        # the kernel's runtime cache, and reusing it makes the resumed turn
+        # cancel instantly → auto-finalize blocks the task. Doing it here is
+        # race-free (old loop exited, new one not yet built).
         async def _evict_runtime(sid: str) -> None:
             try:
                 await kernel_client.cleanup_runtime(sid)
             except Exception:  # noqa: BLE001
                 pass
 
-        # Re-drive (outside the DB txn): register the lead mailbox, deliver any
-        # completed members' results, respawn resumable members (kernel run_turn
-        # on the persisted session), then respawn the lead with a reconcile brief.
-        mailbox_registry.register(lead_session_id)
-        for member_sid, manifest in member_done:
-            mailbox_registry.put(
-                lead_session_id,
-                InboxMsg(kind="member_done", from_session=member_sid, payload=manifest),
+        # Everything above is read + reconcile and safely repeatable. Everything
+        # below RESPAWNS: kernel evictions, member actor loops driving real
+        # turns, then the lead. Take the task's lease first, and give up if a
+        # peer holds it.
+        #
+        # The advisory check in ``recover_active_tasks`` cannot cover this: at a
+        # cold boot NOBODY holds a lease yet, so every worker passes it, and
+        # without an authoritative acquisition here each of them would respawn
+        # the same members — duplicate turns, duplicate model spend — before the
+        # lead loops raced for ownership. The lease travels into the lead loop
+        # so it does not re-acquire and fence the recovery that spawned it.
+        lease = await acquire_actor_lease(session_id=lead_session_id, task_id=task_id)
+        if lease is None:
+            logger.info(
+                "recover: task %s is already being driven — leaving it alone", task_id
             )
+            return False
+        try:
+            return await self._respawn(
+                task_id=task_id,
+                project_id=project_id,
+                user_id=user_id,
+                lead_session_id=lead_session_id,
+                lease=lease,
+                member_done=member_done,
+                resume_members=resume_members,
+                summary=summary,
+                lead_instruction=lead_instruction,
+                evict=_evict_runtime,
+            )
+        except BaseException:
+            # We hold the task but are not going to drive it — hand it back now
+            # rather than making the next driver wait out the TTL.
+            await lease.release()
+            raise
+
+    async def _respawn(
+        self,
+        *,
+        task_id: str,
+        project_id: str,
+        user_id: str,
+        lead_session_id: str,
+        lease: ActorLease,
+        member_done: list[tuple[str, MemberManifest]],
+        resume_members: list[tuple[str, str, str, str, str]],
+        summary: list[str],
+        lead_instruction: str | None,
+        evict: Any,
+    ) -> bool:
+        """Side-effectful half of recovery, run under the task's lease.
+
+        Split out so the lease can wrap it as one unit: register the lead
+        mailbox, deliver any completed members' results, respawn resumable
+        members (kernel ``run_turn`` on the persisted session), then respawn the
+        lead with a reconcile brief.
+        """
+        _evict_runtime = evict
+        for member_sid, manifest in member_done:
+            # Durable: a restart re-seeds results for a lead whose loop may
+            # come up in a different process than this one.
+            async with async_unit_of_work() as db:
+                await mailbox_store.enqueue(
+                    db,
+                    session_id=lead_session_id,
+                    task_id=task_id,
+                    project_id=project_id,
+                    user_id=user_id,
+                    kind="member_done",
+                    from_session=member_sid,
+                    origin="recovery-reseed",
+                    payload=dict(manifest),
+                )
         for member_sid, brief, m_run_dir, m_slug, m_key in resume_members:
             await _evict_runtime(member_sid)
-            self._members.add_member(task_id, member_sid)
-            resume_prompt = brief or "继续完成你的子任务,完成后会汇报给 lead。"
+            resume_prompt = brief or t("task.brief.memberResumeDefault")
             # Fence the goal-mode re-injection: an over-cap subtask goal would
             # blow the ``/goal`` payload again on resume — spill it to a doc and
             # re-inject a short pointer instead (same fence as first dispatch).
@@ -387,40 +355,49 @@ class RecoveryService:
                     label=f"{m_slug}-{m_key}",
                     is_lead=False,
                 )
-            asyncio.create_task(
-                self._actor.run_actor_loop(
-                    session_id=member_sid,
-                    initial_prompt=resume_prompt,
-                    role="subtask",
-                    task_id=task_id,
-                    project_id=project_id,
-                    user_id=user_id,
-                )
+            # No dispatch_epoch on the recovery branch: a resumed member's
+            # artifacts predate the respawn, so attribution restarts from zero.
+            launcher.spawn_actor(
+                self._actor,
+                session_id=member_sid,
+                prompt=resume_prompt,
+                role="subtask",
+                task_id=task_id,
+                project_id=project_id,
+                user_id=user_id,
             )
         await _evict_runtime(lead_session_id)
+        # Localized: this is the lead's USER-turn prompt on resume, and a model
+        # answers in the language it was prompted in — a hardcoded one flips an
+        # otherwise-English task transcript after any restart.
         lead_brief = (
-            "<system-recovery>\n本任务已被恢复(系统重启或用户恢复)。子任务对账结果:\n"
-            + ("\n".join(summary) if summary else "(无在途子任务)")
-            + "\n\n请先调用 get_plan 对齐当前状态,然后继续编排:派发未决子任务、"
-            "审核 in_review、重试 rework;全部完成后调用 finish_task。\n</system-recovery>"
+            "<system-recovery>\n"
+            + t(
+                "task.brief.recoveryLead",
+                params={
+                    "summary": "\n".join(summary)
+                    if summary
+                    else t("task.brief.recoveryNoMembers")
+                },
+            )
+            + "\n</system-recovery>"
         )
         if lead_instruction and lead_instruction.strip():
             lead_brief += (
                 '\n<user-instruction source="resume">\n'
                 + lead_instruction.strip()
                 + "\n</user-instruction>\n"
-                "用户在恢复任务时附带了上面的指令——它是权威的用户意图,请优先据此调整编排"
-                "(必要时 modify_plan / rework)再继续。"
+                + t("task.brief.recoveryUserInstruction")
             )
-        asyncio.create_task(
-            self._actor.run_actor_loop(
-                session_id=lead_session_id,
-                initial_prompt=lead_brief,
-                role="lead",
-                task_id=task_id,
-                project_id=project_id,
-                user_id=user_id,
-            )
+        launcher.spawn_actor(
+            self._actor,
+            session_id=lead_session_id,
+            prompt=lead_brief,
+            role="lead",
+            task_id=task_id,
+            project_id=project_id,
+            user_id=user_id,
+            lease=lease,
         )
         return True
 
@@ -428,14 +405,13 @@ class RecoveryService:
     # Layer 2 (VALUZ-RESUME §5.5): user-initiated stop / resume
     # ------------------------------------------------------------------
 
-    async def _interrupt_kernel_session(self, session_id: str, user_id: str | None = None) -> None:
+    async def _interrupt_kernel_session(self, session_id: str, user_id: str) -> None:
         """Best-effort: ask the kernel runtime to stop an in-flight turn.
 
         Returns silently whether or not a runtime was active — a member parked
         between turns has no live runtime (``interrupt`` returns False), and the
         ``shutdown`` mailbox message is what stops its actor loop instead.
         """
-        user_id = _require_user_id(user_id)
         try:
             await kernel_client.interrupt(user_id, session_id)
         except Exception:  # noqa: BLE001
@@ -447,27 +423,16 @@ class RecoveryService:
         project_id: str,
         *,
         target_status: str = "paused",
-        user_id: str | None = None,
+        user_id: str,
     ) -> bool:
-        """User-initiated cascade halt → ``paused`` (pause) or ``stopped`` (stop).
+        """Cascade halt → ``paused`` (from active) or ``stopped`` (from
+        active/paused; soft-terminal but revivable via resume_task).
 
-        Interrupts the lead + every in-flight member, broadcasts ``shutdown`` to
-        their actor loops, parks in-flight member runs ``→paused`` AND their
-        running plan nodes (``in_progress`` → ``paused``) so the panel stops
-        rendering them as actively running, then flips the task to
-        ``target_status``:
-
-          * ``paused`` — recoverable pause. Layer-1 app-restart recovery skips it;
-            the user resumes explicitly via ``resume_task``. Only from ``active``.
-          * ``stopped`` — user-driven stop. Soft-terminal in the UI (no resume
-            button) but still revivable via chat/inject (``resume_task`` accepts
-            it). From ``active`` or an already-``paused`` task.
-
-        Members + plan nodes are parked identically for both (``stopped`` stays
-        revivable by design); only the task status + the emitted event differ.
-        Returns False if the task is gone or the transition is illegal.
+        Interrupts lead + members, broadcasts shutdown, parks in-flight runs
+        and their ``in_progress`` plan nodes ``→paused``, then flips the task.
+        Members are parked identically for both targets. Returns False when
+        the task is gone or the transition is illegal.
         """
-        user_id = _require_user_id(user_id)
         async with async_unit_of_work() as db:
             task_ds = TaskDatastore(db)
             run_ds = TaskSessionDatastore(db)
@@ -480,14 +445,26 @@ class RecoveryService:
             if task.status not in allowed_from:
                 return False
             runs = await run_ds.list_runs(user_id, task_id)
-            lead_session_id: str | None = next(
-                (r.session_id for r in runs if r.kind == "lead"), None
-            )
+            lead_pick = pick_lead_run(runs)
+            lead_session_id: str | None = lead_pick.session_id if lead_pick else None
             member_sids = [
                 r.session_id for r in runs if r.kind == "subtask" and r.status == "active"
             ]
             for sid in member_sids:
                 await run_ds.update_run_by_session(session_id=sid, status="paused")
+            # The lead's own run too. Its loop leaves through the
+            # externally-managed exit, which skips finalize by design — the
+            # terminal state belongs to whoever stopped it — so nothing else
+            # ever settles this row. Observed on qa: a task ``stopped`` for
+            # twelve minutes, its lease correctly released, and its lead run
+            # still reading ``active``. Anything judging liveness from the run
+            # index rather than the lease saw a runner that had long since
+            # gone. ``paused`` is the same word the members get, and it is the
+            # resumable one.
+            if lead_session_id and lead_pick is not None and lead_pick.status == "active":
+                await run_ds.update_run_by_session(
+                    session_id=lead_session_id, status="paused"
+                )
             # Park only the running member's node (``in_progress`` = a live
             # member session, the one we're halting) → ``paused`` so the panel
             # stops spinning it. Leave ``in_review`` (member finished, awaiting
@@ -496,45 +473,66 @@ class RecoveryService:
             # a parked node back to ``in_progress`` if its run survived;
             # otherwise it stays ``paused`` and is re-dispatchable (ready_keys +
             # resolve_dispatch_node both accept ``paused``).
-            plan = TaskPlan.from_dict(task.plan)
-            parked = 0
-            for node in plan.nodes:
-                if node.status == "in_progress":
-                    plan.update_node(node.key, status="paused")
-                    parked += 1
-            if parked:
-                task.plan = plan.to_dict()
-            task.status = target_status
-            await task_ds.update_task(task)
-            if parked:
-                await planning.emit_plan_update(
-                    event_ds,
+            def _park_running(p: TaskPlan) -> bool:
+                parked = 0
+                for node in p.nodes:
+                    if node.status == "in_progress":
+                        p.update_node(node.key, status="paused")
+                        parked += 1
+                return parked > 0
+
+            await planning.persist_plan_best_effort(
+                task_ds,
+                event_ds,
+                task,
+                mutate=_park_running,
+                actor="user",
+                session_id=lead_session_id,
+                user_id=user_id,
+                diverges="running nodes stay in_progress on a halted task, so the "
+                "panel keeps spinning them until resume reconciles",
+            )
+            if target_status == "stopped":
+                # Terminal write — goes through finalize_task so the status
+                # flip rides the task_state guard AND ``task.finalized`` is
+                # announced (the sandbox-TTL clamp listens on it; the old
+                # direct ``update_task`` write here skipped both). The event
+                # type stays the raw "stopped" — it drives UI status + timer.
+                await finalize_task(
+                    db,
+                    user_id=user_id,
                     project_id=project_id,
                     task_id=task_id,
-                    plan=plan,
+                    status="stopped",
+                    event_type="stopped",
                     actor="user",
-                    session_id=lead_session_id,
-                    user_id=user_id,
+                    payload={"members_paused": len(member_sids)},
                 )
-            await event_ds.append_event(
-                user_id,
-                project_id,
-                task_id,
-                target_status,  # "paused" | "stopped" — drives UI status + timer
-                actor="user",
-                payload={"members_paused": len(member_sids)},
-            )
+            else:
+                if not await task_ds.update_task_status(user_id, task_id, "paused"):
+                    # Lost the flip (lead finalize landed between our status
+                    # check and the write) — the winner owns the terminal;
+                    # appending "paused" here would put a lying event on a
+                    # completed/blocked task's timeline.
+                    logger.warning("stop_task: pause flip lost a race for %s", task_id)
+                    return False
+                await event_ds.append_event(
+                    user_id,
+                    project_id,
+                    task_id,
+                    "paused",  # drives UI status + timer
+                    actor="user",
+                    payload={"members_paused": len(member_sids)},
+                )
 
         # Cascade interrupt + shutdown (outside the DB txn).
         for sid in member_sids:
             await self._interrupt_kernel_session(sid, user_id=user_id)
         if lead_session_id is not None:
             await self._interrupt_kernel_session(lead_session_id, user_id=user_id)
-        self._coordination._broadcast_shutdown(task_id)
-        if lead_session_id is not None:
-            from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
-
-            mailbox_registry.put(lead_session_id, InboxMsg(kind="shutdown"))
+        # The lead reads the paused task on its own poll, from whichever
+        # process runs it — which the queued ``shutdown`` this replaced could
+        # only manage when that happened to be this one.
         return True
 
     async def resume_task(
@@ -543,50 +541,20 @@ class RecoveryService:
         project_id: str,
         *,
         actor: str = "user",
-        user_id: str | None = None,
+        user_id: str,
         instruction: str | None = None,
     ) -> dict[str, Any]:
-        """User-initiated resume of a ``paused`` / ``blocked`` / ``stopped`` /
-        ``completed`` task.
+        """Resume a ``paused`` / ``blocked`` / ``stopped`` / ``completed`` task
+        (``completed`` = deliberate reopen to supplement its subtasks; only
+        ``abandoned`` is hard-terminal, and ``draft`` launches via commit_task).
 
-        ``instruction`` — optional free-text user guidance that rides along
-        with the resume (":intervene action=resume text=…" / chat inject on a
-        halted task). Recorded as a ``user_inject`` event and embedded in the
-        respawned lead's recovery brief (see ``_recover_one_task``).
+        Flips the task ``active``, reactivates the lead run row when a prior
+        finish marked it completed, then reconciles + respawns through the
+        shared ``_recover_one_task`` machine. ``instruction`` rides along into
+        the respawned lead's recovery brief and is recorded as ``user_inject``.
 
-        Flips the task back to ``active`` then reconciles + respawns members
-        and re-drives the lead via the shared ``_recover_one_task`` machine
-        (same path as Layer-1 startup recovery; only the trigger differs).
-
-        Allowed source states (per ``task_state.ALLOWED_TRANSITIONS``):
-
-        - ``paused`` — user-intervened pause (REST /intervene action=pause)
-        - ``blocked`` — auto-finalize couldn't close (unresolved nodes, OR a
-          mid-turn lead crash surfaced as ``task_blocked``). Recoverable.
-        - ``stopped`` — user-driven termination (typically via inject "停止此
-          任务" → lead calling finish_task(status="stopped")). The lead run
-          was marked "completed" by finish_task; we flip it back to "active"
-          here so ``_recover_one_task`` rebuilds a fresh lead actor.
-        - ``completed`` — a finished task REOPENED to supplement or adjust
-          subtasks from a second chat-plan (chat-plan "区分场景"). Like
-          ``stopped``, the lead run was marked "completed" by finish_task; we
-          reactivate it the same way. The caller is expected to immediately
-          modify_plan / inject the new subtasks. A genuinely new goal should
-          be a fresh follow-up task, not a reopen.
-
-        Only ``abandoned`` is hard-terminal (draft discarded, nothing to
-        revive). ``draft`` is also rejected — call ``commit_task`` to launch
-        the lead for the first time.
-
-        Returns a dict explaining what happened:
-
-        - ``{ok: True, prior_status, resumed: True}`` — flip + recovery kicked
-        - ``{ok: False, error, prior_status}`` — illegal source state or
-          task not found; caller surfaces ``error`` to the user.
-
-        Why a dict, not a bool: the chat-facing ``resume_task`` MCP tool needs
-        a human-readable reason to feed back when resume fails (legacy
-        ``True/False`` collapses "wrong status" with "task not found").
+        Returns ``{ok, prior_status, resumed|error}`` — a dict rather than a
+        bool because the MCP tool needs a human-readable rejection reason.
         """
         from valuz_agent.modules.tasks.task_state import assert_transition
 
@@ -623,7 +591,15 @@ class RecoveryService:
             # skip the formal check there.
             if prior_status != "failed":
                 assert_transition(prior_status, "active")
-            await task_ds.update_task_status(user_id, task_id, "active")
+            if not await task_ds.update_task_status(user_id, task_id, "active"):
+                # Lost the flip (e.g. a concurrent stop moved the task under
+                # us) — do NOT append "resumed", normalise runs, or clear the
+                # failure notification off a state we did not create.
+                return {
+                    "ok": False,
+                    "error": "resume_task: task changed concurrently — refresh and retry",
+                    "prior_status": prior_status,
+                }
             # When reviving a stopped OR completed task: finish_task previously
             # marked the lead run as "completed" and broadcast shutdown to
             # members. _recover_one_task respawns the lead unconditionally, but
@@ -632,7 +608,7 @@ class RecoveryService:
             # rows may carry any run status — normalise them the same way.
             if prior_status in ("stopped", "completed", "failed"):
                 runs = await run_ds.list_runs(user_id, task_id)
-                lead_run = next((r for r in runs if r.kind == "lead"), None)
+                lead_run = pick_lead_run(runs)
                 if lead_run is not None and lead_run.status != "active":
                     await run_ds.update_run_by_session(
                         session_id=lead_run.session_id,
@@ -673,7 +649,46 @@ class RecoveryService:
         )
         return {"ok": ok, "prior_status": prior_status, "resumed": ok}
 
-    async def stop_member(self, session_id: str, user_id: str | None = None) -> bool:
+    async def inject_or_revive(
+        self,
+        *,
+        task_id: str,
+        project_id: str,
+        text: str,
+        from_session_id: str,
+        user_id: str,
+    ) -> dict[str, Any]:
+        """Deliver a user instruction to the lead — reviving a halted task.
+
+        The ONE spelling of the "talking to a halted task is resume intent"
+        policy (the :intervene contract promises chat/inject can revive).
+        Both transports (REST :inject, MCP inject_into_task) call this; the
+        policy used to be duplicated in each with drifting result shaping.
+        Returns the messaging result dict, reshaped on the revive path to
+        ``{"delivered", "lead_session_id", "reason"}``.
+        """
+        from valuz_agent.modules.tasks import messaging
+
+        result = await messaging.inject_into_task(
+            task_id=task_id,
+            project_id=project_id,
+            text=text,
+            from_session_id=from_session_id,
+            user_id=user_id,
+        )
+        if result.get("reason") == "TASK_HALTED":
+            revived = await self.resume_task(
+                task_id, project_id, user_id=user_id, instruction=text
+            )
+            ok = bool(revived.get("ok"))
+            return {
+                "delivered": ok,
+                "lead_session_id": None,
+                "reason": "TASK_RESUMED" if ok else "RESUME_FAILED",
+            }
+        return result
+
+    async def stop_member(self, session_id: str, user_id: str) -> bool:
         """User-initiated single-member stop (task stays ``active``).
 
         Interrupts one subtask session, notifies the lead with a
@@ -681,8 +696,6 @@ class RecoveryService:
         run ``→rejected`` and the plan node ``→rework``. The lead decides next
         (redispatch / modify_plan / finish) on its next ``get_plan``.
         """
-        user_id = _require_user_id(user_id)
-        from valuz_agent.modules.tasks.mailbox import InboxMsg, mailbox_registry
 
         async with async_unit_of_work() as db:
             run_ds = TaskSessionDatastore(db)
@@ -700,48 +713,366 @@ class RecoveryService:
             if subtask_key:
                 task = await task_ds.get_task_by_project(user_id, project_id, task_id)
                 if task is not None:
-                    plan = TaskPlan.from_dict(task.plan)
-                    if plan.get(subtask_key) is not None:
-                        plan.update_node(
-                            subtask_key,
-                            status="rework",
-                            review_feedback="用户手动停止了该子任务",
+
+                    def _park(p: TaskPlan, *, _key: str = subtask_key or "") -> bool:
+                        n = p.get(_key)
+                        if n is None or n.status not in (
+                            "in_progress", "in_review", "rework", "paused"
+                        ):
+                            return False
+                        p.update_node(
+                            _key, status="rework", review_feedback=t("task.reworkUserStopped")
                         )
-                        task.plan = plan.to_dict()
-                        await task_ds.update_task(task)
-                        await planning.emit_plan_update(
-                            event_ds,
-                            project_id=project_id,
-                            task_id=task_id,
-                            plan=plan,
-                            actor="user",
-                            session_id=lead_session_id or None,
-                            user_id=user_id,
-                        )
-            await event_ds.append_event(
-                user_id,
-                project_id,
-                task_id,
-                "subtask_stopped",
-                actor="user",
+                        return True
+
+                    await planning.persist_plan_best_effort(
+                        task_ds,
+                        event_ds,
+                        task,
+                        mutate=_park,
+                        actor="user",
+                        session_id=lead_session_id or None,
+                        user_id=user_id,
+                        diverges=f"node {subtask_key!r} not parked to rework after the "
+                        "user stopped its member",
+                    )
+            await record_subtask_stopped(
+                event_ds,
+                user_id=user_id,
+                project_id=project_id,
+                task_id=task_id,
                 session_id=session_id,
-                payload={"subtask_key": subtask_key},
+                agent_slug=agent_slug,
+                agent_name=await resolve_agent_display_name(project_id, agent_slug, user_id),
+                subtask_key=subtask_key,
             )
 
+        # The interrupt only reaches a member MID-TURN. An idle one, parked
+        # between turns, learns it was cancelled from its own run row on the
+        # next poll — bounded by the inbox poll rather than by its 10-minute
+        # idle TTL, and without depending on which process it runs in.
         await self._interrupt_kernel_session(session_id, user_id=user_id)
-        self._members.discard_member(task_id, session_id)
         if lead_session_id:
-            mailbox_registry.put(
-                lead_session_id,
-                InboxMsg(
+            async with async_unit_of_work() as db:
+                # Anything still queued for the member it just stopped would be
+                # read by nobody; cancel it in the same breath as telling the
+                # lead, so the two cannot disagree.
+                await mailbox_store.cancel_pending(db, session_id=session_id)
+                await mailbox_store.enqueue(
+                    db,
+                    session_id=lead_session_id,
+                    task_id=task_id,
+                    project_id=project_id,
+                    user_id=user_id,
                     kind="member_done",
                     from_session=session_id,
+                    origin="member-stopped",
                     payload={
                         "agent": agent_slug,
                         "status": "cancelled",
-                        "summary": "用户停止了该子任务",
+                        "summary": t("task.summaryUserStopped"),
                         "artifacts": [],
                     },
-                ),
-            )
+                )
         return True
+
+
+# ---------------------------------------------------------------------------
+# Live watchdog (task attention & reliability, P2).
+#
+# Boot recovery only reconciles at process START; a lead that dies while the
+# process stays up (uncaught loop crash, failed finalize) would sit ``active``
+# forever with nothing dispatched. This periodic sweep is the same concern as
+# the rest of this module — notice a dead lead, make the task resumable — on a
+# timer instead of at boot.
+#
+# Liveness signal: the task's LEASE (``tasks/lease.py``) — shared state, so it
+# answers for every host process. It used to be the lead's mailbox
+# registration, which is process-local: with more than one process this sweep
+# read every sibling's healthy lead as dead and blocked live tasks mid-run.
+# A task with no lease row is UNKNOWN, never dead. On top of that a task must
+# look dead for ``confirm_sweeps`` consecutive sweeps before we act, and the
+# intervention is deliberately minimal: ``blocked`` + notification, never a
+# respawn.
+# ---------------------------------------------------------------------------
+
+
+def _parse_duration_env(name: str, default: timedelta) -> timedelta:
+    """``"30"`` → 30s; ``"5m"`` / ``"90s"`` / ``"1h"`` → that duration.
+    Bad input warns and returns the default. Mirrors the automations monitor."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    suffixes: dict[str, int] = {"d": 86400, "h": 3600, "m": 60, "s": 1}
+    try:
+        if raw[-1] in suffixes:
+            return timedelta(seconds=int(raw[:-1]) * suffixes[raw[-1]])
+        return timedelta(seconds=int(raw))
+    except (ValueError, IndexError):
+        logger.warning("task health monitor: bad duration %s=%r, using default", name, raw)
+        return default
+
+
+# What the monitor needs from recovery: adopt this task, tell me if you got it.
+RecoverOne = Callable[[str, str, str], Awaitable[bool]]
+
+
+@dataclass(frozen=True)
+class TaskHealthConfig:
+    interval: timedelta = timedelta(seconds=60)
+    startup_delay: timedelta = timedelta(seconds=90)
+    # A task must look dead for this many consecutive sweeps before we act —
+    # absorbs the brief spawn/resume window where the loop hasn't registered
+    # its mailbox yet.
+    confirm_sweeps: int = 2
+
+    @property
+    def enabled(self) -> bool:
+        return self.interval.total_seconds() > 0
+
+    @classmethod
+    def from_env(cls) -> TaskHealthConfig:
+        return cls(
+            interval=_parse_duration_env(
+                "VALUZ_TASK_HEALTH_MONITOR_INTERVAL", cls.interval
+            ),
+            startup_delay=_parse_duration_env(
+                "VALUZ_TASK_HEALTH_MONITOR_STARTUP_DELAY", cls.startup_delay
+            ),
+        )
+
+
+class TaskHealthMonitor:
+    def __init__(
+        self,
+        config: TaskHealthConfig | None = None,
+        *,
+        recover_one: RecoverOne | None = None,
+    ) -> None:
+        self._config = config or TaskHealthConfig.from_env()
+        self._running = False
+        self._task: asyncio.Task[None] | None = None
+        # task_id → consecutive dead-looking sweep count.
+        self._suspect: dict[str, int] = {}
+        # Tasks this process has already tried to adopt. ONE attempt per task
+        # per process, deliberately: a task whose lead dies again immediately
+        # would otherwise be respawned every few sweeps forever, which is the
+        # failure mode a watchdog must not have. The fleet gets one attempt per
+        # process — bounded, small, and self-limiting, because a task that keeps
+        # dying exhausts the attempt everywhere and then gets blocked. Cleared
+        # whenever the task looks alive again, so a LATER outage is retried.
+        self._revive_attempted: set[str] = set()
+        self._recover_one: RecoverOne | None = recover_one
+
+    async def startup(self) -> None:
+        if not self._config.enabled:
+            logger.info("task health monitor: disabled (interval<=0)")
+            return
+        if self._running:
+            return
+        self._running = True
+        self._task = asyncio.create_task(self._tick_loop())
+        logger.info(
+            "task health monitor: started (interval=%s, startup_delay=%s, confirm_sweeps=%d)",
+            self._config.interval,
+            self._config.startup_delay,
+            self._config.confirm_sweeps,
+        )
+
+    async def shutdown(self) -> None:
+        self._running = False
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            self._task = None
+        self._suspect.clear()
+        self._revive_attempted.clear()
+        logger.info("task health monitor: stopped")
+
+    async def _tick_loop(self) -> None:
+        if self._config.startup_delay.total_seconds() > 0:
+            try:
+                await asyncio.sleep(self._config.startup_delay.total_seconds())
+            except asyncio.CancelledError:
+                return
+        interval_s = self._config.interval.total_seconds()
+        while self._running:
+            await self._safe_sweep()
+            try:
+                await asyncio.sleep(interval_s)
+            except asyncio.CancelledError:
+                break
+
+    async def _safe_sweep(self) -> None:
+        try:
+            await self.sweep_once()
+        except Exception:  # noqa: BLE001
+            logger.exception("task health monitor: sweep failed")
+
+    async def sweep_once(self) -> list[str]:
+        """One pass over active tasks. Returns the task_ids marked blocked this
+        sweep (for tests / observability). Never raises to the caller loop."""
+        if is_draining():
+            return []
+        async with async_unit_of_work(commit=False) as db:
+            # ONE query for (task_id, user_id, project_id, lead_session_id) —
+            # this sweep runs every 60s forever, and the previous shape was a
+            # full-row scan plus one list_runs per active task.
+            candidates = await TaskDatastore(db).list_active_lead_bindings()
+
+        # Liveness is the LEASE, and only the lease. It used to be read
+        # alongside ``mailbox_registry.is_owned``, which is process-local and
+        # therefore reported every sibling process's healthy lead as dead —
+        # this sweep then blocked it mid-run. Now every actor loop holds a
+        # lease on its own session, so one shared answer serves all processes
+        # and the second, lying opinion is gone.
+        leases = await load_actor_lease_states([sid for *_, sid in candidates if sid])
+        now = now_ms()
+
+        acted: list[str] = []
+        live_task_ids: set[str] = set()
+        for task_id, user_id, project_id, lead_session_id in candidates:
+            live_task_ids.add(task_id)
+            if lead_session_id is None:
+                # No lead run at all — nothing this monitor can safely do; leave
+                # it to boot recovery / user action.
+                self._suspect.pop(task_id, None)
+                self._revive_attempted.discard(task_id)
+                continue
+            lease = leases.get(lead_session_id)
+            if lease is None:
+                # No lease row: nobody has claimed this task under the lease
+                # scheme. Either it predates the table or its driver is still on
+                # an older build mid-rollout. UNKNOWN is not dead — refusing to
+                # act is what makes this change safe to roll out gradually.
+                self._suspect.pop(task_id, None)
+                self._revive_attempted.discard(task_id)
+                continue
+            if lease.is_live(now):
+                # Someone, here or elsewhere, is running the lead.
+                self._suspect.pop(task_id, None)
+                self._revive_attempted.discard(task_id)
+                continue
+            # Dead-looking: the loop has exited but the task is still active.
+            n = self._suspect.get(task_id, 0) + 1
+            self._suspect[task_id] = n
+            if n < self._config.confirm_sweeps:
+                logger.debug(
+                    "task health monitor: task %s lead loop absent (%d/%d) — waiting to confirm",
+                    task_id,
+                    n,
+                    self._config.confirm_sweeps,
+                )
+                continue
+            # Confirmed dead. Before declaring it stuck, TRY TO TAKE IT OVER —
+            # boot recovery cannot have, and nothing else will.
+            #
+            # ``recover_active_tasks`` runs once, at startup, and stands down on
+            # any task whose lead lease is still live. That is right when a peer
+            # is driving it, and wrong in the one case it matters: a process
+            # killed outright (OOM, node loss, a pod deleted past its grace
+            # period) leaves its lease HELD for the rest of its 90s TTL. Fresh
+            # processes come up inside that window, every one of them stands
+            # down, and by the time the lease expires the only sweep that would
+            # have adopted the task has already run. The task then sat ``active``
+            # with a dead lead until a human resumed it — observed on qa, on a
+            # task killed mid-run by an ordinary deploy.
+            #
+            # So the watchdog adopts it instead: the lease is expired, which is
+            # exactly the condition ``acquire_actor_lease`` needs, and the
+            # respawn is the same idempotent reconcile boot recovery would have
+            # done. Blocking is what happens when that fails.
+            self._suspect.pop(task_id, None)
+            if task_id not in self._revive_attempted:
+                self._revive_attempted.add(task_id)
+                if await self._try_revive(task_id, project_id, user_id):
+                    continue
+            marked = await self._mark_blocked(task_id, user_id, project_id, lead_session_id)
+            if marked:
+                acted.append(task_id)
+
+        # Drop suspicion for tasks that are no longer active (finished / paused
+        # between sweeps) so the map doesn't grow unbounded.
+        for stale in [tid for tid in self._suspect if tid not in live_task_ids]:
+            self._suspect.pop(stale, None)
+        for stale in [tid for tid in self._revive_attempted if tid not in live_task_ids]:
+            self._revive_attempted.discard(stale)
+        return acted
+
+    async def _try_revive(self, task_id: str, project_id: str, user_id: str) -> bool:
+        """Adopt a task whose driver died. True when this process now drives it.
+
+        Deliberately the SAME entry point boot recovery uses — reconcile, then
+        respawn under a freshly acquired lease — so there is one respawn path
+        and not a second, subtly different one that only the watchdog exercises.
+        The lease acquisition inside it is the arbiter: if a peer got there
+        first, this returns False and we fall through to blocking, which the
+        pre-write liveness re-check in ``_mark_blocked`` then declines to do.
+
+        Never raises: a watchdog that dies on a bad task stops watching all of
+        them.
+        """
+        recover = self._recover_one
+        if recover is None:  # pragma: no cover - resolved lazily below
+            from valuz_agent.modules.tasks.orchestrator import task_orchestrator
+
+            recover = task_orchestrator.recovery.adopt_orphaned_task
+        try:
+            revived = await recover(task_id, project_id, user_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("task health monitor: revive failed for task %s", task_id)
+            return False
+        if revived:
+            logger.warning(
+                "task health monitor: task %s adopted — its driver died and boot "
+                "recovery could not take it (lease still held at the time)",
+                task_id,
+            )
+        return bool(revived)
+
+    async def _mark_blocked(
+        self, task_id: str, user_id: str, project_id: str, lead_session_id: str
+    ) -> bool:
+        async with async_unit_of_work() as db:
+            task_ds = TaskDatastore(db)
+            # Re-read under the write UoW — the task may have moved off
+            # ``active`` since the read snapshot (a late finalize won the race).
+            task = await task_ds.get_task_by_project(user_id, project_id, task_id)
+            if task is None or task.status != "active":
+                return False
+            # Double-check liveness right before writing — a driver may have
+            # taken the task over (a resume landed, or a peer picked it up) in
+            # the sweep gap. Both oracles, for the same reason as in the sweep.
+            lease = (await load_actor_lease_states([lead_session_id])).get(lead_session_id)
+            if lease is None or lease.is_live(now_ms()):
+                return False
+            reason = (
+                "The lead stopped without finishing the task (the process "
+                "stayed up but its loop exited). Resume to rebuild the lead "
+                "and continue."
+            )
+            await block_task(
+                db,
+                user_id=user_id,
+                project_id=project_id,
+                task_id=task_id,
+                event_type="task_blocked",
+                actor=lead_session_id,
+                session_id=lead_session_id,
+                reason=reason,
+                payload={"reason": "lead_dead"},
+            )
+        logger.warning(
+            "task health monitor: task %s -> blocked (lead loop dead, session %s)",
+            task_id,
+            lead_session_id,
+        )
+        return True
+
+
+# Process-singleton, mirrors ``automation_failure_monitor``.
+task_health_monitor = TaskHealthMonitor()
+

@@ -1,9 +1,21 @@
-import { useMemo } from "react";
-import type { LLMChannelDetail } from "../api/providers-api";
+import { useEffect, useMemo, useState } from "react";
+import type { LLMChannel } from "../api/providers-api";
+import { getComposerCatalogAdapter } from "../edition/composer-catalog";
 
 /** Runtime identifiers used by the runtime filter. Server-resolved onto each
  *  model's ``runtimes`` — not re-derived here. */
-export type RuntimeProvider = "claude_agent" | "codex" | "deepagents";
+export type RuntimeProvider =
+  | "claude_agent"
+  | "codex"
+  | "deepagents"
+  | "deepseek_harness";
+
+export type ComposerProviderChannelStatus = "loading" | "ready" | "error";
+
+export interface ComposerProviderChannelState {
+  providers: LLMChannel[];
+  status: ComposerProviderChannelStatus;
+}
 
 /**
  * A provider is "usable" when picking it in the model dropdown could actually
@@ -21,7 +33,7 @@ export type RuntimeProvider = "claude_agent" | "codex" | "deepagents";
  * Exported because the Settings → Providers list applies the same rule. REP-107.
  */
 export const providerHasUsableCredentials = (
-  c: Pick<LLMChannelDetail, "credential_source" | "auth_type">,
+  c: Pick<LLMChannel, "credential_source" | "auth_type">,
 ): boolean => {
   if (c.credential_source === "secret_ref") return true;
   if (c.credential_source === "account_connection") return true;
@@ -30,8 +42,70 @@ export const providerHasUsableCredentials = (
 };
 
 /**
- * Transforms enabled ``LLMChannelDetail[]`` into flat ``ModelSelectorItem[]``
- * for the composer / agent model selector, keeping only the (provider, model)
+ * Load the composer's server-resolved model channels through the active
+ * edition's catalog adapter. OSS treats ``targetId`` as opaque and its default
+ * adapter always uses the providers API's module default.
+ *
+ * Switching scopes clears the previous list immediately. An obsolete response
+ * is ignored if it resolves later, so a slower old-scope request can never
+ * overwrite the active scope.
+ */
+export const useComposerProviderChannelState = (
+  targetId?: string | null,
+): ComposerProviderChannelState => {
+  const adapter = getComposerCatalogAdapter();
+  const scopeKey = adapter.getScopeKey({ targetId });
+  const [loaded, setLoaded] = useState<{
+    scopeKey: string;
+    providers: LLMChannel[];
+    status: ComposerProviderChannelStatus;
+  }>({ scopeKey, providers: [], status: "loading" });
+  let current = loaded;
+  if (loaded.scopeKey !== scopeKey) {
+    // Adjust during render so a scope switch can never paint the previous
+    // scope's catalog as current. React discards this render and immediately
+    // retries with the loading state before committing the UI.
+    current = { scopeKey, providers: [], status: "loading" };
+    setLoaded(current);
+  }
+
+  useEffect(() => {
+    let active = true;
+
+    void adapter
+      .listProviderChannels({ targetId })
+      .then(({ providers: channels }) => {
+        if (active) {
+          setLoaded({
+            scopeKey,
+            providers: channels.filter((channel) => channel.enabled),
+            status: "ready",
+          });
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setLoaded({ scopeKey, providers: [], status: "error" });
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [adapter, scopeKey, targetId]);
+
+  return { providers: current.providers, status: current.status };
+};
+
+/** Compatibility wrapper for consumers that only need the current channels. */
+export const useComposerProviderChannels = (targetId?: string | null) =>
+  useComposerProviderChannelState(targetId).providers;
+
+/**
+ * Transforms enabled ``LLMChannel[]`` (from the gated list —
+ * ``providersApi.list({gated: true})``, one request, server-side
+ * subscription-login gate) into flat ``ModelSelectorItem[]`` for the
+ * composer / agent model selector, keeping only the (provider, model)
  * pairs whose model can run on ``runtimeFilter``.
  *
  * Runtime compatibility is read verbatim from ``model.runtimes`` — server-resolved
@@ -47,7 +121,7 @@ export const providerHasUsableCredentials = (
  * session-create, so surfacing them is pure noise).
  */
 export const useComposerProviders = (
-  providers: LLMChannelDetail[],
+  providers: LLMChannel[],
   runtimeFilter?: RuntimeProvider,
 ) =>
   useMemo(
@@ -65,6 +139,7 @@ export const useComposerProviders = (
               providerId: c.id,
               providerName: c.name,
               modelId: m.id,
+              selectionHint: m.selection_hint,
               isDefault: c.is_default && m.id === c.default_model,
               source: c.source,
             })),

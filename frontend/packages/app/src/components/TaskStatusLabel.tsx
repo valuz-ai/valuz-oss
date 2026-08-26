@@ -21,6 +21,7 @@ const TASK_STATUS_KEY: Record<string, string> = {
   completed: "task.statusCompleted",
   failed: "task.statusFailed",
   blocked: "task.statusBlocked",
+  abandoned: "task.statusAbandoned",
 };
 
 // Brand-purple base (#725cf9) with a lighter band the animation slides

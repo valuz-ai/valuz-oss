@@ -6,8 +6,22 @@ import {
   type ServiceStatusType,
 } from "@valuz/shared";
 import type { ServiceDescriptor } from "@valuz/core";
+import type { EgressManager } from "@valuz/desktop-network-egress/main";
+import type {
+  EgressBootstrap,
+  EgressDiagnosticEvent,
+  EgressManagerStatus,
+  EgressMode,
+  EgressSnapshot,
+  RuntimePhaseRecord,
+} from "@valuz/desktop-network-egress/contracts";
 import { DescriptorRegistry, personalDescriptors } from "./descriptors";
-import { startSidecar, type DesktopSidecarResult } from "./sidecar";
+import {
+  reclaimStaleSidecar,
+  resolveSidecarDataDir,
+  startSidecar,
+  type DesktopSidecarResult,
+} from "./sidecar";
 import { recordSidecarLine } from "./system-logs";
 
 const AGENT_SERVER_DETAIL = "Primary local agent runtime";
@@ -30,10 +44,18 @@ export interface DesktopServiceManager {
   restartService(name: string): Promise<ServiceInfo[]>;
   getLogs(name: string): string[];
   getAgentServerInfo(): CraftServerInfo;
+  getDesktopControlToken(): string;
   getShellStatus(): { ready: boolean };
   getAllStatus(): ServiceInfo[];
   registerDescriptor(descriptor: ServiceDescriptor): ServiceDescriptor;
   unregisterDescriptor(name: string): boolean;
+  getEgressDiagnostics(): EgressDiagnosticEvent[];
+  getEgressSnapshots(): EgressSnapshot[];
+  getEgressMode(): EgressMode;
+  getEgressStatus(): EgressManagerStatus;
+  getEgressRuntimePhases(): RuntimePhaseRecord[];
+  getEgressBootstrap?(): EgressBootstrap | null;
+  setEgressMode(mode: EgressMode): Promise<EgressManagerStatus>;
 }
 
 const formatLogLine = (line: string) => {
@@ -86,9 +108,29 @@ const waitForHealth = async (
 
 export const createServiceManager = (
   appDataDir = process.cwd(),
-  options?: { devMode?: boolean; devPort?: number },
+  options?: {
+    devMode?: boolean;
+    /** Spawn and own the source backend so network-mode changes can restart it. */
+    managedDevMode?: boolean;
+    devPort?: number;
+    egressManager?: Pick<
+      EgressManager,
+      | "start"
+      | "quiesce"
+      | "stop"
+      | "setMode"
+      | "getDiagnostics"
+      | "getSnapshots"
+      | "getRuntimePhases"
+      | "getMode"
+      | "getStatus"
+      | "getBootstrap"
+    >;
+    onEgressModeChanged?: (mode: EgressMode) => void;
+  },
 ): DesktopServiceManager => {
   const devMode = options?.devMode ?? false;
+  const managedDevMode = options?.managedDevMode ?? false;
   // In dev mode, probe a backend at this port. Defaults to :8000 (matches
   // ``./scripts/dev.sh``), but ``VALUZ_BACKEND_PORT`` env override lets a
   // sibling worktree point Electron at its own backend (e.g. :28765) without
@@ -97,13 +139,15 @@ export const createServiceManager = (
   const devPort =
     options?.devPort ??
     (Number.isFinite(envPort) && envPort > 0 ? envPort : 8000);
+  const agentServerPort =
+    devMode || managedDevMode ? devPort : PERSONAL_PORTS.AGENT_SERVER;
   const services = new Map<string, ServiceInfo>([
     [
       "agent-server",
       {
         name: "agent-server",
         status: "stopped",
-        port: PERSONAL_PORTS.AGENT_SERVER,
+        port: agentServerPort,
         pid: null,
         detail: AGENT_SERVER_DETAIL,
       },
@@ -112,6 +156,9 @@ export const createServiceManager = (
   const logs = new Map<string, string[]>();
   const descriptors = new DescriptorRegistry(personalDescriptors());
   const agentServerToken = crypto.randomBytes(16).toString("hex");
+  // Separate from the renderer-visible agent server token. This capability
+  // only travels main-process -> managed backend stdin/loopback control API.
+  const desktopControlToken = crypto.randomBytes(32).toString("hex");
 
   // Track running sidecars for cleanup
   const sidecars = new Map<string, DesktopSidecarResult>();
@@ -141,11 +188,67 @@ export const createServiceManager = (
 
   return {
     descriptors,
+    getEgressDiagnostics: () => options?.egressManager?.getDiagnostics() ?? [],
+    getEgressSnapshots: () => options?.egressManager?.getSnapshots() ?? [],
+    getEgressMode: () => options?.egressManager?.getMode() ?? "off",
+    getEgressStatus: () =>
+      options?.egressManager?.getStatus() ?? {
+        mode: "off",
+        enabled: false,
+        started: false,
+        emergencyOverride: false,
+        snapshotCount: 0,
+        diagnosticEventCount: 0,
+      },
+    getEgressRuntimePhases: () =>
+      options?.egressManager?.getRuntimePhases() ?? [],
+    getEgressBootstrap: () => options?.egressManager?.getBootstrap() ?? null,
+    async setEgressMode(mode) {
+      await options?.egressManager?.setMode(mode);
+      try {
+        options?.onEgressModeChanged?.(mode);
+      } catch {
+        // The active in-memory recovery choice has already succeeded. A
+        // persistence failure must not prevent the caller from rebuilding the
+        // sidecar across the compatibility boundary.
+        addLog(
+          "agent-server",
+          "Network recovery mode changed but could not be saved for the next launch",
+        );
+      }
+      return (
+        options?.egressManager?.getStatus() ?? {
+          mode: "off",
+          enabled: false,
+          started: false,
+          emergencyOverride: false,
+          snapshotCount: 0,
+          diagnosticEventCount: 0,
+        }
+      );
+    },
     getAllStatus: () => [...services.values()],
     async startAllServices() {
+      // Start Electron's egress owner before any sidecar so an enabled canary
+      // can deliver its inherited bootstrap before runtimes are constructed.
+      let egressStartFailed = false;
+      try {
+        await options?.egressManager?.start();
+      } catch {
+        egressStartFailed = true;
+      }
       for (const descriptor of descriptors.snapshot()) {
+        const servicePort = managedDevMode
+          ? devPort
+          : descriptor.defaultPort;
         setStatus(descriptor.name, "starting");
         addLog(descriptor.name, "Starting sidecar...");
+        if (egressStartFailed) {
+          addLog(
+            descriptor.name,
+            "Unified model network is unavailable; model requests will remain blocked until model-client-managed connections are selected",
+          );
+        }
 
         // In dev mode, skip spawning a sidecar process. The user runs the
         // backend externally (``valuz start`` boots it on port 8000). Just
@@ -175,14 +278,27 @@ export const createServiceManager = (
         }
 
         try {
+          // Heal leftovers first: a previous shell that crashed / was
+          // force-quit leaves an orphaned valuz-server holding the
+          // single-writer lock and the port — our own spawn would then die
+          // on the lock while the UI talks to a server it can't manage.
+          await reclaimStaleSidecar(
+            managedDevMode ? resolveSidecarDataDir(true) : appDataDir,
+            servicePort,
+            (line) => addLog(descriptor.name, line),
+          );
+
           // Track the child's exit so the health wait can fail fast when the
           // backend process dies before it ever serves (vs. just being slow).
           let exited = false;
           let exitCode: number | null = null;
+          const egressStatus = options?.egressManager?.getStatus();
+          const egressBootstrap = options?.egressManager?.getBootstrap() ?? null;
           const result = await startSidecar({
             appDataDir,
             name: descriptor.name,
-            port: descriptor.defaultPort,
+            port: servicePort,
+            development: managedDevMode,
             onLog: (line) => {
               addLog(descriptor.name, line);
               // Also feed the system-logs ring so the desktop ``服务``
@@ -203,6 +319,13 @@ export const createServiceManager = (
               setStatus(descriptor.name, "stopped");
               sidecars.delete(descriptor.name);
             },
+            egressBootstrap,
+            egressRequired: Boolean(
+              !egressBootstrap &&
+                egressStatus?.enabled &&
+                egressStatus.mode !== "off",
+            ),
+            desktopControlToken,
           });
 
           sidecars.set(descriptor.name, result);
@@ -211,7 +334,7 @@ export const createServiceManager = (
           // Probe until healthy, the process exits, or the hard cap. No fixed
           // 30s deadline — a slow-but-alive backend keeps the splash spinning
           // instead of flashing a premature error; a real crash fails fast.
-          const health = await waitForHealth(descriptor.defaultPort, {
+          const health = await waitForHealth(servicePort, {
             isAlive: () => !exited,
             onSlow: () =>
               addLog(
@@ -247,6 +370,10 @@ export const createServiceManager = (
       return [...services.values()];
     },
     async stopAllServices() {
+      // Reject new registrations/capabilities first, then let sidecar-owned
+      // runtimes wind down before the bounded proxy teardown closes any
+      // remaining relay sockets.
+      await options?.egressManager?.quiesce();
       // Await each teardown so the process trees are actually gone before we
       // report stopped — on quit this runs under before-quit (see index.ts), so
       // children release their files before the app exits / the updater installs.
@@ -259,10 +386,18 @@ export const createServiceManager = (
         }),
       );
       sidecars.clear();
+      await options?.egressManager?.stop();
 
       return [...services.values()];
     },
     async restartService(name: string) {
+      if (devMode) {
+        addLog(
+          name,
+          "Dev mode uses an external backend — restart it from the development shell",
+        );
+        return [...services.values()];
+      }
       const sidecar = sidecars.get(name);
       if (sidecar) {
         addLog(name, "Restarting sidecar...");
@@ -277,26 +412,70 @@ export const createServiceManager = (
       }
 
       setStatus(name, "starting");
+      const servicePort = managedDevMode
+        ? devPort
+        : descriptor.defaultPort;
 
       try {
+        let exited = false;
+        let exitCode: number | null = null;
+        const egressStatus = options?.egressManager?.getStatus();
+        const egressBootstrap = options?.egressManager?.getBootstrap() ?? null;
         const result = await startSidecar({
           appDataDir,
           name: descriptor.name,
-          port: descriptor.defaultPort,
-          onLog: (line) => addLog(descriptor.name, line),
+          port: servicePort,
+          development: managedDevMode,
+          onLog: (line) => {
+            addLog(descriptor.name, line);
+            if (descriptor.name === "agent-server") {
+              recordSidecarLine(line);
+            }
+          },
           onExit: (code, signal) => {
             addLog(
               descriptor.name,
               `Process exited (code=${code}, signal=${signal})`,
             );
+            exited = true;
+            exitCode = code;
             setStatus(descriptor.name, "stopped");
             sidecars.delete(descriptor.name);
           },
+          egressBootstrap,
+          egressRequired: Boolean(
+            !egressBootstrap &&
+              egressStatus?.enabled &&
+              egressStatus.mode !== "off",
+          ),
+          desktopControlToken,
         });
 
         sidecars.set(name, result);
-        setStatus(name, "running", result.pid);
-        addLog(name, "Service restarted");
+        const health = await waitForHealth(servicePort, {
+          isAlive: () => !exited,
+          onSlow: () =>
+            addLog(
+              descriptor.name,
+              "Backend is taking longer than usual — still restarting…",
+            ),
+        });
+        if (health === "healthy") {
+          setStatus(name, "running", result.pid);
+          addLog(name, "Service restarted");
+        } else if (health === "exited") {
+          setStatus(name, "error");
+          addLog(
+            name,
+            `Backend exited before restart completed (code=${exitCode ?? "?"}) — see logs`,
+          );
+        } else {
+          setStatus(name, "error", result.pid);
+          addLog(
+            name,
+            "Backend did not become ready after restart — see logs",
+          );
+        }
       } catch (err) {
         setStatus(name, "error");
         addLog(
@@ -312,10 +491,13 @@ export const createServiceManager = (
     },
     getAgentServerInfo() {
       return {
-        port: PERSONAL_PORTS.AGENT_SERVER,
+        port: agentServerPort,
         status: services.get("agent-server")?.status ?? "stopped",
         token: agentServerToken,
       };
+    },
+    getDesktopControlToken() {
+      return desktopControlToken;
     },
     getShellStatus() {
       return { ready: true };

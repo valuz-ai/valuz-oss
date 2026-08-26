@@ -231,9 +231,10 @@ async def _run_spawn(rid: str, src, _dest, base_name: str) -> SessionAttachmentR
     from valuz_agent.api.routes.sessions import _spawn_attachment_parse
     from valuz_agent.infra.db import async_unit_of_work
 
-    # ``_make_parsing_row`` stamps session_id="s1"; the parsed file lands under
-    # ``attachments/s1/`` in the tmp data dir bound by the fixture.
-    _spawn_attachment_parse(rid, str(src), "s1", base_name, "local-test-owner")
+    # The extract is filed under the ATTACHMENT, not the session — that is what
+    # lets an attachment exist before any session does, and makes binding a
+    # column write rather than a file move.
+    _spawn_attachment_parse(rid, str(src), base_name, "local-test-owner")
     await _drain_parse_tasks()
     async with async_unit_of_work() as session:
         got = await SessionDatastore(session).get_attachment("local-test-owner", rid)
@@ -341,19 +342,23 @@ async def test_spawn_result_with_error_metadata_marks_failed(
 async def test_spawn_office_error_reason_is_persisted(
     db, data_dir_store, tmp_path, monkeypatch
 ) -> None:  # type: ignore[no-untyped-def]
-    """Regression for the Windows docx report: a frozen build missing magika's
-    model makes MarkItDown raise, which light_local catches and RETURNS as
-    metadata['error']="*…model not found…*". The reason must reach the
+    """The office backend reports failures by RETURNING a ParseResult whose
+    metadata carries ``error`` — it does not raise. That reason must reach the
     ``error_message`` column instead of being discarded (which previously left
     parse_status=failed / parse_mode=light_local / error_message=NULL — the
-    exact, undiagnosable row the user pulled from SQLite)."""
+    exact, undiagnosable row a user pulled from SQLite).
+
+    Originally written against a frozen build that shipped without magika's
+    model, breaking every MarkItDown office parse. Both are gone (anydoc has no
+    data files), but the contract this pins is the backend-independent one, so
+    it now uses an anydoc-shaped failure."""
     router = _SpyRouter(
         mode=ParserPluginMode.SYNC,
-        markdown="*Office parse error: model not found at .../magika/models/standard_v3_3*",
+        markdown="*Office parse error: Encrypted*",
         metadata={
             "plugin_id": "light_local",
-            "engine": "markitdown",
-            "error": "model not found at .../magika/models/standard_v3_3/model.onnx",
+            "engine": "anydoc",
+            "error": "Encrypted",
         },
     )
     _inject_router(monkeypatch, router)
@@ -364,7 +369,7 @@ async def test_spawn_office_error_reason_is_persisted(
     assert got.parse_status == "failed"
     assert got.parse_mode == "light_local"
     assert got.parsed_path is None
-    assert got.error_message and "model not found" in got.error_message
+    assert got.error_message and "Encrypted" in got.error_message
 
 
 async def test_spawn_image_parse_miss_marks_native_not_failed(

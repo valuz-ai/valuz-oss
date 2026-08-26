@@ -2,6 +2,7 @@ from sqlalchemy import BigInteger, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from valuz_agent.infra.database import Base, PrimaryKeyMixin, TimestampMixin, UserMixin
+from valuz_agent.infra.fs_registry import KB_KIND_DEFAULT
 
 
 class KnowledgeBaseRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
@@ -11,6 +12,10 @@ class KnowledgeBaseRow(Base, PrimaryKeyMixin, TimestampMixin, UserMixin):
 
     name: Mapped[str] = mapped_column(String(256))
     root_path: Mapped[str] = mapped_column(Text)
+    # Neutral class discriminator. OSS only ever writes/reads ``"normal"``;
+    # embedding hosts use it to distinguish their own KB classes and to route
+    # them to different roots via ``FsRegistry.set_kb_root_resolver``.
+    kind: Mapped[str] = mapped_column(String(32), default=KB_KIND_DEFAULT)
     parser_routing: Mapped[str] = mapped_column(String(32), default="local_only")
     auto_discover: Mapped[bool] = mapped_column(default=False)
     last_full_scan_at: Mapped[int | None] = mapped_column(BigInteger, default=None)

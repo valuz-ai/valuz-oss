@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # upload-to-cos.sh — Upload desktop release artifacts to Tencent COS.
 #
-# Uses coscli (Tencent's official Go CLI for COS). tccli does NOT have a cos
-# subcommand — COS has its own API surface separate from the Tencent Cloud API
-# 3.0 that tccli wraps. See scripts/install-coscli.sh for setup.
+# Uses coscli (Tencent's official Go CLI for COS). COS has its own API surface,
+# separate from the Tencent Cloud API 3.0 that tccli wraps — `tccli cos` exists
+# but exposes a different, thinner operation set, so coscli is the tool for
+# object work here (tccli is still needed for the CDN purge, which is API 3.0).
+# See scripts/install-coscli.sh for setup.
 #
 # Uploads two things from a release directory:
 #   1. Every distributable artifact (*.dmg, *.zip, *.exe, *.AppImage, *.deb,
@@ -55,6 +57,10 @@ done
 VERSIONED_PREFIX="${EDITION}/v${VERSION}"
 LIVE_PREFIX="${EDITION}"
 BUCKET_DISPLAY="${TENCENT_COS_BUCKET:-<bucket>}"
+# Public CDN origin for the live prefix — what electron-updater actually reads,
+# and therefore what has to be purged after a live manifest is overwritten.
+CDN_BASE="${VALUZ_CDN_BASE:-https://files.valuz.cn}"
+PURGED_URLS=()
 
 if $DRY_RUN; then
   echo "[dry-run] Artifacts in $RELEASE_DIR → cos://${BUCKET_DISPLAY}/${VERSIONED_PREFIX}/"
@@ -143,14 +149,33 @@ for m in $MANIFESTS; do
       "$RELEASE_DIR/$m" > "$tmp"
 
   echo "[cos] $m → /${LIVE_PREFIX}/${m} (artifacts prefixed with v${VERSION}/)"
-  if coscli -c "$COS_CONFIG" cp "$tmp" "cos://valuz/${LIVE_PREFIX}/${m}"; then
-    :
+  # A short Cache-Control on the live manifest only — the versioned copies are
+  # immutable and want the CDN's default. Without it the edge falls back to the
+  # CDN-side TTL, which is what left v0.4.2's mac feed single-arch long after
+  # the merged manifest reached the origin. The explicit purge below is still
+  # required: this header only governs objects the edge fetches from now on.
+  if coscli -c "$COS_CONFIG" cp "$tmp" "cos://valuz/${LIVE_PREFIX}/${m}" \
+      --meta "Cache-Control:max-age=60"; then
+    PURGED_URLS+=("${CDN_BASE}/${LIVE_PREFIX}/${m}")
   else
     failed=$((failed + 1))
     echo "WARN: upload failed for live manifest $m (continuing)" >&2
   fi
   rm -f "$tmp"
 done
+
+# Overwriting the origin does not expire what the edge already serves, and the
+# live manifest is the one object this pipeline overwrites. Purge it here, in
+# the same step that wrote it, so "upload succeeded" and "clients can see it"
+# stop being two different things.
+if [ "${#PURGED_URLS[@]}" -gt 0 ]; then
+  if bash "$(dirname "$0")/purge-cdn.sh" "${PURGED_URLS[@]}"; then
+    :
+  else
+    failed=$((failed + 1))
+    echo "WARN: CDN purge failed — the live manifest is stale until its TTL" >&2
+  fi
+fi
 
 echo "[cos] Done. uploaded=$uploaded failed=$failed"
 [ "$failed" -eq 0 ] || exit 1

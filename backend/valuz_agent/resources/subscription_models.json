@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "last_updated": "2026-07-10",
+  "last_updated": "2026-07-26",
   "_comment": "Recommended model lists for OAuth subscription channels. LIVE contract: this file is read into the provider descriptors at every boot, and subscription rows keep model_ids NULL so they always track it — editing the arrays (+ bumping last_updated) reaches every install at next boot, no migration needed (unlike seeds/providers.json, whose row updates go through alembic). Each model is either a bare id or {\"id\", \"label\"}; labels are server-authoritative display names (the backend, not the frontend, owns subscription model names). API-key channels are NOT covered here; their models come from /v1/models auto-discovery + user manual entry on channel edit.",
   "_sources": {
     "claude-subscription": "https://code.claude.com/docs/en/model-config",
@@ -11,6 +11,7 @@
       "default_model": "claude-sonnet-4-6",
       "models": [
         { "id": "claude-fable-5", "label": "Fable 5" },
+        { "id": "claude-opus-5", "label": "Opus 5" },
         { "id": "claude-sonnet-5", "label": "Sonnet 5" },
         { "id": "claude-opus-4-8", "label": "Opus 4.8" },
         { "id": "claude-opus-4-7", "label": "Opus 4.7" },

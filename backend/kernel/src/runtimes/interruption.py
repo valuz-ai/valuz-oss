@@ -23,6 +23,7 @@ subprocess that dies on every attempt.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 
 
@@ -80,8 +81,38 @@ def is_runtime_interruption(exc: BaseException) -> bool:
         return any(is_runtime_interruption(leaf) for leaf in iter_leaf_exceptions(exc))
     if isinstance(exc, (BrokenPipeError, ConnectionError, EOFError)):
         return True
+    from src.runtimes.deepseek_harness.jsonrpc_client import DshTransportClosedError
+
+    if isinstance(exc, DshTransportClosedError):
+        return True
     try:
         from openai_codex import TransportClosedError
     except Exception:
         return False
     return isinstance(exc, TransportClosedError)
+
+
+def absorb_interrupt_cancellations(count: int) -> None:
+    """Balance the ``task.cancel()`` calls a runtime's ``interrupt()`` injected
+    into the turn task, once ``run()`` has swallowed the resulting
+    ``CancelledError`` and stamped ``user_interrupt``.
+
+    ``Task.cancel()`` bumps a per-task counter that only ``Task.uncancel()``
+    decrements; catching the ``CancelledError`` does NOT reset it. A turn task
+    that swallows an interrupt therefore keeps ``cancelling() > 0`` for the rest
+    of its life — and one asyncio task routinely drives several turns (the
+    post-turn queue drain, the task-actor loop). Any later code on that task
+    that reads ``cancelling()`` to ask "am I being cancelled right now?" then
+    misfires (``asyncio.timeout`` / ``TaskGroup`` bookkeeping, teardown helpers
+    that must tell their own cancellation apart from a child's).
+
+    ``count`` is how many times ``interrupt()`` cancelled the task for THIS
+    turn (a double Stop cancels twice but delivers one ``CancelledError``). It
+    is bounded by the task's live count so a genuine outer cancellation that
+    happens to coincide is never erased.
+    """
+    task = asyncio.current_task()
+    if task is None or count <= 0:
+        return
+    for _ in range(min(count, task.cancelling())):
+        task.uncancel()

@@ -150,10 +150,17 @@ class AgentPackService:
         if bundled:
             try:
                 from valuz_agent.modules.skills.service import reindex_official_skills
+                from valuz_agent.ports.skill_lifecycle import get_skill_lifecycle_hook
 
                 await reindex_official_skills(user_id)
+                await get_skill_lifecycle_hook().after_bundled_skills_materialized(
+                    user_id=user_id,
+                    slugs=tuple(bundled),
+                )
             except Exception:  # noqa: BLE001 — best-effort; the boot scan backstops it
-                logger.exception("reindex_official_skills after pack import failed")
+                logger.exception(
+                    "reindex or lifecycle notification after pack import failed"
+                )
         if embedded:
             try:
                 from valuz_agent.modules.skills.service import reindex_user_skills

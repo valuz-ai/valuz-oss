@@ -98,6 +98,26 @@ async def test_list_items_sends_filters_and_pagination() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_items_passes_plugin_composition_filter() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(
+            200, json={"items": [], "total": 0, "page": 1, "page_size": 30, "degraded": False}
+        )
+
+    client = _client(handler)
+    await client.list_items(type_="plugin", locale="en-US", composition="with_connectors")
+    assert seen["params"]["type"] == "plugin"
+    assert seen["params"]["composition"] == "with_connectors"
+    # The composition is part of the cache key: a different filter is a new request.
+    seen.clear()
+    await client.list_items(type_="plugin", locale="en-US", composition="skills_only")
+    assert seen["params"]["composition"] == "skills_only"
+
+
+@pytest.mark.asyncio
 async def test_item_detail_url_encodes_item_id() -> None:
     seen: dict[str, Any] = {}
 

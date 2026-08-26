@@ -5,11 +5,13 @@
  * ``_apiBase`` and this registry stays empty — zero behaviour change.
  *
  * Multi-target editions (commercial local + cloud-shared backend) register a
- * resolver that maps an entity reference (session / project / task id) onto
- * the base URL of the backend that owns it. Api modules consult it for every
- * entity-scoped call, so a conversation created on the cloud backend keeps
- * its whole chain (messages / SSE / attachments / queue / actions) pinned to
- * that backend while the rest of the app talks to the default one.
+ * resolver that maps an entity reference (session / project / task / automation
+ * / knowledge-base id) onto the base URL of the backend that owns it. Api
+ * modules consult it for every entity-scoped call, so a conversation created on
+ * the cloud backend keeps its whole chain (messages / SSE / attachments / queue
+ * / actions) pinned to that backend while the rest of the app talks to the
+ * default one — and likewise a cloud-created automation or knowledge base keeps
+ * its get / edit / run / rescan calls on that backend.
  *
  * The resolver returning ``undefined`` means "no opinion" → module default.
  */
@@ -18,6 +20,9 @@ export interface ApiBaseRef {
   sessionId?: string;
   projectId?: string;
   taskId?: string;
+  automationId?: string;
+  playbookId?: string;
+  kbId?: string;
 }
 
 export type ApiBaseResolver = (ref: ApiBaseRef) => string | undefined;

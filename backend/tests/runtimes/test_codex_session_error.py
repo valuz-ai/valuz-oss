@@ -92,7 +92,7 @@ def test_failed_turn_status_maps_to_execution_error() -> None:
 
 def test_stop_reason_mapping_covers_every_turn_status() -> None:
     """Parametrized over ALL TurnStatus members so a new enum value can't
-    silently fall into the budget-exhausted fallback unnoticed."""
+    silently fall into the defensive fallback unnoticed."""
     from types import SimpleNamespace
 
     from openai_codex.generated.v2_all import TurnStatus
@@ -101,7 +101,11 @@ def test_stop_reason_mapping_covers_every_turn_status() -> None:
         TurnStatus.completed: EndTurn,
         TurnStatus.interrupted: Error,  # user_interrupt
         TurnStatus.failed: Error,  # execution_error
-        TurnStatus.in_progress: BudgetExhausted,  # defensive fallback
+        # NOT BudgetExhausted: a completed turn still reporting ``in_progress``
+        # is codex contradicting itself, and the UI states a budget stop in
+        # plain words ("hit the runtime's maximum step count"). Claiming that
+        # about a protocol inconsistency misinforms the user.
+        TurnStatus.in_progress: Error,  # execution_error — defensive fallback
     }
     assert set(expected) == set(TurnStatus), (
         "TurnStatus gained a member — decide its stop-reason mapping in "
@@ -118,3 +122,10 @@ def test_stop_reason_mapping_covers_every_turn_status() -> None:
             assert stop.category == "user_interrupt"
         if status == TurnStatus.failed:
             assert stop.category == "execution_error"
+        if status == TurnStatus.in_progress:
+            assert stop.category == "execution_error"
+            # Names the offending status so support can act on it, and does
+            # so with the wire value — an enum ``repr`` in a user-facing
+            # error card is a leak, not a diagnostic.
+            assert status.value in stop.message
+            assert "TurnStatus" not in stop.message

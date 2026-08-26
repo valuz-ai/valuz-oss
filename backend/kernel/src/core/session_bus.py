@@ -13,6 +13,15 @@ sink, the next emit explodes with "Unexpected ASGI message", the
 runtime crashes mid-turn. Decoupling lets the agent keep running across
 WS drops; the DB sink (a separate node in the composite) persists every
 event regardless, so reconnect can be made whole from history.
+
+History alone can only make a client whole up to the last *sealed*
+event, because delta types are never persisted. The bus therefore also
+folds every event into a :class:`~src.core.live_partial.LivePartialState`
+— the accumulated state of whatever is still streaming — and can hand a
+joining subscriber that state as absolute frames. Keeping it here rather
+than in a module of its own is deliberate: the bus already serializes
+replay-then-live under its lock, so a snapshot taken inside that lock
+cannot race the live tail it precedes.
 """
 
 from __future__ import annotations
@@ -22,6 +31,7 @@ import logging
 from collections.abc import Iterable
 
 from src.core.events import Event, EventSink
+from src.core.live_partial import LivePartialState
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +52,15 @@ class SessionEventBus:
     raises is dropped (same policy as the subscriber).
     """
 
-    def __init__(self, taps: Iterable[EventSink] = ()) -> None:
+    def __init__(
+        self, taps: Iterable[EventSink] = (), *, session_id: str | None = None
+    ) -> None:
         self._subscriber: EventSink | None = None
         self._taps: list[EventSink] = list(taps)
         self._lock = asyncio.Lock()
+        # ``session_id`` is carried for log context only — the bus itself
+        # is session-agnostic and the orchestrator owns the routing.
+        self._partial = LivePartialState(session_id)
 
     @property
     def has_subscriber(self) -> bool:
@@ -53,6 +68,11 @@ class SessionEventBus:
 
     async def emit(self, event: Event) -> None:
         async with self._lock:
+            # Fold BEFORE fanout so the accumulated state is never behind
+            # what subscribers have already seen: a tap joining between
+            # these two steps would otherwise miss this event in both the
+            # snapshot and the live tail.
+            self._partial.observe(event)
             dead_taps: list[EventSink] = []
             for tap in self._taps:
                 try:
@@ -74,14 +94,31 @@ class SessionEventBus:
                 logger.debug("Bus subscriber failed, detaching: %s", exc)
                 self._subscriber = None
 
-    async def add_tap(self, sink: EventSink, replay: Iterable[Event] = ()) -> None:
+    async def add_tap(
+        self,
+        sink: EventSink,
+        replay: Iterable[Event] = (),
+        *,
+        live_partial: bool = False,
+    ) -> None:
         """Register a passive tap, optionally replaying events to it first.
 
         Replay-then-live is serialized under the bus lock, mirroring
         :meth:`attach`. A replay failure abandons the registration.
+
+        ``live_partial=True`` appends the accumulated state of whatever is
+        still streaming (see :mod:`src.core.live_partial`) after
+        ``replay``. That order matters: ``replay`` carries durable events,
+        the snapshot carries the unsealed tail that continues them.
+        Callers that backfill from the store themselves pass an empty
+        ``replay`` and take only the snapshot — the two never overlap,
+        because reaching the store means the state was sealed and dropped.
         """
         async with self._lock:
-            for ev in replay:
+            frames = list(replay)
+            if live_partial:
+                frames.extend(self._partial.snapshot())
+            for ev in frames:
                 try:
                     await sink.emit(ev)
                 except Exception as exc:
@@ -96,16 +133,26 @@ class SessionEventBus:
             except ValueError:
                 pass
 
-    async def attach(self, sink: EventSink, replay: Iterable[Event] = ()) -> None:
+    async def attach(
+        self,
+        sink: EventSink,
+        replay: Iterable[Event] = (),
+        *,
+        live_partial: bool = False,
+    ) -> None:
         """Atomically install ``sink`` and replay pending events to it.
 
         Replay-then-live is serialized under the bus lock — concurrent
         live emits await the lock, so the subscriber sees replay first
-        and the live tail second, never interleaved.
+        and the live tail second, never interleaved. ``live_partial``
+        behaves as in :meth:`add_tap`.
         """
         async with self._lock:
             self._subscriber = sink
-            for ev in replay:
+            frames = list(replay)
+            if live_partial:
+                frames.extend(self._partial.snapshot())
+            for ev in frames:
                 try:
                     await sink.emit(ev)
                 except Exception as exc:

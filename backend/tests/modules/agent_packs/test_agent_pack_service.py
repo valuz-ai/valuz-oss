@@ -165,7 +165,7 @@ async def test_import_pack_creates_agents(svc: AgentPackService) -> None:
         "comps",
         "idea-generation",
     ]
-    assert analyst.connector_types == ["valuz-search", "valuz-stock"]
+    assert analyst.connector_types == ["valuz-search", "valuz-data"]
 
 
 async def test_import_supply_chain_tracking_pack(svc: AgentPackService) -> None:
@@ -180,7 +180,7 @@ async def test_import_supply_chain_tracking_pack(svc: AgentPackService) -> None:
     lead = next(r for r in res["roles"] if r.slug == "sct-theme-lead")
     assert lead.name == "Theme Lead"
     assert lead.skills == ["serenity-unified-skill", "serenity-bottleneck-hunter"]
-    assert lead.connector_types == ["valuz-search", "valuz-stock"]
+    assert lead.connector_types == ["valuz-search", "valuz-data"]
     assert "Supply Chain Tracking team" in lead.instructions
     assert "not investment advice" in lead.instructions
 
@@ -229,6 +229,49 @@ async def test_import_pack_materializes_skills(svc: AgentPackService, tmp_path) 
     skills_dir = tmp_path / "official-skills"
     assert (skills_dir / "xhs-topic-method" / "SKILL.md").is_file()
     assert (skills_dir / "xhs-note-writing").is_dir()
+
+
+async def test_import_pack_notifies_bundled_skill_lifecycle(
+    svc: AgentPackService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from valuz_agent.ports.extensions import ext
+
+    notified: list[tuple[str, tuple[str, ...]]] = []
+
+    class Hook:
+        async def after_bundled_skills_materialized(
+            self,
+            *,
+            user_id: str,
+            slugs: tuple[str, ...],
+        ) -> None:
+            notified.append((user_id, slugs))
+
+    monkeypatch.setattr(ext, "skill_lifecycle", Hook())
+
+    await svc.import_pack(USER, "investment", **DEPLOY)
+
+    assert notified == [
+        (
+            USER,
+            (
+                "sector-overview",
+                "competitive-analysis",
+                "comps",
+                "idea-generation",
+                "dcf",
+                "3-statement-model",
+                "audit-xls",
+                "earnings-analysis",
+                "earnings-preview",
+                "model-update",
+                "initiating-coverage",
+                "morning-note",
+                "pptx-author",
+            ),
+        )
+    ]
 
 
 async def test_import_pack_indexes_embedded_skills(

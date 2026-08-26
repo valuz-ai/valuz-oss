@@ -85,6 +85,33 @@ from valuz_agent.ports.provider_policy import (
     get_provider_policy,
     set_provider_policy,
 )
+from valuz_agent.ports.runtime_resource import (
+    LocalManagedAgentMutationPort,
+    LocalManagedConnectorMutationPort,
+    LocalRuntimeResourceApplyPort,
+    ManagedAgentMutationPort,
+    ManagedConnectorMutationPort,
+    ManagedMutationResult,
+    RuntimeResourceApplyPort,
+    RuntimeResourceContractError,
+    ensure_managed_root_containment,
+    require_sync_apply_origin,
+    validate_skill_reference,
+)
+from valuz_agent.ports.runtime_turn_context import (
+    NoopRuntimeTurnContextContributor,
+    RuntimeTurnContextContributor,
+    get_runtime_turn_context_contributor,
+    set_runtime_turn_context_contributor,
+)
+from valuz_agent.ports.sandbox_maintenance import (
+    SandboxMaintenanceLease,
+    SandboxMaintenancePort,
+    SandboxMaintenanceProbe,
+    SandboxMaintenanceUnsupported,
+    SandboxTerminalReceipt,
+    UnsupportedSandboxMaintenancePort,
+)
 from valuz_agent.ports.sandbox_policy import (
     AllowAllSandboxPolicy,
     SandboxDecision,
@@ -102,6 +129,18 @@ from valuz_agent.ports.skill_lifecycle import (
     set_skill_lifecycle_hook,
 )
 from valuz_agent.ports.skill_registry import SkillRegistryPort
+from valuz_agent.ports.skill_runtime import (
+    CatalogOnlyUntilClaimed,
+    DiscoverAndExecuteExternalSkills,
+    DiscoveryDecision,
+    ExecutionResourceGate,
+    ExecutionResourceResolver,
+    ExternalSkillClaimReservationGate,
+    InMemoryExternalSkillClaimReservationGate,
+    SkillTreeMutationPort,
+    TurnBoundaryObservedHashHook,
+    validate_managed_skill_path,
+)
 from valuz_agent.ports.tool_provider import ToolProvider
 
 __all__ = [
@@ -155,6 +194,33 @@ __all__ = [
     "SplitPolicy",
     "SystemProviderImmutable",
     "ToolProvider",
+    "CatalogOnlyUntilClaimed",
+    "DiscoverAndExecuteExternalSkills",
+    "DiscoveryDecision",
+    "ExternalSkillClaimReservationGate",
+    "InMemoryExternalSkillClaimReservationGate",
+    "ExecutionResourceGate",
+    "ExecutionResourceResolver",
+    "LocalManagedAgentMutationPort",
+    "LocalManagedConnectorMutationPort",
+    "LocalRuntimeResourceApplyPort",
+    "ManagedAgentMutationPort",
+    "ManagedConnectorMutationPort",
+    "ManagedMutationResult",
+    "RuntimeResourceApplyPort",
+    "RuntimeResourceContractError",
+    "SandboxMaintenancePort",
+    "SandboxMaintenanceLease",
+    "SandboxMaintenanceProbe",
+    "SandboxMaintenanceUnsupported",
+    "SandboxTerminalReceipt",
+    "SkillTreeMutationPort",
+    "TurnBoundaryObservedHashHook",
+    "UnsupportedSandboxMaintenancePort",
+    "ensure_managed_root_containment",
+    "require_sync_apply_origin",
+    "validate_skill_reference",
+    "validate_managed_skill_path",
     "authorize_sandbox_provision",
     "get_agent_lifecycle_hook",
     "get_billing_port",
@@ -169,6 +235,10 @@ __all__ = [
     "set_connector_lifecycle_hook",
     "set_connector_oauth_refresh_port",
     "set_file_address_resolver",
+    "NoopRuntimeTurnContextContributor",
+    "RuntimeTurnContextContributor",
+    "get_runtime_turn_context_contributor",
+    "set_runtime_turn_context_contributor",
     "set_provider_policy",
     "set_sandbox_policy",
     "set_skill_lifecycle_hook",

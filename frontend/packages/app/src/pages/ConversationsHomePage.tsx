@@ -12,20 +12,22 @@ import {
 } from "@valuz/ui";
 import {
   getDefaultExecutionTarget,
-  providersApi,
   mcpProvidersApi,
   recordEntityOrigin,
   sessionsApi,
+  type SessionAttachmentItem,
+  type SessionCreateRequest,
   useEntityOrigin,
   skillsApi,
+  useComposerProviderChannels,
+  useExecutionTargetsRevision,
   useComposerProviders,
   useExecutionTargets,
   useModelDefaults,
   useRuntimes,
   usePanelStore,
-  useSessionAttachments,
+  useStagedAttachments,
   projectsApi,
-  type LLMChannelDetail,
   type ProjectListItem,
   type RuntimeId,
   type SessionListItem,
@@ -33,7 +35,7 @@ import {
 } from "@valuz/core";
 import { homeSuggestions } from "@valuz/app/lib/prototype-data";
 import { useTranslation } from "@valuz/core";
-import { AttachmentParsingDialog } from "../components/AttachmentParsingDialog";
+import { assetUrl, supportsPlanMode } from "@valuz/shared";
 import { OriginBadge } from "../components/ExecutionLocationPicker";
 import { ExecutionLocationBar } from "../components/ExecutionLocationBar";
 
@@ -48,7 +50,6 @@ export const ConversationsHomePage = () => {
   const [allProjects, setAllProjects] = useState<ProjectListItem[]>([]);
   const [dataSources, setDataSources] = useState<DataSourceOption[]>([]);
   const [enabledSlugs, setEnabledSlugs] = useState<string[]>([]);
-  const [providers, setProviders] = useState<LLMChannelDetail[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
     null,
   );
@@ -72,6 +73,13 @@ export const ConversationsHomePage = () => {
   const [selectedPermissionMode, setSelectedPermissionMode] = useState<
     "default" | "auto_review" | "full_access"
   >("full_access");
+  // Session working mode (docs/design/session-modes.md). Staged locally
+  // until the session is minted, then applied via PATCH ``/mode`` right
+  // after create — create carries no ``mode`` field by design (one
+  // kernel-validated write path).
+  const [selectedSessionMode, setSelectedSessionMode] = useState<
+    "default" | "plan" | "goal"
+  >("default");
   // Multi-target editions: where the quick chat runs. ``null`` follows the
   // registered default; single-target builds have no targets and the picker
   // renders nothing. Locked once the session is minted (same lifecycle as
@@ -85,6 +93,7 @@ export const ConversationsHomePage = () => {
       getDefaultExecutionTarget()
     );
   };
+  const providers = useComposerProviderChannels(execTargetId);
   const { defaults: modelDefaults, loading: defaultsLoading } =
     useModelDefaults();
 
@@ -116,12 +125,15 @@ export const ConversationsHomePage = () => {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const {
     attachments: stagedAttachments,
-    hasParsing,
     attachLocalFiles,
     remove: removeAttachment,
-    markPendingConsumed,
-  } = useSessionAttachments(sessionId);
-  const [parsingConfirmOpen, setParsingConfirmOpen] = useState(false);
+    claim: claimStagedAttachments,
+    restage: restageAttachments,
+  } = useStagedAttachments(
+    // The backend this chat will run on — see ProjectDetailPage.
+    resolveExecTarget()?.baseUrl,
+  );
+
   // Observed origin of the minted quick-chat session — drives the locked
   // bar's location chip (multi-target editions).
   const mintedSessionOrigin = useEntityOrigin(sessionId, "session");
@@ -198,6 +210,8 @@ export const ConversationsHomePage = () => {
     [globalSkills],
   );
 
+  const targetsRevision = useExecutionTargetsRevision();
+
   const bootstrap = useCallback(async () => {
     try {
       // Each quick-chat is now its own ephemeral chat project, so the
@@ -229,17 +243,6 @@ export const ConversationsHomePage = () => {
       // Silently fail — picker just shows empty state.
     }
     try {
-      const chListRes = await providersApi.list();
-      const details = await Promise.all(
-        chListRes.providers
-          .filter((c) => c.enabled)
-          .map((c) => providersApi.get(c.id).catch(() => null)),
-      );
-      setProviders(details.filter((d): d is LLMChannelDetail => d !== null));
-    } catch {
-      // Silently fail — Composer model picker just shows empty state.
-    }
-    try {
       const skillRes = await skillsApi.list();
       setGlobalSkills(skillRes.skills);
     } catch {
@@ -247,9 +250,12 @@ export const ConversationsHomePage = () => {
     }
   }, []);
 
+  // Refetch when the fan-out set changes: this page reads projects + sessions
+  // once on mount, and targets arrive after the tree is painted (see
+  // useExecutionTargetsRevision).
   useEffect(() => {
     void bootstrap();
-  }, [bootstrap]);
+  }, [bootstrap, targetsRevision]);
 
   const handleConnectDataSource = (slug: string) => {
     // Hand off to settings; the OAuth completion flips `connected` and a re-bootstrap
@@ -263,12 +269,15 @@ export const ConversationsHomePage = () => {
   // directories with one another. ADR-006: model_provider is locked at
   // session creation, so the composer's pick rides on the create call —
   // sendMessage ignores it.
-  const sessionPayload = () => ({
+  const sessionPayload = (): SessionCreateRequest => ({
     project_id: "chat-default",
     mcp_provider_slugs: enabledSlugs.length > 0 ? enabledSlugs : undefined,
     provider_id: selectedProviderId ?? undefined,
     model_id: selectedModelId ?? undefined,
-    runtime_id: selectedRuntimeId ?? undefined,
+    runtime_id:
+      selectedProviderId && selectedModelId
+        ? (selectedRuntimeId ?? undefined)
+        : undefined,
     permission_mode: selectedPermissionMode,
   });
 
@@ -279,23 +288,39 @@ export const ConversationsHomePage = () => {
     const target = resolveExecTarget();
     let payload = sessionPayload();
     if (target?.remote) {
-      // provider_id / model / runtime / connector picks reference THIS
-      // backend's rows — meaningless (400) on a remote target. Drop them so
-      // the owning backend resolves its own defaults; symbolic fields
-      // (permission_mode) stay.
+      // Connector picks still come from the local backend. Model/provider
+      // picks are target-scoped above, so they are valid on the selected
+      // remote backend and must be preserved.
       payload = {
         ...payload,
         mcp_provider_slugs: undefined,
-        provider_id: undefined,
-        model_id: undefined,
-        runtime_id: undefined,
       };
     }
-    const session = await sessionsApi.create(
+    let session = await sessionsApi.create(
       payload,
       target ? { baseUrl: target.baseUrl } : undefined,
     );
-    if (target) recordEntityOrigin(session.id, target.id);
+    // Apply the staged plan toggle before any message goes out so the
+    // first turn's runtime reconcile already enters plan mode.
+    if (
+      selectedSessionMode === "plan" &&
+      supportsPlanMode(session.runtime_provider)
+    ) {
+      try {
+        session = await sessionsApi.updateMode(session.id, "plan");
+      } catch {
+        /* non-fatal — the session simply stays in default mode */
+      }
+    }
+    if (target) {
+      recordEntityOrigin(session.id, target.id);
+      // Remote quick-chats mint a managed project that no list ever surfaces
+      // (temp projects are list-hidden) — record its origin here or its
+      // project-context fetches route to the module default and 404.
+      if (session.project_id && session.project_id !== "chat-default") {
+        recordEntityOrigin(session.project_id, target.id);
+      }
+    }
     return session;
   };
 
@@ -308,8 +333,6 @@ export const ConversationsHomePage = () => {
     }
   };
 
-  // Mint (once) the quick-chat session attachments upload into. Cached in
-  // ``sessionId`` so subsequent attaches + the send reuse the same session.
   const ensureSession = async (): Promise<{ id: string }> => {
     if (sessionId) return { id: sessionId };
     const session = await createSession();
@@ -323,16 +346,29 @@ export const ConversationsHomePage = () => {
     const text = input.trim();
     if (!text || sending) return;
     setSending(true);
+    // Hoisted so the failure path can hand them back.
+    let claimed: SessionAttachmentItem[] = [];
     try {
       const session = await ensureSession();
-      markPendingConsumed();
-      await sessionsApi.sendMessage(session.id, text);
+      claimed = claimStagedAttachments();
+      // Bind the staged files to this turn — this is where a file stops
+      // being a draft and becomes part of the conversation.
+      await sessionsApi.sendMessage(
+        session.id,
+        text,
+        null,
+        null,
+        null,
+        claimed.map((a) => a.id),
+      );
       setInput("");
       panelSetCollapsed(false);
       navigate(`/conversation/${session.id}`, {
         state: { revealSessionContext: true },
       });
     } catch {
+      // The turn did not go out; the files are still this composer's.
+      restageAttachments(claimed);
       navigate("/conversation/new");
     } finally {
       setSending(false);
@@ -342,11 +378,9 @@ export const ConversationsHomePage = () => {
   const handleSend = () => {
     const text = input.trim();
     if (!text || sending) return;
-    // Block on unfinished parsing — let the user wait or submit raw.
-    if (hasParsing) {
-      setParsingConfirmOpen(true);
-      return;
-    }
+    // An unfinished parse no longer stops the person: the turn binds the
+    // attachment either way and ships ``source_path`` if the extract is not
+    // ready. See ProjectDetailPage for the full rationale.
     void performSend();
   };
 
@@ -386,7 +420,7 @@ export const ConversationsHomePage = () => {
         }
       `}</style>
       <img
-        src="./mascot-wave.png"
+        src={assetUrl("mascot-wave.png")}
         alt=""
         aria-hidden="true"
         className="mascot-fly-in pointer-events-none fixed right-6 top-[60px] z-30 h-[180px] w-auto select-none opacity-60"
@@ -539,15 +573,26 @@ export const ConversationsHomePage = () => {
                 setSelectedPermissionMode(mode);
                 setComposerTouched(true);
               }}
+              sessionMode={selectedSessionMode}
+              planModeAvailable={supportsPlanMode(selectedRuntimeId)}
+              onSessionModeChange={(nextMode) => {
+                setSelectedSessionMode(nextMode);
+                // A session may already exist (attach-on-upload mints it
+                // before the first send) — reconcile it immediately.
+                if (sessionId) {
+                  void sessionsApi.updateMode(sessionId, nextMode).catch(() => {
+                    /* non-fatal */
+                  });
+                }
+              }}
               // ADR-006: the first attach mints the session, freezing
               // model/runtime — lock the pickers once that happens.
               modelLocked={sessionId != null}
               uploadOnAttach
               existingAttachmentCount={
-                stagedAttachments.filter((a) => !a.consumed_at).length
+                stagedAttachments.length
               }
               pinnedAttachments={stagedAttachments
-                .filter((a) => !a.consumed_at)
                 .map((a) => ({
                   id: a.id,
                   name: a.filename,
@@ -557,10 +602,10 @@ export const ConversationsHomePage = () => {
                 }))}
               onRemovePinnedAttachment={(attId) => void removeAttachment(attId)}
               onLocalUpload={(files) =>
-                void attachLocalFiles(files, ensureSession)
+                void attachLocalFiles(files)
               }
               onFileDrop={(files) =>
-                void attachLocalFiles(files, ensureSession)
+                void attachLocalFiles(files)
               }
               sending={sending}
               autoFocus
@@ -569,7 +614,14 @@ export const ConversationsHomePage = () => {
                   locked={sessionId != null}
                   lockedOriginId={mintedSessionOrigin}
                   targetId={execTargetId}
-                  onTargetChange={setExecTargetId}
+                  onTargetChange={(targetId) => {
+                    setExecTargetId(targetId);
+                    // Provider ids are backend-local. Clear the old pick while
+                    // the newly selected service's list is loading.
+                    setSelectedProviderId(null);
+                    setSelectedModelId(null);
+                    setComposerTouched(true);
+                  }}
                   projects={allProjects
                     .filter((w) => w.kind === "project")
                     .map((w) => ({
@@ -591,14 +643,7 @@ export const ConversationsHomePage = () => {
                 />
               }
             />
-            <AttachmentParsingDialog
-              open={parsingConfirmOpen}
-              onConfirm={() => {
-                setParsingConfirmOpen(false);
-                void performSend();
-              }}
-              onCancel={() => setParsingConfirmOpen(false)}
-            />
+
           </div>
         </div>
       </div>

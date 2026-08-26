@@ -194,7 +194,7 @@ class RemoteStore(abc.ABC):
         request_id: str | None = None,
         seq: int | None = None,
     ) -> int | None:
-        rid = request_id or self._new_request_id()  # shared key when WriteThrough mints it
+        rid = request_id or self._new_request_id()  # RuntimeStore passes the shared event_uid
         return await self._retry(
             "append_event",
             lambda: self._append_event_once(
@@ -235,6 +235,21 @@ class RemoteStore(abc.ABC):
             "get_events_after",
             lambda: self._get_events_after_once(
                 user_id, session_id, after_seq=after_seq, limit=limit
+            ),
+        )
+
+    async def get_events_after_for_user(
+        self,
+        user_id: str,
+        *,
+        after_seq: int = 0,
+        types: tuple[str, ...] | None = None,
+        limit: int = 200,
+    ) -> list[StoredEvent]:
+        return await self._retry(
+            "get_events_after_for_user",
+            lambda: self._get_events_after_for_user_once(
+                user_id, after_seq=after_seq, types=types, limit=limit
             ),
         )
 
@@ -324,6 +339,11 @@ class RemoteStore(abc.ABC):
     @abc.abstractmethod
     async def _get_events_after_once(
         self, user_id: str, session_id: str, *, after_seq: int, limit: int
+    ) -> list[StoredEvent]: ...
+
+    @abc.abstractmethod
+    async def _get_events_after_for_user_once(
+        self, user_id: str, *, after_seq: int, types: tuple[str, ...] | None, limit: int
     ) -> list[StoredEvent]: ...
 
     @abc.abstractmethod

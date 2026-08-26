@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from src.adapters.sqlalchemy_store.models import (
     EventModel,
@@ -25,6 +25,7 @@ from src.core.types import (
     MessageStatus,
     ModelProvider,
     ModelSettings,
+    RuntimeProvider,
     Session,
     StopReason,
     UserInterrupt,
@@ -42,7 +43,10 @@ _VALID_PERMISSION_MODES = {"default", "auto_review", "full_access"}
 _VALID_SESSION_MODES = {"default", "plan", "goal"}
 _VALID_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 _VALID_SESSION_STATUSES = {"created", "idle", "running", "terminated"}
-_VALID_RUNTIME_PROVIDERS = {"claude_agent", "codex", "deepagents"}
+# Derived from the canonical Literal so a new runtime member can never be
+# silently coerced away by this read-path validator again (a stale copy here
+# rewrote every loaded deepseek_harness session to deepagents).
+_VALID_RUNTIME_PROVIDERS = set(get_args(RuntimeProvider))
 _VALID_MESSAGE_STATUSES = {"running", "completed", "errored", "cancelled"}
 
 
@@ -80,7 +84,7 @@ def _validate_session_status(
 
 def _validate_runtime_provider(
     value: str,
-) -> Literal["claude_agent", "codex", "deepagents"]:
+) -> RuntimeProvider:
     """Coerce stored runtime_provider; defensive default for legacy rows.
 
     The DB CHECK constraint guards new writes, so this fallback only
@@ -208,8 +212,8 @@ def dict_to_agent_config(data: dict[str, Any] | None) -> AgentConfig | None:
         skills=tuple(data.get("skills") or []),
         mcp_servers=tuple(dict_to_mcp(d) for d in (data.get("mcp_servers") or [])),
         permission_mode=_validate_permission_mode(data.get("permission_mode", "full_access")),
-        max_turns=data.get("max_turns", 50),
-        max_cost_usd=data.get("max_cost_usd", 10.0),
+        max_turns=data.get("max_turns", 1000),
+        max_cost_usd=data.get("max_cost_usd", 500.0),
         effort=_validate_effort(data.get("effort")),
         thinking=data.get("thinking"),
         metadata=data.get("metadata") or {},
@@ -317,6 +321,8 @@ def model_settings_to_dict(s: ModelSettings | None) -> dict[str, Any] | None:
     out: dict[str, Any] = {"temperature": s.temperature, "max_tokens": s.max_tokens}
     if s.effort is not None:
         out["effort"] = s.effort
+    if s.max_input_tokens is not None:
+        out["max_input_tokens"] = s.max_input_tokens
     return out
 
 
@@ -329,10 +335,16 @@ def dict_to_model_settings(data: dict[str, Any] | None) -> ModelSettings | None:
     # to its SDK default when ``effort`` is None.
     if effort is not None and effort not in _VALID_EFFORT_LEVELS:
         effort = None
+    # Same tolerance for a malformed window: a non-positive / non-int
+    # value degrades to "not declared" instead of poisoning the session.
+    max_input_tokens = data.get("max_input_tokens")
+    if not isinstance(max_input_tokens, int) or max_input_tokens <= 0:
+        max_input_tokens = None
     return ModelSettings(
         temperature=data.get("temperature"),
         max_tokens=data.get("max_tokens"),
         effort=effort,
+        max_input_tokens=max_input_tokens,
     )
 
 
@@ -349,12 +361,15 @@ def mcp_to_dict(cfg: McpServerConfig) -> dict[str, Any]:
             "env": dict(cfg.env),
             "env_vars": list(cfg.env_vars),
         }
-    return {
+    out: dict[str, Any] = {
         "name": cfg.name,
         "url": cfg.url,
         "transport": cfg.transport,
         "headers": dict(cfg.headers),
     }
+    if cfg.tool_timeout_sec is not None:
+        out["tool_timeout_sec"] = cfg.tool_timeout_sec
+    return out
 
 
 def dict_to_mcp(data: dict[str, Any]) -> McpServerConfig:
@@ -379,11 +394,14 @@ def dict_to_mcp(data: dict[str, Any]) -> McpServerConfig:
     headers = (
         {str(k): str(v) for k, v in raw_headers.items()} if isinstance(raw_headers, dict) else {}
     )
+    raw_timeout = data.get("tool_timeout_sec")
+    tool_timeout_sec = float(raw_timeout) if isinstance(raw_timeout, (int, float)) else None
     return McpHttpServerConfig(
         name=str(data.get("name", "")),
         url=str(data.get("url", "")),
         transport=transport,
         headers=headers,
+        tool_timeout_sec=tool_timeout_sec,
     )
 
 

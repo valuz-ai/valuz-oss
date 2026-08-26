@@ -96,6 +96,16 @@ export const quitApp = async (): Promise<void> => {
 };
 
 /**
+ * Full client restart (relaunch + quit) — Settings → Backup uses this after
+ * staging a restore, so the relaunched backend applies it immediately.
+ */
+export const relaunchApp = async (): Promise<void> => {
+  const bridge = getBridge();
+  if (!bridge) return;
+  await bridge.invoke("app_relaunch");
+};
+
+/**
  * Spawn a new BrowserWindow beside the main one (same renderer, fresh
  * UI state). No-op outside Electron — the open-source web shell only
  * has one viewport.
@@ -112,10 +122,10 @@ export const openNewWindow = async (): Promise<void> => {
  * the user can jump from an Edit/Write summary row to the actual file.
  * No-op outside Electron — webui callers degrade silently.
  */
-export const revealInFinder = async (path: string): Promise<void> => {
+export const revealInFinder = async (path: string): Promise<string> => {
   const bridge = getBridge();
-  if (!bridge || !path) return;
-  await bridge.invoke("open_in_finder", { path });
+  if (!bridge || !path) return "";
+  return (await bridge.invoke("open_in_finder", { path })) ?? "";
 };
 
 /**
@@ -125,11 +135,12 @@ export const revealInFinder = async (path: string): Promise<void> => {
  */
 export const readFileContent = async (
   path: string,
-): Promise<{ content: string | null }> => {
+): Promise<{ content: string | null; truncated: boolean }> => {
   const bridge = getBridge();
-  if (!bridge || !path) return { content: null };
+  if (!bridge || !path) return { content: null, truncated: false };
   return (await bridge.invoke("read_file_content", { path })) as {
     content: string | null;
+    truncated: boolean;
   };
 };
 

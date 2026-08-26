@@ -1,7 +1,7 @@
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from valuz_agent.api.deps import (
@@ -120,6 +120,22 @@ async def rename_project(
 ) -> ProjectDetail:
     try:
         return await svc.rename_project(user_id, project_id, name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.put("/{project_id}/default-lead")
+async def set_default_lead(
+    project_id: str,
+    agent_slug: str | None = None,
+    user_id: str = Depends(get_current_user_id),
+    svc: ProjectService = Depends(get_project_service),
+) -> ProjectDetail:
+    """Set (or clear, by omitting ``agent_slug``) the project's default task lead."""
+    try:
+        return await svc.set_default_lead(user_id, project_id, agent_slug)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -311,6 +327,9 @@ class ImportProjectConfirmRequest(BaseModel):
     # Optional user-picked project folder. When omitted, the service creates
     # the project under a managed cwd (``data_dir/projects/{id}/``).
     root_path: str | None = None
+    # Optional rename on the way in — how the importer resolves a clash with
+    # a project they already own. Omitted keeps the name from the pack.
+    name: str | None = None
 
 
 class ConnectorToConfigure(BaseModel):
@@ -420,6 +439,7 @@ async def import_project_confirm(
             model=model,
             effort=effort,
             root_path=body.root_path,
+            name=body.name,
         )
     except (ProjectPackImportFailed, PackImportFailed) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -5,12 +5,13 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import uuid4
 
 from valuz_agent.adapters import kernel_client
 from valuz_agent.infra.eventbus import EventBus
-from valuz_agent.infra.fs_registry import fs_registry
+from valuz_agent.infra.fs_registry import ProjectKind, fs_registry
+from valuz_agent.modules.artifacts.snapshot import ARTIFACT_DIR_NAME
 from valuz_agent.modules.automations.datastore import AutomationDatastore
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.docs.datastore import DocumentDatastore
@@ -36,6 +37,13 @@ _VALID_PERMISSION_MODES = ("default", "auto_review", "full_access")
 def _coerce_permission_mode(value: str) -> str:
     return value if value in _VALID_PERMISSION_MODES else "full_access"
 
+
+# Never listed, even with ``include_hidden``. Unlike the names below — which a
+# user may reasonably want to see — this one is not user content: it is the
+# artifact store, holding the immutable snapshot of every delivered version.
+# Showing it invites edits to files whose whole value is that they do not
+# change, and buries the working tree under one directory per version.
+ALWAYS_EXCLUDED_NAMES = frozenset({ARTIFACT_DIR_NAME})
 
 HIDDEN_NAMES = frozenset(
     {
@@ -114,6 +122,9 @@ class ProjectListItem:
 @dataclass
 class ProjectDetail(ProjectListItem):
     instructions_md: str | None = None
+    # Member slug that leads a task when the caller names none. ``None`` = not
+    # configured (the launcher then falls back to the conversation agent).
+    default_lead_agent_slug: str | None = None
 
 
 @dataclass
@@ -124,7 +135,12 @@ class ProjectDeletePreview:
     skill_config_count: int
 
 
-class ProjectMemberCleanup(Protocol):
+class ProjectMembers(Protocol):
+    """The slice of project membership this module needs — sibling datastores
+    are reached through a protocol, never imported directly."""
+
+    async def get(self, user_id: str, project_id: str, agent_slug: str) -> Any: ...
+
     async def delete_by_project(self, user_id: str, project_id: str) -> int: ...
 
 
@@ -161,6 +177,7 @@ def _row_to_detail(
         icon=row.icon,
         instructions_md=instructions_md,
         cwd=cwd,
+        default_lead_agent_slug=row.default_lead_agent_slug,
     )
 
 
@@ -183,6 +200,26 @@ async def project_cwd_by_id(user_id: str, project_id: str) -> str | None:
     return str(fs_registry.project_cwd(user_id, row.id, kind, row.root_path))  # type: ignore[arg-type]
 
 
+async def clear_default_lead_if(user_id: str, project_id: str, agent_slug: str) -> bool:
+    """Clear the project's default lead when it points at ``agent_slug``.
+
+    Module-level (like the other cross-module readers here) so the agents module
+    can call it after undeploying a member without importing this module's
+    datastore. Returns whether anything was cleared.
+    """
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.projects.datastore import ProjectDatastore
+
+    async with async_unit_of_work(commit=True) as db:
+        ds = ProjectDatastore(db)
+        row = await ds.get_by_id(user_id, project_id)
+        if row is None or row.default_lead_agent_slug != agent_slug:
+            return False
+        row.default_lead_agent_slug = None
+        await ds.update(row)
+        return True
+
+
 async def project_name_map(user_id: str) -> dict[str, str]:
     """Return project id -> display name without exposing the project datastore."""
     from valuz_agent.infra.db import async_unit_of_work
@@ -191,6 +228,18 @@ async def project_name_map(user_id: str) -> dict[str, str]:
     async with async_unit_of_work(commit=False) as db:
         rows = await ProjectDatastore(db).list_projects(user_id)
     return {row.id: row.name for row in rows}
+
+
+async def project_root_paths(user_id: str) -> list[tuple[str, str, str | None]]:
+    """Return ``(project_id, kind, root_path)`` triples for every project —
+    used by the backup module to resolve which external bound folders fall
+    inside the user's backup scope, without exposing the project datastore."""
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.projects.datastore import ProjectDatastore
+
+    async with async_unit_of_work(commit=False) as db:
+        rows = await ProjectDatastore(db).list_projects(user_id)
+    return [(row.id, row.kind, row.root_path) for row in rows]
 
 
 async def project_brief_by_id(user_id: str, project_id: str) -> tuple[str, str, str | None] | None:
@@ -205,6 +254,22 @@ async def project_brief_by_id(user_id: str, project_id: str) -> tuple[str, str, 
     return (row.kind, row.name, row.instructions_md)
 
 
+async def project_row_by_id(user_id: str, project_id: str) -> ProjectRow | None:
+    """Return the owner-scoped project row, or ``None`` if it no longer exists.
+
+    Sibling modules that must hand a whole project to another collaborator —
+    ``worktrees.resolve_session_cwd`` takes a ``ProjectRowLike`` — need the row
+    itself, not a projection. Serving it here keeps the datastore private to
+    this module (the boundary contract) while ``ProjectRow`` stays a plain
+    domain type from ``projects.models``.
+    """
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.projects.datastore import ProjectDatastore
+
+    async with async_unit_of_work(commit=False) as db:
+        return await ProjectDatastore(db).get_by_id(user_id, project_id)
+
+
 class ProjectService:
     def __init__(
         self,
@@ -215,7 +280,7 @@ class ProjectService:
         automation_datastore: AutomationDatastore | None = None,
         skill_datastore: SkillDatastore | None = None,
         connector_datastore: ConnectorDatastore | None = None,
-        member_datastore: ProjectMemberCleanup | None = None,
+        member_datastore: ProjectMembers | None = None,
     ) -> None:
         self._ds = datastore
         self._bus = event_bus
@@ -234,7 +299,12 @@ class ProjectService:
         existing = await self._ds.get_chat_project(user_id)
         if existing:
             return
-        row = ProjectRow(name="Chat", kind="chat", sort_order=0)
+        row = ProjectRow(
+            name="Chat",
+            kind="chat",
+            sort_order=0,
+            root_path=_managed_project_root(user_id, "chat"),
+        )
         await self._ds.create(user_id, row)
 
     async def create_chat_project_for_session(self, user_id: str, name: str = "Chat") -> ProjectRow:
@@ -242,10 +312,15 @@ class ProjectService:
 
         Each call creates a NEW ``ProjectRow(kind="chat")`` and mirrors it
         into a dedicated kernel project + agent (1:1 by id). The kernel
-        project gets its own cwd under ``fs_registry.project_root(user_id)`` via
-        ``fs_registry.project_cwd``, so every chat session runs in an
+        project gets its own cwd under ``<project_root>/chats/YYYY/MM/dd/``,
+        allocated here and STORED on the row, so every chat session runs in an
         isolated directory and can't trip over files written by sibling
         chats.
+
+        Chats get their own top-level subdir (sibling to ``projects/``) because
+        one is minted per quick chat and per scheduled-automation run — mixing
+        them into the project tree would bury the handful of directories a user
+        actually created under thousands of ephemeral ones.
 
         Callers:
         - ``SessionService.send_message`` (quick-chat) — default ``name="Chat"``
@@ -258,7 +333,12 @@ class ProjectService:
         for chat-skills configuration, which is global across all chat
         sessions, not bound to any single chat project's id.
         """
-        row = ProjectRow(name=name, kind="chat", sort_order=100)
+        row = ProjectRow(
+            name=name,
+            kind="chat",
+            sort_order=100,
+            root_path=_managed_project_root(user_id, "chat"),
+        )
         await self._ds.create(user_id, row)
         return row
 
@@ -316,7 +396,7 @@ class ProjectService:
             if existing:
                 raise ValueError(f"Directory already bound to project '{existing.name}'")
         else:
-            resolved_root = _managed_project_root(user_id, new_id)
+            resolved_root = _managed_project_root(user_id, "project")
         _write_relative_file(_root_path(user_id, resolved_root), PROJECT_ROOT_MARKER, b"")
         row = ProjectRow(
             id=new_id,
@@ -378,7 +458,7 @@ class ProjectService:
             # Imported projects without a user-picked folder get a managed
             # cwd under fs_registry.project_root(user_id) (mirrors chat projects) so
             # they're still cross-machine portable.
-            resolved_root = _managed_project_root(user_id, new_id)
+            resolved_root = _managed_project_root(user_id, "project")
         _write_relative_file(_root_path(user_id, resolved_root), PROJECT_ROOT_MARKER, b"")
         row = ProjectRow(
             id=new_id,
@@ -413,6 +493,32 @@ class ProjectService:
         row.name = name
         await self._ds.update(row)
         return _row_to_detail(row, cwd=await self.resolve_project_cwd(user_id, row))
+
+    async def set_default_lead(
+        self, user_id: str, project_id: str, agent_slug: str | None
+    ) -> ProjectDetail:
+        """Point the project at the member that leads tasks by default.
+
+        ``None``/empty clears it. The slug must name a current member —
+        accepting a stranger would produce a launcher failure much later, far
+        from the mistake.
+        """
+        row = await self._ds.get_by_id(user_id, project_id)
+        if not row:
+            raise KeyError(project_id)
+        slug = (agent_slug or "").strip() or None
+        if slug is not None:
+            if self._members is None:
+                raise ValueError("project members are unavailable")
+            if await self._members.get(user_id, project_id, slug) is None:
+                raise ValueError(f"'{slug}' is not a member of this project")
+        row.default_lead_agent_slug = slug
+        await self._ds.update(row)
+        return _row_to_detail(
+            row,
+            instructions_md=row.instructions_md,
+            cwd=await self.resolve_project_cwd(user_id, row),
+        )
 
     async def update_instructions(
         self, user_id: str, project_id: str, instructions_md: str
@@ -496,6 +602,17 @@ class ProjectService:
             await self._skills.set_project_skills(user_id, project_id, [])
         if self._members:
             await self._members.delete_by_project(user_id, project_id)
+        # Tasks, before the project row goes: they are the one child that
+        # SURVIVES its parent in a way the user can see. Left behind, an
+        # ``active`` task with no kernel sessions gets respawned by the next
+        # boot's recovery sweep against a session id that no longer exists,
+        # dies, and is announced as "blocked" — for a project that is gone,
+        # on a row with no delete path. Module-local import: this leaf is
+        # reached only from here, and a top-level one would pair with
+        # ``tasks.resolution``'s project import to make a cycle.
+        from valuz_agent.modules.tasks.purge import purge_project_tasks
+
+        await purge_project_tasks(user_id, project_id)
         await self._ds.delete(user_id, project_id)
         # Source-driven forgetting (memory-system-design §11): a deleted project's
         # centralized memory dir is Valuz-owned (never the user's bound repo), so
@@ -574,7 +691,7 @@ class ProjectService:
             )
             return [_node_to_dict(n) for n in nodes]
         else:
-            root = fs_registry.project_cwd(user_id, project_id, "chat")
+            root = fs_registry.project_cwd(user_id, project_id, "chat", row.root_path)
         if not root.exists():
             return []
         nodes = _walk_dir(root, depth=depth, include_hidden=include_hidden)
@@ -591,7 +708,7 @@ class ProjectService:
 
         Returns the resolved relative posix path. Rejects absolute paths,
         parent-traversal, and anything escaping the project root — but,
-        unlike ``_resolve_project_file``, does NOT require the target to
+        unlike the resolve endpoint's ``assert_owned``, does NOT require the target to
         exist (it is a write). Powers ``POST /v1/projects/{id}/files`` so a
         cloud-managed project can receive files without a caller-supplied
         local directory.
@@ -617,8 +734,14 @@ class ProjectService:
         return target.relative_to(root).as_posix()
 
 
-def _managed_project_root(user_id: str, project_id: str) -> str:
-    return str((fs_registry.project_root(user_id) / project_id).resolve())
+def _managed_project_root(user_id: str, kind: ProjectKind = "project") -> str:
+    """Allocate a fresh managed workspace and return its absolute path.
+
+    The result is STORED on the row (``ProjectRow.root_path``); nothing
+    recomputes it, which is what lets old rows keep their pre-cutover flat
+    directories while new ones get the dated layout.
+    """
+    return str(fs_registry.allocate_managed_project_dir(user_id, kind).resolve())
 
 
 def _normalize_explicit_root(root_path: str) -> str:
@@ -627,13 +750,6 @@ def _normalize_explicit_root(root_path: str) -> str:
         raise ValueError("Project root path is required")
     path = Path(value).expanduser()
     return str(path.resolve()) if path.is_absolute() else value.strip("/")
-
-
-def _display_cwd(root_path: str | None) -> str | None:
-    if not root_path:
-        return None
-    path = Path(root_path).expanduser()
-    return str(path.resolve()) if path.is_absolute() else None
 
 
 def _root_path(user_id: str, root_path: str) -> Path:
@@ -675,6 +791,8 @@ def _walk_dir(
     except PermissionError:
         return []
     for entry in entries:
+        if entry.name in ALWAYS_EXCLUDED_NAMES:
+            continue
         if not include_hidden and entry.name in HIDDEN_NAMES:
             continue
         if not include_hidden and entry.name.startswith(".") and entry.name != ".":
@@ -703,23 +821,7 @@ def _project_root(user_id: str, row: ProjectRow, project_id: str) -> Path:
         if not row.root_path:
             raise ValueError("Project has no root path")
         return _root_path(user_id, row.root_path)
-    return fs_registry.project_cwd(user_id, project_id, "chat").resolve()
-
-
-def _resolve_project_file(root: Path, file_path: str) -> Path:
-    relative = Path(file_path)
-    if relative.is_absolute():
-        raise ValueError("Absolute paths are not allowed")
-    if any(part in {"", ".", ".."} for part in relative.parts):
-        raise ValueError("Invalid file path")
-    if any(part in HIDDEN_NAMES or part.startswith(".") for part in relative.parts):
-        raise PermissionError("Hidden files are not previewable")
-    target = (root / relative).resolve()
-    if root != target and root not in target.parents:
-        raise ValueError("File path escapes project root")
-    if not target.exists() or not target.is_file():
-        raise FileNotFoundError(file_path)
-    return target
+    return fs_registry.project_cwd(user_id, project_id, "chat", row.root_path).resolve()
 
 
 def _extension(name: str) -> str:

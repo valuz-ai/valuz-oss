@@ -21,11 +21,11 @@ import { toast } from "sonner";
 import { FolderKanban, MoreVertical, Plus, Upload } from "lucide-react";
 import {
   projectsApi,
+  recordEntityOrigin,
   useProjectStore,
   useTranslation,
   type ProjectListItem,
 } from "@valuz/core";
-import { usePlatform } from "@valuz/app/platform";
 import { useProjectOutlet } from "@valuz/app/layout";
 import type { DirectoryFieldMode } from "../layout";
 import { useAgentDeployPicker } from "../components/agent-deploy-picker";
@@ -35,7 +35,8 @@ import {
   ProjectLocationFields,
   useProjectExecutionLocation,
 } from "../components/ProjectLocationFields";
-import { OriginBadge } from "../components/ExecutionLocationPicker";
+import { OriginIcon } from "../components/ExecutionLocationPicker";
+import { useCardGridColumns } from "../hooks/use-card-grid-columns";
 
 export const ProjectsPage = ({
   directoryFieldMode = "picker",
@@ -45,9 +46,12 @@ export const ProjectsPage = ({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { selectDirectory } = usePlatform();
-  const { setHeader, setHeaderClassName } = useProjectOutlet();
+  const { setHeader, setHeaderClassName, setContentInnerClassName } =
+    useProjectOutlet();
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
+  const { ref: gridRef, columns: gridTemplateColumns } = useCardGridColumns(
+    projects.length,
+  );
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -63,12 +67,19 @@ export const ProjectsPage = ({
   const importInputRef = useRef<HTMLInputElement>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importOpen, setImportOpen] = useState(false);
-  // Initial members for the create dialog (shared with the sidebar entry).
-  const memberPicker = useAgentDeployPicker();
-  const managedDirectory = directoryFieldMode === "managed";
   // Execution location for the create dialog (multi-target editions; inert
   // no-target state on single-backend builds).
   const execLocation = useProjectExecutionLocation();
+  // A target with its own directory chooser (remote desktop) keeps the
+  // directory field even where this platform cannot pick local folders.
+  const managedDirectory =
+    directoryFieldMode === "managed" && !execLocation.hasOwnDirectoryPicker;
+  // Initial members for the create dialog (shared with the sidebar entry).
+  // Source candidates from the chosen target's backend so a cloud-bound
+  // project only lists cloud-deployable agents.
+  const memberPicker = useAgentDeployPicker(
+    execLocation.effectiveTarget?.baseUrl,
+  );
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -88,17 +99,19 @@ export const ProjectsPage = ({
   useEffect(() => {
     if (searchParams.get("create") !== "1") return;
     void Promise.resolve().then(() => setCreateOpen(true));
-    setSearchParams((next) => {
-      next.delete("create");
-      return next;
-    }, { replace: true });
+    setSearchParams(
+      (next) => {
+        next.delete("create");
+        return next;
+      },
+      { replace: true },
+    );
   }, [searchParams, setSearchParams]);
 
   const pageHeader = useMemo(
     () => (
       <PageHeader
         title={t("sidebar.projects" as Parameters<typeof t>[0])}
-        description={t("project.createDesc" as Parameters<typeof t>[0])}
         action={
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -129,19 +142,35 @@ export const ProjectsPage = ({
 
   useEffect(() => {
     setHeader(pageHeader);
-    setHeaderClassName("h-auto px-5 py-5");
+    setHeaderClassName("h-15 px-5");
+    // Own the content padding outright, the way the knowledge page does,
+    // instead of cancelling the shell's default with negative margins.
+    setContentInnerClassName("p-0");
     return () => {
       setHeader(null);
       setHeaderClassName(undefined);
+      setContentInnerClassName(undefined);
     };
-  }, [pageHeader, setHeader, setHeaderClassName]);
+  }, [pageHeader, setHeader, setHeaderClassName, setContentInnerClassName]);
 
   const handleSelectDirectory = async () => {
-    const path = await selectDirectory();
-    if (path) {
-      setNewRootPath(path);
+    const picked = await execLocation.selectDirectory();
+    if (!picked) return;
+    if (picked.existingProjectId) {
+      // Already a project on that target — open it rather than create a
+      // duplicate binding (the backend answers 409 for that).
+      const target = execLocation.effectiveTarget;
+      if (target) recordEntityOrigin(picked.existingProjectId, target.id);
+      setCreateOpen(false);
+      setNewName("");
+      setNewRootPath("");
       setCreateError("");
+      execLocation.reset();
+      navigate(`/projects/${picked.existingProjectId}`);
+      return;
     }
+    setNewRootPath(picked.path);
+    setCreateError("");
   };
 
   const handleCreate = async () => {
@@ -172,10 +201,7 @@ export const ProjectsPage = ({
       toast.success(
         t("project.created" as Parameters<typeof t>[0], { name: trimmedName }),
       );
-      if (
-        execLocation.isRemoteTarget &&
-        execLocation.initialFiles.length > 0
-      ) {
+      if (execLocation.isRemoteTarget && execLocation.initialFiles.length > 0) {
         toast.info(
           t("project.initialFilesUploading" as Parameters<typeof t>[0]),
         );
@@ -260,8 +286,9 @@ export const ProjectsPage = ({
       );
     }
 
+    // Same tiles, same sizing as the knowledge grid — see useCardGridColumns.
     return (
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <div ref={gridRef} className="grid gap-3" style={{ gridTemplateColumns }}>
         {projects.map((project) => (
           <ProjectCard
             key={project.id}
@@ -269,9 +296,10 @@ export const ProjectsPage = ({
             note={project.root_path || ""}
             href={`/projects/${project.id}`}
             badge={
-              // Execution origin (multi-target editions; fan-out tags rows).
+              // Execution origin (multi-target editions; fan-out tags rows) —
+              // the same icon the knowledge card puts after its name.
               project.exec_origin ? (
-                <OriginBadge origin={project.exec_origin} />
+                <OriginIcon origin={project.exec_origin} />
               ) : undefined
             }
             onDelete={() => setDeleteTarget(project)}
@@ -283,8 +311,8 @@ export const ProjectsPage = ({
   };
 
   return (
-    <div className="relative -m-6 h-[calc(100%+48px)] overflow-y-auto bg-card sm:-m-7 sm:h-[calc(100%+56px)]">
-      <div className="flex min-h-full flex-col px-5 pb-5">
+    <div className="relative flex h-full min-h-0 flex-col bg-card">
+      <div className="flex flex-1 flex-col overflow-y-auto px-5 pb-5 pt-3">
         {renderContent()}
       </div>
 
@@ -336,9 +364,7 @@ export const ProjectsPage = ({
           >
             <DirectoryPicker
               value={newRootPath}
-              placeholder={t(
-                "knowledge.selectDir" as Parameters<typeof t>[0],
-              )}
+              placeholder={t("knowledge.selectDir" as Parameters<typeof t>[0])}
               onBrowse={() => void handleSelectDirectory()}
             />
             <p className="text-xs text-muted-foreground">
@@ -346,14 +372,10 @@ export const ProjectsPage = ({
             </p>
           </FormField>
         )}
-        <FormField
-          label={t("project.deployAgents" as Parameters<typeof t>[0])}
-        >
+        <FormField label={t("project.deployAgents" as Parameters<typeof t>[0])}>
           <AgentCheckboxList picker={memberPicker} />
         </FormField>
-        <FormField
-          label={t("common.description" as Parameters<typeof t>[0])}
-        >
+        <FormField label={t("common.description" as Parameters<typeof t>[0])}>
           <Textarea
             placeholder={t(
               "project.instructionPlaceholder" as Parameters<typeof t>[0],

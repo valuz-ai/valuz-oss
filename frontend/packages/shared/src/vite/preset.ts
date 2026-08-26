@@ -18,6 +18,7 @@
  *   });
  */
 
+import { createRequire } from "node:module";
 import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -33,6 +34,15 @@ export interface BaseViteConfigOptions {
   monorepoRoot?: string;
   /** Edition overlay plugin from @valuz/core/vite. */
   editionOverlay: PluginOption;
+}
+
+function canResolve(id: string, dir: string): boolean {
+  try {
+    createRequire(path.join(dir, "_")).resolve(id);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function baseViteConfig(options: BaseViteConfigOptions): UserConfig {
@@ -51,6 +61,15 @@ export function baseViteConfig(options: BaseViteConfigOptions): UserConfig {
     ],
     define: {
       __EDITION__: JSON.stringify(edition),
+    },
+    // Spreadsheet parsing runs inside a lazily-created Worker. Vite cannot
+    // discover that dependency during its normal entry scan, so the first
+    // spreadsheet opened in dev would optimize `xlsx` on demand and reload
+    // the entire renderer. Pre-bundle it at startup to keep the preview open.
+    // Only include when resolvable from the consuming app (pnpm strict hoisting
+    // means it may not be visible from every app root).
+    optimizeDeps: {
+      include: canResolve("xlsx", options.configDir) ? ["xlsx"] : [],
     },
     resolve: {
       alias: {

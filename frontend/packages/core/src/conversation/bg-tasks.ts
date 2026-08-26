@@ -91,7 +91,20 @@ export function deriveBackgroundTasks(
   return [...tasks.values()];
 }
 
-/** The subset that should keep a "running" affordance visible in the UI. */
+/**
+ * The subset that should keep a "running" affordance visible in the UI.
+ *
+ * Use this to render the task LIST (descriptions, per-task state). To ask
+ * the yes/no question "does this session have background work in flight?",
+ * read the server's `background` flag instead — it ships on both
+ * `SessionDetail` and `RunSummary`, both sourced from
+ * `bg_busy_session_ids()`, so every surface agrees.
+ *
+ * The two can legitimately differ: this folds PERSISTED events, so an
+ * orphaned `bg_task.started` (kernel killed mid-task, no `finished` ever
+ * written) reads as running indefinitely, while the server's live registry
+ * is cleared by that same restart.
+ */
 export function runningBackgroundTasks(
   tasks: BackgroundTaskState[],
 ): BackgroundTaskState[] {

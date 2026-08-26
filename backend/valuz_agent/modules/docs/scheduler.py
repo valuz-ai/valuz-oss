@@ -100,7 +100,6 @@ async def _arun_auto_discovery_scan() -> None:
     )
     from valuz_agent.infra.db import async_unit_of_work
     from valuz_agent.infra.eventbus import event_bus
-    from valuz_agent.integrations.docs_embedded import EmbeddedDocsRuntime
     from valuz_agent.modules.docs.datastore import (
         DocumentDatastore,
     )
@@ -109,6 +108,7 @@ async def _arun_auto_discovery_scan() -> None:
     )
     from valuz_agent.modules.parser import ParserRouter
     from valuz_agent.modules.settings.parser_routing import load_routing_config
+    from valuz_agent.ports.docs_runtime import get_docs_runtime
 
     # Snapshot the auto-discover KBs (id, name, owner) across ALL owners in one
     # short-lived session, then run each rescan in its own session below.
@@ -138,7 +138,6 @@ async def _arun_auto_discovery_scan() -> None:
         try:
             from valuz_agent.infra.fs_registry import fs_registry
 
-            preview_dir = fs_registry.docs_preview_dir(owner)
             async with async_unit_of_work(commit=False) as db:
                 routing_config = await load_routing_config(db, user_id=owner)
                 parser = ParserRouter(
@@ -150,7 +149,7 @@ async def _arun_auto_discovery_scan() -> None:
                 svc = DocumentLibraryService(
                     datastore=DocumentDatastore(db),
                     parser=parser,
-                    docs_runtime=EmbeddedDocsRuntime(preview_dir=preview_dir),
+                    docs_runtime=get_docs_runtime(owner),
                     event_bus=event_bus,
                     scan_state_dir=fs_registry.docs_scan_state_dir(owner),
                 )

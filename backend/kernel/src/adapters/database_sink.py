@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING
 
 from src.core.events import Event
@@ -49,11 +50,21 @@ class DatabaseEventSink:
     async def emit(self, event: Event) -> None:
         await self.persist(event)
 
-    async def persist(self, event: Event) -> int | None:
-        """Persist ``event`` and return its row id (``seq``), or ``None``
-        for live-only types / backends that can't report the id."""
+    async def persist(self, event: Event) -> tuple[int | None, str | None]:
+        """Persist ``event``; return ``(seq, event_uid)`` — ``(None, None)``
+        for live-only types / backends that can't report the id.
+
+        The uid is minted HERE (before the store call) so the SAME identity
+        lands in the runtime row, the DataService mirror (via the RuntimeStore
+        ``request_id``), and the live broadcast — the cross-store dedup key."""
         if event.type in _NON_PERSISTED_TYPES:
-            return None
-        return await self._store.append_event(
-            self._user_id, self._session_id, self._message_id, event
+            return None, None
+        event_uid = uuid.uuid4().hex
+        seq = await self._store.append_event(
+            self._user_id,
+            self._session_id,
+            self._message_id,
+            event,
+            request_id=event_uid,
         )
+        return seq, event_uid

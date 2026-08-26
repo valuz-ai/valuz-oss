@@ -21,7 +21,7 @@ async def list_activity(
     project_id: str | None = Query(
         default=None, description="Scope to one project; omit for the global feed."
     ),
-    tab: str = Query(default="all", description="all | chat | task | automation"),
+    tab: str = Query(default="all", description="all | chat | task | automation | playbook"),
     limit: int = Query(default=20, ge=1, le=100),
     cursor: str | None = Query(default=None, description="Opaque keyset cursor."),
     user_id: str = Depends(get_current_user_id),

@@ -11,10 +11,11 @@
 import { useCallback, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { AlertTriangle, MessageCircleQuestion } from "lucide-react";
+import { AlertTriangle, CheckCircle2, MessageCircleQuestion } from "lucide-react";
 
 import {
-  notificationsApi,
+  ApiError,
+  dismissNotification,
   sessionsApi,
   tasksApi,
   useTranslation,
@@ -36,7 +37,111 @@ export function NotificationCard({
   if (entry.kind === "question") {
     return <QuestionCard entry={entry} onNavigateAway={onNavigateAway} />;
   }
+  if (entry.kind === "backup_failed") {
+    return <BackupFailedCard entry={entry} onNavigateAway={onNavigateAway} />;
+  }
+  // Informational kinds are ingested already-resolved, so they reach the
+  // drawer only through history. Guard the fallback anyway: it renders a
+  // FAILURE (Resume button, "任务受阻" label) purely because a kind has no
+  // branch, which is how a completed task came to announce itself as blocked.
+  if (INFORMATIONAL_KINDS.has(entry.kind)) {
+    return <InfoCard entry={entry} onNavigateAway={onNavigateAway} />;
+  }
   return <FailureCard entry={entry} onNavigateAway={onNavigateAway} />;
+}
+
+const INFORMATIONAL_KINDS = new Set(["task_completed"]);
+
+/** A finished thing: what happened, and a way to look at it. No action. */
+function InfoCard({ entry, onNavigateAway }: NotificationCardProps): ReactElement {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+
+  const handleDismiss = useCallback(() => {
+    dismissNotification(entry.id);
+  }, [entry.id]);
+
+  const handleOpen = useCallback(() => {
+    if (entry.route) navigate(entry.route);
+    onNavigateAway?.();
+  }, [entry.route, navigate, onNavigateAway]);
+
+  return (
+    <CardShell
+      icon={<CheckCircle2 className="h-3 w-3 text-ink-muted" />}
+      label={t("notification.kindCompleted" as I18nKey)}
+      title={entry.title}
+    >
+      <div className="flex flex-col gap-3 px-4 py-3">
+        {entry.body && (
+          <p className="line-clamp-6 whitespace-pre-wrap break-words text-xs leading-5 text-ink-body">
+            {entry.body}
+          </p>
+        )}
+        <div className="flex items-center justify-end gap-2">
+          <Button size="sm" variant="ghost" className="text-xs" onClick={handleDismiss}>
+            {t("notification.dismiss" as I18nKey)}
+          </Button>
+          {entry.route && (
+            <Button size="sm" variant="outline" className="text-xs" onClick={handleOpen}>
+              {t("notification.openTask" as I18nKey)}
+            </Button>
+          )}
+        </div>
+      </div>
+    </CardShell>
+  );
+}
+
+function BackupFailedCard({
+  entry,
+  onNavigateAway,
+}: NotificationCardProps): ReactElement {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+
+  // Optimistic — the card leaves the drawer immediately; a failed persist
+  // self-heals on the next SSE snapshot.
+  const handleDismiss = useCallback(() => {
+    dismissNotification(entry.id);
+  }, [entry.id]);
+
+  return (
+    <CardShell
+      icon={<AlertTriangle className="h-3 w-3 text-error-text" />}
+      label={t("notification.kindBackupFailed" as I18nKey)}
+      title={t("notification.notifBackupFailedTitle" as I18nKey)}
+    >
+      <div className="flex flex-col gap-3 px-4 py-3">
+        {entry.body && (
+          <p className="line-clamp-6 whitespace-pre-wrap break-words text-xs leading-5 text-ink-body">
+            {entry.body}
+          </p>
+        )}
+        <div className="flex items-center justify-end gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-xs"
+            onClick={handleDismiss}
+          >
+            {t("notification.dismiss" as I18nKey)}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-xs"
+            onClick={() => {
+              onNavigateAway?.();
+              navigate(entry.route ?? "/settings?tab=backup");
+            }}
+          >
+            {t("notification.openBackupSettings" as I18nKey)}
+          </Button>
+        </div>
+      </div>
+    </CardShell>
+  );
 }
 
 function CardShell({
@@ -51,7 +156,7 @@ function CardShell({
   children: ReactElement;
 }): ReactElement {
   return (
-    <div className="rounded-xl border border-surface-border bg-surface shadow-sm">
+    <div className="rounded-xl border border-surface-border bg-surface shadow-outline">
       <div className="flex flex-col gap-0.5 border-b border-surface-border bg-surface-soft/40 px-4 py-2.5">
         <div className="flex items-center gap-1.5 text-2xs font-medium text-ink-muted">
           {icon}
@@ -88,6 +193,10 @@ function QuestionCard({ entry, onNavigateAway }: NotificationCardProps): ReactEl
         // No optimistic removal — the ``action_resolved`` event resolves the
         // notification and the SSE ``resolved`` frame clears it.
       } catch (err) {
+        // The backend emits action_resolved(expired) when this notification
+        // outlived the runtime that was waiting for it. The stream will remove
+        // the stale card; no retryable user error exists in that case.
+        if (err instanceof ApiError && err.status === 410) return;
         setSubmitting(false);
         toast.error(
           err instanceof Error ? err.message : _t("common.saveFailed" as I18nKey),
@@ -115,7 +224,9 @@ function QuestionCard({ entry, onNavigateAway }: NotificationCardProps): ReactEl
           />
         ) : (
           <div className="flex items-center justify-between px-3 py-3">
-            <span className="text-sm text-ink-muted">{entry.body}</span>
+            <span className="line-clamp-3 break-words text-sm text-ink-muted">
+              {entry.body}
+            </span>
             {entry.session_id && (
               <button
                 type="button"
@@ -157,17 +268,15 @@ function FailureCard({ entry, onNavigateAway }: NotificationCardProps): ReactEle
     }
   }, [entry.task_id, t]);
 
-  const handleDismiss = useCallback(async () => {
-    try {
-      await notificationsApi.dismiss(entry.id);
-    } catch {
-      // best-effort
-    }
+  // Optimistic — the card leaves the drawer immediately; a failed persist
+  // self-heals on the next SSE snapshot.
+  const handleDismiss = useCallback(() => {
+    dismissNotification(entry.id);
   }, [entry.id]);
 
   return (
     <CardShell
-      icon={<AlertTriangle className="h-3 w-3 text-red-500" />}
+      icon={<AlertTriangle className="h-3 w-3 text-error-text" />}
       label={t(
         (isTaskFailure
           ? "notification.kindFailure"
@@ -184,7 +293,7 @@ function FailureCard({ entry, onNavigateAway }: NotificationCardProps): ReactEle
     >
       <div className="flex flex-col gap-3 px-4 py-3">
         {entry.body && (
-          <p className="whitespace-pre-wrap text-xs leading-5 text-ink-body">
+          <p className="line-clamp-6 whitespace-pre-wrap break-words text-xs leading-5 text-ink-body">
             {entry.body}
           </p>
         )}
@@ -192,8 +301,8 @@ function FailureCard({ entry, onNavigateAway }: NotificationCardProps): ReactEle
           <Button
             size="sm"
             variant="ghost"
-            className="text-[12px]"
-            onClick={() => void handleDismiss()}
+            className="text-xs"
+            onClick={handleDismiss}
             disabled={busy}
           >
             {t("notification.dismiss" as I18nKey)}
@@ -203,7 +312,7 @@ function FailureCard({ entry, onNavigateAway }: NotificationCardProps): ReactEle
               <Button
                 size="sm"
                 variant="outline"
-                className="text-[12px]"
+                className="text-xs"
                 onClick={() => {
                   onNavigateAway?.();
                   if (entry.task_id) {
@@ -216,7 +325,7 @@ function FailureCard({ entry, onNavigateAway }: NotificationCardProps): ReactEle
               </Button>
               <Button
                 size="sm"
-                className="text-[12px]"
+                className="text-xs"
                 onClick={() => void handleResume()}
                 disabled={busy}
                 loading={busy}

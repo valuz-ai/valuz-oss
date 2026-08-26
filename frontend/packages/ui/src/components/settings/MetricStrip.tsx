@@ -11,7 +11,7 @@ export const MetricStrip = ({ items }: MetricStripProps) => (
         key={item.label}
         className="rounded-xl bg-card px-3.5 py-3 shadow-sm"
       >
-        <div className="text-[10px] uppercase tracking-[0.8px] text-ink-section">
+        <div className="text-micro uppercase tracking-[0.8px] text-ink-section">
           {item.label}
         </div>
         <div className="mt-2 text-xl font-medium text-ink-heading">{item.value}</div>

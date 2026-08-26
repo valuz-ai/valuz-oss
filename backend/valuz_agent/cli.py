@@ -50,8 +50,10 @@ def serve(
     ),
 ) -> None:
     """Start the Valuz Agent backend server."""
+    from valuz_agent.boot.steps import guard_source_run_data_dir
     from valuz_agent.infra.local_identity import resolve_local_user_id
 
+    guard_source_run_data_dir()  # before the mkdir below touches the root
     fs_registry.data_dir(resolve_local_user_id())  # ensure the data root exists
     if headless:
         os.environ["VALUZ_HEADLESS"] = "1"
@@ -75,13 +77,14 @@ def reset_providers_cmd(
 ) -> None:
     """Reset the provider table to a known-good state."""
     from valuz_agent.boot.schema import run_host_migrations
+    from valuz_agent.boot.steps import guard_source_run_data_dir
     from valuz_agent.infra.database import async_engine
     from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.infra.local_identity import resolve_local_user_id
     from valuz_agent.modules.providers.datastore import ProviderDatastore
     from valuz_agent.modules.providers.service import LLMChannel, reset_providers
 
-    from valuz_agent.infra.local_identity import resolve_local_user_id
-
+    guard_source_run_data_dir()  # runs migrations below — never on the packaged store
     fs_registry.data_dir(resolve_local_user_id())  # ensure the data root exists
     # Ensure the host schema exists via the SAME path as app startup — Alembic
     # upgrade head (idempotent; a no-op against an already-current DB). Using
@@ -119,17 +122,18 @@ def cleanup_seed_agents_cmd() -> None:
     deployed into a project (``delete_agent`` raises for those). Safe to re-run.
     """
     from valuz_agent.boot.schema import run_host_migrations
+    from valuz_agent.boot.steps import guard_source_run_data_dir
     from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.infra.local_identity import resolve_local_user_id
     from valuz_agent.modules.agents.service import AgentService
     from valuz_agent.modules.connectors.datastore import ConnectorDatastore
     from valuz_agent.modules.connectors.service import ConnectorService
 
-    from valuz_agent.infra.local_identity import resolve_local_user_id
-
+    guard_source_run_data_dir()  # runs migrations below — never on the packaged store
     fs_registry.data_dir(resolve_local_user_id())  # ensure the data root exists
     run_host_migrations()
 
-    keep = {"default-assistant"}
+    keep = {"default-assistant", "valurion", "valuz-helper"}
 
     async def _run() -> tuple[list[str], list[tuple[str, str]]]:
         from valuz_agent.infra.local_identity import resolve_local_user_id

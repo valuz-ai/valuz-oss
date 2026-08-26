@@ -1,6 +1,6 @@
 """Generative-UI module — the ``generate_ui`` MCP tool.
 
-Produces OpenUI Lang (from the vendored ``genui-lib`` prompt) via a one-shot
-ephemeral-session LLM call; the frontend renders the result with OpenUI's
+Produces A2UI v0.9.1 JSON via an ephemeral-session LLM call; the frontend
+renders the result with the standalone Valuz A2UI
 ``<Renderer>``. Mirrors ``modules/memory/`` (tool + completer seam).
 """

@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.settings.datastore import SettingsDatastore
 from valuz_agent.modules.settings.models import AppSettingRow
+from valuz_agent.ports.model_defaults import ModelDefaults
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,17 @@ KEY_DEFAULT_PROVIDER_ID = "model.default_provider_id"
 KEY_DEFAULT_MODEL = "model.default_model"
 KEY_THEME = "ui.theme"
 KEY_FONT_SIZE = "ui.font_size"
+# Conversation trust controls. Citation rendering remains on by default so
+# source-bearing answers keep their inspectable indices. Verification is an
+# explicit opt-in because Claim Audit and the bounded semantic verifier can
+# add latency and model usage.
+KEY_CONVERSATION_CITATIONS_ENABLED = "conversation.citations_enabled"
+KEY_CONVERSATION_VERIFICATION_ENABLED = "conversation.verification_enabled"
+# Task-completeness review is on by default and independent of citation
+# rendering/verification. It can add one bounded same-runtime continuation,
+# so users retain a separate control.
+KEY_CONVERSATION_TASK_COVERAGE_ENABLED = "conversation.task_coverage_enabled"
+KEY_PTC_ENABLED = "conversation.ptc_enabled"
 # Memory system toggles (memory-system-design §11). ``memory.enabled`` is the
 # product master switch (gates injection, the foreground tool, and the
 # background extractor); ``memory.auto_extract`` gates ONLY the background
@@ -56,6 +68,21 @@ KEY_MEMORY_AUTO_EXTRACT = "memory.auto_extract"
 # it (never injected into normal turns). Capped to keep the review prompt bounded.
 KEY_MEMORY_CUSTOM_INSTRUCTIONS = "memory.custom_instructions"
 MEMORY_CUSTOM_INSTRUCTIONS_MAX_CHARS = 1500
+# Local backup (docs/design/client-local-backup.md §6). Config keys are
+# user-tunable; the ``last_run`` / ``next_run_at`` pair is runtime state the
+# scheduler + service maintain. Structured values (scope / retention /
+# last_run) are stored as a JSON string inside the usual ``{"value": ...}``
+# envelope — the backup module owns their shape (``modules/backup/schemas``).
+KEY_BACKUP_ENABLED = "backup.enabled"
+KEY_BACKUP_FREQUENCY = "backup.frequency"
+KEY_BACKUP_DESTINATION = "backup.destination"
+KEY_BACKUP_SCOPE = "backup.scope"
+KEY_BACKUP_RETENTION = "backup.retention"
+KEY_BACKUP_LAST_RUN = "backup.last_run"
+KEY_BACKUP_NEXT_RUN_AT = "backup.next_run_at"
+
+BACKUP_FREQUENCY_VALUES = ("manual", "every_6h", "daily", "weekly")
+FALLBACK_BACKUP_FREQUENCY = "daily"
 
 FALLBACK_TIMEZONE = "UTC"
 FALLBACK_LOCALE = "zh-CN"
@@ -76,7 +103,41 @@ FALLBACK_FONT_SIZE = "default"
 # runtime falls through to its SDK default. ``"off"`` from the legacy
 # 4-value enum is normalized to ``None`` on read for back-compat.
 EFFORT_VALUES = ("low", "medium", "high", "xhigh", "max")
-RUNTIME_VALUES = ("claude_agent", "codex", "deepagents")
+RUNTIME_VALUES = ("claude_agent", "codex", "deepagents", "deepseek_harness")
+
+
+# ── factory defaults (ext.model_defaults) ────────────────────────────
+#
+# When the user never explicitly chose, the fallback comes from the
+# ``ext.model_defaults`` port instead of the module constants above: OSS
+# binds a Settings-backed implementation (env-overridable per build), the
+# commercial overlay layers cloud-delivered per-distribution values on top.
+# The constants remain as the defensive last line when a port returns a
+# value outside the known enums.
+
+
+async def _factory_defaults(user_id: str | None) -> ModelDefaults:
+    from valuz_agent.ports.extensions import ext
+
+    return await ext.model_defaults.get(user_id)
+
+
+async def _factory_runtime(user_id: str | None) -> str:
+    value = (await _factory_defaults(user_id)).default_runtime
+    if value in RUNTIME_VALUES:
+        return value
+    logger.warning("ignoring unknown factory default_runtime: %r", value)
+    return FALLBACK_RUNTIME
+
+
+async def _factory_effort(user_id: str | None) -> str:
+    value = (await _factory_defaults(user_id)).default_effort
+    if value in EFFORT_VALUES:
+        return value
+    logger.warning("ignoring unknown factory default_effort: %r", value)
+    return FALLBACK_EFFORT
+
+
 ALLOWED_THEMES = {"light", "dark", "auto"}
 ALLOWED_FONT_SIZES = {"compact", "default", "comfortable"}
 
@@ -203,18 +264,18 @@ async def get_default_effort(db: AsyncSession, user_id: str | None = None) -> st
     if raw is None:
         # Legacy key fallback for one-time graceful upgrade. ``"off"``
         # was the old "no override" sentinel and now resolves to the
-        # explicit fallback (matches what every other unset / corrupt
+        # factory default (matches what every other unset / corrupt
         # path returns below).
         legacy = await _read(db, KEY_DEFAULT_THINKING_LEGACY, user_id=user_id)
         if legacy in (None, "", "off"):
-            return FALLBACK_EFFORT
+            return await _factory_effort(user_id)
         raw = legacy
     if raw in EFFORT_VALUES:
         return raw
     # Unknown stored value (e.g. legacy ``xmax`` typo) — defensive
     # fallback so a single corrupt row doesn't 500 the settings page.
     logger.warning("ignoring unknown default_effort value: %r", raw)
-    return FALLBACK_EFFORT
+    return await _factory_effort(user_id)
 
 
 async def set_default_effort(
@@ -239,8 +300,14 @@ async def set_default_effort(
 
 
 async def get_default_runtime(db: AsyncSession, user_id: str | None = None) -> str:
-    """Return the user's configured default runtime id."""
-    return await _read(db, KEY_DEFAULT_RUNTIME, user_id=user_id) or FALLBACK_RUNTIME
+    """Return the user's configured default runtime id.
+
+    Unset → the factory default from ``ext.model_defaults`` (Settings env /
+    distribution override / cloud-delivered, depending on the bound port)."""
+    stored = await _read(db, KEY_DEFAULT_RUNTIME, user_id=user_id)
+    if stored:
+        return stored
+    return await _factory_runtime(user_id)
 
 
 async def set_default_runtime(db: AsyncSession, value: str, user_id: str | None = None) -> None:
@@ -269,7 +336,10 @@ async def set_default_runtime(db: AsyncSession, value: str, user_id: str | None 
 
 
 async def get_default_provider_id(db: AsyncSession, user_id: str | None = None) -> str | None:
-    return await _read(db, KEY_DEFAULT_PROVIDER_ID, user_id=user_id) or None
+    stored = await _read(db, KEY_DEFAULT_PROVIDER_ID, user_id=user_id)
+    if stored:
+        return stored
+    return (await _factory_defaults(user_id)).default_provider_id
 
 
 async def set_default_provider_id(
@@ -279,7 +349,10 @@ async def set_default_provider_id(
 
 
 async def get_default_model(db: AsyncSession, user_id: str | None = None) -> str | None:
-    return await _read(db, KEY_DEFAULT_MODEL, user_id=user_id) or None
+    stored = await _read(db, KEY_DEFAULT_MODEL, user_id=user_id)
+    if stored:
+        return stored
+    return (await _factory_defaults(user_id)).default_model or None
 
 
 async def set_default_model(
@@ -308,13 +381,89 @@ async def set_font_size(db: AsyncSession, value: str, user_id: str | None = None
     await _write(db, KEY_FONT_SIZE, value, user_id=user_id)
 
 
-async def _read_bool(
-    db: AsyncSession, key: str, default: bool, user_id: str | None = None
-) -> bool:
+async def _read_bool(db: AsyncSession, key: str, default: bool, user_id: str | None = None) -> bool:
     raw = await _read(db, key, user_id=user_id)
     if raw is None:
         return default
     return raw == "true"
+
+
+async def get_conversation_citations_enabled(db: AsyncSession, user_id: str | None = None) -> bool:
+    """Whether normal conversation replies render canonical citations."""
+    return await _read_bool(
+        db,
+        KEY_CONVERSATION_CITATIONS_ENABLED,
+        True,
+        user_id=user_id,
+    )
+
+
+async def set_conversation_citations_enabled(
+    db: AsyncSession, value: bool, user_id: str | None = None
+) -> None:
+    await _write(
+        db,
+        KEY_CONVERSATION_CITATIONS_ENABLED,
+        "true" if value else "false",
+        user_id=user_id,
+    )
+
+
+async def get_conversation_verification_enabled(
+    db: AsyncSession, user_id: str | None = None
+) -> bool:
+    """Whether claim/citation verification runs for normal conversations."""
+    return await _read_bool(
+        db,
+        KEY_CONVERSATION_VERIFICATION_ENABLED,
+        False,
+        user_id=user_id,
+    )
+
+
+async def set_conversation_verification_enabled(
+    db: AsyncSession, value: bool, user_id: str | None = None
+) -> None:
+    await _write(
+        db,
+        KEY_CONVERSATION_VERIFICATION_ENABLED,
+        "true" if value else "false",
+        user_id=user_id,
+    )
+
+
+async def get_ptc_enabled(db: AsyncSession, user_id: str | None = None) -> bool:
+    """Whether Programmatic Tool Calling (the execute_code code face over
+    data connectors) is enabled for this user's sessions."""
+    return await _read_bool(db, KEY_PTC_ENABLED, False, user_id=user_id)
+
+
+async def set_ptc_enabled(db: AsyncSession, value: bool, user_id: str | None = None) -> None:
+    await _write(db, KEY_PTC_ENABLED, "true" if value else "false", user_id=user_id)
+
+
+async def get_conversation_task_coverage_enabled(
+    db: AsyncSession, user_id: str | None = None
+) -> bool:
+    """Whether a completed primary turn may receive one native continuation."""
+
+    return await _read_bool(
+        db,
+        KEY_CONVERSATION_TASK_COVERAGE_ENABLED,
+        False,
+        user_id=user_id,
+    )
+
+
+async def set_conversation_task_coverage_enabled(
+    db: AsyncSession, value: bool, user_id: str | None = None
+) -> None:
+    await _write(
+        db,
+        KEY_CONVERSATION_TASK_COVERAGE_ENABLED,
+        "true" if value else "false",
+        user_id=user_id,
+    )
 
 
 async def get_memory_enabled(db: AsyncSession, user_id: str | None = None) -> bool:
@@ -322,9 +471,7 @@ async def get_memory_enabled(db: AsyncSession, user_id: str | None = None) -> bo
     return await _read_bool(db, KEY_MEMORY_ENABLED, True, user_id=user_id)
 
 
-async def set_memory_enabled(
-    db: AsyncSession, value: bool, user_id: str | None = None
-) -> None:
+async def set_memory_enabled(db: AsyncSession, value: bool, user_id: str | None = None) -> None:
     await _write(db, KEY_MEMORY_ENABLED, "true" if value else "false", user_id=user_id)
 
 
@@ -360,6 +507,90 @@ async def set_memory_custom_instructions(
     )
 
 
+# ── local backup preferences ─────────────────────────────────────────
+
+
+async def get_backup_enabled(db: AsyncSession, user_id: str | None = None) -> bool:
+    """Backup master switch (default OFF — the user opts in from Settings)."""
+    return await _read_bool(db, KEY_BACKUP_ENABLED, False, user_id=user_id)
+
+
+async def set_backup_enabled(db: AsyncSession, value: bool, user_id: str | None = None) -> None:
+    await _write(db, KEY_BACKUP_ENABLED, "true" if value else "false", user_id=user_id)
+
+
+async def get_backup_frequency(db: AsyncSession, user_id: str | None = None) -> str:
+    raw = await _read(db, KEY_BACKUP_FREQUENCY, user_id=user_id)
+    return raw if raw in BACKUP_FREQUENCY_VALUES else FALLBACK_BACKUP_FREQUENCY
+
+
+async def set_backup_frequency(db: AsyncSession, value: str, user_id: str | None = None) -> None:
+    if value not in BACKUP_FREQUENCY_VALUES:
+        raise ValueError(
+            f"backup frequency must be one of {BACKUP_FREQUENCY_VALUES}, got {value!r}"
+        )
+    await _write(db, KEY_BACKUP_FREQUENCY, value, user_id=user_id)
+
+
+async def get_backup_destination(db: AsyncSession, user_id: str | None = None) -> str | None:
+    """User-chosen destination root, or None → the FsRegistry default."""
+    return await _read(db, KEY_BACKUP_DESTINATION, user_id=user_id) or None
+
+
+async def set_backup_destination(db: AsyncSession, value: str, user_id: str | None = None) -> None:
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError("backup destination cannot be empty")
+    await _write(db, KEY_BACKUP_DESTINATION, cleaned, user_id=user_id)
+
+
+async def _read_json(db: AsyncSession, key: str, user_id: str | None = None) -> dict | None:
+    raw = await _read(db, key, user_id=user_id)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+async def get_backup_scope(db: AsyncSession, user_id: str | None = None) -> dict | None:
+    return await _read_json(db, KEY_BACKUP_SCOPE, user_id=user_id)
+
+
+async def set_backup_scope(db: AsyncSession, value: dict, user_id: str | None = None) -> None:
+    await _write(db, KEY_BACKUP_SCOPE, json.dumps(value), user_id=user_id)
+
+
+async def get_backup_retention(db: AsyncSession, user_id: str | None = None) -> dict | None:
+    return await _read_json(db, KEY_BACKUP_RETENTION, user_id=user_id)
+
+
+async def set_backup_retention(db: AsyncSession, value: dict, user_id: str | None = None) -> None:
+    await _write(db, KEY_BACKUP_RETENTION, json.dumps(value), user_id=user_id)
+
+
+async def get_backup_last_run(db: AsyncSession, user_id: str | None = None) -> dict | None:
+    return await _read_json(db, KEY_BACKUP_LAST_RUN, user_id=user_id)
+
+
+async def set_backup_last_run(db: AsyncSession, value: dict, user_id: str | None = None) -> None:
+    await _write(db, KEY_BACKUP_LAST_RUN, json.dumps(value), user_id=user_id)
+
+
+async def get_backup_next_run_at(db: AsyncSession, user_id: str | None = None) -> int | None:
+    raw = await _read(db, KEY_BACKUP_NEXT_RUN_AT, user_id=user_id)
+    try:
+        return int(raw) if raw else None
+    except ValueError:
+        return None
+
+
+async def set_backup_next_run_at(
+    db: AsyncSession, value: int | None, user_id: str | None = None
+) -> None:
+    await _write(db, KEY_BACKUP_NEXT_RUN_AT, str(value) if value else "", user_id=user_id)
 
 
 def detect_system_timezone() -> str:

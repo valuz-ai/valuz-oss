@@ -50,6 +50,8 @@ class FakeProjectService:
 
 
 class FakeSkillDatastore:
+    session = object()
+
     def __init__(self):
         self._enabled: dict[str, set[str]] = {}
         self._rows: dict[str, object] = {}
@@ -762,6 +764,27 @@ class TestCreateSkill:
         catalog = await service.list_catalog("u", "ws-1")
         match = next(s for s in catalog.skills if s.slug == "origin-view")
         assert match.creation_origin == "created"
+
+    async def test_should_keep_special_characters_out_of_name_and_slug(self, svc, skill_root):
+        """The frontmatter name becomes a *directory* name when the kernel
+        materializes the skill into a session cwd, so a namespaced name like
+        ``react:components`` would be uncreatable on Windows (WinError 267).
+        Both the directory and the manifest name are sanitized at creation."""
+        service = svc
+        result = await service.create_skill(
+            "u", SkillCreateRequest(name="react:components", description="A test")
+        )
+        assert Path(result.path).name == "react-components"
+        raw = (Path(result.path) / "SKILL.md").read_text(encoding="utf-8")
+        assert 'name: "react-components"' in raw
+        assert "react:components" not in raw
+
+    async def test_should_dodge_windows_device_name_for_slug(self, svc, skill_root):
+        """``con`` / ``com1`` are reserved device names on Windows — a
+        directory can't carry one even though the charset is plain ASCII."""
+        service = svc
+        result = await service.create_skill("u", SkillCreateRequest(name="con", description="x"))
+        assert Path(result.path).name == "con-skill"
 
     async def test_should_default_to_discovered_for_scanned_skill(self, svc, skill_root):
         """A skill folder dropped on disk (not created via Valuz) shows

@@ -18,6 +18,10 @@ from valuz_agent.modules.settings.model_options import (
 )
 from valuz_agent.modules.settings.preferences import (
     detect_system_timezone,
+    get_conversation_citations_enabled,
+    get_ptc_enabled,
+    get_conversation_task_coverage_enabled,
+    get_conversation_verification_enabled,
     get_default_effort,
     get_default_locale,
     get_default_model,
@@ -26,6 +30,10 @@ from valuz_agent.modules.settings.preferences import (
     get_default_timezone,
     get_font_size,
     get_theme,
+    set_conversation_citations_enabled,
+    set_ptc_enabled,
+    set_conversation_task_coverage_enabled,
+    set_conversation_verification_enabled,
     set_default_effort,
     set_default_locale,
     set_default_model,
@@ -56,6 +64,10 @@ class PreferencesResponse(BaseModel):
     detected_timezone: str
     theme: str
     font_size: str
+    conversation_citations_enabled: bool
+    conversation_verification_enabled: bool
+    conversation_task_coverage_enabled: bool
+    ptc_enabled: bool
 
 
 class PreferencesPatchPayload(BaseModel):
@@ -63,6 +75,10 @@ class PreferencesPatchPayload(BaseModel):
     default_locale: str | None = Field(default=None, min_length=1)
     theme: str | None = Field(default=None)
     font_size: str | None = Field(default=None)
+    conversation_citations_enabled: bool | None = None
+    conversation_verification_enabled: bool | None = None
+    conversation_task_coverage_enabled: bool | None = None
+    ptc_enabled: bool | None = None
 
 
 async def _read_preferences(db: AsyncSession, user_id: str) -> PreferencesResponse:
@@ -72,6 +88,16 @@ async def _read_preferences(db: AsyncSession, user_id: str) -> PreferencesRespon
         detected_timezone=detect_system_timezone(),
         theme=await get_theme(db, user_id=user_id),
         font_size=await get_font_size(db, user_id=user_id),
+        conversation_citations_enabled=await get_conversation_citations_enabled(
+            db, user_id=user_id
+        ),
+        conversation_verification_enabled=await get_conversation_verification_enabled(
+            db, user_id=user_id
+        ),
+        conversation_task_coverage_enabled=await get_conversation_task_coverage_enabled(
+            db, user_id=user_id
+        ),
+        ptc_enabled=await get_ptc_enabled(db, user_id=user_id),
     )
 
 
@@ -105,6 +131,26 @@ async def patch_preferences(
                 await set_theme(db, payload.theme, user_id=user_id)
             if payload.font_size is not None:
                 await set_font_size(db, payload.font_size, user_id=user_id)
+            if payload.conversation_citations_enabled is not None:
+                await set_conversation_citations_enabled(
+                    db,
+                    payload.conversation_citations_enabled,
+                    user_id=user_id,
+                )
+            if payload.conversation_verification_enabled is not None:
+                await set_conversation_verification_enabled(
+                    db,
+                    payload.conversation_verification_enabled,
+                    user_id=user_id,
+                )
+            if payload.conversation_task_coverage_enabled is not None:
+                await set_conversation_task_coverage_enabled(
+                    db,
+                    payload.conversation_task_coverage_enabled,
+                    user_id=user_id,
+                )
+            if payload.ptc_enabled is not None:
+                await set_ptc_enabled(db, payload.ptc_enabled, user_id=user_id)
             return await _read_preferences(db, user_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -236,13 +282,9 @@ async def patch_model_defaults(
                     # any builtin row's ``is_default`` so model_resolver doesn't see
                     # two defaults.
                     await ProviderDatastore(db).clear_default(user_id)
-                    await set_default_provider_id(
-                        db, payload.default_provider_id, user_id=user_id
-                    )
+                    await set_default_provider_id(db, payload.default_provider_id, user_id=user_id)
                     if payload.default_model is not None:
-                        await set_default_model(
-                            db, payload.default_model or None, user_id=user_id
-                        )
+                        await set_default_model(db, payload.default_model or None, user_id=user_id)
                 else:
                     # Set: delegate to ProviderService so is_default +
                     # default_model row + app-setting keys all update together.

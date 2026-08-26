@@ -6,7 +6,7 @@
 - **host domain** — ``doc_asset_dir`` / ``attachment_dir`` / ``secrets_dir``
   / ``logs_dir`` / parser models. Stays on the host, never knows S3, has
   nothing to do with the sandbox. Remains directly on ``FsRegistry``.
-- **project domain** — ``project_cwd`` / ``task_path`` / ``subrun_dir`` /
+- **project domain** — ``project_cwd`` / ``task_path`` /
   ``memory_dir`` / skill staging. These resolve paths *inside a project's
   workspace*, the region both host and kernel touch. This is what
   ``WorkspaceHandle`` abstracts.

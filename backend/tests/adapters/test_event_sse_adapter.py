@@ -103,6 +103,89 @@ def test_should_propagate_message_id_on_assistant_message_frames():
     assert payload["message_id"] == "msg-3"
 
 
+def test_should_propagate_citation_bundle_on_final_assistant_frames():
+    bundle = {
+        "version": 1,
+        "citations": [
+            {
+                "citationId": "cit_1",
+                "source": {
+                    "sourceId": "doc:1",
+                    "providerId": "docs",
+                    "sourceType": "document",
+                    "title": "Annual report",
+                    "retrievedAt": "2026-07-30T08:00:00Z",
+                },
+                "evidence": {
+                    "kind": "text",
+                    "quote": "Revenue increased.",
+                    "snippet": "Revenue increased.",
+                    "capturedAt": "2026-07-30T08:00:00Z",
+                },
+            }
+        ],
+    }
+
+    result = _translate_kernel_event(
+        "assistant_message",
+        {"text": "Revenue increased. [1](citation://cit_1)", "citation_bundle": bundle},
+    )
+
+    assert result is not None
+    legacy_type, payload = result
+    assert legacy_type == "message.assistant.delta"
+    assert json.loads(payload["citation_bundle"]) == bundle
+
+
+def test_should_translate_post_publish_assistant_sidecar_without_body_text():
+    bundle = {"version": 1, "citations": []}
+    coverage = {
+        "status": "complete",
+        "supplemented": True,
+        "assistant_segment_indices": [2],
+    }
+
+    result = _translate_kernel_event(
+        "assistant_message_sidecar",
+        {
+            "assistant_segment_index": 2,
+            "citation_bundle": bundle,
+            "task_coverage": coverage,
+            "message_id": "msg-3",
+        },
+    )
+
+    assert result is not None
+    legacy_type, payload = result
+    assert legacy_type == "message.assistant.sidecar"
+    assert payload["assistant_segment_index"] == "2"
+    assert json.loads(payload["citation_bundle"]) == bundle
+    assert json.loads(payload["task_coverage"]) == coverage
+    assert payload["message_id"] == "msg-3"
+    assert "text" not in payload
+
+
+def test_should_propagate_task_coverage_on_final_assistant_frames():
+    coverage = {
+        "version": 1,
+        "status": "partial",
+        "metrics": {
+            "taskRequirementRequiredCount": 12,
+            "answerRequirementFulfilledCount": 10,
+        },
+    }
+
+    result = _translate_kernel_event(
+        "assistant_message",
+        {"text": "answer", "task_coverage": coverage},
+    )
+
+    assert result is not None
+    legacy_type, payload = result
+    assert legacy_type == "message.assistant.delta"
+    assert json.loads(payload["task_coverage"]) == coverage
+
+
 def test_should_translate_thinking_delta_when_kernel_streams_reasoning_chunks():
     # Reasoning content streams in incrementally (V5+streaming) so the
     # frontend can render a live "Thinking..." preview before the full
@@ -170,6 +253,23 @@ def test_should_translate_tool_output_delta_with_stream_discriminator():
     assert payload["stream"] == "patch"
     assert payload["text"] == "+ added line"
     assert payload["message_id"] == "msg-o"
+
+
+def test_should_translate_tool_thinking_delta():
+    # Tool-scoped reasoning stream (ephemeral generate_ui thinking forwarded
+    # onto the calling session). A separate type from tool.call.output_delta —
+    # the frontend concatenates output deltas into the tool card's output (the
+    # OpenUI code stream) unconditionally, so reasoning text must not ride it.
+    result = _translate_kernel_event(
+        "tool_thinking_delta",
+        {"id": "tool-3", "text": "planning the layout", "message_id": "msg-t"},
+    )
+    assert result is not None
+    legacy_type, payload = result
+    assert legacy_type == "tool.call.thinking_delta"
+    assert payload["tool_use_id"] == "tool-3"
+    assert payload["text"] == "planning the layout"
+    assert payload["message_id"] == "msg-t"
 
 
 def test_should_translate_workflow_progress_with_nested_state():
@@ -276,3 +376,55 @@ def test_should_drop_none_values_from_bg_task_payload():
     assert result is not None
     _legacy_type, payload = result
     assert "usage" not in payload
+
+
+def test_should_propagate_parent_tool_use_id_on_subagent_events():
+    """Events produced inside a Task/Agent run carry ``parent_tool_use_id``;
+    the wire payload must preserve it so the frontend can treat them as
+    out-of-band activity (not part of the lead's sequential flow)."""
+    for kernel_type, data in [
+        ("assistant_message", {"text": "sub", "parent_tool_use_id": "toolu_agent"}),
+        ("thinking", {"text": "hmm", "parent_tool_use_id": "toolu_agent"}),
+        ("tool_use", {"id": "t1", "name": "Read", "parent_tool_use_id": "toolu_agent"}),
+        ("tool_result", {"id": "t1", "content": "ok", "parent_tool_use_id": "toolu_agent"}),
+        ("text_delta", {"text": "chu", "parent_tool_use_id": "toolu_agent"}),
+        ("thinking_delta", {"text": "hm", "parent_tool_use_id": "toolu_agent"}),
+        (
+            "tool_input_delta",
+            {"id": "t1", "name": "Read", "text": "{", "parent_tool_use_id": "toolu_agent"},
+        ),
+    ]:
+        result = _translate_kernel_event(kernel_type, data)
+        assert result is not None, kernel_type
+        _, payload = result
+        assert payload["parent_tool_use_id"] == "toolu_agent", kernel_type
+
+
+def test_should_omit_parent_tool_use_id_when_event_is_top_level():
+    result = _translate_kernel_event("tool_use", {"id": "t1", "name": "Read"})
+    assert result is not None
+    _, payload = result
+    assert "parent_tool_use_id" not in payload
+
+
+def test_should_forward_fork_anchor_on_terminal_session_update():
+    # The wire signal "Fork from here" keys on (docs/design/session-fork.md
+    # §6.5). Stringly-typed per the legacy Record<string, string> contract;
+    # absent on legacy events (and on interim status frames) so consumers
+    # treat missing as unknown.
+    event_type, payload = _translate_kernel_event(
+        "session_update", {"status": "idle", "message_id": "msg-1", "fork_anchor": True}
+    )
+    assert event_type == "session.update"
+    assert payload["fork_anchor"] == "true"
+    assert payload["message_id"] == "msg-1"
+
+    _t, no_anchor = _translate_kernel_event(
+        "session_update", {"status": "idle", "message_id": "msg-2", "fork_anchor": False}
+    )
+    assert no_anchor["fork_anchor"] == "false"
+
+    _t, legacy = _translate_kernel_event(
+        "session_update", {"status": "running", "message_id": "msg-3"}
+    )
+    assert "fork_anchor" not in legacy

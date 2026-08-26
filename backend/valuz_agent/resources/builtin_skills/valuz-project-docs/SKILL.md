@@ -1,9 +1,7 @@
 ---
-name: valuz-project-docs
-description: Search and reason over the project's bound knowledge base documents. Auto-loaded by the host for every project session. Use this when the user asks about facts or context that should already exist inside the project's knowledge base. The current per-turn KB scope (which knowledge bases / folders / documents are bound) is announced inside the user message's `<additional-context>` block — consult it before guessing what's available.
-origin-label: valuz · project knowledge base
-icon: 📚
-tags: [valuz, builtin, knowledge-base, docs]
+name: "valuz-project-docs"
+description: "Search and reason over the project's bound knowledge base documents. Auto-loaded by the host for every project session. Use this when the user asks about facts or context that should already exist inside the project's knowledge base. The current per-turn KB scope (which knowledge bases / folders / documents are bound) is announced inside the user message's `<additional-context>` block — consult it before guessing what's available."
+tags: ["valuz", "builtin", "knowledge-base", "docs"]
 ---
 
 # Project Knowledge Base
@@ -40,7 +38,7 @@ docs?". Summarize what you found, cite document titles back to the user.
 
 ## How to search
 
-Two host-provided MCP tools are available when this skill is loaded.
+Three host-provided MCP tools are available when this skill is loaded.
 The kernel exposes them under the `valuz_docs` MCP namespace, so the
 literal tool names you'll see at runtime are:
 
@@ -52,16 +50,25 @@ literal tool names you'll see at runtime are:
   Required arg `query`. Optional `folder_ids` / `document_ids` narrow
   scope; `top_k` defaults to 5. Returns ranked snippets with the
   document id and filename.
+- `mcp__valuz_docs__doc_read` — open one document by the `document_id` a
+  search returned: its parsed text, plus `source_path` (the original
+  file) and `parsed_path` (that markdown on disk). Both paths are
+  readable with your ordinary file tools, so for a long document prefer
+  grepping `parsed_path` over paging it through the tool. Long documents
+  come back in pieces — when `truncated` is true, call again with
+  `offset=next_offset`.
 
 Typical loop:
 
 1. `list_doc_scope` to learn the rough taxonomy.
 2. One or two `doc_search` calls with tight queries pulled from the user's
    ask.
-3. Read the most relevant snippets, then cite the source document titles
-   back to the user.
+3. `doc_read` the documents whose snippets look right, when the snippet
+   alone doesn't answer the question — a snippet tells you *which*
+   document, not everything it says.
+4. Cite the source document titles back to the user.
 
-If both tools are absent at runtime (the host hasn't enabled them for this
+If the tools are absent at runtime (the host hasn't enabled them for this
 session), fall back to asking the user which document or folder you should
 focus on.
 

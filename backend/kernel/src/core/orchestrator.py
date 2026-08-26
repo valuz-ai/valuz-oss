@@ -13,23 +13,48 @@ this orchestrator does not create or own the directory beyond seeding the
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
 import logging
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
+from src.core import recovery
 from src.core.agent_config import AgentConfig
+from src.core.citation import (
+    CitationGuard,
+    EvidenceRegistry,
+    compact_citation_tool_content,
+    private_citation_tool_content,
+)
+from src.core.claim_evidence_resolution import SemanticVerifierPort
+from src.core.claim_normalization import ClaimNormalizerPort
 from src.core.events import Event, EventSink, GlobalEventTap
 from src.core.prompt_builder import wrap_for_mode
 from src.core.runtime_port import RuntimePort
 from src.core.session_approval_cache import SessionApprovalCache, SessionRule
 from src.core.session_bus import SessionEventBus
 from src.core.store_port import StorePort
+from src.core.task_coverage_continuation import (
+    TASK_COVERAGE_NOOP_TOOL_NAME,
+    build_task_coverage_continuation_prompt,
+    build_task_coverage_noop_tool,
+    should_run_task_coverage,
+)
 from src.core.time_utils import now_ms
-from src.core.types import Error, Message, Session, UserMessage
+from src.core.tracing import TurnTracingSink, start_turn_trace, turn_trace_context
+from src.core.types import (
+    Error,
+    Message,
+    Session,
+    UserMessage,
+)
+from src.core.usage import merge_model_usage
 from src.core.workspace import bootstrap_session_workspace
 
 # Per-session callable injected into runtimes that wire ``approve_for_session``.
@@ -38,8 +63,229 @@ from src.core.workspace import bootstrap_session_workspace
 # Return value: matching ``SessionRule`` on hit, ``None`` on miss.
 # See ``docs/design/approve-for-session.md`` §3.3 for the cache-hit flow.
 SessionRuleFinder = Callable[[str, str, dict[str, Any], dict[str, Any]], "SessionRule | None"]
+SemanticVerifierFactory = Callable[
+    [str, Session],
+    Awaitable[SemanticVerifierPort | None],
+]
+ClaimNormalizerFactory = Callable[
+    [str, Session],
+    Awaitable[ClaimNormalizerPort | None],
+]
 
 logger = logging.getLogger(__name__)
+
+
+class _DiscardEventSink:
+    """Sink used while a runtime is prepared before a user turn exists."""
+
+    async def emit(self, event: Event) -> None:
+        del event
+
+
+def _is_task_coverage_noop_tool_name(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    # Claude and Codex expose harness tools through MCP-qualified names;
+    # DeepAgents uses the plain ToolDef name.
+    return value == TASK_COVERAGE_NOOP_TOOL_NAME or value.endswith(
+        f"__{TASK_COVERAGE_NOOP_TOOL_NAME}"
+    )
+
+
+# The completion-pass prompt forbids these meta-responses and demands the
+# private no-op tool instead — but prompt-level enforcement is probabilistic,
+# and a model that emits "No response requested." anyway used to leave that
+# line in the transcript. The sink treats a pass whose ONLY visible output is
+# such a meta-response (or nothing) as the no-op it was supposed to be.
+# Normalized containment match, lowercase, whitespace-collapsed.
+_TASK_COVERAGE_META_RESPONSES = (
+    "no response requested",
+    "no response is requested",
+    "nothing was omitted",
+    "nothing further",
+    "no correction is needed",
+    "no supplement is needed",
+    "response is complete",
+    "answer is complete",
+    "request is complete",
+    "already complete",
+    "(empty)",
+    "无需补充",
+    "无需更正",
+    "无需回复",
+    "没有遗漏",
+    "回答已完整",
+    "已完整",
+)
+
+
+_CONFIRMATION_CARD_ACTIONS: dict[str, frozenset[str]] = {
+    # Automation writes currently expose a dedicated confirmation card only
+    # for create. Read/run/status actions remain ordinary conversational tool
+    # work and must keep the normal post-run checks.
+    "automation": frozenset({"create"}),
+    # These Playbook actions all return a persisted Operation Card. ``run``
+    # and ``finish`` execute work and are deliberately excluded.
+    "playbook": frozenset(
+        {
+            "create",
+            "update",
+            "update_definition",
+            "set_status",
+            "retire",
+            "delete",
+        }
+    ),
+    # Finance exposes every entity mutation through one proposal action.
+    "domain_operation": frozenset({"propose"}),
+}
+
+
+def _matches_tool_name(tool_name: str, name: str) -> bool:
+    return tool_name == name or tool_name.endswith(f"__{name}") or tool_name.endswith(f"/{name}")
+
+
+def _structural_output_kind(data: dict[str, Any], tool_name: str) -> str | None:
+    """Classify turns whose product deliverable is structural, not prose.
+
+    ``generate_ui`` produces an A2UI artifact. The mutation actions below
+    produce a confirmation card whose pending state is the complete result of
+    the Agent turn. In both cases, a trailing acknowledgement has no factual
+    or task-coverage value, so Citation, Claim Audit, and Task Coverage should
+    not run for that turn.
+
+    Classification happens from the canonical tool-use input rather than
+    model-authored text or localized tool-result prose. Every supported Runtime
+    normalizes MCP arguments into ``data["input"]`` at this boundary.
+    """
+
+    if _matches_tool_name(tool_name, "generate_ui"):
+        return "generate_ui"
+    raw_input = data.get("input")
+    if not isinstance(raw_input, dict):
+        return None
+    action = raw_input.get("action")
+    if not isinstance(action, str):
+        return None
+    for canonical_name, actions in _CONFIRMATION_CARD_ACTIONS.items():
+        if _matches_tool_name(tool_name, canonical_name) and action in actions:
+            return f"{canonical_name}.{action}"
+    return None
+
+
+def _is_task_coverage_meta_response(text: str) -> bool:
+    normalized = " ".join(text.lower().split())
+    if not normalized:
+        return True
+    return any(marker in normalized for marker in _TASK_COVERAGE_META_RESPONSES)
+
+
+class _TaskCoverageProtocolSink:
+    """Keep the entire coverage pass private until its text is classified.
+
+    Every event that flows through this sink belongs to the COVERAGE
+    continuation, so the classification the UI cannot make ("is this trailing
+    thinking just the completeness check?") is definitional here. The pass's
+    reasoning and tool telemetry are internal verification machinery. Tool
+    results are still ingested by the observer so a genuine supplement can
+    cite newly collected Evidence, but they never create user-visible tool
+    cards. Assistant text is held until the pass ends: meta-responses are
+    dropped, while a genuine supplement is then published unchanged.
+    """
+
+    def __init__(self, inner: EventSink) -> None:
+        self._inner = inner
+        self._private_tool_ids: set[str] = set()
+        self.no_gap_declared = False
+        # Coverage is an optional post-run verification pass. Hold all of its
+        # text until the terminal classification instead of guessing from a
+        # length threshold or from whether the verifier called another tool.
+        self._held: list[Event] = []
+        self._held_message_texts: list[str] = []
+
+    async def _flush_held(self) -> None:
+        held = self._held
+        self._held = []
+        for event in held:
+            await self._inner.emit(event)
+
+    async def _classify_and_settle_held(self) -> None:
+        """Classify held-back pass text: meta-refusal (or empty) → drop it and
+        treat the pass as the silent no-op the protocol demanded; anything
+        else is a real supplement and flushes downstream."""
+        if not self._held:
+            return
+        combined = " ".join(
+            self._held_message_texts
+            or [
+                str(event.data.get("text") or "")
+                for event in self._held
+                if event.type == "text_delta"
+            ]
+        )
+        if _is_task_coverage_meta_response(combined):
+            self._held = []
+            self.no_gap_declared = True
+            return
+        await self._flush_held()
+
+    async def finalize(self) -> None:
+        """Backstop for a pass that ended without a ``session_idle`` reaching
+        this sink (the idle path settles held text inline in ``emit``)."""
+        await self._classify_and_settle_held()
+
+    async def emit(self, event: Event) -> None:
+        if event.type in {"thinking", "thinking_delta"}:
+            return
+        tool_id = event.data.get("id") or event.data.get("tool_use_id")
+        tool_name = event.data.get("name") or event.data.get("tool_name")
+        if event.type in {"tool_use", "tool_input_delta"} and (
+            _is_task_coverage_noop_tool_name(tool_name)
+            or (isinstance(tool_id, str) and tool_id in self._private_tool_ids)
+        ):
+            if isinstance(tool_id, str):
+                self._private_tool_ids.add(tool_id)
+            if event.type == "tool_use":
+                self.no_gap_declared = True
+            return
+        if (
+            event.type in {"tool_result", "tool_output_delta"}
+            and isinstance(tool_id, str)
+            and tool_id in self._private_tool_ids
+        ):
+            return
+        if event.type in {"text_delta", "assistant_message"}:
+            self._held.append(event)
+            text = str(event.data.get("text") or "")
+            if event.type == "assistant_message":
+                self._held_message_texts.append(text)
+            return
+        if event.type in {"tool_use", "tool_result"}:
+            # Coverage tools are verifier implementation details. Let the
+            # observer register their names/Evidence without persisting or
+            # broadcasting a tool card.
+            ingest = getattr(self._inner, "emit_private_task_coverage_event", None)
+            if callable(ingest):
+                await ingest(event)
+            return
+        if event.type in {"tool_input_delta", "tool_output_delta"}:
+            return
+        if event.type == "session_idle":
+            # The idle event closes the observer's coverage-segment window;
+            # settle the held text FIRST so a real supplement is attributed
+            # to the pass and a meta-refusal vanishes with the correct
+            # no-gap accounting.
+            await self._classify_and_settle_held()
+        await self._inner.emit(event)
+
+
+def _is_externalized_tool_content(value: Any) -> bool:
+    """Recognize runtime placeholders whose full result lives in a sidecar."""
+
+    if not isinstance(value, str):
+        return False
+    stripped = value.strip()
+    return stripped.startswith("<persisted-output") or stripped.startswith("/large_tool_results/")
 
 
 class SessionNotFoundError(Exception):
@@ -164,104 +410,872 @@ class _MessageIdStampSink:
         await self._inner.emit(stamped)
 
 
-class _MessageObserverSink:
-    """Forwards events to ``inner`` while accumulating per-Message state.
+def _session_citation_quality_policy(
+    session: Session,
+) -> dict[str, Any] | None:
+    """Read only the host-stamped, JSON-safe policy snapshot."""
 
-    Captures the assistant text fragments emitted as ``assistant_message``
-    events, the live ``text_delta`` stream, the ``num_turns`` reported in
-    ``session_idle``, and any ``session_error`` payload. The orchestrator reads
-    these accumulators when finalizing the Message row.
+    metadata = session.metadata if isinstance(session.metadata, dict) else {}
+    valuz = metadata.get("valuz")
+    if not isinstance(valuz, dict):
+        return None
+    snapshot = valuz.get("citation_quality_policy")
+    if not isinstance(snapshot, dict):
+        return None
+    if snapshot.get("mode") not in {"required-on-evidence", "strict-domain"}:
+        return None
+    if not isinstance(snapshot.get("config"), dict):
+        return None
+    return snapshot
+
+
+def _session_citation_enabled(session: Session) -> bool:
+    metadata = session.metadata if isinstance(session.metadata, dict) else {}
+    valuz = metadata.get("valuz")
+    if not isinstance(valuz, dict):
+        return True
+    value = valuz.get("citation_enabled")
+    return value if isinstance(value, bool) else True
+
+
+def _session_citation_verification_enabled(session: Session) -> bool:
+    metadata = session.metadata if isinstance(session.metadata, dict) else {}
+    valuz = metadata.get("valuz")
+    if not isinstance(valuz, dict):
+        return False
+    value = valuz.get("citation_verification_enabled")
+    return value if isinstance(value, bool) else False
+
+
+def _session_task_coverage_enabled(session: Session) -> bool:
+    """Task Coverage is independent from citation display/verification."""
+
+    metadata = session.metadata if isinstance(session.metadata, dict) else {}
+    valuz = metadata.get("valuz")
+    if not isinstance(valuz, dict):
+        return False
+    value = valuz.get("task_coverage_enabled")
+    return value if isinstance(value, bool) else False
+
+
+def _session_task_coverage_policy(session: Session) -> dict[str, Any] | None:
+    metadata = session.metadata if isinstance(session.metadata, dict) else {}
+    valuz = metadata.get("valuz")
+    if not isinstance(valuz, dict):
+        return None
+    policy = valuz.get("task_coverage_policy")
+    if not isinstance(policy, dict):
+        return None
+    if not isinstance(policy.get("revision"), str):
+        return None
+    if not isinstance(policy.get("review_guidance"), dict):
+        return None
+    return policy
+
+
+_PENDING_TASK_CLARIFICATION_KEY = "pending_task_clarification"
+
+
+def _clear_legacy_pending_task_clarification(session: Session) -> None:
+    """Discard Host-owned preflight state written by older builds."""
+
+    metadata = copy.deepcopy(session.metadata) if isinstance(session.metadata, dict) else {}
+    raw_valuz = metadata.get("valuz")
+    if not isinstance(raw_valuz, dict) or _PENDING_TASK_CLARIFICATION_KEY not in raw_valuz:
+        return
+    valuz = dict(raw_valuz)
+    valuz.pop(_PENDING_TASK_CLARIFICATION_KEY, None)
+    metadata["valuz"] = valuz
+    session.metadata = metadata
+
+
+def _session_document_scope(session: Session) -> set[str] | None:
+    """Return the host-stamped locked document scope, if present."""
+
+    metadata = session.metadata if isinstance(session.metadata, dict) else {}
+    valuz = metadata.get("valuz")
+    if not isinstance(valuz, dict):
+        return None
+    research = valuz.get("document_research")
+    if (
+        not isinstance(research, dict)
+        or research.get("purpose") != "document-research"
+        or research.get("source_scope") != "locked"
+    ):
+        return None
+    document_ids = research.get("document_ids")
+    if not isinstance(document_ids, list):
+        return set()
+    return {str(item) for item in document_ids if str(item)}
+
+
+def _make_mode_persist(
+    store: Any, user_id: str, session_id: str
+) -> Callable[[str], Awaitable[None]]:
+    """Targeted write-through for a runtime-initiated mode transition.
+
+    Loads a FRESH row and writes only ``mode`` — deliberately not the
+    turn's in-memory ``session`` reference, whose other runtime-owned
+    fields (status, todos, stop_reason) must keep their end-of-turn save
+    semantics. The turn's final ``save_session`` persists the same mode
+    again (the reconcile rule keeps the runtime's value when
+    ``runtime_mode_change`` is set), so this write is idempotent."""
+
+    async def _persist(mode: str) -> None:
+        fresh = await store.load_session(user_id, session_id)
+        if fresh is not None and fresh.mode != mode:
+            fresh.mode = mode
+            await store.save_session(fresh)
+
+    return _persist
+
+
+class _MessageObserverSink:
+    """Pass Runtime events through first, then attach optional sidecars.
+
+    The observer is intentionally not an answer controller.  It never edits,
+    ranks, suppresses, or replaces Runtime-authored assistant text.  Evidence
+    registration is shared infrastructure; Citation, Audit, and Task Coverage
+    are three independent consumers controlled by separate switches.
     """
 
-    def __init__(self, inner: EventSink) -> None:
+    def __init__(
+        self,
+        inner: EventSink,
+        *,
+        message_id: str = "message",
+        user_prompt: str = "",
+        citation_policy_available: bool = False,
+        citation_quality_policy: dict[str, Any] | None = None,
+        allowed_document_ids: set[str] | None = None,
+        force_citation_required: bool = False,
+        citation_enabled: bool = True,
+        citation_verification_enabled: bool = True,
+        semantic_verifier: SemanticVerifierPort | None = None,
+        claim_normalizer: ClaimNormalizerPort | None = None,
+        task_coverage_enabled: bool = False,
+        mode_persist: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
         self._inner = inner
+        self._message_id = message_id
+        self._user_prompt = user_prompt
+        self._citation_policy_available = citation_policy_available
+        self._citation_quality_policy = citation_quality_policy
+        self._citation_enabled = citation_enabled
+        self._citation_verification_enabled = citation_verification_enabled
+        self._semantic_verifier = semantic_verifier
+        self._claim_normalizer = claim_normalizer
+        self._task_coverage_enabled = task_coverage_enabled
+        self._force_citation_required = force_citation_required or (
+            isinstance(citation_quality_policy, dict)
+            and citation_quality_policy.get("mode") == "strict-domain"
+        )
+
         self._assistant_chunks: list[str] = []
         self._assistant_delta_chunks: list[str] = []
-        self.num_turns: int = 0
+        self._assistant_sidecar_inputs: list[tuple[int, str, EvidenceRegistry, str | None]] = []
+        self._sidecars_finalized = False
+        self._pending_idle_event: Event | None = None
+        self._task_coverage_continuation_active = False
+        self._task_coverage_continuation_attempts = 0
+        self._task_coverage_segment_indices: list[int] = []
+        self._post_run_verification_started = False
+        self._post_run_verification_completed = False
+
+        self._tool_names: dict[str, str] = {}
+        self._structural_output_kinds: set[str] = set()
+        self._external_tool_called = False
+        self._evidence_registry = EvidenceRegistry(
+            allowed_document_ids=allowed_document_ids,
+        )
+
+        self.num_turns = 0
         self.error_payload: dict[str, Any] | None = None
         self.usage: dict[str, int] | None = None
         self.model_usage: dict[str, Any] | None = None
-        # Last `todo_update` payload observed in this turn. None means the
-        # agent did not touch the TODO list. An empty list is a meaningful
-        # "all done" signal from the SDK and is preserved.
+        self.citation_bundle: dict[str, Any] | None = None
+        self.claim_audits: list[dict[str, Any]] = []
+        self.task_coverage: dict[str, Any] | None = None
         self.last_todos: list[dict[str, Any]] | None = None
-        # Captures runtime-emitted ``mode_changed{by: "runtime"}`` events
-        # (codex ``thread/goal/cleared`` listener, Claude bare-``/goal``
-        # poll). Used by ``run_turn`` to decide whether the final
-        # ``save_session`` should honor the runtime's in-memory
-        # ``session.mode`` (runtime emitted a change → keep it) or
-        # reload from disk (user mutated mode mid-turn via ``POST /mode``
-        # → don't clobber). ``None`` means no runtime-emitted mode
-        # change observed this turn.
         self.runtime_mode_change: Literal["default", "plan", "goal"] | None = None
+        self._mode_persist = mode_persist
 
     async def emit(self, event: Event) -> None:
+        if event.type == "citation_evidence":
+            self._register_private_evidence(event)
+            return
+
         if event.type == "assistant_message":
-            self._record_assistant_message(event)
-        elif event.type == "text_delta":
+            await self._publish_runtime_assistant(event)
+            return
+
+        if event.type == "text_delta":
             text = event.data.get("text") or event.data.get("delta") or ""
             if text:
                 self._assistant_delta_chunks.append(str(text))
+
+        elif event.type == "tool_use":
+            tool_use_id = event.data.get("id")
+            tool_name = event.data.get("name")
+            if isinstance(tool_use_id, str) and isinstance(tool_name, str):
+                self._tool_names[tool_use_id] = tool_name
+                if self._tool_event_is_external(event.data, tool_name):
+                    self._external_tool_called = True
+                # A runtime emits ``session_idle`` before ``run()`` returns.
+                # When task coverage is already disabled, that idle event
+                # finalizes Citation/Audit immediately, so waiting for the
+                # outer orchestrator to inspect ``called_tool`` is too late.
+                # Disable prose sidecars as soon as the Runtime requests a
+                # structural deliverable. This must happen before session_idle:
+                # hosted turns with Task Coverage disabled finalize Citation /
+                # Audit inside this observer, before run() returns.
+                structural_kind = _structural_output_kind(event.data, tool_name)
+                if structural_kind is not None:
+                    self._structural_output_kinds.add(structural_kind)
+                    self.skip_post_run_verification_for_structural_output()
+
+        elif event.type == "tool_result":
+            tool_use_id = event.data.get("id")
+            tool_name = self._tool_names.get(tool_use_id) if isinstance(tool_use_id, str) else None
+            event = self._register_and_redact_tool_result(event)
+
         elif event.type == "session_idle":
-            raw = event.data.get("num_turns")
-            if isinstance(raw, int) and raw > 0:
-                self.num_turns = raw
+            # Citation verification and Task Coverage are useful only after
+            # the primary turn brought external information into the answer.
+            # A session may expose host tools through MCP as an implementation
+            # detail; those local tools must not trigger expensive post-run
+            # model passes.
+            if not self._external_tool_called:
+                self._citation_verification_enabled = False
+            raw_turns = event.data.get("num_turns")
+            if isinstance(raw_turns, int) and raw_turns > 0:
+                self.num_turns += raw_turns
             await self.ensure_partial_assistant_message()
+            stop_reason = event.data.get("stop_reason")
+            coverage_active = self._task_coverage_continuation_active
+            coverage_stop_type = (
+                str(stop_reason.get("type") or "error")
+                if isinstance(stop_reason, dict)
+                else "error"
+            )
+            if coverage_active and coverage_stop_type != "end_turn":
+                event = Event(
+                    type="session_idle",
+                    data={
+                        **event.data,
+                        "stop_reason": {"type": "end_turn"},
+                        "task_coverage_failure": coverage_stop_type,
+                    },
+                    timestamp=event.timestamp,
+                )
+            if coverage_active:
+                self.task_coverage = (
+                    {
+                        "status": "complete",
+                        "supplemented": bool(self._task_coverage_segment_indices),
+                        "assistant_segment_indices": list(self._task_coverage_segment_indices),
+                    }
+                    if coverage_stop_type == "end_turn"
+                    else {
+                        "status": "failed",
+                        "reason": coverage_stop_type,
+                        "supplemented": bool(self._task_coverage_segment_indices),
+                        "assistant_segment_indices": list(self._task_coverage_segment_indices),
+                    }
+                )
+            self._task_coverage_continuation_active = False
+            self._pending_idle_event = event
+            if not self._task_coverage_enabled:
+                await self.finalize_sidecars()
+                await self.release_session_idle()
+            return
+
         elif event.type == "session_error":
             self.error_payload = {
-                "category": "execution_error",
-                "message": str(event.data.get("message", "")),
+                "category": str(event.data.get("category") or "execution_error"),
+                "message": str(event.data.get("message") or ""),
             }
+
         elif event.type == "usage_update":
-            self.usage = {
+            current = {
                 "input_tokens": int(event.data.get("input_tokens") or 0),
                 "output_tokens": int(event.data.get("output_tokens") or 0),
                 "cache_read_tokens": int(event.data.get("cache_read_tokens") or 0),
                 "cache_write_tokens": int(event.data.get("cache_write_tokens") or 0),
             }
+            if self.usage is None:
+                self.usage = current
+            else:
+                self.usage = {key: self.usage.get(key, 0) + value for key, value in current.items()}
             raw_model_usage = event.data.get("model_usage")
-            self.model_usage = dict(raw_model_usage) if isinstance(raw_model_usage, dict) else None
+            if isinstance(raw_model_usage, dict):
+                # Every ``usage_update`` is one disjoint increment, so a turn
+                # that produces several of them (claude interleaving a
+                # wake-up turn's result before its own) must ADD the
+                # per-model breakdowns the same way the flat fields above
+                # are added — overwriting would leave ``model_usage``
+                # describing only the last fragment of the turn.
+                self.model_usage = (
+                    copy.deepcopy(raw_model_usage)
+                    if self.model_usage is None
+                    else merge_model_usage(self.model_usage, raw_model_usage)
+                )
+
         elif event.type == "todo_update":
             raw_todos = event.data.get("todos")
             if isinstance(raw_todos, list):
-                self.last_todos = [dict(t) for t in raw_todos if isinstance(t, dict)]
+                self.last_todos = [dict(item) for item in raw_todos if isinstance(item, dict)]
+
         elif event.type == "mode_changed":
             if event.data.get("by") == "runtime":
-                raw_mode = event.data.get("mode")
-                if raw_mode in ("default", "plan", "goal"):
-                    self.runtime_mode_change = raw_mode
+                mode = event.data.get("mode")
+                if mode in ("default", "plan", "goal"):
+                    self.runtime_mode_change = mode
+                    # Write the transition through to the store NOW, not at
+                    # the end-of-turn save. A runtime-initiated exit
+                    # (approved ExitPlanMode) can happen minutes before the
+                    # turn finishes; until then any client that (re)opens
+                    # the session hydrates ``mode`` from the row and would
+                    # show a stale plan chip — the live ``mode_changed``
+                    # frame only reaches clients attached at that moment,
+                    # and replays are deliberately inert. Best-effort: a
+                    # failed persist must never corrupt the turn (the
+                    # end-of-turn save persists the same value anyway).
+                    if self._mode_persist is not None:
+                        try:
+                            await self._mode_persist(mode)
+                        except Exception:
+                            logger.warning(
+                                "mode_changed write-through failed; the "
+                                "end-of-turn save will persist it",
+                                exc_info=True,
+                            )
+
         await self._inner.emit(event)
 
-    def _record_assistant_message(self, event: Event) -> None:
-        text = event.data.get("text") or event.data.get("content") or ""
-        if text:
-            self._assistant_chunks.append(str(text))
-            self._assistant_delta_chunks.clear()
-
-    async def ensure_partial_assistant_message(self) -> None:
-        text = self.partial_assistant_text
-        if not text:
+    def _register_private_evidence(self, event: Event) -> None:
+        citation_content = event.data.get("content")
+        if not isinstance(citation_content, str):
             return
-        event = Event(type="assistant_message", data={"text": text})
-        self._record_assistant_message(event)
-        await self._inner.emit(event)
+        tool_name = event.data.get("tool_name")
+        model_content = event.data.get("model_content")
+        self._evidence_registry.register_tool_projection(
+            model_content if model_content is not None else citation_content,
+            citation_content,
+            tool_name=str(tool_name) if tool_name else None,
+            trusted_private=True,
+        )
 
-    @property
-    def assistant_text(self) -> str | None:
-        partial = self.partial_assistant_text
-        if self._assistant_chunks:
-            chunks = list(self._assistant_chunks)
-            if partial:
-                chunks.append(partial)
-            return "\n".join(chunks)
-        return partial
+    def _register_and_redact_tool_result(self, event: Event) -> Event:
+        tool_use_id = event.data.get("id")
+        tool_name = self._tool_names.get(tool_use_id) if isinstance(tool_use_id, str) else None
+        citation_content = event.data.get("_citation_content")
+        citation_model_content = event.data.get("_citation_model_content")
+        visible_content = event.data.get("content")
+        compacted_content = compact_citation_tool_content(visible_content)
+        private_projection = (
+            citation_content
+            if isinstance(citation_content, str)
+            else private_citation_tool_content(
+                visible_content,
+                model_content=compacted_content,
+            )
+            if compacted_content is not None
+            else None
+        )
+        self._evidence_registry.register_tool_projection(
+            (
+                citation_model_content
+                if citation_model_content is not None
+                else compacted_content
+                if compacted_content is not None
+                else visible_content
+            ),
+            private_projection,
+            tool_name=tool_name,
+            trusted_private=(private_projection is not None or compacted_content is not None),
+        )
+        if (
+            "_citation_content" not in event.data
+            and "_citation_model_content" not in event.data
+            and compacted_content is None
+        ):
+            return event
+        return Event(
+            type=event.type,
+            data={
+                key: (
+                    compacted_content
+                    if key == "content" and compacted_content is not None
+                    else value
+                )
+                for key, value in event.data.items()
+                if key not in {"_citation_content", "_citation_model_content"}
+            },
+            timestamp=event.timestamp,
+        )
+
+    async def emit_private_task_coverage_event(self, event: Event) -> None:
+        """Ingest hidden Coverage tool events without creating transcript UI.
+
+        A genuine supplement may depend on a tool invoked by the verifier, so
+        its Evidence must enter the same turn-local Registry before assistant
+        text is published. The tool call/result itself is post-run protocol
+        telemetry and deliberately never reaches ``self._inner``.
+        """
+
+        if event.type == "tool_use":
+            tool_use_id = event.data.get("id")
+            tool_name = event.data.get("name")
+            if isinstance(tool_use_id, str) and isinstance(tool_name, str):
+                self._tool_names[tool_use_id] = tool_name
+            return
+        if event.type == "tool_result":
+            self._register_and_redact_tool_result(event)
+
+    async def _publish_runtime_assistant(self, event: Event) -> bool:
+        text = str(event.data.get("text") or event.data.get("content") or "")
+        if not text:
+            return False
+        segment_index = len(self._assistant_sidecar_inputs)
+        parent = event.data.get("parent_tool_use_id")
+        parent_tool_use_id = str(parent) if parent is not None else None
+        self._assistant_chunks.append(text)
+        self._assistant_delta_chunks.clear()
+        if self._task_coverage_continuation_active:
+            self._task_coverage_segment_indices.append(segment_index)
+        self._assistant_sidecar_inputs.append(
+            (
+                segment_index,
+                text,
+                self._evidence_registry.read_snapshot(),
+                parent_tool_use_id,
+            )
+        )
+        # This await is the persist-then-broadcast boundary.  Nothing in
+        # Citation or Audit runs before it.
+        await self._inner.emit(event)
+        return True
 
     @property
     def partial_assistant_text(self) -> str | None:
-        if not self._assistant_delta_chunks:
-            return None
         text = "".join(self._assistant_delta_chunks)
         return text or None
+
+    @property
+    def assistant_text(self) -> str | None:
+        return "\n".join(self._assistant_chunks) if self._assistant_chunks else None
+
+    async def ensure_partial_assistant_message(self) -> bool:
+        text = self.partial_assistant_text
+        if not text:
+            return False
+        return await self._publish_runtime_assistant(
+            Event(type="assistant_message", data={"text": text})
+        )
+
+    async def begin_task_coverage_continuation(self) -> None:
+        if self._task_coverage_continuation_attempts:
+            raise RuntimeError("Task Coverage continuation may run at most once")
+        await self.ensure_partial_assistant_message()
+        self._task_coverage_continuation_attempts = 1
+        await self._begin_post_run_verification()
+        self._task_coverage_continuation_active = True
+        self._assistant_delta_chunks.clear()
+
+    def _post_run_verification_features(self) -> list[str]:
+        features: list[str] = []
+        if self._task_coverage_continuation_attempts:
+            features.append("task_coverage")
+        if self._citation_enabled:
+            features.append("citation")
+        if self._citation_verification_enabled:
+            features.append("claim_audit")
+        return features
+
+    async def _begin_post_run_verification(self) -> None:
+        """Expose the real append-only post-run window to presentation layers.
+
+        The marker is lifecycle metadata, never assistant-authored content. A
+        single window intentionally spans Task Coverage and Citation/Audit so
+        clients do not flicker between adjacent host-side phases.
+        """
+
+        if self._post_run_verification_started:
+            return
+        features = self._post_run_verification_features()
+        if not features:
+            return
+        self._post_run_verification_started = True
+        await self._inner.emit(
+            Event(
+                type="turn_phase",
+                data={
+                    "phase": "post_run_verification",
+                    "state": "started",
+                    "features": features,
+                },
+            )
+        )
+
+    async def _complete_post_run_verification(self) -> None:
+        if not self._post_run_verification_started or self._post_run_verification_completed:
+            return
+        self._post_run_verification_completed = True
+        await self._inner.emit(
+            Event(
+                type="turn_phase",
+                data={
+                    "phase": "post_run_verification",
+                    "state": "completed",
+                    "features": self._post_run_verification_features(),
+                },
+            )
+        )
+
+    async def abort_task_coverage_continuation(self, *, reason: str) -> None:
+        await self.ensure_partial_assistant_message()
+        self._task_coverage_continuation_active = False
+        self.task_coverage = {
+            "status": "failed",
+            "reason": reason,
+            "supplemented": bool(self._task_coverage_segment_indices),
+            "assistant_segment_indices": list(self._task_coverage_segment_indices),
+        }
+        self._pending_idle_event = Event(
+            type="session_idle",
+            data={
+                "stop_reason": {"type": "end_turn"},
+                "num_turns": 0,
+                "task_coverage_failure": reason,
+            },
+        )
+
+    def mark_task_coverage_unavailable(self, *, reason: str) -> None:
+        self.task_coverage = {"status": "unavailable", "reason": reason}
+
+    def called_tool(self, name: str) -> bool:
+        """Whether the primary run attempted a named tool call.
+
+        This intentionally keys off ``tool_use`` rather than ``tool_result``:
+        once GenUI compilation was attempted, neither its structural output nor
+        its failure message benefits from prose coverage/citation post-processing.
+        """
+
+        return any(
+            self._matches_tool_name(tool_name, name) for tool_name in self._tool_names.values()
+        )
+
+    def called_external_tool(self) -> bool:
+        """Whether the primary run attempted an external data/tool call."""
+
+        return self._external_tool_called
+
+    def requested_structural_output(self) -> bool:
+        """Whether this turn requested A2UI or a product confirmation card."""
+
+        return bool(self._structural_output_kinds)
+
+    def structural_output_kinds(self) -> tuple[str, ...]:
+        return tuple(sorted(self._structural_output_kinds))
+
+    def has_assistant_text(self) -> bool:
+        """Whether the primary run produced any assistant prose.
+
+        The shared situational gate for BOTH post-run features: Citation/Audit
+        iterates the published assistant segments (nothing published → nothing
+        to check), and Task Coverage must judge the same way — a pure tool
+        turn or an empty answer has no prose whose coverage could be reviewed.
+        """
+
+        return bool(self._assistant_sidecar_inputs) or bool(self.partial_assistant_text)
+
+    @staticmethod
+    def _tool_event_is_external(data: dict[str, Any], tool_name: str) -> bool:
+        """Classify a canonical ``tool_use`` event at the kernel boundary.
+
+        Runtimes that lose MCP server names (currently DeepAgents) stamp the
+        explicit boolean. Claude/DeepSeek names MCP tools
+        ``mcp__<server>__<tool>`` and Codex uses ``<server>/<tool>``; the
+        harness servers are local implementation details while every other
+        session-configured MCP is external. Runtime-native web search/fetch
+        also imports external information even though it is not MCP.
+        """
+
+        explicit = data.get("external")
+        if isinstance(explicit, bool):
+            return explicit
+
+        if tool_name.casefold() in {
+            "web_search",
+            "websearch",
+            "web_fetch",
+            "webfetch",
+        }:
+            return True
+
+        internal_servers = {"harness", "harness_toolkit"}
+        if tool_name.startswith("mcp__"):
+            parts = tool_name.split("__", 2)
+            return len(parts) >= 3 and parts[1] not in internal_servers
+        if "/" in tool_name:
+            server_name = tool_name.split("/", 1)[0]
+            return server_name not in internal_servers
+        return False
+
+    @staticmethod
+    def _matches_tool_name(tool_name: str, name: str) -> bool:
+        return _matches_tool_name(tool_name, name)
+
+    def skip_post_run_verification_for_structural_output(self) -> None:
+        """A product artifact or confirmation card is not a prose answer.
+
+        The structural output (or its validation error) is the complete turn
+        result. Neither benefits from prose citation projection or Claim Audit,
+        and the calling Agent's acknowledgement has no evidence value to
+        verify.
+        """
+
+        self._citation_enabled = False
+        self._citation_verification_enabled = False
+
+    def mark_task_coverage_no_gap(self) -> None:
+        """Record a structured private no-gap result without adding text."""
+
+        if self._task_coverage_segment_indices:
+            # Runtime-authored assistant content always wins the visibility
+            # contract.  A model that both calls the private no-op tool and
+            # writes text produced a supplement; never hide or relabel it.
+            return
+        self.task_coverage = {
+            "status": "complete",
+            "supplemented": False,
+            "assistant_segment_indices": [],
+            "decision": "no-gap",
+        }
+
+    async def finalize_sidecars(self) -> None:
+        if self._sidecars_finalized:
+            return
+        self._sidecars_finalized = True
+        if self._assistant_sidecar_inputs and (
+            self._citation_enabled or self._citation_verification_enabled
+        ):
+            await self._begin_post_run_verification()
+        coverage_targets = set(self._task_coverage_segment_indices)
+        if (
+            self.task_coverage is not None
+            and not coverage_targets
+            and self._assistant_sidecar_inputs
+        ):
+            # Silent/no-op and unavailable continuations have no assistant
+            # segment of their own. Attach the turn-level observation to the
+            # last real Runtime message without inventing user-visible text.
+            coverage_targets.add(self._assistant_sidecar_inputs[-1][0])
+
+        if not (self._citation_enabled or self._citation_verification_enabled):
+            if self.task_coverage is not None:
+                for (
+                    segment_index,
+                    _text,
+                    _registry,
+                    parent_tool_use_id,
+                ) in self._assistant_sidecar_inputs:
+                    if segment_index not in coverage_targets:
+                        continue
+                    sidecar_data: dict[str, Any] = {
+                        "assistant_segment_index": segment_index,
+                        "task_coverage": copy.deepcopy(self.task_coverage),
+                    }
+                    if parent_tool_use_id is not None:
+                        sidecar_data["parent_tool_use_id"] = parent_tool_use_id
+                    await self._inner.emit(
+                        Event(type="assistant_message_sidecar", data=sidecar_data)
+                    )
+            return
+
+        aggregate_citations: list[dict[str, Any]] = []
+        aggregate_projection: dict[str, str] = {}
+        seen_citation_ids: set[str] = set()
+        equivalent_binding_seeds: list[str] = []
+        equivalent_binding_records: list[dict[str, Any]] = []
+        seen_binding_handles: set[str] = set()
+
+        for segment_index, text, registry, parent_tool_use_id in self._assistant_sidecar_inputs:
+            if equivalent_binding_records:
+                # Each assistant segment owns an immutable Registry snapshot
+                # captured at publish time. Collection Addresses materialized
+                # while finalizing an earlier segment therefore do not exist
+                # in the next snapshot. Carry only the direct Evidence records
+                # that were actually cited and verified by the preceding
+                # sidecar; never copy whole Collections or tool payloads.
+                registry.register_tool_result(
+                    {"_valuz_evidence": copy.deepcopy(equivalent_binding_records)},
+                    tool_name="citation-sidecar-seed",
+                    trusted_private=True,
+                )
+            guard = CitationGuard(
+                registry,
+                # All assistant messages in one user turn share a canonical
+                # Citation id space. Message-local audit placement is carried
+                # by ``assistant_segment_index`` on the sidecar, not by
+                # minting a second id for the same Evidence identity.
+                message_id=self._message_id,
+                user_prompt=self._user_prompt,
+                policy_available=self._citation_policy_available,
+                quality_policy=self._citation_quality_policy,
+                force_required=self._force_citation_required,
+                enabled=True,
+                verification_enabled=self._citation_verification_enabled,
+                semantic_verifier=self._semantic_verifier,
+                claim_normalizer=self._claim_normalizer,
+                equivalent_binding_seeds=equivalent_binding_seeds,
+            )
+            try:
+                result = (
+                    await asyncio.to_thread(
+                        guard.finalize,
+                        text,
+                    )
+                    if self._citation_verification_enabled
+                    else await asyncio.to_thread(
+                        guard.finalize_projection,
+                        text,
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "assistant sidecar failed segment=%s",
+                    segment_index,
+                    exc_info=True,
+                )
+                if self.task_coverage is not None and segment_index in coverage_targets:
+                    sidecar_data: dict[str, Any] = {
+                        "assistant_segment_index": segment_index,
+                        "task_coverage": copy.deepcopy(self.task_coverage),
+                    }
+                    if parent_tool_use_id is not None:
+                        sidecar_data["parent_tool_use_id"] = parent_tool_use_id
+                    await self._inner.emit(
+                        Event(type="assistant_message_sidecar", data=sidecar_data)
+                    )
+                continue
+
+            bundle = result.bundle
+            binding_seed = getattr(result, "binding_seed", None)
+            if binding_seed:
+                equivalent_binding_seeds.append(binding_seed)
+            if not isinstance(bundle, dict):
+                if self.task_coverage is not None and segment_index in coverage_targets:
+                    sidecar_data = {
+                        "assistant_segment_index": segment_index,
+                        "task_coverage": copy.deepcopy(self.task_coverage),
+                    }
+                    if parent_tool_use_id is not None:
+                        sidecar_data["parent_tool_use_id"] = parent_tool_use_id
+                    await self._inner.emit(
+                        Event(type="assistant_message_sidecar", data=sidecar_data)
+                    )
+                continue
+
+            for citation in bundle.get("citations", []):
+                if not isinstance(citation, dict):
+                    continue
+                annotations = citation.get("annotations")
+                annotations = annotations if isinstance(annotations, dict) else {}
+                binding = annotations.get("binding")
+                binding = binding if isinstance(binding, dict) else {}
+                handle = binding.get("evidenceHandle")
+                source = citation.get("source")
+                evidence = citation.get("evidence")
+                if (
+                    not isinstance(handle, str)
+                    or handle in seen_binding_handles
+                    or not isinstance(source, dict)
+                    or not isinstance(evidence, dict)
+                ):
+                    continue
+                envelope: dict[str, Any] = {
+                    "evidenceHandle": handle,
+                    "source": copy.deepcopy(source),
+                    "evidence": copy.deepcopy(evidence),
+                }
+                locator = citation.get("locator")
+                if isinstance(locator, dict):
+                    envelope["locator"] = copy.deepcopy(locator)
+                equivalent_binding_records.append(envelope)
+                seen_binding_handles.add(handle)
+
+            sidecar_data: dict[str, Any] = {
+                "assistant_segment_index": segment_index,
+            }
+            if parent_tool_use_id is not None:
+                sidecar_data["parent_tool_use_id"] = parent_tool_use_id
+
+            has_payload = False
+            if self.task_coverage is not None and segment_index in coverage_targets:
+                sidecar_data["task_coverage"] = copy.deepcopy(self.task_coverage)
+                has_payload = True
+            if self._citation_enabled:
+                sidecar_data["citation_bundle"] = bundle
+                has_payload = True
+                projection = bundle.get("projection")
+                if isinstance(projection, dict):
+                    mapping = projection.get("evidenceHandleToCitationId")
+                    if isinstance(mapping, dict):
+                        aggregate_projection.update(
+                            {
+                                str(handle): str(citation_id)
+                                for handle, citation_id in mapping.items()
+                                if handle and citation_id
+                            }
+                        )
+                citations = bundle.get("citations")
+                if isinstance(citations, list):
+                    for citation in citations:
+                        if not isinstance(citation, dict):
+                            continue
+                        citation_id = citation.get("citationId")
+                        if (
+                            not isinstance(citation_id, str)
+                            or not citation_id
+                            or citation_id in seen_citation_ids
+                        ):
+                            continue
+                        seen_citation_ids.add(citation_id)
+                        aggregate_citations.append(copy.deepcopy(citation))
+
+            quality = bundle.get("quality")
+            if self._citation_verification_enabled and isinstance(quality, dict):
+                audit = copy.deepcopy(quality)
+                audit["assistantSegmentIndex"] = segment_index
+                self.claim_audits.append(audit)
+                # When citations are enabled the same audit already lives in
+                # ``citation_bundle.quality``.  Persist the canonical audit for
+                # history, but do not send a second byte-for-byte copy on the
+                # live sidecar.  Audit-only mode still exposes ``claim_audit``.
+                if not self._citation_enabled:
+                    sidecar_data["claim_audit"] = audit
+                    has_payload = True
+
+            if has_payload:
+                await self._inner.emit(Event(type="assistant_message_sidecar", data=sidecar_data))
+
+        if self._citation_enabled and (aggregate_citations or aggregate_projection):
+            self.citation_bundle = {
+                "version": 1,
+                "citations": aggregate_citations,
+                "projection": {
+                    "evidenceHandleToCitationId": aggregate_projection,
+                },
+            }
+
+    async def release_session_idle(self) -> None:
+        await self._complete_post_run_verification()
+        event = self._pending_idle_event
+        self._pending_idle_event = None
+        if event is not None:
+            await self._inner.emit(event)
 
 
 class SessionOrchestrator:
@@ -306,9 +1320,16 @@ class SessionOrchestrator:
         runtime_idle_ttl_s: float | None = None,
         sweep_interval_s: float | None = None,
         bg_busy_runtime_ttl_s: float | None = None,
+        semantic_verifier_factory: SemanticVerifierFactory | None = None,
+        claim_normalizer_factory: ClaimNormalizerFactory | None = None,
     ) -> None:
         self._store = store
         self._runtimes: dict[str, RuntimePort] = {}
+        # Owner is retained only while a runtime is warm. It lets a desktop
+        # network-mode transition rebuild the most-recent runtime without
+        # reading ambient request identity from a background task.
+        self._runtime_owners: dict[str, str] = {}
+        self._runtime_create_locks: dict[str, asyncio.Lock] = {}
         # session_id -> monotonic timestamp of the last turn START/END on that
         # cached runtime. Drives idle-TTL + LRU eviction. Mirrors the lifetime
         # of ``_runtimes`` exactly (added on create, dropped on evict/cleanup).
@@ -352,6 +1373,8 @@ class SessionOrchestrator:
         # ``_get_or_create_bus``, so registration is effective for buses
         # created both before and after the tap was added.
         self._global_taps: list[GlobalEventTap] = []
+        self._semantic_verifier_factory = semantic_verifier_factory
+        self._claim_normalizer_factory = claim_normalizer_factory
 
     @property
     def active_sessions(self) -> set[str]:
@@ -360,15 +1383,146 @@ class SessionOrchestrator:
     def has_cached_runtime(self, session_id: str) -> bool:
         return session_id in self._runtimes
 
+    def warm_runtime_candidates(self, *, limit: int = 1) -> list[tuple[str, str]]:
+        """Return most-recent ``(owner, session)`` pairs eligible for rebuild."""
+        if limit <= 0:
+            return []
+        ordered = sorted(
+            (
+                (sid, used_at)
+                for sid, used_at in self._runtime_last_used.items()
+                if sid not in self._active and sid in self._runtime_owners
+            ),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        return [(self._runtime_owners[sid], sid) for sid, _ in ordered[:limit]]
+
+    async def evict_all_warm_runtimes(self) -> None:
+        """Close every idle cached runtime while keeping the backend alive."""
+        for session_id in list(self._runtimes):
+            if session_id not in self._active:
+                await self._evict_runtime(session_id)
+
+    async def prepare_runtime(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        runtime_context: dict[str, str] | None = None,
+    ) -> None:
+        """Warm one session runtime without dispatching a model request.
+
+        ``runtime_context`` is the same opaque per-operation context a turn
+        carries. Warming builds a real runtime (codex opens its app-server
+        thread), so a stored credential that is a runtime-context marker must
+        be materialized here exactly as it is for a turn.
+        """
+        if session_id in self._active:
+            return
+        session, agent = await self._load_session(user_id, session_id)
+        bootstrap_session_workspace(session.cwd, agent.name or None)
+        runtime = await self._ensure_runtime(
+            session_id,
+            agent,
+            session,
+            _DiscardEventSink(),
+            session.cwd,
+            user_id=user_id,
+            runtime_context=runtime_context,
+        )
+        try:
+            with self._lend_runtime_context(session, runtime_context):
+                await runtime.prepare(session)
+        except Exception:
+            await self._evict_runtime(session_id)
+            raise
+        # Codex thread/start allocates ``runtime_session_id`` during prepare;
+        # persist it now so a later cache eviction resumes the same thread.
+        await self._store.save_session(session)
+
+    async def fork_session(
+        self,
+        user_id: str,
+        session: Any,
+        *,
+        source_native_session_id: str,
+        anchor: str | None = None,
+        runtime_context: dict[str, str] | None = None,
+    ) -> str:
+        """Create *session*'s native thread by forking a source thread.
+
+        Drives ``RuntimePort.fork_session`` through the standard runtime
+        factory — the only sanctioned way to obtain a correctly-configured
+        provider client. *session* is the NEW session object and need not
+        be persisted yet: the fork route calls this BEFORE any kernel rows
+        exist, so a native-fork failure leaves nothing to roll back. On
+        success ``session.runtime_session_id`` carries the new native id
+        (also returned) and the runtime stays warm in the cache for the
+        first Send; persistence is the caller's commit point. On failure
+        the half-built runtime is evicted and the error propagates.
+        """
+        bootstrap_session_workspace(session.cwd, session.agent_config.name or None)
+        runtime = await self._ensure_runtime(
+            session.id,
+            session.agent_config,
+            session,
+            _DiscardEventSink(),
+            session.cwd,
+            user_id=user_id,
+            runtime_context=runtime_context,
+        )
+        try:
+            with self._lend_runtime_context(session, runtime_context):
+                return await runtime.fork_session(
+                    session,
+                    source_native_session_id=source_native_session_id,
+                    anchor=anchor,
+                )
+        except Exception:
+            await self._evict_runtime(session.id)
+            raise
+
+    def set_semantic_verifier_factory(
+        self,
+        factory: SemanticVerifierFactory | None,
+    ) -> None:
+        """Install an owner-scoped bounded verifier factory.
+
+        The factory receives the explicit owner and immutable Session model
+        configuration.  It may return ``None`` when the deployment has no
+        authorized provider; verification then stays deterministic and safely
+        unresolved instead of borrowing ambient request identity.
+        """
+
+        self._semantic_verifier_factory = factory
+
+    def set_claim_normalizer_factory(
+        self,
+        factory: ClaimNormalizerFactory | None,
+    ) -> None:
+        """Install an owner-scoped bounded claim slot normalizer factory."""
+
+        self._claim_normalizer_factory = factory
+
     def _get_or_create_bus(self, session_id: str) -> SessionEventBus:
         bus = self._buses.get(session_id)
         if bus is None:
-            bus = SessionEventBus(taps=[_GlobalForwardTap(session_id, self._global_taps)])
+            bus = SessionEventBus(
+                taps=[_GlobalForwardTap(session_id, self._global_taps)],
+                session_id=session_id,
+            )
             self._buses[session_id] = bus
         return bus
 
     async def attach_session_tap(
-        self, user_id: str, session_id: str, sink: EventSink, *, replay: bool = False
+        self,
+        user_id: str,
+        session_id: str,
+        sink: EventSink,
+        *,
+        replay: bool = False,
+        live_partial: bool = False,
     ) -> None:
         """Register a passive multi-subscriber tap on a session's live stream.
 
@@ -377,10 +1531,16 @@ class SessionOrchestrator:
         streams, host aggregators — can tap one session without displacing
         the client or each other. ``replay=True`` first delivers the events
         of the in-progress message so a mid-turn tap sees a coherent view.
+
+        ``live_partial=True`` additionally delivers the *unsealed* streaming
+        state — partial assistant text, partial tool input, the latest
+        workflow progress — which no replay path can reach because those
+        types are never persisted. The two flags are independent: a caller
+        that runs its own durable backfill wants ``live_partial`` alone.
         """
         bus = self._get_or_create_bus(session_id)
         replay_events = await self._build_replay(user_id, session_id) if replay else []
-        await bus.add_tap(sink, replay=replay_events)
+        await bus.add_tap(sink, replay=replay_events, live_partial=live_partial)
 
     async def detach_session_tap(self, session_id: str, sink: EventSink) -> None:
         """Unregister a tap added via :meth:`attach_session_tap`."""
@@ -480,6 +1640,8 @@ class SessionOrchestrator:
         user_id: str,
         session_id: str,
         user_message: UserMessage,
+        *,
+        runtime_context: dict[str, str] | None = None,
     ) -> Message:
         """Execute one conversation turn.
 
@@ -500,6 +1662,16 @@ class SessionOrchestrator:
         from src.adapters.persist_then_broadcast_sink import PersistThenBroadcastSink
 
         session, agent = await self._load_session(user_id, session_id)
+        # Older builds persisted Host-owned prerequisite state that could
+        # rewrite or block a later user turn.  The native Agent now owns all
+        # clarification decisions, so discard that obsolete control state at
+        # the turn boundary without changing the user's current message.
+        _clear_legacy_pending_task_clarification(session)
+        citation_policy_snapshot = _session_citation_quality_policy(session)
+        document_scope = _session_document_scope(session)
+        task_coverage_enabled = _session_task_coverage_enabled(session)
+        task_coverage_policy = _session_task_coverage_policy(session)
+        current_task_prompt = user_message.text
 
         # Slice 3 of session-modes (broadened in slice 6 simplification):
         # both Claude and Codex process ``/plan <text>`` / ``/goal <text>``
@@ -556,19 +1728,124 @@ class SessionOrchestrator:
         # count without changing the canonical assistant_message/thinking
         # record.
         coalesced: EventSink = DeltaCoalescingSink(persist_then_live)
-        observer = _MessageObserverSink(coalesced)
+        # Langfuse tracing (all no-ops unless active). The attribution scope
+        # covers the WHOLE turn — every span created below (TurnTrace
+        # observations, deepagents' LangChain handler spans) inherits
+        # user/session/message. ``turn_trace`` is the event-driven flavor
+        # (claude_agent/codex; None otherwise): its tap slots UNDER the
+        # observer so spans are built from the same stream that persists —
+        # runtimes carry zero tracing code. Closed in the ``finally`` below.
+        trace_scope = ExitStack()
+        trace_scope.enter_context(
+            turn_trace_context(user_id=user_id, session_id=session_id, message_id=message.id)
+        )
+        turn_trace = start_turn_trace(
+            runtime_provider=session.runtime_provider, prompt=current_task_prompt
+        )
+        if turn_trace is not None:
+            coalesced = TurnTracingSink(coalesced, turn_trace)
+        citation_enabled = _session_citation_enabled(session)
+        citation_verification_enabled = _session_citation_verification_enabled(session)
+        semantic_verifier: SemanticVerifierPort | None = None
+        if citation_verification_enabled and self._semantic_verifier_factory is not None:
+            try:
+                semantic_verifier = await self._semantic_verifier_factory(user_id, session)
+            except Exception:  # noqa: BLE001 — optional sidecar must fail open
+                logger.warning(
+                    "semantic verifier provider unavailable for session %s",
+                    session_id,
+                    exc_info=True,
+                )
+        claim_normalizer: ClaimNormalizerPort | None = None
+        if citation_verification_enabled and self._claim_normalizer_factory is not None:
+            try:
+                claim_normalizer = await self._claim_normalizer_factory(user_id, session)
+            except Exception:  # noqa: BLE001 — optional sidecar must fail open
+                logger.warning(
+                    "claim normalizer provider unavailable for session %s",
+                    session_id,
+                    exc_info=True,
+                )
+        observer = _MessageObserverSink(
+            coalesced,
+            message_id=message.id,
+            user_prompt=current_task_prompt,
+            citation_policy_available=any(Path(path).name == "citation" for path in session.skills),
+            citation_quality_policy=citation_policy_snapshot,
+            allowed_document_ids=document_scope,
+            force_citation_required=(document_scope is not None and citation_enabled),
+            citation_enabled=citation_enabled,
+            citation_verification_enabled=citation_verification_enabled,
+            semantic_verifier=semantic_verifier,
+            claim_normalizer=claim_normalizer,
+            task_coverage_enabled=task_coverage_enabled,
+            mode_persist=_make_mode_persist(self._store, user_id, session_id),
+        )
 
         # Sessions are self-sufficient: ``session.cwd`` is required at
         # creation. Seed the workspace stub lazily (idempotent, one stat on
         # the hot path) — there is no project-creation moment to hook.
         bootstrap_session_workspace(session.cwd, agent.name or None)
-        runtime = await self._ensure_runtime(
-            session_id,
-            agent,
-            session,
-            observer,
-            session.cwd,
-        )
+        from src.runtimes.network_egress import EgressRegistrationError
+
+        try:
+            runtime = await self._ensure_runtime(
+                session_id,
+                agent,
+                session,
+                observer,
+                session.cwd,
+                user_id=user_id,
+                runtime_context=runtime_context,
+            )
+        except EgressRegistrationError as exc:
+            # The desktop and non-model APIs remain usable when the egress
+            # owner fails, but admitted model traffic must fail visibly rather
+            # than falling back to a different route. Finalize this turn like
+            # a runtime error so the UI does not retain a phantom spinner.
+            message_text = (
+                "Unified model networking is unavailable. Check Network settings "
+                "or switch to model-client-managed connections."
+            )
+            session.status = "idle"
+            session.stop_reason = Error(
+                category="network_egress_unavailable",
+                retry_status="terminal",
+                message=message_text,
+            )
+            await observer.emit(
+                Event(
+                    type="user_message",
+                    data={
+                        "message": user_message.text,
+                        "attachments": [
+                            {"source_path": a.source_path, "parsed_path": a.parsed_path}
+                            for a in user_message.attachments
+                        ],
+                    },
+                )
+            )
+            await observer.emit(
+                Event(
+                    type="session_error",
+                    data={
+                        "category": "network_egress_unavailable",
+                        "message": message_text,
+                        "code": str(exc),
+                    },
+                )
+            )
+            self._finalize_message(message, session, observer)
+            await self._store.save_session(session)
+            await self._store.save_message(user_id, message)
+            await observer.emit(
+                Event(
+                    type="session_update",
+                    data={"status": session.status, "message_id": message.id},
+                )
+            )
+            self._active_message.pop(session_id, None)
+            return message
         self._active[session_id] = runtime
 
         try:
@@ -584,8 +1861,128 @@ class SessionOrchestrator:
                     },
                 )
             )
-            await runtime.run(session, user_message)
+            # The ``running`` flip above is persisted but was never announced:
+            # the only ``session_update`` used to be the terminal one after the
+            # turn. Clients that derive status from the event stream (session
+            # header pill, control-plane ``run.status``) therefore sat on
+            # ``created``/stale until end of turn. Emit the interim status here
+            # so every follower — including per-turn re-subscribers on queue
+            # drains — sees ``running`` the moment the turn actually starts.
+            await observer.emit(
+                Event(
+                    type="session_update",
+                    data={"status": "running", "message_id": message.id},
+                )
+            )
+            with self._lend_runtime_context(session, runtime_context):
+                await runtime.run(session, user_message)
+            skip_structural_post_run = observer.requested_structural_output()
+            if skip_structural_post_run:
+                observer.skip_post_run_verification_for_structural_output()
+                logger.info(
+                    "post-run coverage/citation/audit skipped after structural "
+                    "output request message=%s session=%s kinds=%s",
+                    message.id,
+                    session.id,
+                    observer.structural_output_kinds(),
+                )
+            if should_run_task_coverage(
+                enabled=task_coverage_enabled,
+                skip_structural_post_run=skip_structural_post_run,
+                called_external_tool=observer.called_external_tool(),
+                has_assistant_text=observer.has_assistant_text(),
+                stop_reason_type=getattr(session.stop_reason, "type", None),
+            ):
+                if not bool(getattr(runtime, "supports_native_continuation", False)):
+                    observer.mark_task_coverage_unavailable(
+                        reason="runtime-native-continuation-unsupported"
+                    )
+                else:
+                    primary_status = session.status
+                    primary_stop_reason = session.stop_reason
+                    await observer.begin_task_coverage_continuation()
+                    session.status = "running"
+                    session.stop_reason = None
+                    logger.info(
+                        "task_coverage continuing message=%s session=%s on native thread",
+                        message.id,
+                        session.id,
+                    )
+                    coverage_sink = _TaskCoverageProtocolSink(observer)
+                    runtime.update_sink(coverage_sink)
+                    try:
+                        with self._lend_runtime_context(session, runtime_context):
+                            await runtime.run_task_coverage(
+                                session,
+                                UserMessage(
+                                    text=build_task_coverage_continuation_prompt(
+                                        task_coverage_policy
+                                    )
+                                ),
+                                no_op_tool=build_task_coverage_noop_tool(),
+                            )
+                    except asyncio.CancelledError:
+                        # The primary answer is already complete; the
+                        # continuation is an optional enhancement. A
+                        # CancelledError here is either a genuine
+                        # cancellation of this task (host teardown — let it
+                        # propagate) or a stray one raised by the runtime's
+                        # own client rebuild/teardown. Only the former shows
+                        # up as a live cancel request on the current task;
+                        # anything else must not turn a finished turn into a
+                        # "run failed".
+                        session.status = primary_status
+                        session.stop_reason = primary_stop_reason
+                        current = asyncio.current_task()
+                        if current is not None and current.cancelling():
+                            raise
+                        logger.warning(
+                            "task_coverage continuation cancelled message=%s session=%s; "
+                            "preserving primary",
+                            message.id,
+                            session.id,
+                        )
+                        await observer.abort_task_coverage_continuation(reason="cancelled")
+                    except Exception:  # noqa: BLE001 — optional enhancement is fail-open
+                        logger.exception(
+                            "task_coverage continuation failed message=%s session=%s; "
+                            "preserving primary",
+                            message.id,
+                            session.id,
+                        )
+                        session.status = primary_status
+                        session.stop_reason = primary_stop_reason
+                        await observer.abort_task_coverage_continuation(reason="runtime-exception")
+                    else:
+                        # Classify text still held back at pass end (a
+                        # meta-refusal drops silently and counts as no-gap)
+                        # BEFORE reading ``no_gap_declared``.
+                        await coverage_sink.finalize()
+                        if coverage_sink.no_gap_declared:
+                            observer.mark_task_coverage_no_gap()
+                        if getattr(session.stop_reason, "type", None) != "end_turn":
+                            session.status = primary_status
+                            session.stop_reason = primary_stop_reason
+                    finally:
+                        runtime.update_sink(observer)
             await observer.ensure_partial_assistant_message()
+            await observer.finalize_sidecars()
+            await observer.release_session_idle()
+            # Native per-turn fork anchor (codex turn id / Claude transcript
+            # uuid / deepagents checkpoint id), captured by the runtime during
+            # ``run()``. Consumed AFTER the optional coverage continuation so
+            # the anchor reflects the LAST native turn this Message drove.
+            # ``getattr`` keeps runtimes (and test fakes) without the hook
+            # working unchanged. Persisted under
+            # ``metadata["runtime_native"]`` — the message-granularity fork
+            # seam (docs/design/session-fork.md).
+            consume_anchor = getattr(runtime, "consume_turn_anchor", None)
+            turn_has_fork_anchor = False
+            if callable(consume_anchor):
+                anchor = consume_anchor()
+                if anchor:
+                    message.metadata = {**message.metadata, "runtime_native": dict(anchor)}
+                    turn_has_fork_anchor = True
             # finalize must run BEFORE save_session — it writes session.todos
             # (and message.todos) from the observer's last todo_update payload;
             # saving first would persist a stale snapshot.
@@ -615,11 +2012,32 @@ class SessionOrchestrator:
             await observer.emit(
                 Event(
                     type="session_update",
-                    data={"status": session.status, "message_id": message.id},
+                    data={
+                        "status": session.status,
+                        "message_id": message.id,
+                        # Whether this message carries a runtime-native fork
+                        # anchor — the wire signal "Fork from here" keys its
+                        # enabled state on (docs/design/session-fork.md §6.5).
+                        # Absent on events recorded before this field existed;
+                        # consumers treat absent as unknown (keep enabled,
+                        # server 409 is the backstop).
+                        "fork_anchor": turn_has_fork_anchor,
+                    },
                 )
             )
             return message
         finally:
+            if turn_trace is not None:
+                stop = session.stop_reason
+                category = getattr(stop, "category", None)
+                # End BEFORE the scope closes so the usage generation is
+                # still created inside the attribution context.
+                turn_trace.end(
+                    error=f"{category}: {getattr(stop, 'message', '') or ''}".rstrip(": ")
+                    if category
+                    else None
+                )
+            trace_scope.close()
             self._active.pop(session_id, None)
             self._active_message.pop(session_id, None)
             # Mark the runtime freshly-used at turn END too, not just at entry.
@@ -656,6 +2074,21 @@ class SessionOrchestrator:
     ) -> None:
         message.ended_at = now_ms()
         message.assistant_message = observer.assistant_text
+        if observer.citation_bundle is not None:
+            message.metadata = {
+                **message.metadata,
+                "citation_bundle": observer.citation_bundle,
+            }
+        if observer.claim_audits:
+            message.metadata = {
+                **message.metadata,
+                "claim_audits": copy.deepcopy(observer.claim_audits),
+            }
+        if observer.task_coverage is not None:
+            message.metadata = {
+                **message.metadata,
+                "task_coverage": observer.task_coverage,
+            }
         message.total_turns = observer.num_turns or 1
         message.stop_reason = session.stop_reason
         if observer.usage is not None:
@@ -699,11 +2132,18 @@ class SessionOrchestrator:
         self._session_approval_cache.clear(session_id)
         runtime = self._runtimes.pop(session_id, None)
         self._runtime_last_used.pop(session_id, None)
+        self._runtime_owners.pop(session_id, None)
+        self._runtime_create_locks.pop(session_id, None)
         if runtime is not None:
             try:
                 await runtime.close()
             except Exception:
                 logger.debug("Error closing runtime for session %s", session_id, exc_info=True)
+        from src.runtimes.network_egress import get_network_egress_registry
+
+        registry = get_network_egress_registry()
+        if registry is not None:
+            await registry.revoke(session_id)
 
     async def _load_session(self, user_id: str, session_id: str) -> tuple[Any, AgentConfig]:
         session = await self._store.load_session(user_id, session_id)
@@ -713,6 +2153,48 @@ class SessionOrchestrator:
         # holds no agents table to consult.
         return session, session.agent_config
 
+    @contextmanager
+    def _lend_runtime_context(
+        self,
+        session: Any,
+        runtime_context: dict[str, str] | None,
+    ) -> Any:
+        """Lend *session* its materialized runtime-context values for the
+        duration of one ``RuntimePort`` call, then take them back.
+
+        Materializing for ``create_runtime`` alone is not enough. Every
+        ``RuntimePort`` method — ``run`` / ``prepare`` / ``fork_session`` /
+        ``run_task_coverage`` — takes the session as an ARGUMENT and reads its
+        live fields: Claude assembles ``--mcp-config`` from
+        ``session.mcp_servers`` inside ``run()``, and codex emits its per-turn
+        ``mcp_servers.*`` overrides the same way. Only the provider api_key is
+        read at construction. So a session whose MCP headers hold a marker got
+        its model credential filled and shipped the literal placeholder to
+        every MCP server — 403 at the host gate, the runtime parks those
+        servers, and the model reports its tools missing.
+
+        The values are lent to the SAME object rather than handed over as a
+        copy, so the runtime's lifecycle writes (``status`` / ``stop_reason``
+        / ``runtime_session_id`` / ``todos`` / ``mode``) still land on the
+        object that gets persisted. The restore is what keeps the contract
+        from ``materialize_runtime_context``: a later ``save_session`` writes
+        the marker back, never the credential.
+        """
+        from src.core.runtime_context import materialize_runtime_context
+
+        runtime_session = materialize_runtime_context(session, runtime_context)
+        if runtime_session is session:
+            # No markers — nothing lent, nothing to take back.
+            yield
+            return
+        persisted = (session.mcp_servers, session.model_provider)
+        session.mcp_servers = runtime_session.mcp_servers
+        session.model_provider = runtime_session.model_provider
+        try:
+            yield
+        finally:
+            session.mcp_servers, session.model_provider = persisted
+
     async def _ensure_runtime(
         self,
         session_id: str,
@@ -720,8 +2202,15 @@ class SessionOrchestrator:
         session: Any,
         sink: EventSink,
         workspace_root: str,
+        *,
+        user_id: str | None = None,
+        runtime_context: dict[str, str] | None = None,
     ) -> RuntimePort:
         from src.runtimes.factory import create_runtime
+        from src.runtimes.network_egress import (
+            get_network_egress_registry,
+            prepare_runtime_egress,
+        )
 
         # Opportunistic eviction on every turn entry: close runtimes idle past
         # the TTL (skipping the one we're about to touch / any active turn).
@@ -729,31 +2218,57 @@ class SessionOrchestrator:
         # the zero-activity case; together they bound the live subprocess set.
         await self._sweep_idle_runtimes(exclude=session_id)
 
-        cached = self._runtimes.get(session_id)
-        if cached is not None:
-            cached.update_sink(sink)
-            self._runtime_last_used[session_id] = time.monotonic()
-            return cached
+        lock = self._runtime_create_locks.setdefault(session_id, asyncio.Lock())
+        async with lock:
+            cached = self._runtimes.get(session_id)
+            if cached is not None:
+                # A cached runtime keeps the credentials it was BUILT with.
+                # Per-turn context is materialized at construction only, so a
+                # reused runtime silently carries the previous turn's values —
+                # worth saying when the caller did supply fresh ones.
+                if runtime_context:
+                    logger.info(
+                        "runtime-context: session %s reusing a cached runtime; "
+                        "this turn's context keys %s are NOT applied",
+                        session_id,
+                        sorted(runtime_context),
+                    )
+                cached.update_sink(sink)
+                self._runtime_last_used[session_id] = time.monotonic()
+                if user_id is not None:
+                    self._runtime_owners[session_id] = user_id
+                return cached
 
-        runtime = create_runtime(agent, session, sink, workspace_root=workspace_root)
-        # Inject a session-rule finder so runtimes that wire
-        # ``approve_for_session`` can consult the kernel-owned cache
-        # before parking on the user. Implemented via duck-typed setter
-        # rather than a Protocol method so runtimes that haven't wired
-        # the verb yet (codex, claude in Phase 1) don't need a no-op
-        # implementation. Phase 2 / 3 will lift the setter onto
-        # ``RuntimePort`` once all three runtimes consume it.
-        setter = getattr(runtime, "set_session_rule_finder", None)
-        if callable(setter):
-            setter(self._build_session_rule_finder(session_id, runtime))
-        self._runtimes[session_id] = runtime
-        self._runtime_last_used[session_id] = time.monotonic()
-        # Enforce the hard LRU ceiling after admitting the new runtime. This is
-        # the guaranteed bound on concurrent warm subprocesses, independent of
-        # the TTL: no matter how many sessions are touched, at most
-        # ``_max_warm_runtimes`` claude/codex processes stay alive at once.
-        await self._enforce_runtime_cap(exclude=session_id)
-        return runtime
+            from src.core.runtime_context import materialize_runtime_context
+
+            runtime_session = materialize_runtime_context(session, runtime_context)
+            egress_descriptor = await prepare_runtime_egress(session_id, runtime_session)
+            try:
+                runtime = create_runtime(
+                    agent,
+                    runtime_session,
+                    sink,
+                    workspace_root=workspace_root,
+                    egress_descriptor=egress_descriptor,
+                )
+            except Exception:
+                registry = get_network_egress_registry()
+                if registry is not None:
+                    await registry.revoke(session_id)
+                raise
+            # Inject a session-rule finder so runtimes that wire
+            # ``approve_for_session`` can consult the kernel-owned cache
+            # before parking on the user.
+            setter = getattr(runtime, "set_session_rule_finder", None)
+            if callable(setter):
+                setter(self._build_session_rule_finder(session_id, runtime))
+            self._runtimes[session_id] = runtime
+            self._runtime_last_used[session_id] = time.monotonic()
+            if user_id is not None:
+                self._runtime_owners[session_id] = user_id
+            # Enforce the hard LRU ceiling after admitting the new runtime.
+            await self._enforce_runtime_cap(exclude=session_id)
+            return runtime
 
     # ── Warm-runtime eviction (idle TTL + LRU cap) ─────────────────────────
 
@@ -880,15 +2395,21 @@ class SessionOrchestrator:
         this) when the session itself is going away."""
         runtime = self._runtimes.pop(session_id, None)
         self._runtime_last_used.pop(session_id, None)
+        self._runtime_owners.pop(session_id, None)
+        self._runtime_create_locks.pop(session_id, None)
         self._session_approval_cache.clear(session_id)
-        if runtime is None:
-            return
-        try:
-            await runtime.close()
-        except Exception:  # noqa: BLE001
-            logger.debug("Error evicting runtime for session %s", session_id, exc_info=True)
-        else:
-            logger.info("Evicted warm runtime for idle/over-cap session %s", session_id)
+        if runtime is not None:
+            try:
+                await runtime.close()
+            except Exception:  # noqa: BLE001
+                logger.debug("Error evicting runtime for session %s", session_id, exc_info=True)
+            else:
+                logger.info("Evicted warm runtime for idle/over-cap session %s", session_id)
+        from src.runtimes.network_egress import get_network_egress_registry
+
+        registry = get_network_egress_registry()
+        if registry is not None:
+            await registry.revoke(session_id)
 
     def _build_session_rule_finder(
         self,
@@ -1030,8 +2551,23 @@ class SessionOrchestrator:
         active_message = self._active_message.get(session_id)
         if runtime is None or active_message is None:
             # Pending exists in events but the runtime is gone — typical
-            # cause: host restart, but startup scan should have sealed
-            # the row first. Surface as 400 so the client refetches.
+            # cause: host restart. Seal lazily as well as at startup: older
+            # rows and host/durable reconciliation races can still reach this
+            # endpoint after the process that owned the parked future died.
+            sealed = await recovery.seal_pending(
+                self._store, user_id, session_id, pending_id
+            )
+            if sealed is not None:
+                resolved, message_id = sealed
+                bus = self._get_or_create_bus(session_id)
+                await bus.emit(
+                    Event(
+                        type=resolved.type,
+                        data={**resolved.data, "message_id": message_id},
+                        timestamp=resolved.timestamp,
+                    )
+                )
+                raise PendingActionExpiredError(pending_id, "expired")
             raise RuntimeUnavailableError(session_id)
 
         # ``approve_for_session`` commits the rule kernel-side BEFORE
@@ -1157,43 +2693,32 @@ class SessionOrchestrator:
         do better. Returns the number of synthetic resolutions emitted.
         """
         sealed = 0
-        # Cross-owner startup sweep: ``user_id=None`` spans every owner; each
-        # session's follow-up reads/writes use its own ``session.user_id``.
-        sessions = await self._store.list_sessions(None, status="running", limit=500)
-        for session in sessions:
-            events = await self._store.get_events(
-                session.user_id,
-                session.id,
-                types=("requires_action", "action_resolved"),
-                limit=1000,
+        # Own-lineage sweep: ``self._store`` reads are the kernel's runtime
+        # sqlite (RuntimeStore authority) — sessions live on other processes
+        # are structurally out of reach, so this is safe in every deployment.
+        # ``user_id=None`` spans every owner within this kernel's own store.
+        # Do not filter by session status: another recovery layer may already
+        # have changed a crashed turn from running to idle, but its parked
+        # runtime future is still gone and the pending must still expire.
+        offset = 0
+        page_size = 500
+        while True:
+            sessions = await self._store.list_sessions(
+                None, limit=page_size, offset=offset
             )
-            open_pendings: dict[str, str] = {}  # pending_id → message_id
-            for ev in events:
-                pid = ev.data.get("pending_id")
-                if not isinstance(pid, str):
-                    continue
-                if ev.type == "requires_action":
-                    msg_id = ev.data.get("message_id")
-                    if isinstance(msg_id, str):
-                        open_pendings.setdefault(pid, msg_id)
-                elif ev.type == "action_resolved":
-                    open_pendings.pop(pid, None)
-            for pid, msg_id in open_pendings.items():
-                await self._store.append_event(
-                    session.user_id,
-                    session.id,
-                    msg_id,
-                    Event(
-                        type="action_resolved",
-                        data={
-                            "pending_id": pid,
-                            "decision": "expired",
-                            "resolved_by": "system",
-                        },
-                    ),
+            for session in sessions:
+                sealed += await self._seal_session_pendings(
+                    session.user_id, session.id
                 )
-                sealed += 1
+            if len(sessions) < page_size:
+                break
+            offset += page_size
         return sealed
+
+    async def _seal_session_pendings(self, user_id: str, session_id: str) -> int:
+        """Seal one session's open ``requires_action`` events (see
+        ``src.core.recovery.seal_session_pendings``) on this kernel's store."""
+        return await recovery.seal_session_pendings(self._store, user_id, session_id)
 
     async def scan_orphan_runs(self) -> int:
         """On host startup, reset sessions left in ``status="running"``.
@@ -1223,27 +2748,22 @@ class SessionOrchestrator:
         Returns the number of sessions reset.
         """
         reset = 0
-        # Cross-owner startup sweep (see scan_orphan_pendings).
+        # Own-lineage sweep (see scan_orphan_pendings). Sessions stranded on
+        # OTHER processes are the HOST's to reconcile (liveness-checked
+        # ``reset_stranded_session``) — never this kernel's.
         sessions = await self._store.list_sessions(None, status="running", limit=500)
         for session in sessions:
-            session.status = "idle"
-            session.stop_reason = Error(
-                category="host_restart",
-                retry_status="terminal",
-                message="host process restarted while turn was in flight",
-            )
-            await self._store.save_session(session)
-            messages = await self._store.list_messages_for_session(session.user_id, session.id)
-            now = now_ms()
-            for m in messages:
-                if m.status != "running":
-                    continue
-                m.status = "errored"
-                m.error_message = {
-                    "category": "host_restart",
-                    "message": "host process restarted while message was in flight",
-                }
-                m.ended_at = now
-                await self._store.save_message(session.user_id, m)
+            await self._reset_stranded(session)
             reset += 1
         return reset
+
+    async def _reset_stranded(self, session: Session) -> None:
+        """Reset one stranded session (see ``src.core.recovery.reset_stranded``)
+        on this kernel's store."""
+        await recovery.reset_stranded(self._store, session)
+
+    async def reset_stranded_session(self, user_id: str, session_id: str) -> bool:
+        """Per-session stranded reset on this kernel's own store (see
+        ``src.core.recovery.reset_stranded_session`` — the host applies the
+        same semantics to its durable for sessions whose sandbox is gone)."""
+        return await recovery.reset_stranded_session(self._store, user_id, session_id)

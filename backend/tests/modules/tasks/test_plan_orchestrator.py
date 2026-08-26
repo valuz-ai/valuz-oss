@@ -14,11 +14,10 @@ from pathlib import Path
 import pytest
 
 import valuz_agent.boot.kernel  # noqa: F401
-from sqlalchemy import create_engine, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.orm import sessionmaker
-from valuz_agent.infra.database import Base
-from valuz_agent.modules.tasks import orchestrator as orch_mod
+from sqlalchemy import select
+from valuz_agent.adapters import kernel_client as kernel_client_mod
+from valuz_agent.modules.tasks import launcher as launcher_mod
+from valuz_agent.modules.tasks import mailbox_store, member_probe
 from valuz_agent.modules.tasks import planning
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
@@ -36,28 +35,6 @@ def _as_async(fn):
     return _f
 
 
-@pytest.fixture
-def db_factory(tmp_path, monkeypatch):
-    """A tmp-SQLite async sessionmaker bound into ``infra.db.AsyncSessionLocal``.
-
-    The host is now fully async (``async_unit_of_work`` / aiosqlite); we patch
-    ``infra.db.AsyncSessionLocal`` so the orchestrator's units of work bind to
-    this tmp engine. A parallel SYNC sessionmaker is returned for the test
-    helpers to seed/read rows synchronously (simpler than awaiting in helpers).
-    """
-    import valuz_agent.infra.db as db_mod
-
-    db_file = tmp_path / "plan.db"
-    # Sync engine for the test helpers (seed/read).
-    sync_engine = create_engine(f"sqlite:///{db_file}", connect_args={"check_same_thread": False})
-    Base.metadata.create_all(
-        sync_engine, tables=[TaskRow.__table__, TaskEventRow.__table__, TaskSessionRow.__table__]
-    )
-    # Async engine for the code-under-test.
-    async_engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
-    async_factory = async_sessionmaker(bind=async_engine, expire_on_commit=False)
-    monkeypatch.setattr(db_mod, "AsyncSessionLocal", async_factory)
-    return sessionmaker(bind=sync_engine, expire_on_commit=False)
 
 
 def _make_task(db_factory, tmp_path, *, project_id="w1", task_id="t1") -> str:
@@ -279,7 +256,7 @@ def test_dispatch_rejects_unknown_subtask_key(db_factory, tmp_path) -> None:
     _make_task(db_factory, tmp_path)
     orch = TaskOrchestrator()
     res = asyncio.run(
-        orch.dispatch(
+        orch.dispatcher.dispatch_async(
             task_id="t1",
             project_id="w1",
             lead_session_id="lead",
@@ -306,7 +283,7 @@ def test_dispatch_rejects_blocked_subtask(db_factory, tmp_path) -> None:
         )
     )
     res = asyncio.run(
-        orch.dispatch(
+        orch.dispatcher.dispatch_async(
             task_id="t1",
             project_id="w1",
             lead_session_id="lead",
@@ -330,19 +307,12 @@ def test_rework_redispatch_folds_feedback_into_brief(db_factory, tmp_path) -> No
             project_id="w1",
             user_id=OWNER,
             lead_session_id="lead",
-            subtasks=[{"key": "a", "title": "A", "agent": "x", "goal": "build X"}],
+            subtasks=[
+                {"key": "a", "title": "A", "agent": "x", "goal": "build X", "status": "in_review"}
+            ],
         )
     )
     # node in_review → reject (no live member) → rework
-    asyncio.run(
-        planning.modify_plan(
-            task_id="t1",
-            project_id="w1",
-            user_id=OWNER,
-            lead_session_id="lead",
-            update=[{"key": "a", "status": "in_review"}],
-        )
-    )
     asyncio.run(
         planning.review_subtask(
             task_id="t1",
@@ -374,7 +344,7 @@ def test_review_approve_marks_done_and_unlocks(db_factory, tmp_path) -> None:
             user_id=OWNER,
             lead_session_id="lead",
             subtasks=[
-                {"key": "a", "title": "A", "agent": "x"},
+                {"key": "a", "title": "A", "agent": "x", "status": "in_review"},
                 {"key": "b", "title": "B", "agent": "y", "depends_on": ["a"]},
             ],
         )
@@ -437,7 +407,7 @@ def test_finish_task_stopped_emits_task_stopped(db_factory, tmp_path) -> None:
     _make_task(db_factory, tmp_path)
     orch = TaskOrchestrator()
     asyncio.run(
-        orch.finish_task(
+        orch.finalization.finish_task(
             task_id="t1",
             project_id="w1",
             user_id=OWNER,
@@ -461,7 +431,7 @@ def test_finish_task_rejects_legacy_failed_status(db_factory, tmp_path) -> None:
     _make_task(db_factory, tmp_path)
     orch = TaskOrchestrator()
     result = asyncio.run(
-        orch.finish_task(
+        orch.finalization.finish_task(
             task_id="t1",
             project_id="w1",
             user_id=OWNER,
@@ -540,7 +510,7 @@ def test_finish_task_rejected_when_plan_has_unresolved_nodes(db_factory, tmp_pat
         )
     )
     res = asyncio.run(
-        orch.finish_task(
+        orch.finalization.finish_task(
             task_id="t1",
             project_id="w1",
             lead_session_id="lead",
@@ -578,13 +548,14 @@ def test_finish_task_allows_completion_when_all_done(db_factory, tmp_path) -> No
     try:
         row = db.execute(select(TaskRow).filter_by(id="t1")).scalars().one()
         plan = TaskPlan.from_dict(row.plan)
-        plan.update_node("a", status="done")
+        for st in ("in_progress", "in_review", "done"):  # legal chain
+            plan.update_node("a", status=st)
         row.plan = plan.to_dict()
         db.commit()
     finally:
         db.close()
     res = asyncio.run(
-        orch.finish_task(
+        orch.finalization.finish_task(
             task_id="t1",
             project_id="w1",
             lead_session_id="lead",
@@ -650,7 +621,7 @@ def test_auto_finalize_completes_when_no_pending_subtasks(db_factory, tmp_path) 
     _make_lead_run(db_factory)
     orch = TaskOrchestrator()
     asyncio.run(
-        orch._auto_finalize_lead_task(
+        orch.finalization._auto_finalize_lead_task(
             lead_session_id="lead-sess",
             task_id="t1",
             project_id="w1",
@@ -673,7 +644,7 @@ def test_finalize_actor_threads_user_id_to_auto_finalize(db_factory, tmp_path) -
     _make_lead_run(db_factory)
     orch = TaskOrchestrator()
     asyncio.run(
-        orch._finalize_actor(
+        orch.finalization.finalize_actor(
             session_id="lead-sess",
             last_content="done inline",
             final_status="idle",
@@ -700,7 +671,7 @@ def test_auto_finalize_blocks_when_plan_has_unresolved_nodes(db_factory, tmp_pat
         )
     )
     asyncio.run(
-        orch._auto_finalize_lead_task(
+        orch.finalization._auto_finalize_lead_task(
             lead_session_id="lead-sess",
             task_id="t1",
             project_id="w1",
@@ -721,7 +692,7 @@ def test_auto_finalize_blocks_on_terminated_with_empty_plan(db_factory, tmp_path
     _make_task(db_factory, tmp_path)
     orch = TaskOrchestrator()
     asyncio.run(
-        orch._auto_finalize_lead_task(
+        orch.finalization._auto_finalize_lead_task(
             lead_session_id="lead-sess",
             task_id="t1",
             project_id="w1",
@@ -743,7 +714,6 @@ def test_auto_finalize_blocks_on_stop_reason_error_with_empty_plan(
     task failed-but-resumable instead of ``completed``."""
     from types import SimpleNamespace
 
-    from valuz_agent.modules.tasks import orchestrator as orch_mod
 
     _make_task(db_factory, tmp_path)
     fake_sess = SimpleNamespace(
@@ -754,11 +724,17 @@ def test_auto_finalize_blocks_on_stop_reason_error_with_empty_plan(
         }
     )
     monkeypatch.setattr(
-        orch_mod.kernel_client, "get_session", _as_async(lambda _uid, _sid: fake_sess)
+        kernel_client_mod, "get_session", _as_async(lambda _uid, _sid: fake_sess)
+    )
+    from valuz_agent.modules.tasks import events as events_mod
+
+    published: list[tuple] = []
+    monkeypatch.setattr(
+        events_mod, "publish_task_finalized", lambda tid, uid, st: published.append((tid, st))
     )
     orch = TaskOrchestrator()
     asyncio.run(
-        orch._auto_finalize_lead_task(
+        orch.finalization._auto_finalize_lead_task(
             lead_session_id="lead-sess",
             task_id="t1",
             project_id="w1",
@@ -768,31 +744,36 @@ def test_auto_finalize_blocks_on_stop_reason_error_with_empty_plan(
     )
     assert _task_status(db_factory) == "blocked"
     assert "task_blocked" in _events(db_factory)
+    # Terminal contract (tasks/events.py): every terminal write announces
+    # task.finalized — the lead-turn-error → blocked path used to skip it.
+    assert ("t1", "blocked") in published
 
 
-def test_auto_finalize_cancel_with_empty_plan_stays_active(
+def test_auto_finalize_cancel_with_empty_plan_parks_paused(
     db_factory, tmp_path, monkeypatch
 ) -> None:
-    """Carve-out preserved from the 2026-05-29 EnterPlanMode-hang bug: a
-    user/host-driven cancellation (``category='user_interrupt'``) BEFORE any
-    plan node exists has no in-flight work to protect, so locking to
-    ``blocked`` would force a needless ``resume_task`` for what is effectively
-    a fresh kickoff. Stay ``active`` and let the next driver retry. Only a
-    *genuine* failure (other categories) blocks — see the sibling tests."""
+    """Carve-out from the 2026-05-29 EnterPlanMode-hang bug, resolved honestly:
+    a user cancellation (``category='user_interrupt'``) BEFORE any plan node
+    exists has no in-flight work to protect, so ``blocked`` (with its failure
+    notification) would be a lie. But the old "stay active" was a lie too —
+    an active task with no lead loop is a dead zone (inject on it returns
+    LEAD_OFFLINE and drops the message; only halted states auto-revive), and
+    the health watchdog then flipped it blocked anyway with a misleading
+    "lead stopped" alert. ``paused`` is the honest resting state: inject /
+    resume revive it immediately, the watchdog ignores it."""
     from types import SimpleNamespace
 
-    from valuz_agent.modules.tasks import orchestrator as orch_mod
 
     _make_task(db_factory, tmp_path)
     fake_sess = SimpleNamespace(
         stop_reason={"type": "error", "category": "user_interrupt", "message": "cancelled"}
     )
     monkeypatch.setattr(
-        orch_mod.kernel_client, "get_session", _as_async(lambda _uid, _sid: fake_sess)
+        kernel_client_mod, "get_session", _as_async(lambda _uid, _sid: fake_sess)
     )
     orch = TaskOrchestrator()
     asyncio.run(
-        orch._auto_finalize_lead_task(
+        orch.finalization._auto_finalize_lead_task(
             lead_session_id="lead-sess",
             task_id="t1",
             project_id="w1",
@@ -800,8 +781,18 @@ def test_auto_finalize_cancel_with_empty_plan_stays_active(
             user_id=OWNER,
         )
     )
-    assert _task_status(db_factory) == "active"
+    assert _task_status(db_factory) == "paused"
     assert "task_blocked" not in _events(db_factory)
+    assert "paused" in _events(db_factory)
+
+    # Composed with the watchdog: the parked task is OUT of the sweep set —
+    # no more "lead stopped without finishing" notification 2 minutes after a
+    # deliberate cancel (the contradiction this change resolves).
+    from valuz_agent.modules.tasks.recovery import TaskHealthConfig, TaskHealthMonitor
+
+    mon = TaskHealthMonitor(TaskHealthConfig(confirm_sweeps=1))
+    assert asyncio.run(mon.sweep_once()) == []
+    assert _task_status(db_factory) == "paused"
 
 
 def _make_member_run(db_factory, *, session_id="mem-1", subtask_key="a") -> None:
@@ -837,7 +828,6 @@ def test_finalize_actor_member_error_sets_rework_not_failed(
     stop_member; the error rides along as ``review_feedback`` and the timeline
     still records a ``subtask_failed`` event."""
     from valuz_agent.modules.sessions import run_orchestrator as run_orch
-    from valuz_agent.modules.tasks import orchestrator as orch_mod
     from valuz_agent.modules.tasks.plan import TaskPlan
 
     _make_task(db_factory, tmp_path)
@@ -847,7 +837,7 @@ def test_finalize_actor_member_error_sets_rework_not_failed(
             project_id="w1",
             user_id=OWNER,
             lead_session_id="lead-sess",
-            subtasks=[{"key": "a", "title": "A", "agent": "researcher"}],
+            subtasks=[{"key": "a", "title": "A", "agent": "researcher", "status": "in_progress"}],
         )
     )
     _make_member_run(db_factory)
@@ -857,12 +847,16 @@ def test_finalize_actor_member_error_sets_rework_not_failed(
     async def _fake_manifest(*_a: object, **_k: object) -> dict[str, str]:
         return {"session_id": "mem-1", "status": "terminated", "summary": "API Error: ECONNRESET"}
 
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
     monkeypatch.setattr(run_orch, "_finalize_session", _noop)
-    monkeypatch.setattr(orch_mod, "collect_manifest", _fake_manifest)
+    # collect_manifest_safe wraps the source module's collect_manifest —
+    # patching the source covers every consumer.
+    monkeypatch.setattr(manifest_mod, "collect_manifest", _fake_manifest)
 
     orch = TaskOrchestrator()
     asyncio.run(
-        orch._finalize_actor(
+        orch.finalization.finalize_actor(
             session_id="mem-1",
             last_content="",
             final_status="terminated",
@@ -904,7 +898,7 @@ def test_auto_finalize_blocks_on_error_when_plan_has_unresolved_nodes(db_factory
         )
     )
     asyncio.run(
-        orch._auto_finalize_lead_task(
+        orch.finalization._auto_finalize_lead_task(
             lead_session_id="lead-sess",
             task_id="t1",
             project_id="w1",
@@ -927,7 +921,7 @@ def test_auto_finalize_noop_when_already_finalized(db_factory, tmp_path) -> None
         db.close()
     orch = TaskOrchestrator()
     asyncio.run(
-        orch._auto_finalize_lead_task(
+        orch.finalization._auto_finalize_lead_task(
             lead_session_id="lead-sess",
             task_id="t1",
             project_id="w1",
@@ -938,12 +932,41 @@ def test_auto_finalize_noop_when_already_finalized(db_factory, tmp_path) -> None
     assert _events(db_factory) == []  # no duplicate terminal event appended
 
 
+def _seed_live_member(db_factory, task_id="t1", session_id="m1", subtask_key="s1") -> None:
+    """One member run row, ``active`` — the shared answer to "a member is running".
+
+    Membership used to be a set on the orchestrator, so a test could declare a
+    live member without one existing. Every process now reads the run rows, so
+    the row IS the declaration.
+    """
+    from valuz_agent.modules.tasks.models import TaskSessionRow
+
+    db = db_factory()
+    try:
+        db.add(
+            TaskSessionRow(
+                user_id=OWNER,
+                project_id="w1",
+                task_id=task_id,
+                session_id=session_id,
+                agent_slug="worker",
+                sequence=99,
+                kind="subtask",
+                subtask_key=subtask_key,
+                status="active",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
 def test_auto_finalize_noop_when_members_in_flight(db_factory, tmp_path) -> None:
     _make_task(db_factory, tmp_path)
     orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"m1"})  # a member is still running
+    _seed_live_member(db_factory)  # a member is still running
     asyncio.run(
-        orch._auto_finalize_lead_task(
+        orch.finalization._auto_finalize_lead_task(
             lead_session_id="lead-sess",
             task_id="t1",
             project_id="w1",
@@ -958,14 +981,16 @@ def test_lead_idle_with_no_pending_true_when_clean(db_factory, tmp_path) -> None
     _make_task(db_factory, tmp_path)
     orch = TaskOrchestrator()
     # No members, no plan → nothing to wait for → break the loop immediately.
-    assert asyncio.run(orch._lead_idle_with_no_pending("t1", "w1", user_id=OWNER)) is True
+    idle = orch.coordination.lead_idle_with_no_pending("t1", "w1", user_id=OWNER)
+    assert asyncio.run(idle) is True
 
 
 def test_lead_idle_with_no_pending_false_when_member_in_flight(db_factory, tmp_path) -> None:
     _make_task(db_factory, tmp_path)
     orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"m1"})
-    assert asyncio.run(orch._lead_idle_with_no_pending("t1", "w1", user_id=OWNER)) is False
+    _seed_live_member(db_factory)
+    idle = orch.coordination.lead_idle_with_no_pending("t1", "w1", user_id=OWNER)
+    assert asyncio.run(idle) is False
 
 
 def test_lead_idle_with_no_pending_false_when_plan_unresolved(db_factory, tmp_path) -> None:
@@ -980,7 +1005,8 @@ def test_lead_idle_with_no_pending_false_when_plan_unresolved(db_factory, tmp_pa
             subtasks=[{"key": "a", "title": "A", "agent": "x"}],
         )
     )
-    assert asyncio.run(orch._lead_idle_with_no_pending("t1", "w1", user_id=OWNER)) is False
+    idle = orch.coordination.lead_idle_with_no_pending("t1", "w1", user_id=OWNER)
+    assert asyncio.run(idle) is False
 
 
 # ---------------------------------------------------------------------------
@@ -993,7 +1019,7 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
 ) -> None:
     from types import SimpleNamespace
 
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
+    from valuz_agent.modules.tasks import mailbox_store
     from valuz_agent.modules.tasks.models import TaskSessionRow
     from valuz_agent.modules.tasks.plan import TaskPlan
 
@@ -1078,7 +1104,7 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
         ),
     }
     monkeypatch.setattr(
-        orch_mod.kernel_client, "get_session", _as_async(lambda _uid, sid: sessions.get(sid))
+        kernel_client_mod, "get_session", _as_async(lambda _uid, sid: sessions.get(sid))
     )
 
     orch = TaskOrchestrator()
@@ -1090,7 +1116,7 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
     orch._actor.run_actor_loop = _fake_loop  # type: ignore[method-assign]
 
     async def _run() -> None:
-        await orch._recover_one_task("t1", "w1", user_id=OWNER)
+        await orch.recovery._recover_one_task("t1", "w1", user_id=OWNER)
         await asyncio.sleep(0.05)  # let create_task'd loops run
 
     try:
@@ -1110,14 +1136,16 @@ def test_recover_one_task_reconciles_members_and_redrives_lead(
         assert ("sB", "subtask") in spawned  # resumable member respawned
         assert ("lead-s", "lead") in spawned  # lead re-driven
         assert ("sA", "subtask") not in spawned and ("sC", "subtask") not in spawned
-        assert mailbox_registry.has_pending("lead-s")  # completed A's member_done queued
+        # Recovery re-seeds the completed member's result into the lead's DURABLE
+        # inbox: the lead's loop may come up in a different process than this.
+        assert asyncio.run(mailbox_store.has_pending("lead-s"))
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 # ---------------------------------------------------------------------------
 # S4 — Layer 2: user stop / resume (stop_task / resume_task / stop_member)
-# S3 — online heartbeat (_heartbeat_pending)
+# S3 — online heartbeat (member_probe.heartbeat_pending)
 # ---------------------------------------------------------------------------
 
 
@@ -1195,7 +1223,6 @@ def test_stop_task_pauses_members_and_cascade_interrupts(db_factory, tmp_path, m
         members=[("A", "backend", "sA", "in_progress"), ("B", "frontend", "sB", "in_progress")],
     )
     orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"sA", "sB"})
     interrupted: list[str] = []
 
     async def _fake_interrupt(sid: str, user_id: str | None = None) -> None:
@@ -1204,7 +1231,7 @@ def test_stop_task_pauses_members_and_cascade_interrupts(db_factory, tmp_path, m
 
     orch._recovery._interrupt_kernel_session = _fake_interrupt  # type: ignore[method-assign]
 
-    assert asyncio.run(orch.stop_task("t1", "w1", user_id=OWNER)) is True
+    assert asyncio.run(orch.recovery.stop_task("t1", "w1", user_id=OWNER)) is True
 
     task = _task_row(db_factory)
     assert task.status == "paused"
@@ -1226,7 +1253,7 @@ def test_stop_task_noop_when_not_active(db_factory, tmp_path, monkeypatch) -> No
         raise AssertionError("should not interrupt a non-active task")
 
     orch._recovery._interrupt_kernel_session = _fake_interrupt  # type: ignore[method-assign]
-    assert asyncio.run(orch.stop_task("t1", "w1", user_id=OWNER)) is False
+    assert asyncio.run(orch.recovery.stop_task("t1", "w1", user_id=OWNER)) is False
 
 
 def test_resume_task_only_paused_flips_active_and_redrives(
@@ -1234,7 +1261,6 @@ def test_resume_task_only_paused_flips_active_and_redrives(
 ) -> None:
     from types import SimpleNamespace
 
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
 
     _seed_lead_and_members(
         db_factory,
@@ -1245,7 +1271,7 @@ def test_resume_task_only_paused_flips_active_and_redrives(
     )
     # paused member kernel session was interrupted (idle + UserInterrupt-ish) → resume.
     monkeypatch.setattr(
-        orch_mod.kernel_client,
+        kernel_client_mod,
         "get_session",
         _as_async(
             lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "user_interrupt"})
@@ -1260,7 +1286,7 @@ def test_resume_task_only_paused_flips_active_and_redrives(
     orch._actor.run_actor_loop = _fake_loop  # type: ignore[method-assign]
 
     async def _run() -> dict:
-        result = await orch.resume_task("t1", "w1", user_id=OWNER)
+        result = await orch.recovery.resume_task("t1", "w1", user_id=OWNER)
         await asyncio.sleep(0.05)
         return result
 
@@ -1273,7 +1299,7 @@ def test_resume_task_only_paused_flips_active_and_redrives(
         assert ("lead-s", "lead") in spawned
         assert ("sA", "subtask") in spawned  # paused member resumed
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_resume_task_noop_when_active(db_factory, tmp_path) -> None:
@@ -1283,7 +1309,7 @@ def test_resume_task_noop_when_active(db_factory, tmp_path) -> None:
         db_factory, tmp_path, members=[("A", "backend", "sA", "in_progress")], task_status="active"
     )
     orch = TaskOrchestrator()
-    result = asyncio.run(orch.resume_task("t1", "w1", user_id=OWNER))
+    result = asyncio.run(orch.recovery.resume_task("t1", "w1", user_id=OWNER))
     assert result["ok"] is False
     assert result["prior_status"] == "active"
     assert "paused" in result["error"] or "blocked" in result["error"]
@@ -1295,13 +1321,12 @@ def test_resume_task_accepts_blocked(db_factory, tmp_path, monkeypatch) -> None:
     be able to revive them by calling resume_task."""
     from types import SimpleNamespace
 
-    from valuz_agent.modules.tasks import orchestrator as orch_mod
 
     _seed_lead_and_members(
         db_factory, tmp_path, members=[], task_status="blocked", run_status="rejected"
     )
     monkeypatch.setattr(
-        orch_mod.kernel_client,
+        kernel_client_mod,
         "get_session",
         _as_async(lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "error"})),
     )
@@ -1312,7 +1337,7 @@ def test_resume_task_accepts_blocked(db_factory, tmp_path, monkeypatch) -> None:
         spawned.append((session_id, role))
 
     orch._actor.run_actor_loop = _fake_loop  # type: ignore[method-assign]
-    result = asyncio.run(orch.resume_task("t1", "w1", user_id=OWNER))
+    result = asyncio.run(orch.recovery.resume_task("t1", "w1", user_id=OWNER))
     assert result["ok"] is True
     assert result["prior_status"] == "blocked"
     assert _task_row(db_factory).status == "active"
@@ -1326,13 +1351,12 @@ def test_resume_task_accepts_stopped(db_factory, tmp_path, monkeypatch) -> None:
     consistent, then _recover_one_task respawns a fresh lead."""
     from types import SimpleNamespace
 
-    from valuz_agent.modules.tasks import orchestrator as orch_mod
 
     _seed_lead_and_members(
         db_factory, tmp_path, members=[], task_status="stopped", run_status="completed"
     )
     monkeypatch.setattr(
-        orch_mod.kernel_client,
+        kernel_client_mod,
         "get_session",
         _as_async(lambda _uid, sid: SimpleNamespace(status="idle", stop_reason=None)),
     )
@@ -1343,7 +1367,7 @@ def test_resume_task_accepts_stopped(db_factory, tmp_path, monkeypatch) -> None:
         spawned.append((session_id, role))
 
     orch._actor.run_actor_loop = _fake_loop  # type: ignore[method-assign]
-    result = asyncio.run(orch.resume_task("t1", "w1", user_id=OWNER))
+    result = asyncio.run(orch.recovery.resume_task("t1", "w1", user_id=OWNER))
     assert result["ok"] is True
     assert result["prior_status"] == "stopped"
     assert _task_row(db_factory).status == "active"
@@ -1357,13 +1381,12 @@ def test_resume_task_accepts_completed(db_factory, tmp_path, monkeypatch) -> Non
     back to 'active' and _recover_one_task respawns a fresh lead."""
     from types import SimpleNamespace
 
-    from valuz_agent.modules.tasks import orchestrator as orch_mod
 
     _seed_lead_and_members(
         db_factory, tmp_path, members=[], task_status="completed", run_status="completed"
     )
     monkeypatch.setattr(
-        orch_mod.kernel_client,
+        kernel_client_mod,
         "get_session",
         _as_async(lambda _uid, sid: SimpleNamespace(status="idle", stop_reason=None)),
     )
@@ -1374,7 +1397,7 @@ def test_resume_task_accepts_completed(db_factory, tmp_path, monkeypatch) -> Non
         spawned.append((session_id, role))
 
     orch._actor.run_actor_loop = _fake_loop  # type: ignore[method-assign]
-    result = asyncio.run(orch.resume_task("t1", "w1", user_id=OWNER))
+    result = asyncio.run(orch.recovery.resume_task("t1", "w1", user_id=OWNER))
     assert result["ok"] is True
     assert result["prior_status"] == "completed"
     assert _task_row(db_factory).status == "active"
@@ -1390,14 +1413,12 @@ def test_resume_task_with_instruction_embeds_brief_and_logs_event(
     step (":intervene action=resume text=…" / chat inject on a halted task)."""
     from types import SimpleNamespace
 
-    from valuz_agent.modules.tasks import orchestrator as orch_mod
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
 
     _seed_lead_and_members(
         db_factory, tmp_path, members=[], task_status="stopped", run_status="completed"
     )
     monkeypatch.setattr(
-        orch_mod.kernel_client,
+        kernel_client_mod,
         "get_session",
         _as_async(lambda _uid, sid: SimpleNamespace(status="idle", stop_reason=None)),
     )
@@ -1410,7 +1431,7 @@ def test_resume_task_with_instruction_embeds_brief_and_logs_event(
     orch._actor.run_actor_loop = _fake_loop  # type: ignore[method-assign]
     try:
         result = asyncio.run(
-            orch.resume_task("t1", "w1", user_id=OWNER, instruction="先核对数据再继续")
+            orch.recovery.resume_task("t1", "w1", user_id=OWNER, instruction="先核对数据再继续")
         )
         assert result["ok"] is True
         assert '<user-instruction source="resume">' in prompts["lead"]
@@ -1419,7 +1440,7 @@ def test_resume_task_with_instruction_embeds_brief_and_logs_event(
         payload = _event_payload(db_factory, "user_inject")
         assert payload == {"text": "先核对数据再继续", "via": "resume"}
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_resume_task_accepts_legacy_failed(db_factory, tmp_path, monkeypatch) -> None:
@@ -1429,14 +1450,12 @@ def test_resume_task_accepts_legacy_failed(db_factory, tmp_path, monkeypatch) ->
     resume exactly like blocked (datastore tolerates the unknown source)."""
     from types import SimpleNamespace
 
-    from valuz_agent.modules.tasks import orchestrator as orch_mod
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
 
     _seed_lead_and_members(
         db_factory, tmp_path, members=[], task_status="failed", run_status="archived"
     )
     monkeypatch.setattr(
-        orch_mod.kernel_client,
+        kernel_client_mod,
         "get_session",
         _as_async(lambda _uid, sid: SimpleNamespace(status="idle", stop_reason=None)),
     )
@@ -1448,13 +1467,13 @@ def test_resume_task_accepts_legacy_failed(db_factory, tmp_path, monkeypatch) ->
 
     orch._actor.run_actor_loop = _fake_loop  # type: ignore[method-assign]
     try:
-        result = asyncio.run(orch.resume_task("t1", "w1", user_id=OWNER))
+        result = asyncio.run(orch.recovery.resume_task("t1", "w1", user_id=OWNER))
         assert result["ok"] is True
         assert result["prior_status"] == "failed"
         assert _task_row(db_factory).status == "active"
         assert ("lead-s", "lead") in spawned
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_resume_task_rejects_abandoned(db_factory, tmp_path) -> None:
@@ -1462,7 +1481,7 @@ def test_resume_task_rejects_abandoned(db_factory, tmp_path) -> None:
     revive; the user must draft afresh."""
     _seed_lead_and_members(db_factory, tmp_path, members=[], task_status="abandoned")
     orch = TaskOrchestrator()
-    result = asyncio.run(orch.resume_task("t1", "w1", user_id=OWNER))
+    result = asyncio.run(orch.recovery.resume_task("t1", "w1", user_id=OWNER))
     assert result["ok"] is False
     assert result["prior_status"] == "abandoned"
     assert _task_row(db_factory).status == "abandoned"
@@ -1471,31 +1490,33 @@ def test_resume_task_rejects_abandoned(db_factory, tmp_path) -> None:
 def test_stop_member_rejects_run_reworks_node_and_notifies_lead(
     db_factory, tmp_path, monkeypatch
 ) -> None:
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
+    from valuz_agent.modules.tasks import mailbox_store
     from valuz_agent.modules.tasks.plan import TaskPlan
 
     _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
     orch = TaskOrchestrator()
-    orch._members.set_members("t1", {"sB"})
 
     async def _fake_interrupt(sid: str, user_id: str | None = None) -> None:
         assert user_id == OWNER
         pass
 
     orch._recovery._interrupt_kernel_session = _fake_interrupt  # type: ignore[method-assign]
-    mailbox_registry.register("lead-s")
     try:
-        assert asyncio.run(orch.stop_member("sB", user_id=OWNER)) is True
+        assert asyncio.run(orch.recovery.stop_member("sB", user_id=OWNER)) is True
         runs = _runs(db_factory)
         assert runs["sB"] == "rejected"
         plan = TaskPlan.from_dict(db_factory().query(TaskRow).filter_by(id="t1").one().plan)
         assert plan.get("B").status == "rework"
-        assert "sB" not in orch._members.live_members("t1")
-        assert mailbox_registry.has_pending("lead-s")
-        msg = mailbox_registry._boxes["lead-s"].get_nowait()
+        assert asyncio.run(mailbox_store.has_pending("lead-s"))
+        # The cancellation reaches the lead through its durable inbox: the
+        # lead's loop may well be in another process than the one that served
+        # the stop request.
+        drained = asyncio.run(mailbox_store.drain("lead-s", limit=32))
+        assert len(drained) == 1
+        msg = drained[0]
         assert msg.kind == "member_done" and msg.payload["status"] == "cancelled"
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_heartbeat_pending_synthesizes_terminal_completed(
@@ -1515,26 +1536,28 @@ def test_heartbeat_pending_synthesizes_terminal_completed(
         "sC": SimpleNamespace(status="running", stop_reason=None),  # still in flight
     }
     monkeypatch.setattr(
-        orch_mod.kernel_client, "get_session", _as_async(lambda _uid, sid: sessions.get(sid))
+        kernel_client_mod, "get_session", _as_async(lambda _uid, sid: sessions.get(sid))
     )
-    # ``_heartbeat_pending`` lives in tasks/coordination.py (ADR-023 Step 3b);
-    # the orchestrator delegates to it, so stub the coordination module's
-    # ``collect_manifest`` binding.
-    from valuz_agent.modules.tasks import coordination as coord_mod
+    from valuz_agent.modules.tasks import manifest as manifest_mod
 
     monkeypatch.setattr(
-        coord_mod, "collect_manifest", lambda *a, **k: {"status": "completed", "summary": "ok"}
+        manifest_mod,
+        "collect_manifest",
+        _as_async(lambda *a, **k: {"status": "completed", "summary": "ok"}),
     )
     orch = TaskOrchestrator()
 
     out = asyncio.run(
-        orch._heartbeat_pending(
+        member_probe.heartbeat_pending(
             task_id="t1", project_id="w1", pending_keys={"B", "C"}, user_id=OWNER
         )
     )
 
-    assert set(out.keys()) == {"B"}  # only the terminal member synthesized
-    assert out["B"]["status"] == "completed"
+    assert set(out.settled) == {"B"}  # only the terminal member synthesized
+    assert out.settled["B"]["status"] == "completed"
+    # Reported separately from what it acted on, so a caller can grant a grace
+    # period per member: C is still running, so it is not terminal either.
+    assert out.terminal == {"B"}
     runs = _runs(db_factory)
     assert runs["sB"] == "completed"
     plan = TaskPlan.from_dict(db_factory().query(TaskRow).filter_by(id="t1").one().plan)
@@ -1551,7 +1574,6 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
 
     from valuz_agent.api.routes import tasks as tasks_route
     from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
     from valuz_agent.modules.tasks.plan import TaskPlan
 
     _seed_lead_and_members(
@@ -1560,7 +1582,6 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
         members=[("A", "backend", "sA", "in_progress"), ("B", "frontend", "sB", "in_progress")],
     )
     orch = tasks_route.task_orchestrator
-    orch._members.set_members("t1", {"sA", "sB"})
 
     interrupted: list[str] = []
     spawned: list[tuple[str, str]] = []
@@ -1572,11 +1593,17 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
     async def _fake_loop(*, session_id, role, **_kw) -> None:
         spawned.append((session_id, role))
 
+    from valuz_agent.modules.tasks import events as events_mod
+
+    published: list[tuple] = []
+    monkeypatch.setattr(
+        events_mod, "publish_task_finalized", lambda tid, uid, st: published.append((tid, st))
+    )
     monkeypatch.setattr(orch._recovery, "_interrupt_kernel_session", _fake_interrupt)
     monkeypatch.setattr(orch._actor, "run_actor_loop", _fake_loop)
     # On resume, paused members read as interrupted-idle → resumable.
     monkeypatch.setattr(
-        orch_mod.kernel_client,
+        kernel_client_mod,
         "get_session",
         _as_async(
             lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "user_interrupt"})
@@ -1591,6 +1618,10 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
                 "t1", tasks_route.InterveneRequest(action="stop"), db, "local-test-owner"
             )
         assert resp.status == "stopped"
+        # Terminal contract: a user stop is a terminal write → task.finalized
+        # must be announced (sandbox TTL clamp). The old direct update_task
+        # write in stop_task skipped both the announce and the state guard.
+        assert ("t1", "stopped") in published
         assert set(interrupted) == {"sA", "sB", "lead-s"}
         runs = _runs(db_factory)
         assert runs["sA"] == "paused" and runs["sB"] == "paused"
@@ -1608,12 +1639,8 @@ def test_e2e_stop_resume_closed_loop_through_routes(db_factory, tmp_path, monkey
         assert ("lead-s", "lead") in spawned
         assert ("sA", "subtask") in spawned and ("sB", "subtask") in spawned
 
-    try:
-        asyncio.run(_run())
-        assert _task_row(db_factory).status == "active"
-    finally:
-        mailbox_registry.unregister("lead-s")
-        orch._members.set_members("t1", set())
+    asyncio.run(_run())
+    assert _task_row(db_factory).status == "active"
 
 
 def test_pause_distinct_from_stop_and_parks_nodes(db_factory, tmp_path, monkeypatch) -> None:
@@ -1623,12 +1650,10 @@ def test_pause_distinct_from_stop_and_parks_nodes(db_factory, tmp_path, monkeypa
     (``in_progress`` → ``paused``) so the right-rail panel stops spinning."""
     from valuz_agent.api.routes import tasks as tasks_route
     from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
     from valuz_agent.modules.tasks.plan import TaskPlan
 
     _seed_lead_and_members(db_factory, tmp_path, members=[("A", "backend", "sA", "in_progress")])
     orch = tasks_route.task_orchestrator
-    orch._members.set_members("t1", {"sA"})
 
     async def _noop_interrupt(_sid: str, user_id: str | None = None) -> None:
         assert user_id == OWNER
@@ -1652,11 +1677,7 @@ def test_pause_distinct_from_stop_and_parks_nodes(db_factory, tmp_path, monkeypa
             )
         assert r2.status == "stopped"
 
-    try:
-        asyncio.run(_run())
-    finally:
-        mailbox_registry.unregister("lead-s")
-        orch._members.set_members("t1", set())
+    asyncio.run(_run())
 
 
 def test_intervene_noop_raises_409_instead_of_false_success(
@@ -1675,7 +1696,6 @@ def test_intervene_noop_raises_409_instead_of_false_success(
 
     from valuz_agent.api.routes import tasks as tasks_route
     from valuz_agent.infra.db import async_unit_of_work
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
 
     _seed_lead_and_members(db_factory, tmp_path, members=[], task_status="active")
     orch = tasks_route.task_orchestrator
@@ -1714,7 +1734,7 @@ def test_intervene_noop_raises_409_instead_of_false_success(
     try:
         asyncio.run(_run())
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_resume_evicts_kernel_runtime_before_respawn(db_factory, tmp_path, monkeypatch) -> None:
@@ -1729,7 +1749,6 @@ def test_resume_evicts_kernel_runtime_before_respawn(db_factory, tmp_path, monke
 
     import app.dependencies as appdeps
 
-    from valuz_agent.modules.tasks.mailbox import mailbox_registry
 
     _seed_lead_and_members(
         db_factory,
@@ -1739,7 +1758,7 @@ def test_resume_evicts_kernel_runtime_before_respawn(db_factory, tmp_path, monke
         run_status="paused",
     )
     monkeypatch.setattr(
-        orch_mod.kernel_client,
+        kernel_client_mod,
         "get_session",
         _as_async(
             lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "user_interrupt"})
@@ -1765,7 +1784,7 @@ def test_resume_evicts_kernel_runtime_before_respawn(db_factory, tmp_path, monke
     orch._actor.run_actor_loop = _fake_loop  # type: ignore[method-assign]
 
     async def _run() -> None:
-        await orch.resume_task("t1", "w1", user_id=OWNER)
+        await orch.recovery.resume_task("t1", "w1", user_id=OWNER)
         await asyncio.sleep(0.05)
 
     try:
@@ -1773,7 +1792,7 @@ def test_resume_evicts_kernel_runtime_before_respawn(db_factory, tmp_path, monke
         assert "lead-s" in evicted and "sA" in evicted  # both evicted on resume
         assert "lead-s" in spawned and "sA" in spawned
     finally:
-        mailbox_registry.unregister("lead-s")
+        pass
 
 
 def test_lead_shutdown_exit_skips_auto_finalize(monkeypatch) -> None:
@@ -1797,7 +1816,7 @@ def test_lead_shutdown_exit_skips_auto_finalize(monkeypatch) -> None:
 
     # _finalize_actor delegates to LifecycleService (ADR-023 Step 3c), whose
     # implementation calls its own _auto_finalize_lead_task — patch it there.
-    monkeypatch.setattr(orch._lifecycle, "_auto_finalize_lead_task", _fake_auto)
+    monkeypatch.setattr(orch._finalization, "_auto_finalize_lead_task", _fake_auto)
 
     common = dict(
         session_id="L",
@@ -1809,8 +1828,1548 @@ def test_lead_shutdown_exit_skips_auto_finalize(monkeypatch) -> None:
         user_id=OWNER,
     )
     # shutdown exit → auto-finalize SKIPPED (no spurious block on resume)
-    asyncio.run(orch._finalize_actor(via_shutdown=True, **common))  # type: ignore[arg-type]
+    asyncio.run(orch.finalization.finalize_actor(via_shutdown=True, **common))  # type: ignore[arg-type]
     assert called == []
     # natural exit (idle-TTL / end_turn) → auto-finalize RUNS
-    asyncio.run(orch._finalize_actor(via_shutdown=False, **common))  # type: ignore[arg-type]
+    asyncio.run(orch.finalization.finalize_actor(via_shutdown=False, **common))  # type: ignore[arg-type]
     assert called == ["t1"]
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle extraction regression pins — the two fossil-edit bugs (the fixes
+# landed on the dead lifecycle copies while the live bodies sat on the
+# orchestrator; the extraction merged them — keep them pinned).
+# ---------------------------------------------------------------------------
+
+
+def _mark_all_done(db_factory, task_id="t1") -> None:
+    from valuz_agent.modules.tasks.plan import TaskPlan
+
+    db = db_factory()
+    try:
+        row = db.execute(select(TaskRow).filter_by(id=task_id)).scalars().one()
+        plan = TaskPlan.from_dict(row.plan)
+        for n in plan.nodes:
+            # Walk the legal chain — NODE_TRANSITIONS forbids planned → done.
+            for st in ("in_progress", "in_review", "done"):
+                plan.update_node(n.key, status=st)
+        row.plan = plan.to_dict()
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_finish_task_completed_publishes_finalized_and_notifies_memory(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """finish_task is a terminal write site of the task.finalized contract
+    (tasks/events.py): the commercial allocator's TTL clamp listens on it.
+    A completed finish must also graduate lessons into project memory."""
+    from valuz_agent.modules.tasks import events as events_mod
+
+    _make_task(db_factory, tmp_path)
+    asyncio.run(
+        planning.plan_task(
+            task_id="t1",
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="lead",
+            subtasks=[{"key": "a", "title": "A", "agent": "x"}],
+        )
+    )
+    _mark_all_done(db_factory)
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        events_mod, "publish_task_finalized", lambda tid, uid, st: calls.append(("pub", tid, st))
+    )
+
+    orch = TaskOrchestrator()
+    res = asyncio.run(
+        orch.finalization.finish_task(
+            task_id="t1",
+            project_id="w1",
+            lead_session_id="lead",
+            summary="done",
+            user_id=OWNER,
+        )
+    )
+    assert res["ok"] is True
+    # Memory graduation rides this announce (see the task.finalized wiring
+    # test below) — the terminal write itself must publish it.
+    assert ("pub", "t1", "completed") in calls
+
+
+def test_finish_task_stopped_publishes_finalized_without_memory(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """A 'stopped' finish still announces task.finalized (sandbox reclaim)
+    but must NOT graduate memory — that's reserved for real completions."""
+    from valuz_agent.modules.tasks import events as events_mod
+
+    _make_task(db_factory, tmp_path)
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        events_mod, "publish_task_finalized", lambda tid, uid, st: calls.append(("pub", tid, st))
+    )
+
+    orch = TaskOrchestrator()
+    res = asyncio.run(
+        orch.finalization.finish_task(
+            task_id="t1",
+            project_id="w1",
+            lead_session_id="lead",
+            summary="stop",
+            status="stopped",
+            user_id=OWNER,
+        )
+    )
+    assert res["ok"] is True
+    assert ("pub", "t1", "stopped") in calls
+
+
+def test_commit_task_creates_lead_session_with_task_scope(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """The committed lead must ride the task's sandbox scope
+    (``SandboxScope(kind='task')``) exactly like the kickoff lead and every
+    dispatched member — c81ab288 originally landed this on the dead copy."""
+    from types import SimpleNamespace
+
+    from valuz_agent.modules.tasks import resolution as res_mod
+
+    # Draft task with a plan (commit refuses empty plans).
+    _make_task(db_factory, tmp_path)
+    asyncio.run(
+        planning.plan_task(
+            task_id="t1",
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="chat",
+            subtasks=[{"key": "a", "title": "A", "agent": "x"}],
+        )
+    )
+    db = db_factory()
+    try:
+        row = db.execute(select(TaskRow).filter_by(id="t1")).scalars().one()
+        row.status = "draft"
+        db.commit()
+    finally:
+        db.close()
+
+    class _FakeWsDs:
+        def __init__(self, _db):
+            pass
+
+        async def get_by_id(self, _uid, _wid):
+            return SimpleNamespace(id="w1", kind="project", root_path=str(tmp_path), name="W1")
+
+        async def get_context(self, _uid, _wid):
+            return None
+
+    class _FakeMemberDs:
+        def __init__(self, _db):
+            pass
+
+        async def get(self, _uid, _wid, _slug):
+            return SimpleNamespace(agent_slug="lead")
+
+        async def list_by_project(self, _uid, _wid):
+            return []  # empty roster → the commit/kickoff provider pre-flight passes
+
+    created: dict = {}
+
+    async def _capture_create_session(_uid, session, scope=None):
+        created["session_id"] = session.id
+        created["scope"] = scope
+
+    monkeypatch.setattr(res_mod, "ProjectDatastore", _FakeWsDs)
+    monkeypatch.setattr(res_mod, "ProjectMemberDatastore", _FakeMemberDs)
+    monkeypatch.setattr(
+        res_mod, "fs_registry", SimpleNamespace(project_cwd=lambda *a, **k: tmp_path)
+    )
+    monkeypatch.setattr(res_mod, "_member_agent_config", _as_async(lambda *_a, **_k: None))
+    monkeypatch.setattr(
+        res_mod,
+        "build_member_session",
+        _as_async(lambda **_k: SimpleNamespace(id="lead-sess-1")),
+    )
+    monkeypatch.setattr(res_mod, "_credential_gap", _as_async(lambda *_a, **_k: None))
+    monkeypatch.setattr(res_mod, "_provider_resolver_deps", lambda _db: {})
+    monkeypatch.setattr(launcher_mod.kernel_client, "create_session", _capture_create_session)
+    monkeypatch.setattr(
+        launcher_mod,
+        "project_index",
+        SimpleNamespace(record=_as_async(lambda *_a, **_k: None)),
+    )
+
+    async def _run() -> dict:
+        orch = TaskOrchestrator()
+        monkeypatch.setattr(orch._actor, "run_actor_loop", _as_async(lambda **_k: None))
+        res = await orch.lifecycle.commit_task(
+            task_id="t1",
+            project_id="w1",
+            caller_session_id="chat",
+            user_id=OWNER,
+        )
+        await asyncio.sleep(0)  # let the spawned (stubbed) lead loop settle
+        return res
+
+    res = asyncio.run(_run())
+    assert res.get("status") == "active", res
+    assert created["session_id"] == "lead-sess-1"
+    scope = created["scope"]
+    assert scope is not None and scope.kind == "task" and scope.id == "t1"
+
+
+# ---------------------------------------------------------------------------
+# Event-trace golden — the frontend's stream contract in one test.
+#
+# Drives the full chat-plan lifecycle (draft → plan → commit → dispatch →
+# member-in-review → approve → finish) with the kernel/actor layer stubbed,
+# and pins the EXACT ordered event-type sequence plus the payload fields the
+# frontend reads (agent_name, subtask_key). Any refactor that reorders,
+# drops, renames, or de-stamps an event fails here first.
+# ---------------------------------------------------------------------------
+
+
+def test_task_lifecycle_event_trace_golden(db_factory, tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from valuz_agent.modules.tasks import lifecycle as lc_mod
+    from valuz_agent.modules.tasks import resolution as res_mod
+
+    class _FakeWsDs:
+        def __init__(self, _db):
+            pass
+
+        async def get_by_id(self, _uid, _wid):
+            return SimpleNamespace(id="w1", kind="project", root_path=str(tmp_path), name="W1")
+
+        async def get_context(self, _uid, _wid):
+            return None
+
+    class _FakeMemberDs:
+        def __init__(self, _db):
+            pass
+
+        async def get(self, _uid, _wid, _slug):
+            return SimpleNamespace(agent_slug="lead")
+
+        async def list_by_project(self, _uid, _wid):
+            return []  # empty roster → the commit/kickoff provider pre-flight passes
+
+    _next_sid = iter(["lead-sess-1", "member-sess-1"])
+
+    async def _fake_build(**_k):
+        return SimpleNamespace(id=next(_next_sid))
+
+    monkeypatch.setattr(res_mod, "ProjectDatastore", _FakeWsDs)
+    monkeypatch.setattr(res_mod, "ProjectMemberDatastore", _FakeMemberDs)
+    monkeypatch.setattr(
+        res_mod, "fs_registry", SimpleNamespace(project_cwd=lambda *a, **k: tmp_path)
+    )
+    monkeypatch.setattr(res_mod, "_member_agent_config", _as_async(lambda *_a, **_k: None))
+    monkeypatch.setattr(res_mod, "build_member_session", _fake_build)
+    monkeypatch.setattr(res_mod, "_credential_gap", _as_async(lambda *_a, **_k: None))
+    monkeypatch.setattr(res_mod, "_provider_resolver_deps", lambda _db: {})
+    monkeypatch.setattr(
+        res_mod, "resolve_agent_display_name", _as_async(lambda _w, slug, _u: f"Agent {slug}")
+    )
+    # planning resolves display names through its own imports (module-level
+    # ``from ... import``), so stub those bindings too.
+    monkeypatch.setattr(
+        planning, "resolve_agent_display_name", _as_async(lambda _w, slug, _u: f"Agent {slug}")
+    )
+    monkeypatch.setattr(
+        planning,
+        "resolve_agent_display_names",
+        _as_async(lambda _w, slugs, _u: {s: f"Agent {s}" for s in slugs}),
+    )
+    monkeypatch.setattr(
+        launcher_mod.kernel_client, "create_session", _as_async(lambda *_a, **_k: None)
+    )
+    monkeypatch.setattr(kernel_client_mod, "get_session", _as_async(lambda *_a, **_k: None))
+    monkeypatch.setattr(kernel_client_mod, "set_mode", _as_async(lambda *_a, **_k: None))
+    monkeypatch.setattr(
+        launcher_mod,
+        "project_index",
+        SimpleNamespace(record=_as_async(lambda *_a, **_k: None)),
+    )
+    # draft_task needs a project row + task file path via lifecycle namespace too.
+    import valuz_agent.modules.projects.datastore as ws_src
+
+    monkeypatch.setattr(ws_src, "ProjectDatastore", _FakeWsDs)
+    monkeypatch.setattr(
+        lc_mod,
+        "fs_registry",
+        SimpleNamespace(
+            project_cwd=lambda *a, **k: tmp_path,
+            task_path=lambda cwd, tid, slug: tmp_path / f"{tid}.md",
+        ),
+    )
+
+    from valuz_agent.modules.sessions import project_index as pi_mod
+
+    monkeypatch.setattr(pi_mod, "record", _as_async(lambda *_a, **_k: None))
+
+    async def _run() -> None:
+        orch = TaskOrchestrator()
+        monkeypatch.setattr(orch._actor, "run_actor_loop", _as_async(lambda **_k: None))
+        # session creation goes through the launcher now — same shared
+        # kernel_client module object, patched once.
+        from valuz_agent.modules.tasks.launcher import (
+            kernel_client as launch_kernel,
+        )
+
+        monkeypatch.setattr(
+            launch_kernel, "create_session", _as_async(lambda *_a, **_k: None)
+        )
+
+        # 1) draft → 2) plan → 3) commit
+        row = await orch.lifecycle.draft_task(
+            project_id="w1",
+            goal="build the thing",
+            lead_agent_slug="lead",
+            originating_session_id="chat-1",
+            user_id=OWNER,
+        )
+        task_id = row.id
+        await planning.plan_task(
+            task_id=task_id,
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="chat-1",
+            subtasks=[{"key": "a", "title": "A", "agent": "worker"}],
+        )
+        res = await orch.lifecycle.commit_task(
+            task_id=task_id, project_id="w1", caller_session_id="chat-1", user_id=OWNER
+        )
+        assert res.get("status") == "active", res
+
+        # 4) dispatch the planned node (async spawn, actor stubbed)
+        res = await orch.dispatcher.dispatch_async(
+            task_id=task_id,
+            project_id="w1",
+            lead_session_id="lead-sess-1",
+            subtask_key="a",
+            user_id=OWNER,
+        )
+        assert res.get("status") == "dispatched", res
+
+        # 5) member reports done → in_review, 6) lead approves
+        await planning.mark_in_review(
+            task_id=task_id,
+            project_id="w1",
+            member_session_id="member-sess-1",
+            user_id=OWNER,
+        )
+        res = await planning.review_subtask(
+            task_id=task_id,
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="lead-sess-1",
+            decision="approve",
+            subtask_key="a",
+        )
+        assert res.get("decision") == "approve", res
+
+        # 7) finish
+        res = await orch.finalization.finish_task(
+            task_id=task_id,
+            project_id="w1",
+            lead_session_id="lead-sess-1",
+            summary="done",
+            user_id=OWNER,
+        )
+        assert res.get("ok") is True, res
+        await asyncio.sleep(0)  # drain the stubbed actor spawn
+
+    asyncio.run(_run())
+
+    # ---- the golden: exact ordered event-type sequence ----
+    db = db_factory()
+    try:
+        rows = (
+            db.execute(select(TaskEventRow).order_by(TaskEventRow.sequence)).scalars().all()
+        )
+    finally:
+        db.close()
+    assert [e.type for e in rows] == [
+        "task_drafted",
+        "task_planned",
+        "task_plan_update",  # plan_task projects the fresh plan to the panel
+        "committed",
+        "subtask_spawned",
+        "task_plan_update",  # node → in_progress (mark_node_dispatched)
+        "task_plan_update",  # node → in_review (member idle)
+        # approve persists the plan FIRST (CAS write + snapshot), then appends
+        # the review events — an approval that loses the CAS race must not have
+        # already announced itself.
+        "task_plan_update",  # node → done (approve unlocks dependents)
+        "subtask_reviewed",
+        "subtask_completed",
+        "task_completed",
+    ], [e.type for e in rows]
+
+    # ---- payload fields the frontend reads ----
+    by_type = {}
+    for e in rows:
+        by_type.setdefault(e.type, e)
+    spawned = by_type["subtask_spawned"].payload
+    assert spawned["subtask_key"] == "a"
+    assert spawned["agent_name"] == "Agent worker"
+    completed_sub = by_type["subtask_completed"].payload
+    assert completed_sub["subtask_key"] == "a"
+    assert "agent_name" in completed_sub
+    finished = by_type["task_completed"].payload
+    assert finished["summary"] == "done" and finished["artifacts"] == []
+
+
+
+def test_task_finalized_wiring_triggers_memory_on_completed(monkeypatch) -> None:
+    """Event-first memory trigger: the scheduler subscribes to task.finalized
+    (wired at boot) and graduates ONLY real completions — stopped/blocked
+    terminals must not fire an extraction."""
+    from valuz_agent.infra.eventbus import event_bus
+    from valuz_agent.modules.memory import scheduler as sched_mod
+    from valuz_agent.modules.tasks.events import TASK_FINALIZED
+
+    sched_mod.wire_task_finalized_trigger()
+
+    notified: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        sched_mod.task_finish_scheduler,
+        "notify_finished",
+        lambda tid, uid: notified.append((tid, uid)),
+    )
+    event_bus.publish(TASK_FINALIZED, task_id="t-x", owner_user_id=OWNER, status="completed")
+    event_bus.publish(TASK_FINALIZED, task_id="t-y", owner_user_id=OWNER, status="stopped")
+    event_bus.publish(TASK_FINALIZED, task_id="t-z", owner_user_id=OWNER, status="blocked")
+    assert notified == [("t-x", OWNER)]
+
+
+# ---------------------------------------------------------------------------
+# Credential-gap dispatch: no ghost session_id + commit roster pre-flight
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_credential_gap_event_carries_no_session_id(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """A dispatch failing the credential pre-flight appends ``subtask_failed``
+    WITHOUT a session_id: the kernel session is never created on this path, so
+    an id here becomes a clickable timeline link to a session that 404s
+    ("Session not found.")."""
+    from types import SimpleNamespace
+
+    from valuz_agent.modules.tasks import resolution as res_mod
+
+    _make_task(db_factory, tmp_path)
+    asyncio.run(
+        planning.plan_task(
+            task_id="t1",
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="lead-sess",
+            subtasks=[{"key": "a", "title": "A", "agent": "worker"}],
+        )
+    )
+
+    class _FakeWsDs:
+        def __init__(self, _db):
+            pass
+
+        async def get_by_id(self, _uid, _wid):
+            return SimpleNamespace(id="w1", kind="project", root_path=str(tmp_path), name="W1")
+
+        async def get_context(self, _uid, _wid):
+            return None
+
+    gap = "agent 'worker' has no usable model provider for model 'm1' (runtime 'claude_agent')."
+
+    async def _gap(_session, agent_slug, **_k):
+        return gap if agent_slug == "worker" else None
+
+    monkeypatch.setattr(res_mod, "ProjectDatastore", _FakeWsDs)
+    monkeypatch.setattr(
+        res_mod, "fs_registry", SimpleNamespace(project_cwd=lambda *a, **k: tmp_path)
+    )
+    monkeypatch.setattr(
+        res_mod,
+        "build_member_session",
+        _as_async(lambda **_k: SimpleNamespace(id="member-sess-1")),
+    )
+    monkeypatch.setattr(res_mod, "_credential_gap", _gap)
+    monkeypatch.setattr(res_mod, "_provider_resolver_deps", lambda _db: {})
+    monkeypatch.setattr(
+        res_mod, "resolve_agent_display_name", _as_async(lambda _w, slug, _u: f"Agent {slug}")
+    )
+
+    orch = TaskOrchestrator()
+    res = asyncio.run(
+        orch.dispatcher.dispatch_async(
+            task_id="t1",
+            project_id="w1",
+            lead_session_id="lead-sess",
+            subtask_key="a",
+            user_id=OWNER,
+        )
+    )
+    assert res.get("status") == "failed", res
+    assert res.get("error") == gap
+
+    db = db_factory()
+    try:
+        rows = db.execute(select(TaskEventRow).filter_by(type="subtask_failed")).scalars().all()
+    finally:
+        db.close()
+    assert len(rows) == 1, [r.type for r in rows]
+    assert rows[0].session_id is None  # never-created session must not be linkable
+    # The human line lives in ``summary`` for EVERY subtask_failed now — this
+    # path used to be the odd one out, writing it as ``error`` while the other
+    # two wrote ``summary``, so the timeline detail differed by internal path.
+    payload = rows[0].payload or {}
+    assert payload["summary"] == gap
+    assert payload["reason"] == "dispatch_failed"
+    assert payload["subtask_key"] == "a"
+
+
+def test_commit_task_blocks_on_member_provider_preflight(db_factory, tmp_path, monkeypatch) -> None:
+    """``commit_task`` runs the roster provider pre-flight after the lead's own
+    credential check: an unconfigured member fails the commit with an
+    actionable aggregated error instead of surfacing minutes later as a
+    dispatch-time ``subtask_failed``."""
+    from types import SimpleNamespace
+
+    from valuz_agent.modules.tasks import resolution as res_mod
+
+    _make_task(db_factory, tmp_path)
+    asyncio.run(
+        planning.plan_task(
+            task_id="t1",
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="chat",
+            subtasks=[{"key": "a", "title": "A", "agent": "worker"}],
+        )
+    )
+    db = db_factory()
+    try:
+        row = db.execute(select(TaskRow).filter_by(id="t1")).scalars().one()
+        row.status = "draft"
+        db.commit()
+    finally:
+        db.close()
+
+    class _FakeWsDs:
+        def __init__(self, _db):
+            pass
+
+        async def get_by_id(self, _uid, _wid):
+            return SimpleNamespace(id="w1", kind="project", root_path=str(tmp_path), name="W1")
+
+        async def get_context(self, _uid, _wid):
+            return None
+
+    class _FakeMemberDs:
+        def __init__(self, _db):
+            pass
+
+        async def get(self, _uid, _wid, _slug):
+            return SimpleNamespace(agent_slug="lead")
+
+    member_gap = "agent 'worker' has no usable model provider for model 'm1' (runtime 'codex')."
+
+    monkeypatch.setattr(res_mod, "ProjectDatastore", _FakeWsDs)
+    monkeypatch.setattr(res_mod, "ProjectMemberDatastore", _FakeMemberDs)
+    monkeypatch.setattr(
+        res_mod, "fs_registry", SimpleNamespace(project_cwd=lambda *a, **k: tmp_path)
+    )
+    monkeypatch.setattr(res_mod, "_member_agent_config", _as_async(lambda *_a, **_k: None))
+    monkeypatch.setattr(
+        res_mod,
+        "build_member_session",
+        _as_async(lambda **_k: SimpleNamespace(id="lead-sess-1")),
+    )
+    monkeypatch.setattr(res_mod, "_credential_gap", _as_async(lambda *_a, **_k: None))
+    monkeypatch.setattr(res_mod, "_provider_resolver_deps", lambda _db: {})
+    # The sweep is the unit under test's collaborator — stub the singleton the
+    # lifecycle calls (instance attr shadows the bound method).
+    monkeypatch.setattr(
+        res_mod.task_session_resolver,
+        "preflight_member_providers",
+        _as_async(lambda _db, **_k: [member_gap]),
+    )
+
+    orch = TaskOrchestrator()
+    res = asyncio.run(
+        orch.lifecycle.commit_task(
+            task_id="t1",
+            project_id="w1",
+            caller_session_id="chat",
+            user_id=OWNER,
+        )
+    )
+    assert "error" in res, res
+    assert "model configuration check failed" in res["error"]
+    assert member_gap in res["error"]
+    # The draft must remain committable after the user fixes the provider.
+    assert _task_row(db_factory).status == "draft"
+
+
+# ---------------------------------------------------------------------------
+# notify_lead_member_idle — the member -> lead timeline event
+# ---------------------------------------------------------------------------
+
+
+def test_member_report_emits_subtask_reported_with_agent_name(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """A member finishing a round writes ``subtask_reported``, not ``subtask_message``.
+
+    The two directions shared one type (split only by ``payload.direction``)
+    until 2026-07, so the timeline could not tell "the lead said something"
+    from "a member finished a round" without reading the payload. This also
+    pins the ``agent_name`` stamp: the frontend renders it straight from the
+    payload rather than joining the slug against a racy async members list.
+    """
+    from valuz_agent.modules.tasks import coordination as coord_mod
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    _make_task(db_factory, tmp_path)
+    db = db_factory()
+    try:
+        db.add(
+            TaskSessionRow(
+                user_id=OWNER,
+                id="run-mem",
+                project_id="w1",
+                task_id="t1",
+                session_id="mem-sess",
+                agent_slug="researcher",
+                sequence=1,
+                kind="subtask",
+                status="active",
+                subtask_key="A",
+                dispatched_by="lead-sess",
+                run_dir=str(tmp_path),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    async def _fake_manifest(*_a, **_k):
+        return {"session_id": "mem-sess", "status": "idle", "summary": "did the thing"}
+
+    async def _fake_name(_ws, slug, _uid):
+        return f"Name of {slug}"
+
+    monkeypatch.setattr(manifest_mod, "collect_manifest", _fake_manifest)
+    monkeypatch.setattr(coord_mod, "resolve_agent_display_name", _fake_name)
+
+    orch = TaskOrchestrator()
+    asyncio.run(orch.coordination.notify_lead_member_idle("mem-sess", "idle", user_id=OWNER))
+
+    assert "subtask_reported" in _events(db_factory)
+    assert "subtask_message" not in _events(db_factory)
+    payload = _event_payload(db_factory, "subtask_reported")
+    assert payload["agent_name"] == "Name of researcher"
+    assert payload["summary"] == "did the thing"
+    assert payload["status"] == "idle"
+
+
+def test_review_subtask_rejects_when_task_vanishes_between_phases(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """``review_subtask`` reads in TWO units of work — guard both.
+
+    Phase 1 resolves the node on a read-only UoW; phase 2 re-reads on a
+    writable one. Only phase 1 checked for a missing task, so a task deleted in
+    between crashed phase 2 with AttributeError on ``None.plan`` (a 500 out of
+    the tool) instead of returning the same actionable "not found".
+    """
+    _make_task(db_factory, tmp_path)
+    asyncio.run(
+        planning.plan_task(
+            task_id="t1",
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="lead-sess",
+            subtasks=[{"key": "a", "title": "A", "agent": "x"}],
+        )
+    )
+
+    # Delete the task after phase 1 has resolved the node: patch the datastore
+    # read so the SECOND call (phase 2) reports the row gone.
+    calls = {"n": 0}
+    real = planning.TaskDatastore.get_task_by_project
+
+    async def _vanish_after_first(self, user_id, project_id, task_id):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] > 1:
+            return None
+        return await real(self, user_id, project_id, task_id)
+
+    monkeypatch.setattr(
+        planning.TaskDatastore, "get_task_by_project", _vanish_after_first
+    )
+
+    res = asyncio.run(
+        planning.review_subtask(
+            task_id="t1",
+            project_id="w1",
+            lead_session_id="lead-sess",
+            decision="approve",
+            subtask_key="a",
+            user_id=OWNER,
+        )
+    )
+    assert "not found" in res["error"]
+
+
+def test_list_tasks_counts_every_settled_run_as_done(db_factory, tmp_path) -> None:
+    """``runs_done`` must count archived/rejected runs, not a status that
+    doesn't exist.
+
+    The run status enum is active | paused | completed | rejected | archived.
+    This counted ``("completed", "failed")`` — and ``failed`` is not one of
+    them — so an errored run (archived) or a user-stopped one (rejected) never
+    counted, and the progress reported to the agent read low forever.
+    """
+    from valuz_agent.modules.tasks import service as queries
+
+    _make_task(db_factory, tmp_path)
+    db = db_factory()
+    try:
+        for i, status in enumerate(
+            ["completed", "archived", "rejected", "active"], start=1
+        ):
+            db.add(
+                TaskSessionRow(
+                    user_id=OWNER,
+                    id=f"run-{i}",
+                    project_id="w1",
+                    task_id="t1",
+                    session_id=f"s-{i}",
+                    agent_slug="x",
+                    sequence=i,
+                    kind="subtask",
+                    status=status,
+                    subtask_key=f"k{i}",
+                )
+            )
+        db.commit()
+    finally:
+        db.close()
+
+    rows = asyncio.run(queries.list_tasks("w1", user_id=OWNER))
+    assert rows[0]["runs"] == 4
+    # completed + archived + rejected are settled; only the active one isn't.
+    assert rows[0]["runs_done"] == 3
+
+
+def test_plan_update_payload_is_a_self_contained_snapshot(db_factory, tmp_path) -> None:
+    """``task_plan_update`` must carry everything a consumer renders from it.
+
+    Regression for a silent contract drift: the backend emitted
+    ``{"subtasks": ...}`` alone while ``PlanCardFeed`` read four keys off the
+    payload and guarded with
+
+        if ((payload.plan_version ?? 0) <= card.planVersion) return
+
+    With the version missing, every event evaluated ``0 <= n`` and was
+    DISCARDED — the live plan feed only ever updated from its initial fetch,
+    and nothing moved on screen as the plan progressed. Nothing failed; it just
+    quietly stopped working.
+
+    These events go out over SSE, where a consumer cannot assume it saw the
+    previous one, so the payload has to stand alone. Lock the shape.
+    """
+    _make_task(db_factory, tmp_path)
+    asyncio.run(
+        planning.plan_task(
+            task_id="t1",
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="lead-sess",
+            subtasks=[{"key": "a", "title": "A", "agent": "x"}],
+        )
+    )
+    payload = _event_payload(db_factory, "task_plan_update")
+
+    assert set(payload) == {
+        "subtasks",
+        "plan_version",
+        "structural",
+        "task_status",
+        "title",
+    }
+    assert payload["plan_version"] == 1, "the CAS token is the consumer's dedup key"
+    assert payload["structural"] is True, "plan_task re-specifies the plan document"
+    assert payload["task_status"] == "active"
+    assert payload["title"] == "T"
+    # Nodes carry the resolved display name so the panel never has to join the
+    # slug against an async members list.
+    assert payload["subtasks"][0]["key"] == "a"
+    assert "agent_name" in payload["subtasks"][0]
+
+
+def test_plan_update_version_advances_with_every_plan_write(db_factory, tmp_path) -> None:
+    """Consecutive snapshots must be distinguishable, or the consumer's
+    ``version <= seen`` guard drops the newer one."""
+    _make_task(db_factory, tmp_path)
+    asyncio.run(
+        planning.plan_task(
+            task_id="t1",
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="lead-sess",
+            subtasks=[{"key": "a", "title": "A", "agent": "x"}],
+        )
+    )
+    asyncio.run(
+        planning.modify_plan(
+            task_id="t1",
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="lead-sess",
+            add=[{"key": "b", "title": "B", "agent": "x"}],
+        )
+    )
+    db = db_factory()
+    try:
+        versions = [
+            (e.payload or {}).get("plan_version")
+            for e in db.query(TaskEventRow)
+            .filter_by(type="task_plan_update")
+            .order_by(TaskEventRow.sequence)
+            .all()
+        ]
+    finally:
+        db.close()
+    assert versions == [1, 2]
+
+
+def test_every_subtask_failure_path_writes_the_same_payload_shape(
+    db_factory, tmp_path
+) -> None:
+    """One event type, one shape — whichever internal path detected the failure.
+
+    ``subtask_failed`` used to be emitted from three places with three
+    different payloads: the heartbeat backstop wrote {agent_name, subtask_key,
+    status, summary, reason}, dispatch wrote {agent, agent_name, status, error}
+    with no key and no summary, and the actor-loop finalize spread a whole
+    manifest. The timeline renderer falls back to a ``text|summary|goal|error``
+    lookup for this type, so the detail a user saw depended on which code path
+    had failed — and no consumer could rely on any field being present.
+    """
+    from valuz_agent.infra.db import async_unit_of_work
+    from valuz_agent.modules.tasks.datastore import TaskEventDatastore
+    from valuz_agent.modules.tasks.events import record_subtask_failed
+
+    _make_task(db_factory, tmp_path)
+
+    async def _emit(reason: str) -> None:
+        async with async_unit_of_work() as db:
+            await record_subtask_failed(
+                TaskEventDatastore(db),
+                user_id=OWNER,
+                project_id="w1",
+                task_id="t1",
+                session_id="s-1",
+                agent_slug="coder",
+                agent_name="Coder",
+                subtask_key="a",
+                summary="it broke",
+                reason=reason,
+            )
+
+    for reason in ("dispatch_failed", "heartbeat_detected", "run_error"):
+        asyncio.run(_emit(reason))
+
+    db = db_factory()
+    try:
+        rows = (
+            db.execute(select(TaskEventRow).filter_by(type="subtask_failed"))
+            .scalars()
+            .all()
+        )
+    finally:
+        db.close()
+
+    assert len(rows) == 3
+    expected_keys = {
+        "agent",
+        "agent_name",
+        "subtask_key",
+        "status",
+        "summary",
+        "reason",
+        "artifacts",
+    }
+    for row in rows:
+        assert set(row.payload) == expected_keys, "every path must fill every key"
+        assert row.payload["status"] == "failed"
+    # Only the machine-readable cause differs between paths.
+    assert {r.payload["reason"] for r in rows} == {
+        "dispatch_failed",
+        "heartbeat_detected",
+        "run_error",
+    }
+
+
+def test_finalize_actor_skips_parked_member_run(db_factory, tmp_path, monkeypatch) -> None:
+    """stop_task parked this run (→paused) while its member sat idle; the
+    member's shutdown loop-exit must NOT stamp it completed. Recovery only
+    resumes active/paused runs, so the overwrite makes the session invisible
+    on resume and the node is re-dispatched as a brand-new session — session
+    continuity and record truth both lost."""
+    from valuz_agent.modules.sessions import run_orchestrator as run_orch
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    _make_task(db_factory, tmp_path)
+    _make_member_run(db_factory)
+    db = db_factory()
+    try:
+        db.query(TaskSessionRow).filter_by(session_id="mem-1").update({"status": "paused"})
+        db.commit()
+    finally:
+        db.close()
+
+    async def _noop(*_a: object, **_k: object) -> None: ...
+
+    async def _manifest(*_a: object, **_k: object) -> dict[str, str]:
+        return {"session_id": "mem-1", "status": "idle", "summary": ""}
+
+    monkeypatch.setattr(run_orch, "_finalize_session", _noop)
+    monkeypatch.setattr(manifest_mod, "collect_manifest", _manifest)
+
+    orch = TaskOrchestrator()
+    asyncio.run(
+        orch.finalization.finalize_actor(
+            session_id="mem-1",
+            last_content="",
+            final_status="idle",
+            role="subtask",
+            task_id="t1",
+            project_id="w1",
+            via_shutdown=True,
+            user_id=OWNER,
+        )
+    )
+
+    db = db_factory()
+    try:
+        run = db.query(TaskSessionRow).filter_by(session_id="mem-1").one()
+        assert run.status == "paused", "a parked run must survive the loop exit untouched"
+        assert run.ended_at is None
+    finally:
+        db.close()
+
+
+def test_stop_member_parks_the_run_the_member_reads(db_factory, tmp_path) -> None:
+    """The kernel interrupt only reaches a member MID-TURN. An idle member
+    (parked on its mailbox between turns) must still exit immediately on
+    stop_member — without the shutdown message it sat out its full 10-minute
+    idle TTL after the user already cancelled it."""
+    from valuz_agent.modules.tasks import mailbox_store
+
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    orch = TaskOrchestrator()
+
+    async def _fake_interrupt(sid: str, user_id: str | None = None) -> None: ...
+
+    orch._recovery._interrupt_kernel_session = _fake_interrupt  # type: ignore[method-assign]
+    try:
+        assert asyncio.run(orch.recovery.stop_member("sB", user_id=OWNER)) is True
+        # The member learns it was cancelled from its OWN run row, which this
+        # call parks. A queued message could only have reached it while its
+        # loop happened to share this process — which is why the stop that
+        # ends a member was the one least able to cross one.
+        assert not asyncio.run(mailbox_store.has_pending("sB")), "a stop is not a message"
+        assert _runs(db_factory)["sB"] == "rejected", (
+            "and the fact it reads must be written before we return"
+        )
+    finally:
+        pass
+
+
+def test_review_refuses_never_dispatched_node(db_factory, tmp_path) -> None:
+    """Approving a ``planned`` node would skip its work entirely — the
+    transition table refuses planned → done and the lead gets an actionable
+    error instead of a silently 'done' node."""
+    _make_task(db_factory, tmp_path)
+    asyncio.run(
+        planning.plan_task(
+            task_id="t1",
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="lead",
+            subtasks=[{"key": "a", "title": "A", "agent": "x"}],
+        )
+    )
+    res = asyncio.run(
+        planning.review_subtask(
+            task_id="t1",
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="lead",
+            decision="approve",
+            subtask_key="a",
+        )
+    )
+    assert "error" in res and "illegal subtask transition" in res["error"]
+    from valuz_agent.modules.tasks.plan import TaskPlan
+
+    db = db_factory()
+    try:
+        node = TaskPlan.from_dict(db.query(TaskRow).filter_by(id="t1").one().plan).get("a")
+        assert node is not None and node.status == "planned"
+    finally:
+        db.close()
+
+
+def test_review_refuses_halted_task(db_factory, tmp_path) -> None:
+    """A paused/stopped task's plan must not move under review — same
+    writable-status rationale as plan_commands."""
+    _make_task(db_factory, tmp_path)
+    asyncio.run(
+        planning.plan_task(
+            task_id="t1",
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="lead",
+            subtasks=[{"key": "a", "title": "A", "agent": "x", "status": "in_review"}],
+        )
+    )
+    db = db_factory()
+    try:
+        db.query(TaskRow).filter_by(id="t1").update({"status": "paused"})
+        db.commit()
+    finally:
+        db.close()
+    res = asyncio.run(
+        planning.review_subtask(
+            task_id="t1",
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="lead",
+            decision="approve",
+            subtask_key="a",
+        )
+    )
+    assert "error" in res and "review applies to an active task" in res["error"]
+
+
+def test_modify_plan_cannot_stamp_failed(db_factory, tmp_path) -> None:
+    """``failed`` is not in the unresolved set, so a failed-stamped node passes
+    the finish_task(completed) guard — planned work skipped by relabeling.
+    The table makes it unwritable through every door, modify_plan included."""
+    _make_task(db_factory, tmp_path)
+    asyncio.run(
+        planning.plan_task(
+            task_id="t1",
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="lead",
+            subtasks=[{"key": "a", "title": "A", "agent": "x"}],
+        )
+    )
+    res = asyncio.run(
+        planning.modify_plan(
+            task_id="t1",
+            project_id="w1",
+            user_id=OWNER,
+            lead_session_id="lead",
+            update=[{"key": "a", "status": "failed"}],
+        )
+    )
+    assert "error" in res and "illegal subtask transition" in res["error"]
+
+
+def test_recover_crashed_members_resolves_pending_from_the_store(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """The between-turns backstop, end to end against the real store.
+
+    This is the half that was missing. `_heartbeat_pending` only ever ran while
+    the lead sat INSIDE `await_members`; parked on its mailbox between turns it
+    consulted nothing. So a `member_done` posted into another process's queue —
+    which is what happens whenever `dispatch` lands on a different host process
+    than the lead loop — was simply never seen, the lead slept out its whole
+    idle TTL, and auto-finalize blocked the task for "unresolved subtasks" with
+    every member already finished.
+
+    Here the mailbox is not involved at all: the plan says `in_progress`, the
+    kernel says the session is done, and the lead must learn it from the store.
+    """
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(
+        db_factory,
+        tmp_path,
+        members=[("B", "frontend", "sB", "in_progress"), ("C", "qa", "sC", "in_progress")],
+    )
+    sessions = {
+        "sB": SimpleNamespace(status="idle", stop_reason={"type": "end_turn"}),
+        "sC": SimpleNamespace(status="running", stop_reason=None),
+    }
+    monkeypatch.setattr(
+        kernel_client_mod, "get_session", _as_async(lambda _uid, sid: sessions.get(sid))
+    )
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    monkeypatch.setattr(
+        manifest_mod,
+        "collect_manifest",
+        _as_async(lambda *a, **k: {"status": "completed", "summary": "ok"}),
+    )
+    orch = TaskOrchestrator()
+
+    recovered = asyncio.run(
+        orch.coordination.recover_crashed_members(
+            task_id="t1", project_id="w1", user_id=OWNER
+        )
+    )
+    assert recovered == 1, "one member had died; the other is still running"
+
+    # It ENQUEUES rather than returning a batch, so the result travels the same
+    # path as every other message and there is nothing for a caller to park.
+    msgs = asyncio.run(mailbox_store.drain("lead-s", limit=10))
+    assert [m.kind for m in msgs] == ["member_done"]
+    assert msgs[0].from_session == "sB"
+    assert msgs[0].payload["status"] == "completed"
+    # The one still running is left alone — a backstop must not invent results.
+    assert all(m.from_session != "sC" for m in msgs)
+
+
+def test_recover_crashed_members_is_quiet_when_nothing_is_pending(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """A lead parked with no in-flight member must not pay for a kernel probe."""
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(
+        db_factory, tmp_path, members=[("B", "frontend", "sB", "done")]
+    )
+    probes: list[str] = []
+
+    async def _get_session(_uid, sid):
+        probes.append(sid)
+        return SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+
+    monkeypatch.setattr(kernel_client_mod, "get_session", _get_session)
+    orch = TaskOrchestrator()
+
+    msgs = asyncio.run(
+        orch.coordination.recover_crashed_members(
+            task_id="t1", project_id="w1", user_id=OWNER
+        )
+    )
+    assert msgs == []
+    assert probes == []
+
+
+# ---------------------------------------------------------------------------
+# Duplicate member_done: the wasted-turn bug measured on qa.
+# ---------------------------------------------------------------------------
+
+
+def test_member_already_settled_says_yes_for_a_reviewed_member(
+    db_factory, tmp_path
+) -> None:
+    """A member the lead already approved must not earn another turn.
+
+    This is the qa case: the in-turn backstop synthesized the result while the
+    member was still collecting its manifest, the lead reviewed and moved on,
+    and the real ``member_done`` then arrived to wake it for work already done.
+    """
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "done")])
+    orch = TaskOrchestrator()
+    assert asyncio.run(
+        orch.coordination.member_already_settled(
+            task_id="t1", project_id="w1", member_session_id="sB", user_id=OWNER
+        )
+    )
+
+
+def test_member_awaiting_review_is_not_settled(db_factory, tmp_path) -> None:
+    """``in_review`` still owes the lead a review — waking it is the point."""
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_review")])
+    orch = TaskOrchestrator()
+    assert not asyncio.run(
+        orch.coordination.member_already_settled(
+            task_id="t1", project_id="w1", member_session_id="sB", user_id=OWNER
+        )
+    )
+
+
+def test_a_finished_task_settles_every_member(db_factory, tmp_path) -> None:
+    """Both wasted turns on qa landed AFTER ``task_completed``.
+
+    ``finish_task``'s shutdown was queued behind the stale results, and the
+    mailbox is FIFO, so the loop burned a turn on each before reading it.
+    """
+    _seed_lead_and_members(
+        db_factory, tmp_path, members=[("B", "frontend", "sB", "in_review")],
+        task_status="completed",
+    )
+    orch = TaskOrchestrator()
+    assert asyncio.run(
+        orch.coordination.member_already_settled(
+            task_id="t1", project_id="w1", member_session_id="sB", user_id=OWNER
+        )
+    )
+
+
+def test_an_unknown_member_is_never_swallowed(db_factory, tmp_path) -> None:
+    """No run row → surface it. Dropping is the dangerous direction here."""
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    orch = TaskOrchestrator()
+    assert not asyncio.run(
+        orch.coordination.member_already_settled(
+            task_id="t1", project_id="w1", member_session_id="who-dis", user_id=OWNER
+        )
+    )
+
+
+def test_the_backstop_does_not_settle_a_member_it_just_saw_stop(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """The backstop must not race the member's own report.
+
+    It reads durable state, so it sees a member as finished the moment its
+    kernel session goes terminal — while that member is still inside
+    ``notify_lead_member_idle`` collecting a manifest off the filesystem.
+    Synthesizing there strands the real ``member_done`` in a mailbox nobody
+    drains, and hands the lead a worse result: measured in production, the
+    backstop's manifest carried 29 and 31 artifacts, including files written on
+    three earlier days and the other members' output.
+
+    So it OBSERVES on the first pass and may only SETTLE on a later one.
+    """
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    monkeypatch.setattr(
+        kernel_client_mod,
+        "get_session",
+        _as_async(
+            lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+        ),
+    )
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    monkeypatch.setattr(
+        manifest_mod, "collect_manifest",
+        _as_async(lambda *a, **k: {"status": "completed", "summary": "ok"}),
+    )
+    monkeypatch.setattr("valuz_agent.modules.tasks.coordination._HEARTBEAT_S", 0.01)
+
+    orch = TaskOrchestrator()
+    settled: list[str] = []
+    real = member_probe.heartbeat_pending
+
+    async def _watching(**kw):
+        outcome = await real(**kw)
+        settled.extend(outcome.settled)
+        return outcome
+
+    monkeypatch.setattr(member_probe, "heartbeat_pending", _watching)
+
+    # A window of exactly one pass: it may look, it may not act.
+    asyncio.run(
+        orch.coordination.await_member_results(
+            lead_session_id="lead-s", project_id="w1", task_id="t1",
+            timeout_s=0.01, user_id=OWNER,
+        )
+    )
+    assert settled == [], "the first pass that sees a member stop belongs to its own report"
+    assert _runs(db_factory)["sB"] == "active", "and nothing may be written for it yet"
+
+
+def test_recovery_attributes_only_what_the_member_wrote(db_factory, tmp_path, monkeypatch) -> None:
+    """The reconcile path bounds artifacts by the member's own run row too.
+
+    It was the last of the four manifest call sites written without
+    ``since_epoch``, and the one the watchdog reaches when it adopts an
+    orphaned task — so the fix that made adoption common also made this bug
+    common. Observed on qa: two members handed the same 56-file manifest,
+    including reports written three and five days before the task existed.
+    """
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    monkeypatch.setattr(
+        kernel_client_mod,
+        "get_session",
+        _as_async(
+            lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+        ),
+    )
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    seen: dict[str, float] = {}
+
+    async def _capture(_sid, _run_dir, _status, *, since_epoch, **_kw):
+        seen["since_epoch"] = since_epoch
+        return {"status": "completed", "summary": "ok", "artifacts": []}
+
+    monkeypatch.setattr(manifest_mod, "collect_manifest", _capture)
+
+    orch = TaskOrchestrator()
+
+    async def _noop(*_a, **_kw) -> None: ...
+
+    monkeypatch.setattr(orch._recovery, "_interrupt_kernel_session", _noop)
+    monkeypatch.setattr(orch._actor, "run_actor_loop", _noop)
+
+    asyncio.run(orch.recovery.adopt_orphaned_task("t1", "w1", OWNER))
+
+    run_created_ms = next(
+        r.created_at
+        for r in db_factory().query(TaskSessionRow).filter_by(task_id="t1", session_id="sB")
+    )
+    assert seen.get("since_epoch") == pytest.approx(run_created_ms / 1000.0), (
+        "recovery must bound artifacts by the member's own run row, not by 0 — "
+        f"got {seen.get('since_epoch')!r}"
+    )
+
+
+def test_manifest_collection_refuses_to_guess_the_attribution_window() -> None:
+    """``since_epoch`` must stay required — a default is how this keeps happening.
+
+    It defaulted to ``0.0``, meaning "every file under run_dir belongs to this
+    member". Under a shared project cwd that is never true, and THREE of the
+    four call sites were written without it over time — each found separately,
+    months apart, each after it had already written wrong data. An omission
+    that is indistinguishable from a deliberate "attribute everything" cannot
+    have a default; the signature is the only thing that catches the fourth.
+    """
+    import inspect
+
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    for fn in (manifest_mod.collect_manifest, manifest_mod.collect_manifest_safe):
+        param = inspect.signature(fn).parameters["since_epoch"]
+        assert param.default is inspect.Parameter.empty, (
+            f"{fn.__name__} grew a default attribution window — a caller that "
+            "forgets it silently claims the whole directory"
+        )
+
+
+def test_the_backstop_attributes_only_what_the_member_wrote(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """The backstop must bound artifacts by the member's own run row.
+
+    Under a shared project cwd, artifacts are attributed by mtime, and
+    ``since_epoch=0`` means "every file here is yours". The delivery path has
+    always passed the member's dispatch time; this path omitted it, and it is
+    the path that usually wins the race — so the wrong manifest was the common
+    one. Production, one task: two members came back with 29 and 31 artifacts,
+    including reports written on three earlier days and each other's output.
+    """
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    monkeypatch.setattr(
+        kernel_client_mod,
+        "get_session",
+        _as_async(
+            lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+        ),
+    )
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    seen: dict[str, float] = {}
+
+    async def _capture(_sid, _run_dir, _status, *, since_epoch=0.0, **_kw):
+        seen["since_epoch"] = since_epoch
+        return {"status": "completed", "summary": "ok", "artifacts": []}
+
+    monkeypatch.setattr(manifest_mod, "collect_manifest", _capture)
+
+    asyncio.run(
+        member_probe.heartbeat_pending(
+            task_id="t1", project_id="w1", pending_keys={"B"}, user_id=OWNER
+        )
+    )
+
+    run_created_ms = next(
+        r.created_at
+        for r in db_factory().query(TaskSessionRow).filter_by(task_id="t1", session_id="sB")
+    )
+    assert seen.get("since_epoch") == pytest.approx(run_created_ms / 1000.0), (
+        "artifacts must be bounded by the member's own run row, not by 0 — "
+        f"got {seen.get('since_epoch')!r}"
+    )
+
+
+def test_the_grace_is_per_member_not_per_wait(db_factory, tmp_path, monkeypatch) -> None:
+    """A lead already deep in a wait must still give a NEW member its grace.
+
+    This is the one the old spelling got wrong, and it is the common case. The
+    grace used to be "the first slice of this ``await_members`` call", so a lead
+    that dispatched three members and waited three minutes had burned it ~25
+    slices before the first member even finished — and the backstop then won
+    every race. Production, 3 members: 2 were settled by the backstop 1.7s and
+    2.6s after finishing, their own reports arriving later and being dropped as
+    duplicates.
+
+    Here ``B`` is already finished (so passes accumulate against it) while ``C``
+    only stops later. ``C`` must still get a pass of grace of its own.
+    """
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(
+        db_factory,
+        tmp_path,
+        members=[("B", "frontend", "sB", "in_progress"), ("C", "qa", "sC", "in_progress")],
+    )
+    stopped: set[str] = {"sB"}  # B is done from the start; C stops on demand
+
+    def _session(_uid, sid):
+        if sid in stopped:
+            return SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+        return SimpleNamespace(status="running", stop_reason=None)
+
+    monkeypatch.setattr(kernel_client_mod, "get_session", _as_async(_session))
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    monkeypatch.setattr(
+        manifest_mod, "collect_manifest",
+        _as_async(lambda *a, **k: {"status": "completed", "summary": "ok"}),
+    )
+
+    passes = 0
+    real = member_probe.heartbeat_pending
+    settled_when: dict[str, int] = {}
+
+    async def _watching(**kw):
+        nonlocal passes
+        passes += 1
+        if passes == 3:
+            stopped.add("sC")  # C finishes deep into the wait
+        outcome = await real(**kw)
+        for key in outcome.settled:
+            settled_when.setdefault(key, passes)
+        return outcome
+
+    monkeypatch.setattr(member_probe, "heartbeat_pending", _watching)
+    monkeypatch.setattr("valuz_agent.modules.tasks.coordination._HEARTBEAT_S", 0.01)
+
+    orch = TaskOrchestrator()
+    asyncio.run(
+        orch.coordination.await_member_results(
+            lead_session_id="lead-s", project_id="w1", task_id="t1",
+            mode="all", timeout_s=0.4, user_id=OWNER,
+        )
+    )
+
+    assert settled_when.get("B") == 2, (
+        f"B stopped before pass 1, so it is settled on pass 2 (got {settled_when})"
+    )
+    assert settled_when.get("C", 0) >= 4, (
+        "C only stopped during pass 3, so pass 3 may observe it and pass 4 settle it — "
+        f"a wait already 3 passes deep must not skip C's grace (got {settled_when})"
+    )
+
+
+def test_the_backstop_still_fires_for_a_member_that_never_delivers(
+    db_factory, tmp_path, monkeypatch
+) -> None:
+    """The grace above must not turn the backstop off — only make it second."""
+    from types import SimpleNamespace
+
+    _seed_lead_and_members(db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")])
+    monkeypatch.setattr(
+        kernel_client_mod,
+        "get_session",
+        _as_async(
+            lambda _uid, sid: SimpleNamespace(status="idle", stop_reason={"type": "end_turn"})
+        ),
+    )
+    from valuz_agent.modules.tasks import manifest as manifest_mod
+
+    monkeypatch.setattr(
+        manifest_mod, "collect_manifest",
+        _as_async(lambda *a, **k: {"status": "completed", "summary": "ok"}),
+    )
+    monkeypatch.setattr("valuz_agent.modules.tasks.coordination._HEARTBEAT_S", 0.01)
+
+    orch = TaskOrchestrator()
+    out = asyncio.run(
+        orch.coordination.await_member_results(
+            lead_session_id="lead-s2", project_id="w1", task_id="t1",
+            timeout_s=0.06, user_id=OWNER,
+        )
+    )
+    assert out.get("collected"), "a member that never delivers must still be caught"
+
+
+def test_finish_task_parks_members_that_are_still_running(db_factory, tmp_path) -> None:
+    """A task cannot end while leaving its members running.
+
+    A member reads its OWN run row to know it was stopped, and finish_task
+    settles only the lead's. Without parking them here,
+    ``finish_task(stopped, force=True)`` — the one path that deliberately ends
+    a task while members are live — would leave every one of them running
+    until its idle TTL.
+
+    It used to queue a ``shutdown`` per member, which reached only the ones
+    whose loops shared the process that ran finish_task.
+    """
+    _seed_lead_and_members(
+        db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")]
+    )
+    orch = TaskOrchestrator()
+
+    assert _runs(db_factory)["sB"] == "active", "precondition: the member is running"
+
+    asyncio.run(
+        orch.finalization.finish_task(
+            task_id="t1",
+            project_id="w1",
+            lead_session_id="lead-s",
+            summary="done enough",
+            status="stopped",
+            force=True,
+            user_id=OWNER,
+        )
+    )
+
+    assert _runs(db_factory)["sB"] == "paused", (
+        "the member must be able to read that it was stopped — it has no other "
+        "way to find out"
+    )
+
+
+def test_stop_task_parks_the_lead_run_as_well(db_factory, tmp_path) -> None:
+    """A stopped task must not leave a run row claiming its lead is alive.
+
+    The lead's loop leaves through the externally-managed exit, which skips
+    finalize by design — the terminal state belongs to whoever stopped it — so
+    nothing else ever settles this row. Observed on qa: a task `stopped` for
+    twelve minutes, its lease correctly released, its lead run still `active`.
+    Anything reading the run index for liveness rather than the lease saw a
+    runner that had long since gone.
+    """
+    _seed_lead_and_members(
+        db_factory, tmp_path, members=[("B", "frontend", "sB", "in_progress")]
+    )
+    orch = TaskOrchestrator()
+
+    async def _no_interrupt(_sid: str, user_id: str | None = None) -> None: ...
+
+    orch._recovery._interrupt_kernel_session = _no_interrupt  # type: ignore[method-assign]
+    assert asyncio.run(orch.recovery.stop_task("t1", "w1", user_id=OWNER)) is True
+
+    runs = _runs(db_factory)
+    assert runs["sB"] == "paused", "members were already parked"
+    assert runs["lead-s"] == "paused", (
+        "and the lead must be too — nothing else will ever settle it"
+    )

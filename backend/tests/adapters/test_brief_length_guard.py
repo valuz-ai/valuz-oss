@@ -189,5 +189,24 @@ def test_spill_subtask_pointer_wording(monkeypatch, tmp_path) -> None:
     out = spill_goal_brief_if_too_long(
         "子任务说明", run_dir=tmp_path, task_id="t9", label="member-a-k1", is_lead=False
     )
-    assert "子任务" in out
+    # Locale-agnostic: the pointer BECOMES the goal condition, so it is
+    # localized (t("task.brief.goalSpilled*")). What must hold in every
+    # language is that the member variant says "subtask", not "task", and
+    # that it points at the spilled doc.
+    from valuz_agent.i18n import t
+
+    assert out == t(
+        "task.brief.goalSpilledMember",
+        params={
+            "budget": str(GOAL_BRIEF_MAX_TOKENS),
+            "path": str(tmp_path / "tasks" / "_briefs" / "t9-member-a-k1.md"),
+        },
+    )
+    assert out != t(
+        "task.brief.goalSpilledLead",
+        params={
+            "budget": str(GOAL_BRIEF_MAX_TOKENS),
+            "path": str(tmp_path / "tasks" / "_briefs" / "t9-member-a-k1.md"),
+        },
+    ), "the member pointer must not read as the whole task's goal"
     assert (tmp_path / "tasks" / "_briefs" / "t9-member-a-k1.md").exists()

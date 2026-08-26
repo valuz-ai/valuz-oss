@@ -1,0 +1,156 @@
+.va2-metric,
+.va2-metric-group,
+.va2-data-panel,
+.va2-description-list,
+.va2-timeline,
+.va2-diff,
+.va2-sources,
+.va2-sync-group {
+  min-width: 0;
+}
+
+.va2-metric {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--va2-border);
+  border-radius: var(--va2-radius-lg);
+  background: var(--va2-bg);
+  color: inherit;
+  text-decoration: none;
+}
+.va2-metric[data-linked="true"] { cursor: pointer; transition: border-color 120ms ease, box-shadow 120ms ease; }
+.va2-metric[data-linked="true"]:hover { border-color: var(--va2-brand); box-shadow: 0 0 0 2px var(--va2-brand-soft); }
+.va2-metric__label { color: var(--va2-text-muted); font-size: 12px; }
+.va2-metric__value { color: var(--va2-text); font-size: 22px; line-height: 1.25; letter-spacing: -0.02em; }
+.va2-metric__delta { color: var(--va2-text-body); font-size: 12px; font-weight: 600; }
+.va2-metric[data-trend="up"] .va2-metric__delta { color: var(--va2-success-text); }
+.va2-metric[data-trend="down"] .va2-metric__delta { color: var(--va2-danger-text); }
+.va2-metric small { color: var(--va2-text-muted); font-size: 11px; }
+
+.va2-metric-group > header,
+.va2-data-panel > header { margin-bottom: 12px; }
+.va2-metric-group h3,
+.va2-data-panel h3,
+.va2-description-list h3,
+.va2-timeline h3,
+.va2-diff h3,
+.va2-sources h3,
+.va2-sync-group h3 { margin: 0; color: var(--va2-text); font-size: 14px; font-weight: 650; }
+.va2-metric-group header p,
+.va2-data-panel header p { margin: 2px 0 0; color: var(--va2-text-muted); font-size: 12px; }
+.va2-metric-group > div { display: grid; gap: 8px; }
+
+.va2-data-table-wrap { overflow: auto; border: 1px solid var(--va2-border); border-radius: var(--va2-radius-lg); background: var(--va2-bg); }
+.va2-data-table,
+.va2-matrix { width: 100%; border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums; }
+.va2-data-table th,
+.va2-data-table td,
+.va2-matrix th,
+.va2-matrix td { padding: 10px 12px; border-bottom: 1px solid var(--va2-border); color: var(--va2-text-body); font-size: 12px; text-align: left; white-space: nowrap; }
+.va2-data-table[data-density="compact"] th,
+.va2-data-table[data-density="compact"] td { padding-block: 7px; }
+.va2-data-table th,
+.va2-matrix th { background: var(--va2-bg-soft); color: var(--va2-text-muted); font-size: 11px; font-weight: 600; }
+.va2-data-table[data-sticky="true"] th { position: sticky; z-index: 1; top: 0; }
+.va2-data-table tr:last-child td,
+.va2-matrix tr:last-child td { border-bottom: 0; }
+.va2-data-table [data-align="right"] { text-align: right; }
+.va2-data-table [data-align="center"] { text-align: center; }
+.va2-data-table tr[data-highlight="true"] td { background: var(--va2-brand-soft); color: var(--va2-text); font-weight: 600; }
+.va2-data-table td[data-trend="up"] { color: var(--va2-success-text); }
+.va2-data-table td[data-trend="down"] { color: var(--va2-danger-text); }
+.va2-entity-link { color: var(--va2-brand-text); font-weight: 600; text-decoration: none; }
+.va2-entity-link:hover { text-decoration: underline; text-underline-offset: 2px; }
+.va2-matrix td:not([data-label="true"]) { background: color-mix(in oklab, var(--va2-chart-actual) calc(var(--va2-intensity) * 44%), var(--va2-bg)); color: var(--va2-text); text-align: center; }
+.va2-matrix td[data-label="true"] { color: var(--va2-text); font-weight: 600; }
+
+.va2-description-list > dl { display: grid; gap: 8px; margin: 10px 0 0; }
+.va2-description-list dl > div { display: grid; gap: 2px; padding: 12px 14px; border: 1px solid var(--va2-border); border-radius: var(--va2-radius-lg); }
+.va2-description-list dt { color: var(--va2-text-muted); font-size: 11px; }
+.va2-description-list dd { margin: 0; color: var(--va2-text); font-size: 14px; font-weight: 650; }
+.va2-description-list small { color: var(--va2-text-body); font-size: 11px; }
+
+.va2-timeline ol { margin: 10px 0 0; padding: 0; list-style: none; }
+.va2-timeline li { position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 10px; padding-bottom: 16px; }
+.va2-timeline li:not(:last-child)::before { position: absolute; top: 13px; bottom: -2px; left: 5px; width: 1px; background: var(--va2-border-strong); content: ""; }
+.va2-timeline__marker { z-index: 1; width: 11px; height: 11px; margin-top: 5px; border: 2px solid var(--va2-bg); border-radius: 50%; background: var(--va2-text-disabled); box-shadow: 0 0 0 1px var(--va2-border-strong); }
+.va2-timeline li[data-status="current"] .va2-timeline__marker { background: var(--va2-brand); box-shadow: 0 0 0 3px var(--va2-brand-soft); }
+.va2-timeline li[data-status="warning"] .va2-timeline__marker { background: var(--va2-warning); }
+.va2-timeline time { display: block; color: var(--va2-text-muted); font-size: 11px; }
+.va2-timeline strong { display: block; color: var(--va2-text); font-size: 13px; }
+.va2-timeline p { margin: 3px 0 0; color: var(--va2-text-body); font-size: 12px; }
+.va2-timeline small { color: var(--va2-text-muted); font-size: 11px; }
+.va2-timeline[data-compact="true"] li { padding-bottom: 10px; }
+
+.va2-diff > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.va2-diff article { padding: 12px 14px; border: 1px solid var(--va2-border); border-radius: var(--va2-radius-lg); }
+.va2-diff article[data-side="before"] { background: var(--va2-danger-soft); }
+.va2-diff article[data-side="after"] { background: var(--va2-success-soft); }
+.va2-diff article > span { color: var(--va2-text-muted); font-size: 11px; font-weight: 600; text-transform: uppercase; }
+.va2-diff p { margin: 6px 0 0; color: var(--va2-text-body); font-size: 12px; white-space: pre-wrap; }
+
+.va2-citation { display: inline-flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border: 1px solid var(--va2-border); border-radius: var(--va2-radius-md); color: inherit; text-decoration: none; }
+.va2-citation > b { color: var(--va2-brand-text); font-size: 11px; }
+.va2-citation > span { display: grid; flex: 1; gap: 2px; }
+.va2-citation strong { font-size: 12px; font-weight: 600; }
+.va2-citation small { color: var(--va2-text-muted); font-size: 11px; }
+
+.va2-sources ol { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
+.va2-sources li > a,
+.va2-sources li > div { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid var(--va2-border); border-radius: var(--va2-radius-md); color: inherit; text-decoration: none; }
+.va2-sources__index { display: grid; flex: 0 0 22px; height: 22px; place-items: center; border-radius: 50%; background: var(--va2-brand-soft); color: var(--va2-brand-text); font-size: 10px; font-weight: 700; }
+.va2-sources li span:nth-child(2) { display: grid; flex: 1; min-width: 0; }
+.va2-sources strong { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.va2-sources small { color: var(--va2-text-muted); font-size: 10px; }
+.va2-sources[data-compact="true"] li > a,
+.va2-sources[data-compact="true"] li > div { padding-block: 6px; }
+
+.va2-provenance { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--va2-text-muted); font-size: 10px; }
+.va2-provenance > i { width: 2px; height: 2px; border-radius: 50%; background: var(--va2-text-disabled); }
+.va2-provenance[data-freshness="live"] svg { color: var(--va2-success); }
+.va2-provenance[data-freshness="stale"] svg { color: var(--va2-warning); }
+
+.va2-data-state { display: flex; gap: 10px; padding: 12px 14px; border: 1px solid var(--va2-border); border-radius: var(--va2-radius-lg); background: var(--va2-bg-soft); }
+.va2-data-state svg { flex: 0 0 auto; margin-top: 2px; color: var(--va2-text-icon); }
+.va2-data-state[data-state="loading"] svg { animation: va2-spin 1s linear infinite; color: var(--va2-brand); }
+.va2-data-state[data-state="ready"] svg { color: var(--va2-success); }
+.va2-data-state[data-state="error"] svg,
+.va2-data-state[data-state="partial"] svg { color: var(--va2-danger); }
+.va2-data-state[data-state="stale"] svg { color: var(--va2-warning); }
+.va2-data-state strong { display: block; font-size: 12px; }
+.va2-data-state p { margin: 2px 0 0; color: var(--va2-text-muted); font-size: 11px; }
+.va2-data-state progress { width: 160px; height: 4px; margin-top: 7px; accent-color: var(--va2-brand); }
+@keyframes va2-spin { to { transform: rotate(360deg); } }
+
+.va2-control-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.va2-control-bar[data-align="end"] { justify-content: flex-end; }
+.va2-control-bar[data-align="spaceBetween"] { justify-content: space-between; }
+.va2-control-bar > span { color: var(--va2-text-muted); font-size: 11px; font-weight: 600; }
+.va2-control-bar > div,
+.va2-view-toggle > div[role="tablist"] { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--va2-border); border-radius: var(--va2-radius-lg); background: var(--va2-bg-soft); }
+.va2-control-bar button,
+.va2-view-toggle button { min-height: 28px; padding: 3px 10px; border: 0; border-radius: var(--va2-radius-md); background: transparent; color: var(--va2-text-muted); cursor: pointer; font-size: 11px; }
+.va2-control-bar button[aria-pressed="true"],
+.va2-view-toggle button[aria-selected="true"] { background: var(--va2-bg); color: var(--va2-brand-text); box-shadow: var(--va2-shadow-outline); font-weight: 600; }
+.va2-control-bar button:disabled { cursor: not-allowed; opacity: .45; }
+
+.va2-inspector { overflow: hidden; border: 1px solid var(--va2-border); border-radius: var(--va2-radius-lg); }
+.va2-inspector summary { padding: 9px 12px; background: var(--va2-bg-soft); cursor: pointer; color: var(--va2-text-body); font-size: 12px; font-weight: 600; }
+.va2-inspector pre { overflow: auto; max-height: 360px; margin: 0; padding: 12px; background: var(--va2-code-bg); color: var(--va2-code-text); font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.va2-view-toggle > div[role="tablist"] { margin-bottom: 10px; }
+.va2-sync-group > div { display: grid; gap: 10px; margin-top: 10px; }
+
+@container (max-width: 520px) {
+  .va2-metric-group > div,
+  .va2-description-list > dl,
+  .va2-sync-group > div { grid-template-columns: 1fr 1fr !important; }
+  .va2-diff > div { grid-template-columns: 1fr; }
+}
+
+@container (max-width: 340px) {
+  .va2-metric-group > div,
+  .va2-description-list > dl,
+  .va2-sync-group > div { grid-template-columns: 1fr !important; }
+}

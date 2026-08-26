@@ -125,6 +125,14 @@ def _extract_frontmatter(raw: str) -> tuple[dict[str, object], str]:
     frontmatter that doesn't parse as YAML at all, so malformed manifests
     still degrade softly instead of dropping their metadata.
     """
+    # Normalize line endings first: a CRLF manifest (skills authored on
+    # Windows, or repackaged by a tool that rewrites newlines) starts with
+    # ``---\r\n``, which failed the delimiter check below. The whole file then
+    # became the body and the summary fallback surfaced the literal ``---``
+    # delimiter as the skill's description — 30 installed skills showed "---"
+    # in the library before this. yaml.safe_load handles \n fine either way.
+    raw = raw.replace("\r\n", "\n").replace("\r", "\n")
+
     if not raw.startswith("---\n"):
         return {}, raw
 
@@ -229,9 +237,11 @@ def _discover_roots(ctx: RuntimeContext) -> list[tuple[str, Path, str]]:
 
     The configured user write-target is ``FsRegistry.user_skill_root()`` —
     ``settings.user_skills_dir`` / ``VALUZ_USER_SKILLS_DIR``.  The Open Agent
-    Skills standard root (``~/.agents/skills``) plus legacy
-    ``~/.claude/skills`` and ``~/.codex/skills`` are also surfaced as
-    read-only sources so skills authored in other CLIs don't disappear.
+    In local deployments, the Open Agent Skills standard root
+    (``~/.agents/skills``) plus legacy ``~/.claude/skills`` and
+    ``~/.codex/skills`` are also surfaced as read-only sources so skills
+    authored in other CLIs don't disappear. Cloud/shared deployments scan only
+    the configured owner-scoped root and never inspect the operator's HOME.
     Source labels stay distinct so the UI can tell the user where a skill came
     from.
     """
@@ -241,24 +251,33 @@ def _discover_roots(ctx: RuntimeContext) -> list[tuple[str, Path, str]]:
     valuz_root = _default_user_skill_root(ctx.user_id)
     _append_scan_root(roots, seen, "user", valuz_root, "valuz", include_missing=True)
 
-    # Always scan the standards location, even when VALUZ_USER_SKILLS_DIR is a
-    # custom write target. This keeps OSS and commercial local discovery
-    # consistent: configured root + ~/.agents + ~/.claude + ~/.codex.
-    _append_scan_root(roots, seen, "user", Path.home() / ".agents" / "skills", "valuz")
+    # Compatibility roots describe a single developer's host filesystem. A
+    # cloud/shared process must never discover them: it serves request-bound
+    # users and may run directly on a host whose HOME contains operator skills.
+    # Cloud scans only its explicit, owner-scoped VALUZ_USER_SKILLS_DIR above.
+    if settings.deployment_type == "local":
+        # Always scan the standards location in local mode, even when
+        # VALUZ_USER_SKILLS_DIR is a custom write target. This keeps local OSS
+        # and commercial discovery consistent: configured root + ~/.agents +
+        # ~/.claude + ~/.codex.
+        _append_scan_root(
+            roots, seen, "user", Path.home() / ".agents" / "skills", "valuz"
+        )
 
-    # The leaf-and-parent shape check below maps each compatibility root to the
-    # right source label, which drives the .claude / .codex top-level group on
-    # the skill management page.
-    for legacy in fs_registry.legacy_user_skill_roots():
-        if legacy.name == "skills" and legacy.parent.name == ".claude":
-            label = "claude"
-        elif legacy.name == "skills" and legacy.parent.name == ".codex":
-            label = "codex"
-        else:
-            # Defensive: if ``legacy_user_skill_roots`` ever adds a new path,
-            # fall through to the Valuz bucket rather than silently mislabel it.
-            label = "valuz"
-        _append_scan_root(roots, seen, "user", legacy, label)
+        # The leaf-and-parent shape check below maps each compatibility root to
+        # the right source label, which drives the .claude / .codex top-level
+        # group on the skill management page.
+        for legacy in fs_registry.legacy_user_skill_roots():
+            if legacy.name == "skills" and legacy.parent.name == ".claude":
+                label = "claude"
+            elif legacy.name == "skills" and legacy.parent.name == ".codex":
+                label = "codex"
+            else:
+                # Defensive: if ``legacy_user_skill_roots`` ever adds a new
+                # path, fall through to the Valuz bucket rather than silently
+                # mislabel it.
+                label = "valuz"
+            _append_scan_root(roots, seen, "user", legacy, label)
 
     if not roots:
         roots.append(("user", valuz_root, "valuz"))
@@ -289,7 +308,12 @@ class FilesystemSkillSource:
         for scope, root, source_label in _discover_roots(ctx):
             if not root.exists():
                 continue
-            for skill_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+            try:
+                children = sorted(path for path in root.iterdir() if path.is_dir())
+            except PermissionError:
+                logger.warning("skill scan: permission denied reading %s — skipped", root)
+                continue
+            for skill_dir in children:
                 manifest_path = _detect_manifest(skill_dir)
                 if manifest_path is None:
                     continue
@@ -335,6 +359,11 @@ class FilesystemSkillSource:
     def _summary_from_body(body: str) -> str:
         for line in body.splitlines():
             candidate = line.strip()
+            # Skip YAML document markers: when frontmatter can't be parsed the
+            # delimiters stay in the body, and returning one of them shows a
+            # bare "---" where the description belongs.
+            if candidate in {"---", "..."}:
+                continue
             if candidate and not candidate.startswith("#"):
                 return candidate[:180]
         return "Skill discovered from the local filesystem."

@@ -15,6 +15,10 @@ node_modules/
 __pycache__/
 *.pyc
 .venv/
+# Without the bare form, a .venv SYMLINK (a file, not a directory) slips past
+# the rule above and can be committed — which lands an absolute path from one
+# machine in the repo and breaks `make dev` for everyone else.
+.venv
 
 # Build
 frontend/dist/

@@ -24,7 +24,11 @@ import valuz_agent.boot.kernel  # noqa: F401
 from valuz_agent.adapters import kernel_client
 from valuz_agent.adapters.data_reader import data_reader
 from valuz_agent.infra.eventbus import EventBus
-from valuz_agent.modules.tasks.actor_runner import run_session_to_idle
+from valuz_agent.infra.execution_lease import hold_lease, load_lease_states
+from valuz_agent.infra.time_utils import now_ms
+from valuz_agent.modules.sessions.pre_turn import chat_capability_hook
+from valuz_agent.modules.sessions.turn_driver import _INTERRUPT_CATEGORIES, run_session_to_idle
+from valuz_agent.ports.message_context import HostRef
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +38,16 @@ logger = logging.getLogger(__name__)
 # windows *between* drained items (see ``is_draining_queue``). In-memory by
 # design — the queue itself is durable (DB), the drain task is transient.
 _active_drains: set[str] = set()
+
+# Lease namespace for "who is draining this session's input queue".
+DRAIN_LEASE_SCOPE = "session-drain"
+
+# session_id → queued-row id the drain is executing RIGHT NOW. Set just before
+# the row is marked ``dispatched`` (which drops it from ``list_queued``) and
+# cleared when its turn returns — bridging the window where the item is in
+# neither the queue list nor the transcript, so ``list_queue`` can keep it
+# visible to clients (see docs/design/session-input-queue.md §14.5).
+_dispatching_heads: dict[str, str] = {}
 
 
 def _require_user_id(user_id: str | None) -> str:
@@ -56,12 +70,72 @@ def is_draining_queue(session_id: str) -> bool:
     return session_id in _active_drains
 
 
+async def is_draining_queue_anywhere(session_id: str) -> bool:
+    """Like :func:`is_draining_queue`, but true for a drain in ANY host process.
+
+    The set is per-process, so with several of them the plain check answered
+    "not draining" for a session another worker was actively draining — which
+    let ``send_message`` slip a turn into the middle of someone else's drain,
+    and left the steer path skipping the interrupt that hands the promoted head
+    over. The shared lease is the cross-process half of the same signal.
+
+    Local first: a drain we are running ourselves needs no query, so the hot
+    ``list_queue`` poll only reaches the database when the answer is not
+    already known here.
+    """
+    if session_id in _active_drains:
+        return True
+    state = (await load_lease_states(DRAIN_LEASE_SCOPE, [session_id])).get(session_id)
+    return state is not None and state.is_live(now_ms())
+
+
+def get_dispatching_queue_id(session_id: str) -> str | None:
+    """Id of the queued row the drain is currently executing, if any.
+
+    The row is already ``dispatched`` (invisible in ``list_queued``) but its
+    turn may not have landed a durable user message yet — callers use this to
+    keep the item visible across that gap.
+    """
+    return _dispatching_heads.get(session_id)
+
+
+# How often the drain re-checks a busy session before dispatching the next
+# queued item, and how many polls between "still waiting" log lines.
+_BUSY_POLL_SECONDS = 2.0
+_BUSY_LOG_EVERY_POLLS = 30  # ≈ once a minute
+
+
+async def _session_busy(user_id: str, session_id: str) -> bool:
+    """True while the session is NOT genuinely done with the previous message.
+
+    "上一条处理完" for the queue gate means BOTH:
+    - no turn in flight (``status == "running"`` — covers a turn started by
+      another client / any dispatch race), AND
+    - no live ``run_in_background`` work from the previous turn
+      (``bg_busy_session_ids``). A turn that spawns a background task goes
+      kernel-idle the moment its reply streams out, but the user still sees
+      "processing" (the bg-task chip) — dispatching the next queued item at
+      that instant reads as the queue interrupting the previous message.
+
+    Best-effort on the bg probe: if it fails, treat as not busy — a drain that
+    can never dispatch is worse than an occasional early dispatch.
+    """
+    session = await kernel_client.get_session(user_id, session_id)
+    if session is not None and str(getattr(session, "status", "")) == "running":
+        return True
+    try:
+        return session_id in await kernel_client.bg_busy_session_ids()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _chat_billing_meter(session_id: str, user_id: str | None = None) -> Any:
     """Build the chat-path billing meter callback for a session.
 
     Shared by the initial turn and every drained queue item so each metered
     turn bills identically.
     """
+
     async def _meter(message: Any, after_run: Any) -> None:
         if message.input_tokens is not None or message.output_tokens is not None:
             from valuz_agent.ports.billing import MeterEvent
@@ -102,6 +176,7 @@ async def _run_agent_background(
     content: str,
     event_bus: EventBus,
     user_id: str | None = None,
+    host_ref: HostRef | None = None,
 ) -> None:
     """Drive one agent turn in the background, then drain any queued follow-ups.
 
@@ -126,7 +201,9 @@ async def _run_agent_background(
         content,
         event_bus,
         on_message=meter,
+        pre_turn=chat_capability_hook(session_id, owner_user_id, host_ref=host_ref),
         user_id=owner_user_id,
+        host_ref=host_ref,
     )
     await _drain_queue_after_turn(
         session_id,
@@ -141,6 +218,8 @@ async def _drain_queue_after_turn(
     event_bus: EventBus,
     on_message: Any | None = None,
     user_id: str | None = None,
+    *,
+    claimed: bool = False,
 ) -> None:
     """Run queued follow-up inputs FIFO after a turn finishes (host-driven).
 
@@ -150,6 +229,9 @@ async def _drain_queue_after_turn(
     else mark ``dispatched`` and drive it through ``run_session_to_idle`` with
     its frozen attachment snapshot, then loop. Single-flighted via
     ``_active_drains`` so an idle-kick enqueue can't double-run an item.
+
+    ``claimed=True`` means the caller (``schedule_drain``) already put the
+    session in ``_active_drains`` — skip the claim, keep the release.
     """
     from valuz_agent.infra.db import async_unit_of_work
     from valuz_agent.infra.lifecycle import is_draining
@@ -159,9 +241,11 @@ async def _drain_queue_after_turn(
     from valuz_agent.modules.sessions.events import SESSION_FINISHED
 
     owner_user_id = _require_user_id(user_id)
-    if session_id in _active_drains:
-        return
-    _active_drains.add(session_id)
+    if not claimed:
+        if session_id in _active_drains:
+            return
+        _active_drains.add(session_id)
+    busy_polls = 0
     try:
         while True:
             if is_draining():
@@ -173,6 +257,24 @@ async def _drain_queue_after_turn(
                 head = await SessionDatastore(db).peek_next_queued(session_id)
             if head is None:
                 return
+
+            # Busy gate: dispatch only when the previous message is GENUINELY
+            # done — no turn in flight AND no live background tasks (see
+            # ``_session_busy``). Poll rather than exit so the claim stays held
+            # (``draining=true`` keeps followers/routing coherent) and every
+            # iteration re-checks shutdown / pause / queue mutations, which are
+            # the user's escape hatches (Stop soft-pauses; steer interrupts).
+            if await _session_busy(owner_user_id, session_id):
+                busy_polls += 1
+                if busy_polls % _BUSY_LOG_EVERY_POLLS == 0:
+                    logger.info(
+                        "queue drain for %s waiting on busy session (%.0fs)",
+                        session_id,
+                        busy_polls * _BUSY_POLL_SECONDS,
+                    )
+                await asyncio.sleep(_BUSY_POLL_SECONDS)
+                continue
+            busy_polls = 0
 
             head_id = head.id
             payload = head.input or {}
@@ -208,22 +310,33 @@ async def _drain_queue_after_turn(
                 if isinstance(wt_snapshot, dict):
                     await worktree_service.heal_from_snapshot(wt_snapshot)
             except Exception:  # noqa: BLE001
-                logger.warning(
-                    "drain: worktree heal failed for %s", session_id, exc_info=True
-                )
+                logger.warning("drain: worktree heal failed for %s", session_id, exc_info=True)
 
+            # Point at the head BEFORE it flips to ``dispatched`` so there is
+            # no instant where the item is gone from ``list_queued`` but not
+            # yet exposed as the in-flight one.
+            _dispatching_heads[session_id] = head_id
             async with async_unit_of_work() as db:
                 await SessionDatastore(db).mark_queued_status(head_id, "dispatched")
 
-            await run_session_to_idle(
-                session_id,
-                text,
-                event_bus,
-                on_message=on_message,
-                queued_attachments=attachments,
-                user_id=owner_user_id,
-            )
+            try:
+                await run_session_to_idle(
+                    session_id,
+                    text,
+                    event_bus,
+                    on_message=on_message,
+                    queued_attachments=attachments,
+                    # A queued follow-up is a chat turn like any other, and it
+                    # can run arbitrarily long after the send that enqueued it
+                    # — so it needs the same per-turn convergence, not just the
+                    # credential re-stamp the default would give it.
+                    pre_turn=chat_capability_hook(session_id, owner_user_id),
+                    user_id=owner_user_id,
+                )
+            finally:
+                _dispatching_heads.pop(session_id, None)
     finally:
+        _dispatching_heads.pop(session_id, None)
         _active_drains.discard(session_id)
 
 
@@ -233,24 +346,58 @@ def schedule_drain(session_id: str, event_bus: EventBus) -> None:
     Background path: resolve the owner from ``session_id`` before draining; do
     not rely on request ContextVar propagation.
     A no-op if a drain is already in flight for the session.
+
+    Claims ``_active_drains`` SYNCHRONOUSLY (released by the spawned task) so
+    the caller's own ``list_queue`` response already reports ``draining=true``.
+    The previous late claim (inside the task, after an awaited owner lookup)
+    let an idle-kick enqueue answer ``items=[], draining=false`` — the client's
+    drain-follower then never armed and the turn ran invisibly until reload.
+
+    ``_active_drains`` single-flights within THIS process only. That was the
+    whole guard until now, and it does not hold across processes: ``uvicorn
+    --workers N`` (or several replicas) meant every one of them re-kicked the
+    same drain at boot from ``resume_queued_drains``, so one queued item ran N
+    times — N real turns, N× model spend, N assistant replies the user did not
+    ask for. The execution lease below is the cross-process half; the set stays
+    as the cheap local short-circuit and as the ``is_draining_queue`` signal.
     """
     if session_id in _active_drains:
         return
+    _active_drains.add(session_id)
 
     async def _spawn() -> None:
-        owner_user_id = await _resolve_session_owner(session_id)
-        if not owner_user_id:
-            logger.warning("skip queue drain for %s: unknown session owner", session_id)
-            return
-        meter = _chat_billing_meter(session_id, user_id=owner_user_id)
-        await _drain_queue_after_turn(
-            session_id,
-            event_bus,
-            on_message=meter,
-            user_id=owner_user_id,
-        )
+        try:
+            owner_user_id = await _resolve_session_owner(session_id)
+            if not owner_user_id:
+                logger.warning("skip queue drain for %s: unknown session owner", session_id)
+                return
+            async with hold_lease(scope=DRAIN_LEASE_SCOPE, key=session_id) as lease:
+                if lease is None:
+                    logger.info(
+                        "skip queue drain for %s: another process is already draining it",
+                        session_id,
+                    )
+                    return
+                meter = _chat_billing_meter(session_id, user_id=owner_user_id)
+                await _drain_queue_after_turn(
+                    session_id,
+                    event_bus,
+                    on_message=meter,
+                    user_id=owner_user_id,
+                    claimed=True,
+                )
+        finally:
+            # ``_drain_queue_after_turn`` releases on its own; this covers the
+            # early returns/raises before it runs. discard is idempotent.
+            _active_drains.discard(session_id)
 
-    asyncio.create_task(_spawn())
+    try:
+        asyncio.create_task(_spawn())
+    except RuntimeError:
+        # No running loop (shutdown) — never leak the claim: it gates
+        # ``send_message`` 409s and future drain kicks for this session.
+        _active_drains.discard(session_id)
+        raise
 
 
 # Strip leading skill-trigger tokens (``/<slug>``) when deriving a
@@ -274,8 +421,9 @@ async def _project_conversation_run_result(
 ) -> None:
     """Notify (or clear) a NON-task conversation run failure.
 
-    The task-failure projector (``tasks/messaging.record_task_failure_notification``)
-    covers lead/subtask runs; this is its conversation analog, keyed on the
+    The task-failure projector
+    (``notifications/projectors.record_task_failure_notification``) covers
+    lead/subtask runs; this is its conversation analog, keyed on the
     session and routed to ``/conversation/{id}``. ``error_event`` is the exact
     ``session_error`` payload finalize writes durably — passing it means we fire
     precisely when a real failure is recorded (raised exception OR terminal
@@ -297,6 +445,12 @@ async def _project_conversation_run_result(
 
     if error_event is None:
         await notification_service.resolve_session_failures(owner_user_id, session_id)
+        return
+    if str((getattr(error_event, "data", None) or {}).get("category") or "") in (
+        _INTERRUPT_CATEGORIES
+    ):
+        # An interrupted turn (user stop / host teardown / cancelled task) is
+        # resumable intent, not a failure — no badge, no OS notification.
         return
 
     meta = getattr(session, "metadata", None) or {}
@@ -364,7 +518,21 @@ async def _finalize_session(
     error_event = None
     stop_reason_type = None
     stop_reason_message = None
-    if error is not None:
+    if isinstance(error, asyncio.CancelledError):
+        # The turn was interrupted, not failed (``run_session_to_idle`` maps
+        # this onto the loop-local ``interrupted`` status). Still record a
+        # durable terminal marker — the kernel may not have emitted one when
+        # the cancellation cut the turn short, and the client needs a bracket
+        # to close the turn on reload — but as an INTERRUPTION category the
+        # client renders quietly (no retry / switch-model card), and without
+        # stamping the session's stop_reason as an error: the session stays
+        # a clean, resumable idle. ``_project_conversation_run_result``
+        # skips interruption categories, so no failure notification fires.
+        error_event = EventPayload(
+            type="session_error",
+            data={"category": "interrupted", "message": "turn interrupted"},
+        )
+    elif error is not None:
         message = str(error) or "agent turn failed"
         error_event = EventPayload(
             type="session_error",
@@ -380,9 +548,7 @@ async def _finalize_session(
             category = stop_reason.get("category") or stop_reason.get("type")
             message = stop_reason.get("message")
         else:
-            category = getattr(stop_reason, "category", None) or getattr(
-                stop_reason, "type", None
-            )
+            category = getattr(stop_reason, "category", None) or getattr(stop_reason, "type", None)
             message = getattr(stop_reason, "message", None)
         if category is not None or message is not None:
             error_event = EventPayload(

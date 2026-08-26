@@ -18,6 +18,37 @@ const sampleRuntimes: RuntimeSelectorItem[] = [
 ];
 
 describe("Composer runtime selector (REP-107)", () => {
+  it("keeps provider selection hints on the option rows, not the collapsed trigger", () => {
+    render(
+      <Composer
+        providers={[
+          {
+            providerId: "valuz",
+            providerName: "Valuz",
+            modelId: "gpt-5.9",
+            selectionHint: "2×",
+            isDefault: true,
+            source: "system",
+          },
+        ]}
+        selectedProviderId="valuz"
+        selectedModelId="gpt-5.9"
+      />,
+    );
+
+    // Collapsed: the trigger reads as the plain model name, no hint.
+    expect(screen.getByText("GPT 5.9")).toBeTruthy();
+    expect(screen.queryByText("2×")).toBeNull();
+
+    // Open the model list: the option row shows the name plus the hint in
+    // its own right-aligned column (not glued into the label), and the
+    // trigger itself is unchanged.
+    fireEvent.click(screen.getByText("GPT 5.9"));
+    expect(screen.getAllByText("GPT 5.9")).toHaveLength(2);
+    expect(screen.getByText("2×")).toBeTruthy();
+    expect(screen.queryByText("GPT 5.9 · 2×")).toBeNull();
+  });
+
   it("does not render the runtime trigger when runtimes prop is empty", () => {
     render(<Composer runtimes={[]} />);
     expect(
@@ -113,6 +144,51 @@ describe("Composer runtime selector (REP-107)", () => {
   it("shows the runtime's display name when one is selected", () => {
     render(<Composer runtimes={sampleRuntimes} selectedRuntimeId="codex" />);
     expect(screen.getByText("Codex Agent")).toBeTruthy();
+  });
+});
+
+describe("Composer agent selector layering", () => {
+  it("renders the agent menu outside clipping panel containers", () => {
+    const { getByTestId } = render(
+      <div data-testid="clipping-panel" style={{ overflow: "hidden" }}>
+        <Composer
+          agents={[
+            {
+              slug: "valurion",
+              name: "小万",
+              runtimeLabel: "Claude Code",
+              modelLabel: "Valuz Pro",
+            },
+          ]}
+          selectedAgentSlug="valurion"
+          allowAgentBrainOverride
+          runtimes={sampleRuntimes}
+          selectedRuntimeId="claude_agent"
+          providers={[
+            {
+              providerId: "valuz",
+              providerName: "Valuz",
+              modelId: "valuz-pro",
+              isDefault: true,
+            },
+          ]}
+          selectedProviderId="valuz"
+          selectedModelId="valuz-pro"
+        />
+      </div>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /小万/ }));
+
+    const agentMenu = document.querySelector(
+      '[data-slot="composer-agent-menu"]',
+    );
+
+    expect(agentMenu).toBeTruthy();
+    expect(getByTestId("clipping-panel").contains(agentMenu!)).toBe(false);
+
+    fireEvent.mouseDown(agentMenu!);
+    expect(document.body.contains(agentMenu!)).toBe(true);
   });
 });
 

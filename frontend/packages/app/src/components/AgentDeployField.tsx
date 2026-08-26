@@ -38,7 +38,7 @@ export function AgentCheckboxList({ picker }: { picker: AgentDeployPicker }) {
                 icon={Icon}
                 className="h-4 w-4 shrink-0 text-ink-meta"
               />
-              <span className="truncate text-[13px] text-ink-heading">
+              <span className="truncate text-sm text-ink-heading">
                 {a.name}
               </span>
             </label>

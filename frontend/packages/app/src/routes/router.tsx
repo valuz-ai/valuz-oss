@@ -10,6 +10,7 @@ import { providersApi } from "@valuz/core";
 import { PageLoader } from "@valuz/ui";
 import type { ResolvedRoute } from "./route-registry";
 import { isOnboarded } from "../lib/onboarding";
+import { CitationDocumentPreviewProvider } from "../components/CitationDocumentPreviewProvider";
 
 const SETUP_BYPASS_PATHS = [
   "/welcome",
@@ -77,7 +78,11 @@ export function useAppSetupReady() {
 
 export const AppSetupRoot = () => {
   const ready = useAppSetupReady();
-  return ready ? <Outlet /> : <PageLoader logo className="h-screen" />;
+  return ready ? (
+    <Outlet />
+  ) : (
+    <PageLoader logo className="h-screen" />
+  );
 };
 
 export type AppRouteOverrides = Record<string, ComponentType>;
@@ -159,7 +164,15 @@ export function createAppRouteObjects({
 
   return [
     {
-      element: <Root />,
+      // Route hosts can replace Root (for example, the commercial desktop
+      // swaps the OSS setup gate for its auth/deep-link boundary). Keep
+      // citation preview at the shared route-factory layer so every host
+      // renders ConversationPage inside the required context.
+      element: (
+        <CitationDocumentPreviewProvider>
+          <Root />
+        </CitationDocumentPreviewProvider>
+      ),
       children: [
         {
           path: "/",

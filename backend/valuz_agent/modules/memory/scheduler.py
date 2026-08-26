@@ -118,3 +118,28 @@ class TaskFinishScheduler:
 
 
 task_finish_scheduler = TaskFinishScheduler()
+
+
+_task_finalized_wired = False
+
+
+def wire_task_finalized_trigger() -> None:
+    """Subscribe the task-finish extraction to the ``task.finalized`` topic.
+
+    Event-first (the task module publishes its terminal contract event via
+    ``tasks/events.finalize_task``; memory reacts here instead of the task
+    module reaching into this scheduler). Idempotent; wired at boot next to
+    ``set_runner``.
+    """
+    global _task_finalized_wired
+    if _task_finalized_wired:
+        return
+    from valuz_agent.infra.eventbus import event_bus
+    from valuz_agent.modules.tasks.events import TASK_FINALIZED
+
+    def _on_finalized(*, task_id: str, owner_user_id: str, status: str, **_kw: object) -> None:
+        if status == "completed":
+            task_finish_scheduler.notify_finished(task_id, owner_user_id)
+
+    event_bus.subscribe(TASK_FINALIZED, _on_finalized)
+    _task_finalized_wired = True

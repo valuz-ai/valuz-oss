@@ -79,8 +79,13 @@ const bootstrap = async () => {
   // Renderer-driven manual check + restart-to-install. setupUpdater()
   // also wires the periodic auto-check (see scheduleUpdateCheck below);
   // these handlers exist so the UI can drive it on demand.
-  ipcMain.handle(DESKTOP_CHANNELS.updaterCheck, () =>
-    updater.checkForUpdates("about"),
+  // Defaults to the About-page trigger (inline error, no toast). The update
+  // toast's "retry" passes ``trigger: "menu"`` so a repeated check failure
+  // surfaces back in the toast instead of silently vanishing.
+  ipcMain.handle(
+    DESKTOP_CHANNELS.updaterCheck,
+    (_event, args?: { trigger?: string }) =>
+      updater.checkForUpdates(args?.trigger === "menu" ? "menu" : "about"),
   );
   ipcMain.handle(DESKTOP_CHANNELS.updaterDownload, () =>
     updater.downloadUpdate(),

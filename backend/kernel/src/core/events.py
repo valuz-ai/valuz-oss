@@ -12,6 +12,12 @@ OutboundEventType = Literal[
     "assistant_message",
     "tool_use",
     "tool_result",
+    # Runtime-private evidence replay. Some graph middleware enriches the
+    # persisted ToolMessage only after the underlying tool's ``on_tool_end``
+    # callback has fired. The runtime replays that private sidecar before
+    # ``session_idle`` so Citation Guard sees the exact evidence the model saw;
+    # the orchestrator consumes this event without persisting/broadcasting it.
+    "citation_evidence",
     "tool_input_delta",
     "tool_output_delta",
     "thinking",
@@ -61,6 +67,30 @@ OutboundEventType = Literal[
     "bg_task_progress",
     "bg_task_updated",
     "bg_task_finished",
+    # Turn-phase observability marker (persisted). Runtimes emit one event
+    # per otherwise-invisible boundary of a turn so latency can be read
+    # straight off the stored event timestamps — no aggregation layer:
+    #   {phase: "runtime_init", duration_ms}            cold client/process/
+    #                                                   graph construction;
+    #                                                   deepagents adds
+    #                                                   {mcp_tools_ms,
+    #                                                    checkpointer_ms}
+    #   {phase: "thread_init", mode: start|resume,
+    #    duration_ms}                                   codex only
+    #   {phase: "dispatch", duration_ms?}               request handed to the
+    #                                                   SDK/CLI — the gap from
+    #                                                   this row to the first
+    #                                                   thinking/text delta is
+    #                                                   runtime prep + model
+    #                                                   TTFT
+    #   {phase: "post_run_verification", state: started|completed,
+    #    features: [...]}                              host-side Citation /
+    #                                                   Claim Audit / Task
+    #                                                   Coverage window after
+    #                                                   visible primary output
+    # A phase that did not run this turn emits nothing (a warm turn carries
+    # only ``dispatch`` before any optional post-run phase).
+    "turn_phase",
 ]
 
 InboundEventType = Literal[

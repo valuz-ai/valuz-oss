@@ -7,16 +7,21 @@ adding a new test dependency to the backend.
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from collections.abc import Awaitable, Callable
 
 import httpx
 import pytest
+from src.runtimes.network_egress import configure_network_egress, get_network_egress_registry
 
+from valuz_agent.modules.providers import discover as discover_module
 from valuz_agent.modules.providers.discover import (
     DiscoveredModel,
     ModelDiscoveryError,
     discover_model_entries,
     discover_models,
+    ping_credentials,
 )
 
 
@@ -291,3 +296,80 @@ def test_should_raise_on_timeout() -> None:
     with pytest.raises(ModelDiscoveryError) as exc:
         _run(go())
     assert "超时" in exc.value.reason
+
+
+def test_connection_ping_leases_and_revokes_the_explicit_egress_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    control_paths: list[tuple[str, str]] = []
+
+    async def fake_ping_openai(**kwargs: object) -> None:
+        observed.update(kwargs)
+
+    async def go() -> None:
+        configure_network_egress(
+            {
+                "mode": "auto",
+                "controlEndpoint": "http://127.0.0.1:43123",
+                "bootstrapToken": "x" * 43,
+                "expiresAt": int(time.time() * 1000) + 60_000,
+            }
+        )
+        registry = get_network_egress_registry()
+        assert registry is not None
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            control_paths.append((request.method, request.url.path))
+            if request.method == "POST":
+                client_id = json.loads(request.content)["clientId"]
+                return httpx.Response(
+                    201,
+                    json={
+                        "kind": "forward_proxy",
+                        "proxyUrl": "http://runtime:secret@127.0.0.1:43212",
+                        "clientId": client_id,
+                        "expiresAt": int(time.time() * 1000) + 60_000,
+                    },
+                )
+            return httpx.Response(200, json={"revoked": True})
+
+        registry._client = httpx.AsyncClient(  # noqa: SLF001 - control seam under test
+            base_url=registry.bootstrap.control_endpoint,
+            transport=httpx.MockTransport(handler),
+            trust_env=False,
+        )
+        monkeypatch.setattr(discover_module, "_ping_openai", fake_ping_openai)
+        try:
+            await ping_credentials(
+                base_url="https://api.example/v1",
+                api_key="sk-test",
+                protocol="openai",
+                model="test-model",
+            )
+        finally:
+            await registry.close()
+            configure_network_egress(None)
+
+    _run(go())
+    assert observed["proxy_url"] == "http://runtime:secret@127.0.0.1:43212"
+    assert control_paths[0] == ("POST", "/v1/clients/forward-proxy")
+    assert control_paths[1][0] == "DELETE"
+    assert control_paths[1][1].startswith("/v1/clients/")
+
+
+def test_connection_ping_surfaces_egress_failure_as_user_facing_error() -> None:
+    async def go() -> None:
+        configure_network_egress(None, required_unavailable=True)
+        try:
+            await ping_credentials(
+                base_url="https://api.example/v1",
+                api_key="sk-test",
+                protocol="openai",
+                model="test-model",
+            )
+        finally:
+            configure_network_egress(None)
+
+    with pytest.raises(ModelDiscoveryError, match="模型网络出口不可用"):
+        _run(go())

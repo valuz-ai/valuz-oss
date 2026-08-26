@@ -62,6 +62,7 @@ class DataServiceReadClient:
             timestamp=int(row.get("timestamp") or 0),
             seq=row.get("seq"),
             message_id=row.get("message_id"),
+            event_uid=row.get("event_uid"),
             session_id=row.get("session_id"),
         )
 
@@ -80,6 +81,20 @@ class DataServiceReadClient:
             "get_events_after",
             {"session_id": session_id, "after_seq": after_seq or 0, "limit": limit},
         )
+        return [self._row_to_event(r) for r in (data or [])]
+
+    async def get_events_after_for_user(
+        self,
+        user_id: str,
+        *,
+        after_seq: int = 0,
+        types: tuple[str, ...] | None = None,
+        limit: int = 200,
+    ) -> list[EventData]:
+        body: dict[str, Any] = {"after_seq": after_seq, "limit": limit}
+        if types is not None:
+            body["types"] = list(types)
+        data = await self._post("get_events_after_for_user", body)
         return [self._row_to_event(r) for r in (data or [])]
 
     async def get_events_window(
@@ -101,3 +116,28 @@ class DataServiceReadClient:
             items=[self._row_to_event(r) for r in data.get("events", [])],
             has_more=bool(data.get("has_more", False)),
         )
+
+    async def list_messages(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[Any]:
+        # Message rows use the DataService's storage projection. Session detail
+        # aggregation only needs the four normalized token buckets, so keep the
+        # remote reader independent of kernel ORM/domain serializers.
+        data = await self._post(
+            "list_messages_for_session",
+            {"session_id": session_id, "limit": limit, "offset": offset},
+        )
+        return [
+            {
+                "input_tokens": row.get("input_tokens"),
+                "output_tokens": row.get("output_tokens"),
+                "cache_read_tokens": row.get("cache_read_tokens"),
+                "cache_write_tokens": row.get("cache_write_tokens"),
+            }
+            for row in (data or [])
+        ]

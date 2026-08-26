@@ -7,6 +7,7 @@ import {
   SettingsSection,
 } from "@valuz/ui";
 import { useTranslation, useUpdaterStore, useSystemStore } from "@valuz/core";
+import { assetUrl } from "@valuz/shared";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 const REPO_BASE = "https://github.com/valuz-ai/valuz-oss";
@@ -63,7 +64,10 @@ export const AboutSection = () => {
   );
 
   return (
-    <SettingsSection title={t("settings.about.title")} desc={t("settings.about.desc")}>
+    <SettingsSection
+      title={t("settings.about.title")}
+      desc={t("settings.about.desc")}
+    >
       <MetricStrip
         items={[
           {
@@ -81,9 +85,15 @@ export const AboutSection = () => {
       <Card className="mb-4 mt-4 rounded-xl shadow-xs">
         <CardContent className="py-3">
           <div className="flex items-center gap-4">
-            <img src="./logo.png" alt="Valuz" className="h-14 w-14 shrink-0" />
+            <img
+              src={assetUrl("logo.png")}
+              alt="Valuz"
+              className="h-14 w-14 shrink-0"
+            />
             <div>
-              <div className="text-base font-medium text-ink-heading">Valuz Desktop</div>
+              <div className="text-base font-medium text-ink-heading">
+                Valuz Desktop
+              </div>
               <div className="tabular mt-0.5 text-xs text-ink-meta">
                 {displayVersion ? `v${displayVersion}` : ""}
               </div>
@@ -123,15 +133,26 @@ export const AboutSection = () => {
           </Button>
         )}
         {updaterStatus === "error" && (
-          <span className="text-xs text-red-500">{t("settings.about.checkFailed")}</span>
+          <span className="text-xs text-red-500">
+            {t("settings.about.checkFailed")}
+          </span>
         )}
         {bridge && (
           <>
-            <Button variant="ghost" size="sm" onClick={() => openUrl(`${REPO_BASE}/releases`)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => openUrl(`${REPO_BASE}/releases`)}
+            >
               {t("settings.about.viewChangelog")}
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => openUrl(`${REPO_BASE}/issues`)}>
-              {t("settings.about.contactSupport")} <ArrowUpRight className="h-3.5 w-3.5" />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => openUrl(`${REPO_BASE}/issues`)}
+            >
+              {t("settings.about.contactSupport")}{" "}
+              <ArrowUpRight className="h-3.5 w-3.5" />
             </Button>
           </>
         )}

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, type ReactNode } from "react";
 import {
   Activity,
   BookOpen,
+  BookOpenText,
   Bot,
   ChevronDown,
   Clock,
@@ -10,12 +11,15 @@ import {
   ExternalLink,
   FilePenLine,
   FolderOpen,
+  LayoutDashboard,
   Link2,
   ListTodo,
+  Loader2,
   MessageCirclePlus,
   MessageSquare,
   MoreHorizontal,
   Plus,
+  Puzzle,
   Settings,
   Star,
   Store,
@@ -40,6 +44,7 @@ import {
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
 import { DeleteConfirmDialog } from "../components/common/DeleteConfirmDialog";
+import { ForkIcon } from "../components/common/ForkIcon";
 import type { NavLinkComponent } from "./AppShell";
 import { useI18n } from "../hooks/use-i18n";
 
@@ -127,15 +132,21 @@ const BOTTOM_ICON_MAP: Record<string, LucideIcon> = {
   knowledge: BookOpen,
   skills: Zap,
   scheduled: Clock,
+  playbooks: BookOpenText,
   activity: Activity,
   system: Activity,
   settings: Settings,
   agents: Bot,
   connectors: Link2,
+  plugins: Puzzle,
   marketplace: Store,
   projectTasks: ListTodo,
   star: Star,
   compass: Compass,
+  // Verticals that surface a composed "workbench"/dashboard landing page —
+  // ``activity`` was the closest existing key and collided with the Activity
+  // item one row above it in the same sidebar.
+  dashboard: LayoutDashboard,
 };
 
 /** Icon lookup with a gear fallback for unknown (plugin-supplied) ids. */
@@ -316,7 +327,7 @@ const SidebarLink = ({
   <LinkComponent
     to={href}
     className={cn(
-      "relative mx-1 flex cursor-default items-center gap-[9px] px-[10px] py-[7px] text-[13px] font-normal text-ink-heading outline-none transition-[background-color,box-shadow] duration-[120ms] focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-[0_6px_16px_rgba(17,24,39,0.12)]",
+      "relative mx-1 flex cursor-default items-center gap-[9px] px-[10px] py-[7px] text-sm font-normal text-ink-heading outline-none transition-[background-color,box-shadow] duration-[120ms] focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-[0_6px_16px_rgba(17,24,39,0.12)]",
       editing ? "" : "rounded-[7px]",
       editing
         ? ""
@@ -407,7 +418,7 @@ const ProjectRow = ({
         className={cn(
           // ``group`` enables ``group-hover`` on the project-row ``...``
           // menu button (hidden until row hover; see below).
-          "group relative grid h-[31px] cursor-default grid-cols-[16px_minmax(0,1fr)_auto] items-center gap-[7px] px-[10px] text-[13px] font-normal text-ink-heading outline-none transition-[background-color,box-shadow] duration-[120ms] focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-[0_6px_16px_rgba(17,24,39,0.12)]",
+          "group relative grid h-[31px] cursor-default grid-cols-[16px_minmax(0,1fr)_auto] items-center gap-[7px] px-[10px] text-sm font-normal text-ink-heading outline-none transition-[background-color,box-shadow] duration-[120ms] focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-[0_6px_16px_rgba(17,24,39,0.12)]",
           projectRenaming ? "" : "rounded-[7px]",
           projectRenaming
             ? ""
@@ -584,6 +595,10 @@ export interface DesktopSidebarRecentItem {
   /** ``true`` when the run is currently in the live ``running`` pool;
    * decorates the row with a brand-tinted pulsing dot. */
   isRunning?: boolean;
+  /** Whether the row's session can be forked (host computes it from
+   * runtime/origin/status — docs/design/session-fork.md). Rows without it
+   * render no Fork entry. */
+  canFork?: boolean;
   /** Optional icon rendered BEFORE the title — multi-target editions pass
    * an execution-origin icon (local/cloud) here. */
   leadingIcon?: ReactNode;
@@ -620,7 +635,6 @@ export interface DesktopSidebarProps {
    * bottom-left account / org menu. Rendered in both collapsed and expanded
    * states. */
   sidebarFooter?: ReactNode;
-  mascotSrc?: string | null;
   LinkComponent?: NavLinkComponent;
   primaryActionHref?: string;
   /** Fires whenever the primary action ("新对话") is clicked, in addition to
@@ -634,6 +648,10 @@ export interface DesktopSidebarProps {
   /** When provided, the "+" Projects dropdown shows an "Import project…"
    *  item that calls this. Hidden otherwise (the "+" stays a single action). */
   onImportProject?: () => void;
+  /** Additional menu items rendered at the end of the Projects "+" dropdown.
+   * Overlay editions use this stable slot to add project creation/import
+   * actions without replacing the OSS menu. */
+  projectAddMenuItems?: ReactNode;
   /** Project row "..." actions. Pass ``undefined`` to hide an option. */
   onProjectOpenInFinder?: (projectId: string) => void;
   /** When provided, the project "..." menu shows an "Export project" item
@@ -653,6 +671,13 @@ export interface DesktopSidebarProps {
    * entry that opens a confirm dialog. Same scope as ``onRecentRename``:
    * chats only (no backend ``DELETE /v1/tasks/{id}``). */
   onRecentDelete?: (recentId: string) => void;
+  /** When provided, chat rows whose ``canFork`` is true show a Fork entry
+   * (whole-session fork — docs/design/session-fork.md). */
+  onRecentFork?: (recentId: string) => void;
+  /** Row whose fork request is in flight (forks can take seconds on
+   * remote-kernel deployments — #879). That row's right-edge slot shows a
+   * spinner, and every Fork entry is disabled until the request settles. */
+  recentForkPendingId?: string | null;
   /** Whether sidebar is collapsed (controlled externally) */
   collapsed?: boolean;
 }
@@ -666,19 +691,21 @@ export const DesktopSidebar = ({
   sidebarHeader,
   sidebarExtraItems,
   sidebarFooter,
-  mascotSrc = "./mascot.png",
   LinkComponent = DefaultNavLink,
   primaryActionHref = "/conversation/new",
   onPrimaryAction,
   projectGroups,
   onAddProject,
   onImportProject,
+  projectAddMenuItems,
   onProjectOpenInFinder,
   onProjectExport,
   onProjectRename,
   onProjectRemove,
   onRecentRename,
   onRecentDelete,
+  onRecentFork,
+  recentForkPendingId = null,
   collapsed = false,
 }: DesktopSidebarProps) => {
   const { t } = useI18n();
@@ -767,7 +794,10 @@ export const DesktopSidebar = ({
       );
     }
     const showRowMenu =
-      item.kind === "chat" && (onRecentRename || onRecentDelete);
+      item.kind === "chat" && (onRecentRename || onRecentDelete || onRecentFork);
+    // This row's fork request is in flight — the right-edge slot swaps to a
+    // spinner (replacing the dot / "…" menu) until the request settles.
+    const forkPending = recentForkPendingId === item.id;
     return (
       <LinkComponent
         key={`run-${item.id}`}
@@ -787,9 +817,15 @@ export const DesktopSidebar = ({
       >
         {item.leadingIcon ?? null}
         <span className="min-w-0 flex-1 truncate">{item.title}</span>
-        {(item.isRunning || showRowMenu) && (
+        {(item.isRunning || showRowMenu || forkPending) && (
           <span className="relative flex h-5 w-5 shrink-0 items-center justify-center">
-            {item.isRunning && (
+            {forkPending && (
+              <Loader2
+                aria-label={t("sidebar.forking")}
+                className="h-3.5 w-3.5 animate-spin text-ink-muted"
+              />
+            )}
+            {!forkPending && item.isRunning && (
               <span
                 aria-label={t("sidebar.runningIndicator")}
                 className={cn(
@@ -801,7 +837,7 @@ export const DesktopSidebar = ({
                 )}
               />
             )}
-            {showRowMenu && (
+            {!forkPending && showRowMenu && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
@@ -825,6 +861,15 @@ export const DesktopSidebar = ({
                     >
                       <FilePenLine />
                       {t("sidebar.rename")}
+                    </DropdownMenuItem>
+                  )}
+                  {onRecentFork && item.canFork && (
+                    <DropdownMenuItem
+                      disabled={recentForkPendingId != null}
+                      onSelect={() => onRecentFork(item.id)}
+                    >
+                      <ForkIcon />
+                      {t("sidebar.fork")}
                     </DropdownMenuItem>
                   )}
                   {onRecentDelete && (
@@ -1069,7 +1114,7 @@ export const DesktopSidebar = ({
                         />
                         <span>{item.label}</span>
                         {item.badgeCount ? (
-                          <span className="ml-auto flex items-center gap-1 text-[10px] font-medium text-ink-meta">
+                          <span className="ml-auto flex items-center gap-1 text-micro font-medium text-ink-meta">
                             <span
                               className={cn(
                                 "h-1.5 w-1.5 rounded-full animate-pulse",
@@ -1143,7 +1188,7 @@ export const DesktopSidebar = ({
                   open={projectsSectionOpen}
                   onToggle={() => setProjectsSectionOpen((v) => !v)}
                   action={
-                    onImportProject ? (
+                    onImportProject || projectAddMenuItems ? (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <button
@@ -1165,10 +1210,18 @@ export const DesktopSidebar = ({
                               {t("project.create")}
                             </DropdownMenuItem>
                           )}
-                          <DropdownMenuItem onSelect={onImportProject}>
-                            <Upload />
-                            {t("project.import")}
-                          </DropdownMenuItem>
+                          {onImportProject && (
+                            <DropdownMenuItem onSelect={onImportProject}>
+                              <Upload />
+                              {t("project.import")}
+                            </DropdownMenuItem>
+                          )}
+                          {projectAddMenuItems && (
+                            <>
+                              <DropdownMenuSeparator />
+                              {projectAddMenuItems}
+                            </>
+                          )}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     ) : (
@@ -1262,28 +1315,10 @@ export const DesktopSidebar = ({
               </div>
             </nav>
 
-            {/* Mascot — anchored absolutely at the bottom area
-                (above the settings link), z-0 so the scrollable nav
-                sits above it. When the session list is short, the
-                empty space at the bottom of the nav reveals the
-                mascot. When the user expands a project / the Chats
-                group and the list gets long, the nav scrolls over the
-                mascot — line-drawing bleeds through behind the
-                links so it's still felt without obscuring text. */}
-            {mascotSrc ? (
-              <img
-                src={mascotSrc}
-                alt=""
-                aria-hidden="true"
-                className="pointer-events-none absolute bottom-[64px] left-1/2 z-0 h-[170px] w-auto -translate-x-1/2 select-none opacity-60"
-              />
-            ) : null}
-
             {/* Bottom-pinned: Library + Settings. Library (Agents / Skills /
                 Connectors / Knowledge) sits right above Settings so resource
                 management groups with app config; the scrollable nav above
-                stays focused on project verbs + projects. ``relative z-10``
-                so links sit in front of the absolute-positioned mascot; the
+                stays focused on project verbs + projects. The
                 opaque ``bg-background`` (the sidebar's own colour) hides the
                 scrollable nav when a long list scrolls up behind it instead of
                 letting the text bleed through. */}

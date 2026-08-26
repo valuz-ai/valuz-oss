@@ -12,8 +12,25 @@ const fetchJson = createFetchJson(() => _apiBase);
 
 /** Mirrors ``api/openapi.yaml`` → Marketplace* schemas (hand-synced). */
 export type MarketplaceItemType =
-  "skill" | "agent_template" | "agent_team_template" | "connector";
-export type MarketplaceSource = "skillhub" | "valuz_official" | "modelscope";
+  | "skill"
+  | "agent_template"
+  | "agent_team_template"
+  | "connector"
+  | "plugin";
+/** Sources this build knows a label for. */
+export type MarketplaceKnownSource =
+  | "skillhub"
+  | "valuz_official"
+  | "modelscope"
+  | "redskill"
+  | "plugin";
+/**
+ * ``source`` is an OPEN string on the wire — the index grows sources over
+ * time (a new upstream store, a new ingest) and must never require a client
+ * release. Known values keep autocompletion; anything else renders with a
+ * generic label (see ``MarketplaceSourcePill``).
+ */
+export type MarketplaceSource = MarketplaceKnownSource | (string & {});
 export type MarketplaceBadge =
   | "free_install"
   | "requires_api_key"
@@ -27,7 +44,11 @@ export type MarketplaceInstallTarget =
   | "skill_library"
   | "agent_library"
   | "agent_library_project"
-  | "connector_library";
+  | "connector_library"
+  | "plugin_library";
+/** Derived (never authored) plugin composition — ``skills_only`` = 技能套件,
+ * ``with_connectors`` = plugin shipping an ``mcp.json``. */
+export type MarketplacePluginComposition = "skills_only" | "with_connectors";
 export type MarketplaceConnectorRequirementKind =
   "required" | "optional" | "api_key" | "cost";
 
@@ -49,6 +70,17 @@ export interface MarketplaceTeamMember {
 export interface MarketplaceConnectorRequirement {
   name: string;
   requirement: MarketplaceConnectorRequirementKind;
+}
+
+/** One member of a ``plugin`` market item (detail only). Skills and
+ * connectors share the same row shape, discriminated by ``kind``. */
+export interface MarketplacePluginMember {
+  kind: "skill" | "connector";
+  slug: string;
+  name: string;
+  description?: string | null;
+  meta_version?: string | null;
+  path?: string | null;
 }
 
 export interface MarketplaceConnectorConfigField {
@@ -130,7 +162,12 @@ export interface MarketplaceItem {
   stats: MarketplaceStats;
   version?: string | null;
   runtime?: string | null;
+  /** Teams: total skills across members. Plugins: number of member skills. */
   skill_count?: number | null;
+  /** Plugins only: number of member connectors (``mcp.json`` servers). */
+  connector_count?: number | null;
+  /** Plugins only: derived composition. */
+  composition?: MarketplacePluginComposition | null;
   members?: MarketplaceTeamMember[] | null;
   install_target: MarketplaceInstallTarget;
   installed: boolean;
@@ -151,6 +188,8 @@ export interface MarketplaceItemDetail extends MarketplaceItem {
   security?: MarketplaceSecurityReport | null;
   evaluation?: MarketplaceEvaluationReport | null;
   connector_config?: MarketplaceConnectorConfig | null;
+  /** Plugins only: the ``plugin.json`` manifest object verbatim. */
+  plugin_manifest?: Record<string, unknown> | null;
   /** Opaque, type-varies-by-`type` install payload from the market index.
    * Not consumed by the frontend — carried for type parity with the backend. */
   install_manifest?: Record<string, unknown> | null;
@@ -195,14 +234,36 @@ export interface MarketplaceListParams {
   category?: string;
   subcategory?: string;
   source?: MarketplaceSource;
+  /** ``type=plugin`` only: restrict to one derived composition. */
+  composition?: MarketplacePluginComposition;
   q?: string;
   page?: number;
   page_size?: number;
 }
 
+/**
+ * Plugin members ride on the same ``members`` wire field a team roster uses
+ * (the shapes differ; ``kind`` is the discriminant). Read them through this
+ * helper so team code keeps its ``MarketplaceTeamMember`` typing untouched.
+ */
+export function marketplacePluginMembers(
+  detail: MarketplaceItemDetail | MarketplaceItem | null | undefined,
+): MarketplacePluginMember[] {
+  const raw = (detail as { members?: unknown } | null | undefined)?.members;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (m): m is MarketplacePluginMember =>
+      !!m &&
+      typeof m === "object" &&
+      ((m as { kind?: unknown }).kind === "skill" ||
+        (m as { kind?: unknown }).kind === "connector") &&
+      typeof (m as { slug?: unknown }).slug === "string",
+  );
+}
+
 export const marketplaceApi = {
   categories(
-    kind: "skill" | "agent" | "connector",
+    kind: "skill" | "agent" | "connector" | "plugin",
   ): Promise<MarketplaceCategoryList> {
     return fetchJson(`/v1/marketplace/categories?kind=${kind}`);
   },
@@ -213,6 +274,7 @@ export const marketplaceApi = {
     if (params.category) search.set("category", params.category);
     if (params.subcategory) search.set("subcategory", params.subcategory);
     if (params.source) search.set("source", params.source);
+    if (params.composition) search.set("composition", params.composition);
     if (params.q) search.set("q", params.q);
     if (params.page) search.set("page", String(params.page));
     if (params.page_size) search.set("page_size", String(params.page_size));

@@ -23,15 +23,19 @@ branches on ``auth_type`` / ``auth_header_name``).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from valuz_agent.infra.time_utils import now_ms
 from valuz_agent.modules.connectors.datastore import ConnectorDatastore
 from valuz_agent.modules.connectors.models import AuthType, ConnectorRow, TransportType
+from valuz_agent.ports.runtime_resource import ManagedMutationResult
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +158,32 @@ def _oauth_snapshot(row: ConnectorRow):
     )
 
 
+def _managed_definition_etag(row: ConnectorRow) -> str:
+    """Stable non-secret definition token passed to the authority port."""
+    material = json.dumps(
+        {
+            "id": row.id,
+            "slug": row.slug,
+            "displayName": row.display_name,
+            "description": row.description,
+            "connectorType": row.connector_type,
+            "transport": row.transport,
+            "url": row.url,
+            "authType": row.auth_type,
+            "command": row.command,
+            "args": row.args,
+            "workingDir": row.working_dir,
+            "enabled": row.enabled,
+            "updatedAt": row.updated_at,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
 async def _after_connector_saved_hook(
+    db: AsyncSession,
     user_id: str,
     row: ConnectorRow,
     origin: str,
@@ -164,6 +193,7 @@ async def _after_connector_saved_hook(
     from valuz_agent.ports.extensions import ext
 
     await ext.connector_lifecycle.after_connector_saved(
+        db=db,
         user_id=user_id,
         connector=_row_to_view(row),
         secret_snapshot=_secret_snapshot(row),
@@ -171,22 +201,53 @@ async def _after_connector_saved_hook(
     )
 
 
-async def after_connector_oauth_authorized_hook(user_id: str, row: ConnectorRow) -> None:
+async def after_connector_oauth_authorized_hook(
+    db: AsyncSession, user_id: str, row: ConnectorRow, *, cloud_committed: bool = False
+) -> None:
+    if cloud_committed:
+        return
     from valuz_agent.ports.extensions import ext
 
     await ext.connector_lifecycle.after_connector_oauth_authorized(
+        db=db,
         user_id=user_id,
         connector=_row_to_view(row),
         oauth_snapshot=_oauth_snapshot(row),
     )
 
 
-async def _before_connector_delete_hook(user_id: str, row: ConnectorRow) -> None:
+async def _before_connector_delete_hook(
+    db: AsyncSession, user_id: str, row: ConnectorRow
+) -> None:
     from valuz_agent.ports.extensions import ext
 
     await ext.connector_lifecycle.before_connector_delete(
+        db=db,
         user_id=user_id,
         connector=_row_to_view(row),
+    )
+
+
+async def _before_managed_connector_mutation(
+    user_id: str,
+    definition: dict[str, Any],
+    credential_patch: dict[str, Any] | None = None,
+    *,
+    expected_definition_etag: str | None = None,
+    expected_credential_etag: str | None = None,
+    idempotency_key: str | None = None,
+) -> ManagedMutationResult:
+    """Commit connector definition/credentials before local persistence."""
+
+    from valuz_agent.ports.extensions import ext
+
+    return await ext.managed_connector_mutation.mutate(
+        user_id,
+        definition,
+        credential_patch,
+        expected_definition_etag=expected_definition_etag,
+        expected_credential_etag=expected_credential_etag,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -325,6 +386,19 @@ class ConnectorService:
             _slug = f"{_slug}-{uuid4().hex[:6]}"
 
         if transport == "stdio":
+            authority = await _before_managed_connector_mutation(
+                user_id,
+                {
+                    "operation": "upsert",
+                    "slug": _slug,
+                    "display_name": display_name,
+                    "transport": "stdio",
+                    "connector_type": connector_type,
+                    "command": command,
+                    "args": args or [],
+                    "working_dir": working_dir,
+                },
+            )
             row = ConnectorRow(
                 slug=_slug,
                 display_name=display_name,
@@ -339,8 +413,11 @@ class ConnectorService:
                 enabled=True,
                 status="connecting",
             )
+            if authority.resource_id:
+                row.id = authority.resource_id
             created = await self._ds.create(user_id, row)
-            await _after_connector_saved_hook(user_id, created, "created")
+            if not authority.cloud_committed:
+                await _after_connector_saved_hook(self._ds.session, user_id, created, "created")
             return _row_to_view(created)
 
         row = ConnectorRow(
@@ -354,6 +431,25 @@ class ConnectorService:
             enabled=True,
             status="connecting",
         )
+        credential_patch = {
+            "set_attrs": {"headers": headers, "params": params, "env": env},
+        } if any(value is not None for value in (headers, params, env)) else None
+        authority = await _before_managed_connector_mutation(
+            user_id,
+            {
+                "operation": "upsert",
+                "slug": _slug,
+                "display_name": display_name,
+                "description": description,
+                "connector_type": connector_type,
+                "transport": transport,
+                "url": url,
+                "auth_type": auth_type,
+            },
+            credential_patch,
+        )
+        if authority.resource_id:
+            row.id = authority.resource_id
         saved = await self._ds.create(user_id, row)
 
         storage = _compute_storage(
@@ -366,7 +462,8 @@ class ConnectorService:
         saved.headers_json = storage.headers_json
         saved.params_json = storage.params_json
         updated = await self._ds.update(saved)
-        await _after_connector_saved_hook(user_id, updated, "created")
+        if not authority.cloud_committed:
+            await _after_connector_saved_hook(self._ds.session, user_id, updated, "created")
         return _row_to_view(updated)
 
     async def update_connector(
@@ -390,6 +487,26 @@ class ConnectorService:
         row = await self._ds.get_by_id(user_id, connector_id)
         if row is None:
             return None
+        credential_patch = {
+            "set_attrs": {"headers": headers, "params": params, "env": env},
+        } if any(value is not None for value in (headers, params, env)) else None
+        authority = await _before_managed_connector_mutation(
+            user_id,
+            {
+                "operation": "upsert",
+                "resource_id": connector_id,
+                "display_name": display_name,
+                "description": description,
+                "url": url,
+                "auth_type": auth_type,
+                "command": command,
+                "args": args,
+                "working_dir": working_dir,
+                "enabled": enabled,
+            },
+            credential_patch,
+            expected_definition_etag=_managed_definition_etag(row),
+        )
         if display_name is not None:
             row.display_name = display_name
         if description is not None:
@@ -431,7 +548,8 @@ class ConnectorService:
                 row.status = "connecting"
         row.updated_at = now_ms()
         updated = await self._ds.update(row)
-        await _after_connector_saved_hook(user_id, updated, "updated")
+        if not authority.cloud_committed:
+            await _after_connector_saved_hook(self._ds.session, user_id, updated, "updated")
         return _row_to_view(updated)
 
     async def delete_connector(self, user_id: str, connector_id: str) -> bool:
@@ -442,7 +560,13 @@ class ConnectorService:
             return False
         # Secret material (creds + OAuth token) lives in this connector's own
         # columns, so deleting the row drops every credential with it.
-        await _before_connector_delete_hook(user_id, row)
+        authority = await _before_managed_connector_mutation(
+            user_id,
+            {"operation": "delete", "resource_id": connector_id, "slug": row.slug},
+            expected_definition_etag=_managed_definition_etag(row),
+        )
+        if not authority.cloud_committed:
+            await _before_connector_delete_hook(self._ds.session, user_id, row)
         return await self._ds.delete(user_id, connector_id)
 
     async def set_enabled(
@@ -451,10 +575,23 @@ class ConnectorService:
         row = await self._ds.get_by_id(user_id, connector_id)
         if row is None:
             return None
+        authority = await _before_managed_connector_mutation(
+            user_id,
+            {
+                "operation": "upsert",
+                "resource_id": connector_id,
+                "slug": row.slug,
+                "enabled": enabled,
+            },
+            expected_definition_etag=_managed_definition_etag(row),
+        )
         row.enabled = enabled
         row.status = "unknown" if enabled else "disabled"
         row.updated_at = now_ms()
-        return _row_to_view(await self._ds.update(row))
+        updated = await self._ds.update(row)
+        if not authority.cloud_committed:
+            await _after_connector_saved_hook(self._ds.session, user_id, updated, "updated")
+        return _row_to_view(updated)
 
     async def record_test_result(
         self,
@@ -474,7 +611,15 @@ class ConnectorService:
         row.error_message = None if ok else error_message
         row.updated_at = now_ms()
         updated = await self._ds.update(row)
-        await _after_connector_saved_hook(user_id, updated, "updated")
+        # Probe health is local state.  Keep the OSS lifecycle contract for
+        # local editions, but never turn a commercial health-only write into a
+        # desired-state/cloud mutation.
+        from valuz_agent.ports.extensions import ext
+
+        if not getattr(ext.managed_connector_mutation, "cloud_first", False):
+            await _after_connector_saved_hook(
+                self._ds.session, user_id, updated, "updated"
+            )
         return _row_to_view(updated)
 
 

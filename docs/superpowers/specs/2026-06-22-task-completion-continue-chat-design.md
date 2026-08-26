@@ -1,5 +1,11 @@
 # 任务完成后继续对话(收尾微调)设计
 
+> **HISTORICAL (executed 2026-06; APIs renamed since).** 本文引用的
+> `register_dispatch_tools()` 闭包机制已在 2026-07 重构中退役——现为
+> `tools/handlers.build_task_tool_defs`(模块级 handler + 声明表 zip),
+> orchestrator 方法经 `task_orchestrator.<service>.<method>` 访问。
+> 本文仅作实施记录保留,不再反映当前代码。
+
 > 状态:设计已确认,待落实现计划
 > 日期:2026-06-22
 > 范围:任务详情页 — 任务 `completed` 后,用户可继续与 lead 对话,基于交付结果做二次微调

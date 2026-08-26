@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from valuz_agent.modules.tasks.recovery import (
+from valuz_agent.modules.tasks.member_state import (
     RESUME_RETRY_CAP,
     classify_member,
     reconcile,

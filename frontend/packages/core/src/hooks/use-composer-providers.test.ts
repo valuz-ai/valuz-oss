@@ -1,11 +1,15 @@
 /** @vitest-environment jsdom */
-import { renderHook } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { LLMModel } from "@valuz/shared";
 
 import type { LLMChannelDetail } from "../api/providers-api";
+import { clearRequestCacheForTests } from "../api/request";
+import { setComposerCatalogAdapter } from "../edition/composer-catalog";
 import {
+  useComposerProviderChannelState,
+  useComposerProviderChannels,
   useComposerProviders,
   type RuntimeProvider,
 } from "./use-composer-providers";
@@ -47,6 +51,201 @@ const provider = (
   ...overrides,
 });
 
+afterEach(() => {
+  setComposerCatalogAdapter(null);
+  clearRequestCacheForTests();
+  vi.unstubAllGlobals();
+});
+
+describe("useComposerProviderChannels", () => {
+  it("distinguishes a pending request from a successful empty catalog", async () => {
+    let resolveRequest!: (value: Response) => void;
+    const request = new Promise<Response>((resolve) => {
+      resolveRequest = resolve;
+    });
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(request));
+
+    const { result } = renderHook(() =>
+      useComposerProviderChannelState("http://localhost:8000"),
+    );
+
+    expect(result.current).toEqual({ providers: [], status: "loading" });
+
+    await act(async () => {
+      resolveRequest(
+        new Response(JSON.stringify({ providers: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      await request;
+    });
+
+    await waitFor(() =>
+      expect(result.current).toEqual({ providers: [], status: "ready" }),
+    );
+  });
+
+  it("reports a failed catalog request without treating it as ready", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("provider catalog unavailable")),
+    );
+
+    const { result } = renderHook(() =>
+      useComposerProviderChannelState("http://localhost:8000"),
+    );
+
+    await waitFor(() =>
+      expect(result.current).toEqual({ providers: [], status: "error" }),
+    );
+  });
+
+  it("returns loading immediately when the execution target changes", async () => {
+    const localProvider = provider({ id: "local", name: "Local" });
+    let resolveCloud!: (value: { providers: LLMChannelDetail[] }) => void;
+    let resolveLocalRefresh!: (value: {
+      providers: LLMChannelDetail[];
+    }) => void;
+    const cloudRequest = new Promise<{ providers: LLMChannelDetail[] }>(
+      (resolve) => {
+        resolveCloud = resolve;
+      },
+    );
+    const localRefreshRequest = new Promise<{
+      providers: LLMChannelDetail[];
+    }>((resolve) => {
+      resolveLocalRefresh = resolve;
+    });
+    const listProviderChannels = vi
+      .fn()
+      .mockResolvedValueOnce({ providers: [localProvider] })
+      .mockReturnValueOnce(cloudRequest)
+      .mockReturnValueOnce(localRefreshRequest);
+    setComposerCatalogAdapter({
+      getScopeKey: ({ targetId }) => `test:${targetId ?? "default"}`,
+      listAgents: vi.fn(),
+      listProviderChannels,
+    });
+
+    const { result, rerender } = renderHook(
+      ({ baseUrl }) => useComposerProviderChannelState(baseUrl),
+      { initialProps: { baseUrl: "http://localhost:8000" } },
+    );
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    rerender({ baseUrl: "https://cloud.example.test" });
+    expect(result.current).toEqual({ providers: [], status: "loading" });
+    rerender({ baseUrl: "http://localhost:8000" });
+    expect(result.current).toEqual({ providers: [], status: "loading" });
+
+    await act(async () => {
+      resolveCloud({ providers: [] });
+      await cloudRequest;
+    });
+    expect(result.current).toEqual({ providers: [], status: "loading" });
+
+    await act(async () => {
+      resolveLocalRefresh({ providers: [localProvider] });
+      await localRefreshRequest;
+    });
+    await waitFor(() =>
+      expect(result.current).toEqual({
+        providers: [localProvider],
+        status: "ready",
+      }),
+    );
+  });
+
+  it("reloads the gated model list from each selected execution target", async () => {
+    const localProvider = provider({ id: "local", name: "Local" });
+    const cloudProvider = provider({ id: "cloud", name: "Cloud" });
+    const listProviderChannels = vi.fn(
+      ({ targetId }: { targetId?: string | null }) =>
+        Promise.resolve({
+          providers: targetId === "cloud" ? [cloudProvider] : [localProvider],
+        }),
+    );
+    setComposerCatalogAdapter({
+      getScopeKey: ({ targetId }) => `test:${targetId ?? "default"}`,
+      listAgents: vi.fn(),
+      listProviderChannels,
+    });
+
+    const { result, rerender } = renderHook(
+      ({ targetId }) => useComposerProviderChannels(targetId),
+      { initialProps: { targetId: "local" } },
+    );
+
+    await waitFor(() => expect(result.current).toEqual([localProvider]));
+    rerender({ targetId: "cloud" });
+    await waitFor(() => expect(result.current).toEqual([cloudProvider]));
+    rerender({ targetId: "local" });
+    await waitFor(() => expect(result.current).toEqual([localProvider]));
+
+    expect(
+      listProviderChannels.mock.calls.map(([context]) => context.targetId),
+    ).toEqual([
+      "local",
+      "cloud",
+      "local",
+    ]);
+  });
+
+  it("clears the old list and ignores its response after switching targets", async () => {
+    let resolveLocal!: (value: Response) => void;
+    let resolveCloud!: (value: Response) => void;
+    const localRequest = new Promise<Response>((resolve) => {
+      resolveLocal = resolve;
+    });
+    const cloudRequest = new Promise<Response>((resolve) => {
+      resolveCloud = resolve;
+    });
+    const listProviderChannels = vi
+      .fn()
+      .mockReturnValueOnce(localRequest.then((response) => response.json()))
+      .mockReturnValueOnce(cloudRequest.then((response) => response.json()));
+    setComposerCatalogAdapter({
+      getScopeKey: ({ targetId }) => `test:${targetId ?? "default"}`,
+      listAgents: vi.fn(),
+      listProviderChannels,
+    });
+
+    const { result, rerender } = renderHook(
+      ({ targetId }) => useComposerProviderChannels(targetId),
+      { initialProps: { targetId: "local" } },
+    );
+
+    rerender({ targetId: "cloud" });
+    expect(result.current).toEqual([]);
+
+    await act(async () => {
+      resolveLocal(
+        new Response(
+          JSON.stringify({
+            providers: [provider({ id: "local", name: "Local" })],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+      await localRequest;
+    });
+    expect(result.current).toEqual([]);
+
+    const cloudProvider = provider({ id: "cloud", name: "Cloud" });
+    await act(async () => {
+      resolveCloud(
+        new Response(JSON.stringify({ providers: [cloudProvider] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      await cloudRequest;
+    });
+    expect(result.current).toEqual([cloudProvider]);
+  });
+});
+
 describe("useComposerProviders", () => {
   it("flattens enabled providers into one entry per (provider, model)", () => {
     const providers = [
@@ -83,6 +282,21 @@ describe("useComposerProviders", () => {
 
     const { result } = renderHook(() => useComposerProviders(providers));
     expect(result.current.map((m) => m.providerId)).toEqual(["ch-on"]);
+  });
+
+  it("passes picker-only selection hints without changing model ids", () => {
+    const models = mdl(["valuz-pro"], ANTHROPIC);
+    models[0] = { ...models[0], selection_hint: "2×" };
+    const providers = [
+      provider({ id: "valuz", name: "Valuz", source: "system", models }),
+    ];
+
+    const { result } = renderHook(() => useComposerProviders(providers));
+
+    expect(result.current[0]).toMatchObject({
+      modelId: "valuz-pro",
+      selectionHint: "2×",
+    });
   });
 
   it("drops credential-less api_key providers", () => {

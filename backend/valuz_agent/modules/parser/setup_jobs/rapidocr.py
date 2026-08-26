@@ -122,6 +122,25 @@ _ASSETS: tuple[_ModelAsset, ...] = (
 # ``PostProcess.character_dict``.
 _REC_DICT_YML_URL = f"{_V6_REC_REPO}/inference.yml"
 
+# The bundle's on-disk layout, by role — the single source of truth for both
+# this job (which writes it) and the parser integration (which loads it). The
+# parser used to hardcode the same four basenames; the v4→v5→v6 cutovers each
+# renamed them, so a second copy is a live drift hazard.
+MODEL_FILENAMES: dict[str, str] = {
+    "det": _DET_FILENAME,
+    "rec": _REC_FILENAME,
+    "cls": _CLS_FILENAME,
+    "dict": _DICT_FILENAME,
+}
+
+# Every file a usable bundle must contain. ``is_complete`` checks presence of
+# ALL of them, not just the READY marker: the marker records *that a download
+# finished*, which stops being true the moment a file is deleted or a partial
+# write is left behind. A marker outliving its files used to read as "complete"
+# forever — the user was never re-prompted, and the parser silently fell back to
+# a DIFFERENT model generation (rapidocr's own auto-download defaults).
+REQUIRED_MODEL_FILENAMES: tuple[str, ...] = tuple(MODEL_FILENAMES.values())
+
 _READY_MARKER = "READY"
 _MODEL_VERSION = "PP-OCRv6"
 _LICENSE_FILE = "LICENSE"
@@ -167,20 +186,32 @@ class RapidOcrSetupJob:
         return fs_registry.parser_model_dir(PLUGIN_ID, SUBKIND)
 
     def is_complete(self) -> bool:
-        """Return True iff the READY marker exists AND was written by a
-        v6 run. A stale v4/v5 READY marker (no ``model_version=`` line, or
-        a different version string) reads as "not complete" so the
-        first boot after the upgrade auto-prompts the user to
-        re-download.
+        """Return True iff the READY marker exists, was written by a v6 run,
+        AND every model file it vouches for is still on disk.
+
+        A stale v4/v5 READY marker (no ``model_version=`` line, or a different
+        version string) reads as "not complete" so the first boot after the
+        upgrade auto-prompts the user to re-download.
+
+        The file check matters just as much: the marker records that a download
+        once finished, not that the bundle is still usable. A marker outliving
+        its files (manual delete, interrupted cleanup, disk repair) used to read
+        as complete forever — the setup UI never re-prompted, and the parser
+        quietly fell back to auto-downloading rapidocr's OWN default weights, so
+        OCR ran on a different model generation than the user authorized. An
+        incomplete bundle must surface as "needs setup" instead.
         """
-        marker = self.model_dir() / _READY_MARKER
+        model_dir = self.model_dir()
+        marker = model_dir / _READY_MARKER
         if not marker.exists():
             return False
         try:
             content = marker.read_text(encoding="utf-8")
         except OSError:
             return False
-        return f"model_version={_MODEL_VERSION}" in content
+        if f"model_version={_MODEL_VERSION}" not in content:
+            return False
+        return all((model_dir / name).exists() for name in REQUIRED_MODEL_FILENAMES)
 
     # ----- SetupJob.run ----------------------------------------------
 

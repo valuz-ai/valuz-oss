@@ -1,7 +1,7 @@
 """Regression: MCP map fields (``http_headers`` / ``env``) must be emitted as
-per-key dotted ``-c`` overrides, never as an inline table.
+per-key dotted config entries, never as an inline table.
 
-Codex's ``-c k=v`` parser reads an inline-table RHS
+Codex's config overlay parser reads an inline-table RHS
 (``mcp_servers.X.http_headers={ Authorization = "…" }``) as a *string* and
 aborts at app-server startup with ``invalid type: string … expected a map in
 mcp_servers.X.http_headers`` (verified against codex-cli 0.137.0-alpha.4
@@ -66,6 +66,44 @@ def test_header_value_is_toml_quoted_against_injection() -> None:
     ov = _build_config_overrides(session, None, "gpt-5.5")
     # Quotes / backslashes in the value are escaped, not left to corrupt the -c.
     assert r'mcp_servers.s.http_headers.Authorization="a\"b\\c"' in ov
+
+
+def test_tool_timeout_sec_emitted_as_bare_float_when_set() -> None:
+    # The harness toolkit hosts await_members, which parks longer than codex's
+    # 120s default tool-call timeout. The declared per-server timeout must reach
+    # codex as a BARE number (never quoted) so it parses as a float, not a string.
+    session = _session(
+        McpHttpServerConfig(
+            name="harness",
+            url="http://127.0.0.1:8000/_internal/mcp/toolkit/lead/mcp",
+            tool_timeout_sec=480.0,  # arbitrary — this asserts the EMIT, not the policy value
+        )
+    )
+    ov = _build_config_overrides(session, None, "gpt-5.5")
+    assert "mcp_servers.harness.tool_timeout_sec=480.0" in ov, ov
+    assert not any('tool_timeout_sec="' in o for o in ov), ov
+
+
+def test_tool_timeout_sec_absent_when_unset() -> None:
+    # A server that does not declare one keeps codex's own default — no override.
+    session = _session(McpHttpServerConfig(name="s", url="https://x/mcp"))
+    ov = _build_config_overrides(session, None, "gpt-5.5")
+    assert not any("tool_timeout_sec" in o for o in ov), ov
+
+
+def test_exposed_toolkit_gets_raised_tool_timeout() -> None:
+    # The kernel-exposed toolkit path (expose_toolkit) carries await_members too,
+    # so it must lift the same 120s ceiling.
+    from src.runtimes.codex.runtime import (
+        _HARNESS_TOOLKIT_MCP_NAME,
+        _HARNESS_TOOLKIT_TOOL_TIMEOUT_SEC,
+    )
+
+    ov = _build_config_overrides(_session(), None, "gpt-5.5", expose_toolkit=True)
+    assert (
+        f"mcp_servers.{_HARNESS_TOOLKIT_MCP_NAME}.tool_timeout_sec="
+        f"{_HARNESS_TOOLKIT_TOOL_TIMEOUT_SEC}" in ov
+    ), ov
 
 
 def test_toml_key_bare_vs_quoted() -> None:

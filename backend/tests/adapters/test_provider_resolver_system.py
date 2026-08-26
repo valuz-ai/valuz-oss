@@ -195,3 +195,82 @@ class TestResolveRuntimeProviderViaLLMProvider:
             user_id="u1",
         )
         assert rt == "deepagents"
+
+
+class TestResolveModelMaxInputTokens:
+    """Extension-channel (ADR-011) declarations — the valuz-lite/pro alias
+    path. User-row declarations are covered in test_provider_resolver.py."""
+
+    @staticmethod
+    def _channel(provider_id: str, models: list[LLMModel]) -> LLMChannel:
+        return LLMChannel(
+            id=provider_id,
+            name="Valuz Cloud",
+            provider_kind="system",
+            source="system",
+            deletable=False,
+            is_default=False,
+            credential_source="system_managed",
+            auth_type="oauth",
+            compatible_protocols=["anthropic"],
+            group="system",
+            group_rank=20,
+            models=models,
+        )
+
+    async def test_pinned_channel_declared_window_resolves(self) -> None:
+        from valuz_agent.adapters.provider_resolver import resolve_model_max_input_tokens
+
+        _set(
+            rows=[
+                self._channel(
+                    "valuz-channel",
+                    [
+                        LLMModel(id="valuz-lite-anthropic", max_input_tokens=200_000),
+                        LLMModel(id="valuz-pro-anthropic", max_input_tokens=1_000_000),
+                    ],
+                )
+            ]
+        )
+        declared = await resolve_model_max_input_tokens(
+            provider_id="valuz-channel",
+            model_id="valuz-pro-anthropic",
+            providers=_NoProviders(),  # type: ignore[arg-type]
+            user_id="u1",
+        )
+        assert declared == 1_000_000
+
+    async def test_pinned_channel_without_declaration_returns_none(self) -> None:
+        from valuz_agent.adapters.provider_resolver import resolve_model_max_input_tokens
+
+        _set(rows=[self._channel("valuz-channel", [LLMModel(id="valuz-lite-anthropic")])])
+        declared = await resolve_model_max_input_tokens(
+            provider_id="valuz-channel",
+            model_id="valuz-lite-anthropic",
+            providers=_NoProviders(),  # type: ignore[arg-type]
+            user_id="u1",
+        )
+        assert declared is None
+
+    async def test_no_pin_scans_channels_hosting_the_model(self) -> None:
+        from valuz_agent.adapters.provider_resolver import resolve_model_max_input_tokens
+
+        class _EmptyList(_NoProviders):
+            async def list_providers(self, _user_id: str) -> list:  # type: ignore[no-untyped-def]
+                return []
+
+        _set(
+            rows=[
+                self._channel("other-channel", [LLMModel(id="unrelated")]),
+                self._channel(
+                    "valuz-channel", [LLMModel(id="valuz-lite-anthropic", max_input_tokens=200_000)]
+                ),
+            ]
+        )
+        declared = await resolve_model_max_input_tokens(
+            provider_id=None,
+            model_id="valuz-lite-anthropic",
+            providers=_EmptyList(),  # type: ignore[arg-type]
+            user_id="u1",
+        )
+        assert declared == 200_000

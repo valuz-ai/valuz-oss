@@ -130,7 +130,12 @@ class _PaddleOcrBackend(ParserBackend):
             "token": token,
             "options": dict(self._config.options),
         }
-        task_id = await self._scheduler.enqueue(PADDLEOCR_HANDLER_KIND, payload)
+        task_id = await self._scheduler.enqueue(
+            PADDLEOCR_HANDLER_KIND,
+            payload,
+            # Ownership stamp for the durable polling row (valuz-oss#841).
+            user_id=options.user_id if options else None,
+        )
         result = await self._scheduler.await_task(task_id)
         return ParseResult(
             markdown=result.markdown,

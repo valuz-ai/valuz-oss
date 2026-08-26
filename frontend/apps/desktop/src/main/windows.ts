@@ -1,6 +1,7 @@
 import path from "node:path";
-import { BrowserWindow, app, screen } from "electron";
+import { BrowserWindow, app } from "electron";
 import { openExternalIfSafe } from "./security";
+import { loadWindowState, trackWindowState } from "./window-state";
 
 const getRendererUrl = () =>
   process.env.VITE_DEV_SERVER_URL ??
@@ -20,30 +21,14 @@ const getIconPath = () =>
     process.platform === "win32" ? "icon.ico" : "iconRounded.png",
   );
 
-const IDEAL_WIDTH = 1440;
-const IDEAL_HEIGHT = 900;
-
-// Windows/Linux don't auto-clamp oversize windows like macOS does — a fixed
-// 1440×900 overflows small laptop displays (1366×768, scaled 1920×1080).
-// Cap to 90% of the primary work area and center inside it.
-const computeInitialBounds = () => {
-  if (process.platform === "darwin") {
-    return { width: IDEAL_WIDTH, height: IDEAL_HEIGHT, x: undefined, y: undefined };
-  }
-  const work = screen.getPrimaryDisplay().workArea;
-  const width = Math.min(IDEAL_WIDTH, Math.floor(work.width * 0.9));
-  const height = Math.min(IDEAL_HEIGHT, Math.floor(work.height * 0.9));
-  const x = work.x + Math.floor((work.width - width) / 2);
-  const y = work.y + Math.floor((work.height - height) / 2);
-  return { width, height, x, y };
-};
-
 let mainWindow: BrowserWindow | null = null;
 
 export const getMainWindow = () => mainWindow;
 
 export const createMainWindow = async () => {
-  const { width, height, x, y } = computeInitialBounds();
+  // Remembered geometry when there is any, otherwise a size-capped, centered
+  // default — see ``window-state-utils``.
+  const { maximized, width, height, x, y } = loadWindowState();
   const windowOptions: Electron.BrowserWindowConstructorOptions = {
     title: "Valuz",
     width,
@@ -71,6 +56,10 @@ export const createMainWindow = async () => {
   }
 
   mainWindow = new BrowserWindow(windowOptions);
+  if (maximized) {
+    mainWindow.maximize();
+  }
+  trackWindowState(mainWindow);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void openExternalIfSafe(url);

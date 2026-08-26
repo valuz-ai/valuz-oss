@@ -30,6 +30,19 @@ export default tseslint.config(
         "warn",
         { allowConstantExport: true },
       ],
+      // 本仓库用 `_` 前缀表示"刻意丢弃"，并大量使用 rest 解构来剔除字段
+      // （`const { id: _id, ...props } = raw`）。规则默认两者都不豁免，
+      // 于是只能整文件关规则（历史上 combobox.tsx 就是这么做的）——
+      // 那会连真正的未使用变量一起放过。在这里把约定声明一次。
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+          ignoreRestSiblings: true,
+        },
+      ],
     },
   },
   // ─────────────────────────────────────────────────────────────────

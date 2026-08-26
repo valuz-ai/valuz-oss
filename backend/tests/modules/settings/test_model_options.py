@@ -29,8 +29,18 @@ def _group_for(source: str, auth_type: str) -> str:
     return "api_key"
 
 
-def _m(mid: str, label: str | None = None, runtimes: tuple[str, ...] | None = None) -> LLMModel:
-    return LLMModel(id=mid, label=label, runtimes=runtimes)
+def _m(
+    mid: str,
+    label: str | None = None,
+    runtimes: tuple[str, ...] | None = None,
+    selection_hint: str | None = None,
+) -> LLMModel:
+    return LLMModel(
+        id=mid,
+        label=label,
+        runtimes=runtimes,
+        selection_hint=selection_hint,
+    )
 
 
 def _pin(
@@ -63,10 +73,11 @@ _NO_DEFAULT = CurrentDefault(runtime=None, provider_id=None, model=None)
 
 
 class TestRuntimesFor:
-    def test_anthropic_plus_completion_runs_claude_and_deepagents(self) -> None:
+    def test_anthropic_plus_completion_runs_claude_deepagents_and_harness(self) -> None:
         assert runtimes_for(["anthropic", "openai-completion"], provider_kind="system") == [
             "claude_agent",
             "deepagents",
+            "deepseek_harness",
         ]
 
     def test_codex_subscription_runs_codex(self) -> None:
@@ -84,6 +95,7 @@ class TestRuntimesFor:
         assert runtimes_for(["openai-completion", "openai-response"], provider_kind="openai") == [
             "codex",
             "deepagents",
+            "deepseek_harness",
         ]
 
     def test_response_only_user_row_drives_codex(self) -> None:
@@ -97,19 +109,42 @@ class TestRuntimesFor:
         # ``model_providers.harness`` block with its base_url + API key.
         assert runtimes_for(["openai-response"], provider_kind="compatible") == ["codex"]
 
-    def test_deepseek_dual_shape_runs_claude_and_deepagents(self) -> None:
-        assert runtimes_for(["anthropic", "openai-completion"], provider_kind="deepseek") == [
-            "claude_agent",
+    def test_deepseek_channel_shape_runs_all_four(self) -> None:
+        # The unpinned DeepSeek channel derives anthropic + openai-completion
+        # + openai-response (the Responses wire is served natively for the
+        # whole lineup), so all four runtimes apply — claude_agent first.
+        assert runtimes_for(
+            ["anthropic", "openai-completion", "openai-response"], provider_kind="deepseek"
+        ) == ["claude_agent", "codex", "deepagents", "deepseek_harness"]
+
+    def test_completion_wire_derives_harness_protocol_scoped(self) -> None:
+        # deepseek_harness is protocol-scoped, exactly like codex on the
+        # Responses wire: ANY non-subscription channel speaking
+        # chat-completions derives it — the dsh adapter posts a plain
+        # ``${base_url}/chat/completions`` body and follows the channel's
+        # endpoint via $DEEPSEEK_BASE_URL.
+        assert runtimes_for(["openai-completion"], provider_kind="compatible") == [
             "deepagents",
+            "deepseek_harness",
         ]
+
+    def test_anthropic_only_channel_does_not_derive_harness(self) -> None:
+        assert "deepseek_harness" not in runtimes_for(["anthropic"], provider_kind="anthropic")
+
+    def test_subscription_channels_do_not_derive_harness(self) -> None:
+        # Subscription channels expose no API key + base_url for the dsh
+        # adapter to consume.
+        assert "deepseek_harness" not in runtimes_for([], provider_kind="claude-subscription")
+        assert "deepseek_harness" not in runtimes_for([], provider_kind="codex-subscription")
 
     def test_empty_protocols_is_treated_as_no_restriction(self) -> None:
         # Empty → every protocol; non-subscription system speaks all wires, so
-        # every derivable runtime applies (claude / codex / deepagents).
+        # every derivable runtime applies.
         assert runtimes_for([], provider_kind="system") == [
             "claude_agent",
             "codex",
             "deepagents",
+            "deepseek_harness",
         ]
 
 
@@ -117,6 +152,19 @@ class TestRuntimesFor:
 
 
 class TestBuildModelOptions:
+    def test_preserves_picker_only_selection_hint(self) -> None:
+        system = _pin(
+            source="system",
+            provider_kind="system",
+            auth_type="oauth",
+            models=[_m("valuz-pro", "Valuz Pro", selection_hint="2×")],
+        )
+
+        model = build_model_options([system], _NO_DEFAULT).groups[0].providers[0].models[0]
+
+        assert model.label == "Valuz Pro"
+        assert model.selection_hint == "2×"
+
     def test_derives_runtimes_from_compatible(self) -> None:
         """An anthropic channel: models leave runtimes None → derived from the
         channel's compatible_protocols."""

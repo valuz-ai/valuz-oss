@@ -27,7 +27,7 @@ from valuz_agent.modules.decisions.aggregator import DecisionAggregator
 from valuz_agent.modules.notifications.models import NotificationRow
 from valuz_agent.modules.notifications.service import notification_service
 from valuz_agent.modules.projects.models import ProjectRow
-from valuz_agent.modules.tasks import messaging
+from valuz_agent.modules.notifications import projectors
 from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
 
 OWNER = "local-test-owner"
@@ -161,7 +161,7 @@ def test_question_kind_lifecycle(db_factory) -> None:
 def test_task_failed_kind_lifecycle_resume(db_factory) -> None:
     _seed_task(db_factory)
     asyncio.run(
-        messaging.record_task_failure_notification(
+        projectors.record_task_failure_notification(
             task_id="t1", project_id="w1", event_id="ev-1",
             event_type="task_blocked", reason="lead crashed", user_id=OWNER,
         )
@@ -182,7 +182,7 @@ def test_task_failed_kind_lifecycle_resume(db_factory) -> None:
 def test_task_failed_kind_lifecycle_dismiss(db_factory) -> None:
     _seed_task(db_factory)
     asyncio.run(
-        messaging.record_task_failure_notification(
+        projectors.record_task_failure_notification(
             task_id="t1", project_id="w1", event_id="ev-2",
             event_type="kickoff_failed", reason="missing api key", user_id=OWNER,
         )
@@ -198,7 +198,7 @@ def test_read_all_across_kinds(db_factory) -> None:
     # one of each kind.
     asyncio.run(_run_question(db_factory))
     asyncio.run(
-        messaging.record_task_failure_notification(
+        projectors.record_task_failure_notification(
             task_id="t1", project_id="w1", event_id="ev-3",
             event_type="task_blocked", reason="x", user_id=OWNER,
         )

@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
+from urllib.parse import urlsplit
 
 from app.schemas import (
     McpHttpServerConfigSchema as McpHttpServerConfig,
@@ -33,6 +35,21 @@ from valuz_agent.modules.connectors.service import build_overrides, merge_params
 from valuz_agent.ports.extensions import ext
 
 logger = logging.getLogger(__name__)
+
+_REPORTIFY_MCP_HOST = "mcp.reportify.cn"
+_REPORTIFY_REQUEST_TIMEOUT_SECONDS = float(
+    os.environ.get("VALUZ_REPORTIFY_REQUEST_TIMEOUT_SECONDS", "600")
+)
+
+
+def _connector_tool_timeout_sec(url: str) -> float | None:
+    """Apply the shared Reportify request budget only to Reportify MCPs."""
+
+    return (
+        _REPORTIFY_REQUEST_TIMEOUT_SECONDS
+        if urlsplit(url).hostname == _REPORTIFY_MCP_HOST
+        else None
+    )
 
 
 async def _ensure_fresh_oauth_token(
@@ -133,6 +150,8 @@ async def _build_http_config(row, connectors: ConnectorDatastore) -> list[McpSer
     if not url:
         return None
 
+    tool_timeout_sec = _connector_tool_timeout_sec(url)
+
     if "{module}" in url:
         modules: list[str] = []
         if row.args:
@@ -150,6 +169,7 @@ async def _build_http_config(row, connectors: ConnectorDatastore) -> list[McpSer
                 url=merge_params_into_url(url.replace("{module}", module), params),
                 transport=transport,  # type: ignore[arg-type]
                 headers=dict(headers),
+                tool_timeout_sec=tool_timeout_sec,
             )
             for module in modules
         ]
@@ -160,6 +180,7 @@ async def _build_http_config(row, connectors: ConnectorDatastore) -> list[McpSer
             url=merge_params_into_url(url, params),
             transport=transport,  # type: ignore[arg-type]
             headers=dict(headers),
+            tool_timeout_sec=tool_timeout_sec,
         )
     ]
 
@@ -192,6 +213,7 @@ def expand_mcp_dir(value: str) -> str:
 
 def _build_stdio_config(row) -> list[McpServerConfig] | None:
     import shlex
+    import shutil
 
     if not row.command:
         logger.info("mcp resolver: stdio connector %s has no command", row.slug)
@@ -206,6 +228,23 @@ def _build_stdio_config(row) -> list[McpServerConfig] | None:
         parts = shlex.split(raw_command)
         raw_command = parts[0]
         extra_args = tuple(parts[1:])
+
+    # Pre-flight the executable. The stdio child is spawned kernel-side; with
+    # the default in-process kernel that is THIS process, so a which() miss is
+    # definitive — drop the server with an attributable log line instead of
+    # every runtime failing (or silently degrading) at turn time with a bare
+    # ``[Errno 2] No such file or directory``. A split kernel
+    # (``VALUZ_KERNEL_MODE=http``) spawns against ITS own environment, so keep
+    # the server there and leave availability to the runtime.
+    from valuz_agent.infra.config import settings
+
+    if not settings.is_http_kernel and shutil.which(raw_command) is None:
+        logger.warning(
+            "mcp resolver: stdio connector %s dropped — command %r not found on PATH",
+            row.slug,
+            raw_command,
+        )
+        return None
 
     args: tuple[str, ...] = extra_args
     if row.args:

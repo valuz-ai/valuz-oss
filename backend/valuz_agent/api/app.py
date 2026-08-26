@@ -13,31 +13,42 @@ from fastapi.responses import JSONResponse
 
 from valuz_agent.api.middleware import (
     ErrorHandlerMiddleware,
+    LocaleMiddleware,
     TimingMiddleware,
 )
 from valuz_agent.api.routes.activity import router as activity_router
 from valuz_agent.api.routes.agent_templates import router as agent_templates_router
 from valuz_agent.api.routes.agents import router as agents_router
 from valuz_agent.api.routes.analytics import router as analytics_router
+from valuz_agent.api.routes.artifacts import router as artifacts_router
 from valuz_agent.api.routes.automations import router as automations_router
+from valuz_agent.api.routes.backup import router as backup_router
 from valuz_agent.api.routes.browser import router as browser_router
+from valuz_agent.api.routes.channels import router as channels_router
+from valuz_agent.api.routes.citations import router as citations_router
 from valuz_agent.api.routes.connectors import router as connectors_router
 from valuz_agent.api.routes.docs import router as docs_router
+from valuz_agent.api.routes.document_research import router as document_research_router
 from valuz_agent.api.routes.files import router as files_router
 from valuz_agent.api.routes.marketplace import router as marketplace_router
 from valuz_agent.api.routes.memory import router as memory_router
 from valuz_agent.api.routes.notifications import router as notifications_router
 from valuz_agent.api.routes.onboarding import router as onboarding_router
+from valuz_agent.api.routes.operations import router as operations_router
 from valuz_agent.api.routes.parser import settings_router as parser_settings_router
 from valuz_agent.api.routes.parser import system_router as parser_system_router
+from valuz_agent.api.routes.playbooks import router as playbooks_router
+from valuz_agent.api.routes.plugins import router as plugins_router
 from valuz_agent.api.routes.projects import router as projects_router
 from valuz_agent.api.routes.providers import router as providers_router
 from valuz_agent.api.routes.resources import router as resources_router
 from valuz_agent.api.routes.runs import router as runs_router
 from valuz_agent.api.routes.runtimes import router as runtimes_router
+from valuz_agent.api.routes.sessions import attachments_router
 from valuz_agent.api.routes.sessions import router as sessions_router
 from valuz_agent.api.routes.settings import router as settings_router
 from valuz_agent.api.routes.skills import router as skills_router
+from valuz_agent.api.routes.stream import router as stream_router
 from valuz_agent.api.routes.system import router as system_router
 from valuz_agent.api.routes.tasks import router as tasks_router
 from valuz_agent.api.routes.worktrees import router as worktrees_router
@@ -129,6 +140,9 @@ def create_app(
     # per-request ContextVars with a reset boundary, with deps in ``kwargs``).
     _auth_cls, _auth_kwargs = ext.auth_middleware
     app.add_middleware(_auth_cls, **_auth_kwargs)
+    # Outside auth, inside Timing: the locale must be bound before any handler
+    # (or any ``t()`` inside auth failures) renders text.
+    app.add_middleware(LocaleMiddleware)
     app.add_middleware(TimingMiddleware)
     app.add_middleware(
         CORSMiddleware,
@@ -145,6 +159,9 @@ def create_app(
     # only reach the host through the prefixed ingress resolves them too.
     api = APIRouter()
     api.include_router(providers_router)
+    api.include_router(channels_router)
+    api.include_router(citations_router)
+    api.include_router(document_research_router)
     api.include_router(connectors_router)
     api.include_router(browser_router)
     api.include_router(runs_router)
@@ -153,15 +170,24 @@ def create_app(
     api.include_router(system_router)
     api.include_router(projects_router)
     api.include_router(files_router)
+    api.include_router(artifacts_router)
     api.include_router(worktrees_router)
     api.include_router(sessions_router)
+    # Attachments live outside ``/v1/sessions``: a file uploads before any
+    # session exists and is bound by the turn that ships it.
+    api.include_router(attachments_router)
+    api.include_router(stream_router)
     api.include_router(skills_router)
     api.include_router(docs_router)
     api.include_router(automations_router)
+    api.include_router(playbooks_router)
+    api.include_router(operations_router)
+    api.include_router(backup_router)
     api.include_router(notifications_router)
     api.include_router(agents_router)
     api.include_router(agent_templates_router)
     api.include_router(marketplace_router)
+    api.include_router(plugins_router)
     api.include_router(tasks_router)
     api.include_router(analytics_router)
     api.include_router(resources_router)
@@ -196,6 +222,16 @@ def create_app(
 
         for kernel_router in get_kernel_routers():
             api.include_router(kernel_router)
+
+        # Codex reaches kernel-owned ToolDefs (e.g. PTC's execute_code)
+        # through the kernel's ``/mcp/toolkit/{session_id}`` bridge; the
+        # kernel app serves it standalone, the host must serve it in-process.
+        # Root mount on the OUTER app — codex's ``CODEX_TOOLKIT_BASE_URL``
+        # carries no api prefix. The session manager behind it is started by
+        # ``boot/steps.start_mcp_session_managers``.
+        from app.mcp_toolkit_router import mount_mcp_router
+
+        mount_mcp_router(app)
 
     # Mount the aggregate surface under each configured base path. ``None`` →
     # fall back to settings; an empty result → a single mount at "" (native
@@ -252,6 +288,11 @@ def create_app(
 
     _mount_internal("/_internal/mcp/automations", build_automations_mcp_asgi())
 
+    # Owner-scoped Playbook library + in-session invocation tool.
+    from valuz_agent.integrations.playbooks_mcp_server import build_playbooks_mcp_asgi
+
+    _mount_internal("/_internal/mcp/playbooks", build_playbooks_mcp_asgi())
+
     # In-process connectors MCP server — exposes the ``create_mcp`` tool to
     # every session so the agent can create connectors on behalf of the user.
     from valuz_agent.integrations.connectors_mcp_server import (
@@ -268,6 +309,20 @@ def create_app(
 
     _mount_internal("/_internal/mcp/toolkit/base", build_toolkit_mcp_asgi("base"))
     _mount_internal("/_internal/mcp/toolkit/lead", build_toolkit_mcp_asgi("lead"))
+
+    # Edition-registered always-on servers, through the same seam. The resolver
+    # advertises them as ``{backend_base_url}{path}/mcp`` — the identical shape
+    # it uses for the built-ins above — so they need the identical mounting, and
+    # an edition mounting by hand in ``register_api`` has to rediscover that.
+    # One that mounted at the bare path only shipped a spec whose advertised URL
+    # 404'd under every prefixed deployment. Specs registered before
+    # ``create_app`` (i.e. in ``register_capabilities``) are picked up here;
+    # a spec without a factory is an edition that still mounts its own.
+    from valuz_agent.ports.extensions import ext
+
+    for _spec in ext.always_on_mcp_specs:
+        if _spec.app_factory is not None:
+            _mount_internal(_spec.path, _spec.app_factory())
 
     # Startup/shutdown orchestration lives in ``boot/lifespan.py`` (bound via
     # ``lifespan=lifespan`` above). The startup order is load-bearing; see the

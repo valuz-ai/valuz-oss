@@ -79,12 +79,14 @@ async def _gate_subscription_login(channels: list[LLMChannel]) -> None:
     offer models that 422 at session creation. Clearing ``models`` /
     ``default_model`` leaves the card but removes the bad picks.
 
-    Applied on the **per-channel detail path** (``get_provider``) ONLY — that is
-    what the composer fetches. It is deliberately NOT applied to ``list_providers``:
-    that list feeds ``GET /v1/settings/model-options`` (onboarding ConnectStep +
-    Settings default-model picker), which already gate subscription rows
-    client-side on the keychain probe; stripping there drops the channel from
-    model-options and breaks the onboarding login card.
+    Applied on the **per-channel detail path** (``get_provider``) and on the
+    **opt-in gated list** (``list_providers(gated=True)``, the composer's
+    single-request feed — replaced the old 1+N detail fan-out). It is
+    deliberately NOT applied to the default ``list_providers``: that list feeds
+    ``GET /v1/settings/model-options`` (onboarding ConnectStep + Settings
+    default-model picker), which already gate subscription rows client-side on
+    the keychain probe; stripping there drops the channel from model-options
+    and breaks the onboarding login card.
 
     Mutates ``channels`` in place. Probes once per tool (cached); skipped entirely
     when subscription login is disabled (cloud / shared multi-user, no local
@@ -97,7 +99,14 @@ async def _gate_subscription_login(channels: list[LLMChannel]) -> None:
     present = {c.provider_kind for c in channels if c.provider_kind in _SUBSCRIPTION_KIND_TO_TOOL}
     if not present:
         return
-    logged_in = {kind: await detect_cli_login(_SUBSCRIPTION_KIND_TO_TOOL[kind]) for kind in present}
+    # Probe the CLIs concurrently — each cold probe is a subprocess spawn
+    # (seconds, Node CLI cold start), so sequential awaits stack claude+codex
+    # into one user-visible stall; gather pays only the slower of the two.
+    kinds = sorted(present)
+    results = await asyncio.gather(
+        *(detect_cli_login(_SUBSCRIPTION_KIND_TO_TOOL[kind]) for kind in kinds)
+    )
+    logged_in = dict(zip(kinds, results, strict=True))
     for c in channels:
         if c.provider_kind in _SUBSCRIPTION_KIND_TO_TOOL and not logged_in.get(c.provider_kind):
             c.models = []
@@ -432,17 +441,32 @@ def _load_subscription_models() -> dict[str, dict[str, Any]]:
     except (OSError, ValueError) as exc:
         logger.error("failed to load bundled subscription_models.json: %s", exc)
 
-    # Lazy import to avoid circular import at module load.
-    try:
-        from valuz_agent.infra.fs_registry import fs_registry
-        from valuz_agent.infra.local_identity import resolve_local_user_id
+    # Per-user model override file. Only meaningful for a LOCAL deployment:
+    # the file is a hand-placed override by the local install user, and
+    # finding it requires resolving the local install identity — which walks
+    # the whole data dir. On a cloud deployment there is no local user
+    # (identity comes from requests), the file is never written, and that
+    # walk cost minutes per pod start at module import on a network-mounted
+    # data dir. ``deployment_type`` is the field OSS already uses for exactly
+    # this boundary — its docstring: cloud skips "local identity seeding"
+    # that would leak synthetic owner ids into shared backends — so OSS
+    # desktop (``local``, default) keeps identical behaviour and cloud boot
+    # never touches local identity during import.
+    from valuz_agent.infra.config import settings
 
-        local_path = fs_registry.data_dir(resolve_local_user_id()) / "subscription_models.local.json"
-        if local_path.is_file():
-            with local_path.open("r", encoding="utf-8") as fh:
-                _ingest(json.load(fh))
-    except Exception as exc:  # noqa: BLE001 — don't let user override break boot
-        logger.warning("ignoring subscription_models.local.json: %s", exc)
+    if settings.deployment_type == "local":
+        # Lazy import to avoid circular import at module load.
+        try:
+            from valuz_agent.infra.fs_registry import fs_registry
+            from valuz_agent.infra.local_identity import resolve_local_user_id
+
+            local_dir = fs_registry.data_dir(resolve_local_user_id())
+            local_path = local_dir / "subscription_models.local.json"
+            if local_path.is_file():
+                with local_path.open("r", encoding="utf-8") as fh:
+                    _ingest(json.load(fh))
+        except Exception as exc:  # noqa: BLE001 — don't let user override break boot
+            logger.warning("ignoring subscription_models.local.json: %s", exc)
 
     return merged
 
@@ -585,6 +609,9 @@ def _derive_compatible_protocols(row: ProviderRow) -> list[str]:
     compatibility: DeepSeek / Zhipu / Moonshot / MiniMax expose both
     ``/v1/chat/completions`` (→ ``openai-completion`` for DeepAgents)
     and ``/anthropic/v1/messages`` (→ ``anthropic`` for claude_agent).
+    DeepSeek additionally serves the OpenAI Responses wire natively for
+    its whole lineup (→ ``openai-response`` for codex), per
+    https://api-docs.deepseek.com/quick_start/agent_integrations/codex.
 
     Subscription providers pin to their CLI's wire shape:
       * claude-subscription → ``["anthropic"]``
@@ -612,9 +639,14 @@ def _derive_compatible_protocols(row: ProviderRow) -> list[str]:
 
     # Built-in dual-protocol descriptor (DeepSeek / Zhipu / Moonshot /
     # MiniMax) → speaks anthropic via /anthropic + openai-completion
-    # via /v1.
+    # via /v1. DeepSeek also serves the Responses wire on the same
+    # base_url (whole lineup — see docstring), so codex derives for its
+    # models through the normal ``runtimes_for`` rule. ``anthropic``
+    # stays first so ``effective_protocol`` is unchanged.
     descriptor = _PROVIDER_MAP.get(row.provider_kind)
     if descriptor and descriptor.supports_protocol_selection:
+        if row.provider_kind == "deepseek":
+            return ["anthropic", "openai-completion", "openai-response"]
         return ["anthropic", "openai-completion"]
 
     # Subscription providers — pinned by descriptor.runtime_provider.
@@ -676,8 +708,42 @@ def _resolve_models(row: ProviderRow) -> list[LLMModel]:
                 continue
             raw_label = item.get("label") or item.get("display_name")
             label = raw_label if isinstance(raw_label, str) and raw_label.strip() else None
-            models.append(LLMModel(id=mid, label=label or fallback_labels.get(mid)))
+            raw_selection_hint = item.get("selection_hint")
+            selection_hint = (
+                raw_selection_hint
+                if isinstance(raw_selection_hint, str) and raw_selection_hint.strip()
+                else None
+            )
+            models.append(
+                LLMModel(
+                    id=mid,
+                    label=label or fallback_labels.get(mid),
+                    selection_hint=selection_hint,
+                    max_input_tokens=_coerce_max_input_tokens(item.get("max_input_tokens")),
+                )
+            )
     return models
+
+
+def _coerce_max_input_tokens(raw: object) -> int | None:
+    """Validate a stored ``max_input_tokens`` entry — positive int or None."""
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+        return None
+    return raw
+
+
+def declared_model_max_input_tokens(row: ProviderRow, model_id: str) -> int | None:
+    """The row's declared input window for ``model_id``, or ``None``.
+
+    Public lookup for ``provider_resolver`` — user rows can only declare a
+    window through stored dict model entries (no UI yet), so this is
+    usually ``None``; contributed (ADR-011) channels declare through
+    ``LLMModel.max_input_tokens`` directly and don't come through here.
+    """
+    for m in _resolve_models(row):
+        if m.id == model_id:
+            return m.max_input_tokens
+    return None
 
 
 def _models_with_runtimes(row: ProviderRow, compatible: list[str]) -> list[LLMModel]:
@@ -696,11 +762,14 @@ def _models_with_runtimes(row: ProviderRow, compatible: list[str]) -> list[LLMMo
     from valuz_agent.modules.settings.model_options import runtimes_for
 
     ch_runtimes = tuple(runtimes_for(compatible, provider_kind=row.provider_kind))
+
     stamped = [
         LLMModel(
             id=m.id,
             label=m.label,
+            selection_hint=m.selection_hint,
             runtimes=(m.runtimes if m.runtimes is not None else ch_runtimes),
+            max_input_tokens=m.max_input_tokens,
         )
         for m in _resolve_models(row)
     ]
@@ -723,7 +792,15 @@ def _stamp_contributed_runtimes(ch: LLMChannel) -> LLMChannel:
     # ``ch`` is a fresh per-call object from the contributor; ``LLMChannel`` is a
     # mutable dataclass and ``LLMModel`` is frozen, so rebuild the model rows.
     ch.models = [
-        m if m.runtimes is not None else LLMModel(id=m.id, label=m.label, runtimes=ch_runtimes)
+        m
+        if m.runtimes is not None
+        else LLMModel(
+            id=m.id,
+            label=m.label,
+            selection_hint=m.selection_hint,
+            runtimes=ch_runtimes,
+            max_input_tokens=m.max_input_tokens,
+        )
         for m in ch.models
     ]
     return ch
@@ -1144,7 +1221,7 @@ class ProviderService:
 
     # ── Queries ──────────────────────────────────────────────────
 
-    async def list_providers(self, user_id: str) -> list[LLMChannel]:
+    async def list_providers(self, user_id: str, *, gated: bool = False) -> list[LLMChannel]:
         rows = await self._ds.list_providers(user_id)
         policy = ext.policy
         # When the caller's org locks custom models, hide their own
@@ -1181,13 +1258,21 @@ class ProviderService:
         hidden = await policy.hidden_provider_ids(combined, user_id=user_id)
         if hidden:
             combined = [it for it in combined if it.id not in hidden]
-        # NB: subscription-login gating is applied in ``get_provider`` (the
-        # per-channel detail the composer fetches), NOT here. The list feeds
-        # ``GET /v1/settings/model-options`` (onboarding ConnectStep + Settings
-        # default-model picker), which already gate subscription rows client-side
-        # on the CLI keychain probe (``status="client_resolved"`` +
-        # ``isModelProviderUsable``). Stripping models here would drop the channel
-        # from model-options entirely and break the onboarding login card.
+        # NB: by default subscription-login gating is NOT applied here — the
+        # bare list feeds ``GET /v1/settings/model-options`` (onboarding
+        # ConnectStep + Settings default-model picker), which already gate
+        # subscription rows client-side on the CLI keychain probe
+        # (``status="client_resolved"`` + ``isModelProviderUsable``). Stripping
+        # models there would drop the channel from model-options entirely and
+        # break the onboarding login card.
+        #
+        # ``gated=True`` (``GET /v1/providers?gated=1``) opts in to the same
+        # gate ``get_provider`` applies, so the composer surfaces can build
+        # their model pickers from ONE request instead of fanning out a
+        # per-channel detail fetch (1+N, each subscription detail paying a CLI
+        # login probe) on every conversation-page bootstrap.
+        if gated:
+            await _gate_subscription_login(combined)
         return combined
 
     async def get_provider(self, user_id: str, provider_id: str) -> LLMChannelDetail:

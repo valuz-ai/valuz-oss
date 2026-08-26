@@ -246,6 +246,24 @@ class TestFilesystemSkillSource:
         manifests = FilesystemSkillSource().list_skills(RuntimeContext())
         assert [manifest.slug for manifest in manifests] == ["shared"]
 
+    def test_should_skip_host_compatibility_roots_in_cloud(self, tmp_path, monkeypatch):
+        custom_root = tmp_path / "cloud-user-skills" / "{user_id}"
+        fake_home = tmp_path / "host-home"
+        monkeypatch.setattr(settings, "deployment_type", "cloud")
+        monkeypatch.setattr(settings, "user_skills_dir", custom_root)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        _write_skill(tmp_path / "cloud-user-skills" / "owner-1", "cloud-owned")
+        _write_skill(fake_home / ".agents" / "skills", "host-agents")
+        _write_skill(fake_home / ".claude" / "skills", "host-claude")
+        _write_skill(fake_home / ".codex" / "skills", "host-codex")
+
+        manifests = FilesystemSkillSource().list_skills(
+            RuntimeContext(user_id="owner-1")
+        )
+
+        assert [manifest.slug for manifest in manifests] == ["cloud-owned"]
+
 
 class TestFolderBirthtime:
     """The DESC sort on the skill management page hangs off birthtime,

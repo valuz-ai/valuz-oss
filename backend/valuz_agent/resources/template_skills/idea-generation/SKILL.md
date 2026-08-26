@@ -1,6 +1,6 @@
 ---
 name: idea-generation
-description: Systematic stock screening and investment idea sourcing for global equity markets (focus US / HK / A-shares, also other markets). Combines quantitative screens, thematic research, and pattern recognition to surface new long and short ideas. Powered by valuz-stock (quotes, financials, factor screening via factors_screen, concepts, backtest) and valuz-search (earnings, conferences, research reports, minutes, filings, news). Triggers on "选股", "股票筛选", "寻找机会", "stock screen", "stock ideas", "find ideas", or "screen for opportunities".
+description: Systematic stock screening and investment idea sourcing for global equity markets (focus US / HK / A-shares, also other markets). Combines quantitative screens, thematic research, and pattern recognition to surface new long and short ideas. Powered by valuz-data (quotes, financials, factor screening via screen_instruments, themes, and run_backtest) and valuz-search (categorized earnings, conference, research, filing, and news documents). Triggers on "选股", "股票筛选", "寻找机会", "stock screen", "stock ideas", "find ideas", or "screen for opportunities".
 ---
 
 # idea-generation
@@ -13,42 +13,42 @@ Systematically surface new **全球股票市场（美股/港股/A 股为主，�
 
 Two MCP connectors cover the full sourcing workflow:
 
-- `valuz-stock` (Stock MCP) — 行情、财务、指标、因子筛选数值数据. 用**裸代码** (`AAPL` / `00700` / `600519`).
-- `valuz-search` (Search MCP) — 财报、公告、研报、纪要、电话会检索. 用 **`market:ticker`** 格式 (`US:AAPL` / `HK:00700` / `SH:600519`).
+- `valuz-data` (Valuz Data MCP) — 行情、财务、指标、因子筛选与完整文档读取。
+- `valuz-search` (Search MCP) — 财报、公告、研报、纪要、电话会发现。
 
-> **Symbol formats** — `valuz-stock` 用裸代码；`valuz-search` 用 `market:ticker`；`factors_screen` 用 `market` 参数 (`cn` / `hk` / `us`).
+> **Symbol format:** `valuz-search` and `valuz-data` both use canonical `MARKET:LOCAL` symbols (`US:AAPL` / `HK:00700` / `SH:600519`). Call `resolve_symbols` first for aliases or non-canonical input. Search on `valuz-search`; read selected documents and all structured data on `valuz-data`.
 
-用 `valuz-stock` 的因子引擎 (`factors` / `factors_compute` / `factors_screen`) 做量化筛选，用 `valuz-search` 取定性催化/主题资料。
+用 `valuz-data` 的因子引擎 (`list_factors` / `compute_factors` / `screen_instruments`) 做量化筛选，用 `valuz-search` 取定性催化/主题资料。
 
-### Primary: valuz-stock
+### Primary: valuz-data
 
 ```python
-factors()                                     → 列出可用因子 (PE/PB/ROE/RSI/MACD…)
-factors_compute(symbol, formula)              → 算单只标的因子值, 验证公式
-factors_screen(market, formula)               → 因子选股 (核心), market=cn/hk/us
-stock_quote(symbol)                           → Price, PE, PB, market cap
-index_quote(symbol)                           → 指数行情
-company_overview(symbol)                       → 公司概览
-income_statement(symbol, period, limit)       → Financial metrics
-balance_sheet(symbol, period, limit)          → Balance sheet health
-cashflow_statement(symbol, period, limit)     → 现金流
-revenue_breakdown(symbol)                      → 收入拆分
-industry_constituents(...)                     → Peer comparison
-concepts_today() / concepts_latest()           → 当日/最新热门概念
-ohlcv(symbol) / kline(symbol)                  → Price trends, momentum
-backtest(...)                                  → 策略回测
+list_factors()                                → 列出可用因子 (PE/PB/ROE/RSI/MACD…)
+compute_factors(symbol, formula)              → 算单只标的因子值, 验证公式
+screen_instruments(market, formula)               → 因子选股 (核心), market=cn/hk/us
+get_snapshots(symbol)                           → Current price and market activity
+get_valuations(kind="latest", symbol)          → PE, PB, market cap
+get_company(kind="profile", symbol)            → 公司概览
+get_financial_statements(statement_type="income", symbol, period, limit)   → Income data
+get_financial_statements(statement_type="balance", symbol, period, limit)  → Balance sheet
+get_financial_statements(statement_type="cash_flow", symbol, period, limit) → Cash flow
+get_financial_statements(statement_type="revenue_breakdown", symbol)       → 收入拆分
+get_industries(kind="constituents", ...)       → Peer comparison
+get_themes(kind="list")                        → 主题列表
+get_bars(kind="bars", symbol)                  → Price trends, momentum
+run_backtest(...)                                  → 策略回测
 ```
 
 ### Secondary Screening Data
 
 | Data | Source | Use |
 |------|--------|-----|
-| Hot concepts / themes | valuz-stock (`concepts_today`, `concepts_latest`) | Theme rotation, where the money is going |
-| Index / industry constituents | valuz-stock (`index_constituents`, `industry_constituents`) | Universe definition, peer set |
-| Shareholder structure | valuz-stock (`company_shareholders`) | Institutional accumulation/distribution |
-| Earnings calendar | valuz-stock (`earnings_calendar`) | Catalyst timing |
-| Institutional / analyst views | valuz-search (`reports_search`) | Sell-side conviction, target prices |
-| Filings & disclosures | valuz-search (`filings_search`) | Insider transactions, lock-up, M&A |
+| Themes | valuz-data (`get_themes(kind="list"|"constituents")`) | Theme universe and constituents |
+| Index / industry constituents | valuz-data (`get_index`, `get_industries`) | Universe definition, peer set |
+| Shareholder structure | valuz-data (`get_ownership`) | Institutional accumulation/distribution |
+| Earnings calendar | valuz-data (`get_calendar`) | Catalyst timing |
+| Institutional / analyst views | valuz-search (`search_documents`) | Sell-side conviction, target prices |
+| Filings & disclosures | valuz-search (`search_documents`) | Insider transactions, lock-up, M&A |
 
 ## Workflow
 
@@ -77,8 +77,8 @@ backtest(...)                                  → 策略回测
 
 ### Step 2: Quantitative Screens
 
-筛选用 `valuz-stock` 的 **`factors_screen`** (核心)，传 `market` (`cn` / `hk` / `us`) + 因子 `formula`。
-先用 `factors()` 看可用因子，必要时用 `factors_compute(symbol, formula)` 在单只标的上验证公式再放大到全市场。
+筛选用 `valuz-data` 的 **`screen_instruments`** (核心)，传 `market` (`cn` / `hk` / `us`) + 因子 `formula`。
+先用 `list_factors()` 看可用因子，必要时用 `compute_factors(symbol, formula)` 在单只标的上验证公式再放大到全市场。
 
 > **Factor syntax** — 技术: `RSI(14)` / `MACD()` / `BOLL(20,2)` / `KDJ()` / `ATR(14)`；
 > 基本面: `PE()` / `PE_TTM()` / `PB()` / `ROE()` / `ROA()` / `EPS()`；
@@ -88,7 +88,7 @@ backtest(...)                                  → 策略回测
 **Screen 1: Deep Value (深度价值)**
 
 ```python
-factors_screen(market="us", formula="(PE_TTM()<15)&(PB()<1.5)&(ROE()>0.10)")
+screen_instruments(market="us", formula="(PE_TTM()<15)&(PB()<1.5)&(ROE()>0.10)")
 # 港股 / A 股: market="hk" / market="cn"
 ```
 
@@ -97,8 +97,8 @@ Output: Value candidates with potential mispricing.
 **Screen 2: Growth at Reasonable Price (GARP)**
 
 ```python
-factors_screen(market="us", formula="(PE()<25)&(ROE()>0.15)&(EPS()>0)")
-# PEG 思路: 用 factors_compute 验证 PE() 与盈利增速的比值，再以 PE 上限近似 GARP
+screen_instruments(market="us", formula="(PE()<25)&(ROE()>0.15)&(EPS()>0)")
+# PEG 思路: 用 compute_factors 验证 PE() 与盈利增速的比值，再以 PE 上限近似 GARP
 ```
 
 Output: Quality growth at reasonable multiples.
@@ -106,8 +106,8 @@ Output: Quality growth at reasonable multiples.
 **Screen 3: Momentum (趋势跟踪)**
 
 ```python
-factors_screen(market="us", formula="(RSI(14)>40)&(RSI(14)<70)&(MACD()>0)")
-# 趋势确认可叠加均线/布林: 用 factors() 查可用价格因子, factors_compute 验证
+screen_instruments(market="us", formula="(RSI(14)>40)&(RSI(14)<70)&(MACD()>0)")
+# 趋势确认可叠加均线/布林: 用 list_factors() 查可用价格因子, compute_factors 验证
 ```
 
 Output: Momentum names in uptrends.
@@ -116,9 +116,9 @@ Output: Momentum names in uptrends.
 
 ```python
 # 量化部分: 当前承压但盈利转正/资产负债改善的标的
-factors_screen(market="cn", formula="(ROE()>0)&(PB()<1.5)")
+screen_instruments(market="cn", formula="(ROE()>0)&(PB()<1.5)")
 # 定性催化 (新管理层 / 债务重组 / 订单回暖 / 内部人买入):
-#   reports_search / filings_search / news_search (valuz-search), 用 market:ticker
+#   search_documents(category="all") (valuz-search), 用 market:ticker
 ```
 
 Output: Potential turnaround candidates.
@@ -126,8 +126,8 @@ Output: Potential turnaround candidates.
 **Screen 5: Dividend Yield (高股息)**
 
 ```python
-factors_screen(market="hk", formula="(PB()<2)&(ROE()>0.10)")
-# 股息率/派息率/FCF 用 income_statement / cashflow_statement 核验 (valuz-stock, 裸代码)
+screen_instruments(market="hk", formula="(PB()<2)&(ROE()>0.10)")
+# 股息率/派息率/FCF 用 get_financial_statements(statement_type=income|balance|cash_flow) 核验 (valuz-data, MARKET:LOCAL 规范代码)
 ```
 
 Output: High-quality income names.
@@ -136,10 +136,10 @@ Output: High-quality income names.
 
 ```python
 # 事件驱动以检索为主, 用 valuz-search (market:ticker):
-#   filings_search  → 限售解禁 / M&A / 重组公告
-#   news_search     → 集采结果、指数纳入/剔除、监管催化
-#   reports_search  → 卖方对事件的解读
-# earnings_calendar (valuz-stock) 锁定业绩披露时点
+#   search_documents  → 限售解禁 / M&A / 重组公告
+#   search_documents     → 集采结果、指数纳入/剔除、监管催化
+#   search_documents  → 卖方对事件的解读
+# get_calendar (valuz-data) 锁定业绩披露时点
 ```
 
 Output: Event-driven opportunities.
@@ -150,31 +150,31 @@ Output: Event-driven opportunities.
 
 | Theme Type | Examples | Data Sources |
 |-----------|-------------------|-------------|
-| Policy-driven | 国产替代, 新基建, 双碳, reshoring | `news_search` / `filings_search` (valuz-search) |
-| Technology | AI应用, 自动驾驶, 机器人 | `reports_search` / `news_search` (valuz-search) |
-| Demographics | 老龄化, 少子化 | `reports_search` (valuz-search) |
-| Consumption | 消费升级, 国货崛起 | `reports_search` / `news_search` (valuz-search) |
-| Industrial | 高端制造, 专精特新 | `reports_search` / `filings_search` (valuz-search) |
+| Policy-driven | 国产替代, 新基建, 双碳, reshoring | `search_documents` (valuz-search) |
+| Technology | AI应用, 自动驾驶, 机器人 | `search_documents` (valuz-search) |
+| Demographics | 老龄化, 少子化 | `search_documents` (valuz-search) |
+| Consumption | 消费升级, 国货崛起 | `search_documents` (valuz-search) |
+| Industrial | 高端制造, 专精特新 | `search_documents` (valuz-search) |
 
 **Thematic screening approach:**
-1. Define theme and investable universe — `concepts_today()` / `concepts_latest()` (valuz-stock) 找当前热门概念，`industry_constituents(...)` 定义成分股
-2. Map companies (US / HK / A-share and beyond) to theme — 用 `comprehensive_search` / `reports_search` (valuz-search) 佐证个股的主题表达度
-3. Rank by exposure and quality — 叠加 `factors_screen(market=..., formula=...)` 在主题股池内做质量过滤
-4. Identify pure-plays vs beneficiaries — `revenue_breakdown(symbol)` (valuz-stock) 看收入对主题的纯度
+1. Define theme and investable universe — `get_themes(kind="list")` then `get_themes(kind="constituents")`; use `get_industries(kind="constituents")` for an industry universe
+2. Map companies (US / HK / A-share and beyond) to theme — 用 `search_documents` (valuz-search) 佐证个股的主题表达度
+3. Rank by exposure and quality — 叠加 `screen_instruments(market=..., formula=...)` 在主题股池内做质量过滤
+4. Identify pure-plays vs beneficiaries — `get_financial_statements(statement_type="revenue_breakdown", symbol)` 看收入对主题的纯度
 
 ### Step 4: Technical Analysis
 
-**Technical considerations** (factor 语法可直接进 `factors_screen` / `factors_compute`，原始价量用 `ohlcv` / `kline`):
+**Technical considerations** (factor 语法可直接进 `screen_instruments` / `compute_factors`，原始价量用 `get_bars` / `get_bars`):
 
 | Indicator | Factor / Tool | Use |
 |-----------|---------------|-----|
-| 均线 (Moving averages) | `BOLL(20,2)` + `kline(symbol)` | Trend direction (5/10/20/60/120 day) |
+| 均线 (Moving averages) | `BOLL(20,2)` + `get_bars(kind="bars", symbol)` | Trend direction (5/10/20/60/120 day) |
 | MACD | `MACD()` | Momentum and trend changes |
 | RSI | `RSI(14)` | Overbought/oversold |
 | KDJ | `KDJ()` | Short-term momentum |
-| 成交量 (Volume) | `ohlcv(symbol)` | Confirmation of moves |
+| 成交量 (Volume) | `get_bars(kind="bars", symbol)` | Confirmation of moves |
 | 波动率 (Volatility) | `ATR(14)` | Risk sizing, breakout strength |
-| 概念热度 (Theme heat) | `concepts_today()` | Where the money is rotating |
+| 概念热度 (Theme heat) | `get_themes()` | Where the money is rotating |
 
 **Chart patterns to watch:**
 - 突破 (breakout) — above resistance
@@ -184,14 +184,14 @@ Output: Event-driven opportunities.
 
 ### Step 5: Fundamental Deep Dive
 
-**For each candidate** (核验用 valuz-stock 裸代码 + valuz-search `market:ticker`):
+**For each candidate** (核验用 valuz-data MARKET:LOCAL 规范代码 + valuz-search `market:ticker`):
 
-1. **Business model review**: How does company make money? — `company_overview(symbol)`, `revenue_breakdown(symbol)`
-2. **Financial health**: Balance sheet, cash flow, earnings quality — `income_statement` / `balance_sheet` / `cashflow_statement(symbol, period, limit)`
-3. **Competitive position**: Market share, moat, pricing power — `industry_constituents(...)` + `reports_search` (valuz-search)
-4. **Management quality**: Track record, capital allocation — `filings_search` / `minutes_search` (valuz-search)
-5. **Valuation**: vs peers, vs history, vs international peers — `stock_quote(symbol)` + `factors_compute(symbol, "PE_TTM()")` / `PB()`
-6. **Catalyst**: What could re-rate the stock? — `earnings_search` / `news_search` / `reports_search` (valuz-search), `earnings_calendar` (valuz-stock)
+1. **Business model review**: How does company make money? — `get_company(kind="profile", symbol)`, `get_financial_statements(statement_type="revenue_breakdown", symbol)`
+2. **Financial health**: Balance sheet, cash flow, earnings quality — `get_financial_statements(statement_type="balance"|"cash_flow", symbol, period, limit)`
+3. **Competitive position**: Market share, moat, pricing power — `get_industries(kind="constituents", ...)` + `search_documents(category="research_reports")`
+4. **Management quality**: Track record, capital allocation — `search_documents` (valuz-search)
+5. **Valuation**: vs peers, vs history, vs international peers — `get_snapshots(symbol)` + `compute_factors(symbol, "PE_TTM()")` / `PB()`
+6. **Catalyst**: What could re-rate the stock? — `search_documents` (valuz-search), `get_calendar` (valuz-data)
 
 **Red flag checklist:**
 - 商誉占比过高 (>30% of equity)
@@ -223,9 +223,9 @@ Tickers span markets — US (`AAPL`), HK (`0700.HK`), A-share (`600519.SH`), and
 ### Step 7: Monitor & Update
 
 **Ongoing tracking:**
-- Weekly price and news updates — `stock_quote(symbol)` (valuz-stock), `news_search` (valuz-search)
-- Catalyst tracking — `earnings_calendar` (valuz-stock), `earnings_search` / `filings_search` (valuz-search)
-- Thesis validation / invalidation — `reports_search` (valuz-search), `factors_compute(symbol, formula)` to re-check the screen metrics
+- Weekly price and news updates — `get_snapshots(symbol)` (valuz-data), `search_documents` (valuz-search)
+- Catalyst tracking — `get_calendar` (valuz-data), `search_documents` (valuz-search)
+- Thesis validation / invalidation — `search_documents` (valuz-search), `compute_factors(symbol, formula)` to re-check the screen metrics
 - Position sizing recommendations
 
 **Update triggers:**
@@ -243,8 +243,8 @@ Tickers span markets — US (`AAPL`), HK (`0700.HK`), A-share (`600519.SH`), and
 | 涨跌停限制 (price limits, where they apply) | Momentum may be interrupted |
 | 散户占比 (retail participation) | Sentiment-driven overreactions more common in retail-heavy markets |
 | 政策敏感 (policy sensitivity) | Regulatory risk premium in certain sectors |
-| Cross-border fund flows | Track foreign flows for large-caps (`company_shareholders` for ownership shifts) |
-| 概念轮动 (Concept rotation) | `concepts_today` / `concepts_latest` signal sentiment shifts |
+| Cross-border fund flows | Track foreign flows for large-caps (`get_ownership` for ownership shifts) |
+| 概念轮动 (Concept rotation) | `get_themes` / `get_themes` signal sentiment shifts |
 | 停牌 (Trading halt) | Due diligence risk for suspended names |
 
 ### Common Investment Styles

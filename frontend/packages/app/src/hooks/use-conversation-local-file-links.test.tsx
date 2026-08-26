@@ -54,6 +54,66 @@ describe("useConversationLocalFileLinks", () => {
     expect(previewFile).not.toHaveBeenCalled();
   });
 
+  it("preserves a PDF page target when previewing a project file", () => {
+    const previewFile = vi.fn();
+    const openFile = vi.fn();
+
+    const { result } = renderHook(() =>
+      useConversationLocalFileLinks({
+        projectRootPath: "/Users/ada/project",
+        previewFile,
+        openFile,
+      }),
+    );
+
+    expect(
+      result.current.resolveLocalFileHref(
+        "/Users/ada/project/reports/plan.pdf#page=12&zoom=page-width",
+      ),
+    ).toEqual({
+      kind: "preview",
+      path: "reports/plan.pdf",
+      target: { page: 12 },
+    });
+
+    act(() => {
+      result.current.openLocalFileHref(
+        "/Users/ada/project/reports/plan.pdf#page=12&zoom=page-width",
+      );
+    });
+
+    expect(previewFile).toHaveBeenCalledWith("reports/plan.pdf", { page: 12 });
+    expect(openFile).not.toHaveBeenCalled();
+  });
+
+  it("accepts query page targets and ignores invalid pages", () => {
+    const previewFile = vi.fn();
+    const openFile = vi.fn();
+
+    const { result } = renderHook(() =>
+      useConversationLocalFileLinks({
+        projectRootPath: "/Users/ada/project",
+        previewFile,
+        openFile,
+      }),
+    );
+
+    expect(
+      result.current.resolveLocalFileHref(
+        "/Users/ada/project/reports/plan.pdf?page=7",
+      ),
+    ).toEqual({
+      kind: "preview",
+      path: "reports/plan.pdf",
+      target: { page: 7 },
+    });
+    expect(
+      result.current.resolveLocalFileHref(
+        "/Users/ada/project/reports/plan.pdf#page=0",
+      ),
+    ).toEqual({ kind: "preview", path: "reports/plan.pdf" });
+  });
+
   it("renders outside absolute paths as blocked local links in managed cloud mode", () => {
     const previewFile = vi.fn();
     const openFile = vi.fn();

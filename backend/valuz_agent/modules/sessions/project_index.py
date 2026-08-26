@@ -12,6 +12,10 @@ Every kernel ``save_session`` **creation** site must be paired with a
 
 from __future__ import annotations
 
+import asyncio
+from collections import OrderedDict
+from typing import Any
+
 from sqlalchemy import delete, func, select, update
 
 from valuz_agent.infra.db import async_unit_of_work
@@ -20,6 +24,7 @@ from valuz_agent.modules.sessions.models import ProjectSessionRow
 
 __all__ = [
     "count_for_project",
+    "ensure_legacy_session_index",
     "get_queue_paused_at",
     "list_recent",
     "list_session_ids",
@@ -29,6 +34,119 @@ __all__ = [
     "remove_for_project",
     "set_queue_paused",
 ]
+
+_LEGACY_SCAN_PAGE_SIZE = 500
+_RECONCILED_OWNER_LIMIT = 1024
+_reconciled_owners: OrderedDict[str, None] = OrderedDict()
+_reconcile_locks: dict[str, asyncio.Lock] = {}
+
+
+def _mark_owner_reconciled(user_id: str) -> None:
+    _reconciled_owners[user_id] = None
+    _reconciled_owners.move_to_end(user_id)
+    while len(_reconciled_owners) > _RECONCILED_OWNER_LIMIT:
+        evicted_user_id, _ = _reconciled_owners.popitem(last=False)
+        _reconcile_locks.pop(evicted_user_id, None)
+
+
+def _legacy_index_row(session: Any, *, user_id: str) -> ProjectSessionRow | None:
+    """Rebuild one host index row from the metadata kept by legacy sessions."""
+    metadata = getattr(session, "metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    valuz_meta = metadata.get("valuz")
+    if not isinstance(valuz_meta, dict):
+        return None
+
+    session_id = str(getattr(session, "id", "") or "")
+    project_id = str(valuz_meta.get("project_id") or "")
+    if not session_id or not project_id:
+        return None
+
+    run_kind = str(valuz_meta.get("run_kind") or "")
+    if run_kind == "lead":
+        kind = "task_lead"
+    elif run_kind == "subtask" or valuz_meta.get("task_id"):
+        kind = "task_subtask"
+    else:
+        kind = "chat"
+
+    raw_origin = valuz_meta.get("origin")
+    origin = str(raw_origin) if raw_origin else ("task" if kind != "chat" else "user")
+    raw_created_at = getattr(session, "created_at", None)
+    created_at = raw_created_at if isinstance(raw_created_at, int) else now_ms()
+    return ProjectSessionRow(
+        user_id=user_id,
+        project_id=project_id,
+        session_id=session_id,
+        kind=kind,
+        origin=origin,
+        created_at=created_at,
+        updated_at=created_at,
+    )
+
+
+async def ensure_legacy_session_index(user_id: str) -> int:
+    """Backfill pre-index kernel sessions once per owner and process.
+
+    ``valuz_project_session`` was introduced after durable kernel sessions. Old
+    sessions still carry their project/task scope in ``metadata.valuz``; use
+    that owner-scoped source to self-heal missing rows before serving history.
+    The bounded process cache keeps the mobile activity poll from rescanning.
+    """
+    if not user_id:
+        raise ValueError("user_id is required")
+    if user_id in _reconciled_owners:
+        _reconciled_owners.move_to_end(user_id)
+        return 0
+
+    lock = _reconcile_locks.setdefault(user_id, asyncio.Lock())
+    async with lock:
+        if user_id in _reconciled_owners:
+            _reconciled_owners.move_to_end(user_id)
+            return 0
+
+        # Local import keeps the sessions service facade independent from the
+        # execution adapter during module initialization.
+        from valuz_agent.adapters import kernel_client
+
+        added = 0
+        offset = 0
+        while True:
+            sessions = await kernel_client.list_sessions(
+                user_id,
+                limit=_LEGACY_SCAN_PAGE_SIZE,
+                offset=offset,
+            )
+            rows = [
+                row
+                for session in sessions
+                if (row := _legacy_index_row(session, user_id=user_id)) is not None
+            ]
+            if rows:
+                session_ids = [row.session_id for row in rows]
+                async with async_unit_of_work() as db:
+                    existing_ids = set(
+                        (
+                            await db.execute(
+                                select(ProjectSessionRow.session_id).where(
+                                    ProjectSessionRow.session_id.in_(session_ids)
+                                )
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    missing_rows = [row for row in rows if row.session_id not in existing_ids]
+                    db.add_all(missing_rows)
+                    added += len(missing_rows)
+
+            if len(sessions) < _LEGACY_SCAN_PAGE_SIZE:
+                break
+            offset += len(sessions)
+
+        _mark_owner_reconciled(user_id)
+        return added
 
 
 async def record(
@@ -85,9 +203,7 @@ async def list_session_ids(
     if user_id is None:
         raise ValueError("user_id is required")
     async with async_unit_of_work(commit=False) as db:
-        stmt = select(ProjectSessionRow.session_id).where(
-            ProjectSessionRow.user_id == user_id
-        )
+        stmt = select(ProjectSessionRow.session_id).where(ProjectSessionRow.user_id == user_id)
         if project_id is not None:
             stmt = stmt.where(ProjectSessionRow.project_id == project_id)
         if kind is not None:
@@ -233,18 +349,26 @@ async def remove_for_project(project_id: str, user_id: str | None) -> list[str]:
         return ids
 
 
-async def list_recent(limit: int = 200, user_id: str | None = None) -> list[ProjectSessionRow]:
-    """Most-recently-active index rows for the caller across all their projects —
-    the runs-overview / sidebar RECENTS pool. Ordered by ``updated_at`` (bumped
-    each turn by ``touch_activity``) so a chat with a new message is in the pool
-    and floats to the top, not pinned to when it was first created."""
+async def list_recent(
+    limit: int = 200,
+    user_id: str | None = None,
+    project_id: str | None = None,
+) -> list[ProjectSessionRow]:
+    """Most-recently-active index rows for the caller — the runs-overview /
+    sidebar RECENTS pool. Ordered by ``updated_at`` (bumped each turn by
+    ``touch_activity``) so a chat with a new message is in the pool and floats
+    to the top, not pinned to when it was first created.
+
+    ``project_id`` scopes the window to one project. The unscoped pool is a
+    single global recency window shared by every session, so an install with
+    hundreds of quick chats pushes project conversations out of it entirely —
+    the sidebar's per-project accordion asks for its own window instead of
+    fishing its rows out of the global one."""
     if user_id is None:
         raise ValueError("user_id is required")
     async with async_unit_of_work(commit=False) as db:
-        stmt = (
-            select(ProjectSessionRow)
-            .where(ProjectSessionRow.user_id == user_id)
-            .order_by(ProjectSessionRow.updated_at.desc())
-            .limit(limit)
-        )
+        stmt = select(ProjectSessionRow).where(ProjectSessionRow.user_id == user_id)
+        if project_id is not None:
+            stmt = stmt.where(ProjectSessionRow.project_id == project_id)
+        stmt = stmt.order_by(ProjectSessionRow.updated_at.desc()).limit(limit)
         return list((await db.execute(stmt)).scalars().all())

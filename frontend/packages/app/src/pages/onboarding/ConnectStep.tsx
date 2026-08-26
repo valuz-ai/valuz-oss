@@ -14,6 +14,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  ModelSelectionHint,
   type ProviderOption,
 } from "@valuz/ui";
 import {
@@ -64,7 +65,7 @@ const API_KEY_DISPLAY: Record<string, string> = {
 };
 
 const DEFAULT_BADGE_CLASS =
-  "h-4 rounded-[4px] px-1 py-0 text-[10px] leading-none font-normal";
+  "h-4 rounded-sm px-1 py-0 text-micro leading-none font-normal";
 const AVAILABLE_BADGE_CLASS = "rounded-full text-2xs";
 
 // group key → section header i18n key. api_key is handled separately (it always
@@ -391,7 +392,7 @@ const OptionCard = ({
     >
       <div className="flex items-center gap-3.5 px-4 py-3.5" {...headerProps}>
         <div
-          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[13px] font-bold ${
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-sm font-bold ${
             selected || isDefault
               ? "bg-brand/10 text-brand"
               : "bg-surface-soft text-ink-meta"
@@ -476,11 +477,22 @@ const OptionCard = ({
             disabled={busy}
           >
             <SelectTrigger className="w-full text-xs">
-              <SelectValue
-                placeholder={t(
-                  "onboarding.pickModelHint" as Parameters<typeof t>[0],
-                )}
-              />
+              {currentModel ? (
+                // Collapsed trigger: plain name only. ``SelectValue`` would
+                // mirror the option row (including its hint cell), and the
+                // hint belongs to the open list.
+                <span className="truncate text-ink-heading">
+                  {currentModel.label !== currentModel.model_id
+                    ? currentModel.label
+                    : modelLabel(currentModel.model_id)}
+                </span>
+              ) : (
+                <SelectValue
+                  placeholder={t(
+                    "onboarding.pickModelHint" as Parameters<typeof t>[0],
+                  )}
+                />
+              )}
             </SelectTrigger>
             <SelectContent>
               {models.map((m) => (
@@ -495,7 +507,10 @@ const OptionCard = ({
                       raw id — fall back to the static brand catalog (e.g.
                       ``claude-sonnet-4-6`` → "Sonnet 4.6"), same as the Composer's
                       AgentModelPicker. */}
-                  {m.label !== m.model_id ? m.label : modelLabel(m.model_id)}
+                  <span className="min-w-0 flex-1 truncate">
+                    {m.label !== m.model_id ? m.label : modelLabel(m.model_id)}
+                  </span>
+                  <ModelSelectionHint hint={m.selection_hint} />
                 </SelectItem>
               ))}
             </SelectContent>

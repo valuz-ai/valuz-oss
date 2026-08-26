@@ -58,7 +58,21 @@ down both):
 ./scripts/dev.sh frontend         # frontend only
 VALUZ_BACKEND_PORT=18080 ./scripts/dev.sh
 VALUZ_RELOAD=1 ./scripts/dev.sh   # uvicorn --reload
+VALUZ_EGRESS_FRONTENDS=0 ./scripts/dev.sh  # emergency: disable desktop network management
 ```
+
+The desktop makes both connection-management choices available without a launch
+flag. New installations start with model-client-managed connections; switching
+to Valuz management in Settings replaces the backend's in-memory network
+registry and rebuilds only affected model runtimes. The normal same-version
+path keeps the backend process running; restart is a compatibility fallback for
+an older or unhealthy backend. If tasks are active, Settings asks before
+interrupting them and leaves the current mode unchanged when the user cancels
+or an interrupt fails. Opening an existing idle Codex session prepares its
+local app-server/thread in the background without sending a model request, so a
+later Send can reuse it. See [the unified network egress design](docs/design/unified-network-egress.md)
+for the security boundary, admission matrix, monitoring semantics, and rollout
+gates.
 
 ## Tech Stack
 
@@ -125,6 +139,59 @@ It runs three phases in sequence: **backend** (PyInstaller bundles
 `valuz-server`), **CLI** (Go builds the `valuz` binary), and **frontend** (Vite +
 electron-builder produce the `.app` and DMG, named
 `valuz-<edition>-<platform>-<arch>`).
+
+### Docker self-hosting
+
+The root [`compose.yaml`](compose.yaml) builds and runs the complete browser
+deployment: the `valuz-oss-backend` FastAPI service and the
+`valuz-oss-webui` nginx service. The backend applies its database migrations
+automatically on startup, and nginx proxies the WebUI's same-origin `/api`
+requests (including SSE streams and file uploads) to it.
+
+Docker Engine with Docker Compose v2 is required. From the repository root:
+
+```bash
+docker compose up --build --detach
+docker compose ps
+```
+
+Open <http://localhost:8080>. Configure an LLM provider and API key in the
+WebUI's Settings page before starting a conversation. To publish the WebUI on a
+different local port:
+
+```bash
+VALUZ_WEBUI_PORT=18080 docker compose up --build --detach
+```
+
+The default bind address is `127.0.0.1`. The OSS local deployment does not add
+public-user authentication, so do not expose it directly to the internet. If
+remote access is required, place it behind an authenticated reverse proxy; set
+`VALUZ_WEBUI_BIND` only for an intentionally secured network binding.
+
+Useful lifecycle commands:
+
+```bash
+docker compose logs --follow backend
+docker compose up --detach                 # start existing images
+docker compose down                        # stop containers; keep user data
+docker compose down --volumes              # also delete all Valuz Docker data
+```
+
+User configuration, databases, uploaded files, and credentials are stored in
+the `valuz-data` volume. Project workspaces are stored in
+`valuz-workspaces`. Replace the latter volume with an absolute host bind mount
+in `compose.yaml` if project files must be directly accessible from the host.
+
+To build the images without starting Compose:
+
+```bash
+docker build --file backend/Dockerfile --tag valuz-oss-backend:latest .
+docker build --file frontend/apps/webui/Dockerfile --tag valuz-oss-webui:latest .
+```
+
+The WebUI image defaults to `BACKEND_URL=http://backend:8000`; this runtime
+environment variable can be changed when the image is used in another Docker
+network. No CI setup or commercial-edition source is required.
 
 ## License
 

@@ -6,14 +6,18 @@ the caller is an UNTRUSTED, per-task sandbox: a sandbox could set any owner
 header and read/write another user's rows. So in the remote deployment the
 owner must come from a credential the sandbox cannot forge — a signed JWT.
 
-``TokenVerifier`` is that seam. OSS binds :class:`NullTokenVerifier` (no
-token identity → the header path stays authoritative for the in-process /
-trusted-host mount, zero behaviour change). A SaaS overlay binds a real
-signing-key/JWKS-backed verifier whose claims become the owner.
+``TokenVerifier`` is the legacy synchronous form of that seam;
+``AsyncTokenVerifier`` supports identity lookups that perform I/O. The
+DataService normalizes both forms to one awaited interface. OSS binds
+:class:`NullTokenVerifier` where the trusted-header fallback is intentional,
+or a HMAC verifier for sandbox access; a managed host may bind a database,
+cache, or identity-service-backed verifier whose claims become the owner.
 """
 
 from __future__ import annotations
 
+import inspect
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -37,6 +41,28 @@ class TokenVerifier(Protocol):
     """
 
     def verify(self, token: str | None) -> OwnerClaims | None: ...
+
+
+class AsyncTokenVerifier(Protocol):
+    """Async credential verifier used when identity lookup may perform I/O."""
+
+    async def verify(self, token: str | None) -> OwnerClaims | None: ...
+
+
+TokenVerifierLike = TokenVerifier | AsyncTokenVerifier
+
+
+class CompatibleAsyncTokenVerifier:
+    """Normalize legacy sync and new async verifiers to one awaited interface."""
+
+    def __init__(self, verifier: TokenVerifierLike) -> None:
+        self._verifier = verifier
+
+    async def verify(self, token: str | None) -> OwnerClaims | None:
+        result: OwnerClaims | None | Awaitable[OwnerClaims | None] = self._verifier.verify(token)
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
 
 class NullTokenVerifier:

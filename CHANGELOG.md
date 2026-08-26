@@ -7,6 +7,1089 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-25
+
+### Added
+
+- **Playbooks** — a reusable, agent-native instruction library. A Playbook is a
+  prompt-only Definition with an immutable Version chain and an append-only Run
+  history, optionally associated with a Project. The global Playbook library
+  groups by project and offers an expandable instruction editor, status
+  controls, immutable-history reuse, guarded deletion, and current-project
+  management from the right panel; the agent gets full parity through
+  list/get/list_versions/create/update/set_status tools. Automations can pin an
+  exact Playbook definition version, and the relationship is shown in the API,
+  MCP, UI, and tool cards. Ships with reusable Project / Evidence / Playbook
+  facades for editions and migration 0038 (#1001 #1002 @St0neWan9).
+- **Playbooks are a resource kind** — `playbook` joins `ResourceKind` with
+  `list` and `get`, mirroring `automation`, so overlays can sync or share one
+  through the facade instead of reaching into `modules.playbooks`. The
+  definition's current version is the portable body; the version chain and run
+  history stay local (#1003 @St0neWan9).
+- **Programmatic Tool Calling (PTC)** — an opt-in code face over the Valuz Data
+  connectors on all four runtimes. With the Settings switch on and a qualifying
+  data connector in the session, the model can write a program that imports
+  generated, typed wrapper functions and chains N tool calls plus computation
+  in one `execute_code` run; only the program's stdout and created-file list
+  return to the model context, so raw payloads never ride through the
+  conversation. Native tool schemas stay untouched and a managed prompt policy
+  teaches the dispatch rule. Includes the execute_code kernel with loopback
+  proxy and codegen, per-turn convergence, the dsh bridge to kernel ToolDefs
+  via `/mcp/toolkit`, a frozen self-exec fallback so the packaged app is its
+  own interpreter, and one private `.ptc/{runs,work}` cwd namespace
+  (#1049 @jiaoqsh).
+- **An attachment belongs to a turn, not a session** — `session_id` is nullable,
+  files are filed under the attachment's own id, and a turn names the ids it
+  claims. `POST /v1/sessions/reservations` mints an id and writes nothing, so
+  uploads and parsing start while the person is still typing and the session
+  is created at Send. On a cloud project this removes the ~3.5s sandbox wait
+  that used to sit between attaching a file and anything happening
+  (#1009 #1012 @Ready22Race).
+- **Conversation extension points for overlay editions** — generated-UI actions
+  are routed to a host action sink (`registerGenUIActionSink` /
+  `dispatchGenUIAction`) so a click inside a rendered workbench no longer dies
+  silently (#1004 @St0neWan9); a `conversation.selection-actions` slot floats
+  overlay-registered actions over a selected span of an assistant reply, each
+  segment carrying `data-assistant-message-id` (#1005 @St0neWan9); and the slot
+  context receives `insertDraft` so an action can stage a request in the same
+  composer without auto-sending (#1006 @St0neWan9).
+- **Optional chat/task composer mode for embedded hosts** — `ConversationView`
+  / `ComposerPane` accept `onSendTask(goal)`; when provided, the composer's mode
+  toggle renders and a task-mode Send hands the draft to the callback. Absent,
+  behaviour is byte-identical (#1011 @St0neWan9).
+- **A deployment can decide parser routing, not only the account** — a managed
+  deployment provides and pays for parsing as an operator capability, so
+  routing no longer depends on a per-user settings row that the person cannot
+  see and that the login flow never wrote (#1008 @Ready22Race).
+- **The agent can open a document it found** — `doc_read(document_id, offset?)`
+  returns the parsed markdown, so a `doc_search` hit no longer sends the agent
+  to a different corpus that answers "not found" for a document that plainly
+  exists (#1046 @Ready22Race).
+- **Edition-provided project activity source** — `useActivityFeed` consults an
+  edition-registered source first for project-scoped feeds (head page,
+  pagination, and head poll alike), so an edition-injected project reached
+  through a narrow proxy grant shows its real history instead of an empty one.
+  No source, or a source that declines, keeps the stock path
+  (#1051 @St0neWan9).
+
+### Changed
+
+- **Both post-run checks share one situational gate** — Citation/Audit and
+  Task Coverage keep independent user toggles, but a turn that attempted
+  `generate_ui`, brought in no external information, or produced no assistant
+  prose now skips both, and internal runs disable both.
+  `should_run_task_coverage()` gains the previously missing has-assistant-text
+  condition (#1021 @St0neWan9).
+- **A built-in connector can be disconnected** — disconnecting switches it off
+  instead of deleting it, so a built-in whose grant died no longer sits
+  "connected" with every action greyed out and every call answering 401.
+  Observed in production on `valuz-search` / `valuz-data` after a credential
+  rotation (#1048 @St0neWan9).
+- **The knowledge document detail is redesigned** — the detail takes the wider
+  side (3:7) while a document is open and closes with its page instead of
+  outliving it in the layout; one meta strip (type, size, import time, index
+  status) replaces ~15 stacked rows; the parsed result renders through the
+  system file viewer (`ArtifactRenderer`); actions move onto the title row as
+  ghost icon buttons, including a new "view the original file" action; and
+  re-index refreshes the tree in place instead of resetting the page
+  (#1032 #1033 #1034 @Ready22Race).
+- **The sidebar mascot is gone** — the illustration anchored at the bottom of
+  the nav was covered by the links as soon as the project list grew, which read
+  as a layout bug. The `mascotSrc` prop chain that only fed it is removed; the
+  conversation empty state keeps its own (#1042 @St0neWan9).
+
+### Fixed
+
+- **A send claims exactly the files it consumed** — the claimed ids were read
+  from a render value captured before the upload landed, then from a function
+  updater that React need not run synchronously, and creating the session
+  re-keyed the hook's load so every staged row was dropped. The composer's
+  staging set is now split from a session's history, `markPendingConsumed`
+  reads from a ref and returns what it stamped, a turn that names nothing says
+  so, and one claim feeds both the bubble and the bind
+  (#1015 #1017 #1018 #1022 @Ready22Race).
+- **An unfinished parse no longer stops the person** — the "submit anyway?"
+  dialog is removed; the turn binds the attachment regardless of parse state
+  and ships `source_path` when the extract is not ready (#1016 @Ready22Race).
+- **Staged uploads go to the backend the session will run on** — a file
+  attached in a cloud project silently landed on the local backend, into a
+  database the claiming turn could never read; all three `useSessionAttachments`
+  call sites now pass the base URL (#1013 @Ready22Race).
+- **A composer holds its own files, and hands them over explicitly** — staging
+  is owner-scoped on the server, so a file attached in the quick chat appeared
+  in a project chat's composer too. Each composer now tracks what it attached
+  by id, and the one cross-page custody transfer (project draft →
+  `/conversation/new`) carries the rows explicitly instead of relying on the
+  leak (#1023 #1024 @Ready22Race).
+- **The receiving conversation shows the files it was sent with** — the
+  optimistic turn seeded `attachments: []`, the page loaded attachments on
+  mount before the bind, an in-flight file had no home between staging and
+  bound, and a conversation arriving after a post-then-navigate never read
+  again. The handoff now carries the rows, the panel refreshes when a turn
+  starts, and a sent-but-unconfirmed file has somewhere to be
+  (#1007 #1020 #1026 #1027 @Ready22Race).
+- **Panel drafts pre-select and pin their host project** — an embedded panel
+  declaring `createDefaults.projectId` was overwritten by the fresh-draft
+  bootstrap and showed a temporary conversation instead; a host-pinned real
+  project now also locks the location bar (#1014 @St0neWan9).
+- **A document's calls go to the library that owns it** — the detail poll, its
+  preview refetch, and `reindex` did not carry the library id, so on a cloud
+  library the panel froze on a swallowed 404 and re-index never showed new
+  content (#1028 @Ready22Race).
+- **The reindex dispatcher is awaited** — a broker-backed dispatcher had to
+  answer "mine" before it knew, on a throwaway loop that closed before the
+  publish, and the caller's `return` stood in-process parsing down for good
+  (#1030 @Ready22Race).
+- **Binding a knowledge base no longer switches its retrieval off** — four
+  calls in `_format_kb_scope` kept a stale one-argument shape after the
+  datastore went owner-scoped; the first `kb` binding raised, the caller
+  swallowed, and the whole per-turn `<additional-context>` announcement died
+  with it (#1035 @Ready22Race).
+- **"Open the original file" works for a library the user pointed at** — a
+  knowledge base's own `root_path` was missing from the owner allowlist, so
+  every document in it resolved as `forbidden`; the detail panel also stops
+  scrolling the shell (#1052 @Ready22Race). A file that resolves but does not
+  exist now produces an error instead of handing a dead path to the OS
+  (#1053 @Ready22Race).
+- **Runtime-context markers are materialized for the runtime, and named when
+  they are not** — `materialize_runtime_context` was applied only to the
+  session handed to the factory, so the model credential was filled while every
+  MCP header shipped the literal 40-character placeholder and the host gate
+  answered 403 (#1044 @Ready22Race). The turn now checks for unfilled markers
+  on both the bound and unbound paths, reports which contributor answered, and
+  the kernel says what it filled and when a cached runtime reused instead
+  (#1039 #1040 #1041 #1043 @Ready22Race).
+- **The internal MCP gate's refusals name themselves** — all three 403 exits
+  answered a bare `Forbidden`; each now logs its discriminating facts and the
+  rejected credential's first 8 characters, which distinguish every credential
+  shape in play without being secret (#1036 #1038 @Ready22Race).
+- **Claude MCP hook outputs are normalized** — `PostToolUse` replacements keep
+  the MCP content-block outer shape, and mappings, scalars, JSON `null`, and
+  plain arrays are serialized into text blocks, so an empty `kb_search` /
+  `docs_list` result no longer makes Claude Code call `Array.reduce` on an
+  object (#1045 @homeant).
+- **An async parser backend without a scheduler still runs** — a cloud parser
+  that is async-implemented without being ASYNC_POLL has no `_scheduler`, and
+  the sync worker thread raised on every PDF instead of driving it on its own
+  loop (#1047 @Ready22Race).
+- **Organization library actions are handled consistently** — organization
+  skills, agents, and connectors are selectable without duplicate panes,
+  connector cloud slugs survive download and materialize removable local
+  copies, cloud-only connectors stay out of Added after deletion, and lists
+  refresh in place after synchronization (#1050 @homeant).
+- **`valuz-runs-refresh` also refetches the project list** — an agent share
+  landing after boot stayed invisible in the sidebar until an unrelated
+  navigation happened to refetch projects (#1031 @St0neWan9).
+- **The playbook list quiet-degrades when a host refuses it** — a shared-agent
+  or remote project toasted a load failure on `device.offline` /
+  `shared_agent.path_not_allowed`; the list now degrades to empty while
+  user-initiated actions keep their toasts (#1029 @St0neWan9).
+- **Dialogs use the surface background token**, with a design-contract
+  regression test (#1019 @St0neWan9).
+
+### Docs & Chore
+
+- **The attachment custody transfer is pinned by a test** — three regressions
+  came from re-keying the staging set without enumerating its readers; the
+  census is now recorded and the single cross-page handoff has a test
+  (#1025 @Ready22Race).
+
+## [0.4.4] - 2026-08-22
+
+### Added
+
+- **Valuz Data built-in connectors** — the built-in Reportify search/stock
+  endpoints are replaced by Valuz Data search and full-data MCPs, seeded as
+  non-deletable built-ins without starting OAuth in OSS. Existing connector and
+  agent bindings migrate from `valuz-stock` to `valuz-data`, Cloud-managed
+  credential families stay isolated from local OAuth group sharing, and
+  citation/tool metadata is aligned with Valuz Data while accessible source
+  labels are preserved (#996 @St0neWan9).
+- **A built-in connector says it is built-in** — Disconnect renders disabled
+  with an explanatory notice instead of looking enabled and silently doing
+  nothing, and a Built-in badge sits beside the connector's name
+  (#999 @St0neWan9).
+- **The composition root can hand the parser registry a plugin** — `register()`
+  is a second door beside the `valuz.parser_plugins` entry-point group. An
+  overlay that ships as source on `PYTHONPATH` installs no distribution
+  metadata, so entry-point discovery could never see it and every routing
+  decision naming it was quietly demoted to `light_local` — with no exception,
+  no log line, and no missing module (#992 @Ready22Race).
+- **The desktop window remembers its size and position** across restarts, and
+  an explicit centred origin is now computed on every platform. macOS was
+  previously let through on the assumption that it clamps — it does, but
+  clamping is not placement, and a 1440x900 window opened flush against the top
+  of the work area (#986 @St0neWan9).
+
+### Changed
+
+- **The Task Coverage protocol stays out of the transcript** — its tool calls
+  and results are kept private, its assistant text is held until terminal
+  classification, no-gap and meta responses are dropped, and only genuine
+  supplement text is published (#983 @St0neWan9).
+- **The create-KB dialog stops offering a scan nobody runs** — on a backend
+  whose managed root receives documents only through the API, the
+  "auto-discover new files" checkbox is hidden and `auto_discover: false` is
+  sent, rather than creating knowledge bases with a checked-by-default hidden
+  option and then rendering the scan as enabled. Every current caller keeps
+  today's behaviour (#989 @Ready22Race).
+
+### Fixed
+
+- **Claude MCP source metadata survives the content-only bridge** — configured
+  Claude MCP servers route through one transparent in-process proxy so
+  result-level `dev.valuz/source-metadata` and `structuredContent` reach
+  citations; the canonical compacted projection is retained beside the private
+  Citation sidecar so generic JSON pointers inflate against the projection they
+  were minted from; root-scoped Collection hashes stay independent of
+  `_valuz_evidence` transport fields; an omitted declared `itemsPointer` is
+  normalized; and a cited chunk's display title/URL is enriched from richer,
+  already-validated metadata for the same provider and document identity
+  (#983 @St0neWan9).
+- **A budget stop is no longer claimed when it never happened** — a Codex turn
+  still reporting `in_progress` was mapped onto
+  `BudgetExhausted(reason="max_turns")`, a ceiling that runtime does not have.
+  Borrowing the type was free while a budget stop rendered as nothing; since
+  0.4.3 states it in plain words, it is not. A real budget stop is also no
+  longer rendered silently (#988 @Ready22Race).
+- **An attachment appears the moment it is attached, not five seconds later** —
+  a placeholder row goes into local state first and the server row swaps in
+  when the upload lands, instead of waiting out sandbox allocation (~3.6s on
+  cloud) and the upload itself (~1.3s). The chip is removed if the upload
+  fails, and all of them are removed if session creation throws — a chip that
+  outlives its upload promises a turn that cannot carry it (#997 @Ready22Race).
+- **A knowledge-base upload shows that it is running, and the list keeps its
+  statuses live** — one `uploading` state now covers both the header button and
+  the drop overlay (whose "processing" copy was unreachable dead code), and the
+  tree polls while documents are still parsing instead of going stale for
+  minutes (#993 @Ready22Race).
+- **DeepAgents dead-end virtual paths fall through to host paths** — under
+  `virtual_mode`, an out-of-workspace absolute such as `/Users/x/test` resolved
+  to `<cwd>/Users/x/test` and listed empty while the shell tool read the same
+  directory freely. The resolution ladder gains one purely additive branch;
+  `virtual_mode` stays on, so virtual artifact namespaces and the Windows path
+  virtualizer keep working (#998 @jiaoqsh).
+- **The Codex MCP-secret guard is diagnosable and correctly scoped** — the
+  residue check now matches only the value part of each override line, so a
+  benign header value that happens to be a substring of a dotted key path no
+  longer trips it; it probes raw, TOML-escaped, and urlencoded shapes, so URL-
+  and args-borne residues are caught even when byte-shifted; and a refusal
+  carries redacted diagnostics (origin, `secret_env` key, value length,
+  SHA-256 prefix, matched key prefixes) instead of a blind message
+  (#990 @jiaoqsh).
+- **AskUserQuestion cards** — a lone header is hoisted into the card title
+  (#985 @St0neWan9), and a header pill that accompanies a question is stacked
+  above it rather than crowding the same line (#984 @St0neWan9).
+
+### Docs & Chore
+
+- **`make dev` vendors the DeepSeek Harness runtime closure** — `scripts/dev.sh`
+  fetches it on demand with an idempotent freshness check, respects
+  `VALUZ_DSH_RUNTIME_BIN` / `VALUZ_DSH_ROOT`, and fails open. Only
+  `build-desktop.sh` fetched the closure before, so every dev checkout showed
+  the runtime greyed out until the vendor script was found by hand
+  (#991 @jiaoqsh).
+- "A parsing attachment should hold the turn, not the person" (#994
+  @Ready22Race) was reverted before this release (#995 @Ready22Race) and is not
+  part of 0.4.4.
+
+## [0.4.3] - 2026-08-21
+
+### Added
+
+- **The agent library is a union across execution targets** — on editions that
+  reach more than one machine, the library lists every reachable machine's
+  agents, grouped by where they came from, in the ALL tab too. A row keeps its
+  own identity once two machines are listed (a slug is not a row id), an agent
+  from elsewhere is selectable and stays selected, and a target that cannot be
+  picked as a destination is still routable for the rows it owns
+  (#957 @St0neWan9, #959 @St0neWan9, #960 @St0neWan9, #961 @St0neWan9,
+  #963 @St0neWan9, #964 @St0neWan9, #965 @St0neWan9, #967 @St0neWan9).
+- **An edition can contribute projects no execution target lists** — a narrow
+  grant opens exactly one project on someone else's machine, and the list
+  fan-out cannot ask that host for its projects; the project the agent works in
+  now appears anyway (#968 @St0neWan9).
+- **Agent rows say where they came from** — the composer's agent lists carry the
+  row's own tag, in the library's palette, so an agent from elsewhere states
+  what it is rather than where it sits (#970 @St0neWan9, #973 @St0neWan9,
+  #974 @St0neWan9, #975 @St0neWan9).
+- **A read-only detail page for an agent someone shared with you** — it reads
+  like a local agent's header (names, not ids), a rule separates the header from
+  the activity list, and an overlay can inject sections beneath it
+  (#976 @St0neWan9, #977 @St0neWan9, #978 @St0neWan9, #979 @St0neWan9,
+  #980 @St0neWan9).
+- **Remote-desktop execution targets** — a distinct glyph for a remote desktop
+  target, plus an edition-aware directory chooser (#931 @St0neWan9).
+- **Message index rail** — a rail pinned to the left of the transcript for
+  jumping between messages in a long conversation (#934 @St0neWan9).
+- **`deepseek_harness` derives per protocol** — any non-subscription channel
+  speaking the chat-completions wire offers it, mirroring how Codex derives for
+  any Responses-wire channel, instead of only the `deepseek` provider kind
+  (#966 @jiaoqsh).
+- **MCP source provenance in citations** — reads `dev.valuz/source-metadata`
+  while preserving the legacy `cn.valuz/citation-source` descriptor, and fails
+  closed when the two conflict (#972 @St0neWan9).
+- **Opaque per-turn runtime context** — a runtime-context port whose marker
+  values materialize only in the runtime's session copy, leaving persisted
+  session snapshots untouched (#947 @homeant); a task's title is snapshotted
+  into its lead and member execution sessions so billing attribution needs no
+  extra lookup (#950 @homeant).
+- **`CLAUDE_CODE_MAX_CONTEXT_TOKENS`** — the declared context window is exported
+  to the Claude Agent runtime (#941 @jiaoqsh).
+- **Date-partitioned managed workspace directories** — managed project and chat
+  workspaces move off a flat `<project_root>/<project_id>` layout to dated,
+  unguessable directories (#943 @Ready22Race).
+
+### Changed
+
+- **The project grid is the knowledge grid** — the project list renders the same
+  tile cards, on the same measured grid, as the knowledge page; both size from
+  one shared rule (#981 @St0neWan9). The marketplace's single-agent card footer
+  lines up with the team card the same way (#945 @St0neWan9).
+- **Each runtime owns its compaction threshold** — the host declares the context
+  window and stops dictating when to compact (#946 @jiaoqsh).
+- **Task creation returns as soon as the task is registered** — the lead starts
+  behind the response instead of holding the HTTP request for the whole bring-up
+  (#937 @Ready22Race).
+
+### Fixed
+
+- **Turns silently dropped when the runtime budget was exhausted** — messages
+  near the end of a long conversation produced no output, no error and no label
+  (#971 @tutu).
+- **Usage accounting per turn** — Claude's `usage_update` carries one turn rather
+  than the running total, and every model request in a turn is counted with each
+  token bucket counted once (#955 @jiaoqsh, #956 @jiaoqsh).
+- **Sessions** — a user message is recorded for a turn that never started
+  (#951 @Ready22Race); the runtime context is carried on fork and prepare, not
+  only on run (#952 @Ready22Race); a one-time reconciliation backfills the
+  legacy project-session index before activity and history reads
+  (#958 @zhourongyu); `task_id` rides the session detail so "Fork from here" is
+  decided by one predicate and stays hidden inside a task's sessions
+  (#939 @Ready22Race, #940 @Ready22Race).
+- **A swallowed interrupt no longer fails a later completed turn** as
+  `CancelledError` (#936 @jiaoqsh).
+- **In-workspace Windows absolute paths** are accepted by the DeepAgents file
+  tools (#969 @jiaoqsh).
+- **i18n** — each request is answered in the language it asked for
+  (#942 @St0neWan9); route labels are i18n keys (#954 @St0neWan9); the page-title
+  fallback stops passing the branding app name through `t()` (#935 @St0neWan9).
+- **The degraded re-probe could stop for the rest of the session** (#938
+  @St0neWan9).
+- **Editing an agent's instructions** is no longer reverted by a background
+  re-fetch while you type (#944 @St0neWan9).
+- **The desktop splash progress advances continuously** instead of jumping
+  (#948 @St0neWan9).
+- **The dead "Switch model" action** is gone from the conversation error card
+  (#949 @Ready22Race).
+
+### Docs & Chore
+
+- **Release pipeline** — CI purges the CDN after overwriting a live manifest
+  (#930 @St0neWan9), a purge failure can no longer fail the release
+  (#953 @St0neWan9), a recovery workflow rebuilds the single-arch versioned mac
+  manifests (#933 @St0neWan9), and the rollback runbook is corrected so
+  rollback is actually safe (#932 @St0neWan9).
+- Agents test fixture satisfies `ExecutionTarget` (#962 @St0neWan9).
+
+## [0.4.2] - 2026-08-18
+
+### Added
+
+- **Agent Plugins** — plugins are a first-class install unit per the Agent
+  Plugins 1.0.0 spec (`plugin.json` + `skills/` + optional `mcp.json`): a
+  skills-only plugin is a "skill suite", one with MCP servers a "plugin with
+  connectors". New `/v1/plugins` API (preview / install from zip, directory,
+  URL or market item / enable / disable / update / reference-counted uninstall /
+  export / memberships), `.claude-plugin` / `.codebuddy-plugin` compat readers
+  that materialize the normalized layout, marketplace item type `plugin`
+  (`market:plugin:<slug>`, `composition` filter, source `plugin`), the
+  `/plugins` library page, market tabs and plugin badges on skill / connector
+  cards (#908 @St0neWan9).
+- **One resource page for plugins, skills and connectors** — the three library
+  surfaces share a single page and consistent headers instead of three
+  near-identical layouts (#925 @St0neWan9).
+- **DataService credential rotation without a restart** — the kernel picks up a
+  rotated credential in place, so re-keying no longer costs a process cycle
+  (#923 @Ready22Race).
+- **Per-session gateway headers** — DeepAgents and Claude Agent forward
+  `X-Valuz-Session-Id` to the gateway (via `ANTHROPIC_CUSTOM_HEADERS` for Claude),
+  so gateway-side logs can be traced back to a session (#919 @homeant,
+  #921 @homeant).
+- **Model selection hints in the pickers** — the hint that explains why a model
+  is or is not selectable now renders where the choice is made (#902 @homeant).
+- **Close a document preview with the platform shortcut** — Cmd+W on macOS,
+  Ctrl+W elsewhere (#900 @St0neWan9).
+- **RedSkill marketplace source** — `MarketplaceSource` accepts `redskill` (the
+  Xiaohongshu RedSkill store the commercial control plane now ingests) and the
+  market card's source pill labels it (#907 @St0neWan9).
+- **Marketplace infinite scroll** — the market list loads the next page as you
+  reach the end instead of behind a "load more" button (#927 @St0neWan9).
+
+### Changed
+
+- **Reusable desktop network egress capability** — the Electron-owned egress
+  manager moved into its own workspace package and now exposes versioned
+  renderer/main contracts, edition policy injection and capability negotiation,
+  so overlay desktops can reuse the same network path without copying the
+  runtime (#909 @zhourongyu).
+- **Post-run checks are gated on external tools** — citation verification and
+  Task Coverage only run when the turn actually brought external information
+  into the answer. A session may expose host tools over MCP as an
+  implementation detail, and those local calls no longer trigger an expensive
+  post-run model pass (#901 @St0neWan9).
+- **Marketplace tab order** — the top-level tabs now read agents → plugins →
+  skills → connectors (plugins moved next to agents) (#918 @St0neWan9).
+- **Marketplace `source` is an open string** — where a market item comes from is
+  data the index grows over time; the client no longer validates it against a
+  closed enum (which made the whole skills tab fail the moment the index
+  published a source an older build had not heard of). Unknown sources render
+  with a generic pill, unknown badges are dropped, and an index page is parsed
+  item by item so a row this build cannot render (new `type` / `install_target`)
+  is skipped instead of failing the page. Plugin-package members are labelled
+  source `plugin` (was `pluginmarket`) (#911 @St0neWan9).
+- **Agents page default view** — the view switcher lists "All agents" first and
+  opens on it by default; "By project" is the second tab (#906 @St0neWan9).
+- **Only `X-Valuz-Session-Id` is forwarded** — the companion `Session-Title`
+  header was dropped from both the DeepAgents and Claude Agent paths; a title is
+  user content and does not belong in a transport header (#921 @homeant).
+
+### Fixed
+
+- **Window title fallback no longer goes through i18n** — on routes without a
+  registered label the layout used the branding app name as an i18n key
+  (`[i18n] missing translation for key "Valuz Team"` on every navigation);
+  the literal product name is now used directly (#935 @St0neWan9).
+- **Codex no longer leaks MCP secrets into process state** — five related fixes:
+  secrets are kept out of the process argv (#913) and the app-server argv (#914),
+  the tool shell is isolated from runtime secrets (#915), referenced secrets are
+  excluded from that shell (#916), and login-shell secret restoration is blocked
+  so a user's profile cannot put them back (#917 @zhourongyu).
+- **Safe desktop network ownership changes** — activity checks and confirmed
+  interrupts use the memory-only desktop control capability instead of
+  owner-scoped user APIs, and a late task race rolls the selected mode back
+  rather than restarting an active backend (#910 @zhourongyu).
+- **Incompatible egress contracts are rejected** — a renderer and main process on
+  mismatched contract versions now fail the negotiation instead of proceeding on
+  assumptions (#912 @zhourongyu).
+- **Task crash backstop no longer outraces delivery** — the backstop that exists
+  to cover a crashed member could fire before that member's result was
+  delivered, failing work that had in fact completed (#922 @Ready22Race).
+- **Task manifest attribution** — the fourth manifest call site now attributes
+  like the other three, and the window is no longer defaulted when a caller did
+  not state one (#924 @Ready22Race).
+- **A2UI catalog array shapes** — array element object shapes are expanded in the
+  catalog, so the compiler sees the fields it is expected to bind (#926
+  @St0neWan9).
+- **Project pages survive overlay routes** — an overlay route no longer replaces
+  the project page underneath it (#899 @St0neWan9).
+- **Model selection hints stay on the option rows** — they were showing on the
+  collapsed trigger, where the choice is not being made (#903 @St0neWan9).
+- **Desktop close shortcut** — with no preview open, Ctrl+W on Windows/Linux fell
+  through to closing the only window and quit the app; it is now a no-op there,
+  while macOS keeps Cmd+W's window-close meaning and an open preview still closes
+  first everywhere (#904 @St0neWan9).
+- **Desktop window controls** — a maximized window on Windows/Linux showed two
+  outward arrows ("enlarge") where Windows draws the restore glyph; the control
+  now draws `ChromeRestore` — a square in the lower-left with a second square's
+  edges behind it (#898 @St0neWan9).
+
+### Docs & Chore
+
+- **The quality gates are green again** — ruff, eslint, the design audit, the
+  module boundary contract and both test suites (backend 4313, frontend 1191)
+  all pass. Two of the design audit's own rules were misfiring: token/theme files
+  were counted as their own debt, and PR references written in code comments
+  parse as valid hex colours, inflating the colour count on their own. The remaining overage
+  was paid down with exact-equivalent design tokens, so no rendered pixel
+  changes. Ten cross-module datastore imports now go through the owning module's
+  service or a new `ports/effective_resource_sources` (#928 @St0neWan9).
+
+## [0.4.1] - 2026-08-14
+
+### Added
+
+- **DeepSeek Harness (dsh) — a fourth kernel runtime** — the harness joins Claude
+  Agent, Codex Agent and Valuz Agent as a selectable runtime (#894 @jiaoqsh), and
+  its turns are traced into Langfuse like the others (#895 @jiaoqsh).
+- **Unified desktop model network egress** — an Electron-main egress manager gives
+  supported model clients the desktop's proxy/PAC routing through loopback model
+  ingress, without touching tool shells, MCP servers or browser traffic; Settings
+  offers Valuz-managed vs. model-client-managed connections with live status and
+  redacted diagnostics (#833 @zhourongyu).
+- **Session and message fork** — fork a session or an individual message across all
+  three runtimes (#871 @jiaoqsh), with pending state and duplicate-click
+  suppression on every fork entry point (#881 @jiaoqsh).
+- **Docker self-hosting stack for OSS** — run the workstation headless from
+  compose (#862 @St0neWan9).
+- **Optional Langfuse tracing for agent turns** (#834 @jiaoqsh), plus a tracing
+  extra and `.env` loading in the dev launcher (#836 @jiaoqsh).
+- **A pluggable knowledge base** — `DocsRuntimePort` is genuinely swappable
+  (#843), with a KB root resolver extension point and a knowledge-base kind
+  column (#844), pre-authorized cross-owner scope injection for `search_docs`
+  (#845), a bindable document-retrieval runtime (#851), and reindex dispatch plus
+  shared-scope contribution seams (#852 @Ready22Race).
+- **A2UI standalone theme-aware component system** (#858 @St0neWan9), normalized
+  component data contracts (#883 @St0neWan9), and a round of GenUI runtime and
+  research-reading UX refinements (#896 @St0neWan9).
+- **GenUI generation past the output-token cap** — a capped generation continues
+  and the parts are merged (#816 @St0neWan9), with A2UI generation and rendering
+  hardened overall (#870 @St0neWan9).
+- **GenUI blocks aligned with OpenUI semantics** — chart series palette tokens
+  that end multi-series colour collision (#846), bar charts, `AspectRatio` and
+  `VisualFirstCard` (#848), and surfaces, hovers and chart chrome (#853
+  @hanjixin). The A2UI renderer stack is now lazy-loaded, cutting the main bundle
+  by 43% (#850 @hanjixin).
+- **Citation & evidence** — search retrieval metadata is validated (#814), an
+  anchor-verified claim normalizer supports bounded partials (#817), and
+  substantive search summaries register as derived evidence (#819 @St0neWan9).
+- **Durable task actor delivery** — actor messages survive a process boundary
+  (#875), and a doorbell wakes parked actors while `finish_task` parks its
+  members (#884 @Ready22Race).
+- **v10 resource control seams** for runtime control (#798 @homeant).
+- **Codex for every DeepSeek model** — the per-model allowlist is retired
+  (#873 @jiaoqsh).
+- **Host extension surface** — a project add-menu slot (#864 @hanjixin),
+  conversation turn/title slots that get the scroll their mode needs (#837
+  @St0neWan9), and `session_id` threaded into `_kernel_for` so task session ids
+  reach kernel metadata (#859 @Ready22Race).
+
+### Changed
+
+- **Task coordination reworked around state instead of messages** — one lease per
+  actor, and stopping stops being a message (#878); stopping becomes a state the
+  actor reads (#882); `MailboxRegistry` is retired in favour of one message per
+  drain with no buffer (#888); member probing is split out of coordination and
+  the lead run parks on block (#889); the mailbox drain batch size is a required
+  argument (#890); and membership is a query, orphans get adopted, and the lead
+  reads its role first (#891 @Ready22Race).
+
+### Fixed
+
+- **Tasks** — a cross-process execution lease ensures exactly one process drives a
+  task (#863) and the lease renewer is hardened while draining (#865); the lead no
+  longer burns a model turn on a member it already handled (#867), "keep waiting"
+  no longer re-runs the last prompt (#868), a session you no longer drive is not
+  finalized (#872), the in-turn preempt and wait read the durable inbox and hear
+  the doorbell (#876, #885), and buffer reclamation, a stopped lead's run row and
+  a drifting deadline are corrected (#869, #886 @Ready22Race). The task detail
+  page got its scroll back (#866 @Ready22Race).
+- **Citations** — unsourced statements are marked instead of dropped (#818); a
+  half-written binding no longer flashes `[blocked]` (#821); a document chunk may
+  supersede its own provider summary (#822); unknowns are no longer reported as
+  defects (#823); collection addresses and markers stay out of the reader's way
+  (#824) and every marker lands on the statement it belongs to (#825); audit
+  coverage and post-run verification are preserved (#828); precise evidence is
+  preferred without truncation (#829); proven numeric conflicts are corrected
+  (#830); sidecars are reconciled at turn completion (#815); and evidence audit
+  and presentation improved overall (#835 @St0neWan9).
+- **GenUI** — generation `max_tokens` plus an env-tunable harness tool timeout
+  (#812), and a truncated generation's valid prefix is salvaged rather than
+  discarded (#813 @St0neWan9).
+- **Conversation** — the closing bubble carries the whole answer instead of its
+  last segment (#874 @St0neWan9), the tool-output content block is unwrapped
+  before being read (#877), the title slot receives the whole loaded transcript
+  (#854), an edition can declare where its single backend runs (#849
+  @Ready22Race), and share sits with the actions while the token readout trails
+  them (#832 @St0neWan9).
+- **Files & prompts** — a `valuz-file` ref with a surplus slash no longer resolves
+  outside its own project (#892), and the file link is taught once, correctly,
+  reverting the parser guesswork (#893 @Ready22Race).
+- The runs sidebar's project window is scoped with a `project_id` filter
+  (#831 @St0neWan9).
+- Skill discovery works again under DeepAgents `virtual_mode` (#826
+  @Ready22Race), and cloud skill discovery is isolated from the host home
+  directory (#860 @homeant).
+- The document owner is threaded into the `ASYNC_POLL` enqueue (#842
+  @Ready22Race), and edition always-on MCP servers mount under every
+  `api_prefix` (#855 @Ready22Race).
+- The renderer build gets a raised Node heap (#811 @St0neWan9), `@a2ui/react`
+  declares the React floor it actually requires (#820 @St0neWan9), and conflict
+  markers committed into `files-api.ts` are removed (#887 @Ready22Race).
+
+### Docs & Chore
+
+- The release process now requires maintainer confirmation of the version number
+  before tagging (#810 @St0neWan9).
+- GenUI block styling/interaction standards, a component template and a CSS audit
+  guard are codified (#857 @hanjixin).
+- Test coverage for the full kernel summarization offload path (#827) and the
+  docs offload guard's `doc_paths` fake (#847 @Ready22Race).
+- Regenerated i18n key types so the checked-in types match the locale files.
+
+## [0.4.0] - 2026-08-08
+
+### Added
+
+- **A2UI component system** — a standalone A2UI v0.9.1 component package with
+  edition injection and per-call scope, a backend component registry port,
+  typed schemas, analytical tables, provenance controls and a comprehensive
+  chart family
+  (#733, #745, #751, #771, #779, #782 @St0neWan9).
+- **Generative UI live data** — data-binding mode (channel, resolver, grammar),
+  the live-data host seam where refs start an edition host and pushes
+  re-render, and shape-disambiguated slots with `$host` pass-through
+  (#772, #773, #800 @St0neWan9).
+- **Artifacts as versioned deliverables** — delivered artifacts are versioned
+  instead of overwritten (#732, #740 @Ready22Race); generated UI is recorded
+  as a deliverable bound to a host, with host-scoped version history,
+  single-revision reads, timestamped generation receipts, hosted regeneration
+  appending to the host's lineage, and `deliver_artifacts` announcing
+  bound-page revisions like a generation
+  (#770, #790, #791, #795, #803, #804, #806 @St0neWan9).
+- **Citations & evidence quality** — a complete document research and quality
+  flow: claim audits before publication, layered quality policies, layered
+  evidence resolution with MCP source metadata, task-coverage enforcement, and
+  a risk-based audit sidecar (#690, #691, #692, #700, #724, #741 @St0neWan9).
+- **Valurion** — a built-in system agent contract, seeded portably and
+  guaranteed even for empty agent libraries
+  (#662, #663, fixes #664, #665 @St0neWan9).
+- **Document preview pane** — documents open in a resizable split pane with
+  tabs, on conversation, task and project surfaces alike
+  (#697, #698, #699 @St0neWan9).
+- **Notifications** — the drawer gained a History tab, a clear-all action and
+  instant (optimistic) dismiss (#725 @St0neWan9); completed tasks are notified,
+  and the `notification.created` extension event carries the unread count
+  (#714, #715 @zhourongyu).
+- **Token usage** — conversation and task token usage is surfaced in the UI
+  (#789 @zhourongyu).
+- **Auto-compaction at the model's real window** — runtimes compact against the
+  provider-declared `max_input_tokens` instead of a guess (#739 @jiaoqsh).
+- **Turn-phase latency markers** — `turn_phase` events across all three
+  runtimes (#764 @jiaoqsh), with the conversation header split into named
+  phase counters and one continuous turn timer (#674, #675 @Ready22Race).
+- **Bundled skills from system roots** — skill packages resolve from read-only,
+  explicitly declared system roots (#766 @Ready22Race).
+- **Host extension surface** — a resource copy menu slot (#680 @homeant), two
+  host action slots plus a session-scoped slot and a per-message leading slot
+  with its role (#744, #746, #747, #756, #757 @Ready22Race), research-workspace
+  extension points (#755 @St0neWan9), overlays can suppress a host surface
+  (#762 @Ready22Race), and a host-scoped capability policy decides task
+  coverage per surface (#801 @St0neWan9).
+- **Project composer parity** — sending from the project composer works the way
+  "New chat" does (#682 @Ready22Race).
+- **Cloud sessions** — SSE follows a session that moves to a different sandbox,
+  the host's `sandbox_status` lifecycle is translated onto the stream, and a
+  host-observation channel was trialled and dropped
+  (#652, #653, #655, #656 @Ready22Race).
+- **Codex runtime for deepseek-v4-flash** (#760 @jiaoqsh).
+- **Login-shell PATH** — the backend merges the user's login-shell PATH so
+  GUI-launched apps resolve user-installed tools (#687 @jiaoqsh).
+
+### Changed
+
+- **Local document parsing now runs on anydoc instead of MarkItDown** — legacy
+  Office (`.doc` / `.ppt` / `.xls`), macro-enabled variants, OpenDocument, RTF
+  and EPUB parse locally for the first time; spreadsheet output drops pandas
+  artifacts; docx conversion is ~25× faster; and the knowledge-base ingestion
+  gate now mirrors the parser (RTF no longer indexed as raw markup, `.htm` and
+  extension-less text files ingested, unsupported uploads rejected with a
+  reason). See
+  [docs/design/local-parser-anydoc-migration.md](docs/design/local-parser-anydoc-migration.md)
+  (#761 @Ready22Race).
+- **Performance** — the task plan snapshot is no longer quadratic and only the
+  last one is read (#769 @Ready22Race); turns stop walking the skills mount
+  (#793 @Ready22Race); session creation no longer content-hashes every skill
+  (#794 @Ready22Race).
+- **Citations internals** — the audit is decoupled from task coverage
+  (#730 @St0neWan9).
+- **Frontend structure** — `ConversationPage.tsx` split into `conversation/`
+  modules (#735 @St0neWan9).
+
+### Fixed
+
+- **Tasks** — the live task UI, model-facing text and actor loop are repaired
+  and tested end to end (#651); the lead's goal is no longer overwritten on
+  wake-up and agent playbooks are de-duplicated (#668); stale member
+  summaries, poisoned plan nodes and dropped activity rows are gone and the
+  per-poll queries are indexed (#753); a lost plan write no longer tells the
+  lead its subtask key vanished (#759); a task nobody is minding is now
+  surfaced (#768); a deleted session no longer leaves its run row and the tool
+  gates gained tests (#776) (all @Ready22Race).
+- **Project send handoff** — the composer no longer freezes while a cloud
+  session is created, the pending send releases when its echo arrives, the
+  handoff carries every composer option, waits for the project binding and
+  draft bootstrap, survives reloads without replaying, never flashes the
+  new-chat welcome, keeps the optimistic turn alive past the landing refresh,
+  and renders the header while the session is still being minted
+  (#676, #677, #679, #683, #684, #686, #688, #689, #694, #695, #696
+  @Ready22Race; attachment chips clear after the handoff #736 @St0neWan9).
+- **Conversation & stream** — runtime assistant messages are preserved on the
+  stream (#723 @St0neWan9); assistant output no longer merges into the user
+  bubble on turn-scoped message ids (#742 @St0neWan9); the bound agent owns
+  the session's brain (#731 @Ready22Race); session capabilities converge
+  inside `run_turn` (#710 @Ready22Race); bundled skills landing mid-session
+  converge too (#763 @Ready22Race); the session token total below the composer
+  is dropped (#805 @St0neWan9).
+- **Citations hardening** — collection snapshots replay and unpack correctly,
+  values resolve with temporal context, claim-local dimensions win, value
+  labels are not metrics, evidence coverage and discovery item paths are
+  bounded, chunk-level document evidence is restored, discovery results stay
+  non-citable, the bundled evidence protocol is restored, local claims bind
+  semantically in batch, and structured evidence audits are hardened
+  (#702, #704, #706, #707, #709, #717, #719, #721, #722, #796, #807, #808
+  @St0neWan9); task coverage accepts categorical value labels and enforces
+  silent no-op completion (#718, #743 @St0neWan9).
+- **Generative UI** — container-query breakpoints (#726 @hanjixin); adaptive
+  dashboard polish and responsive card widths restored
+  (#670, #672, #678 @yy83000812); the `components` argument is scoped on the
+  repo boundary and A2UI sub-item refs resolve (#749); the slot grammar says
+  the binding IS the refresh, the slot shape is the source's, and the
+  generation's host resolves from the turn (#774, #775, #778); block sizing
+  under containment is corrected (Waterfall bar cap, avatar fallback,
+  page-header Cluster, slot-cluster zeroing, root width)
+  (#780, #783, #785, #787, #788); one breathing element in the generation tail
+  (#784); segment summaries truncate instead of wrapping (#797)
+  (all @St0neWan9).
+- **Artifacts** — a file-stored bound document is served, not null
+  (#781 @St0neWan9).
+- **Skills** — CRLF `SKILL.md` frontmatter parses (#673 @St0neWan9);
+  filesystem-hostile characters are kept out of skill names and directories
+  (#703, #705 @Ready22Race); system skill roots must be declared, never
+  inferred (#767 @Ready22Race); the bundled copy no longer deletes before it
+  writes (#792 @Ready22Race); project skill catalogs route by origin
+  (#737 @Ready22Race).
+- **Notifications** — a completed task no longer announces itself as blocked ("Task blocked")
+  (#758 @Ready22Race); oversized bodies (multi-KB provider error dumps) are
+  clamped at every layer instead of breaking the toast, drawer and history
+  (#738 @St0neWan9).
+- **Desktop & packaging** — mac sidecar entitlements are re-applied explicitly
+  on re-sign (#681, #799 @jiaoqsh); packaged image OCR actually starts and a
+  broken rapidocr bundle surfaces instead of silently substituting
+  (#750, #752 @Ready22Race); the committed `backend/.venv` symlink that broke
+  `make dev` on fresh clones is removed (#754 @Ready22Race).
+- **Runtimes & MCP** — one broken MCP server no longer kills the whole turn
+  (#685 @jiaoqsh); a declared tool timeout is honoured in every runtime
+  (#765 @St0neWan9); a legacy kernel DB is recovered and MCP projections
+  serialize (#701 @St0neWan9).
+- **Files & channels** — `/v1/files/resolve` routes to the backend that owns
+  the entity (#654); vanishing-file batch failures, expired-address recovery
+  and chat-binding routing are fixed (#657) (both @Ready22Race).
+- **Providers** — cloud deployments skip `subscription_models.local.json`
+  (#786 @Ready22Race).
+- **App chrome** — the degraded-target banner pins to the top of the main
+  panel (#802 @St0neWan9); Agent export lives in the copy menu
+  (#693 @homeant); the artifact renderers are behind `t()`
+  (#660 @Ready22Race).
+
+### Docs & Chore
+
+- The file-address design doc is marked shipped and corrected against the code
+  (#659), three dead file symbols are deleted and project-path arithmetic
+  unified (#658), and the runtime test doubles the citation work outgrew are
+  refreshed (#708) (all @Ready22Race).
+- The log file path setting is unified (`VALUZ_LOG_FILE_PATH`)
+  (#727 @homeant).
+- The artifact schema correction ships as migration 0030 (#777 @St0neWan9).
+
+## [0.3.6] - 2026-07-29
+
+### Added
+
+- **IM channels** — agents can be bound to chat channels and answer in them:
+  agent ↔ channel bindings, a WeCom AI-bot runtime, Feishu long-connection
+  replies, and channel session routing (#629, #631 @hanjixin).
+- **Channel ↔ project binding and project default lead** — a chat binds to one
+  project, a project names the agent that leads its tasks, and a guided card
+  plus in-chat commands set the binding when the bot joins a group
+  (#636 @St0neWan9).
+- **Factory model defaults** — the out-of-the-box runtime / model / provider /
+  effort defaults moved behind a replaceable `ModelDefaultsPort`, overridable
+  per build via `VALUZ_DEFAULT_*` (#627 @St0neWan9).
+
+### Changed
+
+- **Tasks** — a deep two-pass hardening of the lead/member subsystem: plan
+  writes go through a single authorized door, every plan and task-status write
+  is a `plan_version` compare-and-set, plan nodes gained a real transition
+  table, actor-lifecycle races were closed, and the seven live task endpoints
+  are now in `api/openapi.yaml` (#639, #643 @Ready22Race).
+- **Generative UI** — better model handling, corrected DeepSeek thinking state,
+  and stronger prompt instructions (#635, #637 @hanjixin).
+- **Generative UI performance** — ephemeral helper sessions are stripped to
+  bare completions and their reasoning streams to the tool card, cutting tens
+  of seconds of scaffolding off every `generate_ui` call (#638 @jiaoqsh).
+
+### Fixed
+
+- **Channels** — bindings load by row owner instead of the ambient local
+  identity (#634 @St0neWan9); channel reads are no longer cached
+  (#640 @St0neWan9).
+- **Projects** — group rows update from the mutation rather than a refetch
+  (#641 @St0neWan9); the project chat panel refreshes after binding changes
+  (#642 @St0neWan9).
+- **Desktop** — orphaned backend sidecars are reclaimed and a parent-process
+  watchdog stops them outliving the app (#628 @St0neWan9); update-toast errors
+  are humanized and offer a retry (#625 @St0neWan9).
+- **Knowledge base** — the document detail panel renders Markdown previews and
+  keeps its rebuild/delete actions visible in a narrow panel
+  (#624 @yy83000812).
+- **Onboarding** — Firecrawl dropped from the default assistant connectors
+  (#626 @St0neWan9).
+- **Settings** — the memory empty placeholder is centered (#630 @St0neWan9).
+- **Generative UI** — the redundant title spinner is gone from the card
+  (#632 @St0neWan9).
+
+### Docs & Chore
+
+- **Tests** — the backend suite's 40-failure order dependency is fixed
+  (#621 @Ready22Race).
+- **Docs** — the COS auto-update feed path is corrected to the `<edition>/`
+  prefix (#622 @St0neWan9); the OpenUI generative-UI design and plan are
+  consolidated into English (#633 @hanjixin).
+
+## [0.3.5] - 2026-07-27
+
+### Added
+
+- **Streaming resilience** — the in-flight turn is recovered on reconnect from
+  a live-partial state snapshot instead of event replay, and live-partial drops
+  are reported explicitly rather than degrading silently (#617 @Ready22Race).
+- **Document reader** — DocumentReaderView for reading fetched documents
+  (#615 @St0neWan9).
+- **Connector catalog** — editions can contribute their own catalog entries
+  (#613 @St0neWan9).
+- **Resources** — organization import plus skill and connector detail action
+  slots; cloud-only catalog rows stay importable (#610 @homeant).
+- **Providers** — Claude Opus 5 added to the subscription model list
+  (#614 @jiaoqsh).
+- **DeepAgents runtime** — the checkpoint backend can be pinned per deployment
+  (#605 @Ready22Race).
+
+### Changed
+
+- **Memory** — injection frozen into `Session.instructions` once per session,
+  instead of once per user message (#618 @jiaoqsh).
+
+### Fixed
+
+- **Conversations** — the header no longer goes quiet while background work is
+  still running (#619 @Ready22Race); a first empty roster no longer claims
+  nothing is configured (#616 @St0neWan9); replayed `session.update` frames can
+  no longer revive a finished turn (#609 @Ready22Race).
+- **Sessions** — todos panel no longer blank on re-open: the detail endpoint
+  kept its todos and unconditional panel writes were removed (#612 @jiaoqsh).
+- **Tasks** — dispatch gets the chat-parity provider fallback and a roster
+  pre-flight (#606 @jiaoqsh).
+- **Skills** — bundled pack materialization now emits a sync notification
+  (#607 @homeant).
+- **Packaging** — the frozen backend runs in forced UTF-8 mode, with utf-8
+  markers on migrations (#608 @St0neWan9).
+- **i18n** — missing connector empty-state strings added (#604 @St0neWan9).
+
+## [0.3.4] - 2026-07-23
+
+### Added
+
+- **Local data backup** — versioned snapshots of the client's local data with
+  scheduling, version browsing, and restore (#572 @Ready22Race).
+- **Per-entity execution location** — automations, knowledge bases, and library
+  resources each carry their own execution target (#597 @hanjixin).
+- **Automation runtime seam** — deployments can bind an
+  `AutomationRuntimePort`, dispatch and execute persisted automation runs
+  through stable facades, and initialize the canonical executor in a headless
+  worker context. The default binding preserves the existing in-process runner
+  and failure monitor (#570 @homeant).
+- **Lifecycle unit of work** — exposed to overlays so edition code can join the
+  host transaction (#579 @homeant).
+- **Async sandbox credential verifier port** — managed editions can bind a
+  database/cache/identity-service verifier without changing the wire contract
+  (#581 @homeant).
+- **Task finalization events** — `task.finalized` published on terminal writes,
+  and the memory-review sandbox released with it (#564 @Ready22Race).
+- **Codex thread items** — `imageView` and `contextCompaction` surfaced in the
+  transcript (#571 @jiaoqsh).
+- **Claude runtime** — env-gated `skipWebFetchPreflight` CLI setting
+  (#600 @jiaoqsh).
+
+### Changed
+
+- **Storage** — uniform `RuntimeStore` dual-write across the kernel and the
+  host durable data plane (#578 @Ready22Race).
+- **Tasks** — host-resident task module finalized: de-duplication, explicit
+  seams, dead-code purge, and type tightening (#594 @Ready22Race).
+- **Frontend event stream** — session-lifetime stream plus a queue-drain busy
+  gate replaces the per-view wiring (#593 @Ready22Race).
+- **Composer catalog extension** — editions can register one generic adapter
+  for model and agent catalog loading while OSS keeps its single-backend
+  module-default behavior (#595 @homeant).
+- **Providers** — the composer's 1+N provider fan-out replaced with one gated
+  list request (#573 @jiaoqsh).
+- **Frontend design spec** — remaining spec violations corrected across the app
+  (#562 @yy83000812).
+
+### Fixed
+
+- **Conversations** — follow-up turns rendered nothing because a stale-cursor
+  replay closed the send-path stream; list fan-out now times out instead of
+  hanging (#589 @St0neWan9); waiting pill stuck on running turns and queued
+  messages invisible or flickering (#590 @Ready22Race); a resolved turn is
+  classified from the authoritative `run_turn` result rather than a lagging
+  mirror re-read (#587 @Ready22Race); conversation history stays stable while
+  models load (#596 @St0neWan9).
+- **List surfaces** — resilient to a degraded cloud target (#588 @St0neWan9)
+  with follow-ups for abort, re-probe, banner gating, and the list cache
+  (#591 @St0neWan9).
+- **Events** — subagent events attributed with `parent_tool_use_id` so they no
+  longer shred the lead's live stream (#565 @Ready22Race); streaming deltas
+  coalesced per flow instead of per type (#566 @Ready22Race).
+- **Execution location** — automation/KB probe gap closed and docs health
+  fanned out (#599 @hanjixin); the managed project's origin is recorded for
+  remote conversations (#601 @St0neWan9).
+- **Composer** — models (#586 @homeant) and agents (#592 @homeant) load from
+  the selected service.
+- **MCP** — FastMCP DNS-rebinding 421s stopped on the built-in servers
+  (#574 @Ready22Race); built-in FastMCP servers made stateless for
+  multi-replica deploys (#575 @Ready22Race).
+- **Notifications** — unread badge cleared when a conversation is opened
+  (#576 @Ready22Race); badge redesigned around a single unread signal with
+  corrected sizing/optical alignment and a focus-visible sheet close
+  (#602 @St0neWan9).
+- **Runtime** — bg-busy marker released on terminal `task_updated` pushes
+  (#568 @Ready22Race); marker-only `error_during_execution` classified as
+  interrupted (#598 @jiaoqsh).
+- **Memory** — review runs inside the source session's sandbox instead of a new
+  one (#577 @Ready22Race).
+- **Database** — `pool_pre_ping` + `pool_recycle` enabled on non-SQLite engines
+  (#569 @Ready22Race).
+- **Boot** — a source backend refuses to run on the packaged app's data dir
+  (#563 @St0neWan9).
+- **Agents** — runtime validated at the API boundary (#560 @St0neWan9).
+- **Skills** — skill-service request unit of work committed (#580 @homeant).
+- **Frontend** — public asset paths resolved via `BASE_URL` for the browser
+  router (#561 @hanjixin); the border around the HTML artifact preview iframe
+  dropped (#567 @St0neWan9).
+
+### Docs & Chore
+
+- Deps: `openai-codex` 0.1.0b3 → 0.144.4, the first stable release
+  (#583 @jiaoqsh); `claude-agent-sdk` 0.2.95 → 0.2.123 (CLI 2.1.215)
+  (#585 @jiaoqsh).
+- Tests: protocol-surface parity red on main fixed by excluding the host-side
+  composite (#584 @Ready22Race).
+
+## [0.3.3] - 2026-07-15
+
+### Added
+
+- **Generative UI** — inline OpenUI via the `generate_ui` MCP tool
+  (#517 @hanjixin), token-by-token streaming (#531 @hanjixin), Valuz brand
+  theming (#533 @yy83000812), and a shared fixed scratch cwd
+  (#518 @hanjixin).
+- **Connector group OAuth sharing** — authenticating one connector in a
+  catalog group (e.g. Valuz search) automatically installs and authorizes all
+  siblings in the same group; refresh-token rotation is serialized per group
+  (#551 @St0neWan9).
+- **Background tasks** — kernel wake-up turns between and during user turns,
+  background-task running strip + idle watcher, runtime eviction yields to live
+  background tasks, and bg_task kernel events translated onto the session SSE
+  stream (#527 @jiaoqsh).
+- **User-level control-plane SSE** — a single `GET /v1/stream` replaces five
+  client-side polls; running/finished lists and the created→running bridge are
+  stream-driven (#536, #540 @Ready22Race).
+- **Notifications** — AskUserQuestion and run failures from non-task
+  conversations surface in the notification ledger (#529 @Ready22Race);
+  DB-poll SSE replaces the in-memory fan-out for multi-pod safety
+  (#552 @Ready22Race).
+- **Execution-location bar** — per-entity API base routing seam, origin
+  badges, remote project creation, and a composer footer bar
+  (#502 @St0neWan9).
+- **Sandbox** — scope-aware allocation seam (session/task) + peek-only SSE
+  live taps (#554 @Ready22Race); allocator `new_turn` hint
+  (#554 @Ready22Race).
+- **Marketplace** — sourced from the cloud market index (#494 @St0neWan9)
+  with index-endpoint racing + OSS-only direct-source fallback
+  (#497 @St0neWan9).
+- **DeepAgents** — externalize checkpoint to COS-safe files in-sandbox
+  (#524 @Ready22Race).
+- **ADR-013** — kernel `/kernel/v1` default, `/_internal` loopback plane,
+  market client `/cloud` paths (#519 @St0neWan9).
+- **Runtime resource lifecycle hooks** — skill discovery and sync extension
+  points (#513 @homeant).
+- **Task attention & reliability** — unified notification ledger, task
+  attention signals (#512 @Ready22Race).
+- **Project composer** — locked location/project chips shown under the
+  composer (#522 @St0neWan9).
+
+### Changed
+
+- **Marketplace performance** — failure memo on index client, ModelScope list
+  cache, pooled connections (#499 @St0neWan9); endpoint resolved once at boot
+  (#498 @St0neWan9); zh copy fixes (#496 @St0neWan9); card/filter/logging
+  cleanups (#495 @St0neWan9).
+- **Frontend design audit** — design spec violations gated in lint
+  (#507 @yy83000812); design spec tags and asset store aligned
+  (#510 @yy83000812).
+- **Kernel SSE** — server-side `types=` filter on the global event stream
+  (#548 @Ready22Race); SSE routes no longer poll `request.is_disconnected()`
+  in-loop (#547 @Ready22Race).
+- **Conversation polling** — P3 poll-removal + SSE disconnect hardening
+  reverted due to runtime regressions; re-landed stream-driven in later PRs
+  (#538 @Ready22Race).
+
+### Fixed
+
+- **Conversation reliability** — resume blank-transcript race healed with a
+  bounded reconcile (#542 @Ready22Race); deterministic resume via ordered
+  merge + hydration gate (#543 @Ready22Race); reconcile burst not re-fired on
+  stream reconnects (#544 @Ready22Race); stream continuation segments after a
+  mid-turn canonical seal (#546 @Ready22Race); send response must not clobber
+  the optimistic running status (#549, #550 @Ready22Race); never fake turn
+  completion when reconnects run out (#525 @St0neWan9); incremental transcript
+  build + un-stick loading on stale status (#552 @Ready22Race).
+- **SSE / streaming** — zombie SSE connections closed so the renderer no
+  longer starves on pending requests (#508 @jiaoqsh); terminal task streams
+  close instead of living forever (#508 @jiaoqsh); caller abort stays wired
+  for streaming responses (#508 @jiaoqsh); control-plane cursor advances only
+  on lifecycle events (#537 @Ready22Race).
+- **Tasks** — lead attribution corrected on blocked/stopped events;
+  skill-creator card surfaces in follow-up chat (#514 @Ready22Race); lead
+  `await_members` pull-gap closed (#539 @Ready22Race); await window aligned
+  to 600 s with the codex ceiling at 720 s (#541 @Ready22Race).
+- **Activity** — backstop-reconcile running-runs list so a stuck "running"
+  dot self-heals (#555 @Ready22Race).
+- **Codex** — webSearch thread items surfaced as tool_use/tool_result events
+  (#545 @jiaoqsh); 120 s MCP tool-call cap lifted for the harness toolkit
+  (#541 @Ready22Race).
+- **Skills** — same-slug official + user copies coexist in the index
+  (#530 @St0neWan9); list refreshed after resource sync (#535 @homeant);
+  PermissionError during directory scan caught and skipped
+  (#557 @St0neWan9); skills materialized under their frontmatter name
+  (#523 @St0neWan9).
+- **Kernel** — every kernel SQLite engine hardened with `busy_timeout`
+  (#505 @Ready22Race); background wake-up turns survive between and during
+  user turns (#527 @jiaoqsh).
+- **Sessions** — external connector credentials re-resolved on every turn
+  (#522 @St0neWan9).
+- **Memory** — review sessions share one fixed scratch cwd
+  (#511 @jiaoqsh).
+- **App** — stale event deliveries guarded from crossing a session switch
+  (#506 @Ready22Race); entry scroll burst no longer yanks an early scroll-up
+  (#509 @Ready22Race); footer-bar chip icons follow their text colour
+  (#504 @St0neWan9); right panel revealed on footer-bar project pick
+  (#503 @St0neWan9); new sessions surfaced in sidebar immediately
+  (#505 @Ready22Race); Chromium 6-connections-per-host cap lifted for
+  loopback (#505 @Ready22Race).
+- **Dev** — dev data dir isolated from the packaged app; dev.sh teardown
+  kills scoped (#500 @St0neWan9).
+- **Build** — Vite `optimizeDeps.include` guarded against pnpm strict
+  hoisting for xlsx (#558 @St0neWan9).
+- **Alembic** — duplicate host revision 0020 linearized (#516 @Ready22Race);
+  notification host migration linearized (#515 @homeant).
+- **Artifacts** — renderers improved and PDF navigation added
+  (#556 @zhourongyu).
+- **GenUI** — foreground color commented out for readability
+  (#520 @hanjixin); unused textAccentPrimary removed from OpenUI theme
+  (#532 @hanjixin); all generated chart rows shown (#553 @yy83000812);
+  desktop layout fixed (#533 @yy83000812).
+
+### Docs & Chore
+
+- Design docs: Task → Kernel migration design (#534 @Ready22Race);
+  event-delivery unification design (#528 @Ready22Race).
+- Test infra: env-level home sandbox + real-home leak tripwire
+  (#526 @St0neWan9); desktop test isolation (#521 @yy83000812).
+
 ## [0.3.2] - 2026-07-11
 
 ### Added

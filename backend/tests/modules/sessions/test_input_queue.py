@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from valuz_agent.infra.database import Base
 from valuz_agent.infra.db import async_unit_of_work
+from valuz_agent.infra.execution_lease import ExecutionLeaseRow
 from valuz_agent.modules.sessions import project_index
 from valuz_agent.modules.sessions.datastore import SessionDatastore
 from valuz_agent.modules.sessions.models import (
@@ -32,6 +33,7 @@ def _queue_db(tmp_path, monkeypatch):
 
     reset_draining()
     run_orchestrator._active_drains.clear()
+    run_orchestrator._dispatching_heads.clear()
     db_file = tmp_path / "queue.db"
     sync_engine = create_engine(f"sqlite:///{db_file}", connect_args={"check_same_thread": False})
     Base.metadata.create_all(
@@ -40,6 +42,10 @@ def _queue_db(tmp_path, monkeypatch):
             QueuedInputRow.__table__,
             SessionAttachmentRow.__table__,
             ProjectSessionRow.__table__,
+            # ``schedule_drain`` takes a cross-process lease before draining —
+            # single-flighting within one process is not enough when several
+            # host processes share the queue.
+            ExecutionLeaseRow.__table__,
         ],
     )
     async_engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
@@ -51,6 +57,7 @@ def _queue_db(tmp_path, monkeypatch):
     yield
     reset_draining()
     run_orchestrator._active_drains.clear()
+    run_orchestrator._dispatching_heads.clear()
 
 
 def _row(session_id: str, text: str) -> QueuedInputRow:
@@ -259,14 +266,30 @@ def _patch_drain(monkeypatch, *, budget_raises=False):
     calls: list[str] = []
 
     async def _fake_run(
-        session_id, text, event_bus, on_message=None, queued_attachments=None, user_id=None
+        session_id,
+        text,
+        event_bus,
+        on_message=None,
+        queued_attachments=None,
+        pre_turn=None,
+        user_id=None,
     ):
         assert user_id == OWNER
+        # A drained item is a full chat turn, so it must carry the full
+        # per-turn convergence hook — not the credential-only default.
+        assert pre_turn is not None
+        # Invariant: while an item's turn runs, the drain exposes it as the
+        # in-flight head — the ``dispatching`` bridge ``list_queue`` serves so
+        # the item is never invisible in both queue and transcript (§14.5).
+        assert run_orchestrator.get_dispatching_queue_id(session_id) is not None
         calls.append(text)
         return "idle"
 
     async def _fake_get_session(uid, sid):
         return _FakeSession()
+
+    async def _fake_bg_busy():
+        return []
 
     async def _budget(session, user_id=None):
         assert session.user_id == OWNER
@@ -280,6 +303,7 @@ def _patch_drain(monkeypatch, *, budget_raises=False):
     # namespace (module-level import), so patch it there, not on actor_runner.
     monkeypatch.setattr(run_orchestrator, "run_session_to_idle", _fake_run)
     monkeypatch.setattr(kc, "get_session", _fake_get_session)
+    monkeypatch.setattr(kc, "bg_busy_session_ids", _fake_bg_busy)
     monkeypatch.setattr(svc, "_enforce_budget", _budget)
     return calls
 
@@ -387,6 +411,171 @@ async def test_list_queue_surfaces_draining_flag() -> None:
     assert draining.draining is True
 
 
+async def test_list_queue_surfaces_dispatching_item() -> None:
+    """The dispatched head stays visible via ``dispatching``: it left ``items``
+    the moment the drain marked it, but its turn may not have landed a durable
+    user message yet — without this, a boundary refetch in that window makes
+    the accepted message vanish from queue bar AND transcript until reload."""
+    import valuz_agent.modules.sessions.run_orchestrator as run_orchestrator
+    from valuz_agent.modules.sessions.service import SessionService
+
+    await project_index.record("proj-1", "dp1", kind="chat", user_id=OWNER)
+    async with async_unit_of_work() as db:
+        ds = SessionDatastore(db)
+        await ds.create_queued(OWNER, _row("dp1", "in-flight"))
+        head = await ds.peek_next_queued("dp1")
+        assert head is not None
+        await ds.mark_queued_status(head.id, "dispatched")
+
+    svc = SessionService.__new__(SessionService)
+
+    run_orchestrator._active_drains.add("dp1")
+    run_orchestrator._dispatching_heads["dp1"] = head.id
+    try:
+        result = await svc.list_queue("dp1", user_id=OWNER)
+    finally:
+        run_orchestrator._dispatching_heads.pop("dp1", None)
+        run_orchestrator._active_drains.discard("dp1")
+
+    assert result.items == []  # dispatched → out of the user-visible list
+    assert result.draining is True
+    assert result.dispatching is not None
+    assert result.dispatching.text == "in-flight"
+    assert result.dispatching.status == "dispatched"
+
+    # Pointer gone (turn returned) → the field is empty again.
+    after = await svc.list_queue("dp1", user_id=OWNER)
+    assert after.dispatching is None
+
+
+async def test_drain_waits_until_session_not_busy(monkeypatch) -> None:
+    """The dispatch gate: "上一条处理完" = kernel turn over AND background tasks
+    done. A turn that spawns a bg task goes idle while the bg work (and the
+    user-visible "processing" chip) continues — dispatching at that instant
+    read as the queue interrupting the previous message. The drain must wait
+    out the busy signal, then dispatch."""
+    import valuz_agent.adapters.kernel_client as kc
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    async with async_unit_of_work() as db:
+        await SessionDatastore(db).create_queued(OWNER, _row("bz1", "after-busy"))
+
+    calls = _patch_drain(monkeypatch)
+    monkeypatch.setattr(run_orchestrator, "_BUSY_POLL_SECONDS", 0.01)
+
+    busy_reads: list[int] = []
+
+    async def _bg_busy():
+        # Busy for the first two polls (live background task), then clear.
+        busy_reads.append(1)
+        return ["bz1"] if len(busy_reads) <= 2 else []
+
+    monkeypatch.setattr(kc, "bg_busy_session_ids", _bg_busy)
+
+    await run_orchestrator._drain_queue_after_turn("bz1", _FakeBus(), user_id=OWNER)
+
+    assert calls == ["after-busy"]  # dispatched only after the busy signal cleared
+    assert len(busy_reads) >= 3  # actually waited through the busy polls
+
+
+async def test_drain_wait_exits_on_pause(monkeypatch) -> None:
+    """Stop/interrupt is the escape hatch while the drain waits on a busy
+    session: the soft-pause must break the wait loop without dispatching."""
+    import valuz_agent.adapters.kernel_client as kc
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    await project_index.record("proj-1", "bz2", kind="chat", user_id=OWNER)
+    async with async_unit_of_work() as db:
+        await SessionDatastore(db).create_queued(OWNER, _row("bz2", "never-runs"))
+
+    calls = _patch_drain(monkeypatch)
+    monkeypatch.setattr(run_orchestrator, "_BUSY_POLL_SECONDS", 0.01)
+
+    polls: list[int] = []
+
+    async def _bg_busy():
+        polls.append(1)
+        if len(polls) == 2:  # user hits Stop while the drain is waiting
+            await project_index.set_queue_paused("bz2", True)
+        return ["bz2"]  # busy forever
+
+    monkeypatch.setattr(kc, "bg_busy_session_ids", _bg_busy)
+
+    await run_orchestrator._drain_queue_after_turn("bz2", _FakeBus(), user_id=OWNER)
+
+    assert calls == []  # never dispatched
+    async with async_unit_of_work(commit=False) as db:
+        assert await SessionDatastore(db).count_queued(OWNER, "bz2") == 1  # item intact
+
+
+async def test_drain_clears_dispatching_pointer(monkeypatch) -> None:
+    """After the drain finishes, no stale in-flight head is exposed."""
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    async with async_unit_of_work() as db:
+        await SessionDatastore(db).create_queued(OWNER, _row("dp2", "only"))
+
+    calls = _patch_drain(monkeypatch)
+    await run_orchestrator._drain_queue_after_turn("dp2", _FakeBus(), user_id=OWNER)
+
+    assert calls == ["only"]
+    assert run_orchestrator.get_dispatching_queue_id("dp2") is None
+
+
+async def test_schedule_drain_claims_synchronously(monkeypatch) -> None:
+    """``schedule_drain`` must claim ``_active_drains`` before returning so the
+    caller's own ``list_queue`` response reports ``draining=true``. The old
+    late claim (inside the spawned task, after an awaited owner lookup) let an
+    idle-kick enqueue answer ``items=[], draining=false`` — the client's
+    drain-follower then never armed and the turn ran invisibly until reload."""
+    import asyncio
+
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    async with async_unit_of_work() as db:
+        await SessionDatastore(db).create_queued(OWNER, _row("sc1", "kick"))
+
+    calls = _patch_drain(monkeypatch)
+
+    async def _owner(session_id):
+        return OWNER
+
+    monkeypatch.setattr(run_orchestrator, "_resolve_session_owner", _owner)
+
+    run_orchestrator.schedule_drain("sc1", _FakeBus())
+    # The claim is visible SYNCHRONOUSLY — before the spawned task ever runs.
+    assert run_orchestrator.is_draining_queue("sc1") is True
+
+    for _ in range(200):
+        if not run_orchestrator.is_draining_queue("sc1"):
+            break
+        await asyncio.sleep(0.01)
+    assert run_orchestrator.is_draining_queue("sc1") is False  # released after drain
+    assert calls == ["kick"]
+
+
+async def test_schedule_drain_releases_claim_when_owner_unknown(monkeypatch) -> None:
+    """The early-return path (owner lookup fails) must not leak the claim —
+    a leaked claim gates ``send_message`` (409) and blocks future drains."""
+    import asyncio
+
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    async def _no_owner(session_id):
+        return None
+
+    monkeypatch.setattr(run_orchestrator, "_resolve_session_owner", _no_owner)
+
+    run_orchestrator.schedule_drain("sc2", _FakeBus())
+    assert run_orchestrator.is_draining_queue("sc2") is True
+
+    for _ in range(200):
+        if not run_orchestrator.is_draining_queue("sc2"):
+            break
+        await asyncio.sleep(0.01)
+    assert run_orchestrator.is_draining_queue("sc2") is False
+
+
 # ---- Steer (service.steer_queued) ----
 
 
@@ -432,7 +621,10 @@ async def test_steer_promotes_and_silently_interrupts(monkeypatch) -> None:
     monkeypatch.setattr(kc, "interrupt", _interrupt)
     # service.py binds these into its own namespace (from ... import ...),
     # so patch them there, not on run_orchestrator.
-    monkeypatch.setattr(svc_mod, "is_draining_queue", lambda sid: False)
+    async def _not_draining(sid):
+        return False
+
+    monkeypatch.setattr(svc_mod, "is_draining_queue_anywhere", _not_draining)
     monkeypatch.setattr(svc_mod, "schedule_drain", _schedule_drain)
 
     svc = SessionService.__new__(SessionService)
@@ -473,7 +665,10 @@ async def test_steer_missing_item_is_idempotent(monkeypatch) -> None:
         return _Idle()
 
     monkeypatch.setattr(kc, "get_session", _get_session)
-    monkeypatch.setattr(svc_mod, "is_draining_queue", lambda sid: False)
+    async def _not_draining(sid):
+        return False
+
+    monkeypatch.setattr(svc_mod, "is_draining_queue_anywhere", _not_draining)
     monkeypatch.setattr(svc_mod, "schedule_drain", lambda sid, bus: None)
 
     svc = SessionService.__new__(SessionService)
@@ -483,3 +678,120 @@ async def test_steer_missing_item_is_idempotent(monkeypatch) -> None:
     # dispatched) — steer must NOT raise, just return the live queue.
     result = await svc.steer_queued("st2", "gone", user_id=OWNER)
     assert len(result.items) == 1  # the genuinely-queued item is untouched
+
+
+async def test_a_peer_process_does_not_double_drain(monkeypatch) -> None:
+    """Regression: every host process re-kicked the same drain at boot.
+
+    ``resume_queued_drains`` is a cross-owner sweep that runs in EVERY process,
+    and the only guard was the in-memory ``_active_drains`` set — which a
+    sibling worker cannot see. One queued item therefore ran once per process:
+    real turns, real model spend, and duplicate assistant replies the user never
+    asked for.
+
+    A peer holding the drain lease is simulated the only way that is honest
+    here — by taking the lease under a DIFFERENT holder id, exactly as another
+    process would. Nothing else is stubbed: the guard under test is the real
+    one.
+    """
+    import asyncio
+
+    from valuz_agent.infra import execution_lease as lease_mod
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    async with async_unit_of_work() as db:
+        await SessionDatastore(db).create_queued(OWNER, _row("dd1", "only once"))
+
+    calls = _patch_drain(monkeypatch)
+
+    async def _owner(session_id):
+        return OWNER
+
+    monkeypatch.setattr(run_orchestrator, "_resolve_session_owner", _owner)
+
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "peer-process")
+    peer = await lease_mod.acquire_lease(
+        scope=run_orchestrator.DRAIN_LEASE_SCOPE, key="dd1"
+    )
+    assert peer is not None
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "our-process")
+
+    run_orchestrator.schedule_drain("dd1", _FakeBus())
+    for _ in range(200):
+        if not run_orchestrator.is_draining_queue("dd1"):
+            break
+        await asyncio.sleep(0.01)
+
+    assert calls == [], "the peer owns this drain — we must not run the item again"
+    # The local claim is still released, so this process is not left wedged.
+    assert run_orchestrator.is_draining_queue("dd1") is False
+
+
+async def test_drain_runs_when_no_peer_holds_it(monkeypatch) -> None:
+    """The lease must not break the ordinary single-process path."""
+    import asyncio
+
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    async with async_unit_of_work() as db:
+        await SessionDatastore(db).create_queued(OWNER, _row("dd2", "go"))
+
+    calls = _patch_drain(monkeypatch)
+
+    async def _owner(session_id):
+        return OWNER
+
+    monkeypatch.setattr(run_orchestrator, "_resolve_session_owner", _owner)
+
+    run_orchestrator.schedule_drain("dd2", _FakeBus())
+    for _ in range(200):
+        if not run_orchestrator.is_draining_queue("dd2"):
+            break
+        await asyncio.sleep(0.01)
+
+    assert calls == ["go"]
+
+
+async def test_a_peer_process_drain_is_visible_as_draining(monkeypatch) -> None:
+    """Regression: `is_draining_queue` answered only for THIS process.
+
+    So while a sibling worker drained a session, this one reported "not
+    draining" — which let `send_message` slip a turn into the middle of that
+    drain, and made the steer path skip the interrupt that hands the promoted
+    head over. Nothing here is stubbed but the holder id: the peer takes the
+    real lease exactly as another process would.
+    """
+    from valuz_agent.infra import execution_lease as lease_mod
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    assert await run_orchestrator.is_draining_queue_anywhere("px1") is False
+
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "peer-process")
+    peer = await lease_mod.acquire_lease(
+        scope=run_orchestrator.DRAIN_LEASE_SCOPE, key="px1"
+    )
+    assert peer is not None
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "our-process")
+
+    assert await run_orchestrator.is_draining_queue_anywhere("px1") is True
+    # ...and stops being true once the peer hands it back.
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "peer-process")
+    await peer.release()
+    monkeypatch.setattr(lease_mod, "_HOLDER_ID", "our-process")
+    assert await run_orchestrator.is_draining_queue_anywhere("px1") is False
+
+
+async def test_our_own_drain_needs_no_query(monkeypatch) -> None:
+    """The hot `list_queue` poll must short-circuit on local state."""
+    from valuz_agent.infra import execution_lease as lease_mod
+    from valuz_agent.modules.sessions import run_orchestrator
+
+    def _boom(*a, **k):
+        raise AssertionError("a locally-known drain must not hit the database")
+
+    run_orchestrator._active_drains.add("px2")
+    try:
+        monkeypatch.setattr(lease_mod, "load_lease_states", _boom)
+        assert await run_orchestrator.is_draining_queue_anywhere("px2") is True
+    finally:
+        run_orchestrator._active_drains.discard("px2")

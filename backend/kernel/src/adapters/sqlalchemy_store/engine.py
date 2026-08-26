@@ -28,6 +28,13 @@ def create_engine(url: str, **kwargs: Any) -> AsyncEngine:
     else:
         defaults.setdefault("pool_size", 5)
         defaults.setdefault("max_overflow", 10)
+        # Server deployments sit behind idle-timeout middleboxes (LB / k8s
+        # conntrack) and PG restarts: a pooled connection can die while idle
+        # and the next checkout raises "connection is closed" mid-request.
+        # pre_ping validates on checkout; recycle retires connections before
+        # typical idle-timeout windows.
+        defaults.setdefault("pool_pre_ping", True)
+        defaults.setdefault("pool_recycle", 1800)
 
     defaults.update(kwargs)
     engine = create_async_engine(url, **defaults)

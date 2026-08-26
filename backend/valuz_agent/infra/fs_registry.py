@@ -29,15 +29,43 @@ via ``project_cwd()``.
 
 from __future__ import annotations
 
+import secrets
 import tempfile
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from valuz_agent.infra.config import settings
+from valuz_agent.infra.config import settings, shared_root_of
 from valuz_agent.ports.workspace import LocalWorkspaceHandle, WorkspaceHandle
 
 ProjectKind = Literal["chat", "project"]
 SkillSource = Literal["claude", "codex"]
+
+# ``project_root`` subdirectory per project kind. Chats and projects are kept
+# apart because they grow at completely different rates: a project is created
+# deliberately, while a chat directory is minted for EVERY quick chat and every
+# scheduled-automation run.
+MANAGED_SUBDIR: dict[str, str] = {"project": "projects", "chat": "chats"}
+
+# Alphabet for the managed directory code. Uppercase CONSONANTS only: the code
+# is user-visible in a file browser, and dropping vowels means a draw can never
+# spell a word (or an obscenity) at the 8-character length used here.
+MANAGED_CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXYZ"
+MANAGED_CODE_LENGTH = 8
+# Attempts before giving up on finding an unused code. 21**8 ≈ 3.8e10 per day
+# directory, so a second attempt is already improbable — this only exists so a
+# genuinely wedged filesystem raises instead of looping.
+_MANAGED_CODE_ATTEMPTS = 16
+
+# The only KB class OSS itself creates. ``KnowledgeBaseRow.kind`` is a neutral
+# discriminator so embedding hosts can distinguish classes of knowledge base
+# (and route them to different roots) without OSS growing any opinion about
+# what those classes mean.
+KB_KIND_DEFAULT = "normal"
+
+# ``(user_id, kind) -> root directory``. See ``FsRegistry.set_kb_root_resolver``.
+KbRootResolver = Callable[[str, str], Path | str]
 
 
 def _to_async_url(url: str) -> str:
@@ -56,6 +84,14 @@ class FsRegistry:
     the returned path is a directory. They never write file content.
     """
 
+    def __init__(self) -> None:
+        # Read-only bundled trees an overlay/edition declared — see
+        # ``register_system_skill_root``. Never written to.
+        self._extra_system_skill_roots: list[Path] = []
+        # Optional per-KB-class root routing — see ``set_kb_root_resolver``.
+        # ``None`` (OSS default) means every KB lives under ``<data_dir>/kb``.
+        self._kb_root_resolver: KbRootResolver | None = None
+
     # ---- FS-1 / FS-2 — data root + secrets ----
 
     def user_dir_name(self, user_id: str) -> str:
@@ -68,10 +104,7 @@ class FsRegistry:
         return Path(raw.replace("{user_id}", self.user_dir_name(user_id))).expanduser()
 
     def _shared_root(self) -> Path:
-        raw = str(settings.data_dir)
-        if "{user_id}" in raw:
-            raw = raw.replace("{user_id}", "")
-        return Path(raw).expanduser()
+        return shared_root_of(settings.data_dir)
 
     def _expand_optional_user_template(self, root: str | Path, user_id: str | None) -> Path:
         raw = str(root)
@@ -135,6 +168,12 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def shared_root_path(self) -> Path:
+        """The configured shared root WITHOUT creating it — for probes/guards
+        that must not touch the filesystem (e.g. the source-run data-dir guard,
+        which runs before any write is allowed)."""
+        return self._shared_root()
+
     def installation_file(self, user_id: str) -> Path:
         path = self.data_dir(user_id) / settings.installation_filename
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -169,10 +208,16 @@ class FsRegistry:
 
         - ``kind="project"``: caller-supplied ``root_path`` is used as-is. The
           path must already be absolute; it is not created.
-        - ``kind="chat"``: a managed cwd is allocated under the configured
-          user-visible project root and created on demand. Deployments that
+        - ``kind="chat"``: the stored ``root_path`` when the row has one (every
+          chat project created since the dated layout landed), otherwise the
+          LEGACY derivation ``<project_root>/<project_id>``. Deployments that
           need user scoping can set ``VALUZ_USER_PROJECT_ROOT`` to a template
           such as ``~/Valuz/{user_id}``.
+
+        The legacy branch is load-bearing, not dead code: chat rows written
+        before the cutover have ``root_path IS NULL`` and their directories are
+        still on disk under the flat layout. ``root_path`` being set is exactly
+        the new-vs-old discriminator — there is no migration and no flag.
         """
         if kind == "project":
             if not root_path:
@@ -182,9 +227,61 @@ class FsRegistry:
                 raise ValueError(f"project root_path must be absolute: {root_path}")
             return path
 
+        if root_path:
+            path = Path(root_path).expanduser()
+            if not path.is_absolute():
+                raise ValueError(f"chat root_path must be absolute: {root_path}")
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+
         path = self.project_root(user_id) / project_id
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def allocate_managed_project_dir(
+        self, user_id: str, kind: ProjectKind, *, now: datetime | None = None
+    ) -> Path:
+        """Allocate + create a fresh managed workspace directory.
+
+        ``<project_root>/{projects|chats}/YYYY/MM/dd/<CODE>`` where ``CODE`` is
+        :data:`MANAGED_CODE_LENGTH` random uppercase consonants.
+
+        The code is deliberately NOT derived from the project id. The old layout
+        was ``<project_root>/<project_id>``, and because that path was
+        recomputable from a row id, callers grew the habit of rebuilding it
+        instead of reading the stored ``root_path`` — the cloud cwd bridge did
+        exactly that, and it is why a layout change can break the sandbox data
+        path. An unguessable directory name makes the stored path the only way
+        to reach a workspace, so the habit cannot come back.
+
+        The date segment comes from the LOCAL time of whoever calls this (the
+        host process). On a desktop install that is the user's own timezone; a
+        container gets whatever ``TZ`` the deployment sets. The value is frozen
+        into ``root_path`` at creation and never recomputed, so a later timezone
+        change cannot move an existing workspace.
+        """
+        stamp = now or datetime.now().astimezone()
+        parent = (
+            self.project_root(user_id)
+            / MANAGED_SUBDIR[kind]
+            / f"{stamp.year:04d}"
+            / f"{stamp.month:02d}"
+            / f"{stamp.day:02d}"
+        )
+        parent.mkdir(parents=True, exist_ok=True)
+        for _ in range(_MANAGED_CODE_ATTEMPTS):
+            code = "".join(
+                secrets.choice(MANAGED_CODE_ALPHABET) for _ in range(MANAGED_CODE_LENGTH)
+            )
+            candidate = parent / code
+            try:
+                # exist_ok=False IS the collision check — an atomic mkdir also
+                # makes two processes racing for the same code safe.
+                candidate.mkdir()
+            except FileExistsError:
+                continue
+            return candidate
+        raise RuntimeError(f"could not allocate a managed {kind} directory under {parent}")
 
     def project_root(self, user_id: str) -> Path:
         """Return the app-visible root for managed project workspaces.
@@ -232,6 +329,16 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def ptc_skill_root(self, user_id: str) -> Path:
+        """Root for generated PTC code-face skills (``ptc-tools-<hash>`` dirs).
+
+        Host-written at codegen time, attached to sessions by absolute path,
+        and linked into each cwd by the kernel's skills materializer.
+        """
+        path = self.data_dir(user_id) / "ptc" / "skills"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def docs_preview_dir(self, user_id: str) -> Path:
         path = self.docs_root(user_id) / "preview"
         path.mkdir(parents=True, exist_ok=True)
@@ -249,17 +356,36 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def kb_root(self, user_id: str) -> Path:
+    def kb_root(self, user_id: str, kind: str = KB_KIND_DEFAULT) -> Path:
         """Return (and create) the knowledge-base root directory.
 
         ``<data_dir>/kb`` — the single home for KB content, replacing the
         legacy stray ``~/.valuz/kb`` path. Routed through the registry so KB
         writes share the same audit / sandbox boundary as every other host
         write. Created on demand.
+
+        ``kind`` is the knowledge base's class (``KnowledgeBaseRow.kind``).
+        OSS only ever uses ``"normal"`` and always returns the single root;
+        a host that manages several KB classes can register a resolver via
+        :meth:`set_kb_root_resolver` to route them to distinct directories.
         """
-        path = self.data_dir(user_id) / "kb"
+        resolver = self._kb_root_resolver
+        if resolver is not None:
+            path = Path(resolver(user_id, kind))
+        else:
+            path = self.data_dir(user_id) / "kb"
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def set_kb_root_resolver(self, resolver: KbRootResolver | None) -> None:
+        """Install (or clear) the KB root resolver.
+
+        The resolver receives ``(user_id, kind)`` and returns the root
+        directory for that class of knowledge base; ``kb_root`` still does
+        the ``mkdir``. Passing ``None`` restores the default single-root
+        behavior. Intended for hosts embedding valuz — OSS never sets one.
+        """
+        self._kb_root_resolver = resolver
 
     # ---- FS-7 — skill-creator staging (project-cwd-keyed) ----
     #
@@ -345,16 +471,78 @@ class FsRegistry:
     #     return self.user_skill_root(source) / slug
 
     def official_skill_root(self, *, user_id: str) -> Path:
-        """Return the canonical home for bundled / official skills.
+        """Return the per-user, WRITABLE home for official-scope skills.
 
-        Official skills are host-owned content under ``VALUZ_DATA_DIR``. The
-        directory is created lazily by ``sync_bundled_official_skills`` on
-        first boot.
+        Holds the official content that genuinely belongs to one user: template
+        skills materialized on demand by an agent-pack import, and externally
+        installed official skills. Packages that ship with the install live in
+        :meth:`system_skill_roots` instead and are never copied here.
 
         Passing ``user_id`` is required so ``data_dir`` templates naturally
-        materialize bundled official skills under the owner data root.
+        place this under the owner data root.
         """
         return self.data_dir(user_id) / "official-skills"
+
+    def system_skill_roots(self) -> tuple[Path, ...]:
+        """Read-only roots holding the packages that ship with this install.
+
+        A bundled package is a release artifact: identical bytes for every
+        user, read-only, versioned with the release that carries it. Resolving
+        it from one shared location — rather than copying it into each user's
+        data dir — is what keeps a multi-user deployment from having to make N
+        copies of immutable content converge.
+
+        Declared, never inferred: ``VALUZ_SYSTEM_SKILLS_DIR``
+        (``os.pathsep``-separated), plus anything an overlay registered through
+        :meth:`register_system_skill_root`. Empty when nothing is declared, and
+        resolution then falls back to the per-user root exactly as before.
+
+        **Deliberately not defaulted to the package's own ``resources`` trees.**
+        A system root has one hard requirement: every process that has to READ a
+        package must see it at the same absolute path. That holds for a desktop
+        install, where the host and its kernel share a filesystem. It does not
+        hold for a sandboxed deployment — the kernel runs inside a sandbox that
+        mounts the owner's data subtrees and nothing else, so a host package
+        path resolves to nothing there and skill materialization fails. Since
+        this class cannot tell those deployments apart, the safe default is to
+        stay out of the way and let a deployment that HAS composed its trees
+        into an image-wide location say so.
+        """
+        import os
+
+        configured = (settings.system_skills_dir or "").strip()
+        roots = [Path(part).expanduser() for part in configured.split(os.pathsep) if part]
+        roots.extend(self._extra_system_skill_roots)
+        seen: set[Path] = set()
+        out: list[Path] = []
+        for root in roots:
+            resolved = root.resolve(strict=False)
+            if resolved not in seen and resolved.is_dir():
+                seen.add(resolved)
+                out.append(resolved)
+        return tuple(out)
+
+    def register_system_skill_root(self, root: Path) -> None:
+        """Declare one more read-only bundled tree (an edition's, typically).
+
+        Idempotent and process-global, matching how editions register their
+        other contributions at import time.
+        """
+        resolved = Path(root).resolve(strict=False)
+        if resolved not in self._extra_system_skill_roots:
+            self._extra_system_skill_roots.append(resolved)
+
+    def clear_system_skill_roots(self) -> None:
+        """Test hook — registration is process-global."""
+        self._extra_system_skill_roots.clear()
+
+    def find_system_skill(self, slug: str) -> Path | None:
+        """The shipped package directory for ``slug``, if this install has one."""
+        for root in self.system_skill_roots():
+            candidate = root / slug
+            if candidate.is_dir():
+                return candidate
+        return None
 
     def legacy_user_skill_roots(self) -> list[Path]:
         """Return the legacy CLI skill locations for read-only discovery.
@@ -433,116 +621,6 @@ class FsRegistry:
         parent = Path(base_cwd) / "tasks" / "_briefs"
         parent.mkdir(parents=True, exist_ok=True)
         return parent / f"{task_id}-{ascii_label}.md"
-
-    def subrun_dir(
-        self,
-        project_cwd: str | Path,
-        task_id: str,
-        n: int,
-        mode: str = "isolated",
-        base_ref: str = "HEAD",
-    ) -> Path:
-        """Return (and create) the working directory for sub-run number *n*.
-
-        ``<project_cwd>/tasks/<task_id>/runs/run-N/``
-
-        *mode* controls materialisation:
-          ``isolated`` (default) — plain ``mkdir``. No git involvement.
-          ``repo-worktree``      — attempt ``git worktree add -b <branch> <dir> <base_ref>``
-                                   if *project_cwd* is inside a git repository;
-                                   falls back to plain mkdir + a warning when the
-                                   project is not a git repo (or git is unavailable).
-        """
-        import logging
-        import subprocess
-
-        _log = logging.getLogger(__name__)
-
-        run_dir = Path(project_cwd) / "tasks" / task_id / "runs" / f"run-{n}"
-
-        if mode == "isolated":
-            run_dir.mkdir(parents=True, exist_ok=True)
-            return run_dir
-
-        if mode == "repo-worktree":
-            # Only attempt worktree if the project_cwd is inside a git repo
-            git_root: str | None = None
-            try:
-                result = subprocess.run(
-                    ["git", "-C", str(project_cwd), "rev-parse", "--show-toplevel"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if result.returncode == 0:
-                    git_root = result.stdout.strip()
-            except Exception:  # noqa: BLE001
-                pass
-
-            if git_root is None:
-                _log.warning(
-                    "subrun_dir: project_cwd %s is not a git repo; "
-                    "falling back to plain mkdir for run-%d (mode=repo-worktree)",
-                    project_cwd,
-                    n,
-                )
-                run_dir.mkdir(parents=True, exist_ok=True)
-                return run_dir
-
-            # Build a branch name unique to this run
-            branch = f"task/{task_id}/run-{n}"
-            run_dir.parent.mkdir(parents=True, exist_ok=True)
-
-            try:
-                wt_result = subprocess.run(
-                    [
-                        "git",
-                        "-C",
-                        git_root,
-                        "worktree",
-                        "add",
-                        "-b",
-                        branch,
-                        str(run_dir),
-                        base_ref,
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                if wt_result.returncode != 0:
-                    _log.warning(
-                        "subrun_dir: git worktree add failed (%s); "
-                        "falling back to mkdir for run-%d",
-                        wt_result.stderr.strip(),
-                        n,
-                    )
-                    run_dir.mkdir(parents=True, exist_ok=True)
-                return run_dir
-            except Exception as exc:  # noqa: BLE001
-                _log.warning(
-                    "subrun_dir: git worktree add raised %s; falling back to mkdir for run-%d",
-                    exc,
-                    n,
-                )
-                run_dir.mkdir(parents=True, exist_ok=True)
-                return run_dir
-
-        # Unknown mode — fall back to isolated
-        _log.warning("subrun_dir: unknown mode %r; using isolated", mode)
-        run_dir.mkdir(parents=True, exist_ok=True)
-        return run_dir
-
-    # ---- FS-10 — parser plugin local assets (model files, licenses) ----
-    #
-    # Each plugin gets its own subdirectory under ``data_dir/models/``.
-    # ``RapidOcrSetupJob`` writes PP-OCRv6 ONNX files + the Apache 2.0
-    # ``LICENSE`` + a ``READY`` marker into ``models/light_local/rapidocr/``.
-    # ``parser_light_local._build_rapidocr`` reads the same directory and
-    # constructs ``rapidocr.RapidOCR`` with explicit ``params={"Det.model_path":
-    # ...}`` so the library's auto-download path is short-circuited — the
-    # runtime only consults the directory we already prepared with
-    # explicit user authorization.
 
     def parser_model_dir(self, plugin_id: str, subkind: str | None = None) -> Path:
         """Return the canonical model-asset directory for a parser plugin.
@@ -623,7 +701,7 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    # ---- FS-14 — generative-UI scratch cwd (openui-generative-ui §5) ----
+    # ---- FS-14 — generative-UI scratch cwd ----
     #
     # ONE fixed cwd shared by every ephemeral generate_ui session. Runtimes key
     # per-project artifacts on the session cwd (claude-agent-sdk keeps
@@ -636,7 +714,75 @@ class FsRegistry:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    # ---- FS-16 — Agent Plugins (docs: agent-plugins-support design) ----
+    #
+    #   plugins/<name>/        → PLUGIN_ROOT (the installed package, replaced on update)
+    #   plugins-data/<name>/   → PLUGIN_DATA (client-managed persistent state — MUST
+    #                            survive updates; spec §9.1)
+    #
+    # ``name`` is a spec-conformant plugin name (lowercase a-z0-9.-, no "..") and
+    # therefore a single safe path segment; the guard below is defensive.
+
+    @staticmethod
+    def _plugin_segment(name: str) -> str:
+        if not name or "/" in name or "\\" in name or name in (".", "..") or ".." in name:
+            raise ValueError(f"invalid plugin name: {name!r}")
+        return name
+
+    def plugins_root(self, user_id: str) -> Path:
+        path = self.data_dir(user_id) / "plugins"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def plugin_root(self, user_id: str, name: str) -> Path:
+        """PLUGIN_ROOT for one installed plugin (NOT created — the installer
+        materializes it atomically)."""
+        return self.plugins_root(user_id) / self._plugin_segment(name)
+
+    def plugins_data_root(self, user_id: str) -> Path:
+        path = self.data_dir(user_id) / "plugins-data"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def plugin_data_dir(self, user_id: str, name: str) -> Path:
+        """PLUGIN_DATA for one installed plugin (created, writable)."""
+        path = self.plugins_data_root(user_id) / self._plugin_segment(name)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    # ---- FS-15 — local backup (docs/design/client-local-backup.md) ----
+    #
+    # The backup destination is user-configurable (a preference); this method
+    # only resolves the DEFAULT root. It deliberately lives OUTSIDE data_dir
+    # so a backup never recursively contains itself and survives a data-dir
+    # wipe. The restore-pending pointer, in contrast, lives INSIDE data_dir:
+    # the boot restore step must find it before any preference (DB) read is
+    # possible.
+
+    def default_backup_root(self, user_id: str) -> Path:
+        """Return the default backup destination root (NOT created — the
+        backup engine creates it on first use so an unused feature leaves no
+        empty directory behind)."""
+        return self._expand_optional_user_template(settings.backup_root, user_id)
+
+    def backup_restore_pending_file(self, user_id: str) -> Path:
+        """Pointer file staging a restore request for the next boot.
+
+        Written by ``BackupService.request_restore`` (full absolute paths
+        inside), consumed by ``boot/backup_restore.py`` before any engine
+        opens the SQLite files."""
+        path = self.data_dir(user_id) / "backup-restore-pending.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def backup_restore_result_file(self, user_id: str) -> Path:
+        """Result report of the last boot-time restore attempt (read by the
+        settings UI to surface success/failure after the restart)."""
+        path = self.data_dir(user_id) / "backup-restore-result.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
 
 fs_registry = FsRegistry()
 
-__all__ = ["FsRegistry", "fs_registry"]
+__all__ = ["KB_KIND_DEFAULT", "FsRegistry", "KbRootResolver", "fs_registry"]

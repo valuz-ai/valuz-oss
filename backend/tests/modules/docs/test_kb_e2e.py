@@ -32,7 +32,7 @@ from valuz_agent.modules.docs.service import (
 
 
 class FakeParser:
-    def parse_sync(self, file_path: str):
+    def parse_sync(self, file_path: str, options=None):
         from valuz_agent.ports.parser_backend import ParseResult
 
         return ParseResult(
@@ -46,10 +46,10 @@ class FakeDocsRuntime:
         self.preview_dir = None
         self.runtime_id = None
 
-    def search_sync(self, query, doc_scope_ids, top_k=5):
+    def search_sync(self, query, doc_scope_ids, top_k=5, doc_paths=None):
         return []
 
-    async def search(self, query, doc_scope_ids, top_k=5):
+    async def search(self, query, doc_scope_ids, top_k=5, doc_paths=None):
         return []
 
 
@@ -146,7 +146,9 @@ def _run_bg_work_inline(service: DocumentLibraryService) -> None:
 
         service._pending.append(_work)  # type: ignore[attr-defined]
 
-    def _inline_reindex(doc_ids: list[str], task_id: str) -> None:
+    async def _inline_reindex(
+        doc_ids: list[str], task_id: str, user_id: str = "local-test-owner"
+    ) -> None:
         async def _work() -> None:
             task = await service._ds.get_import_task("local-test-owner", task_id)
             if task is None:
@@ -314,17 +316,28 @@ class TestInitialScan:
         assert len(docs) == 1
         assert docs[0].filename == "visible.txt"
 
-    async def test_should_skip_unsupported_extensions(self, svc, tmp_path):
+    async def test_should_ingest_text_and_skip_binary(self, svc, tmp_path):
+        """The scan gate mirrors the parser, it is not an extension allow-list.
+
+        ``code.py`` was previously skipped, which contradicted the parser: its
+        unknown-extension fallback reads any UTF-8 file as text, so the KB was
+        refusing content it could perfectly well index. Only genuinely binary
+        payloads are skipped now.
+        """
         root = tmp_path / "ext_test"
         root.mkdir()
         (root / "code.py").write_text("x = 1", encoding="utf-8")
         (root / "data.csv").write_text("a,b\n1,2", encoding="utf-8")
+        (root / "notes").write_text("no extension, still text", encoding="utf-8")
+        (root / "archive.zip").write_bytes(b"PK\x03\x04\x00\x00binary")
 
         kb = await _create_kb_and_settle(svc, name="Ext", root_path=str(root))
         docs = await svc.list_documents("local-test-owner", kb_id=kb.id)
         filenames = {d.filename for d in docs}
         assert "data.csv" in filenames
-        assert "code.py" not in filenames
+        assert "code.py" in filenames
+        assert "notes" in filenames
+        assert "archive.zip" not in filenames
 
 
 # ── 3. Rescan (D5/D6: missing lifecycle) ─────────────────────────────
@@ -468,7 +481,7 @@ class TestRescan:
             def __init__(self) -> None:
                 self.pdf_pick = "light_local"
 
-            def parse_sync(self, file_path: str):
+            def parse_sync(self, file_path: str, options=None):
                 from valuz_agent.ports.parser_backend import ParseResult
 
                 # Emit the engine name that ``_engine_to_plugin_id``
@@ -672,6 +685,53 @@ class TestScopeResolution:
         )
         scope = await svc.resolve_doc_scope("local-test-owner", "project-1")
         assert scope == [target_doc.id]
+
+    async def test_all_available_allowlist_ignores_project_bindings_and_reauthorizes(
+        self,
+        svc,
+        tmp_path,
+        db,
+    ):
+        first_root = tmp_path / "first"
+        second_root = tmp_path / "second"
+        first_root.mkdir()
+        second_root.mkdir()
+        (first_root / "a.md").write_text("a", encoding="utf-8")
+        (second_root / "b.md").write_text("b", encoding="utf-8")
+        first = await _create_kb_and_settle(svc, name="First", root_path=str(first_root))
+        second = await _create_kb_and_settle(svc, name="Second", root_path=str(second_root))
+
+        ds = DocumentDatastore(db)
+        for kb in (first, second):
+            for doc in await ds.list_documents("local-test-owner", kb_id=kb.id):
+                doc.status = "ready"
+                await ds.update(doc)
+
+        # Project binding points at Second, but a session snapshot allowlisting
+        # First must see only First.
+        await svc.update_project_bindings(
+            "local-test-owner",
+            "project-1",
+            [{"binding_kind": "kb", "target_id": second.id}],
+        )
+        first_scope = await svc.resolve_doc_scope(
+            "local-test-owner",
+            "project-1",
+            knowledge_base_ids=[first.id],
+        )
+        assert len(first_scope) == 1
+        assert (await ds.get_by_id("local-test-owner", first_scope[0])).kb_id == first.id
+
+        # Revocation/deletion fails closed immediately for the old snapshot.
+        await svc.delete_kb("local-test-owner", first.id)
+        assert (
+            await svc.resolve_doc_scope(
+                "local-test-owner",
+                "project-1",
+                knowledge_base_ids=[first.id],
+            )
+            == []
+        )
 
 
 # ── 6. Doc scope tree (M09 integration) ──────────────────────────────
@@ -900,7 +960,7 @@ class TestManagedKbRoot:
 
         # Managed root lives under <data_dir>/kb/<kb_id>; point data_dir at
         # tmp so the test never touches the real ~/.valuz-oss tree.
-        def _kb_root(_user_id: str) -> Path:
+        def _kb_root(_user_id: str, _kind: str = "normal") -> Path:
             path = tmp_path / "kb"
             path.mkdir(parents=True, exist_ok=True)
             return path
@@ -919,7 +979,7 @@ class TestManagedKbRoot:
     ) -> None:
         from valuz_agent.modules.docs import service as docs_service
 
-        def _kb_root(_user_id: str) -> Path:
+        def _kb_root(_user_id: str, _kind: str = "normal") -> Path:
             path = tmp_path / "kb"
             path.mkdir(parents=True, exist_ok=True)
             return path

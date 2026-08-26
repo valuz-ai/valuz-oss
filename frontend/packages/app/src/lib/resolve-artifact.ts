@@ -19,7 +19,60 @@ import {
 
 const TEXT_KINDS = new Set(["markdown", "code", "html", "plain"]);
 const BINARY_KINDS = new Set(["image", "pdf", "media", "docx", "spreadsheet"]);
-const TRUNCATION_MARKER = "(file too large, truncated)";
+export const MAX_TEXT_PREVIEW_BYTES = 5 * 1024 * 1024;
+
+async function readResponseTextPreview(
+  response: Response,
+  signal?: AbortSignal,
+): Promise<{ content: string; truncated: boolean }> {
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  const declaredSize = Number(response.headers.get("content-length"));
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const truncated = bytes.byteLength > MAX_TEXT_PREVIEW_BYTES;
+    return {
+      content: new TextDecoder().decode(
+        truncated ? bytes.subarray(0, MAX_TEXT_PREVIEW_BYTES) : bytes,
+      ),
+      truncated,
+    };
+  }
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let truncated = Number.isFinite(declaredSize) && declaredSize > MAX_TEXT_PREVIEW_BYTES;
+  while (total < MAX_TEXT_PREVIEW_BYTES) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const { done, value } = await reader.read();
+    if (done) break;
+    const remaining = MAX_TEXT_PREVIEW_BYTES - total;
+    if (value.byteLength > remaining) {
+      chunks.push(value.subarray(0, remaining));
+      total += remaining;
+      truncated = true;
+      break;
+    }
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  if (total >= MAX_TEXT_PREVIEW_BYTES && !truncated) {
+    const next = await reader.read();
+    truncated ||= !next.done;
+  }
+  if (truncated) await reader.cancel();
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { content: new TextDecoder().decode(bytes), truncated };
+}
 
 function extensionOf(name: string): string | null {
   const i = name.lastIndexOf(".");
@@ -42,6 +95,7 @@ async function buildContent(
   d: ResolvedFileDescriptor,
   previewKind: ArtifactPreviewKind,
   platform: PlatformCapabilities,
+  signal?: AbortSignal,
 ): Promise<ArtifactContent> {
   if (!d.exists || d.error) {
     return { kind: "external", reason: d.error ?? "not_found" };
@@ -53,27 +107,28 @@ async function buildContent(
     // Remote: fetch text directly from the presigned URL (client → object store).
     if (d.kind === "remote" && d.url) {
       try {
-        const res = await fetch(d.url);
-        const text = await res.text();
+        const res = await fetch(d.url, { signal });
+        const text = await readResponseTextPreview(res, signal);
         return {
           kind: "text",
           encoding: "utf-8",
-          content: text,
-          truncated: false,
+          content: text.content,
+          truncated: text.truncated,
         };
-      } catch {
+      } catch (cause) {
+        if (signal?.aborted) throw cause;
         return { kind: "external", reason: "fetch_failed", openUrl: d.url };
       }
     }
     // Local desktop: read via IPC (no backend proxy).
     if (d.kind === "local" && d.absPath && platform.readFileContent) {
-      const { content } = await platform.readFileContent(d.absPath);
+      const { content, truncated } = await platform.readFileContent(d.absPath);
       if (content != null) {
         return {
           kind: "text",
           encoding: "utf-8",
           content,
-          truncated: content.endsWith(TRUNCATION_MARKER),
+          truncated,
         };
       }
     }
@@ -103,7 +158,12 @@ async function buildContent(
 /** Build the shell's ``{ artifact, content }`` from a resolve descriptor. */
 export async function resolvedToArtifactFile(
   d: ResolvedFileDescriptor,
-  opts: { projectId: string; relPath: string; platform: PlatformCapabilities },
+  opts: {
+    projectId: string;
+    relPath: string;
+    platform: PlatformCapabilities;
+    signal?: AbortSignal;
+  },
 ): Promise<ArtifactFileResponse> {
   const previewKind = (d.previewKind || "unsupported") as ArtifactPreviewKind;
   const artifact: ArtifactDescriptor = {
@@ -126,6 +186,6 @@ export async function resolvedToArtifactFile(
       canDownload: d.capabilities.canDownload,
     },
   };
-  const content = await buildContent(d, previewKind, opts.platform);
+  const content = await buildContent(d, previewKind, opts.platform, opts.signal);
   return { artifact, content };
 }

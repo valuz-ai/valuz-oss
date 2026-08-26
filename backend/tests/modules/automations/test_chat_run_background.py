@@ -20,6 +20,17 @@ import pytest
 from valuz_agent.modules.automations.in_process_runner import InProcessAutomationRunner
 
 
+class _StaleLease:
+    token = "stale"
+    attempt = 1
+
+    async def heartbeat(self) -> None:
+        pass
+
+    async def is_current(self) -> bool:
+        return False
+
+
 @asynccontextmanager
 async def _fake_uow(*args, **kwargs):
     yield Mock()
@@ -159,3 +170,34 @@ async def test_finish_chat_run_marks_session_error_failed_and_releases() -> None
     assert "Not logged in" in (run.error_message or "")
     # Single-flight released even on failure so the automation isn't wedged.
     assert "auto-1" not in runner._active_ids
+
+
+@pytest.mark.asyncio
+async def test_stale_lease_cannot_persist_terminal_chat_state() -> None:
+    runner = InProcessAutomationRunner()
+    runner._triggers = Mock()
+    row, run = _row(), _run()
+    ds = Mock()
+    ds.get_automation = AsyncMock(return_value=row)
+    ds.last_run = AsyncMock(return_value=run)
+    ds.replace_run = AsyncMock()
+    ds.update_automation = AsyncMock()
+    ds.trim_runs = AsyncMock()
+    svc = _session_service([])
+
+    with (
+        patch("valuz_agent.modules.automations.datastore.AutomationDatastore", return_value=ds),
+        patch("valuz_agent.infra.db.async_unit_of_work", _fake_uow),
+        patch.object(runner, "_build_session_service", return_value=svc),
+    ):
+        await runner._finish_chat_run(
+            user_id="u1",
+            automation_id="auto-1",
+            run_id="run-1",
+            session_id="sess-1",
+            rendered_prompt="hello",
+            lease=_StaleLease(),
+        )
+
+    ds.replace_run.assert_not_awaited()
+    ds.update_automation.assert_not_awaited()

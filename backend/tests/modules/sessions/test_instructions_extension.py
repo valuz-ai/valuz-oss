@@ -1,13 +1,4 @@
-"""Tests for the deployment-instructions extension seam (ports/instructions.py).
-
-Proves: the OSS default binds no override (empty preamble); a bound provider's
-text flows through ``global_instructions_preamble`` — the single seam helper
-both consumption sites call (``_create_agent_bound_session`` for chat/project,
-``build_member_session`` for task lead/members) — and lands as the FIRST
-prompt section, ahead of the agent's own instructions; an override returning
-``None``/empty adds nothing (the empty section is skipped by
-``assemble_session_instructions``).
-"""
+"""Owner-aware distribution prompt contract."""
 
 # ruff: noqa: I001 — kernel bootstrap side-effect import must precede src/app
 from __future__ import annotations
@@ -16,106 +7,155 @@ from collections.abc import Iterator
 
 import pytest
 
-import valuz_agent.boot.kernel  # noqa: F401 — kernel sys.path side-effect
+import valuz_agent.boot.kernel  # noqa: F401
 from valuz_agent.adapters.system_prompt_builder import (
+    AUTHORIZATION_BOUNDARY_INSTRUCTIONS,
     assemble_session_instructions,
     prepend_global_instructions,
 )
 from valuz_agent.ports.extensions import Extensions, ext
-from valuz_agent.ports.instructions import global_instructions_preamble
+from valuz_agent.ports.instructions import (
+    GlobalInstructionsConfigurationError,
+    OSS_GLOBAL_INSTRUCTIONS,
+    OSSGlobalInstructionsProvider,
+    PromptSnapshot,
+    agent_inherits_global_instructions,
+    global_instructions_preamble,
+    resolve_global_instructions,
+)
+
+OWNER = "owner-a"
 
 
 @pytest.fixture
-def restore_override() -> Iterator[None]:
-    original = ext.instructions
+def restore_provider() -> Iterator[None]:
+    original = ext.global_instructions
     try:
         yield
     finally:
-        ext.instructions = original
+        ext.global_instructions = original
 
 
-class _StaticProvider:
-    def __init__(self, text: str | None) -> None:
-        self._text = text
+class _OwnerProvider:
+    def __init__(self) -> None:
+        self.owners: list[str] = []
 
-    async def global_instructions(self) -> str | None:
-        return self._text
-
-
-def test_oss_default_binds_no_override() -> None:
-    assert Extensions().instructions is None
-
-
-async def test_unbound_override_yields_empty_preamble(restore_override: None) -> None:
-    ext.instructions = None
-    assert await global_instructions_preamble() == ""
+    async def resolve(self, user_id: str) -> PromptSnapshot:
+        self.owners.append(user_id)
+        return PromptSnapshot(
+            content=f"prompt for {user_id}",
+            revision=f"rev-{user_id}",
+            distribution=f"dist-{user_id}",
+        )
 
 
-async def test_bound_provider_text_flows_through(restore_override: None) -> None:
-    ext.instructions = _StaticProvider("platform policy: be terse")
-    assert await global_instructions_preamble() == "platform policy: be terse"
+def test_oss_default_is_a_complete_provider() -> None:
+    provider = Extensions().global_instructions
+    assert isinstance(provider, OSSGlobalInstructionsProvider)
 
 
-async def test_none_result_coerces_to_empty(restore_override: None) -> None:
-    ext.instructions = _StaticProvider(None)
-    assert await global_instructions_preamble() == ""
+@pytest.mark.parametrize(
+    ("kind", "inherit", "expected"),
+    [
+        ("system", True, True),
+        ("system", False, True),
+        ("standard", True, True),
+        ("standard", False, False),
+    ],
+)
+def test_agent_prompt_inheritance_contract(
+    kind: str,
+    inherit: bool,
+    expected: bool,
+) -> None:
+    assert (
+        agent_inherits_global_instructions(
+            kind=kind,
+            inherit_global_instructions=inherit,
+        )
+        is expected
+    )
 
 
-async def test_preamble_lands_first_in_assembled_prompt(restore_override: None) -> None:
-    ext.instructions = _StaticProvider("org compliance preamble")
+async def test_oss_prompt_is_nonempty_and_versioned() -> None:
+    snapshot = await OSSGlobalInstructionsProvider().resolve(OWNER)
+    assert snapshot.content == OSS_GLOBAL_INSTRUCTIONS
+    assert snapshot.revision
+    assert snapshot.distribution == "oss"
+
+
+async def test_owner_is_explicit_and_snapshots_do_not_cross(
+    restore_provider: None,
+) -> None:
+    provider = _OwnerProvider()
+    ext.global_instructions = provider
+
+    a = await resolve_global_instructions("owner-a")
+    b = await resolve_global_instructions("owner-b")
+
+    assert provider.owners == ["owner-a", "owner-b"]
+    assert a.content == "prompt for owner-a"
+    assert b.content == "prompt for owner-b"
+    assert a.distribution != b.distribution
+
+
+async def test_empty_distribution_snapshot_fails_closed(
+    restore_provider: None,
+) -> None:
+    class _Invalid:
+        async def resolve(self, user_id: str) -> PromptSnapshot:
+            return PromptSnapshot(content="", revision="", distribution="")
+
+    ext.global_instructions = _Invalid()
+    with pytest.raises(GlobalInstructionsConfigurationError):
+        await resolve_global_instructions(OWNER)
+
+
+async def test_preamble_lands_first_in_assembled_prompt(
+    restore_provider: None,
+) -> None:
+    ext.global_instructions = _OwnerProvider()
     prompt = assemble_session_instructions(
         [
-            ("global-instructions", await global_instructions_preamble()),
+            ("global-instructions", await global_instructions_preamble(OWNER)),
             ("agent-instructions", "dig deep"),
         ]
     )
-    expected_head = "<global-instructions>\norg compliance preamble\n</global-instructions>"
+    expected_head = "<global-instructions>\nprompt for owner-a\n</global-instructions>"
     assert prompt.startswith(expected_head)
     assert prompt.index("global-instructions") < prompt.index("agent-instructions")
 
 
-async def test_empty_preamble_emits_no_section(restore_override: None) -> None:
-    ext.instructions = None
-    prompt = assemble_session_instructions(
-        [
-            ("global-instructions", await global_instructions_preamble()),
-            ("agent-instructions", "dig deep"),
-        ]
-    )
-    assert "global-instructions" not in prompt
-    assert prompt.startswith("<agent-instructions>")
-
-
-# --- raw/no-agent path (quick chat) -------------------------------------
-# ``create_session`` without an ``agent_slug`` builds a bare project prompt
-# instead of going through the full ``assemble_session_instructions`` list;
-# it applies the preamble via ``prepend_global_instructions``.
-
-
-async def test_raw_path_prepends_preamble_before_project_prompt(
-    restore_override: None,
+async def test_raw_path_prepends_prompt_and_accepts_existing_snapshot(
+    restore_provider: None,
 ) -> None:
-    ext.instructions = _StaticProvider("org compliance preamble")
-    prompt = await prepend_global_instructions("You are working in project X.")
+    provider = _OwnerProvider()
+    ext.global_instructions = provider
+    snapshot = await resolve_global_instructions(OWNER)
+
+    prompt = await prepend_global_instructions(
+        "You are working in project X.",
+        user_id=OWNER,
+        snapshot=snapshot,
+    )
+
     assert prompt == (
-        "<global-instructions>\norg compliance preamble\n</global-instructions>"
-        "\n\nYou are working in project X."
+        "<global-instructions>\nprompt for owner-a\n</global-instructions>\n\n"
+        "<authorization-boundary>\n"
+        f"{AUTHORIZATION_BOUNDARY_INSTRUCTIONS}\n"
+        "</authorization-boundary>\n\nYou are working in project X."
     )
+    # The already-resolved snapshot prevents a second provider read.
+    assert provider.owners == [OWNER]
 
 
-async def test_raw_path_empty_preamble_keeps_prompt_byte_identical(
-    restore_override: None,
+async def test_raw_path_prompt_alone_when_no_project_prompt(
+    restore_provider: None,
 ) -> None:
-    ext.instructions = None
-    assert await prepend_global_instructions("You are working in project X.") == (
-        "You are working in project X."
-    )
-
-
-async def test_raw_path_preamble_alone_when_no_project_prompt(
-    restore_override: None,
-) -> None:
-    ext.instructions = _StaticProvider("org compliance preamble")
-    assert await prepend_global_instructions("") == (
-        "<global-instructions>\norg compliance preamble\n</global-instructions>"
+    ext.global_instructions = _OwnerProvider()
+    assert await prepend_global_instructions("", user_id=OWNER) == (
+        "<global-instructions>\nprompt for owner-a\n</global-instructions>\n\n"
+        "<authorization-boundary>\n"
+        f"{AUTHORIZATION_BOUNDARY_INSTRUCTIONS}\n"
+        "</authorization-boundary>"
     )

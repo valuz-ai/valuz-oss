@@ -12,14 +12,39 @@
  * other target's rows and the failing target id is published through
  * ``useDegradedListTargets`` so shells can render a "list may be incomplete"
  * hint. Only when EVERY target fails does the fan-out throw.
+ *
+ * A target that never settles counts as failed too: browser fetch has no
+ * default timeout, so a black-holed backend (connection accepted, response
+ * never sent — e.g. an OOM-wedged cloud deployment) would otherwise hold
+ * ``Promise.allSettled`` open forever and pin every list surface on
+ * "loading" even though the healthy target answered in milliseconds. Each
+ * target therefore races ``LIST_TARGET_TIMEOUT_MS``; on timeout the target's
+ * ``AbortSignal`` fires (so the underlying request is torn down rather than
+ * leaking a hung connection per poll tick) and the target goes down the same
+ * degraded path as a rejection.
+ *
+ * Recovery is active, not just passive: while any target is degraded, the
+ * store re-probes the failed targets every ``DEGRADED_REPROBE_MS`` by
+ * replaying the most recent fan-out's ``fetchOne`` against them. A hint that
+ * only failed requests could set and only successful requests could clear
+ * would otherwise linger forever on quiet pages (e.g. a conversation left
+ * open) where no list refresh happens to run after the outage ends.
  */
 
 import { useSyncExternalStore } from "react";
-import { getExecutionTargets, type ExecutionTarget } from "./execution-targets";
+import {
+  getExecutionTargets,
+  selectableExecutionTargets,
+  type ExecutionTarget,
+} from "./execution-targets";
 
 /** Targets to fan a list call out to; [] = single-backend fast path. */
 export function getListFanOutTargets(): ExecutionTarget[] {
-  const targets = getExecutionTargets();
+  // Unselectable targets are narrow grants (see ExecutionTarget.selectable):
+  // they answer for the entities the edition already holds, not for "list
+  // everything you have". Fanning out to one only ever yields a refusal, and
+  // a refusal here is what raises the "list may be incomplete" banner.
+  const targets = selectableExecutionTargets(getExecutionTargets());
   return targets.length >= 2 ? targets : [];
 }
 
@@ -30,16 +55,94 @@ export interface FanOutOutcome<T> {
   failedTargets: string[];
 }
 
+/** Per-target budget before a hung list fetch counts as a failed target. */
+export const LIST_TARGET_TIMEOUT_MS = 10_000;
+
+/** Re-probe cadence for degraded targets (banner auto-clears on recovery). */
+export const DEGRADED_REPROBE_MS = 30_000;
+
+type FanOutFetch<T> = (
+  target: ExecutionTarget,
+  signal?: AbortSignal,
+) => Promise<T>;
+
+/**
+ * Reject after ``LIST_TARGET_TIMEOUT_MS`` when ``promise`` hasn't settled,
+ * invoking ``onTimeout`` first (used to abort the underlying request). The
+ * late settlement of the losing promise stays observed (routed into the
+ * already-settled deferred, a no-op) so it can't surface as an unhandled
+ * rejection.
+ */
+function withTargetTimeout<T>(
+  promise: Promise<T>,
+  targetId: string,
+  onTimeout?: () => void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      onTimeout?.();
+      reject(
+        new Error(
+          `list target '${targetId}' timed out after ${LIST_TARGET_TIMEOUT_MS}ms`,
+        ),
+      );
+    }, LIST_TARGET_TIMEOUT_MS);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+/** Run one target's fetch under the timeout + abort discipline. */
+function fetchTarget<T>(
+  fetchOne: FanOutFetch<T>,
+  target: ExecutionTarget,
+): Promise<T> {
+  const controller = new AbortController();
+  return withTargetTimeout(fetchOne(target, controller.signal), target.id, () =>
+    controller.abort(),
+  );
+}
+
 /**
  * Run ``fetchOne`` against every registered target concurrently. Publishes
  * failures to the degraded-targets store. Throws (the first rejection) only
- * when no target answered.
+ * when no target answered. A target that neither resolves nor rejects within
+ * ``LIST_TARGET_TIMEOUT_MS`` is aborted and treated as failed.
+ *
+ * ``fetchOne`` SHOULD forward the provided ``AbortSignal`` into its request
+ * so a timed-out target actually tears down the connection; callers that
+ * ignore it still get the timeout, just without the abort.
+ */
+/**
+ * Ask several targets the same GET and collect what answers.
+ *
+ * ``only`` narrows the set — a caller may know that some targets cannot hold
+ * anything new (the agent library, where a sibling runtime of the same account
+ * would just repeat it). Failures are then reported for that subset alone, so
+ * a target nobody asked is never announced as degraded.
  */
 export async function fanOutTargets<T>(
-  fetchOne: (target: ExecutionTarget) => Promise<T>,
+  fetchOne: FanOutFetch<T>,
+  only?: readonly ExecutionTarget[],
 ): Promise<FanOutOutcome<T>> {
-  const targets = getListFanOutTargets();
-  const settled = await Promise.allSettled(targets.map(fetchOne));
+  const targets = only ? [...only] : getListFanOutTargets();
+  if (targets.length > 0) {
+    // Remembered so the degraded re-probe can replay the same request shape
+    // (auth, params) against the failed targets. GET-only surfaces, so a
+    // replay is side-effect free.
+    _lastFanOut = fetchOne as FanOutFetch<unknown>;
+  }
+  const settled = await Promise.allSettled(
+    targets.map((target) => fetchTarget(fetchOne, target)),
+  );
   const values: Array<{ target: ExecutionTarget; value: T }> = [];
   const failedTargets: string[] = [];
   let firstError: unknown;
@@ -51,7 +154,9 @@ export async function fanOutTargets<T>(
       firstError ??= result.reason;
     }
   });
-  publishDegradedTargets(failedTargets);
+  // A narrowed fan-out speaks only for what it asked: it must not clear a
+  // degradation another list observed on a target it skipped.
+  if (!only || failedTargets.length > 0) publishDegradedTargets(failedTargets);
   if (values.length === 0 && failedTargets.length > 0) {
     throw firstError;
   }
@@ -62,12 +167,73 @@ export async function fanOutTargets<T>(
 
 let _degraded: string[] = [];
 const _listeners = new Set<() => void>();
+let _lastFanOut: FanOutFetch<unknown> | null = null;
+let _reprobeTimer: ReturnType<typeof setTimeout> | null = null;
 
 function publishDegradedTargets(failed: string[]): void {
   const next = [...failed].sort();
-  if (next.join(",") === _degraded.join(",")) return;
+  const changed = next.join(",") !== _degraded.join(",");
   _degraded = next;
+  if (_degraded.length === 0) {
+    if (_reprobeTimer !== null) {
+      clearTimeout(_reprobeTimer);
+      _reprobeTimer = null;
+    }
+  } else {
+    scheduleReprobe();
+  }
+  if (!changed) return;
   for (const fn of _listeners) fn();
+}
+
+function scheduleReprobe(): void {
+  if (_reprobeTimer !== null) return;
+  _reprobeTimer = setTimeout(() => {
+    _reprobeTimer = null;
+    void runReprobe();
+  }, DEGRADED_REPROBE_MS);
+}
+
+/**
+ * Replay the last fan-out's fetch against only the degraded targets; targets
+ * that answer are removed from the degraded set (real list content follows
+ * with the next regular refresh). Still-failed targets keep the banner and
+ * the next probe stays scheduled.
+ *
+ * Every exit has to leave recovery running or cancelled deliberately — an
+ * early return that simply drops the timer strands the banner forever, which
+ * is the exact failure the active-recovery design above exists to prevent.
+ */
+async function runReprobe(): Promise<void> {
+  const registered = getListFanOutTargets();
+  // A target that has left the registry — or a drop back to the
+  // single-backend fast path, where ``getListFanOutTargets`` returns [] — is
+  // no longer fanned out to, so the list cannot be missing its content. Drop
+  // those ids instead of naming a target the user can no longer see.
+  const stillListed = _degraded.filter((id) =>
+    registered.some((t) => t.id === id),
+  );
+  if (stillListed.length !== _degraded.length) {
+    publishDegradedTargets(stillListed);
+  }
+  const fetchOne = _lastFanOut;
+  const failed = registered.filter((t) => _degraded.includes(t.id));
+  if (!fetchOne || failed.length === 0) {
+    // Nothing to probe on this tick. ``scheduleReprobe`` runs from the timer
+    // callback that already cleared ``_reprobeTimer``, so returning without
+    // rescheduling would end recovery permanently and strand the banner.
+    if (_degraded.length > 0) scheduleReprobe();
+    return;
+  }
+  const settled = await Promise.allSettled(
+    failed.map((target) => fetchTarget(fetchOne, target)),
+  );
+  const recovered = new Set(
+    failed
+      .filter((_, i) => settled[i]!.status === "fulfilled")
+      .map((t) => t.id),
+  );
+  publishDegradedTargets(_degraded.filter((id) => !recovered.has(id)));
 }
 
 function subscribe(fn: () => void): () => void {

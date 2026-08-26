@@ -10,13 +10,10 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import select
 
 import valuz_agent.boot.kernel  # noqa: F401
-from valuz_agent.infra.database import Base
-from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow, TaskSessionRow
+from valuz_agent.modules.tasks.models import TaskEventRow, TaskRow
 from valuz_agent.modules.tasks.orchestrator import TaskOrchestrator
 
 OWNER = "local-test-owner"
@@ -26,23 +23,6 @@ OWNER = "local-test-owner"
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
-def db_factory(tmp_path, monkeypatch):
-    """Tmp-SQLite async sessionmaker, patched into AsyncSessionLocal."""
-    import valuz_agent.infra.db as db_mod
-
-    db_file = tmp_path / "upd_deliverable.db"
-    sync_engine = create_engine(
-        f"sqlite:///{db_file}", connect_args={"check_same_thread": False}
-    )
-    Base.metadata.create_all(
-        sync_engine,
-        tables=[TaskRow.__table__, TaskEventRow.__table__, TaskSessionRow.__table__],
-    )
-    async_engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
-    async_factory = async_sessionmaker(bind=async_engine, expire_on_commit=False)
-    monkeypatch.setattr(db_mod, "AsyncSessionLocal", async_factory)
-    return sessionmaker(bind=sync_engine, expire_on_commit=False)
 
 
 def _make_task(db_factory, tmp_path, *, project_id="w1", task_id="t1") -> str:
@@ -130,7 +110,7 @@ def test_update_deliverable_appends_event_on_completed_task(
     """update_deliverable on a completed task appends a deliverable_updated event."""
     orch = TaskOrchestrator()
     result = asyncio.run(
-        orch.update_deliverable(
+        orch.finalization.update_deliverable(
             task_id=completed_task["task_id"],
             project_id=completed_task["project_id"],
             user_id=OWNER,
@@ -159,7 +139,7 @@ def test_update_deliverable_rejected_on_active_task(db_factory, active_task) -> 
     """update_deliverable is rejected when the task is not yet completed."""
     orch = TaskOrchestrator()
     result = asyncio.run(
-        orch.update_deliverable(
+        orch.finalization.update_deliverable(
             task_id=active_task["task_id"],
             project_id=active_task["project_id"],
             user_id=OWNER,
@@ -180,7 +160,7 @@ def test_update_deliverable_rejected_when_task_not_found(db_factory) -> None:
     """update_deliverable is rejected when no task matches the id."""
     orch = TaskOrchestrator()
     result = asyncio.run(
-        orch.update_deliverable(
+        orch.finalization.update_deliverable(
             task_id="does-not-exist",
             project_id="w1",
             user_id=OWNER,
@@ -205,15 +185,10 @@ def test_update_deliverable_rejected_when_task_not_found(db_factory) -> None:
 
 
 def test_update_deliverable_tool_is_declared() -> None:
-    """update_deliverable appears in DISPATCH_TOOL_NAMES and DISPATCH_TOOL_DECLARATIONS."""
+    """update_deliverable ships in the lead toolset."""
     from valuz_agent.modules.tasks.tools.declarations import (
         DISPATCH_TOOL_DECLARATIONS,
-        DISPATCH_TOOL_NAMES,
         UPDATE_DELIVERABLE_TOOL_NAME,
-    )
-
-    assert UPDATE_DELIVERABLE_TOOL_NAME in DISPATCH_TOOL_NAMES, (
-        "update_deliverable must be in DISPATCH_TOOL_NAMES"
     )
 
     decl_names = {d.name for d in DISPATCH_TOOL_DECLARATIONS}
@@ -237,12 +212,17 @@ def test_update_deliverable_declaration_has_required_summary() -> None:
 
 
 def test_update_deliverable_is_lead_only() -> None:
-    """update_deliverable is in LEAD_ONLY_TOOL_NAMES so it is stripped from chat agents."""
+    """update_deliverable must never reach a chat session's toolset.
+
+    It rewrites a finished task's deliverable card, so only that task's lead
+    may call it. Audience is decided by tuple membership (``boot/steps.py``
+    partitions the toolkit MCP server by these two lists).
+    """
     from valuz_agent.modules.tasks.tools.declarations import (
-        LEAD_ONLY_TOOL_NAMES,
+        ORCHESTRATION_TOOL_DECLARATIONS,
         UPDATE_DELIVERABLE_TOOL_NAME,
     )
 
-    assert UPDATE_DELIVERABLE_TOOL_NAME in LEAD_ONLY_TOOL_NAMES, (
-        "update_deliverable must be in LEAD_ONLY_TOOL_NAMES to be stripped from chat agents"
-    )
+    assert UPDATE_DELIVERABLE_TOOL_NAME not in {
+        d.name for d in ORCHESTRATION_TOOL_DECLARATIONS
+    }, "update_deliverable must not be advertised to chat sessions"
