@@ -111,6 +111,19 @@ class SessionPermissionModeRequest(BaseModel):
     permission_mode: str
 
 
+class SessionModeRequest(BaseModel):
+    """Body for ``PATCH /v1/sessions/{id}/mode``.
+
+    Session working mode (kernel ``Session.mode``,
+    docs/design/session-modes.md). Same-mode re-set is idempotent;
+    direct ``plan ↔ goal`` transitions are allowed (the kernel composes
+    exit + entry in one reconcile pass). deepagents / deepseek_harness
+    sessions reject non-default modes with 400 (no native primitive).
+    """
+
+    mode: Literal["default", "plan", "goal"]
+
+
 class SessionActionRequest(BaseModel):
     """Body for ``POST /v1/sessions/{id}/actions``.
 
@@ -605,6 +618,37 @@ async def update_permission_mode(
         return await svc.set_permission_mode(session_id, body.permission_mode, user_id=user_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/{session_id}/mode")
+async def update_session_mode(
+    session_id: str,
+    body: SessionModeRequest,
+    user_id: str = Depends(get_current_user_id),
+    svc: SessionService = Depends(get_session_service),
+) -> SessionDetail:
+    """Enter or leave a session working mode (``default``/``plan``/``goal``).
+
+    Thin façade over the kernel's ``POST /sessions/{id}/mode``
+    (docs/design/session-modes.md). ``plan`` makes the runtime plan
+    before touching anything — Claude applies the typed
+    ``set_permission_mode("plan")`` mutator immediately and exits
+    through the ``ExitPlanMode`` approval card; ``goal`` arms the goal
+    loop (the kernel wraps the next non-slash user message as
+    ``/goal <text>``); ``default`` exits the current mode. The runtime
+    can also exit on its own (approved plan / completed goal) —
+    surfaced live as ``session.mode_changed{by:"runtime"}``.
+
+    Only ``claude_agent`` and ``codex`` support non-default modes; the
+    kernel 400s deepagents / deepseek_harness and that error is
+    re-surfaced verbatim here.
+    """
+    from valuz_agent.adapters.kernel_client import KernelClientError
+
+    try:
+        return await svc.set_session_mode(session_id, body.mode, user_id=user_id)
+    except KernelClientError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
 
 
 @router.patch("/{session_id}/effort")
