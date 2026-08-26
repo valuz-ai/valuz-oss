@@ -30,7 +30,11 @@ Cleanup is manifest-driven: only entries we wrote during a previous session
 are eligible for removal, and the manifest records each entry's *kind* so a
 copied directory is removed precisely (``shutil.rmtree``) while a user-placed
 real directory of the same name is never touched. Anything the user hand-placed
-under the skills root is sacred.
+under the skills root is sacred — and when it occupies a name we were asked to
+materialize, that ONE skill is skipped with a warning rather than replaced (or
+raised over). A directory under the skills root is itself a discoverable skill,
+so the project's own copy simply wins; the session keeps every other skill and
+still runs.
 """
 
 from __future__ import annotations
@@ -223,9 +227,17 @@ def _materialize(plan: _Plan, skills: list[str]) -> str:
             _log_skipped_cycle(name, src, plan.skills_root, reason)
             continue
         # Clear a same-named entry created earlier in THIS call (duplicate
-        # basenames). ``created.get(name)`` lets us remove a prior copy too;
-        # a leftover real dir we never wrote is left to raise FileExistsError.
+        # basenames). ``created.get(name)`` lets us remove a prior copy too.
         _remove_managed_entry(dst, created.get(name))
+        # Whatever survives that is not ours to replace (see
+        # ``_remove_managed_entry``). Skip that one skill rather than fail the
+        # call: the alternatives are both worse than losing one link — deleting
+        # a user's directory, or raising and taking the whole session down over
+        # a name collision the session can otherwise run without.
+        blocked = _unmanaged_entry_reason(dst)
+        if blocked is not None:
+            _log_skipped_unmanaged(name, src, dst, blocked)
+            continue
         kind = _create_managed_entry(os.path.abspath(src), dst)
         created[name] = kind
         new_entries.append((name, kind))
@@ -300,6 +312,55 @@ def _log_skipped_cycle(name: str, src: str, skills_root: str, reason: str) -> No
             name,
             src,
             skills_root,
+        )
+
+
+# What sits at the destination that we may not remove. ``dir`` is the benign
+# case — a directory under the skills root IS a discoverable skill, so the
+# project's own copy just wins; ``other`` (a plain file, a socket) holds the
+# name without being loadable, so that skill really is dropped.
+_UNMANAGED_DIR = "unmanaged_dir"
+_UNMANAGED_OTHER = "unmanaged_other"
+
+
+def _unmanaged_entry_reason(dst: str) -> str | None:
+    """Classify what still occupies ``dst``, or ``None`` when it is free.
+
+    Only meaningful *after* :func:`_remove_managed_entry` has run for ``dst``:
+    everything we wrote is gone by then, so anything left is by definition not
+    ours. ``lexists`` rather than ``exists`` so a dangling entry counts too —
+    ``os.symlink`` fails on those just the same.
+    """
+    if not os.path.lexists(dst):
+        return None
+    return _UNMANAGED_DIR if os.path.isdir(dst) else _UNMANAGED_OTHER
+
+
+def _log_skipped_unmanaged(name: str, src: str, dst: str, reason: str) -> None:
+    """Say which copy of ``name`` the session ended up with, and why.
+
+    Both cases warn: the caller asked for a specific source and did not get it.
+    They differ in consequence, and the message says which — a directory still
+    loads (as the project's own copy), anything else means the skill is gone.
+    """
+    if reason == _UNMANAGED_DIR:
+        logger.warning(
+            "Skill %r not linked: %s already exists and is not an entry we "
+            "created, so it is left untouched. The session uses THAT directory "
+            "instead of %s. Remove it if you meant to use the managed skill "
+            "(a stale copy checked into the project is the usual cause).",
+            name,
+            dst,
+            src,
+        )
+    else:
+        logger.warning(
+            "Skipping skill %r: %s already exists, is not an entry we created, "
+            "and is not a directory — it holds the name without being a "
+            "loadable skill, so %s is unavailable this session. Remove it.",
+            name,
+            dst,
+            src,
         )
 
 
@@ -394,10 +455,15 @@ def _remove_managed_entry(path: str, kind: str | None = None) -> None:
     - a copied directory (``kind == "copy"``) -> ``shutil.rmtree``
 
     Anything else — a real directory we did not record as a copy, a user file —
-    is left alone. The dev-stage policy is to never destroy what we did not
-    write; if such an entry sits at ``path``, the subsequent create in
-    ``_materialize`` raises ``FileExistsError`` — loud and visible, easier to
-    debug than a silent partial state.
+    is left alone: the policy is to never destroy what we did not write. When
+    such an entry sits at ``path``, ``_materialize`` skips that one skill and
+    warns (``_unmanaged_entry_reason`` / ``_log_skipped_unmanaged``) rather than
+    letting the create raise. It used to raise, on the reasoning that a loud
+    failure beats a silent partial state — but the failure is not loud where it
+    lands. It surfaces as a dead session: materialization runs inside the turn,
+    before the runtime client is even spawned, so every turn (and every retry)
+    dies with a bare ``FileExistsError`` and no way for the user to act on it.
+    One skipped link, named in the log, is the smaller loss.
     """
     if os.path.islink(path):
         _remove_link(path)

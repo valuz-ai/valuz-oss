@@ -204,18 +204,87 @@ def test_user_placed_dir_is_never_destroyed(tmp_path: Path) -> None:
     root = Path(sm.prepare_deepagents_skills(str(cwd), [src]))
 
     # User hand-places a real directory with the same basename a future skill
-    # would use. It is NOT in our manifest, so it must survive + force a loud error.
+    # would use. It is NOT in our manifest, so it must survive — and the skill
+    # that wanted the name is skipped rather than replacing it or raising.
     sm.prepare_deepagents_skills(str(cwd), [])  # clears our managed 'alpha'
     user_dir = root / "alpha"
     user_dir.mkdir()
     (user_dir / "precious.txt").write_text("keep me", encoding="utf-8")
 
     src_again = _make_skill(tmp_path / "again", "alpha")
-    with pytest.raises(FileExistsError):
-        sm.prepare_deepagents_skills(str(cwd), [src_again])
+    sm.prepare_deepagents_skills(str(cwd), [src_again])
 
-    # The user's file is untouched.
+    # The user's file is untouched and the entry is still their real directory.
     assert (user_dir / "precious.txt").read_text(encoding="utf-8") == "keep me"
+    assert not user_dir.is_symlink()
+    # Not ours, so not recorded — a later call must not "clean up" a user's dir.
+    assert _manifest(cwd, sm.AGENTS_MANIFEST) == {"managed": []}
+
+
+def test_blocked_name_does_not_fail_the_other_skills(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """One occupied name costs one link, not the whole call.
+
+    Materialization runs inside the turn, before the runtime client is spawned,
+    so raising here kills the session (and every retry). Every other skill in
+    the same call must still land, and the warning must name which copy won.
+    """
+    cwd = tmp_path / "cwd"
+    blocked = cwd / ".agents" / "skills" / "alpha"
+    blocked.mkdir(parents=True)
+    (blocked / "SKILL.md").write_text("# project copy\n", encoding="utf-8")
+
+    with caplog.at_level("DEBUG", logger=sm.__name__):
+        root = Path(
+            sm.prepare_deepagents_skills(
+                str(cwd), [_make_skill(tmp_path, "alpha"), _make_skill(tmp_path, "beta")]
+            )
+        )
+
+    assert (root / "alpha" / "SKILL.md").read_text(encoding="utf-8") == "# project copy\n"
+    assert (root / "beta").is_symlink()
+    assert _manifest(cwd, sm.AGENTS_MANIFEST) == {"managed": [{"name": "beta", "kind": "symlink"}]}
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("not an entry we created" in r.getMessage() for r in warnings)
+
+
+def test_checked_in_entry_and_manifest_still_run(tmp_path: Path) -> None:
+    """The shape that broke real projects: a repo with BOTH the materialized
+    directory and our manifest committed to version control. Cleanup can't
+    remove the directory (git checked it out as a real dir, not a link), so the
+    create used to raise on every turn forever."""
+    cwd = tmp_path / "cwd"
+    skills_root = cwd / ".claude" / "skills"
+    committed = skills_root / "project-docs"
+    committed.mkdir(parents=True)
+    (committed / "SKILL.md").write_text("# stale committed copy\n", encoding="utf-8")
+    (cwd / ".claude" / ".harness-skills.json").write_text(
+        '{"managed": ["project-docs"]}', encoding="utf-8"
+    )
+
+    src = _make_skill(tmp_path, "project-docs")
+    root = Path(sm.prepare_claude_skills(str(cwd), [src]))
+
+    assert (root / "project-docs" / "SKILL.md").read_text(encoding="utf-8") == (
+        "# stale committed copy\n"
+    )
+    assert _manifest(cwd, sm.CLAUDE_MANIFEST) == {"managed": []}
+
+
+def test_non_directory_at_the_name_is_skipped_not_raised(tmp_path: Path) -> None:
+    """A plain file holding the name is the lossy case — the skill really is
+    unavailable — but it still must not take the session down with it."""
+    cwd = tmp_path / "cwd"
+    skills_root = cwd / ".agents" / "skills"
+    skills_root.mkdir(parents=True)
+    (skills_root / "alpha").write_text("not a skill", encoding="utf-8")
+
+    root = Path(sm.prepare_deepagents_skills(str(cwd), [_make_skill(tmp_path, "alpha")]))
+
+    assert (root / "alpha").is_file()
+    assert _manifest(cwd, sm.AGENTS_MANIFEST) == {"managed": []}
 
 
 def test_legacy_string_manifest_is_read_and_cleaned(tmp_path: Path) -> None:
