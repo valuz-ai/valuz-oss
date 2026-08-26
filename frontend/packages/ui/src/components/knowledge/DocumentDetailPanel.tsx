@@ -104,12 +104,18 @@ export interface DocumentDetailPanelProps {
   onViewSource?: () => void;
 }
 
-function _formatAttemptTime(iso: string): string {
+function _formatAttemptTime(stamp: string): string {
   // Compact ``HH:mm:ss`` — the doc has its own importedAt above so
   // the day part would just be visual noise on most attempts.
   try {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
+    // Two shapes reach this. OSS's own parser writes ISO 8601; the cloud
+    // pipeline wrote epoch milliseconds, and ``new Date("1787303620297")`` is
+    // an Invalid Date, not that instant — so those rows printed their raw
+    // number. The writer is fixed, but the rows it already wrote are not, and
+    // they are the ones a user is looking at when something went wrong.
+    const epoch = /^\d+$/.test(stamp.trim()) ? Number(stamp) : NaN;
+    const d = Number.isNaN(epoch) ? new Date(stamp) : new Date(epoch);
+    if (Number.isNaN(d.getTime())) return stamp;
     return d.toLocaleTimeString(getLocale(), {
       hour: "2-digit",
       minute: "2-digit",
@@ -117,7 +123,7 @@ function _formatAttemptTime(iso: string): string {
       hour12: false,
     });
   } catch {
-    return iso;
+    return stamp;
   }
 }
 
