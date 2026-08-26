@@ -31,7 +31,7 @@ import {
   DropdownMenuTrigger,
   cn,
 } from "@valuz/ui";
-import { Check, ChevronDown, FolderOpen } from "lucide-react";
+import { Check, ChevronDown, FolderOpen, X } from "lucide-react";
 import { executionTargetIcon } from "./execution-target-icon";
 
 type TK = Parameters<ReturnType<typeof useTranslation>["t"]>[0];
@@ -219,10 +219,41 @@ export function ExecutionLocationBar({
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className={cn(CHIP_CLASS, CHIP_INTERACTIVE_CLASS)}
+              className={cn(
+                CHIP_CLASS,
+                CHIP_INTERACTIVE_CLASS,
+                "group/exec-proj",
+              )}
             >
               {projectChipBody}
-              <ChevronDown className="h-3 w-3 shrink-0 text-ink-muted" />
+              {selectedProject ? (
+                <span className="relative flex h-3 w-3 shrink-0 items-center justify-center">
+                  {/* Hover swaps the chevron for a clear (×) affordance —
+                      clicking it drops back to 临时对话 without opening the
+                      menu (pointerdown is what Radix opens on, so both
+                      events stop here); the rest of the chip still opens
+                      the dropdown. */}
+                  <ChevronDown className="h-3 w-3 text-ink-muted group-hover/exec-proj:hidden" />
+                  <span
+                    role="button"
+                    aria-label={t("common.remove" as TK)}
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onProjectChange(null);
+                    }}
+                    className="absolute inset-0 hidden items-center justify-center rounded text-ink-muted hover:text-ink-heading group-hover/exec-proj:flex"
+                  >
+                    <X className="h-3 w-3" />
+                  </span>
+                </span>
+              ) : (
+                <ChevronDown className="h-3 w-3 shrink-0 text-ink-muted" />
+              )}
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent
