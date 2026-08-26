@@ -47,12 +47,19 @@ export type SessionMode = "default" | "plan" | "goal";
  * ``claude_agent`` lowers natively (typed SDK
  * ``set_permission_mode("plan")`` + the ``ExitPlanMode`` approval
  * card); ``codex`` via ``turn/start.collaborationMode`` (plan proposal
- * arrives as ``session.plan_proposed`` and approval is client-driven).
- * deepagents / deepseek_harness have no native primitive and the
- * server 400s them. UI affordances gate on this list so users never
- * see a toggle the backend would reject.
+ * arrives as ``session.plan_proposed`` and approval is client-driven);
+ * ``deepseek_harness`` via the vendored ``dsh-plan-mode`` plugin (the
+ * ``exit_plan_mode`` review parks as the same ``exit_plan_mode``
+ * approval card Claude uses — approval continues the same turn
+ * natively). deepagents has no native primitive and the server 400s
+ * it. UI affordances gate on this list so users never see a toggle
+ * the backend would reject.
  */
-export const PLAN_MODE_RUNTIMES: readonly string[] = ["claude_agent", "codex"];
+export const PLAN_MODE_RUNTIMES: readonly string[] = [
+  "claude_agent",
+  "codex",
+  "deepseek_harness",
+];
 
 /** Whether the composer should offer the plan-mode toggle for a runtime. */
 export function supportsPlanMode(

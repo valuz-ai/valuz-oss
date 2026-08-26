@@ -78,6 +78,12 @@ class DshLaunchSpec:
     # Extra environment for the subprocess (e.g. ELECTRON_RUN_AS_NODE=1 when
     # the Node carrier is the desktop's own Electron binary).
     env: dict[str, str] = field(default_factory=dict)
+    # Whether the resolved closure carries the plan-mode plugin set
+    # (dsh-plan-mode + dsh-user-questions + dsh-tool-ask-user +
+    # valuz-dsh-kernel-bridge). Compositions referencing a missing bare
+    # plugin fail to boot, so the plan rows are only emitted when the
+    # closure actually has them — see ``_probe_plan_capable``.
+    plan_capable: bool = False
 
 
 def _resolve_node() -> tuple[str, dict[str, str]] | None:
@@ -116,12 +122,34 @@ def _packaged_entry() -> Path | None:
     return vendored if vendored.is_file() else None
 
 
+# The bare-plugin names the plan feature composes on top of the base set.
+# All four must resolve from the closure or the subprocess fails to boot.
+_PLAN_PLUGIN_PROBES = (
+    Path("@deepseek-ai") / "dsh-plan-mode" / "lib" / "index.js",
+    Path("@deepseek-ai") / "dsh-user-questions" / "lib" / "index.js",
+    Path("@deepseek-ai") / "dsh-tool-ask-user" / "lib" / "index.js",
+    Path("valuz-dsh-kernel-bridge") / "lib" / "index.js",
+)
+
+
+def _probe_plan_capable(entry: Path) -> bool:
+    """Whether the packaged closure around ``entry`` carries the plan set.
+
+    ``entry`` is ``<closure>/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/
+    lib/packaged-bin.js``; bare plugins resolve from that ``node_modules``.
+    """
+    node_modules = entry.parents[3]
+    return all((node_modules / probe).is_file() for probe in _PLAN_PLUGIN_PROBES)
+
+
 def resolve_launch() -> DshLaunchSpec | None:
     """Resolve how to spawn the dsh runtime on this machine, or None."""
     bin_override = os.environ.get(DSH_RUNTIME_BIN_ENV, "").strip()
     if bin_override:
         if not (shutil.which(bin_override) or os.path.isfile(bin_override)):
             return None
+        # A single-file executable's embedded plugin set is opaque — assume
+        # no plan plugins rather than emit a composition that cannot boot.
         return DshLaunchSpec(
             argv=(bin_override,),
             cwd=None,
@@ -137,12 +165,17 @@ def resolve_launch() -> DshLaunchSpec | None:
                 cwd=None,
                 config_parent_dir=tempfile.gettempdir(),
                 env=extra_env,
+                plan_capable=_probe_plan_capable(entry),
             )
     root = os.environ.get(DSH_ROOT_ENV, "").strip()
     if root:
         source_entry = Path(root) / _SOURCE_ENTRY
         node = shutil.which("node")
         if source_entry.is_file() and node is not None:
+            # The source checkout resolves plugins from the examples
+            # project's node_modules, which has no valuz-dsh-kernel-bridge —
+            # plan rows would fail the boot, so the contributor carrier
+            # stays plan-incapable.
             return DshLaunchSpec(
                 argv=(node, "--import", "tsx", str(source_entry)),
                 cwd=root,
@@ -184,6 +217,8 @@ def write_composition(
     skills_root: str | None,
     model_settings: ModelSettings | None,
     kernel_toolkit: bool = False,
+    plan_capable: bool = False,
+    user_questions_url: str | None = None,
 ) -> str:
     """Write this session's composition file; returns the ``cordis.yml`` path.
 
@@ -199,6 +234,8 @@ def write_composition(
         skills_root=skills_root,
         model_settings=model_settings,
         kernel_toolkit=kernel_toolkit,
+        plan_capable=plan_capable,
+        user_questions_url=user_questions_url,
     )
     path.write_text(json.dumps(rows, ensure_ascii=False, indent=1))
     path.chmod(0o600)
@@ -227,6 +264,47 @@ def kernel_toolkit_url(session_id: str) -> str:
     return f"{base.rstrip('/')}/mcp/toolkit/{session_id}"
 
 
+# Base of the kernel's dsh user-questions route as reachable from a local
+# subprocess. Same convention as ``VALUZ_PTC_ENDPOINT``: the default
+# matches the in-process desktop backend and includes the frozen route
+# prefix (``src`` must not import ``app.routes.KERNEL_API_PREFIX``).
+USER_QUESTIONS_ENDPOINT_ENV = "VALUZ_DSH_UQ_ENDPOINT"
+USER_QUESTIONS_ENDPOINT_DEFAULT = "http://127.0.0.1:8000/kernel/v1/dsh/user-questions"
+
+
+def user_questions_endpoint(token: str) -> str:
+    base = (
+        os.environ.get(USER_QUESTIONS_ENDPOINT_ENV, "").strip() or USER_QUESTIONS_ENDPOINT_DEFAULT
+    )
+    return f"{base.rstrip('/')}/{token}"
+
+
+# ``dsh-plan-mode``'s mandatory ``section`` — the deployment-owned plan
+# discipline the model sees (prompt order 50) while plan mode is active.
+# Same product contract as the Claude runtime's ``PLAN_MODE_DISCIPLINE``:
+# plan-first applies to EVERY task type, not just code changes. dsh's plan
+# mode is soft guidance by design (sandbox/approval enforce independently),
+# so this text carries the whole behavioral contract.
+PLAN_MODE_SECTION = """\
+You are in plan mode: the user wants to align on a plan BEFORE you produce
+anything. This applies to EVERY kind of task — research, analysis, and
+writing included, not just code changes.
+
+1. Keep reconnaissance lightweight and read-only: check which data sources /
+   files / tools exist and what shape they have. Do NOT run the full
+   analysis, mutate files, or draft the deliverable yet.
+2. If key decisions are unclear, ask the user with the ask_user_question
+   tool first.
+3. Present a concise execution plan — goal, steps, data sources, deliverable
+   format, and any open choices — by calling exit_plan_mode with the
+   complete plan as markdown (starting with a # heading). Then stop and
+   wait for the review.
+4. Execute only after the plan is approved.
+
+Exception: a trivial exchange that plainly needs no plan (a greeting, a
+one-line factual question) may be answered directly."""
+
+
 def build_composition_rows(
     session: Session,
     *,
@@ -234,6 +312,8 @@ def build_composition_rows(
     skills_root: str | None,
     model_settings: ModelSettings | None,
     kernel_toolkit: bool = False,
+    plan_capable: bool = False,
+    user_questions_url: str | None = None,
 ) -> list[dict[str, Any]]:
     """The plugin tree for one kernel session (pure; unit-testable).
 
@@ -300,6 +380,34 @@ def build_composition_rows(
         {"id": "token-meter", "name": "@deepseek-ai/dsh-token-meter"},
         {"id": "compaction-basic", "name": "@deepseek-ai/dsh-compaction-basic"},
     ]
+    if plan_capable:
+        # Plan set — ALWAYS composed on a capable closure, never gated on
+        # ``session.mode``: dsh-plan-mode keeps ``exit_plan_mode`` registered
+        # in both states (stable tool catalog), plan state is per-session
+        # durable (``plan/mode`` log events, default inactive), and the
+        # bridge plugin converges it to the kernel-desired value at the
+        # first pre-step. ``ask_user_question`` (dsh-tool-ask-user) rides
+        # along in every mode — parity with Claude's AskUserQuestion /
+        # codex's request_user_input clarifying path.
+        rows.append({"id": "user-questions", "name": "@deepseek-ai/dsh-user-questions"})
+        rows.append({"id": "tool-ask-user", "name": "@deepseek-ai/dsh-tool-ask-user"})
+        rows.append(
+            {
+                "id": "plan-mode",
+                "name": "@deepseek-ai/dsh-plan-mode",
+                "config": {"section": PLAN_MODE_SECTION},
+            }
+        )
+        bridge_config: dict[str, Any] = {"planActive": session.mode == "plan"}
+        if user_questions_url:
+            bridge_config["userQuestionsEndpoint"] = user_questions_url
+        rows.append(
+            {
+                "id": "valuz-kernel-bridge",
+                "name": "valuz-dsh-kernel-bridge",
+                "config": bridge_config,
+            }
+        )
     rows.extend(_mcp_rows(session))
     if kernel_toolkit:
         # Kernel ToolDefs (registered by the runtime in mcp_bridge) surface

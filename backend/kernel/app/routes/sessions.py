@@ -461,12 +461,22 @@ async def set_session_mode(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if body.mode != "default" and session.runtime_provider in ("deepagents", "deepseek_harness"):
+    if body.mode != "default" and session.runtime_provider == "deepagents":
         raise HTTPException(
             status_code=400,
             detail=(
                 f"mode={body.mode!r} is not supported on {session.runtime_provider} "
                 "sessions (no native plan/goal primitive)."
+            ),
+        )
+    # deepseek_harness gained plan (dsh-plan-mode via the vendored closure,
+    # slice 3); goal still has no dsh lowering.
+    if body.mode == "goal" and session.runtime_provider == "deepseek_harness":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "mode='goal' is not supported on deepseek_harness sessions "
+                "(no native goal primitive)."
             ),
         )
 

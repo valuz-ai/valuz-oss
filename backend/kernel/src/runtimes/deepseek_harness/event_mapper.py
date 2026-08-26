@@ -23,14 +23,21 @@ from src.core.events import Event
 logger = logging.getLogger(__name__)
 
 DSH_TODO_TOOL_NAME = "todo_write"
+# ``dsh-tool-ask-user``'s tool. Its raw tool_use/tool_result pair is
+# suppressed like todo_write's: the runtime's user-questions park emits the
+# ``AskUserQuestion`` anchor pair the interactive clarifying card renders
+# from, so the generic pair would double-render the same exchange.
+DSH_ASK_USER_TOOL_NAME = "ask_user_question"
 
 
 class DshEventMapper:
     def __init__(self) -> None:
         self._todo_call_ids: set[str] = set()
+        self._ask_user_call_ids: set[str] = set()
 
     def reset(self) -> None:
         self._todo_call_ids.clear()
+        self._ask_user_call_ids.clear()
 
     def map_session_event(self, event: dict[str, Any]) -> list[Event]:
         etype = event.get("type")
@@ -51,6 +58,22 @@ class DshEventMapper:
             todos = data.get("todos")
             if isinstance(todos, list):
                 return [Event(type="todo_update", data={"todos": list(todos)})]
+            return []
+        if etype == "plan/mode":
+            # dsh-plan-mode's logged state flip. Runtime-attributed even for
+            # the spawn-time converge our bridge plugin performs — the
+            # kernel row already holds that value, so the write-through is
+            # an idempotent no-op there, while the approved-exit flip is
+            # exactly the runtime-initiated transition the observer's
+            # ``mode_persist`` write-through exists for.
+            active = data.get("active")
+            if isinstance(active, bool):
+                return [
+                    Event(
+                        type="mode_changed",
+                        data={"mode": "plan" if active else "default", "by": "runtime"},
+                    )
+                ]
             return []
         if etype == "compaction/end":
             return [Event(type="compaction", data={})]
@@ -94,6 +117,9 @@ class DshEventMapper:
         if name == DSH_TODO_TOOL_NAME:
             self._todo_call_ids.add(call_id)
             return []
+        if name == DSH_ASK_USER_TOOL_NAME:
+            self._ask_user_call_ids.add(call_id)
+            return []
         arguments = data.get("arguments")
         parsed_input: Any = {}
         if isinstance(arguments, str) and arguments:
@@ -119,7 +145,7 @@ class DshEventMapper:
             call_id = block.get("toolCallId")
             if not isinstance(call_id, str):
                 continue
-            if call_id in self._todo_call_ids:
+            if call_id in self._todo_call_ids or call_id in self._ask_user_call_ids:
                 continue
             events.append(
                 Event(

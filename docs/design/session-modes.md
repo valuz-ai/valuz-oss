@@ -35,7 +35,8 @@ mode: Literal["default", "plan", "goal"] = "default"
 ### Kernel API
 
 - `POST {KERNEL_API_PREFIX}/v1/sessions/{id}/mode` — validates (400 for
-  `deepagents` / `deepseek_harness`: no native primitive), writes, and
+  `deepagents` on any non-default mode, and for `deepseek_harness` on
+  `goal` — dsh has plan since slice 3), writes, and
   emits `mode_changed{mode, by: "user"}` on a real transition
   (idempotent on same-mode re-set). Direct `plan ↔ goal` transitions are
   allowed — runtime reconcile composes independent exit + entry branches
@@ -70,7 +71,9 @@ in-memory value wins; otherwise the disk value wins (honors a concurrent
 | Claude + goal | Wrap: next non-slash user message becomes `/goal <text>` (`wrap_for_mode`). | `client.query("/goal clear")`; auto-exit detected by a bare `/goal` status probe after `ResultMessage` ("No goal set." → flip + `mode_changed{by:"runtime"}`). |
 | Codex + plan | Wrap `/plan <text>` per turn (**prompt-level only** — the app-server turn input does not parse slashes; native lowering is §7). | Stop wrapping. |
 | Codex + goal | Wrap `/goal <text>`; codex-core auto-continues the thread goal. | `thread/goal/clear` via the SDK's raw JSON-RPC escape hatch (camelCase params); auto-exit via the `thread/goal/cleared` notification. |
-| deepagents / deepseek_harness | 400 at the kernel route; `wrap_for_mode` skips them; UI hides the toggle. | n/a |
+| dsh + plan | Composition mounts the plan plugin set; the `valuz-dsh-kernel-bridge` plugin converges dsh plan state to `session.mode` at the first pre-step (§7). Respawn-on-drift covers between-turn toggles. | (a) user: chip off → PATCH → respawn with `planActive: false`; (b) model: `exit_plan_mode {plan}` → `ctx.userQuestions` → HTTP bridge → approval subject `exit_plan_mode` (always parks, V1 verbs) → approve resolves the review with the intent's approve label, the tool returns `{approved: true}`, dsh flips `plan/mode` → `mode_changed{by:"runtime"}`, and execution continues the same turn. |
+| dsh + goal | 400 at the kernel route (no goal lowering). | n/a |
+| deepagents | 400 at the kernel route; `wrap_for_mode` skips it; UI hides the toggle. | n/a |
 
 `wrap_for_mode(text, mode, runtime_provider)`
 (`kernel/src/core/prompt_builder.py`) is the single wrap point: no wrap
@@ -193,34 +196,68 @@ shapes verified with `codex app-server generate-json-schema
 - `wrap_for_mode` no longer prefixes `/plan ` for codex (plan lowering
   is protocol-level on every runtime that has it).
 
-## 7. Roadmap — dsh plan (slice 3)
+## 7. dsh native plan (slice 3 — implemented)
 
-dsh ships plan as a plugin (`@deepseek-ai/dsh-plan-mode`, published at
-our pinned `0.1.0-rc.6`): a mandatory `section` prompt (`plan:policy`,
-order 50, fail-fast on empty/unknown config) + an always-registered
-`exit_plan_mode` tool that reviews through `ctx.userQuestions`. No env
-var, no wire method — activation is in-process (`ctx.planMode.set`) or
-`/plan` via a command adapter our stdio JSON-RPC surface
-(`initialize` / `session/prompt` / `shutdown`) does not reach.
+dsh ships plan as a plugin (`@deepseek-ai/dsh-plan-mode`, pinned
+`0.1.0-rc.6`; the review flow is byte-identical at `0.1.1-rc.2`): a
+mandatory `section` prompt (`plan:policy`, order 50, fail-fast on
+empty/unknown config) + an always-registered `exit_plan_mode` tool that
+reviews through `ctx.userQuestions.ask()` with
+`intent {kind: "plan-review", approve: "Approve"}`. Nothing crosses the
+SDK JSON-RPC wire (still exactly `session/prompt` / `session/created` /
+`session/event` / `agent/status` / `subagent/end` at `0.1.1-rc.2`) —
+both plan state and user questions are in-process plugin seams, which
+the dsh Web host wires in-process too. Our lowering:
 
-Plan of record:
+- **Composition** (`deepseek_harness/composition.py`): on a
+  plan-capable closure (probed at launch resolution — all four plugins
+  present in `node_modules`, so a composition never references a bare
+  plugin it can't boot), ALWAYS compose `dsh-user-questions`,
+  `dsh-tool-ask-user`, `dsh-plan-mode` (`section` =
+  `PLAN_MODE_SECTION`, the dsh spelling of `PLAN_MODE_DISCIPLINE`) and
+  the Valuz-owned **`valuz-dsh-kernel-bridge`** plugin
+  (`backend/vendor/dsh-runtime/valuz-plugins/kernel-bridge`, a `file:`
+  dep installed as a real copy via `.npmrc install-links=true` so the
+  staged desktop closure stays self-contained). Never gate the rows on
+  `session.mode` — the tool catalog stays stable and plan state is the
+  per-session durable `plan/mode` log value (default inactive).
+- **Entry/exit**: the bridge plugin converges dsh plan state to its
+  baked `planActive` (from `session.mode`) ONCE per session on the
+  first `agent/pre-step` — the plan-mode controller applies the pending
+  selection in that same pre-step, so the first request already
+  carries the section. Converge-once is load-bearing: an approved
+  `exit_plan_mode` flips dsh state mid-turn and a per-step converge
+  would re-enter plan. The runtime tracks the dsh-side state from wire
+  `plan/mode` events and respawns only on real drift (user toggled the
+  chip between turns; there is no live wire flip) — an approved exit
+  flips both sides, so no respawn there.
+- **Review = same card as Claude**: the bridge plugin registers the
+  `ctx.userQuestions` provider, forwarding `ask()` over HTTP to
+  `{KERNEL_API_PREFIX}/v1/dsh/user-questions/{token}` (per-spawn random
+  token IS the credential, PTC's model; bearer middleware exempts the
+  path). The kernel parks it as `requires_action`: `plan-review` intent
+  → subject `exit_plan_mode` (payload `{plan}` from the question's
+  `detail`, V1 verbs), anything else → `clarifying_questions` with the
+  synthetic `AskUserQuestion` anchor pair (codex pattern; the raw
+  `ask_user_question` tool pair is mapper-suppressed). `submit_action`
+  translates the verb into dsh's answers envelope
+  (`approve` → select the intent's approve label → `{approved: true}`
+  → **same-turn native execution**; `reject` + feedback → `custom`
+  (single-select: custom overrides selected) → the tool fails with
+  "their feedback: ..." and the model revises; clarifying `answer` →
+  per-question `{id, selected, custom?}` remap) and the plugin's
+  long-poll (25 s GETs, 30 s server ceiling) releases the tool call.
+- **Event mapping**: `plan/mode {active}` → `mode_changed{by:
+  "runtime"}` → the orchestrator's write-through persists it — kernel
+  `session.mode` stays authoritative (dsh logs the event lazily at the
+  next accepted pre-step and can lose it on process death).
+- **Carriers**: vendored + packaged-entry closures are plan-capable;
+  the `VALUZ_DSH_RUNTIME_BIN` single-file and `VALUZ_DSH_ROOT` source
+  carriers are not (no `valuz-dsh-kernel-bridge` in their plugin
+  resolution) and degrade to no-plan compositions.
 
-1. Vendor pins + composition row gated on `session.mode == "plan"`
-   (fingerprint must include `mode`; respawn-on-drift switches modes,
-   cold-start history replay keeps continuity). Verify whether
-   composing alone activates the section or a bootstrap plugin calling
-   `ctx.planMode.set` is needed.
-2. Event mapping: `plan/mode {active}` → `mode_changed{by:"runtime"}` —
-   kernel `session.mode` stays authoritative (dsh logs the event
-   lazily at the next accepted pre-step and can lose it on process
-   death).
-3. v1 exit is user-driven (chip off → mode default); `exit_plan_mode`
-   without a userQuestions provider throws its documented
-   "no user-questions channel" message and the bundled guidance tells
-   the model to ask the user to switch modes. Follow-up: register a
-   userQuestions provider over the kernel MCP toolkit HTTP bridge →
-   standard `requires_action`, giving dsh the same blocking review card
-   as Claude. Upstream ask: a `session/plan` JSON-RPC method.
+Upstream asks that would simplify this: a `session/plan` JSON-RPC
+method, and a wire-level userQuestions channel.
 
 ## 8. Explicit non-goals
 
