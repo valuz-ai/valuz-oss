@@ -169,7 +169,23 @@
     "versionReuseHint": "正在回用 v{source}；保存后会生成新的 v{version}，不会覆盖历史版本。",
     "versionSaveHint": "修改执行指令后保存会生成 v{version}；仅修改名称、状态或工作区不会增加版本。",
     "versionColumn": "版本",
-    "actionColumn": "操作"
+    "actionColumn": "操作",
+    "detailTitle": "手册详情",
+    "versionLabel": "v{version}",
+    "run": "运行",
+    "executionHistory": "执行记录",
+    "noExecutions": "还没有执行记录",
+    "content": "手册内容",
+    "notFound": "执行手册不存在或已删除",
+    "runStatus": {
+      "queued": "排队中",
+      "planning": "规划中",
+      "running": "运行中",
+      "waiting_approval": "待确认",
+      "completed": "已完成",
+      "failed": "失败",
+      "stopped": "已停止"
+    }
   },
   "backend": {
     "schedule": {
@@ -3236,6 +3252,7 @@
     "apiKeyConfig": "API Key 配置",
     "toolCalls": "工具调用",
     "contextPanel": "上下文面板",
-    "overlays": "浮层预览"
+    "overlays": "浮层预览",
+    "playbookDetail": "手册详情"
   }
 }

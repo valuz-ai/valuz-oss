@@ -201,6 +201,15 @@ export const personalDesktopRoutes: DesktopRouteModule[] = [
     edition: "personal",
   },
   {
+    id: "playbook-detail",
+    path: "/playbooks/:playbookId",
+    label: "route.playbookDetail",
+    description: "Playbook detail view with its run history.",
+    layout: "project",
+    showInNav: false,
+    edition: "personal",
+  },
+  {
     id: "automation",
     path: "/automations",
     label: "automation.title",

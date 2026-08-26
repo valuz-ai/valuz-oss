@@ -169,7 +169,23 @@
     "versionReuseHint": "Reusing v{source}; saving creates v{version} without overwriting history.",
     "versionSaveHint": "Editing the Prompt creates v{version}; changing only the name, status, or project does not add a version.",
     "versionColumn": "Version",
-    "actionColumn": "Actions"
+    "actionColumn": "Actions",
+    "detailTitle": "Playbook detail",
+    "versionLabel": "v{version}",
+    "run": "Run",
+    "executionHistory": "Execution history",
+    "noExecutions": "No executions yet",
+    "content": "Playbook content",
+    "notFound": "This playbook no longer exists",
+    "runStatus": {
+      "queued": "Queued",
+      "planning": "Planning",
+      "running": "Running",
+      "waiting_approval": "Awaiting approval",
+      "completed": "Completed",
+      "failed": "Failed",
+      "stopped": "Stopped"
+    }
   },
   "backend": {
     "schedule": {
@@ -3236,6 +3252,7 @@
     "apiKeyConfig": "API key configuration",
     "toolCalls": "Tool calls",
     "contextPanel": "Context panel",
-    "overlays": "Overlays"
+    "overlays": "Overlays",
+    "playbookDetail": "Playbook detail"
   }
 }
